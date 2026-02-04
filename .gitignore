@@ -1,0 +1,23 @@
+# Prerequisites
+*.d
+*.obj
+*.exe
+*.pdb
+*.ilk
+*.suo
+*.sln
+*.vcxproj
+*.vcxproj.user
+*.vcxproj.filters
+
+# CMake Build Folders
+build/
+out/
+bin/
+cmake-build-debug/
+cmake-build-release/
+.vs/
+
+# System
+.DS_Store
+Thumbs.db
