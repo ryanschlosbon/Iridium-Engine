@@ -77,7 +77,7 @@ add_executable(Iridium src/main.cpp "src/renderer/VkContext.h"
 "src/renderer/VkSwapchain.h" 
 "src/renderer/VkSwapchain.cpp" 
 "src/renderer/VkRenderPass.h" 
-"src/renderer/VkRenderPass.cpp" "src/renderer/VkFramebuffer.h" "src/renderer/VkFramebuffer.cpp")
+"src/renderer/VkRenderPass.cpp" "src/renderer/VkFramebuffer.h" "src/renderer/VkFramebuffer.cpp" "src/utils/File.h" "src/renderer/VkGraphicsPipeline.h" "src/renderer/VkGraphicsPipeline.cpp" "src/renderer/VkCommandManager.h" "src/renderer/VkCommandManager.cpp" "src/renderer/VkSyncObjects.h" "src/renderer/VkSyncObjects.cpp")
 
 # 7. INCLUDE PATHS
 # Allows your code to say #include "core/Window.h" instead of "../src/core/Window.h"

@@ -39,27 +39,30 @@ public:
 	VkQueue getGraphicsQueue() const { return graphicsQueue; }
 	VkQueue getPresentQueue() const { return presentQueue; }
 	SwapChainSupportDetails querySwapChainSupport(VkPhysicalDevice device);
+	VkCommandPool getCommandPool() const { return commandPool; }
 
 	// We need to know if validation is on to clean up properly
 	bool enableValidationLayers;
 
 private:
-	// 1. The Connection to the Driver
+	// The Connection to the Driver
 	VkInstance instance;
 	VkDebugUtilsMessengerEXT debugMessenger;
 
-	// 2. The Connection to the Window
+	// The Connection to the Window
 	VkSurfaceKHR surface;
 
-	// 3. The Physical Hardware (GPU)
+	// The Physical Hardware (GPU)
 	VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
 
-	// 4. The Logical Interface (The "Virtual" GPU we send commands to)
+	// The Logical Interface (The "Virtual" GPU we send commands to)
 	VkDevice device;
 
-	// 5. The Command Ports
+	// The Command Ports
 	VkQueue graphicsQueue;
 	VkQueue presentQueue;
+
+	VkCommandPool commandPool;
 
 
 	// Internal Setup Functions
@@ -69,6 +72,7 @@ private:
 	void createSurface(GLFWwindow* window);
 	void pickPhysicalDevice();
 	void createLogicalDevice();
+	void createCommandPool();
 
 	// Helpers
 	bool isDeviceSuitable(VkPhysicalDevice device);

@@ -72,11 +72,15 @@ VkContext::VkContext(bool enableValidation, GLFWwindow* window) : enableValidati
 
 	// Turn on the GPU features
 	createLogicalDevice();
+
+	createCommandPool();
 }
 
 // Destructor
 VkContext::~VkContext() {
 	// Cleanup happens in reverse order of creation
+	vkDestroyCommandPool(device, commandPool, nullptr);
+
 	// Shutdown the Logical Device
 	vkDestroyDevice(device, nullptr);
 
@@ -334,6 +338,24 @@ void VkContext::createLogicalDevice() {
 	// The device is created. Now we ask it for the handles to the queues so we can use them later.
 	vkGetDeviceQueue(device, indices.graphicsFamily.value(), 0, &graphicsQueue);
 	vkGetDeviceQueue(device, indices.presentFamily.value(), 0, &presentQueue);
+}
+
+void VkContext::createCommandPool() {
+	QueueFamilyIndices queueFamilyIndices = findQueueFamilies(physicalDevice);
+
+	VkCommandPoolCreateInfo poolInfo{};
+	poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+
+	// RESET_COMMAND_BUFFER_BIT: Allows the command buffers to be rerecorded individually
+	// Allows camera control
+	poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+
+	// The pool must command buffers for the graphics queue
+	poolInfo.queueFamilyIndex = queueFamilyIndices.graphicsFamily.value();
+
+	if (vkCreateCommandPool(device, &poolInfo, nullptr, &commandPool) != VK_SUCCESS) {
+		throw std::runtime_error("failed to create command pool!");
+	}
 }
 
 SwapChainSupportDetails VkContext::querySwapChainSupport(VkPhysicalDevice device) {
