@@ -1,4 +1,5 @@
 #include "VkGraphicsPipeline.h"
+#include "VkMesh.h"
 #include <stdexcept>
 #include <iostream>
 
@@ -10,6 +11,7 @@ VkGraphicsPipeline::VkGraphicsPipeline(VkContext* context, VkSwapchain* swapchai
 VkGraphicsPipeline::~VkGraphicsPipeline() {
 	vkDestroyPipeline(context->getDevice(), graphicsPipeline, nullptr);
 	vkDestroyPipelineLayout(context->getDevice(), pipelineLayout, nullptr);
+	vkDestroyDescriptorSetLayout(context->getDevice(), descriptorSetLayout, nullptr);
 }
 
 VkShaderModule VkGraphicsPipeline::createShaderModule(const std::vector<char>& code) {
@@ -27,8 +29,8 @@ VkShaderModule VkGraphicsPipeline::createShaderModule(const std::vector<char>& c
 void VkGraphicsPipeline::createGraphicsPipeline(VkSwapchain* swapchain, VkRenderPassWrapper* renderPass) {
 	// Load Shaders
 	// Make sure the paths match where .spv files are located
-	auto vertShaderCode = readFile("assets/shaders/vert.spv");	
-	auto fragShaderCode = readFile("assets/shaders/frag.spv");
+	auto vertShaderCode = readFile("assets/shaders/shader_vert.spv");	
+	auto fragShaderCode = readFile("assets/shaders/shader_frag.spv");
 
 	VkShaderModule vertShaderModule = createShaderModule(vertShaderCode);
 	VkShaderModule fragShaderModule = createShaderModule(fragShaderCode);
@@ -48,11 +50,17 @@ void VkGraphicsPipeline::createGraphicsPipeline(VkSwapchain* swapchain, VkRender
 
 	VkPipelineShaderStageCreateInfo shaderStages[] = { vertStageInfo, fragStageInfo };
 
-	// Vertex Input (For now, no vertex data)
+
+	// Vertex Input
+	auto bindingDescription = Vertex::getBindingDescription();
+	auto attributeDescriptions = Vertex::getAttributeDescriptions();
+
 	VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
 	vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-	vertexInputInfo.vertexBindingDescriptionCount = 0;
-	vertexInputInfo.vertexAttributeDescriptionCount = 0;
+	vertexInputInfo.vertexBindingDescriptionCount = 1;
+	vertexInputInfo.pVertexBindingDescriptions = &bindingDescription;
+	vertexInputInfo.vertexAttributeDescriptionCount = static_cast<uint32_t>(attributeDescriptions.size());
+	vertexInputInfo.pVertexAttributeDescriptions = attributeDescriptions.data();
 
 	// Input Assembly (How to draw the points)'
 	VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
@@ -88,8 +96,17 @@ void VkGraphicsPipeline::createGraphicsPipeline(VkSwapchain* swapchain, VkRender
 	rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
 	rasterizer.lineWidth = 1.0f;
 	rasterizer.cullMode = VK_CULL_MODE_BACK_BIT;
-	rasterizer.frontFace = VK_FRONT_FACE_CLOCKWISE;
+	rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
 	rasterizer.depthBiasEnable = VK_FALSE;
+
+	// Depth Stencil
+	VkPipelineDepthStencilStateCreateInfo depthStencil{};
+	depthStencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+	depthStencil.depthTestEnable = VK_TRUE;       // Should we test? Yes!
+	depthStencil.depthWriteEnable = VK_TRUE;      // Should we save new depths? Yes!
+	depthStencil.depthCompareOp = VK_COMPARE_OP_LESS; // "Closer" pixels win
+	depthStencil.depthBoundsTestEnable = VK_FALSE;
+	depthStencil.stencilTestEnable = VK_FALSE;
 
 	// Multisampling (disabled for now)
 	VkPipelineMultisampleStateCreateInfo multisampling{};
@@ -109,11 +126,34 @@ void VkGraphicsPipeline::createGraphicsPipeline(VkSwapchain* swapchain, VkRender
 	colorBlending.attachmentCount = 1;
 	colorBlending.pAttachments = &colorBlendAttachment;
 
-	// Pipeline Layout (Global variables)
+	VkPushConstantRange pushConstant{};
+	pushConstant.offset = 0;
+	pushConstant.size = sizeof(MeshPushConstants);
+	pushConstant.stageFlags = VK_SHADER_STAGE_VERTEX_BIT; // Only the vertex shader needs this
+
+	VkDescriptorSetLayoutBinding uboLayoutBinding{};
+	uboLayoutBinding.binding = 0;                          // Matches 'layout(binding = 0)' in shader
+	uboLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+	uboLayoutBinding.descriptorCount = 1;                  // Just 1 UBO struct
+	uboLayoutBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT; // Used in the Vertex Shader
+	uboLayoutBinding.pImmutableSamplers = nullptr;
+
+	VkDescriptorSetLayoutCreateInfo layoutInfo{};
+	layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+	layoutInfo.bindingCount = 1;
+	layoutInfo.pBindings = &uboLayoutBinding;
+
+	if (vkCreateDescriptorSetLayout(context->getDevice(), &layoutInfo, nullptr, &descriptorSetLayout) != VK_SUCCESS) {
+		throw std::runtime_error("failed to create descriptor set layout!");
+	}
+
+	// 3. Update the Pipeline Layout to use this Descriptor Layout
 	VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
 	pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-	pipelineLayoutInfo.setLayoutCount = 0; // No descriptor sets for now
-	pipelineLayoutInfo.pushConstantRangeCount = 0; // No push constants for now
+	pipelineLayoutInfo.setLayoutCount = 1;                 // <--- Change from 0 to 1
+	pipelineLayoutInfo.pSetLayouts = &descriptorSetLayout; // <--- Pass the layout
+	pipelineLayoutInfo.pushConstantRangeCount = 1; // <--- Change this to 1
+	pipelineLayoutInfo.pPushConstantRanges = &pushConstant; // <--- Point to the range
 
 	if (vkCreatePipelineLayout(context->getDevice(), &pipelineLayoutInfo, nullptr, &pipelineLayout) != VK_SUCCESS) {
 		throw std::runtime_error("failed to create pipeline layout!");
@@ -134,6 +174,7 @@ void VkGraphicsPipeline::createGraphicsPipeline(VkSwapchain* swapchain, VkRender
 	pipelineInfo.pRasterizationState = &rasterizer;
 	pipelineInfo.pMultisampleState = &multisampling;
 	pipelineInfo.pColorBlendState = &colorBlending;
+	pipelineInfo.pDepthStencilState = &depthStencil;
 	
 	// Connect Render Pass
 	pipelineInfo.layout = pipelineLayout;

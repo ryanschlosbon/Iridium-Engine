@@ -1,23 +1,19 @@
 #version 450
 
-// Hardcoded array of positions for a triangle
-vec2 positions[3] = vec2[](
-    vec2(0.0, -0.5),
-    vec2(0.5, 0.5),
-    vec2(-0.5, 0.5)
-);
+layout(binding = 0) uniform UniformBufferObject {
+    mat4 model;
+    mat4 view;
+    mat4 proj;
+} ubo;
 
-// Hardcoded array of colors for each point
-vec3 colors[3] = vec3[](
-    vec3(1.0, 0.0, 0.0), // Red
-    vec3(0.0, 1.0, 0.0), // Green
-    vec3(0.0, 0.0, 1.0)  // Blue
-);
+// CHANGE: This was vec2, now it must be vec3
+layout(location = 0) in vec3 inPosition;
+layout(location = 1) in vec3 inColor;
 
-// Output to the fragment shader
 layout(location = 0) out vec3 fragColor;
 
 void main() {
-    gl_Position = vec4(positions[gl_VertexIndex], 0.0, 1.0);
-    fragColor = colors[gl_VertexIndex];
+    // We can now use inPosition directly (it already has Z)
+    gl_Position = ubo.proj * ubo.view * ubo.model * vec4(inPosition, 1.0);
+    fragColor = inColor;
 }

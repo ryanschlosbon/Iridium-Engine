@@ -15,6 +15,7 @@ class VkSwapchain {
 		VkFormat getImageFormat() const { return swapChainImageFormat; }
 		VkExtent2D getExtent() const { return swapChainExtent; }
 		const std::vector<VkImageView>& getImageViews() const { return swapChainImageViews; }
+		uint32_t getImageCount() const { return static_cast<uint32_t>(swapChainImages.size()); }
 	
 	private:
 		VkContext* context;	// Reference to the core engine

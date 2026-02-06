@@ -1,10 +1,11 @@
 #include "VkCommandManager.h"
 #include <stdexcept>
 
-VkCommandManager::VkCommandManager(VkContext* context, VkFramebufferWrapper* framebuffer, VkGraphicsPipeline* pipeline)
+VkCommandManager::VkCommandManager(VkContext* context, VkFramebufferWrapper* framebuffer, 
+	VkGraphicsPipeline* pipeline, int count)
 	: context(context) {
 	// Create 1 buffer for every frame (usually 3)
-	createCommandBuffers(3);
+	createCommandBuffers(count);
 }
 
 VkCommandManager::~VkCommandManager() {
@@ -26,40 +27,67 @@ void VkCommandManager::createCommandBuffers(int count) {
 	}
 }
 
-void VkCommandManager::recordCommands(VkRenderPassWrapper* renderPass, VkFramebufferWrapper* framebuffer,
-	VkGraphicsPipeline* pipeline, VkExtent2D extent) {
-	for (size_t i = 0; i < commandBuffers.size(); i++) {
-		VkCommandBufferBeginInfo beginInfo{};
-		beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+void VkCommandManager::recordCommands(uint32_t imageIndex, VkRenderPassWrapper* renderPass, VkFramebufferWrapper* framebuffer,
+    VkGraphicsPipeline* pipeline, VkExtent2D extent, VkBuffer vertexBuffer,
+    VkBuffer indexBuffer, uint32_t indexCount, MeshPushConstants constants,
+    const std::vector<VkDescriptorSet>& descriptorSets) {
 
-		if (vkBeginCommandBuffer(commandBuffers[i], &beginInfo) != VK_SUCCESS) {
-			throw std::runtime_error("failed to begin recording command buffer!");
-		}
+    // 1. Start recording the specific buffer for this frame
+    VkCommandBufferBeginInfo beginInfo{};
+    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
 
-		// Start the Render Pass
-		VkRenderPassBeginInfo renderPassInfo{};
-		renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-		renderPassInfo.renderPass = renderPass->getRenderPass();
-		renderPassInfo.framebuffer = framebuffer->getFramebuffer(static_cast<int>(i)); // Bind the image
-		renderPassInfo.renderArea.offset = { 0, 0 };
-		renderPassInfo.renderArea.extent = extent;
+    if (vkBeginCommandBuffer(commandBuffers[imageIndex], &beginInfo) != VK_SUCCESS) {
+        throw std::runtime_error("failed to begin recording command buffer!");
+    }
 
-		// Clear Color (black bg)
-		VkClearValue clearColor = { {{0.0f, 0.0f, 0.0f, 1.0f}} };
-		renderPassInfo.clearValueCount = 1;
-		renderPassInfo.pClearValues = &clearColor;
+    // 2. Configure the Render Pass
+    VkRenderPassBeginInfo renderPassInfo{};
+    renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    renderPassInfo.renderPass = renderPass->getRenderPass();
+    renderPassInfo.framebuffer = framebuffer->getFramebuffer(static_cast<int>(imageIndex));
+    renderPassInfo.renderArea.offset = { 0, 0 };
+    renderPassInfo.renderArea.extent = extent;
 
-		vkCmdBeginRenderPass(commandBuffers[i], &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+    // Clear Color (Black Background)
+    std::array<VkClearValue, 2> clearValues{};
+    clearValues[0].color = { {0.0f, 0.0f, 0.0f, 1.0f} }; // Clear Color
+    clearValues[1].depthStencil = { 1.0f, 0 };          // Clear Depth to 1.0
 
-		vkCmdBindPipeline(commandBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline->getPipeline());
+    renderPassInfo.clearValueCount = static_cast<uint32_t>(clearValues.size());
+    renderPassInfo.pClearValues = clearValues.data();
 
-		// Commands
-		vkCmdDraw(commandBuffers[i], 3, 1, 0, 0); // Draw 3 vertices, 1 instance
+    // --- START RENDERING ---
+    vkCmdBeginRenderPass(commandBuffers[imageIndex], &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
 
-		vkCmdEndRenderPass(commandBuffers[i]);
+    vkCmdBindPipeline(commandBuffers[imageIndex], VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline->getPipeline());
 
-		if (vkEndCommandBuffer(commandBuffers[i]) != VK_SUCCESS) {
-			throw std::runtime_error("failed to record command buffer!");
-		}
-	}
+    // Bind the specific Descriptor Set for this frame (UBO/Matrices)
+    vkCmdBindDescriptorSets(commandBuffers[imageIndex], VK_PIPELINE_BIND_POINT_GRAPHICS,
+        pipeline->getPipelineLayout(), 0, 1, &descriptorSets[imageIndex], 0, nullptr);
+
+    // Upload Push Constants (Scale/Offset)
+    vkCmdPushConstants(
+        commandBuffers[imageIndex],
+        pipeline->getPipelineLayout(),
+        VK_SHADER_STAGE_VERTEX_BIT,
+        0,
+        sizeof(MeshPushConstants),
+        &constants
+    );
+
+    // Bind Geometry Buffers
+    VkBuffer vertexBuffers[] = { vertexBuffer };
+    VkDeviceSize offsets[] = { 0 };
+    vkCmdBindVertexBuffers(commandBuffers[imageIndex], 0, 1, vertexBuffers, offsets);
+    vkCmdBindIndexBuffer(commandBuffers[imageIndex], indexBuffer, 0, VK_INDEX_TYPE_UINT16);
+
+    // Draw the Indexed Square
+    vkCmdDrawIndexed(commandBuffers[imageIndex], indexCount, 1, 0, 0, 0);
+
+    vkCmdEndRenderPass(commandBuffers[imageIndex]);
+    // --- END RENDERING ---
+
+    if (vkEndCommandBuffer(commandBuffers[imageIndex]) != VK_SUCCESS) {
+        throw std::runtime_error("failed to record command buffer!");
+    }
 }

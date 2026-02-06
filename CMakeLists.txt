@@ -30,6 +30,7 @@ FetchContent_Declare(
     glfw
     GIT_REPOSITORY https://github.com/glfw/glfw.git
     GIT_TAG 3.3.8
+    SOURCE_DIR ${FETCHCONTENT_BASE_DIR}/glfw
 )
 # These flags stop GLFW from building its own docs/examples, which speeds up our build.
 set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
@@ -48,6 +49,7 @@ FetchContent_Declare(
     glm
     GIT_REPOSITORY https://github.com/g-truc/glm.git
     GIT_TAG 0.9.9.8
+    SOURCE_DIR ${FETCHCONTENT_BASE_DIR}/glm
 )
 
 FetchContent_GetProperties(glm)
@@ -77,7 +79,7 @@ add_executable(Iridium src/main.cpp "src/renderer/VkContext.h"
 "src/renderer/VkSwapchain.h" 
 "src/renderer/VkSwapchain.cpp" 
 "src/renderer/VkRenderPass.h" 
-"src/renderer/VkRenderPass.cpp" "src/renderer/VkFramebuffer.h" "src/renderer/VkFramebuffer.cpp" "src/utils/File.h" "src/renderer/VkGraphicsPipeline.h" "src/renderer/VkGraphicsPipeline.cpp" "src/renderer/VkCommandManager.h" "src/renderer/VkCommandManager.cpp" "src/renderer/VkSyncObjects.h" "src/renderer/VkSyncObjects.cpp")
+"src/renderer/VkRenderPass.cpp" "src/renderer/VkFramebuffer.h" "src/renderer/VkFramebuffer.cpp" "src/utils/File.h" "src/renderer/VkGraphicsPipeline.h" "src/renderer/VkGraphicsPipeline.cpp" "src/renderer/VkCommandManager.h" "src/renderer/VkCommandManager.cpp" "src/renderer/VkSyncObjects.h" "src/renderer/VkSyncObjects.cpp" "src/renderer/VkMesh.h")
 
 # 7. INCLUDE PATHS
 # Allows your code to say #include "core/Window.h" instead of "../src/core/Window.h"
