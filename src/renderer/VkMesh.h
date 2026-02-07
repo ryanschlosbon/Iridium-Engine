@@ -1,51 +1,122 @@
 #pragma once
-#include <vulkan/vulkan.h>
-#include <glm/glm.hpp>
 #include <vector>
-#include <array>
+#include <map>
+#include <memory> // Needed for std::unique_ptr
+#include <glm/glm.hpp>
+#include <vulkan/vulkan.h>
+
+// FORWARD DECLARATION: Tells the compiler "A struct named Node exists, trust me."
+struct Node;
+
+// 1. Define SubMesh FIRST (because ModelAsset uses it)
+struct SubMesh {
+	uint32_t indexStart;
+	uint32_t indexCount;
+	int materialIndex;
+};
+
+// 2. Define BakedMesh SECOND (because ModelAsset uses it)
+struct BakedMesh {
+	int meshIndex;
+	glm::mat4 transform; // The pre-calculated offset
+};
 
 struct Vertex {
 	glm::vec3 pos;
 	glm::vec3 color;
+	glm::vec3 normal;
+	glm::vec2 uv;
 
-	// Binding Description:
-	// Describes at which rate to load data from memory throughout the vertices.
 	static VkVertexInputBindingDescription getBindingDescription() {
 		VkVertexInputBindingDescription bindingDescription{};
-		bindingDescription.binding = 0; // Index of the binding in the array of bindings
-		bindingDescription.stride = sizeof(Vertex); // Number of bytes from one entry to the next
-		bindingDescription.inputRate = VK_VERTEX_INPUT_RATE_VERTEX; // Move to the next data entry after each vertex
+		bindingDescription.binding = 0;
+		bindingDescription.stride = sizeof(Vertex);
+		bindingDescription.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
 		return { bindingDescription };
 	}
 
-	// Attribute Descriptions:
-	// Describes how to extract a vertex attribute from a chunk of vertex data (vec2 at offset 0, vec3 at offset 8)
 	static std::vector<VkVertexInputAttributeDescription> getAttributeDescriptions() {
-		std::vector<VkVertexInputAttributeDescription> attributeDescriptions(2);
+		std::vector<VkVertexInputAttributeDescription> attributeDescriptions(4);
 
-		// Position attribute
-		attributeDescriptions[0].binding = 0; // Which binding the per-vertex data comes.
-		attributeDescriptions[0].location = 0; // Location directive of the input in the vertex shader
-		attributeDescriptions[0].format = VK_FORMAT_R32G32B32_SFLOAT; // vec3 
-		attributeDescriptions[0].offset = offsetof(Vertex, pos); // Offset of the attribute within the struct
-		
-		// Color attribute
+		// Position
+		attributeDescriptions[0].binding = 0;
+		attributeDescriptions[0].location = 0;
+		attributeDescriptions[0].format = VK_FORMAT_R32G32B32_SFLOAT;
+		attributeDescriptions[0].offset = offsetof(Vertex, pos);
+
+		// Color
 		attributeDescriptions[1].binding = 0;
-		attributeDescriptions[1].location = 1; // Location 1 in the shader
-		attributeDescriptions[1].format = VK_FORMAT_R32G32B32_SFLOAT; // vec3
+		attributeDescriptions[1].location = 1;
+		attributeDescriptions[1].format = VK_FORMAT_R32G32B32_SFLOAT;
 		attributeDescriptions[1].offset = offsetof(Vertex, color);
-		
+
+		// Normal
+		attributeDescriptions[2].binding = 0;
+		attributeDescriptions[2].location = 2;
+		attributeDescriptions[2].format = VK_FORMAT_R32G32B32_SFLOAT;
+		attributeDescriptions[2].offset = offsetof(Vertex, normal);
+
+		// UV
+		attributeDescriptions[3].binding = 0;
+		attributeDescriptions[3].location = 3;
+		attributeDescriptions[3].format = VK_FORMAT_R32G32_SFLOAT;
+		attributeDescriptions[3].offset = offsetof(Vertex, uv);
+
 		return attributeDescriptions;
 	}
 };
 
 struct MeshPushConstants {
-	glm::vec2 offset;
-	glm::vec2 scale;
+	glm::mat4 renderMatrix;
 };
 
 struct UniformBufferObject {
 	alignas(16) glm::mat4 model;
 	alignas(16) glm::mat4 view;
 	alignas(16) glm::mat4 proj;
+};
+
+struct Texture {
+	VkImage image;
+	VkDeviceMemory memory;
+	VkImageView view;
+	VkSampler sampler;
+};
+
+struct Material {
+	glm::vec4 baseColor;
+	int textureIndex;
+	std::vector<VkDescriptorSet> descriptorSets;
+};
+
+// 3. NOW define ModelAsset (Since it knows what SubMesh and BakedMesh are)
+struct ModelAsset {
+	// GPU Buffers
+	VkBuffer vertexBuffer;
+	VkDeviceMemory vertexBufferMemory;
+	VkBuffer indexBuffer;
+	VkDeviceMemory indexBufferMemory;
+
+	// Data for rendering
+	uint32_t totalIndices;
+	std::vector<SubMesh> subMeshes;             // Works now!
+	std::map<int, std::vector<int>> meshToSubMeshes;
+	std::vector<Material> materials;
+	std::vector<Texture> textures;
+
+	// Hierarchy
+	std::vector<std::unique_ptr<Node>> rootNodes;
+
+	struct BakedPart {
+		int meshIndex;
+		glm::mat4 transform;
+	};
+
+	std::map<int, std::vector<BakedPart>> materialBuckets;
+};
+
+struct RenderObject {
+	std::shared_ptr<ModelAsset> model;
+	glm::mat4 transform;
+	VkDescriptorSet descriptorSet;
 };

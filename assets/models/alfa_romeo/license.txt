@@ -1,0 +1,11 @@
+Model Information:
+* title:	Alfa Romeo 8c Corto Touring Spider 1933
+* source:	https://sketchfab.com/3d-models/alfa-romeo-8c-corto-touring-spider-1933-3552656f66f34db49b577525f9affb9a
+* author:	vecarz (https://sketchfab.com/heynic)
+
+Model License:
+* license type:	CC-BY-NC-SA-4.0 (http://creativecommons.org/licenses/by-nc-sa/4.0/)
+* requirements:	Author must be credited. No commercial use. Modified versions must have the same license.
+
+If you use this 3D model in your project be sure to copy paste this credit wherever you share it:
+This work is based on "Alfa Romeo 8c Corto Touring Spider 1933" (https://sketchfab.com/3d-models/alfa-romeo-8c-corto-touring-spider-1933-3552656f66f34db49b577525f9affb9a) by vecarz (https://sketchfab.com/heynic) licensed under CC-BY-NC-SA-4.0 (http://creativecommons.org/licenses/by-nc-sa/4.0/)

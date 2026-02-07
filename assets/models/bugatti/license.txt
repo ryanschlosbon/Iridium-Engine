@@ -1,0 +1,11 @@
+Model Information:
+* title:	2015 Bugatti Atlantic - Concept Car
+* source:	https://sketchfab.com/3d-models/2015-bugatti-atlantic-concept-car-cc04ce7b78ef4fb3b1c7ee9a232fb220
+* author:	Ddiaz Design (https://sketchfab.com/ddiaz-design)
+
+Model License:
+* license type:	CC-BY-NC-SA-4.0 (http://creativecommons.org/licenses/by-nc-sa/4.0/)
+* requirements:	Author must be credited. No commercial use. Modified versions must have the same license.
+
+If you use this 3D model in your project be sure to copy paste this credit wherever you share it:
+This work is based on "2015 Bugatti Atlantic - Concept Car" (https://sketchfab.com/3d-models/2015-bugatti-atlantic-concept-car-cc04ce7b78ef4fb3b1c7ee9a232fb220) by Ddiaz Design (https://sketchfab.com/ddiaz-design) licensed under CC-BY-NC-SA-4.0 (http://creativecommons.org/licenses/by-nc-sa/4.0/)

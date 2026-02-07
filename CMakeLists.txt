@@ -74,22 +74,74 @@ find_package(Vulkan REQUIRED)
 
 # 6. THE EXECUTABLE
 # This tells CMake: "Take src/main.cpp and turn it into Iridium.exe"
-add_executable(Iridium src/main.cpp "src/renderer/VkContext.h" 
-"src/renderer/VkContext.cpp" 
-"src/renderer/VkSwapchain.h" 
-"src/renderer/VkSwapchain.cpp" 
-"src/renderer/VkRenderPass.h" 
-"src/renderer/VkRenderPass.cpp" "src/renderer/VkFramebuffer.h" "src/renderer/VkFramebuffer.cpp" "src/utils/File.h" "src/renderer/VkGraphicsPipeline.h" "src/renderer/VkGraphicsPipeline.cpp" "src/renderer/VkCommandManager.h" "src/renderer/VkCommandManager.cpp" "src/renderer/VkSyncObjects.h" "src/renderer/VkSyncObjects.cpp" "src/renderer/VkMesh.h")
+add_executable(IridiumEngine 
+    src/main.cpp 
+    "src/renderer/VkContext.h" 
+    "src/renderer/VkContext.cpp" 
+    "src/renderer/VkSwapchain.h" 
+    "src/renderer/VkSwapchain.cpp" 
+    "src/renderer/VkRenderPass.h" 
+    "src/renderer/VkRenderPass.cpp" 
+    "src/renderer/VkFramebuffer.h" 
+    "src/renderer/VkFramebuffer.cpp" 
+    "src/utils/File.h" 
+    "src/renderer/VkGraphicsPipeline.h" 
+    "src/renderer/VkGraphicsPipeline.cpp" 
+    "src/renderer/VkCommandManager.h" 
+    "src/renderer/VkCommandManager.cpp" 
+    "src/renderer/VkSyncObjects.h" 
+    "src/renderer/VkSyncObjects.cpp" 
+    "src/renderer/VkMesh.h"
+    "src/vendor/std_image_impl.cpp" 
+    "src/assets/AssetManager.h" 
+    "src/assets/AssetManager.cpp" 
+    "src/scene/Entity.h" 
+    "src/scene/Scene.h" 
+    "src/scene/Components.h" 
+    "src/scene/components/TransformComponent.h" 
+    "src/scene/Registry.h" 
+    "src/scene/components/MeshComponent.h"
+    "src/vendor/imgui/imgui.cpp"
+    "src/vendor/imgui/imgui_demo.cpp"
+    "src/vendor/imgui/imgui_draw.cpp"
+    "src/vendor/imgui/imgui_tables.cpp"
+    "src/vendor/imgui/imgui_widgets.cpp"
+    "src/vendor/imgui/backends/imgui_impl_glfw.cpp"
+    "src/vendor/imgui/backends/imgui_impl_vulkan.cpp" 
+    "src/editor/EditorSystem.h" 
+    "src/editor/EditorSystem.cpp")
+
+add_compile_definitions(PROJECT_ROOT_DIR="${CMAKE_CURRENT_SOURCE_DIR}/")
 
 # 7. INCLUDE PATHS
 # Allows your code to say #include "core/Window.h" instead of "../src/core/Window.h"
-target_include_directories(Iridium PRIVATE src)
+target_include_directories(IridiumEngine PRIVATE src
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/src/vendor/simdjson
+    ${CMAKE_SOURCE_DIR}/src/vendor/imgui
+    ${CMAKE_SOURCE_DIR}/src/vendor/imgui/backends
+)
 
 # 8. LINKING
 # This connects your code to the libraries we downloaded.
 # If you miss this, you get "Unresolved External Symbol" errors.
-target_link_libraries(Iridium PRIVATE
+target_link_libraries(IridiumEngine PRIVATE
     glfw            # The Window library
     glm::glm        # The Math library
     Vulkan::Vulkan  # The Graphics Driver
 )
+
+target_sources(IridiumEngine PRIVATE 
+    src/vendor/simdjson/simdjson.cpp
+    src/vendor/fastgltf/src/fastgltf.cpp
+    src/vendor/fastgltf/src/base64.cpp
+    src/vendor/fastgltf/src/io.cpp
+    src/vendor/std_image_impl.cpp 
+    src/vendor/imgui/imgui.cpp
+    src/vendor/imgui/imgui_demo.cpp
+    src/vendor/imgui/imgui_draw.cpp
+    src/vendor/imgui/imgui_tables.cpp
+    src/vendor/imgui/imgui_widgets.cpp
+    src/vendor/imgui/backends/imgui_impl_glfw.cpp
+    src/vendor/imgui/backends/imgui_impl_vulkan.cpp
+    src/editor/EditorSystem.cpp)

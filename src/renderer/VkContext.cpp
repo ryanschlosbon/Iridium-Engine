@@ -1,4 +1,5 @@
 #include "VkContext.h"
+#include "VkCommandManager.h"
 #include <iostream>
 #include <set>
 #include <stdexcept>
@@ -301,9 +302,8 @@ void VkContext::createLogicalDevice() {
 	}
 
 	// Specify Device Features
-	// for now, no special shader features are necessary.
-	// Later, we will come back to enable samplerAnisotropy
 	VkPhysicalDeviceFeatures deviceFeatures{};
+	deviceFeatures.samplerAnisotropy = VK_TRUE;
 
 	// Create the Logical Device
 	VkDeviceCreateInfo createInfo{};
@@ -467,4 +467,39 @@ void VkContext::createImage(uint32_t width, uint32_t height, VkFormat format,
 	}
 
 	vkBindImageMemory(device, image, imageMemory, 0);
+}
+
+void VkContext::createGPUBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
+	const void* data, VkBuffer& buffer, VkDeviceMemory& memory,
+	VkCommandManager* commandManager) {
+	// 1. Create Staging Buffer (CPU Visible)
+	VkBuffer stagingBuffer;
+	VkDeviceMemory stagingBufferMemory;
+	createBuffer(size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+		VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+		stagingBuffer, stagingBufferMemory);
+
+	// 2. Map & Copy
+	void* mappedData;
+	vkMapMemory(device, stagingBufferMemory, 0, size, 0, &mappedData);
+	memcpy(mappedData, data, (size_t)size);
+	vkUnmapMemory(device, stagingBufferMemory);
+
+	// 3. Create GPU Buffer (Device Local)
+	createBuffer(size, VK_BUFFER_USAGE_TRANSFER_DST_BIT | usage,
+		VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+		buffer, memory);
+
+	// 4. Copy from Staging to GPU
+	VkCommandBuffer commandBuffer = commandManager->beginSingleTimeCommands();
+
+	VkBufferCopy copyRegion{};
+	copyRegion.size = size;
+	vkCmdCopyBuffer(commandBuffer, stagingBuffer, buffer, 1, &copyRegion);
+
+	commandManager->endSingleTimeCommands(commandBuffer);
+
+	// 5. Cleanup Staging
+	vkDestroyBuffer(device, stagingBuffer, nullptr);
+	vkFreeMemory(device, stagingBufferMemory, nullptr);
 }

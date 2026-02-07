@@ -2,8 +2,10 @@
 
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
+#include <vulkan/vulkan.h>
 #include <vector>
 #include <optional>
+
 
 // A helper struct
 // Vulkan queues (Graphics, Compute, Present) are grouped into "Families".
@@ -26,6 +28,8 @@ struct SwapChainSupportDetails {
 	std::vector<VkPresentModeKHR> presentModes;	// Sync modes (e.g., vsync)
 };
 
+class VkCommandManager;
+
 class VkContext {
 public:
 	// The Constructor takes the Window pointer so we can create the Surface
@@ -40,6 +44,7 @@ public:
 	VkQueue getPresentQueue() const { return presentQueue; }
 	SwapChainSupportDetails querySwapChainSupport(VkPhysicalDevice device);
 	VkCommandPool getCommandPool() const { return commandPool; }
+	VkInstance getInstance() const { return instance; }
 
 	bool enableValidationLayers;
 	void createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties, 
@@ -49,6 +54,9 @@ public:
 		VkImageTiling tiling, VkImageUsageFlags usage,
 		VkMemoryPropertyFlags properties, VkImage& image,
 		VkDeviceMemory& imageMemory);
+	void createGPUBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
+		const void* data, VkBuffer& buffer, VkDeviceMemory& memory,
+		VkCommandManager* commandManager);
 
 private:
 	// The Connection to the Driver

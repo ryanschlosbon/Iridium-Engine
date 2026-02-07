@@ -13,13 +13,15 @@ public:
 
     VkPipeline getPipeline() const { return graphicsPipeline; }
     VkPipelineLayout getPipelineLayout() const { return pipelineLayout; }
-	VkDescriptorSetLayout getDescriptorSetLayout() const { return descriptorSetLayout; }
+    VkDescriptorSetLayout getGlobalSetLayout() { return globalSetLayout; }
+    VkDescriptorSetLayout getMaterialSetLayout() { return materialSetLayout; }
 
 private:
     VkContext* context;
     VkPipeline graphicsPipeline;
     VkPipelineLayout pipelineLayout; // Holds "Global Variables" definitions
-	VkDescriptorSetLayout descriptorSetLayout; // Defines how to connect shader resources (uniform buffers, textures, etc.)
+    VkDescriptorSetLayout globalSetLayout;   // Set 0 (Camera/UBO)
+    VkDescriptorSetLayout materialSetLayout; // Set 1 (Texture/Sampler)
 
     // Helper to wrap shader code into a Vulkan module
     VkShaderModule createShaderModule(const std::vector<char>& code);

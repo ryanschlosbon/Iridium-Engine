@@ -2,8 +2,13 @@
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp> 
-#include <glm/gtc/type_ptr.hpp>         
-
+#include <glm/gtc/type_ptr.hpp>    
+#include <fastgltf/core.hpp>
+#include <fastgltf/types.hpp>
+#include <fastgltf/tools.hpp>
+#include <fastgltf/glm_element_traits.hpp>
+#include <stb_image.h>
+#include <imgui_impl_vulkan.h>
 #include <iostream>
 #include <vector>
 #include <stdexcept> 
@@ -17,6 +22,11 @@
 #include "renderer/VkCommandManager.h"
 #include "renderer/VkSyncObjects.h"
 #include "renderer/VkMesh.h"
+#include "assets/AssetManager.h"  
+#include "scene/Registry.h"
+#include "scene/components/MeshComponent.h"
+#include "scene/components/TransformComponent.h"
+#include "editor/EditorSystem.h"
 
 // CONSTANTS
 const int WIDTH = 1280;
@@ -139,24 +149,29 @@ private:
     VkRenderPassWrapper* vkRenderPass;
     VkFramebufferWrapper* vkFramebuffer;
     VkGraphicsPipeline* vkPipeline;
-	VkCommandManager* vkCommandManager;
-	VkSyncObjects* vkSyncObjects;
-	VkBuffer vertexBuffer;
-    VkDeviceMemory vertexBufferMemory;
-    VkBuffer indexBuffer;
-    VkDeviceMemory indexBufferMemory;
+    VkCommandManager* vkCommandManager;
+    VkSyncObjects* vkSyncObjects;
     VkDescriptorPool descriptorPool;
     VkImage depthImage;
     VkDeviceMemory depthImageMemory;
     VkImageView depthImageView;
+    std::vector<Texture> modelTextures;
+    std::vector<int> materialToTextureMap;
+    VkImageView textureImageView;
+    VkSampler textureSampler;
+    EditorSystem editor;
+    std::vector<VkDescriptorSet> globalDescriptorSets;
+    bool enableValidation = false;
 
     glm::vec2 squarePos = { 0.0f, 0.0f };
     std::vector<VkBuffer> uniformBuffers;
     std::vector<VkDeviceMemory> uniformBuffersMemory;
     std::vector<void*> uniformBuffersMapped;
-    std::vector<VkDescriptorSet> descriptorSets;
     uint32_t currentFrame = 0;
     std::vector<VkFence> imagesInFlight;
+
+    AssetManager* assetManager;
+    std::shared_ptr<ModelAsset> mainModel;
 
     // Mouse State
     float lastX = WIDTH / 2.0f;
@@ -176,67 +191,6 @@ private:
     glm::vec3 cameraUp = glm::vec3(0.0f, 1.0f, 0.0f);  // Y is up
     float cameraSpeed = 2.5f;
     float deltaTime = 0.0f; // Time between frames
-    float lastFrame = 0.0f;
-
-    // Define a Cube (24 vertices, 4 per face)
-    const std::vector<Vertex> vertices = {
-        // Front face (Red)
-        {{-0.5f, -0.5f,  0.5f}, {1.0f, 0.0f, 0.0f}},
-        {{ 0.5f, -0.5f,  0.5f}, {1.0f, 0.0f, 0.0f}},
-        {{ 0.5f,  0.5f,  0.5f}, {1.0f, 0.0f, 0.0f}},
-        {{-0.5f,  0.5f,  0.5f}, {1.0f, 0.0f, 0.0f}},
-
-        // Back face (Cyan)
-        {{-0.5f, -0.5f, -0.5f}, {0.0f, 1.0f, 1.0f}},
-        {{ 0.5f, -0.5f, -0.5f}, {0.0f, 1.0f, 1.0f}},
-        {{ 0.5f,  0.5f, -0.5f}, {0.0f, 1.0f, 1.0f}},
-        {{-0.5f,  0.5f, -0.5f}, {0.0f, 1.0f, 1.0f}},
-
-        // Left face (Green)
-        {{-0.5f, -0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}},
-        {{-0.5f, -0.5f,  0.5f}, {0.0f, 1.0f, 0.0f}},
-        {{-0.5f,  0.5f,  0.5f}, {0.0f, 1.0f, 0.0f}},
-        {{-0.5f,  0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}},
-
-        // Right face (Magenta)
-        {{ 0.5f, -0.5f, -0.5f}, {1.0f, 0.0f, 1.0f}},
-        {{ 0.5f, -0.5f,  0.5f}, {1.0f, 0.0f, 1.0f}},
-        {{ 0.5f,  0.5f,  0.5f}, {1.0f, 0.0f, 1.0f}},
-        {{ 0.5f,  0.5f, -0.5f}, {1.0f, 0.0f, 1.0f}},
-
-        // Top face (Blue)
-        {{-0.5f, -0.5f, -0.5f}, {0.0f, 0.0f, 1.0f}},
-        {{ 0.5f, -0.5f, -0.5f}, {0.0f, 0.0f, 1.0f}},
-        {{ 0.5f, -0.5f,  0.5f}, {0.0f, 0.0f, 1.0f}},
-        {{-0.5f, -0.5f,  0.5f}, {0.0f, 0.0f, 1.0f}},
-
-        // Bottom face (Yellow)
-        {{-0.5f,  0.5f, -0.5f}, {1.0f, 1.0f, 0.0f}},
-        {{ 0.5f,  0.5f, -0.5f}, {1.0f, 1.0f, 0.0f}},
-        {{ 0.5f,  0.5f,  0.5f}, {1.0f, 1.0f, 0.0f}},
-        {{-0.5f,  0.5f,  0.5f}, {1.0f, 1.0f, 0.0f}}
-    };
-
-    // 36 Indices (6 faces * 2 triangles * 3 vertices)
-    const std::vector<uint16_t> indices = {
-        // Front face (Red) - Vertices 0,1,2,3
-        0, 1, 2, 2, 3, 0,
-
-        // Back face (Cyan) - Vertices 4,5,6,7
-        4, 7, 6, 6, 5, 4,
-
-        // Left face (Green) - Vertices 8,9,10,11
-        8, 9, 10, 10, 11, 8,
-
-        // Right face (Magenta) - Vertices 12,13,14,15
-        12, 14, 13, 14, 12, 15,
-
-        // Top face (Blue) - Vertices 16,17,18,19
-        16, 17, 18, 18, 19, 16,
-
-        // Bottom face (Yellow) - Vertices 20,21,22,23
-        20, 23, 22, 22, 21, 20
-    };
 
     void initWindow() {
         glfwInit();
@@ -258,54 +212,63 @@ private:
     }
 
     void initVulkan() {
-        // Initialize the Context
-        // true = Enable Validation Layers
-        // window = pass the GLFW window so the context can create the Surface
-        vkContext = new VkContext(true, window);
+        vkContext = new VkContext(enableValidation, window);
         vkSwapchain = new VkSwapchain(vkContext, window);
         vkRenderPass = new VkRenderPassWrapper(vkContext, vkSwapchain);
         vkPipeline = new VkGraphicsPipeline(vkContext, vkSwapchain, vkRenderPass);
+        vkSyncObjects = new VkSyncObjects(vkContext, vkSwapchain->getImageCount());
+
+        // CommandManager must exist before AssetManager
+        vkCommandManager = new VkCommandManager(vkContext, nullptr, vkPipeline, vkSwapchain->getImageCount());
 
         createDepthResources();
-
+        transitionImageLayout(depthImage, VK_FORMAT_D32_SFLOAT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
         vkFramebuffer = new VkFramebufferWrapper(vkContext, vkSwapchain, vkRenderPass, depthImageView);
-        vkCommandManager = new VkCommandManager(vkContext, vkFramebuffer, vkPipeline, vkSwapchain->getImageCount());
-        vkSyncObjects = new VkSyncObjects(vkContext, vkSwapchain->getImageCount());
-        imagesInFlight.resize(vkSwapchain->getImageCount(), VK_NULL_HANDLE);
 
-        createVertexBuffer();
-        createIndexBuffer();
+        // --- ASSET MANAGEMENT ---
+        assetManager = new AssetManager(vkContext, vkCommandManager);
+
+        std::string modelPath = std::string(PROJECT_ROOT_DIR) + "assets/models/alfa_romeo/scene.gltf";
+        mainModel = assetManager->getModel(modelPath);
 
         createUniformBuffers();
         createDescriptorPool();
         createDescriptorSets();
+
+        // --- EDITOR INITIALIZATION ---
+        // This MUST happen after vkRenderPass and vkCommandManager are valid
+        editor.init(
+            vkContext->getInstance(),
+            vkContext->getDevice(),
+            vkContext->getPhysicalDevice(),
+            vkContext->getGraphicsQueue(),
+            vkRenderPass->getRenderPass(),
+            window,
+            vkCommandManager->getCommandPool() // Use the manager here for clarity
+        );
     }
 
-    void drawFrame(MeshPushConstants constants) {
+    void drawFrame(const std::vector<RenderObject>& renderQueue) {
         // 1. Wait for CPU-GPU sync (Frame 0 or 1)
         VkFence currentFence = vkSyncObjects->getInFlightFence(currentFrame);
-        vkWaitForFences(vkContext->getDevice(), 1, &currentFence, VK_TRUE, UINT64_MAX);
+
+        VkFence inFlightFence = vkSyncObjects->getInFlightFence(currentFrame);
+
+        vkWaitForFences(vkContext->getDevice(), 1, &inFlightFence, VK_TRUE, UINT64_MAX);
+
+        updateUniformBuffer(currentFrame);
 
         // 2. Acquire the next image
         uint32_t imageIndex;
-        vkAcquireNextImageKHR(
-            vkContext->getDevice(),
-            vkSwapchain->getSwapchain(),
-            UINT64_MAX,
-            vkSyncObjects->getImageAvailableSemaphore(currentFrame),
-            VK_NULL_HANDLE,
-            &imageIndex
-        );
+        vkAcquireNextImageKHR(vkContext->getDevice(), vkSwapchain->getSwapchain(), UINT64_MAX,
+            vkSyncObjects->getImageAvailableSemaphore(currentFrame), VK_NULL_HANDLE, &imageIndex);
 
-        VkSemaphore signalSem = vkSyncObjects->getRenderFinishedSemaphore(imageIndex);
-
+        // Handle resize logic (tracker update)
         if (imageIndex >= imagesInFlight.size()) {
-            // If this hits, the swapchain likely resized, and we need to handle it.
-            // For now, let's just resize the tracker to match.
             imagesInFlight.resize(vkSwapchain->getImageCount(), VK_NULL_HANDLE);
         }
 
-        // 3. Image-in-Flight check: Ensures we don't reuse an image still being presented
+        // 3. Image-in-Flight check
         if (imagesInFlight[imageIndex] != VK_NULL_HANDLE) {
             vkWaitForFences(vkContext->getDevice(), 1, &imagesInFlight[imageIndex], VK_TRUE, UINT64_MAX);
         }
@@ -314,19 +277,29 @@ private:
         // 4. Reset the fence now that we are moving forward
         vkResetFences(vkContext->getDevice(), 1, &currentFence);
 
-        // 5. Update data and record commands
+        // 5. Update data
         updateUniformBuffer(imageIndex);
-        vkCommandManager->recordCommands(imageIndex, vkRenderPass, vkFramebuffer, vkPipeline,
-            vkSwapchain->getExtent(), vertexBuffer, indexBuffer,
-            static_cast<uint32_t>(indices.size()), constants, descriptorSets);
+
+        // FIX: Do NOT create a local renderQueue here. 
+        // We use the 'renderQueue' argument passed into the function.
+
+        vkCommandManager->recordCommands(
+            imageIndex,
+            vkRenderPass,
+            vkFramebuffer,
+            vkPipeline,
+            vkSwapchain->getExtent(),
+            renderQueue,
+            globalDescriptorSets,
+            &editor
+        );
 
         // 6. Submit the work
         VkSubmitInfo submitInfo{};
         submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
 
-        // Wait for the image to be available before writing to the Color Attachment
         VkSemaphore waitSemaphores[] = { vkSyncObjects->getImageAvailableSemaphore(currentFrame) };
-        VkPipelineStageFlags waitStages[] = { VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT }; // <--- DON'T MISS THIS
+        VkPipelineStageFlags waitStages[] = { VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT };
         submitInfo.waitSemaphoreCount = 1;
         submitInfo.pWaitSemaphores = waitSemaphores;
         submitInfo.pWaitDstStageMask = waitStages;
@@ -334,7 +307,6 @@ private:
         submitInfo.commandBufferCount = 1;
         submitInfo.pCommandBuffers = &vkCommandManager->getCommandBuffer(imageIndex);
 
-        // Signal that rendering is done using the IMAGE's dedicated semaphore
         VkSemaphore signalSemaphores[] = { vkSyncObjects->getRenderFinishedSemaphore(imageIndex) };
         submitInfo.signalSemaphoreCount = 1;
         submitInfo.pSignalSemaphores = signalSemaphores;
@@ -347,7 +319,7 @@ private:
         VkPresentInfoKHR presentInfo{};
         presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
         presentInfo.waitSemaphoreCount = 1;
-        presentInfo.pWaitSemaphores = signalSemaphores; // Wait for the render to finish
+        presentInfo.pWaitSemaphores = signalSemaphores;
 
         VkSwapchainKHR swapChains[] = { vkSwapchain->getSwapchain() };
         presentInfo.swapchainCount = 1;
@@ -356,40 +328,7 @@ private:
 
         vkQueuePresentKHR(vkContext->getPresentQueue(), &presentInfo);
 
-        // Cycle the frame index (0 -> 1 -> 0)
         currentFrame = (currentFrame + 1) % VkSyncObjects::MAX_FRAMES_IN_FLIGHT;
-    }
-
-    void createVertexBuffer() {
-		VkDeviceSize bufferSize = sizeof(vertices[0]) * vertices.size();
-
-        // usage: It's a vertex buffer
-		// properties: HOST_VISIBLE (CPU can write to it) | HOST_COHERENT (Changes are visible immediately)
-		vkContext->createBuffer(bufferSize, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, 
-			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, 
-			vertexBuffer, vertexBufferMemory);
-
-        // Map the memory
-        void* data;
-		vkMapMemory(vkContext->getDevice(), vertexBufferMemory, 0, bufferSize, 0, &data);
-
-        // Copy the vertex data
-        memcpy(data, vertices.data(), (size_t)bufferSize);
-
-		// Unmap the memory (to flush the writes)
-		vkUnmapMemory(vkContext->getDevice(), vertexBufferMemory);
-    }
-
-    void createIndexBuffer() {
-        VkDeviceSize bufferSize = sizeof(indices[0]) * indices.size();
-        vkContext->createBuffer(bufferSize, VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
-            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-            indexBuffer, indexBufferMemory);
-
-        void* data;
-        vkMapMemory(vkContext->getDevice(), indexBufferMemory, 0, bufferSize, 0, &data);
-        memcpy(data, indices.data(), (size_t)bufferSize);
-        vkUnmapMemory(vkContext->getDevice(), indexBufferMemory);
     }
 
     void createUniformBuffers() {
@@ -412,38 +351,51 @@ private:
     }
 
     void updateUniformBuffer(uint32_t currentImage) {
-        static auto startTime = std::chrono::high_resolution_clock::now();
-        auto currentTime = std::chrono::high_resolution_clock::now();
-        float time = std::chrono::duration<float, std::chrono::seconds::period>(currentTime - startTime).count();
-
         UniformBufferObject ubo{};
 
-        // 1. Rotation (Rotate around the Z axis)
-        ubo.model = glm::rotate(glm::mat4(1.0f), time * glm::radians(90.0f), glm::vec3(1.0f, 1.0f, 0.0f));
+        // 1. Restore the Model Matrix (Identity is fine for the car itself)
+        ubo.model = glm::mat4(1.0f);
 
-		// 2. View (uses camera position and direction)
+        // 2. Restore the Camera View (This enables WASD/Mouse)
         ubo.view = glm::lookAt(cameraPos, cameraPos + cameraFront, cameraUp);
 
-        // 3. Perspective (FOV, Aspect Ratio, Near plane, Far plane)
+        // 3. Restore Perspective (This fixes the "flat" look)
         float aspectRatio = vkSwapchain->getExtent().width / (float)vkSwapchain->getExtent().height;
-        ubo.proj = glm::perspective(glm::radians(45.0f), aspectRatio, 0.1f, 10.0f);
+        ubo.proj = glm::perspective(glm::radians(45.0f), aspectRatio, 0.1f, 1000.0f);
 
-        // 4. Vulkan Y-Axis Flip Fix
+        // Vulkan Y-Flip
         ubo.proj[1][1] *= -1;
 
         memcpy(uniformBuffersMapped[currentImage], &ubo, sizeof(ubo));
     }
 
     void createDescriptorPool() {
-        VkDescriptorPoolSize poolSize{};
-        poolSize.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        poolSize.descriptorCount = static_cast<uint32_t>(vkSwapchain->getImageCount());
+        uint32_t imageCount = static_cast<uint32_t>(vkSwapchain->getImageCount());
+        uint32_t materialCount = static_cast<uint32_t>(mainModel->materials.size());
 
+        // 1. Calculate Limits
+        // We need one set for the Global Camera PER FRAME
+        // Plus one set for EACH Material PER FRAME
+        uint32_t maxSets = (1 + materialCount) * imageCount;
+
+        std::array<VkDescriptorPoolSize, 2> poolSizes{};
+
+        // 2. Uniform Buffers (Only needed for Global Sets now)
+        poolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        poolSizes[0].descriptorCount = imageCount; // We only need a few of these!
+
+        // 3. Combined Image Samplers (Only needed for Material Sets)
+        poolSizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        poolSizes[1].descriptorCount = materialCount * imageCount;
+
+        // 4. Create the Pool
         VkDescriptorPoolCreateInfo poolInfo{};
         poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        poolInfo.poolSizeCount = 1;
-        poolInfo.pPoolSizes = &poolSize;
-        poolInfo.maxSets = static_cast<uint32_t>(vkSwapchain->getImageCount());
+        poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
+        poolInfo.pPoolSizes = poolSizes.data();
+
+        // Crucial: Make sure we have enough room for BOTH types of sets
+        poolInfo.maxSets = maxSets;
 
         if (vkCreateDescriptorPool(vkContext->getDevice(), &poolInfo, nullptr, &descriptorPool) != VK_SUCCESS) {
             throw std::runtime_error("failed to create descriptor pool!");
@@ -451,22 +403,26 @@ private:
     }
 
     void createDescriptorSets() {
-        std::vector<VkDescriptorSetLayout> layouts(vkSwapchain->getImageCount(), 
-            vkPipeline->getDescriptorSetLayout());
+        uint32_t imageCount = static_cast<uint32_t>(vkSwapchain->getImageCount());
 
-        VkDescriptorSetAllocateInfo allocInfo{};
-        allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-        allocInfo.descriptorPool = descriptorPool;
-        allocInfo.descriptorSetCount = static_cast<uint32_t>(vkSwapchain->getImageCount());
-        allocInfo.pSetLayouts = layouts.data();
+        // Resize the vector to hold one set per frame
+        globalDescriptorSets.resize(imageCount);
 
-        descriptorSets.resize(vkSwapchain->getImageCount());
-        if (vkAllocateDescriptorSets(vkContext->getDevice(), &allocInfo, descriptorSets.data()) != VK_SUCCESS) {
-            throw std::runtime_error("failed to allocate descriptor sets!");
+        // Get the layout we created for Set 0
+        std::vector<VkDescriptorSetLayout> globalLayouts(imageCount, vkPipeline->getGlobalSetLayout());
+
+        VkDescriptorSetAllocateInfo globalAllocInfo{};
+        globalAllocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        globalAllocInfo.descriptorPool = descriptorPool;
+        globalAllocInfo.descriptorSetCount = imageCount;
+        globalAllocInfo.pSetLayouts = globalLayouts.data();
+
+        if (vkAllocateDescriptorSets(vkContext->getDevice(), &globalAllocInfo, globalDescriptorSets.data()) != VK_SUCCESS) {
+            throw std::runtime_error("failed to allocate global descriptor sets!");
         }
 
-        // Connect each buffer to its set
-        for (size_t i = 0; i < vkSwapchain->getImageCount(); i++) {
+        // Update Global Sets with the Uniform Buffer
+        for (size_t i = 0; i < imageCount; i++) {
             VkDescriptorBufferInfo bufferInfo{};
             bufferInfo.buffer = uniformBuffers[i];
             bufferInfo.offset = 0;
@@ -474,14 +430,63 @@ private:
 
             VkWriteDescriptorSet descriptorWrite{};
             descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            descriptorWrite.dstSet = descriptorSets[i];
-            descriptorWrite.dstBinding = 0; // Matches 'layout(binding = 0)' in shader
+            descriptorWrite.dstSet = globalDescriptorSets[i];
+            descriptorWrite.dstBinding = 0; // Binding 0 in Set 0
             descriptorWrite.dstArrayElement = 0;
             descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
             descriptorWrite.descriptorCount = 1;
             descriptorWrite.pBufferInfo = &bufferInfo;
 
             vkUpdateDescriptorSets(vkContext->getDevice(), 1, &descriptorWrite, 0, nullptr);
+        }
+
+        size_t numMaterials = mainModel->materials.size();
+        if (numMaterials == 0) return;
+
+        // Get the layout we created for Set 1
+        std::vector<VkDescriptorSetLayout> materialLayouts(imageCount, vkPipeline->getMaterialSetLayout());
+
+        for (size_t m = 0; m < numMaterials; m++) {
+            auto& material = mainModel->materials[m];
+
+            VkDescriptorSetAllocateInfo materialAllocInfo{};
+            materialAllocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+            materialAllocInfo.descriptorPool = descriptorPool;
+            materialAllocInfo.descriptorSetCount = imageCount;
+            materialAllocInfo.pSetLayouts = materialLayouts.data();
+
+            material.descriptorSets.resize(imageCount);
+
+            if (vkAllocateDescriptorSets(vkContext->getDevice(), &materialAllocInfo, material.descriptorSets.data()) != VK_SUCCESS) {
+                throw std::runtime_error("failed to allocate descriptor sets for material " + std::to_string(m));
+            }
+
+            // Determine which texture to use
+            int imgIdx = material.textureIndex;
+            if (imgIdx < 0 || imgIdx >= static_cast<int>(mainModel->textures.size())) {
+                imgIdx = 0; // Fallback
+            }
+
+            // Update Material Sets with the Texture
+            for (size_t i = 0; i < imageCount; i++) {
+                VkDescriptorImageInfo imageInfo{};
+                imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                imageInfo.imageView = mainModel->textures[imgIdx].view;
+                imageInfo.sampler = mainModel->textures[imgIdx].sampler;
+
+                VkWriteDescriptorSet descriptorWrite{};
+                descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                descriptorWrite.dstSet = material.descriptorSets[i];
+
+                descriptorWrite.dstBinding = 0;
+
+                descriptorWrite.dstArrayElement = 0;
+                descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                descriptorWrite.descriptorCount = 1;
+                descriptorWrite.pImageInfo = &imageInfo;
+
+                vkUpdateDescriptorSets(vkContext->getDevice(), 1, &descriptorWrite, 0, nullptr);
+            }
         }
     }
 
@@ -515,64 +520,165 @@ private:
         vkCreateImageView(vkContext->getDevice(), &viewInfo, nullptr, &depthImageView);
     }
 
+    void transitionImageLayout(VkImage image, VkFormat format, VkImageLayout oldLayout, VkImageLayout newLayout) {
+        VkCommandBuffer commandBuffer = vkCommandManager->beginSingleTimeCommands();
+
+        VkImageMemoryBarrier barrier{};
+        barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        barrier.oldLayout = oldLayout;
+        barrier.newLayout = newLayout;
+        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.image = image;
+
+        // Handle Aspect Mask
+        if (newLayout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL) {
+            barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+        }
+        else {
+            barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        }
+
+        barrier.subresourceRange.baseMipLevel = 0;
+        barrier.subresourceRange.levelCount = 1;
+        barrier.subresourceRange.baseArrayLayer = 0;
+        barrier.subresourceRange.layerCount = 1;
+
+        VkPipelineStageFlags sourceStage;
+        VkPipelineStageFlags destinationStage;
+
+        // Transition for Depth Buffer
+        if (oldLayout == VK_IMAGE_LAYOUT_UNDEFINED && newLayout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL) {
+            barrier.srcAccessMask = 0;
+            barrier.dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+            sourceStage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+            destinationStage = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+        }
+        // Transition for Textures
+        else if (oldLayout == VK_IMAGE_LAYOUT_UNDEFINED && newLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) {
+            barrier.srcAccessMask = 0;
+            barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            sourceStage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+            destinationStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+        }
+        else if (oldLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL && newLayout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
+            barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            sourceStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+            destinationStage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+        }
+        else {
+            throw std::invalid_argument("unsupported layout transition!");
+        }
+
+        vkCmdPipelineBarrier(commandBuffer, sourceStage, destinationStage, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+
+        vkCommandManager->endSingleTimeCommands(commandBuffer);
+    }
+
+    void copyBufferToImage(VkBuffer buffer, VkImage image, uint32_t width, uint32_t height) {
+        VkCommandBuffer commandBuffer = vkCommandManager->beginSingleTimeCommands();
+
+        VkBufferImageCopy region{};
+        region.bufferOffset = 0;
+        region.bufferRowLength = 0;
+        region.bufferImageHeight = 0;
+        region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        region.imageSubresource.mipLevel = 0;
+        region.imageSubresource.baseArrayLayer = 0;
+        region.imageSubresource.layerCount = 1;
+        region.imageOffset = { 0, 0, 0 };
+        region.imageExtent = { width, height, 1 };
+
+        vkCmdCopyBufferToImage(commandBuffer, buffer, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+
+        vkCommandManager->endSingleTimeCommands(commandBuffer);
+    }
+
+    void processInput(GLFWwindow* window) {
+        // Calculate velocity based on time, not frame rate
+        float velocity = cameraSpeed * deltaTime; // <--- ADD THIS
+
+        // Forward/Backward
+        if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS)
+            cameraPos += velocity * cameraFront;  // <--- USE velocity HERE
+        if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS)
+            cameraPos -= velocity * cameraFront;
+
+        // Left/Right
+        if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS)
+            cameraPos -= glm::normalize(glm::cross(cameraFront, cameraUp)) * velocity;
+        if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS)
+            cameraPos += glm::normalize(glm::cross(cameraFront, cameraUp)) * velocity;
+
+        // Up/Down
+        if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS)
+            cameraPos += velocity * cameraUp;
+        if (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS)
+            cameraPos -= velocity * cameraUp;
+    }
+
     void mainLoop() {
-        double lastTime = glfwGetTime();
-        int nbFrames = 0;
+        Registry registry;
+        Entity car = registry.createEntity();
+
+        registry.addComponent<TransformComponent>(car, glm::vec3(0.0f), glm::vec3(0.0f), glm::vec3(1.0f));
+        registry.addComponent<MeshComponent>(car, mainModel);
+
+        float lastFrameTime = 0.0f;
 
         while (!glfwWindowShouldClose(window)) {
+            float currentFrameTime = static_cast<float>(glfwGetTime());
+            deltaTime = currentFrameTime - lastFrameTime;
+            lastFrameTime = currentFrameTime;
+
             glfwPollEvents();
+            processInput(window);
 
-            // 1. Calculate Delta Time (Time per frame)
-            float currentFrameTime = (float)glfwGetTime();
-            deltaTime = currentFrameTime - lastFrame;
-            lastFrame = currentFrameTime;
+            // --- UPDATE SYSTEM ---
+            // 1. Only call this ONCE per frame
+            editor.update(registry, assetManager);
 
-            // 2. Camera Controls (WASD)
-            float velocity = cameraSpeed * deltaTime;
+            // 2. Build the render queue from the ECS
+            std::vector<RenderObject> renderQueue;
+            auto* meshPool = registry.getPool<MeshComponent>();
+            auto* transformPool = registry.getPool<TransformComponent>();
 
-            // Move Forward/Backward
-            if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS)
-                cameraPos += cameraSpeed * cameraFront * deltaTime;
-            if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS)
-                cameraPos -= cameraSpeed * cameraFront * deltaTime;
-
-            // Move Left/Right (Cross product gets the vector perpendicular to "Forward" and "Up")
-            if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS)
-                cameraPos -= glm::normalize(glm::cross(cameraFront, cameraUp)) * velocity;
-            if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS)
-                cameraPos += glm::normalize(glm::cross(cameraFront, cameraUp)) * velocity;
-
-            // 3. Optional: Vertical Movement (Space/Shift)
-            if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS)
-                cameraPos += cameraUp * velocity;
-            if (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS)
-                cameraPos -= cameraUp * velocity;
-
-            // Pass empty constants for now (or keep using them for the object position if you like)
-            MeshPushConstants constants{};
-            constants.offset = squarePos; // We keep this if you still want the object to move separately
-            constants.scale = glm::vec2(1.0f);
-
-            // Measure FPS
-            double currentTime = glfwGetTime();
-            nbFrames++;
-
-            if (currentTime - lastTime >= 1.0) {
-                // Create title string: "Iridium Engine - [ 144 FPS ]"
-                std::string title = "Iridium Engine - [ " + std::to_string(nbFrames) + " FPS ]";
-                glfwSetWindowTitle(window, title.c_str());
-
-                // Reset
-                nbFrames = 0;
-                lastTime += 1.0;
+            for (size_t i = 0; i < meshPool->components.size(); i++) {
+                Entity e = meshPool->entities[i];
+                if (transformPool->sparseMap.contains(e) && meshPool->components[i].enabled) {
+                    RenderObject obj;
+                    obj.model = meshPool->components[i].model;
+                    obj.transform = transformPool->get(e).mat4();
+                    renderQueue.push_back(obj);
+                }
             }
 
-            drawFrame(constants);
+            // --- RENDER SYSTEM ---
+            drawFrame(renderQueue);
+
+            // Update Window Title (FPS)
+            static double lastFpsUpdate = 0;
+            static int frameCount = 0;
+            frameCount++;
+            if (currentFrameTime - lastFpsUpdate >= 1.0) {
+                std::string title = "Iridium Engine | " + std::to_string(frameCount) + " FPS";
+                glfwSetWindowTitle(window, title.c_str());
+                frameCount = 0;
+                lastFpsUpdate = currentFrameTime;
+            }
         }
         vkDeviceWaitIdle(vkContext->getDevice());
     }
 
     void cleanup() {
+        vkDeviceWaitIdle(vkContext->getDevice());
+        editor.cleanup(vkContext->getDevice());
+
+        // 1. AssetManager destructor cleans up all Models, Buffers, and Textures automatically.
+        delete assetManager;
+
+        // 2. Clean up "Global" resources that belong to the Engine, not the Assets.
         vkDestroyImageView(vkContext->getDevice(), depthImageView, nullptr);
         vkDestroyImage(vkContext->getDevice(), depthImage, nullptr);
         vkFreeMemory(vkContext->getDevice(), depthImageMemory, nullptr);
@@ -583,10 +689,6 @@ private:
         }
 
         vkDestroyDescriptorPool(vkContext->getDevice(), descriptorPool, nullptr);
-        vkDestroyBuffer(vkContext->getDevice(), indexBuffer, nullptr);
-        vkFreeMemory(vkContext->getDevice(), indexBufferMemory, nullptr);
-        vkDestroyBuffer(vkContext->getDevice(), vertexBuffer, nullptr);
-        vkFreeMemory(vkContext->getDevice(), vertexBufferMemory, nullptr);
 
         delete vkSyncObjects;
         delete vkCommandManager;
@@ -594,7 +696,7 @@ private:
         delete vkPipeline;
         delete vkRenderPass;
         delete vkSwapchain;
-        delete vkContext;
+        delete vkContext; // Context goes last (mostly)
 
         glfwDestroyWindow(window);
         glfwTerminate();
