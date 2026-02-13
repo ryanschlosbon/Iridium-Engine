@@ -91,7 +91,8 @@ void VkCommandManager::endSingleTimeCommands(VkCommandBuffer commandBuffer) {
 
 void VkCommandManager::recordCommands(uint32_t imageIndex, VkRenderPassWrapper* renderPass,
     VkFramebufferWrapper* framebuffer, VkGraphicsPipeline* pipeline, VkExtent2D extent,
-    const std::vector<RenderObject>& renderQueue, const std::vector<VkDescriptorSet>& globalSets,
+    Registry& registry, // <--- USING REGISTRY
+    const std::vector<VkDescriptorSet>& globalSets,
     EditorSystem* editor) {
 
     VkCommandBuffer cmd = commandBuffers[imageIndex];
@@ -115,7 +116,7 @@ void VkCommandManager::recordCommands(uint32_t imageIndex, VkRenderPassWrapper* 
 
     vkCmdBeginRenderPass(cmd, &rpInfo, VK_SUBPASS_CONTENTS_INLINE);
 
-    // 2. Bind Pipeline & Dynamic State
+    // 2. Bind Pipeline & Global State
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline->getPipeline());
 
     VkViewport viewport{ 0.0f, 0.0f, (float)extent.width, (float)extent.height, 0.0f, 1.0f };
@@ -126,34 +127,98 @@ void VkCommandManager::recordCommands(uint32_t imageIndex, VkRenderPassWrapper* 
 
     VkPipelineLayout layout = pipeline->getPipelineLayout();
 
-    // 3. GLOBAL CAMERA (Set 0) - Bind ONCE per frame
+    // Bind Global Camera Data (Set 0)
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &globalSets[imageIndex], 0, nullptr);
 
-    // 4. RENDER LOOP (The Optimized Batch)
-    for (const auto& obj : renderQueue) {
-        // A. Bind VBO/IBO once for the entire car
-        VkDeviceSize offset = 0;
-        vkCmdBindVertexBuffers(cmd, 0, 1, &obj.model->vertexBuffer, &offset);
-        vkCmdBindIndexBuffer(cmd, obj.model->indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+    // MODE 1: WIREFRAME
+    if (editor && editor->currentRenderMode == 1) {
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline->getWireframePipeline());
+    }
+    // MODE 0: STANDARD (Default)
+    else {
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline->getPipeline());
+    }
 
-        // Pass the Entity's world transform (like car position)
-        vkCmdPushConstants(cmd, layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4), &obj.transform);
+    // 3. ECS RENDER LOOP
+    // Get the pools directly (since your Registry doesn't have .view())
+    auto* meshPool = registry.getPool<MeshComponent>();
+    auto* transformPool = registry.getPool<TransformComponent>();
 
-        // 3. Loop through ONLY the merged "Super Meshes"
-        for (const auto& subMesh : obj.model->subMeshes) {
-            auto& mat = obj.model->materials[subMesh.materialIndex];
+    // Iterate through all entities that have a MESH
+    // (We iterate meshes because we only want to draw things that exist visibly)
+    for (uint32_t entity : meshPool->entities) {
 
-            // Bind texture once per material type
-            if (!mat.descriptorSets.empty()) {
-                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 1, 1, &mat.descriptorSets[imageIndex], 0, nullptr);
+        // Check: Does this mesh entity ALSO have a Transform?
+        // (We can't draw it if we don't know where it is)
+        if (transformPool->sparseMap.contains(entity)) {
+
+            // A. Retrieve the live components
+            auto& meshComp = meshPool->get(entity);
+            auto& transformComp = transformPool->get(entity);
+
+            // B. Bind VBO/IBO (Mesh Data)
+            VkDeviceSize offset = 0;
+            vkCmdBindVertexBuffers(cmd, 0, 1, &meshComp.model->vertexBuffer, &offset);
+            vkCmdBindIndexBuffer(cmd, meshComp.model->indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+
+            // C. Push the CALCULATED World Matrix (From TransformSystem)
+            // This 'worldMatrix' was updated by TransformSystem::update() right before this function ran
+            vkCmdPushConstants(cmd, layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4), &transformComp.worldMatrix);
+
+            // D. Draw the Submeshes (Materials)
+            for (const auto& subMesh : meshComp.model->subMeshes) {
+                auto& mat = meshComp.model->materials[subMesh.materialIndex];
+
+                // Bind Material Textures (Set 1)
+                if (!mat.descriptorSets.empty()) {
+                    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 1, 1, &mat.descriptorSets[imageIndex], 0, nullptr);
+                }
+
+                vkCmdDrawIndexed(cmd, subMesh.indexCount, 1, subMesh.indexStart, 0, 0);
             }
-
-            // ONE draw call for all "Chrome" parts, ONE for all "Rubber", etc.
-            vkCmdDrawIndexed(cmd, subMesh.indexCount, 1, subMesh.indexStart, 0, 0);
         }
     }
 
-    // 5. Editor UI
+    if (editor && editor->getSelectedEntity() != NULL_ENTITY) {
+        Entity selected = editor->getSelectedEntity();
+
+        // Check if our selection actually has a mesh to outline
+        auto* meshPool = registry.getPool<MeshComponent>();
+        auto* transformPool = registry.getPool<TransformComponent>();
+
+        bool hasMesh = false;
+        for (auto e : meshPool->entities) { if (e == selected) hasMesh = true; }
+
+        if (hasMesh && transformPool->sparseMap.contains(selected)) {
+
+            // 1. Switch to Outline Pipeline (Green, Cull Front)
+            if (editor && editor->currentRenderMode == 1) {
+                // If in Wireframe Mode -> Use Wireframe Outline (The Green Cage)
+                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline->getOutlineWireframePipeline());
+            }
+            else {
+                // If in Solid Mode -> Use Solid Outline (The Green Shell)
+                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline->getOutlinePipeline());
+            }
+            auto& meshComp = meshPool->get(selected);
+            auto& transformComp = transformPool->get(selected);
+
+            // 2. Bind Mesh (Same VBO/IBO)
+            VkDeviceSize offset = 0;
+            vkCmdBindVertexBuffers(cmd, 0, 1, &meshComp.model->vertexBuffer, &offset);
+            vkCmdBindIndexBuffer(cmd, meshComp.model->indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+
+            // 3. Push Transform (Same Matrix)
+            vkCmdPushConstants(cmd, layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4), &transformComp.worldMatrix);
+
+            // 4. Draw (No materials needed, the shader is solid green)
+            for (const auto& subMesh : meshComp.model->subMeshes) {
+                vkCmdDrawIndexed(cmd, subMesh.indexCount, 1, subMesh.indexStart, 0, 0);
+            }
+        }
+    }
+
+    // 4. Editor UI
     if (editor) {
         editor->render(cmd);
     }

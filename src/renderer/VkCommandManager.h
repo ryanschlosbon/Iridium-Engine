@@ -5,6 +5,8 @@
 #include "VkGraphicsPipeline.h"
 #include "VkMesh.h"
 #include "editor/EditorSystem.h"
+#include "scene/Registry.h"
+#include "scene/Components.h"
 
 class EditorSystem;
 
@@ -23,14 +25,12 @@ public:
 	~VkCommandManager();
 
 	// The function that writes the commands into the command buffer
-	void recordCommands(uint32_t imageIndex,
-		VkRenderPassWrapper* renderPass,
-		VkFramebufferWrapper* framebuffer,
-		VkGraphicsPipeline* pipeline,
-		VkExtent2D extent,
-		const std::vector<RenderObject>& renderQueue, 
-		const std::vector<VkDescriptorSet>& descriptorSets,
+	void recordCommands(uint32_t imageIndex, VkRenderPassWrapper* renderPass,
+		VkFramebufferWrapper* framebuffer, VkGraphicsPipeline* pipeline, 
+		VkExtent2D extent, Registry& registry,
+		const std::vector<VkDescriptorSet>& globalSets,
 		EditorSystem* editor);
+
 	void transitionImageLayout(VkImage image, VkFormat format, VkImageLayout oldLayout, VkImageLayout newLayout);
 	void copyBufferToImage(VkBuffer buffer, VkImage image, uint32_t width, uint32_t height);
 

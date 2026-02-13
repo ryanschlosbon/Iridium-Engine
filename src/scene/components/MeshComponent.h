@@ -1,8 +1,8 @@
 #pragma once
 #include <memory>
-#include "assets/AssetManager.h" // To access the ModelAsset struct
+#include "assets/AssetManager.h" // Fix path relative to this folder
 
-struct MeshComponent { 
-    std::shared_ptr<ModelAsset> model; 
+struct MeshComponent {
+    std::shared_ptr<ModelAsset> model;
     bool enabled = true;
 };

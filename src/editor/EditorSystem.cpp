@@ -2,9 +2,11 @@
 #include "scene/Components.h" // Need access to Transform/Mesh components
 #include <vector>
 #include <iostream>
+#include <glm/gtc/type_ptr.hpp>
 #include "imgui.h"
 #include "backends/imgui_impl_vulkan.h"
 #include "backends/imgui_impl_glfw.h"
+#include "vendor/imguizmo/ImGuizmo.h"
 
 static void check_vk_result(VkResult err) {
     if (err == 0) return;
@@ -78,11 +80,13 @@ void EditorSystem::cleanup(VkDevice device) {
     vkDestroyDescriptorPool(device, imguiPool, nullptr);
 }
 
-void EditorSystem::update(Registry& registry, AssetManager* assetManager) {
+void EditorSystem::update(Registry& registry, AssetManager* assetManager,
+    const glm::mat4& view, const glm::mat4& proj) {
     // Start the frame
     ImGui_ImplVulkan_NewFrame();
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
+    ImGuizmo::BeginFrame();
 
     // --- WINDOW 1: SCENE HIERARCHY ---
     ImGui::Begin("Scene Hierarchy");
@@ -121,21 +125,109 @@ void EditorSystem::update(Registry& registry, AssetManager* assetManager) {
     }
     ImGui::End();
 
-    // --- WINDOW 2: INSPECTOR ---
+    // --- WINDOW 2: INSPECTOR & Gizmo ---
     ImGui::Begin("Inspector");
+
     if (selectedEntity != NULL_ENTITY) {
         auto* transformPool = registry.getPool<TransformComponent>();
 
         // Check if selected entity has a transform
-        if (transformPool->sparseMap.contains(selectedEntity)) {
+        if (transformPool->has(selectedEntity)) {
             auto& transform = transformPool->get(selectedEntity);
 
-            ImGui::Text("Transform Component");
-            // Direct memory access allows real-time editing!
-            ImGui::DragFloat3("Position", &transform.position.x, 0.1f);
-            ImGui::DragFloat3("Rotation", &transform.rotation.x, 1.0f);
-            ImGui::DragFloat3("Scale", &transform.scale.x, 0.1f);
+            // Delete Button
+            ImGui::PushStyleColor(ImGuiCol_Button, (ImVec4)ImColor::HSV(0.0f, 0.6f, 0.6f));
+
+            if (ImGui::Button("DELETE ENTITY")) {
+                // We'll implement this function in Registry next
+                registry.destroyEntity(selectedEntity);
+                selectedEntity = NULL_ENTITY;
+                ImGui::PopStyleColor();
+                ImGui::End();
+                ImGui::Render();
+                return; // Exit early so we don't crash accessing a dead entity
+            }
+            ImGui::PopStyleColor();
+
+            if (ImGui::RadioButton("Translate", currentGizmoOperation == ImGuizmo::TRANSLATE))
+                currentGizmoOperation = ImGuizmo::TRANSLATE;
+            ImGui::SameLine();
+            if (ImGui::RadioButton("Rotate", currentGizmoOperation == ImGuizmo::ROTATE))
+                currentGizmoOperation = ImGuizmo::ROTATE;
+            ImGui::SameLine();
+            if (ImGui::RadioButton("Scale", currentGizmoOperation == ImGuizmo::SCALE))
+                currentGizmoOperation = ImGuizmo::SCALE;
+
+            if (ImGui::DragFloat3("Position", &transform.position.x, 0.1f)) {
+                transform.isDirty = true;
+            }
+            if (ImGui::DragFloat3("Rotation", &transform.rotation.x, 1.0f)) {
+                transform.isDirty = true;
+            }
+            if (ImGui::DragFloat3("Scale", &transform.scale.x, 0.1f)) {
+                transform.isDirty = true;
+            }
+
+            ImGuiIO& io = ImGui::GetIO();
+            ImGuizmo::SetRect(0, 0, io.DisplaySize.x, io.DisplaySize.y);
+
+            // ImGuizmo needs a mutable model matrix
+            glm::mat4 modelMatrix = transform.worldMatrix;
+
+            // Draw it!
+            ImGuizmo::Manipulate(
+                glm::value_ptr(view),
+                glm::value_ptr(proj),
+                (ImGuizmo::OPERATION)currentGizmoOperation,
+                ImGuizmo::LOCAL,
+                glm::value_ptr(modelMatrix)
+            );
+
+            if (ImGuizmo::IsUsing()) {
+                float translation[3], rotation[3], scale[3];
+                ImGuizmo::DecomposeMatrixToComponents(
+                    glm::value_ptr(modelMatrix), translation, rotation, scale
+                );
+
+                // Update component and flag as dirty
+                transform.position = glm::make_vec3(translation);
+                transform.rotation = glm::make_vec3(rotation);
+                transform.scale = glm::make_vec3(scale);
+                transform.isDirty = true;
+            }
         }
+    }
+    ImGui::End();
+
+    // --- WINDOW 3: RENDER MODE DROPDOWN (Overlay) ---
+    // Calculate position: Top-Right corner with 10px padding
+    const float PAD = 10.0f;
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    ImVec2 workPos = viewport->WorkPos; // Top-left of working area
+    ImVec2 workSize = viewport->WorkSize;
+    ImVec2 windowPos;
+    windowPos.x = workPos.x + workSize.x - PAD;
+    windowPos.y = workPos.y + PAD;
+
+    // Pivot: (1,0) means the x,y coordinate refers to the window's Top-Right corner
+    ImGui::SetNextWindowPos(windowPos, ImGuiCond_Always, ImVec2(1.0f, 0.0f));
+
+    // Transparent background, no title bar, no resize, always auto-fit
+    ImGui::SetNextWindowBgAlpha(0.35f); // Make it slightly transparent
+    ImGuiWindowFlags windowFlags = ImGuiWindowFlags_NoDecoration |
+        ImGuiWindowFlags_AlwaysAutoResize |
+        ImGuiWindowFlags_NoSavedSettings |
+        ImGuiWindowFlags_NoFocusOnAppearing |
+        ImGuiWindowFlags_NoNav;
+
+    if (ImGui::Begin("RenderModeOverlay", nullptr, windowFlags)) {
+        ImGui::Text("View Mode");
+        ImGui::SameLine();
+
+        // The Dropdown
+        const char* items[] = { "Standard", "Wireframe", "Outline Only" }; // Added 'Outline' for future use!
+        ImGui::SetNextItemWidth(110);
+        ImGui::Combo("##renderMode", &currentRenderMode, items, IM_ARRAYSIZE(items));
     }
     ImGui::End();
 

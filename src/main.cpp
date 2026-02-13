@@ -23,10 +23,10 @@
 #include "renderer/VkSyncObjects.h"
 #include "renderer/VkMesh.h"
 #include "assets/AssetManager.h"  
+#include "scene/Components.h"
 #include "scene/Registry.h"
-#include "scene/components/MeshComponent.h"
-#include "scene/components/TransformComponent.h"
 #include "editor/EditorSystem.h"
+#include "scene/TransformSystem.h"
 
 // CONSTANTS
 const int WIDTH = 1280;
@@ -116,6 +116,14 @@ public:
     static void mouse_button_callback(GLFWwindow* window, int button, int action, int mods) {
         auto* app = reinterpret_cast<IridiumEngine*>(glfwGetWindowUserPointer(window));
 
+        if (ImGui::GetIO().WantCaptureMouse) return;
+
+        if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS) {
+            double xpos, ypos;
+            glfwGetCursorPos(window, &xpos, &ypos);
+            app->selectEntityAtMouse(xpos, ypos); // <--- CALL IT
+        }
+
         if (button == GLFW_MOUSE_BUTTON_RIGHT) {
             if (action == GLFW_PRESS) {
                 app->isRightMouseButtonDown = true;
@@ -162,6 +170,8 @@ private:
     EditorSystem editor;
     std::vector<VkDescriptorSet> globalDescriptorSets;
     bool enableValidation = false;
+    TransformSystem transformSystem;
+    Registry registry;
 
     glm::vec2 squarePos = { 0.0f, 0.0f };
     std::vector<VkBuffer> uniformBuffers;
@@ -248,7 +258,8 @@ private:
         );
     }
 
-    void drawFrame(const std::vector<RenderObject>& renderQueue) {
+    // CHANGED: Added view and proj to the arguments
+    void drawFrame(Registry& registry, const glm::mat4& view, const glm::mat4& proj) {
         // 1. Wait for CPU-GPU sync (Frame 0 or 1)
         VkFence currentFence = vkSyncObjects->getInFlightFence(currentFrame);
 
@@ -256,7 +267,8 @@ private:
 
         vkWaitForFences(vkContext->getDevice(), 1, &inFlightFence, VK_TRUE, UINT64_MAX);
 
-        updateUniformBuffer(currentFrame);
+        // CHANGED: Pass the matrices here!
+        updateUniformBuffer(currentFrame, view, proj);
 
         // 2. Acquire the next image
         uint32_t imageIndex;
@@ -277,11 +289,8 @@ private:
         // 4. Reset the fence now that we are moving forward
         vkResetFences(vkContext->getDevice(), 1, &currentFence);
 
-        // 5. Update data
-        updateUniformBuffer(imageIndex);
-
-        // FIX: Do NOT create a local renderQueue here. 
-        // We use the 'renderQueue' argument passed into the function.
+        // 5. Update data (Pass matrices here too just in case)
+        updateUniformBuffer(imageIndex, view, proj);
 
         vkCommandManager->recordCommands(
             imageIndex,
@@ -289,7 +298,7 @@ private:
             vkFramebuffer,
             vkPipeline,
             vkSwapchain->getExtent(),
-            renderQueue,
+            registry,
             globalDescriptorSets,
             &editor
         );
@@ -350,21 +359,21 @@ private:
         }
     }
 
-    void updateUniformBuffer(uint32_t currentImage) {
+    // CHANGED: Added view and proj arguments
+    void updateUniformBuffer(uint32_t currentImage, const glm::mat4& view, const glm::mat4& proj) {
         UniformBufferObject ubo{};
 
-        // 1. Restore the Model Matrix (Identity is fine for the car itself)
+        // 1. Model Matrix (Identity)
         ubo.model = glm::mat4(1.0f);
 
-        // 2. Restore the Camera View (This enables WASD/Mouse)
-        ubo.view = glm::lookAt(cameraPos, cameraPos + cameraFront, cameraUp);
+        // 2. View Matrix (Passed in)
+        ubo.view = view;
 
-        // 3. Restore Perspective (This fixes the "flat" look)
-        float aspectRatio = vkSwapchain->getExtent().width / (float)vkSwapchain->getExtent().height;
-        ubo.proj = glm::perspective(glm::radians(45.0f), aspectRatio, 0.1f, 1000.0f);
+        // 3. Projection Matrix (Passed in)
+        ubo.proj = proj;
 
-        // Vulkan Y-Flip
-        ubo.proj[1][1] *= -1;
+        // Note: The Y-Flip happened in mainLoop before passing 'proj' here, 
+        // so we don't need to do it again!
 
         memcpy(uniformBuffersMapped[currentImage], &ubo, sizeof(ubo));
     }
@@ -596,6 +605,8 @@ private:
     }
 
     void processInput(GLFWwindow* window) {
+        if (ImGui::GetIO().WantTextInput) return;
+
         // Calculate velocity based on time, not frame rate
         float velocity = cameraSpeed * deltaTime; // <--- ADD THIS
 
@@ -618,11 +629,71 @@ private:
             cameraPos -= velocity * cameraUp;
     }
 
+    // Helper function to cast a ray and find the closest entity
+    void selectEntityAtMouse(double mouseX, double mouseY) {
+        // 1. Calculate standard matrices (Same as mainLoop)
+        float aspectRatio = vkSwapchain->getExtent().width / (float)vkSwapchain->getExtent().height;
+        glm::mat4 view = glm::lookAt(cameraPos, cameraPos + cameraFront, cameraUp);
+        glm::mat4 proj = glm::perspective(glm::radians(45.0f), aspectRatio, 0.1f, 1000.0f);
+
+        // 2. Convert Mouse (Screen) to Ray (World)
+        // Normalized Device Coordinates (-1 to +1)
+        float x = (2.0f * static_cast<float>(mouseX)) / WIDTH - 1.0f;
+        float y = 1.0f - (2.0f * static_cast<float>(mouseY)) / HEIGHT; // Vulkan Y is flipped? Standard GLM inverse handles OpenGL style usually.
+
+        glm::vec4 rayClip = glm::vec4(x, y, -1.0f, 1.0f);
+        glm::vec4 rayEye = glm::inverse(proj) * rayClip;
+        rayEye = glm::vec4(rayEye.x, rayEye.y, -1.0f, 0.0f);
+        glm::vec3 rayWorld = glm::normalize(glm::vec3(glm::inverse(view) * rayEye));
+
+        // 3. Check Intersection with all Mesh Entities
+        float closestDist = 10000.0f;
+        Entity closestEntity = NULL_ENTITY;
+
+        auto* meshPool = registry.getPool<MeshComponent>();
+        auto* transformPool = registry.getPool<TransformComponent>();
+
+        for (uint32_t entity : meshPool->entities) {
+            if (!transformPool->sparseMap.contains(entity)) continue;
+
+            auto& transform = transformPool->get(entity);
+
+            // Simple Sphere Intersection
+            // Radius approx = max scale * 1.5
+            float radius = 1.5f * std::max({ transform.scale.x, transform.scale.y, transform.scale.z });
+
+            glm::vec3 sphereCenter = transform.position;
+            glm::vec3 toSphere = sphereCenter - cameraPos;
+            float t = glm::dot(toSphere, rayWorld);
+
+            if (t > 0.0f) {
+                glm::vec3 closestPoint = cameraPos + (rayWorld * t);
+                float dist = glm::distance(closestPoint, sphereCenter);
+
+                if (dist < radius) {
+                    if (t < closestDist) {
+                        closestDist = t;
+                        closestEntity = entity;
+                    }
+                }
+            }
+        }
+
+        // 4. Update Editor
+        editor.setSelectedEntity(closestEntity);
+    }
+
     void mainLoop() {
-        Registry registry;
+        TransformSystem transformSystem; // <--- 1. Instantiate the System
+
         Entity car = registry.createEntity();
 
+        // 2. Add Components
+        // Because your Registry uses brace initialization {args...}, this works perfectly.
+        // It fills position, rotation, and scale. The matrices default to Identity.
         registry.addComponent<TransformComponent>(car, glm::vec3(0.0f), glm::vec3(0.0f), glm::vec3(1.0f));
+
+        // This fills 'model'. 'enabled' defaults to true.
         registry.addComponent<MeshComponent>(car, mainModel);
 
         float lastFrameTime = 0.0f;
@@ -635,27 +706,28 @@ private:
             glfwPollEvents();
             processInput(window);
 
+            // --- 1. CALCULATE MATRICES ---
+            // We need these for the Editor Gizmos
+            glm::mat4 view = glm::lookAt(cameraPos, cameraPos + cameraFront, cameraUp);
+
+            float aspectRatio = vkSwapchain->getExtent().width / (float)vkSwapchain->getExtent().height;
+            glm::mat4 proj = glm::perspective(glm::radians(45.0f), aspectRatio, 0.1f, 1000.0f);
+            glm::mat4 editorProj = proj;
+
+            // Vulkan Y-Flip (Important for Gizmos to match the scene!)
+            proj[1][1] *= -1;
+
             // --- UPDATE SYSTEM ---
-            // 1. Only call this ONCE per frame
-            editor.update(registry, assetManager);
+            editor.update(registry, assetManager, view, editorProj);
 
-            // 2. Build the render queue from the ECS
-            std::vector<RenderObject> renderQueue;
-            auto* meshPool = registry.getPool<MeshComponent>();
-            auto* transformPool = registry.getPool<TransformComponent>();
-
-            for (size_t i = 0; i < meshPool->components.size(); i++) {
-                Entity e = meshPool->entities[i];
-                if (transformPool->sparseMap.contains(e) && meshPool->components[i].enabled) {
-                    RenderObject obj;
-                    obj.model = meshPool->components[i].model;
-                    obj.transform = transformPool->get(e).mat4();
-                    renderQueue.push_back(obj);
-                }
-            }
+            // 3. Calculate Transforms
+            // This takes the inputs (Position/Rotation) and fills the outputs (WorldMatrix)
+            transformSystem.update(registry);
 
             // --- RENDER SYSTEM ---
-            drawFrame(renderQueue);
+            // 4. Pass the Registry directly!
+            // No more manual loop here. The CommandManager handles the iteration.
+            drawFrame(registry, view, proj);
 
             // Update Window Title (FPS)
             static double lastFpsUpdate = 0;

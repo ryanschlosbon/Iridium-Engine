@@ -29,7 +29,13 @@ public:
         return components[sparseMap[entity]];
     }
 
+    bool has(Entity entity) {
+        return sparseMap.find(entity) != sparseMap.end();
+    }
+
     void remove(Entity entity) override {
+        if (sparseMap.find(entity) == sparseMap.end()) return;
+
         size_t index = sparseMap[entity];
         size_t lastIndex = components.size() - 1;
 
@@ -68,6 +74,16 @@ public:
             pools[typeIdx] = std::make_unique<ComponentPool<T>>();
         }
         return static_cast<ComponentPool<T>*>(pools[typeIdx].get());
+    }
+
+    void destroyEntity(Entity entity) {
+        // Iterate over all active pools
+        for (auto& pair : pools) {
+            // We need to check if the entity is actually IN this pool before removing
+            // But since 'IComponentPool' is generic, we rely on the 'remove' implementation 
+            // to be safe.
+            pair.second->remove(entity);
+        }
     }
 
 private:

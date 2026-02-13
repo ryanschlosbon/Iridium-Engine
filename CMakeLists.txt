@@ -109,7 +109,11 @@ add_executable(IridiumEngine
     "src/vendor/imgui/backends/imgui_impl_glfw.cpp"
     "src/vendor/imgui/backends/imgui_impl_vulkan.cpp" 
     "src/editor/EditorSystem.h" 
-    "src/editor/EditorSystem.cpp")
+    "src/editor/EditorSystem.cpp" 
+    "src/scene/TransformSystem.cpp" 
+    "src/scene/TransformSystem.h" 
+    "src/scene/components/RelationshipComponent.h"
+    "src/vendor/imguizmo/ImGuizmo.cpp")
 
 add_compile_definitions(PROJECT_ROOT_DIR="${CMAKE_CURRENT_SOURCE_DIR}/")
 

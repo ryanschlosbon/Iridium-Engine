@@ -19,10 +19,19 @@ public:
     void cleanup(VkDevice device);
 
     // This renders the actual UI windows (Hierarchy, Inspector, etc.)
-    void update(Registry& registry, AssetManager* assetManager);
+    void update(Registry& registry, AssetManager* assetManager,
+        const glm::mat4& view, const glm::mat4& proj);
 
     // This records the draw commands into the Vulkan buffer
     void render(VkCommandBuffer cmd);
+
+    int currentGizmoOperation = 0;
+
+    Entity getSelectedEntity() { return selectedEntity; }
+
+    int currentRenderMode = 0; // 0 = Standard, 1 = Wireframe
+
+    void setSelectedEntity(Entity e) { selectedEntity = e; }
 
 private:
     VkDescriptorPool imguiPool;

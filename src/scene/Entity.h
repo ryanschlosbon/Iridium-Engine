@@ -4,4 +4,4 @@
 // In ECS, an Entity is JUST an ID. 
 // We don't use a class because the data lives in the Registry pools.
 using Entity = uint32_t;
-const Entity NULL_ENTITY = 0xFFFFFFFF;
+constexpr Entity NULL_ENTITY = ~0u;
