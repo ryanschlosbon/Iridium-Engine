@@ -120,6 +120,14 @@ void VkContext::createInstance() {
 	// Convert to a vector so we can add more later as needed
 	std::vector<const char*> extensions(glfwExtensions, glfwExtensions + glfwExtensionCount);
 
+	// 1. MAC SPECIFIC: Enable Portability Enumeration Extension
+	// This flags to the loader that we want to see MoltenVK devices.
+	#ifdef __APPLE__
+		extensions.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
+		// You might also need this one for proper device properties on Mac
+		extensions.push_back(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME);
+	#endif
+
 	// If we are debugging, we add the Debug Utils extension
 	if (enableValidationLayers) {
 		extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
@@ -135,6 +143,11 @@ void VkContext::createInstance() {
 	else {
 		createInfo.enabledLayerCount = 0;
 	}
+
+	// 2. MAC SPECIFIC: Set the Flag
+	#ifdef __APPLE__
+		createInfo.flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
+	#endif
 
 	// User Vulkan Check
 	// If it fails it means the user doesn't have Vulkan installed, or something is wrong with the installation
@@ -277,67 +290,78 @@ QueueFamilyIndices VkContext::findQueueFamilies(VkPhysicalDevice device) {
 }
 
 void VkContext::createLogicalDevice() {
-	// Get the indices again so we know what to create
-	QueueFamilyIndices indices = findQueueFamilies(physicalDevice);
+    // 1. Queue Family Logic
+    QueueFamilyIndices indices = findQueueFamilies(physicalDevice);
 
-	std::vector<VkDeviceQueueCreateInfo> queueCreateInfos;
-	// We use a set to ensure we don't create the same queue twice
-	std::set<uint32_t> uniqueQueueFamilies = {
-		indices.graphicsFamily.value(),
-		indices.presentFamily.value()
-	};
+    std::vector<VkDeviceQueueCreateInfo> queueCreateInfos;
+    std::set<uint32_t> uniqueQueueFamilies = {
+       indices.graphicsFamily.value(),
+       indices.presentFamily.value()
+    };
 
-	// Vulkan requires us to assign a priority (0.0 to 1.0) to queues.
-	// This influences scheduling if you have multple threads fighting for the GPU
-	float queuePriority = 1.0f;
+    float queuePriority = 1.0f;
 
-	// Create the info struct for every unique queue family we need
-	for (uint32_t queueFamily : uniqueQueueFamilies) {
-		VkDeviceQueueCreateInfo queueCreateInfo{};
-		queueCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
-		queueCreateInfo.queueFamilyIndex = queueFamily;
-		queueCreateInfo.queueCount = 1;
-		queueCreateInfo.pQueuePriorities = &queuePriority;
-		queueCreateInfos.push_back(queueCreateInfo);
-	}
+    for (uint32_t queueFamily : uniqueQueueFamilies) {
+       VkDeviceQueueCreateInfo queueCreateInfo{};
+       queueCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+       queueCreateInfo.queueFamilyIndex = queueFamily;
+       queueCreateInfo.queueCount = 1;
+       queueCreateInfo.pQueuePriorities = &queuePriority;
+       queueCreateInfos.push_back(queueCreateInfo);
+    }
 
-	// Specify Device Features
-	VkPhysicalDeviceFeatures deviceFeatures{};
-	deviceFeatures.samplerAnisotropy = VK_TRUE;
+    // 2. Device Features
+    VkPhysicalDeviceFeatures deviceFeatures{};
+    deviceFeatures.samplerAnisotropy = VK_TRUE;
 
-	// Create the Logical Device
-	VkDeviceCreateInfo createInfo{};
-	createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+    // 3. Extensions Setup (THE MAC COMPATIBILITY FIX)
+    // Start with the Swapchain extension, which is required on all platforms.
+    std::vector<const char*> deviceExtensions = {
+        VK_KHR_SWAPCHAIN_EXTENSION_NAME
+    };
 
-	// Attach the queues
-	createInfo.queueCreateInfoCount = static_cast<uint32_t>(queueCreateInfos.size());
-	createInfo.pQueueCreateInfos = queueCreateInfos.data();
+    // Check if the device supports the "Portability Subset" extension.
+    // This is required for MoltenVK (macOS) but not for standard Vulkan drivers.
+    uint32_t extensionCount;
+    vkEnumerateDeviceExtensionProperties(physicalDevice, nullptr, &extensionCount, nullptr);
+    std::vector<VkExtensionProperties> availableExtensions(extensionCount);
+    vkEnumerateDeviceExtensionProperties(physicalDevice, nullptr, &extensionCount, availableExtensions.data());
 
-	// Attach the features
-	createInfo.pEnabledFeatures = &deviceFeatures;
+    for (const auto& extension : availableExtensions) {
+        if (strcmp(extension.extensionName, "VK_KHR_portability_subset") == 0) {
+            deviceExtensions.push_back("VK_KHR_portability_subset");
+            break;
+        }
+    }
 
-	// Attach the extensions (Swapchain)
-	createInfo.enabledExtensionCount = static_cast<uint32_t>(deviceExtensions.size());
-	createInfo.ppEnabledExtensionNames = deviceExtensions.data();
+    // 4. Create the Logical Device
+    VkDeviceCreateInfo createInfo{};
+    createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
 
-	// (Legacy) Set validation layers for the device
-	// Modern Vulkan ignores this as it uses Instance layers, but we set it for backwards compatibility.
-	if (enableValidationLayers) {
-		createInfo.enabledLayerCount = static_cast<uint32_t>(validationLayers.size());
-		createInfo.ppEnabledLayerNames = validationLayers.data();
-	}
-	else {
-		createInfo.enabledLayerCount = 0;
-	}
+    createInfo.queueCreateInfoCount = static_cast<uint32_t>(queueCreateInfos.size());
+    createInfo.pQueueCreateInfos = queueCreateInfos.data();
 
-	if (vkCreateDevice(physicalDevice, &createInfo, nullptr, &device) != VK_SUCCESS) {
-		throw std::runtime_error("failed to create logical device");
-	}
+    createInfo.pEnabledFeatures = &deviceFeatures;
 
-	// Retrieve the Queue Handles
-	// The device is created. Now we ask it for the handles to the queues so we can use them later.
-	vkGetDeviceQueue(device, indices.graphicsFamily.value(), 0, &graphicsQueue);
-	vkGetDeviceQueue(device, indices.presentFamily.value(), 0, &presentQueue);
+    // Pass the dynamically created list of extensions
+    createInfo.enabledExtensionCount = static_cast<uint32_t>(deviceExtensions.size());
+    createInfo.ppEnabledExtensionNames = deviceExtensions.data();
+
+    if (enableValidationLayers) {
+       createInfo.enabledLayerCount = static_cast<uint32_t>(validationLayers.size());
+       createInfo.ppEnabledLayerNames = validationLayers.data();
+    }
+    else {
+       createInfo.enabledLayerCount = 0;
+    }
+
+    if (vkCreateDevice(physicalDevice, &createInfo, nullptr, &device) != VK_SUCCESS) {
+       throw std::runtime_error("failed to create logical device");
+    }
+
+    // 5. Retrieve Queue Handles
+    vkGetDeviceQueue(device, indices.graphicsFamily.value(), 0, &graphicsQueue);
+    vkGetDeviceQueue(device, indices.presentFamily.value(), 0, &presentQueue);
 }
 
 void VkContext::createCommandPool() {
