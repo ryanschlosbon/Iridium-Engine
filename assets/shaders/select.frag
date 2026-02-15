@@ -2,5 +2,5 @@
 layout(location = 0) out vec4 outColor;
 
 void main() {
-    outColor = vec4(0.0, 0.0, 1.0, 1.0); // Solid Orange Color
+    outColor = vec4((94.0/255.0), (119.0/255.0), (145.0/255.0), 1.0);
 }

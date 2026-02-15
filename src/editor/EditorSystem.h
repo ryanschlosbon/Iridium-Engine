@@ -33,6 +33,8 @@ public:
 
     void setSelectedEntity(Entity e) { selectedEntity = e; }
 
+    int currentToolMode = 0;    // 0 = Select (No Gizmo) 1 = Translate 2 = Rotate 3 = Scale
+
 private:
     VkDescriptorPool imguiPool;
 

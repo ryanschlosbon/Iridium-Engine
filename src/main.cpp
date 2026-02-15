@@ -42,32 +42,57 @@ public:
         cleanup();
     }
 
-    // MOUSE MOVEMENT (Look & Pan)
     static void mouse_callback(GLFWwindow* window, double xposIn, double yposIn) {
         auto* app = reinterpret_cast<IridiumEngine*>(glfwGetWindowUserPointer(window));
+
+        // 1. ImGui Guard:
+        // If UI wants the mouse AND we aren't currently dragging, ignore the input.
+        if (ImGui::GetIO().WantCaptureMouse && !app->isRightMouseButtonDown && !app->isMiddleMouseButtonDown) {
+            return;
+        }
 
         float xpos = static_cast<float>(xposIn);
         float ypos = static_cast<float>(yposIn);
 
+        // 2. Reset Logic (THE FIX):
+        // If NO navigation buttons are pressed, reset 'firstMouse' and stop tracking.
+        // This ensures the next click starts fresh, preventing the "snap" from old coordinates.
+        if (!app->isRightMouseButtonDown && !app->isMiddleMouseButtonDown) {
+            app->firstMouse = true;
+            return;
+        }
+
+        // 3. First Click Logic:
+        // If this is the first frame of a click, just set the reference point.
+        // Do NOT calculate an offset yet.
         if (app->firstMouse) {
             app->lastX = xpos;
             app->lastY = ypos;
             app->firstMouse = false;
+            return;
         }
 
+        // 4. Calculate Offset
         float xoffset = xpos - app->lastX;
         float yoffset = app->lastY - ypos; // Reversed since Y-coordinates go from bottom to top
 
         app->lastX = xpos;
         app->lastY = ypos;
 
+        // 5. Warp Guard:
+        // Ignore massive jumps (e.g. > 100 pixels in one frame).
+        // This catches the exact moment the OS warps the cursor to the center.
+        if (std::abs(xoffset) > 100.0f || std::abs(yoffset) > 100.0f) {
+            return;
+        }
+
         // MODE 1: LOOK AROUND (Right Click Held)
         if (app->isRightMouseButtonDown) {
-            xoffset *= app->mouseSensitivity;
-            yoffset *= app->mouseSensitivity;
+            // Apply sensitivity only for rotation, not panning (usually feels better)
+            float sensitivity = app->mouseSensitivity;
 
-            app->yaw += xoffset;
-            app->pitch += yoffset;
+            app->yaw += xoffset * sensitivity;
+            app->pitch += yoffset * sensitivity;
 
             // Constrain Pitch so screen doesn't flip
             if (app->pitch > 89.0f) app->pitch = 89.0f;
@@ -83,16 +108,16 @@ public:
 
         // MODE 2: PANNING (Middle Click Held)
         if (app->isMiddleMouseButtonDown) {
-            // Panning speed factor (can be adjusted or tied to cameraSpeed)
+            // Panning speed factor
             float panSpeed = app->cameraSpeed * 0.005f;
 
             // Calculate Right and Up vectors relative to camera
             glm::vec3 cameraRight = glm::normalize(glm::cross(app->cameraFront, app->cameraUp));
             glm::vec3 cameraTrueUp = glm::normalize(glm::cross(cameraRight, app->cameraFront));
 
-            // Move Position:
-            // - Mouse Left/Right (xoffset) moves along Camera Right
-            // - Mouse Up/Down (yoffset) moves along Camera Up
+            // Move Position (Standard "Drag the World" Panning):
+            // Note: We use raw xoffset/yoffset here (no sensitivity) for 1:1 mouse feel,
+            // but multiplied by panSpeed to match scene scale.
             app->cameraPos -= cameraRight * (xoffset * panSpeed);
             app->cameraPos -= cameraTrueUp * (yoffset * panSpeed);
         }

@@ -82,41 +82,90 @@ void EditorSystem::cleanup(VkDevice device) {
 
 void EditorSystem::update(Registry& registry, AssetManager* assetManager,
     const glm::mat4& view, const glm::mat4& proj) {
-    // Start the frame
+
+    // Standard Frame Setup
     ImGui_ImplVulkan_NewFrame();
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
     ImGuizmo::BeginFrame();
 
-    // --- WINDOW 1: SCENE HIERARCHY ---
-    ImGui::Begin("Scene Hierarchy");
+    const float PAD = 10.0f;
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    ImVec2 workPos = viewport->WorkPos;
+    ImVec2 workSize = viewport->WorkSize;
 
+    // =========================================================
+    // 1. TOP TOOLBAR (Select, Move, Rotate, Scale)
+    // =========================================================
+    // We position this to the LEFT of the Render Mode dropdown.
+    // The Render Dropdown is at (RightEdge - 10).
+    // Let's place this at (RightEdge - 220) roughly.
+
+    ImVec2 toolbarPos;
+    toolbarPos.x = workPos.x + workSize.x - 220.0f;
+    toolbarPos.y = workPos.y + PAD;
+
+    ImGui::SetNextWindowPos(toolbarPos, ImGuiCond_Always, ImVec2(1.0f, 0.0f)); // Pivot top-right
+    ImGui::SetNextWindowBgAlpha(0.6f);
+
+    ImGuiWindowFlags toolbarFlags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav;
+
+    if (ImGui::Begin("Toolbar", nullptr, toolbarFlags)) {
+        // Mode 0: Select (No Color Push needed)
+        bool isSelectActive = (currentToolMode == 0);
+        if (isSelectActive) ImGui::PushStyleColor(ImGuiCol_Button, (ImVec4)ImColor::HSV(0.0f, 0.0f, 0.6f)); // Optional: Grey out if active
+        if (ImGui::Button("Select")) currentToolMode = 0;
+        if (isSelectActive) ImGui::PopStyleColor();
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Select Only (No Gizmo)");
+
+        ImGui::SameLine();
+
+        // Mode 1: Translate
+        bool isMoveActive = (currentToolMode == 1); // Capture state BEFORE button
+        if (isMoveActive) ImGui::PushStyleColor(ImGuiCol_Button, (ImVec4)ImColor::HSV(0.0f, 0.7f, 0.7f));
+        if (ImGui::Button("Move")) currentToolMode = 1;
+        if (isMoveActive) ImGui::PopStyleColor(); // Use the CAPTURED state to Pop
+
+        ImGui::SameLine();
+
+        // Mode 2: Rotate
+        bool isRotateActive = (currentToolMode == 2);
+        if (isRotateActive) ImGui::PushStyleColor(ImGuiCol_Button, (ImVec4)ImColor::HSV(0.33f, 0.7f, 0.7f));
+        if (ImGui::Button("Rotate")) currentToolMode = 2;
+        if (isRotateActive) ImGui::PopStyleColor();
+
+        ImGui::SameLine();
+
+        // Mode 3: Scale
+        bool isScaleActive = (currentToolMode == 3);
+        if (isScaleActive) ImGui::PushStyleColor(ImGuiCol_Button, (ImVec4)ImColor::HSV(0.66f, 0.7f, 0.7f));
+        if (ImGui::Button("Scale")) currentToolMode = 3;
+        if (isScaleActive) ImGui::PopStyleColor();
+    }
+    ImGui::End();
+
+    // =========================================================
+    // 2. SCENE HIERARCHY
+    // =========================================================
+    ImGui::Begin("Scene Hierarchy");
     auto* meshPool = registry.getPool<MeshComponent>();
-    // Loop through all entities that have a mesh
     for (size_t i = 0; i < meshPool->entities.size(); i++) {
         Entity e = meshPool->entities[i];
         std::string label = "Entity " + std::to_string(e);
-
         if (ImGui::Selectable(label.c_str(), selectedEntity == e)) {
             selectedEntity = e;
         }
     }
-
-    // --- IMPORTER SECTION ---
     ImGui::Separator();
     ImGui::Text("Import New Model");
     ImGui::InputText("Path", importPathBuffer, sizeof(importPathBuffer));
     if (ImGui::Button("Import")) {
         try {
-            // Build the full path using the project root
             std::string fullPath = std::string(PROJECT_ROOT_DIR) + importPathBuffer;
-
             auto newModel = assetManager->getModel(fullPath);
-
             Entity newEntity = registry.createEntity();
             registry.addComponent<MeshComponent>(newEntity, newModel);
             registry.addComponent<TransformComponent>(newEntity);
-
             selectedEntity = newEntity;
         }
         catch (const std::exception& e) {
@@ -125,113 +174,89 @@ void EditorSystem::update(Registry& registry, AssetManager* assetManager,
     }
     ImGui::End();
 
-    // --- WINDOW 2: INSPECTOR & Gizmo ---
+    // =========================================================
+    // 3. INSPECTOR (With Sliders, but NO Radio Buttons)
+    // =========================================================
     ImGui::Begin("Inspector");
-
     if (selectedEntity != NULL_ENTITY) {
         auto* transformPool = registry.getPool<TransformComponent>();
-
-        // Check if selected entity has a transform
         if (transformPool->has(selectedEntity)) {
             auto& transform = transformPool->get(selectedEntity);
 
             // Delete Button
             ImGui::PushStyleColor(ImGuiCol_Button, (ImVec4)ImColor::HSV(0.0f, 0.6f, 0.6f));
-
             if (ImGui::Button("DELETE ENTITY")) {
-                // We'll implement this function in Registry next
                 registry.destroyEntity(selectedEntity);
                 selectedEntity = NULL_ENTITY;
                 ImGui::PopStyleColor();
                 ImGui::End();
                 ImGui::Render();
-                return; // Exit early so we don't crash accessing a dead entity
+                return;
             }
             ImGui::PopStyleColor();
 
-            if (ImGui::RadioButton("Translate", currentGizmoOperation == ImGuizmo::TRANSLATE))
-                currentGizmoOperation = ImGuizmo::TRANSLATE;
-            ImGui::SameLine();
-            if (ImGui::RadioButton("Rotate", currentGizmoOperation == ImGuizmo::ROTATE))
-                currentGizmoOperation = ImGuizmo::ROTATE;
-            ImGui::SameLine();
-            if (ImGui::RadioButton("Scale", currentGizmoOperation == ImGuizmo::SCALE))
-                currentGizmoOperation = ImGuizmo::SCALE;
+            // Sliders (Always visible regardless of tool mode)
+            ImGui::Separator();
+            if (ImGui::DragFloat3("Position", &transform.position.x, 0.1f)) transform.isDirty = true;
+            if (ImGui::DragFloat3("Rotation", &transform.rotation.x, 1.0f)) transform.isDirty = true;
+            if (ImGui::DragFloat3("Scale", &transform.scale.x, 0.1f)) transform.isDirty = true;
 
-            if (ImGui::DragFloat3("Position", &transform.position.x, 0.1f)) {
-                transform.isDirty = true;
-            }
-            if (ImGui::DragFloat3("Rotation", &transform.rotation.x, 1.0f)) {
-                transform.isDirty = true;
-            }
-            if (ImGui::DragFloat3("Scale", &transform.scale.x, 0.1f)) {
-                transform.isDirty = true;
-            }
+            // =================================================
+            // GIZMO LOGIC
+            // =================================================
+            // Only draw gizmo if we are NOT in "Select Mode" (0)
+            if (currentToolMode > 0) {
+                // Map Tool Mode to ImGuizmo Operation
+                ImGuizmo::OPERATION op = ImGuizmo::TRANSLATE;
+                if (currentToolMode == 2) op = ImGuizmo::ROTATE;
+                if (currentToolMode == 3) op = ImGuizmo::SCALE;
 
-            ImGuiIO& io = ImGui::GetIO();
-            ImGuizmo::SetRect(0, 0, io.DisplaySize.x, io.DisplaySize.y);
+                ImGuiIO& io = ImGui::GetIO();
+                ImGuizmo::SetRect(0, 0, io.DisplaySize.x, io.DisplaySize.y);
 
-            // ImGuizmo needs a mutable model matrix
-            glm::mat4 modelMatrix = transform.worldMatrix;
+                glm::mat4 modelMatrix = transform.worldMatrix;
 
-            // Draw it!
-            ImGuizmo::Manipulate(
-                glm::value_ptr(view),
-                glm::value_ptr(proj),
-                (ImGuizmo::OPERATION)currentGizmoOperation,
-                ImGuizmo::LOCAL,
-                glm::value_ptr(modelMatrix)
-            );
-
-            if (ImGuizmo::IsUsing()) {
-                float translation[3], rotation[3], scale[3];
-                ImGuizmo::DecomposeMatrixToComponents(
-                    glm::value_ptr(modelMatrix), translation, rotation, scale
+                ImGuizmo::Manipulate(
+                    glm::value_ptr(view),
+                    glm::value_ptr(proj),
+                    op,
+                    ImGuizmo::LOCAL,
+                    glm::value_ptr(modelMatrix)
                 );
 
-                // Update component and flag as dirty
-                transform.position = glm::make_vec3(translation);
-                transform.rotation = glm::make_vec3(rotation);
-                transform.scale = glm::make_vec3(scale);
-                transform.isDirty = true;
+                if (ImGuizmo::IsUsing()) {
+                    float translation[3], rotation[3], scale[3];
+                    ImGuizmo::DecomposeMatrixToComponents(
+                        glm::value_ptr(modelMatrix), translation, rotation, scale
+                    );
+                    transform.position = glm::make_vec3(translation);
+                    transform.rotation = glm::make_vec3(rotation);
+                    transform.scale = glm::make_vec3(scale);
+                    transform.isDirty = true;
+                }
             }
         }
     }
     ImGui::End();
 
-    // --- WINDOW 3: RENDER MODE DROPDOWN (Overlay) ---
-    // Calculate position: Top-Right corner with 10px padding
-    const float PAD = 10.0f;
-    const ImGuiViewport* viewport = ImGui::GetMainViewport();
-    ImVec2 workPos = viewport->WorkPos; // Top-left of working area
-    ImVec2 workSize = viewport->WorkSize;
+    // =========================================================
+    // 4. RENDER MODE DROPDOWN (Existing)
+    // =========================================================
     ImVec2 windowPos;
     windowPos.x = workPos.x + workSize.x - PAD;
     windowPos.y = workPos.y + PAD;
-
-    // Pivot: (1,0) means the x,y coordinate refers to the window's Top-Right corner
     ImGui::SetNextWindowPos(windowPos, ImGuiCond_Always, ImVec2(1.0f, 0.0f));
+    ImGui::SetNextWindowBgAlpha(0.35f);
 
-    // Transparent background, no title bar, no resize, always auto-fit
-    ImGui::SetNextWindowBgAlpha(0.35f); // Make it slightly transparent
-    ImGuiWindowFlags windowFlags = ImGuiWindowFlags_NoDecoration |
-        ImGuiWindowFlags_AlwaysAutoResize |
-        ImGuiWindowFlags_NoSavedSettings |
-        ImGuiWindowFlags_NoFocusOnAppearing |
-        ImGuiWindowFlags_NoNav;
-
-    if (ImGui::Begin("RenderModeOverlay", nullptr, windowFlags)) {
+    if (ImGui::Begin("RenderModeOverlay", nullptr, toolbarFlags)) {
         ImGui::Text("View Mode");
         ImGui::SameLine();
-
-        // The Dropdown
-        const char* items[] = { "Standard", "Wireframe", "Outline Only" }; // Added 'Outline' for future use!
+        const char* items[] = { "Standard", "Wireframe", "Outline Only" };
         ImGui::SetNextItemWidth(110);
         ImGui::Combo("##renderMode", &currentRenderMode, items, IM_ARRAYSIZE(items));
     }
     ImGui::End();
 
-    // Render the data (internally)
     ImGui::Render();
 }
 
