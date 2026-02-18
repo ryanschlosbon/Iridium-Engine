@@ -173,6 +173,7 @@ std::shared_ptr<ModelAsset> AssetManager::loadModelFromFile(const std::string& p
 
     auto& gltf = asset.get();
     auto model = std::make_shared<ModelAsset>();
+    model->filePath = path;
 
     // 1. Load Images
     for (auto& image : gltf.images) {

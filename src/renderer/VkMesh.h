@@ -91,6 +91,8 @@ struct Material {
 
 // 3. NOW define ModelAsset (Since it knows what SubMesh and BakedMesh are)
 struct ModelAsset {
+	std::string filePath;
+
 	// GPU Buffers
 	VkBuffer vertexBuffer;
 	VkDeviceMemory vertexBufferMemory;

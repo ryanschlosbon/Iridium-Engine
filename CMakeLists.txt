@@ -48,6 +48,15 @@ endif()
 # C. VULKAN
 find_package(Vulkan REQUIRED)
 
+# D. JSON
+message(STATUS "Downloading nlohmann/json...")
+FetchContent_Declare(
+    json
+    GIT_REPOSITORY https://github.com/nlohmann/json.git
+    GIT_TAG v3.11.3
+)
+FetchContent_MakeAvailable(json)
+
 # --- PLATFORM DETECTION (MAC vs WINDOWS) ---
 if (APPLE)
     message(STATUS "Detected MacOS - Linking Frameworks and MoltenVK")
@@ -160,7 +169,7 @@ add_executable(IridiumEngine
         "src/vendor/fastgltf/src/fastgltf.cpp"
         "src/vendor/fastgltf/src/base64.cpp"
         "src/vendor/fastgltf/src/io.cpp"
-)
+ "src/scene/SceneSerializer.h" "src/scene/SceneSerializer.cpp" "src/scene/components/LightComponent.h")
 
 # Defines PROJECT_ROOT_DIR for C++ to find assets
 add_compile_definitions(PROJECT_ROOT_DIR="${CMAKE_CURRENT_SOURCE_DIR}/")
@@ -178,5 +187,6 @@ target_link_libraries(IridiumEngine PRIVATE
         glfw
         glm::glm
         Vulkan::Vulkan
+        nlohmann_json::nlohmann_json
         ${PLATFORM_LIBS} # Links Cocoa/IOKit on Mac, nothing on Windows
 )

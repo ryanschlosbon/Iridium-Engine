@@ -9,6 +9,7 @@ class IComponentPool {
 public:
     virtual ~IComponentPool() = default;
     virtual void remove(Entity entity) = 0;
+    virtual void clear() = 0;
 };
 
 template<typename T>
@@ -50,6 +51,12 @@ public:
         entities.pop_back();
         sparseMap.erase(entity);
     }
+
+    void clear() override {
+        components.clear();
+        entities.clear();
+        sparseMap.clear();
+    }
 };
 
 class Registry {
@@ -83,6 +90,19 @@ public:
             // But since 'IComponentPool' is generic, we rely on the 'remove' implementation 
             // to be safe.
             pair.second->remove(entity);
+        }
+    }
+
+    void clear() {
+        // 1. Reset Entity ID Counter
+        nextEntityID = 0;
+
+        // 2. Clear every existing Component Pool
+        for (auto& pair : pools) {
+            // pair.second is the unique_ptr<IComponentPool>
+            if (pair.second) {
+                pair.second->clear();
+            }
         }
     }
 

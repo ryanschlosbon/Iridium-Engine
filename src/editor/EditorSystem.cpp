@@ -89,6 +89,64 @@ void EditorSystem::update(Registry& registry, AssetManager* assetManager,
     ImGui::NewFrame();
     ImGuizmo::BeginFrame();
 
+    // Main Menu Bar
+    if (ImGui::BeginMainMenuBar()) {
+
+        // --- FILE MENU ---
+        if (ImGui::BeginMenu("File")) {
+            // Save Scene
+            // Shortcut display "Ctrl+S" is just text; we have to handle the key press separately if we want hotkeys.
+            if (ImGui::MenuItem("Save Scene", "Ctrl+S")) {
+                SceneSerializer serializer(registry, assetManager);
+                // For now, we hardcode the path. Later, we can add a File Dialog.
+                serializer.Serialize("assets/scenes/test_scene.json");
+            }
+
+            // Load Scene
+            if (ImGui::MenuItem("Load Scene", "Ctrl+O")) {
+                // 1. Clear the current world
+                registry.clear();
+
+                // 2. Create serializer (PASSING THE ASSET MANAGER)
+                SceneSerializer serializer(registry, assetManager);
+
+                // 3. Load
+                // Use the relative path from your project root
+                if (serializer.Deserialize("assets/scenes/test_scene.json")) {
+                    // Reset selected entity so we don't crash trying to display a deleted one
+                    selectedEntity = NULL_ENTITY;
+                }
+            }
+
+            ImGui::Separator(); // Adds a nice line
+
+            // Exit
+            if (ImGui::MenuItem("Exit", "Alt+F4")) {
+                // You'd need a pointer to the window to close it, 
+                // or set a global "shouldClose" flag.
+                // glfwSetWindowShouldClose(window, true); 
+            }
+
+            ImGui::EndMenu();
+        }
+
+        // --- EDIT MENU (Placeholder for future) ---
+        if (ImGui::BeginMenu("Edit")) {
+            if (ImGui::MenuItem("Undo", "Ctrl+Z")) {}
+            if (ImGui::MenuItem("Redo", "Ctrl+Y")) {}
+            ImGui::EndMenu();
+        }
+
+        // --- VIEW MENU (Placeholder) ---
+        if (ImGui::BeginMenu("View")) {
+            ImGui::MenuItem("Scene Hierarchy", nullptr, true); // boolean for checked state
+            ImGui::MenuItem("Inspector", nullptr, true);
+            ImGui::EndMenu();
+        }
+
+        ImGui::EndMainMenuBar();
+    }
+
     const float PAD = 10.0f;
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
     ImVec2 workPos = viewport->WorkPos;

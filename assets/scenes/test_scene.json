@@ -1,0 +1,51 @@
+{
+    "Entities": [
+        {
+            "EntityID": 0,
+            "Mesh": {
+                "FilePath": "C:/Users/rjs12/source/repos/Iridium-Engine/assets/models/alfa_romeo/scene.gltf"
+            },
+            "Transform": {
+                "Position": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "Rotation": [
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "Scale": [
+                    1.0,
+                    1.0,
+                    1.0
+                ]
+            }
+        },
+        {
+            "EntityID": 1,
+            "Mesh": {
+                "FilePath": "C:/Users/rjs12/source/repos/Iridium-Engine/assets/models/bugatti/scene.gltf"
+            },
+            "Transform": {
+                "Position": [
+                    2.527632713317871,
+                    0.0,
+                    0.0
+                ],
+                "Rotation": [
+                    0.0,
+                    -0.0,
+                    0.0
+                ],
+                "Scale": [
+                    100.0,
+                    100.0,
+                    100.0
+                ]
+            }
+        }
+    ],
+    "Scene": "Untitled Scene"
+}
