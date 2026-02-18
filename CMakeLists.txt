@@ -169,7 +169,7 @@ add_executable(IridiumEngine
         "src/vendor/fastgltf/src/fastgltf.cpp"
         "src/vendor/fastgltf/src/base64.cpp"
         "src/vendor/fastgltf/src/io.cpp"
- "src/scene/SceneSerializer.h" "src/scene/SceneSerializer.cpp" "src/scene/components/LightComponent.h")
+ "src/scene/SceneSerializer.h" "src/scene/SceneSerializer.cpp" "src/scene/components/LightComponent.h" "src/editor/Reflection.h")
 
 # Defines PROJECT_ROOT_DIR for C++ to find assets
 add_compile_definitions(PROJECT_ROOT_DIR="${CMAKE_CURRENT_SOURCE_DIR}/")

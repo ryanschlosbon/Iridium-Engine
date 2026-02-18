@@ -5,3 +5,4 @@
 #include "components/MeshComponent.h"
 #include "components/RelationshipComponent.h"
 #include "components/LightComponent.h"
+#include "../editor/Reflection.h"
