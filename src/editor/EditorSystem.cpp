@@ -206,14 +206,26 @@ void EditorSystem::update(Registry& registry, AssetManager* assetManager,
     // 2. SCENE HIERARCHY
     // =========================================================
     ImGui::Begin("Scene Hierarchy");
-    auto* meshPool = registry.getPool<MeshComponent>();
-    for (size_t i = 0; i < meshPool->entities.size(); i++) {
-        Entity e = meshPool->entities[i];
-        std::string label = "Entity " + std::to_string(e);
-        if (ImGui::Selectable(label.c_str(), selectedEntity == e)) {
-            selectedEntity = e;
+    auto* transformPool = registry.getPool<TransformComponent>();
+
+    // Iterate over TransformComponent, since every entity needs a transform component
+    // Safety check: Make sure the pool actually exists
+    if (transformPool) {
+        for (size_t i = 0; i < transformPool->entities.size(); i++) {
+            Entity e = transformPool->entities[i];
+
+            // Give it a better name if it has a specific component
+            std::string label = "Entity " + std::to_string(e);
+
+            // Example: Append " (Light)" if it has a light
+            if (registry.getPool<LightComponent>()->has(e)) label += " (Light)";
+
+            if (ImGui::Selectable(label.c_str(), selectedEntity == e)) {
+                selectedEntity = e;
+            }
         }
     }
+
     ImGui::Separator();
     ImGui::Text("Import New Model");
     ImGui::InputText("Path", importPathBuffer, sizeof(importPathBuffer));
@@ -237,63 +249,100 @@ void EditorSystem::update(Registry& registry, AssetManager* assetManager,
     // =========================================================
     ImGui::Begin("Inspector");
     if (selectedEntity != NULL_ENTITY) {
-        auto* transformPool = registry.getPool<TransformComponent>();
-        if (transformPool->has(selectedEntity)) {
-            auto& transform = transformPool->get(selectedEntity);
 
-            // Delete Button
-            ImGui::PushStyleColor(ImGuiCol_Button, (ImVec4)ImColor::HSV(0.0f, 0.6f, 0.6f));
-            if (ImGui::Button("DELETE ENTITY")) {
-                registry.destroyEntity(selectedEntity);
-                selectedEntity = NULL_ENTITY;
-                ImGui::PopStyleColor();
-                ImGui::End();
-                ImGui::Render();
-                return;
-            }
+        static std::string inspectorError = "";
+        static float errorTimer = 0.0f;
+
+        ImGui::Text("Entity ID: %d", (int)selectedEntity);
+        ImGui::Separator();
+
+        ImGui::PushStyleColor(ImGuiCol_Button, (ImVec4)ImColor::HSV(0.0f, 0.6f, 0.6f));
+        if (ImGui::Button("DELETE ENTITY", ImVec2(-1, 0))) { // -1 width = spans full window
+            registry.destroyEntity(selectedEntity);
+            selectedEntity = NULL_ENTITY; // Deselect so we don't crash
             ImGui::PopStyleColor();
+            ImGui::End();
 
-            // Sliders (Always visible regardless of tool mode)
-            ImGui::Separator();
-            if (ImGui::DragFloat3("Position", &transform.position.x, 0.1f)) transform.isDirty = true;
-            if (ImGui::DragFloat3("Rotation", &transform.rotation.x, 1.0f)) transform.isDirty = true;
-            if (ImGui::DragFloat3("Scale", &transform.scale.x, 0.1f)) transform.isDirty = true;
+            ImGui::Render();
+            return; // Exit early to prevent drawing a dead entity
+        }
+        ImGui::PopStyleColor();
+        ImGui::Separator();
 
-            // =================================================
-            // GIZMO LOGIC
-            // =================================================
-            // Only draw gizmo if we are NOT in "Select Mode" (0)
-            if (currentToolMode > 0) {
-                // Map Tool Mode to ImGuizmo Operation
-                ImGuizmo::OPERATION op = ImGuizmo::TRANSLATE;
-                if (currentToolMode == 2) op = ImGuizmo::ROTATE;
-                if (currentToolMode == 3) op = ImGuizmo::SCALE;
+        // --- AUTOMATIC INSPECTOR LOOP ---
+        // Iterate over EVERY pool in the registry
+        for (auto& [typeIndex, pool] : registry.pools) {
 
-                ImGuiIO& io = ImGui::GetIO();
-                ImGuizmo::SetRect(0, 0, io.DisplaySize.x, io.DisplaySize.y);
+            // Check if the entity has this component
+            // We use the base interface IComponentPool so we don't need to know the type!
+            if (pool) {
+                // Get a clean name
+                std::string name = typeIndex.name();
+                if (name.find("struct ") != std::string::npos) name = name.substr(7);
+                if (name.find("class ") != std::string::npos) name = name.substr(6);
 
-                glm::mat4 modelMatrix = transform.worldMatrix;
+                // Draw the Header
+                // We only want to draw the header IF the entity actually has the component.
+                // So we need to expose 'has' or 'getVoid' to check first.
+                if (pool->getVoid(selectedEntity) != nullptr) {
+                    if (ImGui::CollapsingHeader(name.c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
 
-                ImGuizmo::Manipulate(
-                    glm::value_ptr(view),
-                    glm::value_ptr(proj),
-                    op,
-                    ImGuizmo::LOCAL,
-                    glm::value_ptr(modelMatrix)
-                );
+                        pool->DrawInspector(selectedEntity);
 
-                if (ImGuizmo::IsUsing()) {
-                    float translation[3], rotation[3], scale[3];
-                    ImGuizmo::DecomposeMatrixToComponents(
-                        glm::value_ptr(modelMatrix), translation, rotation, scale
-                    );
-                    transform.position = glm::make_vec3(translation);
-                    transform.rotation = glm::make_vec3(rotation);
-                    transform.scale = glm::make_vec3(scale);
-                    transform.isDirty = true;
+                        ImGui::Spacing();
+
+                        if (name != "TransformComponent") {
+                            if (ImGui::Button(("Remove " + name).c_str())) {
+                                pool->remove(selectedEntity);
+                            }
+                        }
+                        else {
+                            ImGui::TextDisabled("(Required Component)");
+                        }
+                        ImGui::Separator();
+                    }
                 }
             }
         }
+
+        // Add Component Button
+        ImGui::Spacing();
+        if (ImGui::Button("Add Component")) {
+            ImGui::OpenPopup("AddComponentPopup");
+        }
+
+        if (ImGui::BeginPopup("AddComponentPopup")) {
+
+            // Only show "Light" if the entity DOES NOT have a LightComponent
+            if (!registry.getPool<LightComponent>()->has(selectedEntity)) {
+                if (ImGui::MenuItem("Light")) {
+                    registry.addComponent<LightComponent>(selectedEntity);
+                }
+            }
+
+            // Only show "Mesh" if the entity DOES NOT have a MeshComponent
+            if (!registry.getPool<MeshComponent>()->has(selectedEntity)) {
+                if (ImGui::MenuItem("Mesh")) {
+                    registry.addComponent<MeshComponent>(selectedEntity);
+                }
+            }
+
+            // Transform is usually added by default, but we'll put the check here for safety
+            if (!registry.getPool<TransformComponent>()->has(selectedEntity)) {
+                if (ImGui::MenuItem("Transform")) {
+                    registry.addComponent<TransformComponent>(selectedEntity);
+                }
+            }
+
+            // If the list is empty (user added everything possible)
+            if (registry.getPool<LightComponent>()->has(selectedEntity) &&
+                registry.getPool<MeshComponent>()->has(selectedEntity)) {
+                ImGui::TextDisabled("All components added");
+            }
+
+            ImGui::EndPopup();
+        }
+
     }
     ImGui::End();
 

@@ -1,6 +1,7 @@
 #pragma once
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include "../../editor/Reflection.h"
 
 struct TransformComponent {
     // Raw Data
@@ -19,8 +20,6 @@ struct TransformComponent {
         glm::mat4 mat = glm::mat4(1.0f);
         mat = glm::translate(mat, position);
 
-        // CHANGED: Rotation Order to XYZ to match ImGuizmo
-        // (Old way was Z->Y->X, which fights the gizmo)
         mat = glm::rotate(mat, glm::radians(rotation.z), glm::vec3(0, 0, 1));
         mat = glm::rotate(mat, glm::radians(rotation.y), glm::vec3(0, 1, 0));
         mat = glm::rotate(mat, glm::radians(rotation.x), glm::vec3(1, 0, 0));
@@ -34,4 +33,10 @@ struct TransformComponent {
     void setPosition(const glm::vec3& newPos) { position = newPos; isDirty = true; }
     void setRotation(const glm::vec3& newRot) { rotation = newRot; isDirty = true; }
     void setScale(const glm::vec3& newScale) { scale = newScale; isDirty = true; }
+
+    void OnInspector() {
+        PROPERTY(position);
+        PROPERTY(rotation);
+        PROPERTY(scale);
+    }
 };

@@ -10,6 +10,9 @@ public:
     virtual ~IComponentPool() = default;
     virtual void remove(Entity entity) = 0;
     virtual void clear() = 0;
+    // virtual bool has(Entity entity) = 0;
+    virtual void* getVoid(Entity entity) = 0;
+    virtual void DrawInspector(Entity entity) = 0;
 };
 
 template<typename T>
@@ -20,6 +23,14 @@ public:
     std::unordered_map<Entity, size_t> sparseMap; // Map: Entity ID -> Dense Index
 
     T& add(Entity entity, T component) {
+        // CRASH FIX: Check if it already exists! This is a second fallback. Handling is first done in inspector
+        if (has(entity)) {
+            // Just overwrite the existing data
+            components[sparseMap[entity]] = component;
+            return components[sparseMap[entity]];
+        }
+
+        // Standard Add Logic
         sparseMap[entity] = components.size();
         entities.push_back(entity);
         components.push_back(component);
@@ -52,6 +63,17 @@ public:
         sparseMap.erase(entity);
     }
 
+    void* getVoid(Entity entity) override {
+        if (!has(entity)) return nullptr;
+        return &components[sparseMap[entity]];
+    }
+
+    void DrawInspector(Entity entity) override {
+        if (!has(entity)) return;
+        // This line will call OnInspector() on the specific component
+        components[sparseMap[entity]].OnInspector();
+    }
+
     void clear() override {
         components.clear();
         entities.clear();
@@ -60,6 +82,9 @@ public:
 };
 
 class Registry {
+    // Allow EditorSystem to access private 'pools'
+    friend class EditorSystem;
+
 public:
     Entity createEntity() { return nextEntityID++; }
 
