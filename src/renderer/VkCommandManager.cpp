@@ -154,6 +154,9 @@ void VkCommandManager::recordCommands(uint32_t imageIndex, VkRenderPassWrapper* 
 
             // A. Retrieve the live components
             auto& meshComp = meshPool->get(entity);
+
+            if (!meshComp.enabled || !meshComp.model) continue; // Skip disabled or invalid meshes
+
             auto& transformComp = transformPool->get(entity);
 
             // B. Bind VBO/IBO (Mesh Data)
@@ -182,17 +185,16 @@ void VkCommandManager::recordCommands(uint32_t imageIndex, VkRenderPassWrapper* 
     if (editor && editor->getSelectedEntity() != NULL_ENTITY) {
         Entity selected = editor->getSelectedEntity();
 
-        // Check if our selection actually has a mesh to outline
         auto* meshPool = registry.getPool<MeshComponent>();
         auto* transformPool = registry.getPool<TransformComponent>();
 
-        bool hasMesh = false;
-        for (auto e : meshPool->entities) { if (e == selected) hasMesh = true; }
-
-        if (hasMesh && transformPool->sparseMap.contains(selected)) {
+        // OPTIMIZED: Use the ECS O(1) lookup instead of a for-loop, 
+        // and safely check if the model is loaded and enabled.
+        if (meshPool->has(selected) && transformPool->has(selected) &&
+            meshPool->get(selected).enabled && meshPool->get(selected).model) {
 
             // 1. Switch to Outline Pipeline (Green, Cull Front)
-            if (editor && editor->currentRenderMode == 1) {
+            if (editor->currentRenderMode == 1) {
                 // If in Wireframe Mode -> Use Wireframe Outline (The Green Cage)
                 vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline->getOutlineWireframePipeline());
             }
@@ -200,6 +202,7 @@ void VkCommandManager::recordCommands(uint32_t imageIndex, VkRenderPassWrapper* 
                 // If in Solid Mode -> Use Solid Outline (The Green Shell)
                 vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline->getOutlinePipeline());
             }
+
             auto& meshComp = meshPool->get(selected);
             auto& transformComp = transformPool->get(selected);
 

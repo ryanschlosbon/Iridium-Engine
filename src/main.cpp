@@ -283,7 +283,6 @@ private:
         );
     }
 
-    // CHANGED: Added view and proj to the arguments
     void drawFrame(Registry& registry, const glm::mat4& view, const glm::mat4& proj) {
         // 1. Wait for CPU-GPU sync (Frame 0 or 1)
         VkFence currentFence = vkSyncObjects->getInFlightFence(currentFrame);
@@ -708,6 +707,36 @@ private:
         editor.setSelectedEntity(closestEntity);
     }
 
+    void ProcessMeshSwaps(Registry& registry, AssetManager* assetManager) {
+        auto* meshPool = registry.getPool<MeshComponent>();
+
+        // Safety check in case the pool hasn't been created yet
+        if (!meshPool) return;
+
+        for (uint32_t entity : meshPool->entities) {
+            auto& meshComp = meshPool->get(entity);
+
+            // Check if the Inspector UI submitted a new mesh request
+            if (!meshComp.requestedMeshPath.empty()) {
+                try {
+                    // Use the AssetManager to load the new model
+                    std::string fullPath = std::string(PROJECT_ROOT_DIR) + meshComp.requestedMeshPath;
+
+                    // Swap the pointer. The next time recordCommands runs, it will draw the new mesh!
+                    meshComp.model = assetManager->getModel(fullPath);
+
+                    std::cout << "Successfully swapped mesh to: " << fullPath << std::endl;
+                }
+                catch (const std::exception& e) {
+                    std::cerr << "Failed to swap mesh: " << e.what() << "\n";
+                }
+
+                // Clear the flag so we don't try to load it again next frame
+                meshComp.requestedMeshPath.clear();
+            }
+        }
+    }
+
     void mainLoop() {
         TransformSystem transformSystem; // <--- 1. Instantiate the System
 
@@ -730,6 +759,8 @@ private:
 
             glfwPollEvents();
             processInput(window);
+
+            ProcessMeshSwaps(registry, assetManager);
 
             // --- 1. CALCULATE MATRICES ---
             // We need these for the Editor Gizmos

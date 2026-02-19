@@ -364,6 +364,66 @@ void EditorSystem::update(Registry& registry, AssetManager* assetManager,
     }
     ImGui::End();
 
+    // =========================================================
+        // 5. GIZMO DRAWING
+        // =========================================================
+        // Only draw if an entity is selected AND we are in Move/Rotate/Scale mode
+    if (selectedEntity != NULL_ENTITY && currentToolMode > 0) {
+        auto* transformPool = registry.getPool<TransformComponent>();
+
+        if (transformPool && transformPool->has(selectedEntity)) {
+            auto& transform = transformPool->get(selectedEntity);
+
+            // FIX 1: Bind strictly to the raw Display Size, bypassing ImGui window offsets.
+            // This ensures ImGuizmo's 2D space perfectly matches the Vulkan Swapchain 1:1.
+            ImGuiIO& io = ImGui::GetIO();
+            ImGuizmo::SetOrthographic(false);
+            ImGuizmo::SetDrawlist(ImGui::GetBackgroundDrawList());
+            ImGuizmo::SetRect(0.0f, 0.0f, io.DisplaySize.x, io.DisplaySize.y);
+
+            // Map Iridium Engine's Toolbar Modes to ImGuizmo Operations
+            ImGuizmo::OPERATION snapOp = ImGuizmo::TRANSLATE;
+            if (currentToolMode == 1) snapOp = ImGuizmo::TRANSLATE;
+            if (currentToolMode == 2) snapOp = ImGuizmo::ROTATE;
+            if (currentToolMode == 3) snapOp = ImGuizmo::SCALE;
+
+            // FIX 2: Sanitize the projection matrix for ImGuizmo's internal OpenGL hit-testing.
+            // If the camera does a Vulkan Y-flip, we temporarily un-flip it just for this calculation.
+            glm::mat4 gizmoProj = proj;
+            if (gizmoProj[1][1] < 0.0f) {
+                gizmoProj[1][1] *= -1.0f;
+            }
+
+            // Draw the Gizmo and handle user interaction
+            bool isManipulated = ImGuizmo::Manipulate(
+                glm::value_ptr(view),
+                glm::value_ptr(gizmoProj),
+                snapOp,
+                ImGuizmo::LOCAL,
+                glm::value_ptr(transform.worldMatrix)
+            );
+
+            if (isManipulated) {
+                glm::vec3 newPos, newRot, newScale;
+
+                // Extract the modified data from the matrix
+                ImGuizmo::DecomposeMatrixToComponents(
+                    glm::value_ptr(transform.worldMatrix),
+                    glm::value_ptr(newPos),
+                    glm::value_ptr(newRot),
+                    glm::value_ptr(newScale)
+                );
+
+                transform.position = newPos;
+                transform.rotation = newRot;
+                transform.scale = newScale;
+
+                // Flag the TransformSystem to recalculate matrices next frame
+                transform.isDirty = true;
+            }
+        }
+    }
+
     ImGui::Render();
 }
 

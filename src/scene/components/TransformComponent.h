@@ -35,8 +35,15 @@ struct TransformComponent {
     void setScale(const glm::vec3& newScale) { scale = newScale; isDirty = true; }
 
     void OnInspector() {
-        PROPERTY(position);
-        PROPERTY(rotation);
-        PROPERTY(scale);
+        bool changed = false;
+
+        // If any of these get edited, changed becomes true
+        changed |= PROPERTY(position);
+        changed |= PROPERTY(rotation);
+        changed |= PROPERTY(scale);
+
+        if (changed) {
+            isDirty = true; // Now the TransformSystem will catch it next frame!
+        }
     }
 };
