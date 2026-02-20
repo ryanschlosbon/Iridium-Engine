@@ -1,5 +1,5 @@
 #include "TransformSystem.h"
-#include "scene/Registry.h" // Include your specific Registry header here
+#include "ecs/Registry.h" // Include your specific Registry header here
 #include <algorithm>
 
 TransformSystem::TransformSystem() {}

@@ -5,7 +5,7 @@
 #include "VkGraphicsPipeline.h"
 #include "VkMesh.h"
 #include "editor/EditorSystem.h"
-#include "scene/Registry.h"
+#include "ecs/Registry.h"
 #include "scene/Components.h"
 
 class EditorSystem;

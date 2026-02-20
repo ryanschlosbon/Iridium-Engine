@@ -24,9 +24,10 @@
 #include "renderer/VkMesh.h"
 #include "assets/AssetManager.h"  
 #include "scene/Components.h"
-#include "scene/Registry.h"
+#include "ecs/Registry.h"
 #include "editor/EditorSystem.h"
-#include "scene/TransformSystem.h"
+#include "ecs/systems/TransformSystem.h"
+#include "utils/DeletionQueue.h"
 
 // CONSTANTS
 const int WIDTH = 1280;
@@ -197,6 +198,7 @@ private:
     bool enableValidation = false;
     TransformSystem transformSystem;
     Registry registry;
+    DeletionQueue frameDeletionQueues[VkSyncObjects::MAX_FRAMES_IN_FLIGHT];
 
     glm::vec2 squarePos = { 0.0f, 0.0f };
     std::vector<VkBuffer> uniformBuffers;
@@ -290,6 +292,8 @@ private:
         VkFence inFlightFence = vkSyncObjects->getInFlightFence(currentFrame);
 
         vkWaitForFences(vkContext->getDevice(), 1, &inFlightFence, VK_TRUE, UINT64_MAX);
+
+        frameDeletionQueues[currentFrame].flush();
 
         // CHANGED: Pass the matrices here!
         updateUniformBuffer(currentFrame, view, proj);
@@ -707,35 +711,40 @@ private:
         editor.setSelectedEntity(closestEntity);
     }
 
-    void ProcessMeshSwaps(Registry& registry, AssetManager* assetManager) {
-        auto* meshPool = registry.getPool<MeshComponent>();
+    void ProcessMeshSwaps(Registry& registry, AssetManager* assetManager, uint32_t currentFrame) {
+    auto* meshPool = registry.getPool<MeshComponent>();
+    if (!meshPool) return;
 
-        // Safety check in case the pool hasn't been created yet
-        if (!meshPool) return;
-
-        for (uint32_t entity : meshPool->entities) {
-            auto& meshComp = meshPool->get(entity);
-
-            // Check if the Inspector UI submitted a new mesh request
-            if (!meshComp.requestedMeshPath.empty()) {
-                try {
-                    // Use the AssetManager to load the new model
-                    std::string fullPath = std::string(PROJECT_ROOT_DIR) + meshComp.requestedMeshPath;
-
-                    // Swap the pointer. The next time recordCommands runs, it will draw the new mesh!
-                    meshComp.model = assetManager->getModel(fullPath);
-
-                    std::cout << "Successfully swapped mesh to: " << fullPath << std::endl;
+    for (uint32_t entity : meshPool->entities) {
+        auto& meshComp = meshPool->get(entity);
+        
+        if (!meshComp.requestedMeshPath.empty()) {
+            try {
+                // 1. Grab the new path
+                std::string fullPath = std::string(PROJECT_ROOT_DIR) + meshComp.requestedMeshPath;
+                
+                // 2. THE LAMBDA TRICK
+                if (meshComp.model) {
+                    // Create a local copy of the shared_ptr
+                    std::shared_ptr<ModelAsset> oldModel = meshComp.model;
+                    
+                    // Push a lambda into the queue that captures 'oldModel' BY VALUE.
+                    // This artificially holds the Vulkan memory hostage until the queue flushes!
+                    frameDeletionQueues[currentFrame].push_function([oldModel]() {});
                 }
-                catch (const std::exception& e) {
-                    std::cerr << "Failed to swap mesh: " << e.what() << "\n";
-                }
-
-                // Clear the flag so we don't try to load it again next frame
-                meshComp.requestedMeshPath.clear();
+              
+                // 3. Swap the pointer. The old mesh is now safely owned by the Deletion Queue.
+                meshComp.model = assetManager->getModel(fullPath);
+                
+                std::cout << "Successfully swapped mesh to: " << fullPath << std::endl;
+            } catch (const std::exception& e) {
+                std::cerr << "Failed to swap mesh: " << e.what() << "\n";
             }
+            
+            meshComp.requestedMeshPath.clear();
         }
     }
+}
 
     void mainLoop() {
         TransformSystem transformSystem; // <--- 1. Instantiate the System
@@ -760,7 +769,7 @@ private:
             glfwPollEvents();
             processInput(window);
 
-            ProcessMeshSwaps(registry, assetManager);
+            ProcessMeshSwaps(registry, assetManager, currentFrame);
 
             // --- 1. CALCULATE MATRICES ---
             // We need these for the Editor Gizmos

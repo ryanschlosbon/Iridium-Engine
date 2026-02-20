@@ -1,6 +1,6 @@
 #include "SceneSerializer.h"
 #include "Components.h"
-#include "Entity.h"
+#include "ecs/Entity.h"
 #include "assets/AssetManager.h"
 #include <fstream>
 #include <iostream>

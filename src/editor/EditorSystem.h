@@ -1,7 +1,7 @@
 #pragma once
 #include "assets/AssetManager.h"
 #include "scene/SceneSerializer.h"
-#include "scene/Entity.h"
+#include "ecs/Entity.h"
 
 class AssetManager;
 struct ModelAsset;
