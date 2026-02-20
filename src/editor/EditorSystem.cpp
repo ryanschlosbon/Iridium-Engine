@@ -59,6 +59,7 @@ void EditorSystem::init(VkInstance instance, VkDevice device, VkPhysicalDevice p
     ImGuiIO& io = ImGui::GetIO(); (void)io;
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard; // Enable Keyboard Controls
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;     // Enable Docking
+    io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;   // Enable windows outside of engine
 
     ImGui_ImplGlfw_InitForVulkan(window, true);
 
@@ -106,6 +107,9 @@ void EditorSystem::update(Registry& registry, AssetManager* assetManager,
     ImGui::NewFrame();
     ImGuizmo::BeginFrame();
 
+    ImGuiDockNodeFlags dockFlags = ImGuiDockNodeFlags_PassthruCentralNode;
+    ImGui::DockSpaceOverViewport(0, ImGui::GetMainViewport(), dockFlags);
+
     // Draw editor panels
     for (auto& panel : panels) {
         panel->OnImGuiRender(registry, assetManager);
@@ -138,6 +142,9 @@ void EditorSystem::update(Registry& registry, AssetManager* assetManager,
             if (gizmoProj[1][1] < 0.0f) {
                 gizmoProj[1][1] *= -1.0f;
             }
+
+            // Tells ImGuizmo how big the window currently is, for proper guizmo scaling
+            ImGuizmo::SetRect(0, 0, io.DisplaySize.x, io.DisplaySize.y);
 
             // Draw the Gizmo and handle user interaction
             bool isManipulated = ImGuizmo::Manipulate(

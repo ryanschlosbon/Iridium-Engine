@@ -124,10 +124,15 @@ void Application::mouse_button_callback(GLFWwindow* window, int button, int acti
     }
 }
 
+void Application::framebufferResizeCallback(GLFWwindow* window, int width, int height) {
+    auto app = reinterpret_cast<Application*>(glfwGetWindowUserPointer(window));
+    app->framebufferResized = true;
+}
+
 void Application::initWindow() {
     glfwInit();
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-    glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
+    glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
 
     window = glfwCreateWindow(WIDTH, HEIGHT, "Iridium Engine", nullptr, nullptr);
     glfwSetWindowUserPointer(window, this);
@@ -135,6 +140,8 @@ void Application::initWindow() {
     glfwSetCursorPosCallback(window, mouse_callback);
     glfwSetScrollCallback(window, scroll_callback);
     glfwSetMouseButtonCallback(window, mouse_button_callback);
+
+    glfwSetFramebufferSizeCallback(window, framebufferResizeCallback);
 }
 
 void Application::initVulkan() {
@@ -156,7 +163,7 @@ void Application::initVulkan() {
     mainModel = assetManager->getModel(modelPath);
 
     createUniformBuffers();
-    createDescriptorPool();
+    descriptorAllocator.init(vkContext->getDevice());
     createDescriptorSets();
 
     editor.init(
@@ -180,8 +187,16 @@ void Application::drawFrame(Registry& registry, const glm::mat4& view, const glm
     updateUniformBuffer(currentFrame, view, proj);
 
     uint32_t imageIndex;
-    vkAcquireNextImageKHR(vkContext->getDevice(), vkSwapchain->getSwapchain(), UINT64_MAX,
-        vkSyncObjects->getImageAvailableSemaphore(currentFrame), VK_NULL_HANDLE, &imageIndex);
+    VkResult result = vkAcquireNextImageKHR(vkContext->getDevice(), vkSwapchain->getSwapchain(), 
+        UINT64_MAX, vkSyncObjects->getImageAvailableSemaphore(currentFrame), VK_NULL_HANDLE, &imageIndex);
+
+    if (result == VK_ERROR_OUT_OF_DATE_KHR) {
+        recreateSwapchain();
+        return; // Skip the rest of this frame
+    }
+    else if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
+        throw std::runtime_error("Failed to acquire swap chain image!");
+    }
 
     if (imageIndex >= imagesInFlight.size()) {
         imagesInFlight.resize(vkSwapchain->getImageCount(), VK_NULL_HANDLE);
@@ -236,7 +251,22 @@ void Application::drawFrame(Registry& registry, const glm::mat4& view, const glm
     presentInfo.pSwapchains = swapChains;
     presentInfo.pImageIndices = &imageIndex;
 
-    vkQueuePresentKHR(vkContext->getPresentQueue(), &presentInfo);
+    VkResult presentResult = vkQueuePresentKHR(vkContext->getPresentQueue(), &presentInfo);
+
+    // Check both the Vulkan result and our custom GLFW boolean
+    if (presentResult == VK_ERROR_OUT_OF_DATE_KHR || presentResult == VK_SUBOPTIMAL_KHR || wasWindowResized()) {
+        resetWindowResizedFlag();
+        recreateSwapchain();
+        }
+    else if (presentResult != VK_SUCCESS) {
+        throw std::runtime_error("Failed to present swap chain image!");
+    }
+
+    ImGuiIO& io = ImGui::GetIO();
+    if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {
+        ImGui::UpdatePlatformWindows();
+        ImGui::RenderPlatformWindowsDefault();
+    }
 
     currentFrame = (currentFrame + 1) % VkSyncObjects::MAX_FRAMES_IN_FLIGHT;
 }
@@ -267,44 +297,55 @@ void Application::updateUniformBuffer(uint32_t currentImage, const glm::mat4& vi
     memcpy(uniformBuffersMapped[currentImage], &ubo, sizeof(ubo));
 }
 
-void Application::createDescriptorPool() {
+void Application::allocateMaterialDescriptors(std::shared_ptr<ModelAsset> model) {
     uint32_t imageCount = static_cast<uint32_t>(vkSwapchain->getImageCount());
-    uint32_t materialCount = static_cast<uint32_t>(mainModel->materials.size());
-    uint32_t maxSets = (1 + materialCount) * imageCount;
+    size_t numMaterials = model->materials.size();
+    if (numMaterials == 0) return;
 
-    std::array<VkDescriptorPoolSize, 2> poolSizes{};
-    poolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    poolSizes[0].descriptorCount = imageCount;
-    poolSizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSizes[1].descriptorCount = materialCount * imageCount;
+    for (size_t m = 0; m < numMaterials; m++) {
+        auto& material = model->materials[m];
 
-    VkDescriptorPoolCreateInfo poolInfo{};
-    poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
-    poolInfo.pPoolSizes = poolSizes.data();
-    poolInfo.maxSets = maxSets;
+        // If this material already has descriptors (from a previous load), skip it!
+        if (!material.descriptorSets.empty()) continue;
 
-    if (vkCreateDescriptorPool(vkContext->getDevice(), &poolInfo, nullptr, &descriptorPool) != VK_SUCCESS) {
-        throw std::runtime_error("failed to create descriptor pool!");
+        material.descriptorSets.resize(imageCount);
+
+        int imgIdx = material.textureIndex;
+        if (imgIdx < 0 || imgIdx >= static_cast<int>(model->textures.size())) {
+            imgIdx = 0;
+        }
+
+        for (size_t i = 0; i < imageCount; i++) {
+            // Dynamically allocate the Material Set
+            material.descriptorSets[i] = descriptorAllocator.allocate(vkPipeline->getMaterialSetLayout());
+
+            VkDescriptorImageInfo imageInfo{};
+            imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            imageInfo.imageView = model->textures[imgIdx].view;
+            imageInfo.sampler = model->textures[imgIdx].sampler;
+
+            VkWriteDescriptorSet descriptorWrite{};
+            descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            descriptorWrite.dstSet = material.descriptorSets[i];
+            descriptorWrite.dstBinding = 0;
+            descriptorWrite.dstArrayElement = 0;
+            descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            descriptorWrite.descriptorCount = 1;
+            descriptorWrite.pImageInfo = &imageInfo;
+
+            vkUpdateDescriptorSets(vkContext->getDevice(), 1, &descriptorWrite, 0, nullptr);
+        }
     }
 }
 
 void Application::createDescriptorSets() {
     uint32_t imageCount = static_cast<uint32_t>(vkSwapchain->getImageCount());
     globalDescriptorSets.resize(imageCount);
-    std::vector<VkDescriptorSetLayout> globalLayouts(imageCount, vkPipeline->getGlobalSetLayout());
-
-    VkDescriptorSetAllocateInfo globalAllocInfo{};
-    globalAllocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-    globalAllocInfo.descriptorPool = descriptorPool;
-    globalAllocInfo.descriptorSetCount = imageCount;
-    globalAllocInfo.pSetLayouts = globalLayouts.data();
-
-    if (vkAllocateDescriptorSets(vkContext->getDevice(), &globalAllocInfo, globalDescriptorSets.data()) != VK_SUCCESS) {
-        throw std::runtime_error("failed to allocate global descriptor sets!");
-    }
 
     for (size_t i = 0; i < imageCount; i++) {
+        // 1. Dynamically allocate the Global Set using our new class
+        globalDescriptorSets[i] = descriptorAllocator.allocate(vkPipeline->getGlobalSetLayout());
+
         VkDescriptorBufferInfo bufferInfo{};
         bufferInfo.buffer = uniformBuffers[i];
         bufferInfo.offset = 0;
@@ -322,49 +363,8 @@ void Application::createDescriptorSets() {
         vkUpdateDescriptorSets(vkContext->getDevice(), 1, &descriptorWrite, 0, nullptr);
     }
 
-    size_t numMaterials = mainModel->materials.size();
-    if (numMaterials == 0) return;
-
-    std::vector<VkDescriptorSetLayout> materialLayouts(imageCount, vkPipeline->getMaterialSetLayout());
-
-    for (size_t m = 0; m < numMaterials; m++) {
-        auto& material = mainModel->materials[m];
-
-        VkDescriptorSetAllocateInfo materialAllocInfo{};
-        materialAllocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-        materialAllocInfo.descriptorPool = descriptorPool;
-        materialAllocInfo.descriptorSetCount = imageCount;
-        materialAllocInfo.pSetLayouts = materialLayouts.data();
-
-        material.descriptorSets.resize(imageCount);
-
-        if (vkAllocateDescriptorSets(vkContext->getDevice(), &materialAllocInfo, material.descriptorSets.data()) != VK_SUCCESS) {
-            throw std::runtime_error("failed to allocate descriptor sets for material " + std::to_string(m));
-        }
-
-        int imgIdx = material.textureIndex;
-        if (imgIdx < 0 || imgIdx >= static_cast<int>(mainModel->textures.size())) {
-            imgIdx = 0;
-        }
-
-        for (size_t i = 0; i < imageCount; i++) {
-            VkDescriptorImageInfo imageInfo{};
-            imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            imageInfo.imageView = mainModel->textures[imgIdx].view;
-            imageInfo.sampler = mainModel->textures[imgIdx].sampler;
-
-            VkWriteDescriptorSet descriptorWrite{};
-            descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            descriptorWrite.dstSet = material.descriptorSets[i];
-            descriptorWrite.dstBinding = 0;
-            descriptorWrite.dstArrayElement = 0;
-            descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            descriptorWrite.descriptorCount = 1;
-            descriptorWrite.pImageInfo = &imageInfo;
-
-            vkUpdateDescriptorSets(vkContext->getDevice(), 1, &descriptorWrite, 0, nullptr);
-        }
-    }
+    // 2. Allocate materials for the starting model
+    allocateMaterialDescriptors(mainModel);
 }
 
 void Application::createDepthResources() {
@@ -484,12 +484,16 @@ void Application::processInput(GLFWwindow* window) {
 }
 
 void Application::selectEntityAtMouse(double mouseX, double mouseY) {
-    float aspectRatio = vkSwapchain->getExtent().width / (float)vkSwapchain->getExtent().height;
+    float currentWidth = static_cast<float>(vkSwapchain->getExtent().width);
+    float currentHeight = static_cast<float>(vkSwapchain->getExtent().height);
+    float aspectRatio = currentWidth / currentHeight;
+
     glm::mat4 view = glm::lookAt(cameraPos, cameraPos + cameraFront, cameraUp);
     glm::mat4 proj = glm::perspective(glm::radians(45.0f), aspectRatio, 0.1f, 1000.0f);
 
-    float x = (2.0f * static_cast<float>(mouseX)) / WIDTH - 1.0f;
-    float y = 1.0f - (2.0f * static_cast<float>(mouseY)) / HEIGHT;
+    // 2. Use the dynamic width/height for the NDC calculation!
+    float x = (2.0f * static_cast<float>(mouseX)) / currentWidth - 1.0f;
+    float y = 1.0f - (2.0f * static_cast<float>(mouseY)) / currentHeight;
 
     glm::vec4 rayClip = glm::vec4(x, y, -1.0f, 1.0f);
     glm::vec4 rayEye = glm::inverse(proj) * rayClip;
@@ -545,6 +549,9 @@ void Application::ProcessMeshSwaps(Registry& registry, AssetManager* assetManage
                 }
 
                 meshComp.model = assetManager->getModel(fullPath);
+
+                allocateMaterialDescriptors(meshComp.model);
+
                 std::cout << "Successfully swapped mesh to: " << fullPath << std::endl;
             }
             catch (const std::exception& e) {
@@ -597,6 +604,40 @@ void Application::mainLoop() {
     vkDeviceWaitIdle(vkContext->getDevice());
 }
 
+void Application::recreateSwapchain() {
+    // 1. Handle Minimization
+    int width = 0, height = 0;
+    glfwGetFramebufferSize(window, &width, &height);
+    while (width == 0 || height == 0) {
+        glfwGetFramebufferSize(window, &width, &height);
+        glfwWaitEvents();
+    }
+
+    // 2. Wait for GPU to finish
+    vkDeviceWaitIdle(vkContext->getDevice());
+
+    // 3. CLEANUP OLD
+    // We delete framebuffers first because they depend on the depth buffer and swapchain
+    delete vkFramebuffer;
+
+    // Destroy Depth Resources
+    vkDestroyImageView(vkContext->getDevice(), depthImageView, nullptr);
+    vkDestroyImage(vkContext->getDevice(), depthImage, nullptr);
+    vkFreeMemory(vkContext->getDevice(), depthImageMemory, nullptr);
+
+    // Deleting this triggers your VkSwapchain::~VkSwapchain() automatically!
+    delete vkSwapchain;
+
+    // 4. CREATE NEW (Make sure these match your init functions!)
+    vkSwapchain = new VkSwapchain(vkContext, window);
+
+    // You likely have a function named something like this in your setup:
+    createDepthResources();
+
+    // Recreate the framebuffers with the new swapchain and depth buffer
+    vkFramebuffer = new VkFramebufferWrapper(vkContext, vkSwapchain, vkRenderPass, depthImageView);
+}
+
 void Application::cleanup() {
     vkDeviceWaitIdle(vkContext->getDevice());
     editor.cleanup(vkContext->getDevice());
@@ -612,7 +653,7 @@ void Application::cleanup() {
         vkFreeMemory(vkContext->getDevice(), uniformBuffersMemory[i], nullptr);
     }
 
-    vkDestroyDescriptorPool(vkContext->getDevice(), descriptorPool, nullptr);
+    descriptorAllocator.cleanup();
 
     delete vkSyncObjects;
     delete vkCommandManager;

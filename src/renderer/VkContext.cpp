@@ -313,6 +313,7 @@ void VkContext::createLogicalDevice() {
     // 2. Device Features
     VkPhysicalDeviceFeatures deviceFeatures{};
     deviceFeatures.samplerAnisotropy = VK_TRUE;
+	deviceFeatures.fillModeNonSolid = VK_TRUE;
 
     // 3. Extensions Setup (THE MAC COMPATIBILITY FIX)
     // Start with the Swapchain extension, which is required on all platforms.

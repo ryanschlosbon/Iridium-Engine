@@ -20,6 +20,7 @@
 #include "editor/EditorSystem.h"
 #include "ecs/systems/TransformSystem.h"
 #include "utils/DeletionQueue.h"
+#include "renderer/DescriptorAllocator.h"
 
 class Application {
 public:
@@ -30,6 +31,11 @@ public:
     static void scroll_callback(GLFWwindow* window, double xoffset, double yoffset);
     static void mouse_button_callback(GLFWwindow* window, int button, int action, int mods);
 
+    static void framebufferResizeCallback(GLFWwindow* window, int width, int height);
+
+    bool wasWindowResized() const { return framebufferResized; }
+    void resetWindowResizedFlag() { framebufferResized = false; }
+
 private:
     GLFWwindow* window;
     VkContext* vkContext;
@@ -39,7 +45,7 @@ private:
     VkGraphicsPipeline* vkPipeline;
     VkCommandManager* vkCommandManager;
     VkSyncObjects* vkSyncObjects;
-    VkDescriptorPool descriptorPool;
+    DescriptorAllocator descriptorAllocator;
     VkImage depthImage;
     VkDeviceMemory depthImageMemory;
     VkImageView depthImageView;
@@ -62,6 +68,7 @@ private:
     std::vector<void*> uniformBuffersMapped;
     uint32_t currentFrame = 0;
     std::vector<VkFence> imagesInFlight;
+    bool framebufferResized = false;
 
     AssetManager* assetManager;
     std::shared_ptr<ModelAsset> mainModel;
@@ -99,4 +106,6 @@ private:
     void processInput(GLFWwindow* window);
     void selectEntityAtMouse(double mouseX, double mouseY);
     void ProcessMeshSwaps(Registry& registry, AssetManager* assetManager, uint32_t currentFrame);
+    void recreateSwapchain();
+    void allocateMaterialDescriptors(std::shared_ptr<ModelAsset> model);
 };

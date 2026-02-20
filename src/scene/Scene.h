@@ -1,7 +1,7 @@
 #include <vector>
 #include <memory>
 #include "renderer/VkMesh.h"
-#include "Entity.h"
+#include "ecs/Entity.h"
 
 class Scene {
 public:
