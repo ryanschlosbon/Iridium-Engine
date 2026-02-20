@@ -16,6 +16,7 @@ VkGraphicsPipeline::VkGraphicsPipeline(VkContext* context, VkSwapchain* swapchai
 
 VkGraphicsPipeline::~VkGraphicsPipeline() {
 	vkDestroyPipeline(context->getDevice(), graphicsPipeline, nullptr);
+    vkDestroyPipeline(context->getDevice(), wireframePipeline, nullptr);
     vkDestroyPipeline(context->getDevice(), outlinePipeline, nullptr);
     vkDestroyPipeline(context->getDevice(), outlineWireframePipeline, nullptr);
 	vkDestroyPipelineLayout(context->getDevice(), pipelineLayout, nullptr);
