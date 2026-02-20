@@ -146,11 +146,11 @@ add_executable(IridiumEngine
         "src/vendor/std_image_impl.cpp"
         "src/assets/AssetManager.h"
         "src/assets/AssetManager.cpp"
-        "src/scene/Entity.h"
+        "src/ecs/Entity.h"
         "src/scene/Scene.h"
         "src/scene/Components.h"
         "src/scene/components/TransformComponent.h"
-        "src/scene/Registry.h"
+        "src/ecs/Registry.h"
         "src/scene/components/MeshComponent.h"
         "src/vendor/imgui/imgui.cpp"
         "src/vendor/imgui/imgui_demo.cpp"
@@ -161,15 +161,15 @@ add_executable(IridiumEngine
         "src/vendor/imgui/backends/imgui_impl_vulkan.cpp"
         "src/editor/EditorSystem.h"
         "src/editor/EditorSystem.cpp"
-        "src/scene/TransformSystem.cpp"
-        "src/scene/TransformSystem.h"
+        "src/ecs/systems/TransformSystem.cpp"
+        "src/ecs/systems/TransformSystem.h"
         "src/scene/components/RelationshipComponent.h"
         "src/vendor/imguizmo/ImGuizmo.cpp"
         "src/vendor/simdjson/simdjson.cpp"
         "src/vendor/fastgltf/src/fastgltf.cpp"
         "src/vendor/fastgltf/src/base64.cpp"
         "src/vendor/fastgltf/src/io.cpp"
- "src/scene/SceneSerializer.h" "src/scene/SceneSerializer.cpp" "src/scene/components/LightComponent.h" "src/editor/Reflection.h")
+ "src/scene/SceneSerializer.h" "src/scene/SceneSerializer.cpp" "src/scene/components/LightComponent.h" "src/editor/Reflection.h" "src/utils/DeletionQueue.h" "src/core/Application.h" "src/core/Application.cpp")
 
 # Defines PROJECT_ROOT_DIR for C++ to find assets
 add_compile_definitions(PROJECT_ROOT_DIR="${CMAKE_CURRENT_SOURCE_DIR}/")

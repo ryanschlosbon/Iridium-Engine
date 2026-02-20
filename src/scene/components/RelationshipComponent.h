@@ -1,6 +1,6 @@
 #pragma once
 #include <vector>
-#include "../Entity.h"
+#include "ecs/Entity.h"
 
 struct RelationshipComponent {
     Entity parent = NULL_ENTITY;

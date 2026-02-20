@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Registry.h"
+#include "ecs/Registry.h"
 #include <string>
 
 class AssetManager;
