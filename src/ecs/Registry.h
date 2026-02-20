@@ -82,11 +82,9 @@ public:
 };
 
 class Registry {
-    // Allow EditorSystem to access private 'pools'
-    friend class EditorSystem;
-
 public:
     Entity createEntity() { return nextEntityID++; }
+    auto& getPools() { return pools; }
 
     template<typename T, typename... Args>
     T& addComponent(Entity entity, Args&&... args) {
