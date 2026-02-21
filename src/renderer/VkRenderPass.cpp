@@ -22,8 +22,8 @@ void VkRenderPassWrapper::createRenderPass(VkFormat swapChainImageFormat) {
 	colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE; // Store the framebuffer contents to memory at end
 
 	// Layout Transitions
-	colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED; // Don't care about previous layout
-	colorAttachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR; // Ready for presentation
+	colorAttachment.initialLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+	colorAttachment.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
 	// Subpass Reference
 	// A render pass can have multiple subpasses (e.g. Geometry -> Lighting)

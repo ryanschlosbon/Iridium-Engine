@@ -3,15 +3,37 @@
 #include <stdexcept>
 #include <iostream> // Add this at the top of the file
 
-VkCommandManager::VkCommandManager(VkContext* context, VkFramebufferWrapper* framebuffer, 
-	VkGraphicsPipeline* pipeline, int count)
-	: context(context) {
-	// Create 1 buffer for every frame (usually 3)
-	createCommandBuffers(count);
+VkCommandManager::VkCommandManager(VkContext* context, VkFramebufferWrapper* framebuffer,
+    VkGraphicsPipeline* pipeline, uint32_t count)
+    : context(context) {
+
+    // 1. Create the Command Pool (The Factory)
+    VkCommandPoolCreateInfo poolInfo{};
+    poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+    poolInfo.queueFamilyIndex = context->getGraphicsQueueFamily(); // Uses the new getter
+    poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+
+    if (vkCreateCommandPool(context->getDevice(), &poolInfo, nullptr, &this->commandPool) != VK_SUCCESS) {
+        throw std::runtime_error("failed to create command pool!");
+    }
+
+    // 2. Allocate the Command Buffers
+    commandBuffers.resize(count);
+    VkCommandBufferAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    allocInfo.commandPool = this->commandPool;
+    allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    allocInfo.commandBufferCount = count;
+
+    if (vkAllocateCommandBuffers(context->getDevice(), &allocInfo, commandBuffers.data()) != VK_SUCCESS) {
+        throw std::runtime_error("failed to allocate command buffers!");
+    }
 }
 
 VkCommandManager::~VkCommandManager() {
-	// We don't need to explicitly free command buffers because they are destroyed with the Pool (in VkContext)
+    if (commandPool != VK_NULL_HANDLE) {
+        vkDestroyCommandPool(context->getDevice(), commandPool, nullptr);
+    }
 }
 
 void collectDrawCalls(Node* node, glm::mat4 parentTransform, ModelAsset* model, std::vector<RenderPacket>& drawList) {
@@ -57,9 +79,7 @@ VkCommandBuffer VkCommandManager::beginSingleTimeCommands() {
     VkCommandBufferAllocateInfo allocInfo{};
     allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
     allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-
-    // FIX: Use the valid pool from your context
-    allocInfo.commandPool = context->getCommandPool();
+    allocInfo.commandPool = this->commandPool; // Now uses the valid class member
     allocInfo.commandBufferCount = 1;
 
     VkCommandBuffer commandBuffer;
@@ -70,7 +90,6 @@ VkCommandBuffer VkCommandManager::beginSingleTimeCommands() {
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
 
     vkBeginCommandBuffer(commandBuffer, &beginInfo);
-
     return commandBuffer;
 }
 
@@ -83,29 +102,38 @@ void VkCommandManager::endSingleTimeCommands(VkCommandBuffer commandBuffer) {
     submitInfo.pCommandBuffers = &commandBuffer;
 
     vkQueueSubmit(context->getGraphicsQueue(), 1, &submitInfo, VK_NULL_HANDLE);
+
+    // CRITICAL: Prevent the nvoglv64.dll crash by waiting for the GPU to finish
     vkQueueWaitIdle(context->getGraphicsQueue());
 
-    // FIX: Use the valid pool from your context
-    vkFreeCommandBuffers(context->getDevice(), context->getCommandPool(), 1, &commandBuffer);
+    vkFreeCommandBuffers(context->getDevice(), commandPool, 1, &commandBuffer);
 }
 
-void VkCommandManager::recordCommands(uint32_t imageIndex, VkRenderPassWrapper* renderPass,
-    VkFramebufferWrapper* framebuffer, VkGraphicsPipeline* pipeline, VkExtent2D extent,
-    Registry& registry, // <--- USING REGISTRY
-    const std::vector<VkDescriptorSet>& globalSets,
+void VkCommandManager::recordCommands(
+    uint32_t currentFrame,
+    uint32_t imageIndex,
+    VkRenderPassWrapper* offscreenPass,
+    VkFramebufferWrapper* offscreenFramebuffer,
+    VkUIRenderPass* uiPass,
+    const std::vector<VkFramebuffer>& uiFramebuffers,
+    VkGraphicsPipeline* pipeline,
+    VkExtent2D extent,
+    Registry& registry,
+    VkDescriptorSet globalDescriptorSet,
     EditorSystem* editor) {
 
-    VkCommandBuffer cmd = commandBuffers[imageIndex];
+    VkCommandBuffer cmd = commandBuffers[currentFrame];
     VkCommandBufferBeginInfo beginInfo{ VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
 
     if (vkBeginCommandBuffer(cmd, &beginInfo) != VK_SUCCESS) {
         throw std::runtime_error("failed to begin recording command buffer!");
     }
 
-    // 1. Begin Render Pass
+    // === PASS 1: OFF-SCREEN 3D SCENE ===
+    // This draws the game world into your invisible sceneColorImageViews
     VkRenderPassBeginInfo rpInfo{ VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
-    rpInfo.renderPass = renderPass->getRenderPass();
-    rpInfo.framebuffer = framebuffer->getFramebuffer(imageIndex);
+    rpInfo.renderPass = offscreenPass->getRenderPass();
+    rpInfo.framebuffer = offscreenFramebuffer->getFramebuffer(imageIndex); //
     rpInfo.renderArea.extent = extent;
 
     std::array<VkClearValue, 2> clears{};
@@ -116,9 +144,7 @@ void VkCommandManager::recordCommands(uint32_t imageIndex, VkRenderPassWrapper* 
 
     vkCmdBeginRenderPass(cmd, &rpInfo, VK_SUBPASS_CONTENTS_INLINE);
 
-    // 2. Bind Pipeline & Global State
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline->getPipeline());
-
+    // 1. Set Viewport & Scissor for the Scene
     VkViewport viewport{ 0.0f, 0.0f, (float)extent.width, (float)extent.height, 0.0f, 1.0f };
     vkCmdSetViewport(cmd, 0, 1, &viewport);
 
@@ -127,106 +153,95 @@ void VkCommandManager::recordCommands(uint32_t imageIndex, VkRenderPassWrapper* 
 
     VkPipelineLayout layout = pipeline->getPipelineLayout();
 
-    // Bind Global Camera Data (Set 0)
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &globalSets[imageIndex], 0, nullptr);
+    // 2. Bind Global Camera Data (Set 0)
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &globalDescriptorSet, 0, nullptr);
 
-    // MODE 1: WIREFRAME
+    // 3. Select Render Mode (Wireframe vs Solid)
     if (editor && editor->currentRenderMode == 1) {
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline->getWireframePipeline());
     }
-    // MODE 0: STANDARD (Default)
     else {
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline->getPipeline());
     }
 
-    // 3. ECS RENDER LOOP
-    // Get the pools directly (since your Registry doesn't have .view())
+    // 4. ECS RENDER LOOP (Draw all meshes)
     auto* meshPool = registry.getPool<MeshComponent>();
     auto* transformPool = registry.getPool<TransformComponent>();
 
-    // Iterate through all entities that have a MESH
-    // (We iterate meshes because we only want to draw things that exist visibly)
     for (uint32_t entity : meshPool->entities) {
-
-        // Check: Does this mesh entity ALSO have a Transform?
-        // (We can't draw it if we don't know where it is)
         if (transformPool->sparseMap.contains(entity)) {
-
-            // A. Retrieve the live components
             auto& meshComp = meshPool->get(entity);
-
-            if (!meshComp.enabled || !meshComp.model) continue; // Skip disabled or invalid meshes
+            if (!meshComp.enabled || !meshComp.model) continue;
 
             auto& transformComp = transformPool->get(entity);
 
-            // B. Bind VBO/IBO (Mesh Data)
             VkDeviceSize offset = 0;
             vkCmdBindVertexBuffers(cmd, 0, 1, &meshComp.model->vertexBuffer, &offset);
             vkCmdBindIndexBuffer(cmd, meshComp.model->indexBuffer, 0, VK_INDEX_TYPE_UINT32);
 
-            // C. Push the CALCULATED World Matrix (From TransformSystem)
-            // This 'worldMatrix' was updated by TransformSystem::update() right before this function ran
+            // Push World Matrix
             vkCmdPushConstants(cmd, layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4), &transformComp.worldMatrix);
 
-            // D. Draw the Submeshes (Materials)
             for (const auto& subMesh : meshComp.model->subMeshes) {
                 auto& mat = meshComp.model->materials[subMesh.materialIndex];
-
-                // Bind Material Textures (Set 1)
                 if (!mat.descriptorSets.empty()) {
-                    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 1, 1, &mat.descriptorSets[imageIndex], 0, nullptr);
+                    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 1, 1,
+                        &mat.descriptorSets[currentFrame], 0, nullptr);
                 }
-
                 vkCmdDrawIndexed(cmd, subMesh.indexCount, 1, subMesh.indexStart, 0, 0);
             }
         }
     }
 
+    // 5. SELECTION OUTLINE logic
     if (editor && editor->getSelectedEntity() != NULL_ENTITY) {
         Entity selected = editor->getSelectedEntity();
-
-        auto* meshPool = registry.getPool<MeshComponent>();
-        auto* transformPool = registry.getPool<TransformComponent>();
-
-        // OPTIMIZED: Use the ECS O(1) lookup instead of a for-loop, 
-        // and safely check if the model is loaded and enabled.
         if (meshPool->has(selected) && transformPool->has(selected) &&
             meshPool->get(selected).enabled && meshPool->get(selected).model) {
 
-            // 1. Switch to Outline Pipeline (Green, Cull Front)
             if (editor->currentRenderMode == 1) {
-                // If in Wireframe Mode -> Use Wireframe Outline (The Green Cage)
                 vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline->getOutlineWireframePipeline());
             }
             else {
-                // If in Solid Mode -> Use Solid Outline (The Green Shell)
                 vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline->getOutlinePipeline());
             }
 
             auto& meshComp = meshPool->get(selected);
             auto& transformComp = transformPool->get(selected);
 
-            // 2. Bind Mesh (Same VBO/IBO)
             VkDeviceSize offset = 0;
             vkCmdBindVertexBuffers(cmd, 0, 1, &meshComp.model->vertexBuffer, &offset);
             vkCmdBindIndexBuffer(cmd, meshComp.model->indexBuffer, 0, VK_INDEX_TYPE_UINT32);
-
-            // 3. Push Transform (Same Matrix)
             vkCmdPushConstants(cmd, layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4), &transformComp.worldMatrix);
 
-            // 4. Draw (No materials needed, the shader is solid green)
             for (const auto& subMesh : meshComp.model->subMeshes) {
                 vkCmdDrawIndexed(cmd, subMesh.indexCount, 1, subMesh.indexStart, 0, 0);
             }
         }
     }
 
-    // 4. Editor UI
+    vkCmdEndRenderPass(cmd); // END OF PASS 1
+
+
+    // === PASS 2: UI SWAPCHAIN ===
+    // This takes the editor UI (which now samples from Pass 1) and draws it to the monitor
+    VkRenderPassBeginInfo uiPassInfo{ VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
+    uiPassInfo.renderPass = uiPass->getRenderPass();
+    uiPassInfo.framebuffer = uiFramebuffers[imageIndex]; // The OS window framebuffers
+    uiPassInfo.renderArea.extent = extent;
+
+    VkClearValue uiClearColor = { {{0.0f, 0.0f, 0.0f, 1.0f}} };
+    uiPassInfo.clearValueCount = 1;
+    uiPassInfo.pClearValues = &uiClearColor;
+
+    vkCmdBeginRenderPass(cmd, &uiPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+    // DRAW THE EDITOR UI HERE
     if (editor) {
         editor->render(cmd);
     }
 
-    vkCmdEndRenderPass(cmd);
+    vkCmdEndRenderPass(cmd); // END OF PASS 2
 
     if (vkEndCommandBuffer(cmd) != VK_SUCCESS) {
         throw std::runtime_error("failed to record command buffer!");
@@ -258,6 +273,12 @@ void VkCommandManager::transitionImageLayout(VkImage image, VkFormat format, VkI
         barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
         sourceStage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
         destinationStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+    }
+    else if (oldLayout == VK_IMAGE_LAYOUT_UNDEFINED && newLayout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
+        barrier.srcAccessMask = 0;
+        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        sourceStage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+        destinationStage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
     }
     else if (oldLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL && newLayout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
         barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;

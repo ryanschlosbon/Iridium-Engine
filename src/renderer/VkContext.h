@@ -45,6 +45,7 @@ public:
 	SwapChainSupportDetails querySwapChainSupport(VkPhysicalDevice device);
 	VkCommandPool getCommandPool() const { return commandPool; }
 	VkInstance getInstance() const { return instance; }
+	uint32_t getGraphicsQueueFamily() const { return graphicsQueueFamilyIndex; }
 
 	bool enableValidationLayers;
 	void createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties, 
@@ -78,6 +79,7 @@ private:
 
 	VkCommandPool commandPool;
 
+	uint32_t graphicsQueueFamilyIndex;
 
 	// Internal Setup Functions
 	// These break the massive intialization process into small steps.

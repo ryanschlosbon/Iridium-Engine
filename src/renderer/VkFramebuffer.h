@@ -8,15 +8,15 @@
 
 class VkFramebufferWrapper {
 public:
-	VkFramebufferWrapper(VkContext* context, VkSwapchain* swapchain, VkRenderPassWrapper* renderPass, 
-		VkImageView depthImageView);
-	~VkFramebufferWrapper();
+    VkFramebufferWrapper(VkContext* context, VkRenderPassWrapper* renderPass,
+        const std::vector<VkImageView>& colorImageViews,
+        const std::vector<VkImageView>& depthImageViews,
+        VkExtent2D extent);
+    ~VkFramebufferWrapper();
 
-	VkFramebuffer getFramebuffer(int index) const { return framebuffers[index]; }
-	void createFramebuffers(VkSwapchain* swapchain,
-		VkRenderPassWrapper* renderPass,
-		VkImageView depthImageView);
+    VkFramebuffer getFramebuffer(int index) const { return framebuffers[index]; }
+
 private:
-	VkContext* context;
-	std::vector<VkFramebuffer> framebuffers;
+    VkContext* context;
+    std::vector<VkFramebuffer> framebuffers;
 };

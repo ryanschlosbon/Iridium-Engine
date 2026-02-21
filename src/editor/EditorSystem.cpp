@@ -2,8 +2,6 @@
 #include "scene/Components.h"
 #include "panels/core/SceneHierarchyPanel.h"
 #include "panels/core/InspectorPanel.h"
-#include "panels/core/ToolbarPanel.h"
-#include "panels/core/RenderModePanel.h"
 #include "panels/menus/MenuBarPanel.h"
 #include "panels/windows/ProjectSettingsPanel.h"
 
@@ -85,8 +83,8 @@ void EditorSystem::init(VkInstance instance, VkDevice device, VkPhysicalDevice p
 
     panels.push_back(std::make_unique<SceneHierarchyPanel>(&selectedEntity));
     panels.push_back(std::make_unique<InspectorPanel>(&selectedEntity));
-    panels.push_back(std::make_unique<ToolbarPanel>(&currentToolMode));
-    panels.push_back(std::make_unique<RenderModePanel>(&currentRenderMode));
+    // panels.push_back(std::make_unique<ToolbarPanel>(&currentToolMode));
+    // panels.push_back(std::make_unique<RenderModePanel>(&currentRenderMode));
     panels.push_back(std::make_unique<MenuBarPanel>(&selectedEntity, &uiState));
     panels.push_back(std::make_unique<ProjectSettingsPanel>(&uiState.showProjectSettings));
 }
@@ -99,7 +97,7 @@ void EditorSystem::cleanup(VkDevice device) {
 }
 
 void EditorSystem::update(Registry& registry, AssetManager* assetManager,
-    const glm::mat4& view, const glm::mat4& proj) {
+    const glm::mat4& viewInput, const glm::mat4& projInput, VkDescriptorSet sceneTexture) {
 
     // Standard Frame Setup
     ImGui_ImplVulkan_NewFrame();
@@ -115,66 +113,30 @@ void EditorSystem::update(Registry& registry, AssetManager* assetManager,
         panel->OnImGuiRender(registry, assetManager);
     }
 
-    // GIZMO DRAWING
-    // Only draw if an entity is selected AND we are in Move/Rotate/Scale mode
-    if (selectedEntity != NULL_ENTITY && currentToolMode > 0) {
-        auto* transformPool = registry.getPool<TransformComponent>();
+    glm::mat4 view = viewInput;
+    glm::mat4 proj = projInput;
 
-        if (transformPool && transformPool->has(selectedEntity)) {
-            auto& transform = transformPool->get(selectedEntity);
-
-            // FIX 1: Bind strictly to the raw Display Size, bypassing ImGui window offsets.
-            // This ensures ImGuizmo's 2D space perfectly matches the Vulkan Swapchain 1:1.
-            ImGuiIO& io = ImGui::GetIO();
-            ImGuizmo::SetOrthographic(false);
-            ImGuizmo::SetDrawlist(ImGui::GetBackgroundDrawList());
-            ImGuizmo::SetRect(0.0f, 0.0f, io.DisplaySize.x, io.DisplaySize.y);
-
-            // Map Iridium Engine's Toolbar Modes to ImGuizmo Operations
-            ImGuizmo::OPERATION snapOp = ImGuizmo::TRANSLATE;
-            if (currentToolMode == 1) snapOp = ImGuizmo::TRANSLATE;
-            if (currentToolMode == 2) snapOp = ImGuizmo::ROTATE;
-            if (currentToolMode == 3) snapOp = ImGuizmo::SCALE;
-
-            // FIX 2: Sanitize the projection matrix for ImGuizmo's internal OpenGL hit-testing.
-            // If the camera does a Vulkan Y-flip, we temporarily un-flip it just for this calculation.
-            glm::mat4 gizmoProj = proj;
-            if (gizmoProj[1][1] < 0.0f) {
-                gizmoProj[1][1] *= -1.0f;
-            }
-
-            // Tells ImGuizmo how big the window currently is, for proper guizmo scaling
-            ImGuizmo::SetRect(0, 0, io.DisplaySize.x, io.DisplaySize.y);
-
-            // Draw the Gizmo and handle user interaction
-            bool isManipulated = ImGuizmo::Manipulate(
-                glm::value_ptr(view),
-                glm::value_ptr(gizmoProj),
-                snapOp,
-                ImGuizmo::LOCAL,
-                glm::value_ptr(transform.worldMatrix)
-            );
-
-            if (isManipulated) {
-                glm::vec3 newPos, newRot, newScale;
-
-                // Extract the modified data from the matrix
-                ImGuizmo::DecomposeMatrixToComponents(
-                    glm::value_ptr(transform.worldMatrix),
-                    glm::value_ptr(newPos),
-                    glm::value_ptr(newRot),
-                    glm::value_ptr(newScale)
-                );
-
-                transform.position = newPos;
-                transform.rotation = newRot;
-                transform.scale = newScale;
-
-                // Flag the TransformSystem to recalculate matrices next frame
-                transform.isDirty = true;
-            }
+    // --- 2. CUSTOM ECS SELECTED ENTITY SEARCH ---
+    auto* transformPool = registry.getPool<TransformComponent>();
+    TransformComponent* selectedTransform = nullptr;
+    
+    // Check if we have a valid selected entity and if the pool exists
+    if (selectedEntity != NULL_ENTITY && transformPool) {
+        if (transformPool->has(selectedEntity)) {
+            selectedTransform = &transformPool->get(selectedEntity);
         }
     }
+
+    // Define the gizmo operation locally so it remembers what tool is active
+       static ImGuizmo::OPERATION currentGizmoOperation = ImGuizmo::TRANSLATE;
+
+    // --- 3. RENDER THE VIEWPORT PANEL ---
+    viewportPanel.render(sceneTexture,
+        currentRenderMode,
+        currentGizmoOperation,
+        view,
+        proj,
+        selectedTransform);
 
     ImGui::Render();
 }

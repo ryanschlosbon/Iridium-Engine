@@ -7,6 +7,7 @@
 #include "editor/EditorSystem.h"
 #include "ecs/Registry.h"
 #include "scene/Components.h"
+#include "VkUIRenderPass.h"
 
 class EditorSystem;
 
@@ -20,15 +21,22 @@ struct RenderPacket {
 
 class VkCommandManager {
 public: 
-	VkCommandManager(VkContext* context, VkFramebufferWrapper* framebuffer, 
-		VkGraphicsPipeline* pipeline, int count);
+	VkCommandManager(VkContext* context, VkFramebufferWrapper* framebuffer,
+		VkGraphicsPipeline* pipeline, uint32_t count);
 	~VkCommandManager();
 
 	// The function that writes the commands into the command buffer
-	void recordCommands(uint32_t imageIndex, VkRenderPassWrapper* renderPass,
-		VkFramebufferWrapper* framebuffer, VkGraphicsPipeline* pipeline, 
-		VkExtent2D extent, Registry& registry,
-		const std::vector<VkDescriptorSet>& globalSets,
+	void recordCommands(
+		uint32_t currentFrame,
+		uint32_t imageIndex,
+		VkRenderPassWrapper* offscreenPass,
+		VkFramebufferWrapper* offscreenFramebuffer,
+		VkUIRenderPass* uiPass,                           // NEW
+		const std::vector<VkFramebuffer>& uiFramebuffers, // NEW
+		VkGraphicsPipeline* pipeline,
+		VkExtent2D extent,
+		Registry& registry,
+		VkDescriptorSet globalDescriptorSet, 
 		EditorSystem* editor);
 
 	void transitionImageLayout(VkImage image, VkFormat format, VkImageLayout oldLayout, VkImageLayout newLayout);

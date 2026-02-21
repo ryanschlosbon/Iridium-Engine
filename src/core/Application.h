@@ -21,6 +21,7 @@
 #include "ecs/systems/TransformSystem.h"
 #include "utils/DeletionQueue.h"
 #include "renderer/DescriptorAllocator.h"
+#include "renderer/VkUIRenderPass.h"
 
 class Application {
 public:
@@ -46,9 +47,22 @@ private:
     VkCommandManager* vkCommandManager;
     VkSyncObjects* vkSyncObjects;
     DescriptorAllocator descriptorAllocator;
-    VkImage depthImage;
-    VkDeviceMemory depthImageMemory;
-    VkImageView depthImageView;
+    VkUIRenderPass* vkUIRenderPass;
+    std::vector<VkFramebuffer> uiFramebuffers;
+
+    // --- OFF-SCREEN RENDER TARGETS ---
+    std::vector<VkImage> sceneColorImages;
+    std::vector<VkDeviceMemory> sceneColorImageMemories;
+    std::vector<VkImageView> sceneColorImageViews;
+    VkSampler sceneSampler;
+
+    // --- UPGRADED DEPTH RESOURCES ---
+    std::vector<VkImage> depthImages;
+    std::vector<VkDeviceMemory> depthImageMemories;
+    std::vector<VkImageView> depthImageViews;
+
+    // The special ImGui pointer that lets the UI draw our Vulkan texture
+    std::vector<VkDescriptorSet> sceneDescriptorSets;
 
     std::vector<Texture> modelTextures;
     std::vector<int> materialToTextureMap;
@@ -57,7 +71,7 @@ private:
 
     EditorSystem editor;
     std::vector<VkDescriptorSet> globalDescriptorSets;
-    bool enableValidation = false;
+    bool enableValidation = true;
     TransformSystem transformSystem;
     Registry registry;
     DeletionQueue frameDeletionQueues[VkSyncObjects::MAX_FRAMES_IN_FLIGHT];
@@ -108,4 +122,6 @@ private:
     void ProcessMeshSwaps(Registry& registry, AssetManager* assetManager, uint32_t currentFrame);
     void recreateSwapchain();
     void allocateMaterialDescriptors(std::shared_ptr<ModelAsset> model);
+    void createOffscreenRenderTarget();
+    void createUIFramebuffers();
 };

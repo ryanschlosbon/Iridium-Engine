@@ -10,6 +10,8 @@
 #include <chrono>
 #include <algorithm>
 
+#include "backends/imgui_impl_vulkan.h"
+
 const int WIDTH = 1280;
 const int HEIGHT = 720;
 
@@ -82,6 +84,10 @@ void Application::mouse_callback(GLFWwindow* window, double xposIn, double yposI
 void Application::scroll_callback(GLFWwindow* window, double xoffset, double yoffset) {
     auto* app = reinterpret_cast<Application*>(glfwGetWindowUserPointer(window));
 
+    if (!app->editor.getViewportPanel().isFocused) {
+        return;
+    }
+
     app->cameraSpeed += (float)yoffset * 0.5f;
 
     if (app->cameraSpeed < 0.1f) app->cameraSpeed = 0.1f;
@@ -92,31 +98,24 @@ void Application::scroll_callback(GLFWwindow* window, double xoffset, double yof
 
 void Application::mouse_button_callback(GLFWwindow* window, int button, int action, int mods) {
     auto* app = reinterpret_cast<Application*>(glfwGetWindowUserPointer(window));
+    ViewportPanel& viewport = app->editor.getViewportPanel();
 
-    if (ImGui::GetIO().WantCaptureMouse) return;
+    // 1. Focus Gate: Only process clicks if the viewport is the active window
+    if (!viewport.isFocused) return;
 
+    // 2. UI Guard: If clicking a button/combo-box, abort selection
+    if (ImGui::IsAnyItemHovered()) return;
+
+    // --- LEFT CLICK: Selection ---
     if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS) {
-        double xpos, ypos;
-        glfwGetCursorPos(window, &xpos, &ypos);
-        app->selectEntityAtMouse(xpos, ypos);
+        app->selectEntityAtMouse(viewport.mouseX, viewport.mouseY);
     }
 
-    if (button == GLFW_MOUSE_BUTTON_RIGHT) {
-        if (action == GLFW_PRESS) {
-            app->isRightMouseButtonDown = true;
-            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
-            app->firstMouse = true;
-        }
-        else if (action == GLFW_RELEASE) {
-            app->isRightMouseButtonDown = false;
-            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
-        }
-    }
-
+    // --- MIDDLE CLICK: Panning ---
     if (button == GLFW_MOUSE_BUTTON_MIDDLE) {
         if (action == GLFW_PRESS) {
             app->isMiddleMouseButtonDown = true;
-            app->firstMouse = true;
+            app->firstMouse = true; // Prevents "jumping" when pan starts
         }
         else if (action == GLFW_RELEASE) {
             app->isMiddleMouseButtonDown = false;
@@ -150,12 +149,17 @@ void Application::initVulkan() {
     vkRenderPass = new VkRenderPassWrapper(vkContext, vkSwapchain);
     vkPipeline = new VkGraphicsPipeline(vkContext, vkSwapchain, vkRenderPass);
     vkSyncObjects = new VkSyncObjects(vkContext, vkSwapchain->getImageCount());
-
-    vkCommandManager = new VkCommandManager(vkContext, nullptr, vkPipeline, vkSwapchain->getImageCount());
+    vkCommandManager = new VkCommandManager(vkContext, vkFramebuffer, vkPipeline, VkSyncObjects::MAX_FRAMES_IN_FLIGHT);
 
     createDepthResources();
-    transitionImageLayout(depthImage, VK_FORMAT_D32_SFLOAT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
-    vkFramebuffer = new VkFramebufferWrapper(vkContext, vkSwapchain, vkRenderPass, depthImageView);
+    createOffscreenRenderTarget();
+    vkFramebuffer = new VkFramebufferWrapper(
+        vkContext,
+        vkRenderPass,
+        sceneColorImageViews,
+        depthImageViews,
+        vkSwapchain->getExtent()
+    );
 
     assetManager = new AssetManager(vkContext, vkCommandManager);
 
@@ -166,15 +170,28 @@ void Application::initVulkan() {
     descriptorAllocator.init(vkContext->getDevice());
     createDescriptorSets();
 
+    vkUIRenderPass = new VkUIRenderPass(vkContext, vkSwapchain->getImageFormat());
+    createUIFramebuffers();
+
     editor.init(
         vkContext->getInstance(),
         vkContext->getDevice(),
         vkContext->getPhysicalDevice(),
         vkContext->getGraphicsQueue(),
-        vkRenderPass->getRenderPass(),
+        vkUIRenderPass->getRenderPass(),
         window,
         vkCommandManager->getCommandPool()
     );
+
+    // Register our custom off-screen textures with Dear ImGui!
+    sceneDescriptorSets.resize(vkSwapchain->getImageCount());
+    for (size_t i = 0; i < sceneDescriptorSets.size(); i++) {
+        sceneDescriptorSets[i] = ImGui_ImplVulkan_AddTexture(
+            sceneSampler,
+            sceneColorImageViews[i],
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+        );
+    }
 }
 
 void Application::drawFrame(Registry& registry, const glm::mat4& view, const glm::mat4& proj) {
@@ -209,17 +226,18 @@ void Application::drawFrame(Registry& registry, const glm::mat4& view, const glm
 
     vkResetFences(vkContext->getDevice(), 1, &currentFence);
 
-    updateUniformBuffer(imageIndex, view, proj);
-
     vkCommandManager->recordCommands(
-        imageIndex,
-        vkRenderPass,
-        vkFramebuffer,
-        vkPipeline,
-        vkSwapchain->getExtent(),
-        registry,
-        globalDescriptorSets,
-        &editor
+        currentFrame,       // 0. Current frame index (CPU)
+        imageIndex,         // 1. Current frame index (GPU)
+        vkRenderPass,       // 2. Off-screen Pass wrapper
+        vkFramebuffer,      // 3. Off-screen Framebuffer wrapper
+        vkUIRenderPass,     // 4. NEW: The UI Pass wrapper
+        uiFramebuffers,     // 5. NEW: The UI Framebuffer vector
+        vkPipeline,         // 6. Graphics Pipeline
+        vkSwapchain->getExtent(), // 7. Extent
+        registry,           // 8. ECS Registry
+        globalDescriptorSets[currentFrame], // 9. Camera Data
+        &editor             // 10. Editor System pointer
     );
 
     VkSubmitInfo submitInfo{};
@@ -231,7 +249,7 @@ void Application::drawFrame(Registry& registry, const glm::mat4& view, const glm
     submitInfo.pWaitSemaphores = waitSemaphores;
     submitInfo.pWaitDstStageMask = waitStages;
     submitInfo.commandBufferCount = 1;
-    submitInfo.pCommandBuffers = &vkCommandManager->getCommandBuffer(imageIndex);
+    submitInfo.pCommandBuffers = &vkCommandManager->getCommandBuffer(currentFrame);
 
     VkSemaphore signalSemaphores[] = { vkSyncObjects->getRenderFinishedSemaphore(imageIndex) };
     submitInfo.signalSemaphoreCount = 1;
@@ -273,19 +291,42 @@ void Application::drawFrame(Registry& registry, const glm::mat4& view, const glm
 
 void Application::createUniformBuffers() {
     VkDeviceSize bufferSize = sizeof(UniformBufferObject);
-    size_t imageCount = vkSwapchain->getImageCount();
 
-    uniformBuffers.resize(imageCount);
-    uniformBuffersMemory.resize(imageCount);
-    uniformBuffersMapped.resize(imageCount);
+    size_t frameCount = VkSyncObjects::MAX_FRAMES_IN_FLIGHT;
 
-    for (size_t i = 0; i < imageCount; i++) {
+    uniformBuffers.resize(frameCount);
+    uniformBuffersMemory.resize(frameCount);
+    uniformBuffersMapped.resize(frameCount);
+
+    for (size_t i = 0; i < frameCount; i++) {
         vkContext->createBuffer(bufferSize,
             VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
             uniformBuffers[i], uniformBuffersMemory[i]);
 
         vkMapMemory(vkContext->getDevice(), uniformBuffersMemory[i], 0, bufferSize, 0, &uniformBuffersMapped[i]);
+    }
+}
+
+void Application::createUIFramebuffers() {
+    uiFramebuffers.resize(vkSwapchain->getImageCount());
+
+    for (size_t i = 0; i < vkSwapchain->getImageCount(); i++) {
+        // UI Framebuffers only need the Color attachment (the Swapchain image)
+        VkImageView attachments[] = { vkSwapchain->getImageViews()[i] };
+
+        VkFramebufferCreateInfo framebufferInfo{};
+        framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+        framebufferInfo.renderPass = vkUIRenderPass->getRenderPass();
+        framebufferInfo.attachmentCount = 1;
+        framebufferInfo.pAttachments = attachments;
+        framebufferInfo.width = vkSwapchain->getExtent().width;
+        framebufferInfo.height = vkSwapchain->getExtent().height;
+        framebufferInfo.layers = 1;
+
+        if (vkCreateFramebuffer(vkContext->getDevice(), &framebufferInfo, nullptr, &uiFramebuffers[i]) != VK_SUCCESS) {
+            throw std::runtime_error("failed to create UI framebuffer!");
+        }
     }
 }
 
@@ -298,7 +339,7 @@ void Application::updateUniformBuffer(uint32_t currentImage, const glm::mat4& vi
 }
 
 void Application::allocateMaterialDescriptors(std::shared_ptr<ModelAsset> model) {
-    uint32_t imageCount = static_cast<uint32_t>(vkSwapchain->getImageCount());
+    uint32_t frameCount = VkSyncObjects::MAX_FRAMES_IN_FLIGHT;
     size_t numMaterials = model->materials.size();
     if (numMaterials == 0) return;
 
@@ -308,14 +349,14 @@ void Application::allocateMaterialDescriptors(std::shared_ptr<ModelAsset> model)
         // If this material already has descriptors (from a previous load), skip it!
         if (!material.descriptorSets.empty()) continue;
 
-        material.descriptorSets.resize(imageCount);
+        material.descriptorSets.resize(frameCount);
 
         int imgIdx = material.textureIndex;
         if (imgIdx < 0 || imgIdx >= static_cast<int>(model->textures.size())) {
             imgIdx = 0;
         }
 
-        for (size_t i = 0; i < imageCount; i++) {
+        for (size_t i = 0; i < frameCount; i++) {
             // Dynamically allocate the Material Set
             material.descriptorSets[i] = descriptorAllocator.allocate(vkPipeline->getMaterialSetLayout());
 
@@ -339,10 +380,10 @@ void Application::allocateMaterialDescriptors(std::shared_ptr<ModelAsset> model)
 }
 
 void Application::createDescriptorSets() {
-    uint32_t imageCount = static_cast<uint32_t>(vkSwapchain->getImageCount());
-    globalDescriptorSets.resize(imageCount);
+    uint32_t frameCount = VkSyncObjects::MAX_FRAMES_IN_FLIGHT;
+    globalDescriptorSets.resize(frameCount);
 
-    for (size_t i = 0; i < imageCount; i++) {
+    for (size_t i = 0; i < frameCount; i++) {
         // 1. Dynamically allocate the Global Set using our new class
         globalDescriptorSets[i] = descriptorAllocator.allocate(vkPipeline->getGlobalSetLayout());
 
@@ -368,30 +409,34 @@ void Application::createDescriptorSets() {
 }
 
 void Application::createDepthResources() {
+    uint32_t imageCount = vkSwapchain->getImageCount();
     VkFormat depthFormat = VK_FORMAT_D32_SFLOAT;
-    vkContext->createImage(
-        vkSwapchain->getExtent().width,
-        vkSwapchain->getExtent().height,
-        depthFormat,
-        VK_IMAGE_TILING_OPTIMAL,
-        VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
-        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-        depthImage,
-        depthImageMemory
-    );
 
-    VkImageViewCreateInfo viewInfo{};
-    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-    viewInfo.image = depthImage;
-    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    viewInfo.format = depthFormat;
-    viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
-    viewInfo.subresourceRange.baseMipLevel = 0;
-    viewInfo.subresourceRange.levelCount = 1;
-    viewInfo.subresourceRange.baseArrayLayer = 0;
-    viewInfo.subresourceRange.layerCount = 1;
+    depthImages.resize(imageCount);
+    depthImageMemories.resize(imageCount);
+    depthImageViews.resize(imageCount);
 
-    vkCreateImageView(vkContext->getDevice(), &viewInfo, nullptr, &depthImageView);
+    for (size_t i = 0; i < imageCount; i++) {
+        vkContext->createImage(
+            vkSwapchain->getExtent().width, vkSwapchain->getExtent().height, depthFormat,
+            VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+            depthImages[i], depthImageMemories[i]
+        );
+
+        VkImageViewCreateInfo viewInfo{};
+        viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        viewInfo.image = depthImages[i];
+        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        viewInfo.format = depthFormat;
+        viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+        viewInfo.subresourceRange.baseMipLevel = 0;
+        viewInfo.subresourceRange.levelCount = 1;
+        viewInfo.subresourceRange.baseArrayLayer = 0;
+        viewInfo.subresourceRange.layerCount = 1;
+
+        vkCreateImageView(vkContext->getDevice(), &viewInfo, nullptr, &depthImageViews[i]);
+    }
 }
 
 void Application::transitionImageLayout(VkImage image, VkFormat format, VkImageLayout oldLayout, VkImageLayout newLayout) {
@@ -465,7 +510,23 @@ void Application::copyBufferToImage(VkBuffer buffer, VkImage image, uint32_t wid
 }
 
 void Application::processInput(GLFWwindow* window) {
-    if (ImGui::GetIO().WantTextInput) return;
+    ViewportPanel& viewport = editor.getViewportPanel();
+
+    if (viewport.isHovered && glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS) {
+        if (!isRightMouseButtonDown) {
+            isRightMouseButtonDown = true;
+            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+            firstMouse = true;
+        }
+    }
+    else if (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_RELEASE) {
+        if (isRightMouseButtonDown) {
+            isRightMouseButtonDown = false;
+            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+        }
+    }
+
+    if (!viewport.isFocused) return;
 
     float velocity = cameraSpeed * deltaTime;
 
@@ -484,14 +545,23 @@ void Application::processInput(GLFWwindow* window) {
 }
 
 void Application::selectEntityAtMouse(double mouseX, double mouseY) {
-    float currentWidth = static_cast<float>(vkSwapchain->getExtent().width);
-    float currentHeight = static_cast<float>(vkSwapchain->getExtent().height);
+    if (ImGui::IsAnyItemHovered()) return;
+
+    ViewportPanel& viewport = editor.getViewportPanel();
+
+    // USE THE VIEWPORT SIZE, NOT THE SWAPCHAIN SIZE!
+    float currentWidth = viewport.viewportWidth;
+    float currentHeight = viewport.viewportHeight;
+
+    // Prevent divide-by-zero crashes if the window is minimized
+    if (currentWidth <= 0.0f || currentHeight <= 0.0f) return;
+
     float aspectRatio = currentWidth / currentHeight;
 
     glm::mat4 view = glm::lookAt(cameraPos, cameraPos + cameraFront, cameraUp);
     glm::mat4 proj = glm::perspective(glm::radians(45.0f), aspectRatio, 0.1f, 1000.0f);
 
-    // 2. Use the dynamic width/height for the NDC calculation!
+    // NDC Calculation (Now correctly mapped to the 0.0-1.0 space of the ImGui panel)
     float x = (2.0f * static_cast<float>(mouseX)) / currentWidth - 1.0f;
     float y = 1.0f - (2.0f * static_cast<float>(mouseY)) / currentHeight;
 
@@ -581,13 +651,18 @@ void Application::mainLoop() {
         ProcessMeshSwaps(registry, assetManager, currentFrame);
 
         glm::mat4 view = glm::lookAt(cameraPos, cameraPos + cameraFront, cameraUp);
-        float aspectRatio = vkSwapchain->getExtent().width / (float)vkSwapchain->getExtent().height;
+
+        // Use the Viewport Panel's dimensions for the Camera Aspect Ratio
+        float vWidth = std::max(1.0f, editor.getViewportPanel().viewportWidth);
+        float vHeight = std::max(1.0f, editor.getViewportPanel().viewportHeight);
+        float aspectRatio = vWidth / vHeight;
+
         glm::mat4 proj = glm::perspective(glm::radians(45.0f), aspectRatio, 0.1f, 1000.0f);
         glm::mat4 editorProj = proj;
 
         proj[1][1] *= -1;
 
-        editor.update(registry, assetManager, view, editorProj);
+        editor.update(registry, assetManager, view, editorProj, sceneDescriptorSets[currentFrame]);
         transformSystem.update(registry);
         drawFrame(registry, view, proj);
 
@@ -617,36 +692,137 @@ void Application::recreateSwapchain() {
     vkDeviceWaitIdle(vkContext->getDevice());
 
     // 3. CLEANUP OLD
-    // We delete framebuffers first because they depend on the depth buffer and swapchain
+    delete vkSyncObjects;
+    for (auto fb : uiFramebuffers) {
+        vkDestroyFramebuffer(vkContext->getDevice(), fb, nullptr);
+    }
+    delete vkUIRenderPass;
+
+    for (auto descSet : sceneDescriptorSets) {
+        ImGui_ImplVulkan_RemoveTexture(descSet);
+    }
+
     delete vkFramebuffer;
 
-    // Destroy Depth Resources
-    vkDestroyImageView(vkContext->getDevice(), depthImageView, nullptr);
-    vkDestroyImage(vkContext->getDevice(), depthImage, nullptr);
-    vkFreeMemory(vkContext->getDevice(), depthImageMemory, nullptr);
+    // Destroy the arrays of Depth AND Color resources!
+    vkDestroySampler(vkContext->getDevice(), sceneSampler, nullptr);
+    for (size_t i = 0; i < sceneColorImages.size(); i++) {
+        vkDestroyImageView(vkContext->getDevice(), sceneColorImageViews[i], nullptr);
+        vkDestroyImage(vkContext->getDevice(), sceneColorImages[i], nullptr);
+        vkFreeMemory(vkContext->getDevice(), sceneColorImageMemories[i], nullptr);
+
+        vkDestroyImageView(vkContext->getDevice(), depthImageViews[i], nullptr);
+        vkDestroyImage(vkContext->getDevice(), depthImages[i], nullptr);
+        vkFreeMemory(vkContext->getDevice(), depthImageMemories[i], nullptr);
+    }
 
     // Deleting this triggers your VkSwapchain::~VkSwapchain() automatically!
     delete vkSwapchain;
 
-    // 4. CREATE NEW (Make sure these match your init functions!)
+    // 4. CREATE NEW 
     vkSwapchain = new VkSwapchain(vkContext, window);
-
-    // You likely have a function named something like this in your setup:
+    vkSyncObjects = new VkSyncObjects(vkContext, vkSwapchain->getImageCount());
+    imagesInFlight.assign(vkSwapchain->getImageCount(), VK_NULL_HANDLE); // Purge the old fences
+    // Recreate both Color and Depth off-screen targets!
+    createOffscreenRenderTarget();
     createDepthResources();
 
-    // Recreate the framebuffers with the new swapchain and depth buffer
-    vkFramebuffer = new VkFramebufferWrapper(vkContext, vkSwapchain, vkRenderPass, depthImageView);
+    // 5. Register the new textures with ImGui
+    sceneDescriptorSets.resize(vkSwapchain->getImageCount());
+    for (size_t i = 0; i < sceneDescriptorSets.size(); i++) {
+        sceneDescriptorSets[i] = ImGui_ImplVulkan_AddTexture(
+            sceneSampler,
+            sceneColorImageViews[i],
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+        );
+    }
+
+    // 6. Rebuild Framebuffers
+    vkFramebuffer = new VkFramebufferWrapper(vkContext, vkRenderPass, sceneColorImageViews,
+        depthImageViews, vkSwapchain->getExtent());
+
+    // ---> NEW: Rebuild the UI Render Pass and Framebuffers <---
+    vkUIRenderPass = new VkUIRenderPass(vkContext, vkSwapchain->getImageFormat());
+    createUIFramebuffers();
+    // ---------------------------------------------------------
 }
 
+void Application::createOffscreenRenderTarget() {
+    uint32_t imageCount = vkSwapchain->getImageCount();
+    VkExtent2D extent = vkSwapchain->getExtent();
+
+    sceneColorImages.resize(imageCount);
+    sceneColorImageMemories.resize(imageCount);
+    sceneColorImageViews.resize(imageCount);
+
+    for (size_t i = 0; i < imageCount; i++) {
+        vkContext->createImage(
+            extent.width, extent.height, vkSwapchain->getImageFormat(),
+            VK_IMAGE_TILING_OPTIMAL,
+            VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+            sceneColorImages[i], sceneColorImageMemories[i]
+        );
+
+        VkImageViewCreateInfo viewInfo{};
+        viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        viewInfo.image = sceneColorImages[i];
+        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        viewInfo.format = vkSwapchain->getImageFormat();
+        viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        viewInfo.subresourceRange.baseMipLevel = 0;
+        viewInfo.subresourceRange.levelCount = 1;
+        viewInfo.subresourceRange.baseArrayLayer = 0;
+        viewInfo.subresourceRange.layerCount = 1;
+
+        vkCreateImageView(vkContext->getDevice(), &viewInfo, nullptr, &sceneColorImageViews[i]);
+    }
+
+    // Create the ONE Sampler (outside the loop)
+    VkSamplerCreateInfo samplerInfo{};
+    samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    samplerInfo.magFilter = VK_FILTER_LINEAR;
+    samplerInfo.minFilter = VK_FILTER_LINEAR;
+    samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.anisotropyEnable = VK_FALSE;
+    samplerInfo.maxAnisotropy = 1.0f;
+    samplerInfo.borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK;
+    samplerInfo.unnormalizedCoordinates = VK_FALSE;
+    samplerInfo.compareEnable = VK_FALSE;
+    samplerInfo.compareOp = VK_COMPARE_OP_ALWAYS;
+    samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+
+    if (vkCreateSampler(vkContext->getDevice(), &samplerInfo, nullptr, &sceneSampler) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create scene sampler!");
+    }
+
+    for (size_t i = 0; i < sceneColorImages.size(); i++) {
+        vkCommandManager->transitionImageLayout(
+            sceneColorImages[i],
+            vkSwapchain->getImageFormat(), // The format parameter doesn't matter for your function, but pass it anyway
+            VK_IMAGE_LAYOUT_UNDEFINED,
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+        );
+    }
+}
 void Application::cleanup() {
     vkDeviceWaitIdle(vkContext->getDevice());
     editor.cleanup(vkContext->getDevice());
 
     delete assetManager;
 
-    vkDestroyImageView(vkContext->getDevice(), depthImageView, nullptr);
-    vkDestroyImage(vkContext->getDevice(), depthImage, nullptr);
-    vkFreeMemory(vkContext->getDevice(), depthImageMemory, nullptr);
+    vkDestroySampler(vkContext->getDevice(), sceneSampler, nullptr);
+    for (size_t i = 0; i < sceneColorImages.size(); i++) {
+        vkDestroyImageView(vkContext->getDevice(), sceneColorImageViews[i], nullptr);
+        vkDestroyImage(vkContext->getDevice(), sceneColorImages[i], nullptr);
+        vkFreeMemory(vkContext->getDevice(), sceneColorImageMemories[i], nullptr);
+
+        vkDestroyImageView(vkContext->getDevice(), depthImageViews[i], nullptr);
+        vkDestroyImage(vkContext->getDevice(), depthImages[i], nullptr);
+        vkFreeMemory(vkContext->getDevice(), depthImageMemories[i], nullptr);
+    }
 
     for (size_t i = 0; i < uniformBuffers.size(); i++) {
         vkDestroyBuffer(vkContext->getDevice(), uniformBuffers[i], nullptr);
@@ -655,6 +831,11 @@ void Application::cleanup() {
 
     descriptorAllocator.cleanup();
 
+    for (auto framebuffer : uiFramebuffers) {
+        vkDestroyFramebuffer(vkContext->getDevice(), framebuffer, nullptr);
+    }
+
+    delete vkUIRenderPass;
     delete vkSyncObjects;
     delete vkCommandManager;
     delete vkFramebuffer;

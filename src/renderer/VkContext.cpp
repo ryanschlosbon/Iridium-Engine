@@ -268,6 +268,7 @@ QueueFamilyIndices VkContext::findQueueFamilies(VkPhysicalDevice device) {
 		// We check the bitmask
 		if (queueFamily.queueFlags & VK_QUEUE_GRAPHICS_BIT) {
 			indices.graphicsFamily = i;
+			this->graphicsQueueFamilyIndex = i;
 		}
 
 		// B. Does this family support presenting to the window?
