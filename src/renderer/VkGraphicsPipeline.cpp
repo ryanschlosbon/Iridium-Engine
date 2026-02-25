@@ -46,7 +46,7 @@ void VkGraphicsPipeline::createPipelineLayouts() {
     uboBinding.binding = 0;
     uboBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     uboBinding.descriptorCount = 1;
-    uboBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    uboBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
 
     VkDescriptorSetLayoutCreateInfo globalInfo{ VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
     globalInfo.bindingCount = 1;
@@ -56,16 +56,19 @@ void VkGraphicsPipeline::createPipelineLayouts() {
         throw std::runtime_error("failed to create global descriptor set layout!");
     }
 
-    // --- SET 1: Material Texture (Sampler) ---
-    VkDescriptorSetLayoutBinding samplerBinding{};
-    samplerBinding.binding = 0;
-    samplerBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    samplerBinding.descriptorCount = 1;
-    samplerBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    // --- SET 1: Material Textures (3 Samplers) ---
+    std::array<VkDescriptorSetLayoutBinding, 3> samplerBindings{};
+
+    for (int i = 0; i < 3; i++) {
+        samplerBindings[i].binding = i;
+        samplerBindings[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        samplerBindings[i].descriptorCount = 1;
+        samplerBindings[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    }
 
     VkDescriptorSetLayoutCreateInfo materialInfo{ VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
-    materialInfo.bindingCount = 1;
-    materialInfo.pBindings = &samplerBinding;
+    materialInfo.bindingCount = static_cast<uint32_t>(samplerBindings.size());
+    materialInfo.pBindings = samplerBindings.data();
 
     if (vkCreateDescriptorSetLayout(context->getDevice(), &materialInfo, nullptr, &materialSetLayout) != VK_SUCCESS) {
         throw std::runtime_error("failed to create material descriptor set layout!");
@@ -79,7 +82,7 @@ void VkGraphicsPipeline::createPipelineLayouts() {
     VkPushConstantRange pushConstant{};
     pushConstant.offset = 0;
     pushConstant.size = sizeof(MeshPushConstants);
-    pushConstant.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    pushConstant.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
 
     // Combine Layouts: [ Set 0, Set 1 ]
     std::array<VkDescriptorSetLayout, 2> setLayouts = { globalSetLayout, materialSetLayout };
@@ -178,7 +181,7 @@ VkPipeline VkGraphicsPipeline::createPipeline(VkSwapchain* swapchain, VkRenderPa
     }
     else {
         rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
-        rasterizer.cullMode = VK_CULL_MODE_BACK_BIT;
+        rasterizer.cullMode = VK_CULL_MODE_NONE;
     }
 
     // Multisampling
@@ -198,10 +201,16 @@ VkPipeline VkGraphicsPipeline::createPipeline(VkSwapchain* swapchain, VkRenderPa
     VkPipelineColorBlendAttachmentState colorBlendAttachment{};
     colorBlendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
     colorBlendAttachment.blendEnable = VK_FALSE;
+
+    // 3 color targets (Pos, Norm, Albedo), so we need 3 blend states
+    std::array<VkPipelineColorBlendAttachmentState, 3> blendAttachments = {
+        colorBlendAttachment, colorBlendAttachment, colorBlendAttachment
+    };
+
     VkPipelineColorBlendStateCreateInfo colorBlending{ VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO };
     colorBlending.logicOpEnable = VK_FALSE;
-    colorBlending.attachmentCount = 1;
-    colorBlending.pAttachments = &colorBlendAttachment;
+    colorBlending.attachmentCount = static_cast<uint32_t>(blendAttachments.size());
+    colorBlending.pAttachments = blendAttachments.data();
 
     // Dynamic State
     std::vector<VkDynamicState> dynamicStates = {
@@ -272,7 +281,7 @@ void VkGraphicsPipeline::createGraphicsPipeline(VkSwapchain* swapchain, VkRender
     uboBinding.binding = 0; // binding = 0 in shader
     uboBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     uboBinding.descriptorCount = 1;
-    uboBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    uboBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
 
     VkDescriptorSetLayoutCreateInfo globalInfo{ VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
     globalInfo.bindingCount = 1;
@@ -282,16 +291,19 @@ void VkGraphicsPipeline::createGraphicsPipeline(VkSwapchain* swapchain, VkRender
         throw std::runtime_error("failed to create global descriptor set layout!");
     }
 
-    // SET 1: Material Texture (Sampler)
-    VkDescriptorSetLayoutBinding samplerBinding{};
-    samplerBinding.binding = 0; // binding = 0 in shader (but inside Set 1)
-    samplerBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    samplerBinding.descriptorCount = 1;
-    samplerBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    // --- SET 1: Material Textures (3 Samplers) ---
+    std::array<VkDescriptorSetLayoutBinding, 3> samplerBindings{};
+
+    for (int i = 0; i < 3; i++) {
+        samplerBindings[i].binding = i;
+        samplerBindings[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        samplerBindings[i].descriptorCount = 1;
+        samplerBindings[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    }
 
     VkDescriptorSetLayoutCreateInfo materialInfo{ VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
-    materialInfo.bindingCount = 1;
-    materialInfo.pBindings = &samplerBinding;
+    materialInfo.bindingCount = static_cast<uint32_t>(samplerBindings.size());
+    materialInfo.pBindings = samplerBindings.data();
 
     if (vkCreateDescriptorSetLayout(context->getDevice(), &materialInfo, nullptr, &materialSetLayout) != VK_SUCCESS) {
         throw std::runtime_error("failed to create material descriptor set layout!");
@@ -303,7 +315,7 @@ void VkGraphicsPipeline::createGraphicsPipeline(VkSwapchain* swapchain, VkRender
     VkPushConstantRange pushConstant{};
     pushConstant.offset = 0;
     pushConstant.size = sizeof(MeshPushConstants);
-    pushConstant.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    pushConstant.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
 
     // Combine Layouts: [ Set 0, Set 1 ]
     std::array<VkDescriptorSetLayout, 2> setLayouts = { globalSetLayout, materialSetLayout };

@@ -153,21 +153,64 @@ void Application::initVulkan() {
 
     createDepthResources();
     createOffscreenRenderTarget();
+    descriptorAllocator.init(vkContext->getDevice());
+
+    assetManager = new AssetManager(vkContext, vkCommandManager);
+
+    // Plug the Application's descriptor function directly into the AssetManager!
+    assetManager->onModelLoadedCallback = [this](std::shared_ptr<ModelAsset> model) {
+        this->allocateMaterialDescriptors(model);
+        };
+
+    hdriMap = assetManager->loadHDRI(std::string(PROJECT_ROOT_DIR) + "assets/hdri/cobblestone_street_night_4k.hdr");
+
+    createLightingRenderPass(); 
+    vkLightingPipeline = new VkLightingPipeline(vkContext, lightingRenderPass);
+    createLightingDescriptorSets();
+    createLightingFramebuffers();
+
+    // 1. Create the Pass and Pipeline
+// (Assuming your lit scene format is the swapchain format, adjust if you use a custom HDR format)
+    vkForwardRenderPass = new VkForwardRenderPass(vkContext, vkSwapchain->getImageFormat(), 
+        findDepthFormat(vkContext->getPhysicalDevice()));
+    vkForwardPipeline = new VkForwardPipeline(vkContext, vkForwardRenderPass, vkLightingPipeline->getDescriptorSetLayout());
+
+
+    // 2. Create the Forward Framebuffers
+    forwardFramebuffers.resize(vkSwapchain->getImageCount());
+    for (size_t i = 0; i < vkSwapchain->getImageCount(); i++) {
+        std::array<VkImageView, 2> attachments = {
+            litSceneImageViews[i], // Color: The finished lighting pass!
+            depthImageViews[i]     // Depth: The G-Buffer's depth map!
+        };
+
+        VkFramebufferCreateInfo framebufferInfo{};
+        framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+        framebufferInfo.renderPass = vkForwardRenderPass->getRenderPass();
+        framebufferInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
+        framebufferInfo.pAttachments = attachments.data();
+        framebufferInfo.width = vkSwapchain->getExtent().width;
+        framebufferInfo.height = vkSwapchain->getExtent().height;
+        framebufferInfo.layers = 1;
+
+        if (vkCreateFramebuffer(vkContext->getDevice(), &framebufferInfo, nullptr, &forwardFramebuffers[i]) != VK_SUCCESS) {
+            throw std::runtime_error("failed to create forward framebuffers!");
+        }
+    }
+
     vkFramebuffer = new VkFramebufferWrapper(
         vkContext,
         vkRenderPass,
-        sceneColorImageViews,
+        gPositionImageViews,
+        gNormalImageViews,
+        gAlbedoImageViews,
         depthImageViews,
         vkSwapchain->getExtent()
     );
 
-    assetManager = new AssetManager(vkContext, vkCommandManager);
-
     std::string modelPath = std::string(PROJECT_ROOT_DIR) + "assets/models/alfa_romeo/scene.gltf";
     mainModel = assetManager->getModel(modelPath);
-
     createUniformBuffers();
-    descriptorAllocator.init(vkContext->getDevice());
     createDescriptorSets();
 
     vkUIRenderPass = new VkUIRenderPass(vkContext, vkSwapchain->getImageFormat());
@@ -187,14 +230,14 @@ void Application::initVulkan() {
     sceneDescriptorSets.resize(vkSwapchain->getImageCount());
     for (size_t i = 0; i < sceneDescriptorSets.size(); i++) {
         sceneDescriptorSets[i] = ImGui_ImplVulkan_AddTexture(
-            sceneSampler,
-            sceneColorImageViews[i],
+            gBufferSampler,
+            litSceneImageViews[i],
             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
         );
     }
 }
 
-void Application::drawFrame(Registry& registry, const glm::mat4& view, const glm::mat4& proj) {
+void Application::drawFrame(Registry& registry, const glm::mat4& view, const glm::mat4& proj, const glm::mat4& editorProj) {
     VkFence currentFence = vkSyncObjects->getInFlightFence(currentFrame);
     VkFence inFlightFence = vkSyncObjects->getInFlightFence(currentFrame);
 
@@ -215,6 +258,8 @@ void Application::drawFrame(Registry& registry, const glm::mat4& view, const glm
         throw std::runtime_error("Failed to acquire swap chain image!");
     }
 
+    editor.update(registry, assetManager, view, editorProj, sceneDescriptorSets[imageIndex]);
+
     if (imageIndex >= imagesInFlight.size()) {
         imagesInFlight.resize(vkSwapchain->getImageCount(), VK_NULL_HANDLE);
     }
@@ -227,17 +272,29 @@ void Application::drawFrame(Registry& registry, const glm::mat4& view, const glm
     vkResetFences(vkContext->getDevice(), 1, &currentFence);
 
     vkCommandManager->recordCommands(
-        currentFrame,       // 0. Current frame index (CPU)
-        imageIndex,         // 1. Current frame index (GPU)
-        vkRenderPass,       // 2. Off-screen Pass wrapper
-        vkFramebuffer,      // 3. Off-screen Framebuffer wrapper
-        vkUIRenderPass,     // 4. NEW: The UI Pass wrapper
-        uiFramebuffers,     // 5. NEW: The UI Framebuffer vector
-        vkPipeline,         // 6. Graphics Pipeline
-        vkSwapchain->getExtent(), // 7. Extent
-        registry,           // 8. ECS Registry
-        globalDescriptorSets[currentFrame], // 9. Camera Data
-        &editor             // 10. Editor System pointer
+        currentFrame,
+        imageIndex,
+        vkRenderPass,
+        vkFramebuffer,
+        lightingRenderPass,
+        lightingFramebuffers[imageIndex],
+        vkLightingPipeline,
+        lightingDescriptorSets[imageIndex],
+        cameraPos,
+        view,
+        proj,
+        vkUIRenderPass,
+        uiFramebuffers,
+        vkPipeline,
+        vkSwapchain->getExtent(),
+        registry,
+        globalDescriptorSets[currentFrame],
+        &editor,
+        vkForwardRenderPass,
+        vkForwardPipeline,
+        forwardFramebuffers,
+        litSceneImages[imageIndex],
+        opaqueSceneCopyImages[imageIndex]
     );
 
     VkSubmitInfo submitInfo{};
@@ -346,35 +403,46 @@ void Application::allocateMaterialDescriptors(std::shared_ptr<ModelAsset> model)
     for (size_t m = 0; m < numMaterials; m++) {
         auto& material = model->materials[m];
 
-        // If this material already has descriptors (from a previous load), skip it!
+        // If this material already has descriptors, skip it!
         if (!material.descriptorSets.empty()) continue;
 
         material.descriptorSets.resize(frameCount);
 
-        int imgIdx = material.textureIndex;
-        if (imgIdx < 0 || imgIdx >= static_cast<int>(model->textures.size())) {
-            imgIdx = 0;
-        }
+        // Grab the 3 precise indices AssetManager loaded for us
+        int albedoIdx = material.albedoTextureIndex;
+        int normalIdx = material.normalTextureIndex;
+        int mrIdx = material.metallicRoughnessTextureIndex;
 
         for (size_t i = 0; i < frameCount; i++) {
-            // Dynamically allocate the Material Set
             material.descriptorSets[i] = descriptorAllocator.allocate(vkPipeline->getMaterialSetLayout());
 
-            VkDescriptorImageInfo imageInfo{};
-            imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            imageInfo.imageView = model->textures[imgIdx].view;
-            imageInfo.sampler = model->textures[imgIdx].sampler;
+            // 1. Assign the info directly to the material struct so it never leaves scope!
+            material.albedoInfo = { model->textures[albedoIdx].sampler, model->textures[albedoIdx].view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+            material.normalInfo = { model->textures[normalIdx].sampler, model->textures[normalIdx].view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+            material.pbrInfo = { model->textures[mrIdx].sampler, model->textures[mrIdx].view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
 
-            VkWriteDescriptorSet descriptorWrite{};
-            descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            descriptorWrite.dstSet = material.descriptorSets[i];
-            descriptorWrite.dstBinding = 0;
-            descriptorWrite.dstArrayElement = 0;
-            descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            descriptorWrite.descriptorCount = 1;
-            descriptorWrite.pImageInfo = &imageInfo;
+            std::array<VkWriteDescriptorSet, 3> descriptorWrites{};
 
-            vkUpdateDescriptorSets(vkContext->getDevice(), 1, &descriptorWrite, 0, nullptr);
+            // Binding 0: Albedo
+            descriptorWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            descriptorWrites[0].dstSet = material.descriptorSets[i];
+            descriptorWrites[0].dstBinding = 0;
+            descriptorWrites[0].dstArrayElement = 0;
+            descriptorWrites[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            descriptorWrites[0].descriptorCount = 1;
+            descriptorWrites[0].pImageInfo = &material.albedoInfo; // <--- Safe Pointer
+
+            // Binding 1: Normal
+            descriptorWrites[1] = descriptorWrites[0];
+            descriptorWrites[1].dstBinding = 1;
+            descriptorWrites[1].pImageInfo = &material.normalInfo; // <--- Safe Pointer
+
+            // Binding 2: Metallic / Roughness
+            descriptorWrites[2] = descriptorWrites[0];
+            descriptorWrites[2].dstBinding = 2;
+            descriptorWrites[2].pImageInfo = &material.pbrInfo; // <--- Safe Pointer
+
+            vkUpdateDescriptorSets(vkContext->getDevice(), static_cast<uint32_t>(descriptorWrites.size()), descriptorWrites.data(), 0, nullptr);
         }
     }
 }
@@ -481,6 +549,12 @@ void Application::transitionImageLayout(VkImage image, VkFormat format, VkImageL
         barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
         barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
         sourceStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+        destinationStage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    }
+    else if (oldLayout == VK_IMAGE_LAYOUT_UNDEFINED && newLayout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
+        barrier.srcAccessMask = 0;
+        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        sourceStage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
         destinationStage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
     }
     else {
@@ -612,10 +686,18 @@ void Application::ProcessMeshSwaps(Registry& registry, AssetManager* assetManage
         if (!meshComp.requestedMeshPath.empty()) {
             try {
                 std::string fullPath = std::string(PROJECT_ROOT_DIR) + meshComp.requestedMeshPath;
-
                 if (meshComp.model) {
                     std::shared_ptr<ModelAsset> oldModel = meshComp.model;
-                    frameDeletionQueues[currentFrame].push_function([oldModel]() {});
+                    frameDeletionQueues[currentFrame].push_function([this, oldModel]() {
+                        for (auto& mat : oldModel->materials) {
+                            if (!mat.descriptorSets.empty()) {
+                                // Free the sets back to your allocator so the pool doesn't dry up!
+                                vkFreeDescriptorSets(vkContext->getDevice(), descriptorAllocator.getPool(),
+                                    static_cast<uint32_t>(mat.descriptorSets.size()), mat.descriptorSets.data());
+                                mat.descriptorSets.clear();
+                            }
+                        }
+                        });
                 }
 
                 meshComp.model = assetManager->getModel(fullPath);
@@ -662,9 +744,8 @@ void Application::mainLoop() {
 
         proj[1][1] *= -1;
 
-        editor.update(registry, assetManager, view, editorProj, sceneDescriptorSets[currentFrame]);
         transformSystem.update(registry);
-        drawFrame(registry, view, proj);
+        drawFrame(registry, view, proj, editorProj);
 
         static double lastFpsUpdate = 0;
         static int frameCount = 0;
@@ -693,6 +774,9 @@ void Application::recreateSwapchain() {
 
     // 3. CLEANUP OLD
     delete vkSyncObjects;
+    for (auto fb : lightingFramebuffers) {
+        vkDestroyFramebuffer(vkContext->getDevice(), fb, nullptr);
+    }
     for (auto fb : uiFramebuffers) {
         vkDestroyFramebuffer(vkContext->getDevice(), fb, nullptr);
     }
@@ -702,18 +786,51 @@ void Application::recreateSwapchain() {
         ImGui_ImplVulkan_RemoveTexture(descSet);
     }
 
+    for (auto fb : forwardFramebuffers) {
+        vkDestroyFramebuffer(vkContext->getDevice(), fb, nullptr);
+    }
+
     delete vkFramebuffer;
 
     // Destroy the arrays of Depth AND Color resources!
-    vkDestroySampler(vkContext->getDevice(), sceneSampler, nullptr);
-    for (size_t i = 0; i < sceneColorImages.size(); i++) {
-        vkDestroyImageView(vkContext->getDevice(), sceneColorImageViews[i], nullptr);
-        vkDestroyImage(vkContext->getDevice(), sceneColorImages[i], nullptr);
-        vkFreeMemory(vkContext->getDevice(), sceneColorImageMemories[i], nullptr);
+    // Delete the single sampler
+    vkDestroySampler(vkContext->getDevice(), gBufferSampler, nullptr);
 
+    for (size_t i = 0; i < gAlbedoImages.size(); i++) {
+        // Position
+        vkDestroyImageView(vkContext->getDevice(), gPositionImageViews[i], nullptr);
+        vkDestroyImage(vkContext->getDevice(), gPositionImages[i], nullptr);
+        vkFreeMemory(vkContext->getDevice(), gPositionImageMemories[i], nullptr);
+
+        // Normal
+        vkDestroyImageView(vkContext->getDevice(), gNormalImageViews[i], nullptr);
+        vkDestroyImage(vkContext->getDevice(), gNormalImages[i], nullptr);
+        vkFreeMemory(vkContext->getDevice(), gNormalImageMemories[i], nullptr);
+
+        // Albedo
+        vkDestroyImageView(vkContext->getDevice(), gAlbedoImageViews[i], nullptr);
+        vkDestroyImage(vkContext->getDevice(), gAlbedoImages[i], nullptr);
+        vkFreeMemory(vkContext->getDevice(), gAlbedoImageMemories[i], nullptr);
+
+        // Depth
         vkDestroyImageView(vkContext->getDevice(), depthImageViews[i], nullptr);
         vkDestroyImage(vkContext->getDevice(), depthImages[i], nullptr);
         vkFreeMemory(vkContext->getDevice(), depthImageMemories[i], nullptr);
+
+        // Lit
+        vkDestroyImageView(vkContext->getDevice(), litSceneImageViews[i], nullptr);
+        vkDestroyImage(vkContext->getDevice(), litSceneImages[i], nullptr);
+        vkFreeMemory(vkContext->getDevice(), litSceneImageMemories[i], nullptr);
+
+        // The Photograph
+        vkDestroyImageView(vkContext->getDevice(), opaqueSceneCopyViews[i], nullptr);
+        vkDestroyImage(vkContext->getDevice(), opaqueSceneCopyImages[i], nullptr);
+        vkFreeMemory(vkContext->getDevice(), opaqueSceneCopyMemories[i], nullptr);
+
+        // The Secret Depth Buffer
+        vkDestroyImageView(vkContext->getDevice(), glassDepthViews[i], nullptr);
+        vkDestroyImage(vkContext->getDevice(), glassDepthImages[i], nullptr);
+        vkFreeMemory(vkContext->getDevice(), glassDepthMemories[i], nullptr);
     }
 
     // Deleting this triggers your VkSwapchain::~VkSwapchain() automatically!
@@ -723,23 +840,56 @@ void Application::recreateSwapchain() {
     vkSwapchain = new VkSwapchain(vkContext, window);
     vkSyncObjects = new VkSyncObjects(vkContext, vkSwapchain->getImageCount());
     imagesInFlight.assign(vkSwapchain->getImageCount(), VK_NULL_HANDLE); // Purge the old fences
+    
     // Recreate both Color and Depth off-screen targets!
     createOffscreenRenderTarget();
     createDepthResources();
+
+    createLightingFramebuffers();
+    createLightingDescriptorSets();
+
+    // Rebuild Forward Framebuffers with the new Lit Scene and Depth images!
+    forwardFramebuffers.resize(vkSwapchain->getImageCount());
+    for (size_t i = 0; i < vkSwapchain->getImageCount(); i++) {
+        std::array<VkImageView, 2> attachments = {
+            litSceneImageViews[i],
+            depthImageViews[i]
+        };
+
+        VkFramebufferCreateInfo framebufferInfo{};
+        framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+        framebufferInfo.renderPass = vkForwardRenderPass->getRenderPass();
+        framebufferInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
+        framebufferInfo.pAttachments = attachments.data();
+        framebufferInfo.width = vkSwapchain->getExtent().width;
+        framebufferInfo.height = vkSwapchain->getExtent().height;
+        framebufferInfo.layers = 1;
+
+        if (vkCreateFramebuffer(vkContext->getDevice(), &framebufferInfo, nullptr, &forwardFramebuffers[i]) != VK_SUCCESS) {
+            throw std::runtime_error("failed to recreate forward framebuffers!");
+        }
+    }
 
     // 5. Register the new textures with ImGui
     sceneDescriptorSets.resize(vkSwapchain->getImageCount());
     for (size_t i = 0; i < sceneDescriptorSets.size(); i++) {
         sceneDescriptorSets[i] = ImGui_ImplVulkan_AddTexture(
-            sceneSampler,
-            sceneColorImageViews[i],
+            gBufferSampler,
+            litSceneImageViews[i],
             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
         );
     }
 
     // 6. Rebuild Framebuffers
-    vkFramebuffer = new VkFramebufferWrapper(vkContext, vkRenderPass, sceneColorImageViews,
-        depthImageViews, vkSwapchain->getExtent());
+    vkFramebuffer = new VkFramebufferWrapper(
+        vkContext,
+        vkRenderPass,
+        gPositionImageViews,
+        gNormalImageViews,
+        gAlbedoImageViews,
+        depthImageViews,
+        vkSwapchain->getExtent()
+    );
 
     // ---> NEW: Rebuild the UI Render Pass and Framebuffers <---
     vkUIRenderPass = new VkUIRenderPass(vkContext, vkSwapchain->getImageFormat());
@@ -751,77 +901,275 @@ void Application::createOffscreenRenderTarget() {
     uint32_t imageCount = vkSwapchain->getImageCount();
     VkExtent2D extent = vkSwapchain->getExtent();
 
-    sceneColorImages.resize(imageCount);
-    sceneColorImageMemories.resize(imageCount);
-    sceneColorImageViews.resize(imageCount);
+    // Resize all vectors
+    gPositionImages.resize(imageCount); gPositionImageMemories.resize(imageCount); gPositionImageViews.resize(imageCount);
+    gNormalImages.resize(imageCount);   gNormalImageMemories.resize(imageCount);   gNormalImageViews.resize(imageCount);
+    gAlbedoImages.resize(imageCount);   gAlbedoImageMemories.resize(imageCount);   gAlbedoImageViews.resize(imageCount);
+
+    litSceneImages.resize(imageCount);
+    litSceneImageMemories.resize(imageCount);
+    litSceneImageViews.resize(imageCount);
+
+    VkFormat floatFormat = VK_FORMAT_R16G16B16A16_SFLOAT; // High precision for Pos/Norm
+    VkFormat albedoFormat = VK_FORMAT_R8G8B8A8_UNORM;     // Standard color for Albedo
 
     for (size_t i = 0; i < imageCount; i++) {
-        vkContext->createImage(
-            extent.width, extent.height, vkSwapchain->getImageFormat(),
-            VK_IMAGE_TILING_OPTIMAL,
-            VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-            sceneColorImages[i], sceneColorImageMemories[i]
-        );
+        // 1. POSITION
+        vkContext->createImage(extent.width, extent.height, floatFormat, VK_IMAGE_TILING_OPTIMAL,
+            VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+            gPositionImages[i], gPositionImageMemories[i]);
 
-        VkImageViewCreateInfo viewInfo{};
-        viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-        viewInfo.image = sceneColorImages[i];
-        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-        viewInfo.format = vkSwapchain->getImageFormat();
-        viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        viewInfo.subresourceRange.baseMipLevel = 0;
-        viewInfo.subresourceRange.levelCount = 1;
-        viewInfo.subresourceRange.baseArrayLayer = 0;
-        viewInfo.subresourceRange.layerCount = 1;
+        VkImageViewCreateInfo posViewInfo{ VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
+        posViewInfo.image = gPositionImages[i]; posViewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D; posViewInfo.format = floatFormat;
+        posViewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT; posViewInfo.subresourceRange.levelCount = 1; posViewInfo.subresourceRange.layerCount = 1;
+        vkCreateImageView(vkContext->getDevice(), &posViewInfo, nullptr, &gPositionImageViews[i]);
 
-        vkCreateImageView(vkContext->getDevice(), &viewInfo, nullptr, &sceneColorImageViews[i]);
+        // 2. NORMAL
+        vkContext->createImage(extent.width, extent.height, floatFormat, VK_IMAGE_TILING_OPTIMAL,
+            VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+            gNormalImages[i], gNormalImageMemories[i]);
+
+        VkImageViewCreateInfo normViewInfo = posViewInfo;
+        normViewInfo.image = gNormalImages[i]; normViewInfo.format = floatFormat;
+        vkCreateImageView(vkContext->getDevice(), &normViewInfo, nullptr, &gNormalImageViews[i]);
+
+        // 3. ALBEDO
+        vkContext->createImage(extent.width, extent.height, albedoFormat, VK_IMAGE_TILING_OPTIMAL,
+            VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+            gAlbedoImages[i], gAlbedoImageMemories[i]);
+
+        VkImageViewCreateInfo albedoViewInfo = posViewInfo;
+        albedoViewInfo.image = gAlbedoImages[i]; albedoViewInfo.format = albedoFormat;
+        vkCreateImageView(vkContext->getDevice(), &albedoViewInfo, nullptr, &gAlbedoImageViews[i]);
+
+        // 4. THE FINAL LIT SCENE
+        vkContext->createImage(extent.width, extent.height, vkSwapchain->getImageFormat(), 
+            VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT 
+            | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+            litSceneImages[i], litSceneImageMemories[i]);
+
+        VkImageViewCreateInfo litViewInfo = posViewInfo;
+        litViewInfo.image = litSceneImages[i];
+        litViewInfo.format = vkSwapchain->getImageFormat();
+        vkCreateImageView(vkContext->getDevice(), &litViewInfo, nullptr, &litSceneImageViews[i]);
     }
 
-    // Create the ONE Sampler (outside the loop)
-    VkSamplerCreateInfo samplerInfo{};
-    samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-    samplerInfo.magFilter = VK_FILTER_LINEAR;
-    samplerInfo.minFilter = VK_FILTER_LINEAR;
+    // Resize the new arrays
+    opaqueSceneCopyImages.resize(imageCount); opaqueSceneCopyMemories.resize(imageCount); opaqueSceneCopyViews.resize(imageCount);
+    glassDepthImages.resize(imageCount); glassDepthMemories.resize(imageCount); glassDepthViews.resize(imageCount);
+
+    for (size_t i = 0; i < imageCount; i++) {
+        // --- 1. THE PHOTOGRAPH (Opaque Scene Copy) ---
+        // Same format as litSceneImages!
+        vkContext->createImage(extent.width, extent.height, vkSwapchain->getImageFormat(), VK_IMAGE_TILING_OPTIMAL,
+            VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+            opaqueSceneCopyImages[i], opaqueSceneCopyMemories[i]);
+
+        VkImageViewCreateInfo copyViewInfo{ VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
+        copyViewInfo.image = opaqueSceneCopyImages[i];
+        copyViewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        copyViewInfo.format = vkSwapchain->getImageFormat();
+        copyViewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        copyViewInfo.subresourceRange.levelCount = 1;
+        copyViewInfo.subresourceRange.layerCount = 1;
+        vkCreateImageView(vkContext->getDevice(), &copyViewInfo, nullptr, &opaqueSceneCopyViews[i]);
+
+        transitionImageLayout(opaqueSceneCopyImages[i], vkSwapchain->getImageFormat(),
+            VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+
+        // --- 2. THE SECRET DEPTH BUFFER (Glass Thickness) ---
+        // Must use your engine's standardized depth format!
+        vkContext->createImage(extent.width, extent.height, findDepthFormat(vkContext->getPhysicalDevice()), VK_IMAGE_TILING_OPTIMAL,
+            VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+            glassDepthImages[i], glassDepthMemories[i]);
+
+        VkImageViewCreateInfo glassDepthViewInfo = copyViewInfo;
+        glassDepthViewInfo.image = glassDepthImages[i];
+        glassDepthViewInfo.format = findDepthFormat(vkContext->getPhysicalDevice());
+        glassDepthViewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+        vkCreateImageView(vkContext->getDevice(), &glassDepthViewInfo, nullptr, &glassDepthViews[i]);
+    }
+
+    // Create ONE Sampler for the G-Buffer
+    VkSamplerCreateInfo samplerInfo{ VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO };
+    samplerInfo.magFilter = VK_FILTER_LINEAR; samplerInfo.minFilter = VK_FILTER_LINEAR;
     samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    samplerInfo.anisotropyEnable = VK_FALSE;
     samplerInfo.maxAnisotropy = 1.0f;
-    samplerInfo.borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK;
-    samplerInfo.unnormalizedCoordinates = VK_FALSE;
-    samplerInfo.compareEnable = VK_FALSE;
-    samplerInfo.compareOp = VK_COMPARE_OP_ALWAYS;
-    samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    vkCreateSampler(vkContext->getDevice(), &samplerInfo, nullptr, &gBufferSampler);
+}
 
-    if (vkCreateSampler(vkContext->getDevice(), &samplerInfo, nullptr, &sceneSampler) != VK_SUCCESS) {
-        throw std::runtime_error("Failed to create scene sampler!");
+void Application::createLightingDescriptorSets() {
+    uint32_t imageCount = vkSwapchain->getImageCount();
+    
+    // ONLY allocate if the vector is empty
+    if (lightingDescriptorSets.empty()) {
+        lightingDescriptorSets.resize(imageCount);
+        for (size_t i = 0; i < imageCount; i++) {
+            lightingDescriptorSets[i] = descriptorAllocator.allocate(vkLightingPipeline->getDescriptorSetLayout());
+        }
     }
+    for (size_t i = 0; i < imageCount; i++) {
+        // Allocate the set using the layout from your new pipeline
+        lightingDescriptorSets[i] = descriptorAllocator.allocate(vkLightingPipeline->getDescriptorSetLayout());
 
-    for (size_t i = 0; i < sceneColorImages.size(); i++) {
-        vkCommandManager->transitionImageLayout(
-            sceneColorImages[i],
-            vkSwapchain->getImageFormat(), // The format parameter doesn't matter for your function, but pass it anyway
-            VK_IMAGE_LAYOUT_UNDEFINED,
-            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
-        );
+        VkDescriptorImageInfo posInfo{ gBufferSampler, gPositionImageViews[i], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+        VkDescriptorImageInfo normInfo{ gBufferSampler, gNormalImageViews[i], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+        VkDescriptorImageInfo albedoInfo{ gBufferSampler, gAlbedoImageViews[i], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+        VkDescriptorImageInfo hdriInfo{ hdriMap.sampler, hdriMap.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+        VkDescriptorImageInfo copyInfo{ gBufferSampler, opaqueSceneCopyViews[i], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+        VkDescriptorImageInfo glassDepthInfo{ gBufferSampler, glassDepthViews[i], VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL };
+
+        std::array<VkWriteDescriptorSet, 6> descriptorWrites{};
+
+        // Binding 0: Position
+        descriptorWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        descriptorWrites[0].dstSet = lightingDescriptorSets[i];
+        descriptorWrites[0].dstBinding = 0;
+        descriptorWrites[0].dstArrayElement = 0;
+        descriptorWrites[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        descriptorWrites[0].descriptorCount = 1;
+        descriptorWrites[0].pImageInfo = &posInfo;
+
+        // Binding 1: Normal
+        descriptorWrites[1] = descriptorWrites[0]; // Copy base struct
+        descriptorWrites[1].dstBinding = 1;
+        descriptorWrites[1].pImageInfo = &normInfo;
+
+        // Binding 2: Albedo
+        descriptorWrites[2] = descriptorWrites[0]; // Copy base struct
+        descriptorWrites[2].dstBinding = 2;
+        descriptorWrites[2].pImageInfo = &albedoInfo;
+
+        // Binding 3: HDRI Skybox
+        descriptorWrites[3] = descriptorWrites[0];
+        descriptorWrites[3].dstBinding = 3;
+        descriptorWrites[3].pImageInfo = &hdriInfo;
+
+        // Binding 4: Opaque Scene Copy
+        descriptorWrites[4] = descriptorWrites[0];
+        descriptorWrites[4].dstBinding = 4;
+        descriptorWrites[4].pImageInfo = &copyInfo;
+
+        // Binding 5: Glass Depth
+        descriptorWrites[5] = descriptorWrites[0];
+        descriptorWrites[5].dstBinding = 5;
+        descriptorWrites[5].pImageInfo = &glassDepthInfo;
+
+        vkUpdateDescriptorSets(vkContext->getDevice(), static_cast<uint32_t>(descriptorWrites.size()), descriptorWrites.data(), 0, nullptr);
     }
 }
+
+void Application::createLightingRenderPass() {
+    VkAttachmentDescription colorAttachment{};
+    colorAttachment.format = vkSwapchain->getImageFormat();
+    colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+    colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR; // Clear old frames
+    colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    colorAttachment.finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+    VkAttachmentReference colorAttachmentRef{};
+    colorAttachmentRef.attachment = 0;
+    colorAttachmentRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+    VkSubpassDescription subpass{};
+    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    subpass.colorAttachmentCount = 1;
+    subpass.pColorAttachments = &colorAttachmentRef;
+
+    VkSubpassDependency dependency{};
+    dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
+    dependency.dstSubpass = 0;
+    dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dependency.srcAccessMask = 0;
+    dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+
+    VkRenderPassCreateInfo renderPassInfo{ VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO };
+    renderPassInfo.attachmentCount = 1;
+    renderPassInfo.pAttachments = &colorAttachment;
+    renderPassInfo.subpassCount = 1;
+    renderPassInfo.pSubpasses = &subpass;
+    renderPassInfo.dependencyCount = 1;
+    renderPassInfo.pDependencies = &dependency;
+
+    if (vkCreateRenderPass(vkContext->getDevice(), &renderPassInfo, nullptr, &lightingRenderPass) != VK_SUCCESS) {
+        throw std::runtime_error("failed to create lighting render pass!");
+    }
+}
+
+void Application::createLightingFramebuffers() {
+    lightingFramebuffers.resize(vkSwapchain->getImageCount());
+    for (size_t i = 0; i < vkSwapchain->getImageCount(); i++) {
+        VkImageView attachments[] = { litSceneImageViews[i] };
+
+        VkFramebufferCreateInfo framebufferInfo{ VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO };
+        framebufferInfo.renderPass = lightingRenderPass;
+        framebufferInfo.attachmentCount = 1;
+        framebufferInfo.pAttachments = attachments;
+        framebufferInfo.width = vkSwapchain->getExtent().width;
+        framebufferInfo.height = vkSwapchain->getExtent().height;
+        framebufferInfo.layers = 1;
+
+        if (vkCreateFramebuffer(vkContext->getDevice(), &framebufferInfo, nullptr, &lightingFramebuffers[i]) != VK_SUCCESS) {
+            throw std::runtime_error("failed to create lighting framebuffer!");
+        }
+    }
+}
+
 void Application::cleanup() {
     vkDeviceWaitIdle(vkContext->getDevice());
     editor.cleanup(vkContext->getDevice());
 
     delete assetManager;
 
-    vkDestroySampler(vkContext->getDevice(), sceneSampler, nullptr);
-    for (size_t i = 0; i < sceneColorImages.size(); i++) {
-        vkDestroyImageView(vkContext->getDevice(), sceneColorImageViews[i], nullptr);
-        vkDestroyImage(vkContext->getDevice(), sceneColorImages[i], nullptr);
-        vkFreeMemory(vkContext->getDevice(), sceneColorImageMemories[i], nullptr);
+    // Delete the single sampler
+    vkDestroySampler(vkContext->getDevice(), gBufferSampler, nullptr);
 
+    if (hdriMap.image != VK_NULL_HANDLE) {
+        vkDestroySampler(vkContext->getDevice(), hdriMap.sampler, nullptr);
+        vkDestroyImageView(vkContext->getDevice(), hdriMap.view, nullptr);
+        vkDestroyImage(vkContext->getDevice(), hdriMap.image, nullptr);
+        vkFreeMemory(vkContext->getDevice(), hdriMap.memory, nullptr);
+    }
+
+    for (size_t i = 0; i < gAlbedoImages.size(); i++) {
+        // Position
+        vkDestroyImageView(vkContext->getDevice(), gPositionImageViews[i], nullptr);
+        vkDestroyImage(vkContext->getDevice(), gPositionImages[i], nullptr);
+        vkFreeMemory(vkContext->getDevice(), gPositionImageMemories[i], nullptr);
+
+        // Normal
+        vkDestroyImageView(vkContext->getDevice(), gNormalImageViews[i], nullptr);
+        vkDestroyImage(vkContext->getDevice(), gNormalImages[i], nullptr);
+        vkFreeMemory(vkContext->getDevice(), gNormalImageMemories[i], nullptr);
+
+        // Albedo
+        vkDestroyImageView(vkContext->getDevice(), gAlbedoImageViews[i], nullptr);
+        vkDestroyImage(vkContext->getDevice(), gAlbedoImages[i], nullptr);
+        vkFreeMemory(vkContext->getDevice(), gAlbedoImageMemories[i], nullptr);
+
+        // Depth
         vkDestroyImageView(vkContext->getDevice(), depthImageViews[i], nullptr);
         vkDestroyImage(vkContext->getDevice(), depthImages[i], nullptr);
         vkFreeMemory(vkContext->getDevice(), depthImageMemories[i], nullptr);
+
+        // Lit
+        vkDestroyImageView(vkContext->getDevice(), litSceneImageViews[i], nullptr);
+        vkDestroyImage(vkContext->getDevice(), litSceneImages[i], nullptr);
+        vkFreeMemory(vkContext->getDevice(), litSceneImageMemories[i], nullptr);
+
+        // The Photograph
+        vkDestroyImageView(vkContext->getDevice(), opaqueSceneCopyViews[i], nullptr);
+        vkDestroyImage(vkContext->getDevice(), opaqueSceneCopyImages[i], nullptr);
+        vkFreeMemory(vkContext->getDevice(), opaqueSceneCopyMemories[i], nullptr);
+
+        // The Secret Depth Buffer
+        vkDestroyImageView(vkContext->getDevice(), glassDepthViews[i], nullptr);
+        vkDestroyImage(vkContext->getDevice(), glassDepthImages[i], nullptr);
+        vkFreeMemory(vkContext->getDevice(), glassDepthMemories[i], nullptr);
     }
 
     for (size_t i = 0; i < uniformBuffers.size(); i++) {
@@ -831,9 +1179,25 @@ void Application::cleanup() {
 
     descriptorAllocator.cleanup();
 
+    for (auto fb : lightingFramebuffers) {
+        vkDestroyFramebuffer(vkContext->getDevice(), fb, nullptr);
+    }
+
+    delete vkLightingPipeline;
+
+    if (lightingRenderPass != VK_NULL_HANDLE) {
+        vkDestroyRenderPass(vkContext->getDevice(), lightingRenderPass, nullptr);
+    }
+
     for (auto framebuffer : uiFramebuffers) {
         vkDestroyFramebuffer(vkContext->getDevice(), framebuffer, nullptr);
     }
+
+    for (auto fb : forwardFramebuffers) {
+        vkDestroyFramebuffer(vkContext->getDevice(), fb, nullptr);
+    }
+    delete vkForwardPipeline;
+    delete vkForwardRenderPass;
 
     delete vkUIRenderPass;
     delete vkSyncObjects;

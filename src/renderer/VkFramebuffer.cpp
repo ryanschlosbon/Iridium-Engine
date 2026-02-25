@@ -3,15 +3,20 @@
 #include <array>
 
 VkFramebufferWrapper::VkFramebufferWrapper(VkContext* context, VkRenderPassWrapper* renderPass,
-    const std::vector<VkImageView>& colorImageViews,
+    const std::vector<VkImageView>& positionImageViews,
+    const std::vector<VkImageView>& normalImageViews,
+    const std::vector<VkImageView>& albedoImageViews,
     const std::vector<VkImageView>& depthImageViews,
     VkExtent2D extent) : context(context) {
 
-    framebuffers.resize(colorImageViews.size());
+    framebuffers.resize(albedoImageViews.size());
 
-    for (size_t i = 0; i < colorImageViews.size(); i++) {
-        std::array<VkImageView, 2> attachments = {
-            colorImageViews[i],
+    for (size_t i = 0; i < albedoImageViews.size(); i++) {
+        // MUST MATCH THE ORDER IN VKRENDERPASS EXACLTY (Pos, Norm, Albedo, Depth)
+        std::array<VkImageView, 4> attachments = {
+            positionImageViews[i],
+            normalImageViews[i],
+            albedoImageViews[i],
             depthImageViews[i]
         };
 
@@ -25,7 +30,7 @@ VkFramebufferWrapper::VkFramebufferWrapper(VkContext* context, VkRenderPassWrapp
         framebufferInfo.layers = 1;
 
         if (vkCreateFramebuffer(context->getDevice(), &framebufferInfo, nullptr, &framebuffers[i]) != VK_SUCCESS) {
-            throw std::runtime_error("failed to create framebuffer!");
+            throw std::runtime_error("failed to create deferred framebuffer!");
         }
     }
 }

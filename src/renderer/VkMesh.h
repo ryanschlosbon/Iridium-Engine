@@ -2,6 +2,7 @@
 #include <vector>
 #include <map>
 #include <memory> // Needed for std::unique_ptr
+#include <string>
 #include <glm/glm.hpp>
 #include <vulkan/vulkan.h>
 
@@ -17,50 +18,57 @@ struct SubMesh {
 
 // 2. Define BakedMesh SECOND (because ModelAsset uses it)
 struct BakedMesh {
-	int meshIndex;
+	int subMeshIndex;
 	glm::mat4 transform; // The pre-calculated offset
 };
 
 struct Vertex {
 	glm::vec3 pos;
-	glm::vec3 color;
+	glm::vec3 color = glm::vec3(1.0f, 1.0f, 1.0f);
 	glm::vec3 normal;
 	glm::vec2 uv;
+	glm::vec4 tangent;
 
 	static VkVertexInputBindingDescription getBindingDescription() {
 		VkVertexInputBindingDescription bindingDescription{};
 		bindingDescription.binding = 0;
 		bindingDescription.stride = sizeof(Vertex);
 		bindingDescription.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
-		return { bindingDescription };
+		return bindingDescription;
 	}
 
 	static std::vector<VkVertexInputAttributeDescription> getAttributeDescriptions() {
-		std::vector<VkVertexInputAttributeDescription> attributeDescriptions(4);
+		std::vector<VkVertexInputAttributeDescription> attributeDescriptions(5);
 
-		// Position
+		// Location 0: Position
 		attributeDescriptions[0].binding = 0;
 		attributeDescriptions[0].location = 0;
 		attributeDescriptions[0].format = VK_FORMAT_R32G32B32_SFLOAT;
 		attributeDescriptions[0].offset = offsetof(Vertex, pos);
 
-		// Color
+		// Location 1: Color
 		attributeDescriptions[1].binding = 0;
 		attributeDescriptions[1].location = 1;
 		attributeDescriptions[1].format = VK_FORMAT_R32G32B32_SFLOAT;
 		attributeDescriptions[1].offset = offsetof(Vertex, color);
 
-		// Normal
+		// Location 2: Normal
 		attributeDescriptions[2].binding = 0;
 		attributeDescriptions[2].location = 2;
 		attributeDescriptions[2].format = VK_FORMAT_R32G32B32_SFLOAT;
 		attributeDescriptions[2].offset = offsetof(Vertex, normal);
 
-		// UV
+		// THE CULPRIT: Location 3 MUST specifically target the UV offset with a VEC2 format!
 		attributeDescriptions[3].binding = 0;
 		attributeDescriptions[3].location = 3;
 		attributeDescriptions[3].format = VK_FORMAT_R32G32_SFLOAT;
 		attributeDescriptions[3].offset = offsetof(Vertex, uv);
+
+		// Location 4: Tangent
+		attributeDescriptions[4].binding = 0;
+		attributeDescriptions[4].location = 4;
+		attributeDescriptions[4].format = VK_FORMAT_R32G32B32A32_SFLOAT;
+		attributeDescriptions[4].offset = offsetof(Vertex, tangent);
 
 		return attributeDescriptions;
 	}
@@ -68,6 +76,10 @@ struct Vertex {
 
 struct MeshPushConstants {
 	glm::mat4 renderMatrix;
+	glm::vec4 baseColor;
+	float metallicFactor;
+	float roughnessFactor;
+	glm::vec2 padding;      // Keeps Vulkan memory alignment happy
 };
 
 struct UniformBufferObject {
@@ -83,10 +95,26 @@ struct Texture {
 	VkSampler sampler;
 };
 
+enum class AlphaMode {
+	Opaque,
+	Mask,
+	Blend
+};
+
 struct Material {
-	glm::vec4 baseColor;
-	int textureIndex;
+	glm::vec4 baseColor = glm::vec4(1.0f, 1.0f, 1.0f, 1.0f); // MUST default to white!
+	float metallicFactor = 1.0f;                             // glTF spec default
+	float roughnessFactor = 1.0f;                            // glTF spec default
+	int albedoTextureIndex = -1;  // Renamed from textureIndex
+	int normalTextureIndex = -1;  
+	int metallicRoughnessTextureIndex = -1; 
 	std::vector<VkDescriptorSet> descriptorSets;
+
+	AlphaMode alphaMode = AlphaMode::Opaque; // Defaults to solid
+
+	VkDescriptorImageInfo albedoInfo{};
+	VkDescriptorImageInfo normalInfo{};
+	VkDescriptorImageInfo pbrInfo{};
 };
 
 // 3. NOW define ModelAsset (Since it knows what SubMesh and BakedMesh are)
@@ -110,7 +138,7 @@ struct ModelAsset {
 	std::vector<std::unique_ptr<Node>> rootNodes;
 
 	struct BakedPart {
-		int meshIndex;
+		int subMeshIndex;
 		glm::mat4 transform;
 	};
 
