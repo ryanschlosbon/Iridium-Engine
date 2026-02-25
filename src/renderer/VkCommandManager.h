@@ -3,11 +3,17 @@
 #include "VkContext.h"
 #include "VkFramebuffer.h"
 #include "VkGraphicsPipeline.h"
+#include "VkLightingPipeline.h"
 #include "VkMesh.h"
 #include "editor/EditorSystem.h"
 #include "ecs/Registry.h"
 #include "scene/Components.h"
 #include "VkUIRenderPass.h"
+#include "renderer/VkForwardRenderPass.h" 
+#include "renderer/VkForwardPipeline.h"
+
+class VkForwardRenderPass;
+class VkForwardPipeline;
 
 class EditorSystem;
 
@@ -31,13 +37,25 @@ public:
 		uint32_t imageIndex,
 		VkRenderPassWrapper* offscreenPass,
 		VkFramebufferWrapper* offscreenFramebuffer,
-		VkUIRenderPass* uiPass,                           // NEW
-		const std::vector<VkFramebuffer>& uiFramebuffers, // NEW
+		VkRenderPass lightingRenderPass,
+		VkFramebuffer lightingFramebuffer,
+		VkLightingPipeline* lightingPipeline,
+		VkDescriptorSet lightingDescriptorSet,
+		glm::vec3 cameraPos,
+		glm::mat4 view,
+		glm::mat4 proj,
+		VkUIRenderPass* uiPass,
+		const std::vector<VkFramebuffer>& uiFramebuffers,
 		VkGraphicsPipeline* pipeline,
 		VkExtent2D extent,
 		Registry& registry,
-		VkDescriptorSet globalDescriptorSet, 
-		EditorSystem* editor);
+		VkDescriptorSet globalDescriptorSet,
+		EditorSystem* editor,
+		VkForwardRenderPass* forwardPass,
+		VkForwardPipeline* forwardPipeline,
+		const std::vector<VkFramebuffer>& forwardFramebuffers,
+		VkImage litSceneImage,
+		VkImage opaqueSceneCopy);
 
 	void transitionImageLayout(VkImage image, VkFormat format, VkImageLayout oldLayout, VkImageLayout newLayout);
 	void copyBufferToImage(VkBuffer buffer, VkImage image, uint32_t width, uint32_t height);

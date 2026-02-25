@@ -2,6 +2,7 @@
 #include <unordered_map>
 #include <string>
 #include <memory>
+#include <functional>
 #include <filesystem>
 #include <fastgltf/core.hpp>
 #include "renderer/VkContext.h"
@@ -24,6 +25,8 @@ public:
 
     // The main entry point for the ECS to get a model
     std::shared_ptr<ModelAsset> getModel(const std::string& path);
+    Texture loadHDRI(const std::string& path);
+    std::function<void(std::shared_ptr<ModelAsset>)> onModelLoadedCallback;
 
 private:
     VkContext* vkContext;
@@ -35,9 +38,10 @@ private:
     std::shared_ptr<ModelAsset> loadModelFromFile(const std::string& path);
     Texture loadTexture(const std::string& path);
     Texture createDefaultTexture();
+    Texture createDefaultNormalTexture();
+    Texture createDefaultPbrTexture();
     void mergeMaterials(ModelAsset* model, std::vector<Vertex>& originalVertices,
         std::vector<uint32_t>& originalIndices);
-
 
     // Internal buffer helpers
     void uploadToGPU(ModelAsset* asset, const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices);

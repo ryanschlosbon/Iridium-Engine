@@ -114,13 +114,25 @@ void VkCommandManager::recordCommands(
     uint32_t imageIndex,
     VkRenderPassWrapper* offscreenPass,
     VkFramebufferWrapper* offscreenFramebuffer,
+    VkRenderPass lightingRenderPass,
+    VkFramebuffer lightingFramebuffer,
+    VkLightingPipeline* lightingPipeline,
+    VkDescriptorSet lightingDescriptorSet,
+    glm::vec3 cameraPos,
+    glm::mat4 view,
+    glm::mat4 proj,
     VkUIRenderPass* uiPass,
     const std::vector<VkFramebuffer>& uiFramebuffers,
     VkGraphicsPipeline* pipeline,
     VkExtent2D extent,
     Registry& registry,
     VkDescriptorSet globalDescriptorSet,
-    EditorSystem* editor) {
+    EditorSystem* editor,
+    VkForwardRenderPass* forwardPass,
+    VkForwardPipeline* forwardPipeline,
+    const std::vector<VkFramebuffer>& forwardFramebuffers,
+    VkImage litSceneImage,
+    VkImage opaqueSceneCopy) {
 
     VkCommandBuffer cmd = commandBuffers[currentFrame];
     VkCommandBufferBeginInfo beginInfo{ VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
@@ -136,11 +148,23 @@ void VkCommandManager::recordCommands(
     rpInfo.framebuffer = offscreenFramebuffer->getFramebuffer(imageIndex); //
     rpInfo.renderArea.extent = extent;
 
-    std::array<VkClearValue, 2> clears{};
-    clears[0].color = { {0.0f, 0.0f, 0.0f, 1.0f} };
-    clears[1].depthStencil = { 1.0f, 0 };
-    rpInfo.clearValueCount = 2;
-    rpInfo.pClearValues = clears.data();
+    // Update this array to have 4 elements instead of 2!
+    std::array<VkClearValue, 4> clearValues{};
+
+    // Background color for Position (Black)
+    clearValues[0].color = { {0.0f, 0.0f, 0.0f, 1.0f} };
+
+    // Background color for Normals (Black)
+    clearValues[1].color = { {0.0f, 0.0f, 0.0f, 1.0f} };
+
+    // Background color for Albedo (This is the actual "sky" color of your viewport)
+    clearValues[2].color = { {0.1f, 0.1f, 0.1f, 1.0f} };
+
+    // Depth clear value
+    clearValues[3].depthStencil = { 1.0f, 0 };
+
+    rpInfo.clearValueCount = static_cast<uint32_t>(clearValues.size());
+    rpInfo.pClearValues = clearValues.data();
 
     vkCmdBeginRenderPass(cmd, &rpInfo, VK_SUBPASS_CONTENTS_INLINE);
 
@@ -179,14 +203,31 @@ void VkCommandManager::recordCommands(
             vkCmdBindVertexBuffers(cmd, 0, 1, &meshComp.model->vertexBuffer, &offset);
             vkCmdBindIndexBuffer(cmd, meshComp.model->indexBuffer, 0, VK_INDEX_TYPE_UINT32);
 
-            // Push World Matrix
-            vkCmdPushConstants(cmd, layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4), &transformComp.worldMatrix);
-
             for (const auto& subMesh : meshComp.model->subMeshes) {
                 auto& mat = meshComp.model->materials[subMesh.materialIndex];
+
+                // THE FILTER: Do NOT draw glass into the G-Buffer!
+                if (mat.alphaMode == AlphaMode::Blend) {
+                    continue; // Skip it! We will draw this later in the Forward Pass!
+                }
+
+                // Construct the struct and pass both the matrix and the material color
+                MeshPushConstants push{};
+                push.renderMatrix = transformComp.worldMatrix;
+                push.baseColor = mat.baseColor;
+                push.metallicFactor = mat.metallicFactor;
+                push.roughnessFactor = mat.roughnessFactor;
+
+                vkCmdPushConstants(cmd, layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 
+                    0, sizeof(MeshPushConstants), &push);
                 if (!mat.descriptorSets.empty()) {
                     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 1, 1,
                         &mat.descriptorSets[currentFrame], 0, nullptr);
+                }
+                else {
+                    // THE PROOF: 
+                    std::cout << "[DEBUG WARNING] Submesh " << subMesh.materialIndex
+                        << " has EMPTY descriptor sets! Driver is rendering Light Grey!\n";
                 }
                 vkCmdDrawIndexed(cmd, subMesh.indexCount, 1, subMesh.indexStart, 0, 0);
             }
@@ -212,7 +253,11 @@ void VkCommandManager::recordCommands(
             VkDeviceSize offset = 0;
             vkCmdBindVertexBuffers(cmd, 0, 1, &meshComp.model->vertexBuffer, &offset);
             vkCmdBindIndexBuffer(cmd, meshComp.model->indexBuffer, 0, VK_INDEX_TYPE_UINT32);
-            vkCmdPushConstants(cmd, layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4), &transformComp.worldMatrix);
+
+            MeshPushConstants push{};
+            push.renderMatrix = transformComp.worldMatrix;
+            vkCmdPushConstants(cmd, layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 
+                0, sizeof(MeshPushConstants), &push);
 
             for (const auto& subMesh : meshComp.model->subMeshes) {
                 vkCmdDrawIndexed(cmd, subMesh.indexCount, 1, subMesh.indexStart, 0, 0);
@@ -222,8 +267,165 @@ void VkCommandManager::recordCommands(
 
     vkCmdEndRenderPass(cmd); // END OF PASS 1
 
+    // =======================================================
+    // === PASS 2: DEFERRED LIGHTING PASS                  ===
+    // =======================================================
+    VkRenderPassBeginInfo lightingPassInfo{ VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
+    lightingPassInfo.renderPass = lightingRenderPass;
+    lightingPassInfo.framebuffer = lightingFramebuffer;
+    lightingPassInfo.renderArea.extent = extent;
 
-    // === PASS 2: UI SWAPCHAIN ===
+    VkClearValue lightingClearColor = { {{0.0f, 0.0f, 0.0f, 1.0f}} };
+    lightingPassInfo.clearValueCount = 1;
+    lightingPassInfo.pClearValues = &lightingClearColor;
+
+    vkCmdBeginRenderPass(cmd, &lightingPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+    // 1. Bind the Empty-Vertex Pipeline
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, lightingPipeline->getPipeline());
+
+    // 2. Bind the G-Buffer (Position, Normal, Albedo) to the fragment shader
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, lightingPipeline->getPipelineLayout(),
+        0, 1, &lightingDescriptorSet, 0, nullptr);
+
+    // 3. Pass the Camera Position via Push Constants
+    LightingPushConstants push{};
+    push.viewPos = glm::vec4(cameraPos, 1.0f);
+    push.invView = glm::inverse(view);
+    push.invProj = glm::inverse(proj);
+    vkCmdPushConstants(cmd, lightingPipeline->getPipelineLayout(), VK_SHADER_STAGE_FRAGMENT_BIT,
+        0, sizeof(LightingPushConstants), &push);
+
+    // 4. THE MAGIC TRICK: Draw 3 vertices with no vertex buffer!
+    vkCmdDraw(cmd, 3, 1, 0, 0);
+
+    vkCmdEndRenderPass(cmd); // END OF PASS 2
+
+    // =======================================================
+    // === VRAM PHOTOGRAPH: COPY LIT SCENE FOR REFRACTION  ===
+    // =======================================================
+
+    // 1. Transition Lit Scene to TRANSFER_SRC and Copy to TRANSFER_DST
+    VkImageMemoryBarrier litSrcBarrier{ VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
+    litSrcBarrier.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    litSrcBarrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    litSrcBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    litSrcBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    litSrcBarrier.image = litSceneImage;
+    litSrcBarrier.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+    litSrcBarrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    litSrcBarrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+
+    VkImageMemoryBarrier copyDstBarrier = litSrcBarrier;
+    copyDstBarrier.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    copyDstBarrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    copyDstBarrier.image = opaqueSceneCopy;
+    copyDstBarrier.srcAccessMask = 0;
+    copyDstBarrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+
+    VkImageMemoryBarrier copyBarriers[] = { litSrcBarrier, copyDstBarrier };
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+        0, 0, nullptr, 0, nullptr, 2, copyBarriers);
+
+    // 2. Perform the blazing-fast VRAM-to-VRAM copy 
+    VkImageCopy imageCopyRegion{};
+    imageCopyRegion.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+    imageCopyRegion.dstSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+    imageCopyRegion.extent = { extent.width, extent.height, 1 };
+
+    vkCmdCopyImage(cmd,
+        litSceneImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+        opaqueSceneCopy, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        1, &imageCopyRegion);
+
+    // 3. Transition Lit Scene BACK to COLOR_ATTACHMENT and Copy to SHADER_READ_ONLY
+    VkImageMemoryBarrier litDstBarrier = litSrcBarrier;
+    litDstBarrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    litDstBarrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    litDstBarrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    litDstBarrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+
+    VkImageMemoryBarrier copyReadBarrier = copyDstBarrier;
+    copyReadBarrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    copyReadBarrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    copyReadBarrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    copyReadBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+    VkImageMemoryBarrier endBarriers[] = { litDstBarrier, copyReadBarrier };
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+        0, 0, nullptr, 0, nullptr, 2, endBarriers);
+
+    // =======================================================
+        // === PASS 3: FORWARD TRANSLUCENCY PASS               ===
+        // =======================================================
+    VkRenderPassBeginInfo forwardPassInfo{};
+    forwardPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    forwardPassInfo.renderPass = forwardPass->getRenderPass();
+    forwardPassInfo.framebuffer = forwardFramebuffers[imageIndex];
+    forwardPassInfo.renderArea.offset = { 0, 0 };
+    forwardPassInfo.renderArea.extent = extent; // Uses the passed-in extent!
+    forwardPassInfo.clearValueCount = 0;
+    forwardPassInfo.pClearValues = nullptr;
+
+    vkCmdBeginRenderPass(cmd, &forwardPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, forwardPipeline->getPipeline());
+
+    // SET 0: Bind Global UBO (Camera Data)
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+        forwardPipeline->getPipelineLayout(), 0, 1, &globalDescriptorSet, 0, nullptr);
+
+    // SET 2: Bind Lighting UBO (HDRI Map for Reflections!)
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+        forwardPipeline->getPipelineLayout(), 2, 1, &lightingDescriptorSet, 0, nullptr);
+
+    // Custom ECS Loop for Iridium Engine
+    if (meshPool && transformPool) {
+        for (uint32_t entity : meshPool->entities) {
+            if (transformPool->sparseMap.contains(entity)) {
+                auto& meshComp = meshPool->get(entity);
+                if (!meshComp.enabled || !meshComp.model) continue;
+
+                auto& transformComp = transformPool->get(entity);
+
+                // Bind Vertex/Index buffers
+                VkDeviceSize offset = 0;
+                vkCmdBindVertexBuffers(cmd, 0, 1, &meshComp.model->vertexBuffer, &offset);
+                vkCmdBindIndexBuffer(cmd, meshComp.model->indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+
+                for (const auto& subMesh : meshComp.model->subMeshes) {
+                    auto& mat = meshComp.model->materials[subMesh.materialIndex];
+
+                    // THE FILTER: ONLY draw glass!
+                    if (mat.alphaMode != AlphaMode::Blend) {
+                        continue;
+                    }
+
+                    // Push Constants
+                    MeshPushConstants push{};
+                    push.renderMatrix = transformComp.worldMatrix;
+                    push.baseColor = mat.baseColor;
+                    push.metallicFactor = mat.metallicFactor;
+                    push.roughnessFactor = mat.roughnessFactor;
+
+                    vkCmdPushConstants(cmd, forwardPipeline->getPipelineLayout(),
+                        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(MeshPushConstants), &push);
+
+                    // SET 1: Bind Material Descriptors
+                    if (!mat.descriptorSets.empty()) {
+                        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                            forwardPipeline->getPipelineLayout(), 1, 1, &mat.descriptorSets[currentFrame], 0, nullptr);
+                    }
+
+                    vkCmdDrawIndexed(cmd, subMesh.indexCount, 1, subMesh.indexStart, 0, 0);
+                }
+            }
+        }
+    }
+
+    vkCmdEndRenderPass(cmd); // END OF PASS 3
+
+    // === PASS 4: UI SWAPCHAIN ===
     // This takes the editor UI (which now samples from Pass 1) and draws it to the monitor
     VkRenderPassBeginInfo uiPassInfo{ VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
     uiPassInfo.renderPass = uiPass->getRenderPass();

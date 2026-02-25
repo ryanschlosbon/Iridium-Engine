@@ -22,6 +22,9 @@
 #include "utils/DeletionQueue.h"
 #include "renderer/DescriptorAllocator.h"
 #include "renderer/VkUIRenderPass.h"
+#include "renderer/VkLightingPipeline.h"
+#include "renderer/VkForwardRenderPass.h"
+#include "renderer/VkForwardPipeline.h"
 
 class Application {
 public:
@@ -50,16 +53,51 @@ private:
     VkUIRenderPass* vkUIRenderPass;
     std::vector<VkFramebuffer> uiFramebuffers;
 
-    // --- OFF-SCREEN RENDER TARGETS ---
-    std::vector<VkImage> sceneColorImages;
-    std::vector<VkDeviceMemory> sceneColorImageMemories;
-    std::vector<VkImageView> sceneColorImageViews;
-    VkSampler sceneSampler;
+    // --- G-BUFFER RENDER TARGETS ---
+    std::vector<VkImage> gPositionImages;
+    std::vector<VkDeviceMemory> gPositionImageMemories;
+    std::vector<VkImageView> gPositionImageViews;
+
+    std::vector<VkImage> gNormalImages;
+    std::vector<VkDeviceMemory> gNormalImageMemories;
+    std::vector<VkImageView> gNormalImageViews;
+
+    std::vector<VkImage> gAlbedoImages;
+    std::vector<VkDeviceMemory> gAlbedoImageMemories;
+    std::vector<VkImageView> gAlbedoImageViews;
+
+    VkSampler gBufferSampler;
 
     // --- UPGRADED DEPTH RESOURCES ---
     std::vector<VkImage> depthImages;
     std::vector<VkDeviceMemory> depthImageMemories;
     std::vector<VkImageView> depthImageViews;
+
+    // --- LIGHTING PASS RESOURCES ---
+    VkLightingPipeline* vkLightingPipeline;
+    VkRenderPass lightingRenderPass;
+    std::vector<VkFramebuffer> lightingFramebuffers;
+    std::vector<VkDescriptorSet> lightingDescriptorSets;
+
+    // The Final Lit Scene (This goes to ImGui!)
+    std::vector<VkImage> litSceneImages;
+    std::vector<VkDeviceMemory> litSceneImageMemories;
+    std::vector<VkImageView> litSceneImageViews;
+
+    // The Photograph (For Refraction)
+    std::vector<VkImage> opaqueSceneCopyImages;
+    std::vector<VkDeviceMemory> opaqueSceneCopyMemories;
+    std::vector<VkImageView> opaqueSceneCopyViews;
+
+    // The Back-Face Depth (For Thickness)
+    std::vector<VkImage> glassDepthImages;
+    std::vector<VkDeviceMemory> glassDepthMemories;
+    std::vector<VkImageView> glassDepthViews;
+
+    // Forward Pipeline for Glass
+    VkForwardRenderPass* vkForwardRenderPass = nullptr;
+    VkForwardPipeline* vkForwardPipeline = nullptr;
+    std::vector<VkFramebuffer> forwardFramebuffers;
 
     // The special ImGui pointer that lets the UI draw our Vulkan texture
     std::vector<VkDescriptorSet> sceneDescriptorSets;
@@ -71,7 +109,7 @@ private:
 
     EditorSystem editor;
     std::vector<VkDescriptorSet> globalDescriptorSets;
-    bool enableValidation = true;
+    bool enableValidation = false;
     TransformSystem transformSystem;
     Registry registry;
     DeletionQueue frameDeletionQueues[VkSyncObjects::MAX_FRAMES_IN_FLIGHT];
@@ -86,6 +124,7 @@ private:
 
     AssetManager* assetManager;
     std::shared_ptr<ModelAsset> mainModel;
+    Texture hdriMap;
 
     // Mouse State
     float lastX = 1280 / 2.0f;
@@ -109,7 +148,7 @@ private:
     void initVulkan();
     void mainLoop();
     void cleanup();
-    void drawFrame(Registry& registry, const glm::mat4& view, const glm::mat4& proj);
+    void drawFrame(Registry& registry, const glm::mat4& view, const glm::mat4& proj, const glm::mat4& editorProj);
     void createUniformBuffers();
     void updateUniformBuffer(uint32_t currentImage, const glm::mat4& view, const glm::mat4& proj);
     void createDescriptorPool();
@@ -124,4 +163,32 @@ private:
     void allocateMaterialDescriptors(std::shared_ptr<ModelAsset> model);
     void createOffscreenRenderTarget();
     void createUIFramebuffers();
+    void createLightingDescriptorSets();
+    void createLightingRenderPass();
+    void createLightingFramebuffers();
+
+    // Add these above your initVulkan() function
+    VkFormat findSupportedFormat(VkPhysicalDevice physicalDevice, const std::vector<VkFormat>& candidates, VkImageTiling tiling, VkFormatFeatureFlags features) {
+        for (VkFormat format : candidates) {
+            VkFormatProperties props;
+            vkGetPhysicalDeviceFormatProperties(physicalDevice, format, &props);
+
+            if (tiling == VK_IMAGE_TILING_LINEAR && (props.linearTilingFeatures & features) == features) {
+                return format;
+            }
+            else if (tiling == VK_IMAGE_TILING_OPTIMAL && (props.optimalTilingFeatures & features) == features) {
+                return format;
+            }
+        }
+        throw std::runtime_error("failed to find supported format!");
+    }
+
+    VkFormat findDepthFormat(VkPhysicalDevice physicalDevice) {
+        return findSupportedFormat(
+            physicalDevice,
+            { VK_FORMAT_D32_SFLOAT, VK_FORMAT_D32_SFLOAT_S8_UINT, VK_FORMAT_D24_UNORM_S8_UINT },
+            VK_IMAGE_TILING_OPTIMAL,
+            VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT
+        );
+    }
 };

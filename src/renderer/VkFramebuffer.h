@@ -9,7 +9,9 @@
 class VkFramebufferWrapper {
 public:
     VkFramebufferWrapper(VkContext* context, VkRenderPassWrapper* renderPass,
-        const std::vector<VkImageView>& colorImageViews,
+        const std::vector<VkImageView>& positionImageViews, 
+        const std::vector<VkImageView>& normalImageViews, 
+        const std::vector<VkImageView>& albedoImageViews, 
         const std::vector<VkImageView>& depthImageViews,
         VkExtent2D extent);
     ~VkFramebufferWrapper();

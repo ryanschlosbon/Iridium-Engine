@@ -9,6 +9,7 @@ public:
 
     // The magic function: give it a layout, and it guarantees a valid Descriptor Set
     VkDescriptorSet allocate(VkDescriptorSetLayout layout);
+    VkDescriptorPool getPool() { return currentPool; }
 
 private:
     VkDevice device;

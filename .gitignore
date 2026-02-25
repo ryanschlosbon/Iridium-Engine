@@ -21,6 +21,10 @@ cmake-build-release/
 # Ignore compiled Vulkan shaders
 assets/shaders/*.spv
 
+# Ignore Assets
+assets/models/
+assets/hdri
+
 # System
 .DS_Store
 Thumbs.db

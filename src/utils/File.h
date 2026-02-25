@@ -1,7 +1,10 @@
-#include <fstream>
+#pragma once
 #include <vector>
+#include <string>
+#include <fstream>
+#include <stdexcept>
 
-static std::vector<char> readFile(const std::string& filename) {
+inline std::vector<char> readFile(const std::string& filename) {
 	// Open file at end and in binary mode
 	std::ifstream file(filename, std::ios::ate | std::ios::binary);
 
