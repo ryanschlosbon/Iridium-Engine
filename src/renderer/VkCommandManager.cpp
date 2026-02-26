@@ -132,7 +132,10 @@ void VkCommandManager::recordCommands(
     VkForwardPipeline* forwardPipeline,
     const std::vector<VkFramebuffer>& forwardFramebuffers,
     VkImage litSceneImage,
-    VkImage opaqueSceneCopy) {
+    VkImage opaqueSceneCopy,
+    VkRenderPass glassDepthRenderPass,
+    VkFramebuffer glassDepthFramebuffer,
+    Iridium::GlassDepthPipeline* glassDepthPipeline) {
 
     VkCommandBuffer cmd = commandBuffers[currentFrame];
     VkCommandBufferBeginInfo beginInfo{ VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
@@ -355,6 +358,66 @@ void VkCommandManager::recordCommands(
     vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
         0, 0, nullptr, 0, nullptr, 2, endBarriers);
+
+    // =======================================================
+    // === PASS 2.5: GLASS DEPTH PASS                      ===
+    // =======================================================
+    VkRenderPassBeginInfo glassDepthPassInfo{ VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
+    glassDepthPassInfo.renderPass = glassDepthRenderPass;
+    glassDepthPassInfo.framebuffer = glassDepthFramebuffer;
+    glassDepthPassInfo.renderArea.extent = extent;
+
+    VkClearValue depthClearValue{};
+    depthClearValue.depthStencil = { 1.0f, 0 };
+    glassDepthPassInfo.clearValueCount = 1;
+    glassDepthPassInfo.pClearValues = &depthClearValue;
+
+    vkCmdBeginRenderPass(cmd, &glassDepthPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+    // 1. Bind the depth-only pipeline
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, glassDepthPipeline->getPipeline());
+
+    // 2. Set Viewport & Scissor (Re-use the ones from Pass 1)
+    vkCmdSetViewport(cmd, 0, 1, &viewport);
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &globalDescriptorSet, 0, nullptr);
+
+    // 3. ECS RENDER LOOP (Draw ONLY glass meshes into the depth buffer)
+    if (meshPool && transformPool) {
+        for (uint32_t entity : meshPool->entities) {
+            if (transformPool->sparseMap.contains(entity)) {
+                auto& meshComp = meshPool->get(entity);
+                if (!meshComp.enabled || !meshComp.model) continue;
+
+                auto& transformComp = transformPool->get(entity);
+
+                VkDeviceSize offset = 0;
+                vkCmdBindVertexBuffers(cmd, 0, 1, &meshComp.model->vertexBuffer, &offset);
+                vkCmdBindIndexBuffer(cmd, meshComp.model->indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+
+                for (const auto& subMesh : meshComp.model->subMeshes) {
+                    auto& mat = meshComp.model->materials[subMesh.materialIndex];
+
+                    // THE FILTER: ONLY draw glass into the glass depth buffer!
+                    if (mat.alphaMode != AlphaMode::Blend) {
+                        continue;
+                    }
+
+                    // Push Constants (We only need the matrix for depth, no color/roughness!)
+                    MeshPushConstants push{};
+                    push.renderMatrix = transformComp.worldMatrix;
+
+                    vkCmdPushConstants(cmd, layout,
+                        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(MeshPushConstants), &push);
+
+                    vkCmdDrawIndexed(cmd, subMesh.indexCount, 1, subMesh.indexStart, 0, 0);
+                }
+            }
+        }
+    }
+
+    vkCmdEndRenderPass(cmd); // END OF PASS 2.5
 
     // =======================================================
         // === PASS 3: FORWARD TRANSLUCENCY PASS               ===

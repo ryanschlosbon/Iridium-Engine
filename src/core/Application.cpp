@@ -152,9 +152,12 @@ void Application::initVulkan() {
     vkCommandManager = new VkCommandManager(vkContext, vkFramebuffer, vkPipeline, VkSyncObjects::MAX_FRAMES_IN_FLIGHT);
 
     createDepthResources();
+
+    glassDepthRenderPass = new Iridium::GlassDepthRenderPass();
+    glassDepthRenderPass->init(vkContext->getDevice(), findDepthFormat(vkContext->getPhysicalDevice()));
+
     createOffscreenRenderTarget();
     descriptorAllocator.init(vkContext->getDevice());
-
     assetManager = new AssetManager(vkContext, vkCommandManager);
 
     // Plug the Application's descriptor function directly into the AssetManager!
@@ -206,6 +209,14 @@ void Application::initVulkan() {
         gAlbedoImageViews,
         depthImageViews,
         vkSwapchain->getExtent()
+    );
+
+    glassDepthPipeline = new Iridium::GlassDepthPipeline();
+    glassDepthPipeline->init(
+        vkContext->getDevice(),
+        glassDepthRenderPass->getRenderPass(),
+        vkPipeline->getPipelineLayout(),
+        std::string(PROJECT_ROOT_DIR) + "assets/shaders/glass_depth_vert.spv"
     );
 
     std::string modelPath = std::string(PROJECT_ROOT_DIR) + "assets/models/alfa_romeo/scene.gltf";
@@ -294,7 +305,10 @@ void Application::drawFrame(Registry& registry, const glm::mat4& view, const glm
         vkForwardPipeline,
         forwardFramebuffers,
         litSceneImages[imageIndex],
-        opaqueSceneCopyImages[imageIndex]
+        opaqueSceneCopyImages[imageIndex],
+        glassDepthRenderPass->getRenderPass(),
+        glassDepthFramebuffers[imageIndex],
+        glassDepthPipeline
     );
 
     VkSubmitInfo submitInfo{};
@@ -790,6 +804,10 @@ void Application::recreateSwapchain() {
         vkDestroyFramebuffer(vkContext->getDevice(), fb, nullptr);
     }
 
+    for (auto fb : glassDepthFramebuffers) {
+        vkDestroyFramebuffer(vkContext->getDevice(), fb, nullptr);
+    }
+
     delete vkFramebuffer;
 
     // Destroy the arrays of Depth AND Color resources!
@@ -998,6 +1016,24 @@ void Application::createOffscreenRenderTarget() {
     samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     samplerInfo.maxAnisotropy = 1.0f;
     vkCreateSampler(vkContext->getDevice(), &samplerInfo, nullptr, &gBufferSampler);
+
+    glassDepthFramebuffers.resize(imageCount);
+    for (size_t i = 0; i < imageCount; i++) {
+        VkImageView attachments[] = { glassDepthViews[i] };
+
+        VkFramebufferCreateInfo framebufferInfo{};
+        framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+        framebufferInfo.renderPass = glassDepthRenderPass->getRenderPass();
+        framebufferInfo.attachmentCount = 1;
+        framebufferInfo.pAttachments = attachments;
+        framebufferInfo.width = extent.width;
+        framebufferInfo.height = extent.height;
+        framebufferInfo.layers = 1;
+
+        if (vkCreateFramebuffer(vkContext->getDevice(), &framebufferInfo, nullptr, &glassDepthFramebuffers[i]) != VK_SUCCESS) {
+            throw std::runtime_error("failed to create glass depth framebuffer!");
+        }
+    }
 }
 
 void Application::createLightingDescriptorSets() {
@@ -1198,6 +1234,14 @@ void Application::cleanup() {
     }
     delete vkForwardPipeline;
     delete vkForwardRenderPass;
+
+    for (auto fb : glassDepthFramebuffers) {
+        vkDestroyFramebuffer(vkContext->getDevice(), fb, nullptr);
+    }
+    glassDepthPipeline->cleanup();
+    delete glassDepthPipeline;
+    glassDepthRenderPass->cleanup();
+    delete glassDepthRenderPass;
 
     delete vkUIRenderPass;
     delete vkSyncObjects;

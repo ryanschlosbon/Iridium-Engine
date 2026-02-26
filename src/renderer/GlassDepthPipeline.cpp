@@ -1,4 +1,5 @@
 #include "GlassDepthPipeline.h"
+#include "VkMesh.h"
 #include <stdexcept>
 #include <vector>
 #include <fstream>
@@ -19,12 +20,18 @@ namespace Iridium {
 
         VkPipelineShaderStageCreateInfo shaderStages[] = { vertShaderStageInfo };
 
-        // 2. Vertex Input (Plug in your engine's specific Vertex binding/attribute descriptions here)
+        // 2. Vertex Input 
+        auto bindingDescription = Vertex::getBindingDescription();
+        auto attributeDescriptions = Vertex::getAttributeDescriptions();
+
         VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
         vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-        // TODO: Add your auto vertexBindingDescriptions and vertexAttributeDescriptions here
-        vertexInputInfo.vertexBindingDescriptionCount = 0;
-        vertexInputInfo.vertexAttributeDescriptionCount = 0;
+
+        // Pass your engine's actual vertex struct descriptions!
+        vertexInputInfo.vertexBindingDescriptionCount = 1;
+        vertexInputInfo.pVertexBindingDescriptions = &bindingDescription;
+        vertexInputInfo.vertexAttributeDescriptionCount = static_cast<uint32_t>(attributeDescriptions.size());
+        vertexInputInfo.pVertexAttributeDescriptions = attributeDescriptions.data();
 
         // 3. Input Assembly
         VkPipelineInputAssemblyStateCreateInfo inputAssembly{};

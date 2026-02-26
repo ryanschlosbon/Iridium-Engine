@@ -25,6 +25,8 @@
 #include "renderer/VkLightingPipeline.h"
 #include "renderer/VkForwardRenderPass.h"
 #include "renderer/VkForwardPipeline.h"
+#include "renderer/GlassDepthRenderPass.h"
+#include "renderer/GlassDepthPipeline.h"
 
 class Application {
 public:
@@ -94,6 +96,10 @@ private:
     std::vector<VkDeviceMemory> glassDepthMemories;
     std::vector<VkImageView> glassDepthViews;
 
+    Iridium::GlassDepthRenderPass* glassDepthRenderPass = nullptr;
+    Iridium::GlassDepthPipeline* glassDepthPipeline = nullptr;
+    std::vector<VkFramebuffer> glassDepthFramebuffers;
+
     // Forward Pipeline for Glass
     VkForwardRenderPass* vkForwardRenderPass = nullptr;
     VkForwardPipeline* vkForwardPipeline = nullptr;
@@ -109,7 +115,7 @@ private:
 
     EditorSystem editor;
     std::vector<VkDescriptorSet> globalDescriptorSets;
-    bool enableValidation = false;
+    bool enableValidation = true;
     TransformSystem transformSystem;
     Registry registry;
     DeletionQueue frameDeletionQueues[VkSyncObjects::MAX_FRAMES_IN_FLIGHT];
