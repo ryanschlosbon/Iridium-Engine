@@ -63,22 +63,42 @@ void main() {
     vec4 texColor = texture(albedoMap, fragTexCoord);
     vec3 glassColor = push.baseColor.rgb * fragColor * texColor.rgb;
     
-    float metallic = push.metallicFactor * texture(metallicRoughnessMap, fragTexCoord).b;
+    // We still read roughness from the texture so frosted glass works!
     float roughness = push.roughnessFactor * texture(metallicRoughnessMap, fragTexCoord).g;
 
     vec3 cameraPos = inverse(ubo.view)[3].xyz;
-    vec3 N = normalize(fragNormal);
     
-    // 1. THE ONE-SIDED FIX: Flip the normal if we are looking at the inside of the glass!
-    // This prevents the backfaces from returning negative dot products and turning into 100% mirrors.
+    // ==========================================================
+    // 1. NORMAL MAP DECODING (With Tangent Safeguard)
+    // ==========================================================
+    vec3 N_geom = normalize(fragNormal);
     if (!gl_FrontFacing) {
-        N = -N;
+        N_geom = -N_geom;
     }
+
+    vec3 T;
+    if (length(fragTangent.xyz) < 0.001) {
+        T = cross(N_geom, vec3(0.0, 1.0, 0.0));
+        if (length(T) < 0.001) {
+            T = cross(N_geom, vec3(1.0, 0.0, 0.0));
+        }
+        T = normalize(T);
+    } else {
+        T = normalize(fragTangent.xyz);
+    }
+    
+    T = normalize(T - dot(T, N_geom) * N_geom); 
+    float handedness = (abs(fragTangent.w) < 0.001) ? 1.0 : fragTangent.w;
+    vec3 B = normalize(cross(N_geom, T)) * handedness;
+    mat3 TBN = mat3(T, B, N_geom);
+
+    vec3 normalSample = texture(normalMap, fragTexCoord).rgb;
+    vec3 N = normalize(TBN * (normalSample * 2.0 - 1.0));
+
+    // ==========================================================
 
     vec3 V = normalize(cameraPos - fragWorldPos);
     vec3 R = reflect(-V, N);
-    
-    // 2. THE UPSIDE-DOWN FIX: Invert the Y-axis for Vulkan's coordinate system
     R.y = -R.y; 
 
     vec2 screenSize = vec2(textureSize(opaqueSceneCopyMap, 0));
@@ -92,30 +112,38 @@ void main() {
     // ==========================================================
     // 3. BEER-LAMBERT LAW & BASE TINT
     // ==========================================================
-    // Physics: Thick glass absorbs light.
     vec3 absorbColor = vec3(1.0) - glassColor;
     vec3 physicalTransmittance = exp(-absorbColor * effectiveThickness * 0.5);
 
-    // Art Direction: The material's alpha defines a minimum tint, even if paper-thin!
-    // If the glTF model says the glass should be 40% opaque, we enforce that tint.
     float materialAlpha = push.baseColor.a * texColor.a;
     vec3 finalTransmittance = mix(physicalTransmittance, glassColor, materialAlpha);
 
     // ==========================================================
-    // 4. SCREEN SPACE REFRACTION (Pure Physics)
+    // 4. SCREEN SPACE REFRACTION (True Snell's Law Physics)
     // ==========================================================
-    // Distortion is now strictly driven by physical thickness and surface angle.
-    // Extremely thin glass (windshield) will have thickness near 0.0, meaning zero distortion.
-    // Thick glass (headlamps) will multiply the distortion.
-    
-    // We use (1.0 - dot(N, V)) so looking at glass at a steep angle refracts more than looking dead-on
-    float angleOfIncidence = 1.0 - max(dot(N, V), 0.0);
-    float physicalDistortion = (thickness * 0.1) * angleOfIncidence;
-    
-    // Add a tiny bit of scatter for roughness, but no artificial boost!
-    float distortionStrength = physicalDistortion + (roughness * 0.01);
+    // In physics, the Index of Refraction (IOR) determines how much light bends.
+    float IOR_Air = 1.0;
+    float IOR_Glass = 1.52; // Automotive windshields/headlights are typically 1.52
+    float eta = IOR_Air / IOR_Glass;
 
-    vec2 distortedUV = screenUV + (N.xy * distortionStrength);
+    // The refract() function calculates the exact 3D trajectory of the bent light ray
+    vec3 refractedRay = refract(-V, N, eta);
+
+    // If the ray hits at an extreme grazing angle, it completely reflects (Total Internal Reflection)
+    // refract() returns a zero vector if this happens, so we fallback to no distortion
+    if (length(refractedRay) < 0.001) {
+        refractedRay = -V;
+    }
+
+    // We take the X and Y trajectory of the bent ray, and multiply it by how far it 
+    // travels through the glass (thickness) to get our physical UV offset!
+    // The 0.25 is a scaling factor to convert 3D world space units to 2D screen UV space.
+    vec2 physicalDistortion = refractedRay.xy * thickness * 0.25;
+    
+    // Add microscopic scattering for frosted glass (Roughness)
+    float scatter = roughness * 0.01;
+
+    vec2 distortedUV = screenUV + physicalDistortion + (N.xy * scatter);
     distortedUV = clamp(distortedUV, vec2(0.001), vec2(0.999));
 
     vec3 refractionColor = texture(opaqueSceneCopyMap, distortedUV).rgb;
@@ -124,7 +152,9 @@ void main() {
     vec3 reflectionColor = texture(hdriMap, SampleSphericalMap(R)).rgb;
     reflectionColor = pow(ACESFilm(reflectionColor * 1.5), vec3(1.0/2.2));
 
-    vec3 F0 = mix(vec3(0.04), glassColor, metallic); 
+    // OVERRIDE METALLIC: Real glass is strictly dielectric (0.04). 
+    // This stops artists' metallic hacks from turning your glass into chrome!
+    vec3 F0 = vec3(0.04); 
     vec3 F = FresnelSchlick(max(dot(N, V), 0.0), F0);
 
     vec3 finalColor = mix(tintedRefraction, reflectionColor, F.r);
@@ -132,11 +162,6 @@ void main() {
     // ==========================================================
     // 5. THE GHOSTING FIX & BASELINE OPACITY
     // ==========================================================
-    // Ensure the baseline opacity is never lower than what the material requested
     float finalAlpha = clamp(materialAlpha + F.r + (thickness * 0.5) + roughness, 0.0, 1.0);
-
-    // Because we already manually painted the background (refractionColor) into our finalColor,
-    // we MUST tell Vulkan this is an opaque pixel. If alpha < 1.0, Vulkan blends the straight, 
-    // un-refracted background back on top, causing the double image!
     outColor = vec4(finalColor, 1.0);
 }
