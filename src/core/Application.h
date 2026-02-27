@@ -105,8 +105,9 @@ private:
     VkForwardPipeline* vkForwardPipeline = nullptr;
     std::vector<VkFramebuffer> forwardFramebuffers;
 
-    // The special ImGui pointer that lets the UI draw our Vulkan texture
+    // The special ImGui pointers that lets the UI draw our Vulkan texture
     std::vector<VkDescriptorSet> sceneDescriptorSets;
+    std::vector<VkDescriptorSet> glassDepthUITextures;
 
     std::vector<Texture> modelTextures;
     std::vector<int> materialToTextureMap;

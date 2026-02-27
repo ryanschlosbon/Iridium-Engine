@@ -10,6 +10,7 @@ class ViewportPanel {
 public:
     // We pass in the texture and render mode so the panel can draw them
     void render(VkDescriptorSet sceneTexture,
+        VkDescriptorSet glassDepthTexture,
         int& currentRenderMode,
         ImGuizmo::OPERATION& currentGizmoOperation,
         const glm::mat4& viewMatrix,

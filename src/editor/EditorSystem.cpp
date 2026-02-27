@@ -97,7 +97,7 @@ void EditorSystem::cleanup(VkDevice device) {
 }
 
 void EditorSystem::update(Registry& registry, AssetManager* assetManager,
-    const glm::mat4& viewInput, const glm::mat4& projInput, VkDescriptorSet sceneTexture) {
+    const glm::mat4& viewInput, const glm::mat4& projInput, VkDescriptorSet sceneTexture, VkDescriptorSet glassDepthTexture) {
 
     // Standard Frame Setup
     ImGui_ImplVulkan_NewFrame();
@@ -132,6 +132,7 @@ void EditorSystem::update(Registry& registry, AssetManager* assetManager,
 
     // --- 3. RENDER THE VIEWPORT PANEL ---
     viewportPanel.render(sceneTexture,
+        glassDepthTexture,
         currentRenderMode,
         currentGizmoOperation,
         view,

@@ -239,10 +239,17 @@ void Application::initVulkan() {
 
     // Register our custom off-screen textures with Dear ImGui!
     sceneDescriptorSets.resize(vkSwapchain->getImageCount());
+    glassDepthUITextures.resize(vkSwapchain->getImageCount());
     for (size_t i = 0; i < sceneDescriptorSets.size(); i++) {
         sceneDescriptorSets[i] = ImGui_ImplVulkan_AddTexture(
             gBufferSampler,
             litSceneImageViews[i],
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+        );
+
+        glassDepthUITextures[i] = ImGui_ImplVulkan_AddTexture(
+            gBufferSampler,
+            glassDepthViews[i],
             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
         );
     }
@@ -269,7 +276,7 @@ void Application::drawFrame(Registry& registry, const glm::mat4& view, const glm
         throw std::runtime_error("Failed to acquire swap chain image!");
     }
 
-    editor.update(registry, assetManager, view, editorProj, sceneDescriptorSets[imageIndex]);
+    editor.update(registry, assetManager, view, editorProj, sceneDescriptorSets[imageIndex], glassDepthUITextures[imageIndex]);
 
     if (imageIndex >= imagesInFlight.size()) {
         imagesInFlight.resize(vkSwapchain->getImageCount(), VK_NULL_HANDLE);
@@ -800,6 +807,10 @@ void Application::recreateSwapchain() {
         ImGui_ImplVulkan_RemoveTexture(descSet);
     }
 
+    for (auto descSet : glassDepthUITextures) {
+        if (descSet) ImGui_ImplVulkan_RemoveTexture(descSet);
+    }
+
     for (auto fb : forwardFramebuffers) {
         vkDestroyFramebuffer(vkContext->getDevice(), fb, nullptr);
     }
@@ -890,10 +901,17 @@ void Application::recreateSwapchain() {
 
     // 5. Register the new textures with ImGui
     sceneDescriptorSets.resize(vkSwapchain->getImageCount());
+    glassDepthUITextures.resize(vkSwapchain->getImageCount());
     for (size_t i = 0; i < sceneDescriptorSets.size(); i++) {
         sceneDescriptorSets[i] = ImGui_ImplVulkan_AddTexture(
             gBufferSampler,
             litSceneImageViews[i],
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+        );
+
+        glassDepthUITextures[i] = ImGui_ImplVulkan_AddTexture(
+            gBufferSampler,
+            glassDepthViews[i],
             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
         );
     }
@@ -1055,8 +1073,7 @@ void Application::createLightingDescriptorSets() {
         VkDescriptorImageInfo albedoInfo{ gBufferSampler, gAlbedoImageViews[i], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
         VkDescriptorImageInfo hdriInfo{ hdriMap.sampler, hdriMap.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
         VkDescriptorImageInfo copyInfo{ gBufferSampler, opaqueSceneCopyViews[i], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
-        VkDescriptorImageInfo glassDepthInfo{ gBufferSampler, glassDepthViews[i], VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL };
-
+        VkDescriptorImageInfo glassDepthInfo{ gBufferSampler, glassDepthViews[i], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL }; 
         std::array<VkWriteDescriptorSet, 6> descriptorWrites{};
 
         // Binding 0: Position

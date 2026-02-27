@@ -3,6 +3,7 @@
 #include <glm/gtc/type_ptr.hpp> // For glm::value_ptr
 
 void ViewportPanel::render(VkDescriptorSet sceneTexture,
+    VkDescriptorSet glassDepthTexture,
     int& currentRenderMode,
     ImGuizmo::OPERATION& currentGizmoOperation,
     const glm::mat4& viewMatrix,
@@ -50,7 +51,7 @@ void ViewportPanel::render(VkDescriptorSet sceneTexture,
     ImGui::SameLine();
 
     // Render Mode Combo Box
-    const char* items[] = { "Standard", "Wireframe", "Outline Only" };
+    const char* items[] = { "Standard", "Wireframe", "Glass Depth" };
     ImGui::SetNextItemWidth(110);
     ImGui::Combo("##renderMode", &currentRenderMode, items, IM_ARRAYSIZE(items));
 
@@ -71,9 +72,14 @@ void ViewportPanel::render(VkDescriptorSet sceneTexture,
     mouseY = absoluteMousePos.y - screenPos.y;
     isHovered = ImGui::IsWindowHovered();
 
+    VkDescriptorSet textureToDraw = sceneTexture;
+    if (currentRenderMode == 2) { // 2 matches "Glass Depth" in the array above
+        textureToDraw = glassDepthTexture;
+    }
+
     // Prevent crashing if window is too small
     if (viewportWidth > 0.0f && viewportHeight > 0.0f) {
-        ImGui::Image((ImTextureID)sceneTexture, availSize);
+        ImGui::Image((ImTextureID)textureToDraw, availSize);
     }
 
 // ========================================================

@@ -1,5 +1,6 @@
 #include "VkCommandManager.h"
 #include "assets/AssetManager.h"
+#include <glm/gtx/norm.hpp>
 #include <stdexcept>
 #include <iostream> // Add this at the top of the file
 
@@ -442,46 +443,75 @@ void VkCommandManager::recordCommands(
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
         forwardPipeline->getPipelineLayout(), 2, 1, &lightingDescriptorSet, 0, nullptr);
 
-    // Custom ECS Loop for Iridium Engine
+    // --- SORTED ECS LOOP FOR TRANSLUCENCY ---
     if (meshPool && transformPool) {
+
+        // 1. Gather all translucent objects and calculate their distance
+        struct TransparentDraw {
+            uint32_t entity;
+            float distance;
+        };
+        std::vector<TransparentDraw> sortedGlass;
+
         for (uint32_t entity : meshPool->entities) {
             if (transformPool->sparseMap.contains(entity)) {
                 auto& meshComp = meshPool->get(entity);
                 if (!meshComp.enabled || !meshComp.model) continue;
 
-                auto& transformComp = transformPool->get(entity);
-
-                // Bind Vertex/Index buffers
-                VkDeviceSize offset = 0;
-                vkCmdBindVertexBuffers(cmd, 0, 1, &meshComp.model->vertexBuffer, &offset);
-                vkCmdBindIndexBuffer(cmd, meshComp.model->indexBuffer, 0, VK_INDEX_TYPE_UINT32);
-
-                for (const auto& subMesh : meshComp.model->subMeshes) {
-                    auto& mat = meshComp.model->materials[subMesh.materialIndex];
-
-                    // THE FILTER: ONLY draw glass!
-                    if (mat.alphaMode != AlphaMode::Blend) {
-                        continue;
+                // Only grab entities that actually have glass materials
+                bool hasGlass = false;
+                for (const auto& mat : meshComp.model->materials) {
+                    if (mat.alphaMode == AlphaMode::Blend) {
+                        hasGlass = true;
+                        break;
                     }
-
-                    // Push Constants
-                    MeshPushConstants push{};
-                    push.renderMatrix = transformComp.worldMatrix;
-                    push.baseColor = mat.baseColor;
-                    push.metallicFactor = mat.metallicFactor;
-                    push.roughnessFactor = mat.roughnessFactor;
-
-                    vkCmdPushConstants(cmd, forwardPipeline->getPipelineLayout(),
-                        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(MeshPushConstants), &push);
-
-                    // SET 1: Bind Material Descriptors
-                    if (!mat.descriptorSets.empty()) {
-                        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                            forwardPipeline->getPipelineLayout(), 1, 1, &mat.descriptorSets[currentFrame], 0, nullptr);
-                    }
-
-                    vkCmdDrawIndexed(cmd, subMesh.indexCount, 1, subMesh.indexStart, 0, 0);
                 }
+
+                if (hasGlass) {
+                    auto& transformComp = transformPool->get(entity);
+                    // Calculate squared distance to avoid expensive square root operations
+                    float distSq = glm::length2(cameraPos - transformComp.position);
+                    sortedGlass.push_back({ entity, distSq });
+                }
+            }
+        }
+
+        // 2. Sort from furthest to closest (Back-to-Front)
+        std::sort(sortedGlass.begin(), sortedGlass.end(),
+            [](const TransparentDraw& a, const TransparentDraw& b) {
+                return a.distance > b.distance;
+            });
+
+        // 3. Draw them in the sorted order!
+        for (const auto& drawItem : sortedGlass) {
+            auto& meshComp = meshPool->get(drawItem.entity);
+            auto& transformComp = transformPool->get(drawItem.entity);
+
+            VkDeviceSize offset = 0;
+            vkCmdBindVertexBuffers(cmd, 0, 1, &meshComp.model->vertexBuffer, &offset);
+            vkCmdBindIndexBuffer(cmd, meshComp.model->indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+
+            for (const auto& subMesh : meshComp.model->subMeshes) {
+                auto& mat = meshComp.model->materials[subMesh.materialIndex];
+
+                // THE FILTER: ONLY draw glass!
+                if (mat.alphaMode != AlphaMode::Blend) continue;
+
+                MeshPushConstants push{};
+                push.renderMatrix = transformComp.worldMatrix;
+                push.baseColor = mat.baseColor;
+                push.metallicFactor = mat.metallicFactor;
+                push.roughnessFactor = mat.roughnessFactor;
+
+                vkCmdPushConstants(cmd, forwardPipeline->getPipelineLayout(),
+                    VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(MeshPushConstants), &push);
+
+                if (!mat.descriptorSets.empty()) {
+                    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                        forwardPipeline->getPipelineLayout(), 1, 1, &mat.descriptorSets[currentFrame], 0, nullptr);
+                }
+
+                vkCmdDrawIndexed(cmd, subMesh.indexCount, 1, subMesh.indexStart, 0, 0);
             }
         }
     }
