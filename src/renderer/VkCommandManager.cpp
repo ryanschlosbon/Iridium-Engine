@@ -152,20 +152,17 @@ void VkCommandManager::recordCommands(
     rpInfo.framebuffer = offscreenFramebuffer->getFramebuffer(imageIndex); //
     rpInfo.renderArea.extent = extent;
 
-    // Update this array to have 4 elements instead of 2!
-    std::array<VkClearValue, 4> clearValues{};
-
-    // Background color for Position (Black)
-    clearValues[0].color = { {0.0f, 0.0f, 0.0f, 1.0f} };
+    // Update this array to have 3 elements
+    std::array<VkClearValue, 3> clearValues{};
 
     // Background color for Normals (Black)
-    clearValues[1].color = { {0.0f, 0.0f, 0.0f, 1.0f} };
+    clearValues[0].color = { {0.0f, 0.0f, 0.0f, 1.0f} };
 
     // Background color for Albedo (This is the actual "sky" color of your viewport)
-    clearValues[2].color = { {0.1f, 0.1f, 0.1f, 1.0f} };
+    clearValues[1].color = { {0.1f, 0.1f, 0.1f, 1.0f} };
 
     // Depth clear value
-    clearValues[3].depthStencil = { 1.0f, 0 };
+    clearValues[2].depthStencil = { 1.0f, 0 };
 
     rpInfo.clearValueCount = static_cast<uint32_t>(clearValues.size());
     rpInfo.pClearValues = clearValues.data();
@@ -221,6 +218,8 @@ void VkCommandManager::recordCommands(
                 push.baseColor = mat.baseColor;
                 push.metallicFactor = mat.metallicFactor;
                 push.roughnessFactor = mat.roughnessFactor;
+                push.emissiveFactor = mat.emissiveFactor; // <-- Added
+                push.padding = 0.0f;                      // <-- Added
 
                 vkCmdPushConstants(cmd, layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 
                     0, sizeof(MeshPushConstants), &push);
@@ -305,61 +304,6 @@ void VkCommandManager::recordCommands(
     vkCmdDraw(cmd, 3, 1, 0, 0);
 
     vkCmdEndRenderPass(cmd); // END OF PASS 2
-
-    // =======================================================
-    // === VRAM PHOTOGRAPH: COPY LIT SCENE FOR REFRACTION  ===
-    // =======================================================
-
-    // 1. Transition Lit Scene to TRANSFER_SRC and Copy to TRANSFER_DST
-    VkImageMemoryBarrier litSrcBarrier{ VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
-    litSrcBarrier.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    litSrcBarrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-    litSrcBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    litSrcBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    litSrcBarrier.image = litSceneImage;
-    litSrcBarrier.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
-    litSrcBarrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
-    litSrcBarrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-
-    VkImageMemoryBarrier copyDstBarrier = litSrcBarrier;
-    copyDstBarrier.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    copyDstBarrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    copyDstBarrier.image = opaqueSceneCopy;
-    copyDstBarrier.srcAccessMask = 0;
-    copyDstBarrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-
-    VkImageMemoryBarrier copyBarriers[] = { litSrcBarrier, copyDstBarrier };
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-        0, 0, nullptr, 0, nullptr, 2, copyBarriers);
-
-    // 2. Perform the blazing-fast VRAM-to-VRAM copy 
-    VkImageCopy imageCopyRegion{};
-    imageCopyRegion.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
-    imageCopyRegion.dstSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
-    imageCopyRegion.extent = { extent.width, extent.height, 1 };
-
-    vkCmdCopyImage(cmd,
-        litSceneImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-        opaqueSceneCopy, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-        1, &imageCopyRegion);
-
-    // 3. Transition Lit Scene BACK to COLOR_ATTACHMENT and Copy to SHADER_READ_ONLY
-    VkImageMemoryBarrier litDstBarrier = litSrcBarrier;
-    litDstBarrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-    litDstBarrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    litDstBarrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-    litDstBarrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-
-    VkImageMemoryBarrier copyReadBarrier = copyDstBarrier;
-    copyReadBarrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    copyReadBarrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    copyReadBarrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-    copyReadBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-
-    VkImageMemoryBarrier endBarriers[] = { litDstBarrier, copyReadBarrier };
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
-        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-        0, 0, nullptr, 0, nullptr, 2, endBarriers);
 
     // =======================================================
     // === PASS 2.5: GLASS DEPTH PASS                      ===
@@ -477,8 +421,9 @@ void VkCommandManager::recordCommands(
         if (glassBucket.empty()) return;
 
         // --- A. VRAM PHOTOGRAPH: COPY LIT SCENE ---
+        // lighting pass (or previous glass pass) just finished drawing to it!
         VkImageMemoryBarrier litSrcBarrier{ VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
-        litSrcBarrier.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        litSrcBarrier.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL; 
         litSrcBarrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
         litSrcBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         litSrcBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
@@ -488,7 +433,7 @@ void VkCommandManager::recordCommands(
         litSrcBarrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
 
         VkImageMemoryBarrier copyDstBarrier = litSrcBarrier;
-        copyDstBarrier.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        copyDstBarrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
         copyDstBarrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
         copyDstBarrier.image = opaqueSceneCopy;
         copyDstBarrier.srcAccessMask = 0;
@@ -592,6 +537,8 @@ void VkCommandManager::recordCommands(
             push.baseColor = mat.baseColor;
             push.metallicFactor = mat.metallicFactor;
             push.roughnessFactor = mat.roughnessFactor;
+            push.emissiveFactor = mat.emissiveFactor;
+            push.padding = 0.0f;
 
             vkCmdPushConstants(cmd, forwardPipeline->getPipelineLayout(),
                 VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(MeshPushConstants), &push);
@@ -609,7 +556,18 @@ void VkCommandManager::recordCommands(
     executeGlassLayer(backgroundBucket);
     executeGlassLayer(foregroundBucket);
 
-    // === PASS 4: UI SWAPCHAIN ===
+    VkImageMemoryBarrier finalLitBarrier{ VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
+    finalLitBarrier.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    finalLitBarrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    finalLitBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    finalLitBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    finalLitBarrier.image = litSceneImage;
+    finalLitBarrier.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+    finalLitBarrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    finalLitBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+        0, 0, nullptr, 0, nullptr, 1, &finalLitBarrier);
 
     // === PASS 4: UI SWAPCHAIN ===
     // This takes the editor UI (which now samples from Pass 1) and draws it to the monitor

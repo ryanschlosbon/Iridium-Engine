@@ -56,10 +56,6 @@ private:
     std::vector<VkFramebuffer> uiFramebuffers;
 
     // --- G-BUFFER RENDER TARGETS ---
-    std::vector<VkImage> gPositionImages;
-    std::vector<VkDeviceMemory> gPositionImageMemories;
-    std::vector<VkImageView> gPositionImageViews;
-
     std::vector<VkImage> gNormalImages;
     std::vector<VkDeviceMemory> gNormalImageMemories;
     std::vector<VkImageView> gNormalImageViews;

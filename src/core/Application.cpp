@@ -204,7 +204,6 @@ void Application::initVulkan() {
     vkFramebuffer = new VkFramebufferWrapper(
         vkContext,
         vkRenderPass,
-        gPositionImageViews,
         gNormalImageViews,
         gAlbedoImageViews,
         depthImageViews,
@@ -508,7 +507,7 @@ void Application::createDepthResources() {
     for (size_t i = 0; i < imageCount; i++) {
         vkContext->createImage(
             vkSwapchain->getExtent().width, vkSwapchain->getExtent().height, depthFormat,
-            VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+            VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
             depthImages[i], depthImageMemories[i]
         );
@@ -826,11 +825,6 @@ void Application::recreateSwapchain() {
     vkDestroySampler(vkContext->getDevice(), gBufferSampler, nullptr);
 
     for (size_t i = 0; i < gAlbedoImages.size(); i++) {
-        // Position
-        vkDestroyImageView(vkContext->getDevice(), gPositionImageViews[i], nullptr);
-        vkDestroyImage(vkContext->getDevice(), gPositionImages[i], nullptr);
-        vkFreeMemory(vkContext->getDevice(), gPositionImageMemories[i], nullptr);
-
         // Normal
         vkDestroyImageView(vkContext->getDevice(), gNormalImageViews[i], nullptr);
         vkDestroyImage(vkContext->getDevice(), gNormalImages[i], nullptr);
@@ -920,7 +914,6 @@ void Application::recreateSwapchain() {
     vkFramebuffer = new VkFramebufferWrapper(
         vkContext,
         vkRenderPass,
-        gPositionImageViews,
         gNormalImageViews,
         gAlbedoImageViews,
         depthImageViews,
@@ -938,7 +931,6 @@ void Application::createOffscreenRenderTarget() {
     VkExtent2D extent = vkSwapchain->getExtent();
 
     // Resize all vectors
-    gPositionImages.resize(imageCount); gPositionImageMemories.resize(imageCount); gPositionImageViews.resize(imageCount);
     gNormalImages.resize(imageCount);   gNormalImageMemories.resize(imageCount);   gNormalImageViews.resize(imageCount);
     gAlbedoImages.resize(imageCount);   gAlbedoImageMemories.resize(imageCount);   gAlbedoImageViews.resize(imageCount);
 
@@ -947,35 +939,34 @@ void Application::createOffscreenRenderTarget() {
     litSceneImageViews.resize(imageCount);
 
     VkFormat floatFormat = VK_FORMAT_R16G16B16A16_SFLOAT; // High precision for Pos/Norm
-    VkFormat albedoFormat = VK_FORMAT_R8G8B8A8_UNORM;     // Standard color for Albedo
+    VkFormat albedoFormat = VK_FORMAT_R16G16B16A16_SFLOAT;     // Standard color for Albedo
 
     for (size_t i = 0; i < imageCount; i++) {
-        // 1. POSITION
-        vkContext->createImage(extent.width, extent.height, floatFormat, VK_IMAGE_TILING_OPTIMAL,
-            VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-            gPositionImages[i], gPositionImageMemories[i]);
-
-        VkImageViewCreateInfo posViewInfo{ VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
-        posViewInfo.image = gPositionImages[i]; posViewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D; posViewInfo.format = floatFormat;
-        posViewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT; posViewInfo.subresourceRange.levelCount = 1; posViewInfo.subresourceRange.layerCount = 1;
-        vkCreateImageView(vkContext->getDevice(), &posViewInfo, nullptr, &gPositionImageViews[i]);
-
         // 2. NORMAL
-        vkContext->createImage(extent.width, extent.height, floatFormat, VK_IMAGE_TILING_OPTIMAL,
+        vkContext->createImage(extent.width, extent.height, VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_TILING_OPTIMAL,
             VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
             gNormalImages[i], gNormalImageMemories[i]);
 
-        VkImageViewCreateInfo normViewInfo = posViewInfo;
-        normViewInfo.image = gNormalImages[i]; normViewInfo.format = floatFormat;
+        // Explicitly initialize the struct from scratch
+        VkImageViewCreateInfo normViewInfo{ VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
+        normViewInfo.image = gNormalImages[i];
+        normViewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        normViewInfo.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+        normViewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        normViewInfo.subresourceRange.baseMipLevel = 0;
+        normViewInfo.subresourceRange.levelCount = 1;
+        normViewInfo.subresourceRange.baseArrayLayer = 0;
+        normViewInfo.subresourceRange.layerCount = 1;
         vkCreateImageView(vkContext->getDevice(), &normViewInfo, nullptr, &gNormalImageViews[i]);
 
         // 3. ALBEDO
-        vkContext->createImage(extent.width, extent.height, albedoFormat, VK_IMAGE_TILING_OPTIMAL,
+        vkContext->createImage(extent.width, extent.height, VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_TILING_OPTIMAL,
             VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
             gAlbedoImages[i], gAlbedoImageMemories[i]);
 
-        VkImageViewCreateInfo albedoViewInfo = posViewInfo;
-        albedoViewInfo.image = gAlbedoImages[i]; albedoViewInfo.format = albedoFormat;
+        VkImageViewCreateInfo albedoViewInfo = normViewInfo;
+        albedoViewInfo.image = gAlbedoImages[i]; 
+        albedoViewInfo.format = albedoFormat;
         vkCreateImageView(vkContext->getDevice(), &albedoViewInfo, nullptr, &gAlbedoImageViews[i]);
 
         // 4. THE FINAL LIT SCENE
@@ -984,7 +975,7 @@ void Application::createOffscreenRenderTarget() {
             | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
             litSceneImages[i], litSceneImageMemories[i]);
 
-        VkImageViewCreateInfo litViewInfo = posViewInfo;
+        VkImageViewCreateInfo litViewInfo = normViewInfo;
         litViewInfo.image = litSceneImages[i];
         litViewInfo.format = vkSwapchain->getImageFormat();
         vkCreateImageView(vkContext->getDevice(), &litViewInfo, nullptr, &litSceneImageViews[i]);
@@ -1068,7 +1059,7 @@ void Application::createLightingDescriptorSets() {
         // Allocate the set using the layout from your new pipeline
         lightingDescriptorSets[i] = descriptorAllocator.allocate(vkLightingPipeline->getDescriptorSetLayout());
 
-        VkDescriptorImageInfo posInfo{ gBufferSampler, gPositionImageViews[i], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+        VkDescriptorImageInfo depthInfo{ gBufferSampler, depthImageViews[i], VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL };
         VkDescriptorImageInfo normInfo{ gBufferSampler, gNormalImageViews[i], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
         VkDescriptorImageInfo albedoInfo{ gBufferSampler, gAlbedoImageViews[i], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
         VkDescriptorImageInfo hdriInfo{ hdriMap.sampler, hdriMap.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
@@ -1076,14 +1067,13 @@ void Application::createLightingDescriptorSets() {
         VkDescriptorImageInfo glassDepthInfo{ gBufferSampler, glassDepthViews[i], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL }; 
         std::array<VkWriteDescriptorSet, 6> descriptorWrites{};
 
-        // Binding 0: Position
         descriptorWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         descriptorWrites[0].dstSet = lightingDescriptorSets[i];
         descriptorWrites[0].dstBinding = 0;
         descriptorWrites[0].dstArrayElement = 0;
         descriptorWrites[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         descriptorWrites[0].descriptorCount = 1;
-        descriptorWrites[0].pImageInfo = &posInfo;
+        descriptorWrites[0].pImageInfo = &depthInfo;
 
         // Binding 1: Normal
         descriptorWrites[1] = descriptorWrites[0]; // Copy base struct
@@ -1189,11 +1179,6 @@ void Application::cleanup() {
     }
 
     for (size_t i = 0; i < gAlbedoImages.size(); i++) {
-        // Position
-        vkDestroyImageView(vkContext->getDevice(), gPositionImageViews[i], nullptr);
-        vkDestroyImage(vkContext->getDevice(), gPositionImages[i], nullptr);
-        vkFreeMemory(vkContext->getDevice(), gPositionImageMemories[i], nullptr);
-
         // Normal
         vkDestroyImageView(vkContext->getDevice(), gNormalImageViews[i], nullptr);
         vkDestroyImage(vkContext->getDevice(), gNormalImages[i], nullptr);

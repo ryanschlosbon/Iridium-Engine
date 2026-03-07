@@ -202,9 +202,9 @@ VkPipeline VkGraphicsPipeline::createPipeline(VkSwapchain* swapchain, VkRenderPa
     colorBlendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
     colorBlendAttachment.blendEnable = VK_FALSE;
 
-    // 3 color targets (Pos, Norm, Albedo), so we need 3 blend states
-    std::array<VkPipelineColorBlendAttachmentState, 3> blendAttachments = {
-        colorBlendAttachment, colorBlendAttachment, colorBlendAttachment
+    // 2 color targets (Norm, Albedo), so we need 2 blend states
+    std::array<VkPipelineColorBlendAttachmentState, 2> blendAttachments = {
+        colorBlendAttachment, colorBlendAttachment
     };
 
     VkPipelineColorBlendStateCreateInfo colorBlending{ VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO };

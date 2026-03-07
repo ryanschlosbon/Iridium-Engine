@@ -3,7 +3,6 @@
 #include <array>
 
 VkFramebufferWrapper::VkFramebufferWrapper(VkContext* context, VkRenderPassWrapper* renderPass,
-    const std::vector<VkImageView>& positionImageViews,
     const std::vector<VkImageView>& normalImageViews,
     const std::vector<VkImageView>& albedoImageViews,
     const std::vector<VkImageView>& depthImageViews,
@@ -13,8 +12,7 @@ VkFramebufferWrapper::VkFramebufferWrapper(VkContext* context, VkRenderPassWrapp
 
     for (size_t i = 0; i < albedoImageViews.size(); i++) {
         // MUST MATCH THE ORDER IN VKRENDERPASS EXACLTY (Pos, Norm, Albedo, Depth)
-        std::array<VkImageView, 4> attachments = {
-            positionImageViews[i],
+        std::array<VkImageView, 3> attachments = {
             normalImageViews[i],
             albedoImageViews[i],
             depthImageViews[i]
