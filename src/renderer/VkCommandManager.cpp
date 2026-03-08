@@ -1,5 +1,6 @@
 #include "VkCommandManager.h"
 #include "assets/AssetManager.h"
+#include <glm/gtx/norm.hpp>
 #include <stdexcept>
 #include <iostream> // Add this at the top of the file
 
@@ -132,7 +133,10 @@ void VkCommandManager::recordCommands(
     VkForwardPipeline* forwardPipeline,
     const std::vector<VkFramebuffer>& forwardFramebuffers,
     VkImage litSceneImage,
-    VkImage opaqueSceneCopy) {
+    VkImage opaqueSceneCopy,
+    VkRenderPass glassDepthRenderPass,
+    VkFramebuffer glassDepthFramebuffer,
+    Iridium::GlassDepthPipeline* glassDepthPipeline) {
 
     VkCommandBuffer cmd = commandBuffers[currentFrame];
     VkCommandBufferBeginInfo beginInfo{ VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
@@ -148,20 +152,17 @@ void VkCommandManager::recordCommands(
     rpInfo.framebuffer = offscreenFramebuffer->getFramebuffer(imageIndex); //
     rpInfo.renderArea.extent = extent;
 
-    // Update this array to have 4 elements instead of 2!
-    std::array<VkClearValue, 4> clearValues{};
-
-    // Background color for Position (Black)
-    clearValues[0].color = { {0.0f, 0.0f, 0.0f, 1.0f} };
+    // Update this array to have 3 elements
+    std::array<VkClearValue, 3> clearValues{};
 
     // Background color for Normals (Black)
-    clearValues[1].color = { {0.0f, 0.0f, 0.0f, 1.0f} };
+    clearValues[0].color = { {0.0f, 0.0f, 0.0f, 1.0f} };
 
     // Background color for Albedo (This is the actual "sky" color of your viewport)
-    clearValues[2].color = { {0.1f, 0.1f, 0.1f, 1.0f} };
+    clearValues[1].color = { {0.1f, 0.1f, 0.1f, 1.0f} };
 
     // Depth clear value
-    clearValues[3].depthStencil = { 1.0f, 0 };
+    clearValues[2].depthStencil = { 1.0f, 0 };
 
     rpInfo.clearValueCount = static_cast<uint32_t>(clearValues.size());
     rpInfo.pClearValues = clearValues.data();
@@ -217,6 +218,8 @@ void VkCommandManager::recordCommands(
                 push.baseColor = mat.baseColor;
                 push.metallicFactor = mat.metallicFactor;
                 push.roughnessFactor = mat.roughnessFactor;
+                push.emissiveFactor = mat.emissiveFactor; // <-- Added
+                push.padding = 0.0f;                      // <-- Added
 
                 vkCmdPushConstants(cmd, layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 
                     0, sizeof(MeshPushConstants), &push);
@@ -260,6 +263,7 @@ void VkCommandManager::recordCommands(
                 0, sizeof(MeshPushConstants), &push);
 
             for (const auto& subMesh : meshComp.model->subMeshes) {
+                if (meshComp.model->materials[subMesh.materialIndex].alphaMode == AlphaMode::Blend) continue;
                 vkCmdDrawIndexed(cmd, subMesh.indexCount, 1, subMesh.indexStart, 0, 0);
             }
         }
@@ -302,84 +306,30 @@ void VkCommandManager::recordCommands(
     vkCmdEndRenderPass(cmd); // END OF PASS 2
 
     // =======================================================
-    // === VRAM PHOTOGRAPH: COPY LIT SCENE FOR REFRACTION  ===
+    // === PASS 2.5: GLASS DEPTH PASS                      ===
     // =======================================================
+    VkRenderPassBeginInfo glassDepthPassInfo{ VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
+    glassDepthPassInfo.renderPass = glassDepthRenderPass;
+    glassDepthPassInfo.framebuffer = glassDepthFramebuffer;
+    glassDepthPassInfo.renderArea.extent = extent;
 
-    // 1. Transition Lit Scene to TRANSFER_SRC and Copy to TRANSFER_DST
-    VkImageMemoryBarrier litSrcBarrier{ VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
-    litSrcBarrier.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    litSrcBarrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-    litSrcBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    litSrcBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    litSrcBarrier.image = litSceneImage;
-    litSrcBarrier.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
-    litSrcBarrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-    litSrcBarrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    VkClearValue depthClearValue{};
+    depthClearValue.depthStencil = { 1.0f, 0 };
+    glassDepthPassInfo.clearValueCount = 1;
+    glassDepthPassInfo.pClearValues = &depthClearValue;
 
-    VkImageMemoryBarrier copyDstBarrier = litSrcBarrier;
-    copyDstBarrier.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    copyDstBarrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    copyDstBarrier.image = opaqueSceneCopy;
-    copyDstBarrier.srcAccessMask = 0;
-    copyDstBarrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    vkCmdBeginRenderPass(cmd, &glassDepthPassInfo, VK_SUBPASS_CONTENTS_INLINE);
 
-    VkImageMemoryBarrier copyBarriers[] = { litSrcBarrier, copyDstBarrier };
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-        0, 0, nullptr, 0, nullptr, 2, copyBarriers);
+    // 1. Bind the depth-only pipeline
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, glassDepthPipeline->getPipeline());
 
-    // 2. Perform the blazing-fast VRAM-to-VRAM copy 
-    VkImageCopy imageCopyRegion{};
-    imageCopyRegion.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
-    imageCopyRegion.dstSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
-    imageCopyRegion.extent = { extent.width, extent.height, 1 };
+    // 2. Set Viewport & Scissor (Re-use the ones from Pass 1)
+    vkCmdSetViewport(cmd, 0, 1, &viewport);
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-    vkCmdCopyImage(cmd,
-        litSceneImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-        opaqueSceneCopy, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-        1, &imageCopyRegion);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &globalDescriptorSet, 0, nullptr);
 
-    // 3. Transition Lit Scene BACK to COLOR_ATTACHMENT and Copy to SHADER_READ_ONLY
-    VkImageMemoryBarrier litDstBarrier = litSrcBarrier;
-    litDstBarrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-    litDstBarrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    litDstBarrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-    litDstBarrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-
-    VkImageMemoryBarrier copyReadBarrier = copyDstBarrier;
-    copyReadBarrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    copyReadBarrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    copyReadBarrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-    copyReadBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-
-    VkImageMemoryBarrier endBarriers[] = { litDstBarrier, copyReadBarrier };
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
-        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-        0, 0, nullptr, 0, nullptr, 2, endBarriers);
-
-    // =======================================================
-        // === PASS 3: FORWARD TRANSLUCENCY PASS               ===
-        // =======================================================
-    VkRenderPassBeginInfo forwardPassInfo{};
-    forwardPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-    forwardPassInfo.renderPass = forwardPass->getRenderPass();
-    forwardPassInfo.framebuffer = forwardFramebuffers[imageIndex];
-    forwardPassInfo.renderArea.offset = { 0, 0 };
-    forwardPassInfo.renderArea.extent = extent; // Uses the passed-in extent!
-    forwardPassInfo.clearValueCount = 0;
-    forwardPassInfo.pClearValues = nullptr;
-
-    vkCmdBeginRenderPass(cmd, &forwardPassInfo, VK_SUBPASS_CONTENTS_INLINE);
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, forwardPipeline->getPipeline());
-
-    // SET 0: Bind Global UBO (Camera Data)
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-        forwardPipeline->getPipelineLayout(), 0, 1, &globalDescriptorSet, 0, nullptr);
-
-    // SET 2: Bind Lighting UBO (HDRI Map for Reflections!)
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-        forwardPipeline->getPipelineLayout(), 2, 1, &lightingDescriptorSet, 0, nullptr);
-
-    // Custom ECS Loop for Iridium Engine
+    // 3. ECS RENDER LOOP (Draw ONLY glass meshes into the depth buffer)
     if (meshPool && transformPool) {
         for (uint32_t entity : meshPool->entities) {
             if (transformPool->sparseMap.contains(entity)) {
@@ -388,7 +338,6 @@ void VkCommandManager::recordCommands(
 
                 auto& transformComp = transformPool->get(entity);
 
-                // Bind Vertex/Index buffers
                 VkDeviceSize offset = 0;
                 vkCmdBindVertexBuffers(cmd, 0, 1, &meshComp.model->vertexBuffer, &offset);
                 vkCmdBindIndexBuffer(cmd, meshComp.model->indexBuffer, 0, VK_INDEX_TYPE_UINT32);
@@ -396,26 +345,17 @@ void VkCommandManager::recordCommands(
                 for (const auto& subMesh : meshComp.model->subMeshes) {
                     auto& mat = meshComp.model->materials[subMesh.materialIndex];
 
-                    // THE FILTER: ONLY draw glass!
+                    // THE FILTER: ONLY draw glass into the glass depth buffer!
                     if (mat.alphaMode != AlphaMode::Blend) {
                         continue;
                     }
 
-                    // Push Constants
+                    // Push Constants (We only need the matrix for depth, no color/roughness!)
                     MeshPushConstants push{};
                     push.renderMatrix = transformComp.worldMatrix;
-                    push.baseColor = mat.baseColor;
-                    push.metallicFactor = mat.metallicFactor;
-                    push.roughnessFactor = mat.roughnessFactor;
 
-                    vkCmdPushConstants(cmd, forwardPipeline->getPipelineLayout(),
+                    vkCmdPushConstants(cmd, layout,
                         VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(MeshPushConstants), &push);
-
-                    // SET 1: Bind Material Descriptors
-                    if (!mat.descriptorSets.empty()) {
-                        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                            forwardPipeline->getPipelineLayout(), 1, 1, &mat.descriptorSets[currentFrame], 0, nullptr);
-                    }
 
                     vkCmdDrawIndexed(cmd, subMesh.indexCount, 1, subMesh.indexStart, 0, 0);
                 }
@@ -423,7 +363,215 @@ void VkCommandManager::recordCommands(
         }
     }
 
-    vkCmdEndRenderPass(cmd); // END OF PASS 3
+    vkCmdEndRenderPass(cmd); // END OF PASS 2.5
+
+    // =======================================================
+    // === THE AAA TWO-PASS TRANSLUCENCY ARCHITECTURE      ===
+    // =======================================================
+
+    // 1. GATHER AND SORT ALL GLASS *SUBMESHES* INDIVIDUALLY
+    struct TransparentDraw {
+        uint32_t entity;
+        uint32_t subMeshIndex; // <--- NEW: Track the specific piece of glass!
+        float distance;
+    };
+    std::vector<TransparentDraw> sortedGlass;
+
+    if (meshPool && transformPool) {
+        for (uint32_t entity : meshPool->entities) {
+            if (transformPool->sparseMap.contains(entity)) {
+                auto& meshComp = meshPool->get(entity);
+                if (!meshComp.enabled || !meshComp.model) continue;
+
+                auto& transformComp = transformPool->get(entity);
+                float distSq = glm::length2(cameraPos - transformComp.position);
+
+                // Rip the entity apart and bucketize every glass piece separately
+                for (uint32_t i = 0; i < meshComp.model->subMeshes.size(); i++) {
+                    auto& mat = meshComp.model->materials[meshComp.model->subMeshes[i].materialIndex];
+                    if (mat.alphaMode == AlphaMode::Blend) {
+                        sortedGlass.push_back({ entity, i, distSq });
+                    }
+                }
+            }
+        }
+    }
+
+    // Sort from furthest to closest (Back-to-Front)
+    std::sort(sortedGlass.begin(), sortedGlass.end(),
+        [](const TransparentDraw& a, const TransparentDraw& b) {
+            // If distances are identical, fallback to submesh index to prevent Z-fighting flickering
+            if (abs(a.distance - b.distance) < 0.001f) return a.subMeshIndex > b.subMeshIndex;
+            return a.distance > b.distance;
+        });
+
+    // 2. BUCKETIZE INTO BACKGROUND & FOREGROUND
+    std::vector<TransparentDraw> backgroundBucket;
+    std::vector<TransparentDraw> foregroundBucket;
+
+    if (!sortedGlass.empty()) {
+        foregroundBucket.push_back(sortedGlass.back()); // The absolute closest piece of glass
+        for (size_t i = 0; i < sortedGlass.size() - 1; i++) {
+            backgroundBucket.push_back(sortedGlass[i]); // Everything else
+        }
+    }
+
+    // 3. THE REUSABLE RENDER LAMBDA
+    auto executeGlassLayer = [&](const std::vector<TransparentDraw>& glassBucket) {
+        if (glassBucket.empty()) return;
+
+        // --- A. VRAM PHOTOGRAPH: COPY LIT SCENE ---
+        // lighting pass (or previous glass pass) just finished drawing to it!
+        VkImageMemoryBarrier litSrcBarrier{ VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
+        litSrcBarrier.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL; 
+        litSrcBarrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        litSrcBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        litSrcBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        litSrcBarrier.image = litSceneImage;
+        litSrcBarrier.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+        litSrcBarrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        litSrcBarrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+
+        VkImageMemoryBarrier copyDstBarrier = litSrcBarrier;
+        copyDstBarrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        copyDstBarrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        copyDstBarrier.image = opaqueSceneCopy;
+        copyDstBarrier.srcAccessMask = 0;
+        copyDstBarrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+
+        VkImageMemoryBarrier copyBarriers[] = { litSrcBarrier, copyDstBarrier };
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+            0, 0, nullptr, 0, nullptr, 2, copyBarriers);
+
+        VkImageCopy imageCopyRegion{};
+        imageCopyRegion.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+        imageCopyRegion.dstSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+        imageCopyRegion.extent = { extent.width, extent.height, 1 };
+
+        vkCmdCopyImage(cmd,
+            litSceneImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+            opaqueSceneCopy, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            1, &imageCopyRegion);
+
+        VkImageMemoryBarrier litDstBarrier = litSrcBarrier;
+        litDstBarrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        litDstBarrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        litDstBarrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        litDstBarrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+
+        VkImageMemoryBarrier copyReadBarrier = copyDstBarrier;
+        copyReadBarrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        copyReadBarrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        copyReadBarrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        copyReadBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+        VkImageMemoryBarrier endBarriers[] = { litDstBarrier, copyReadBarrier };
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+            0, 0, nullptr, 0, nullptr, 2, endBarriers);
+
+        // --- B. GLASS DEPTH PASS ---
+        VkRenderPassBeginInfo glassDepthPassInfo{ VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
+        glassDepthPassInfo.renderPass = glassDepthRenderPass;
+        glassDepthPassInfo.framebuffer = glassDepthFramebuffer;
+        glassDepthPassInfo.renderArea.extent = extent;
+
+        VkClearValue depthClearValue{};
+        depthClearValue.depthStencil = { 1.0f, 0 };
+        glassDepthPassInfo.clearValueCount = 1;
+        glassDepthPassInfo.pClearValues = &depthClearValue;
+
+        vkCmdBeginRenderPass(cmd, &glassDepthPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, glassDepthPipeline->getPipeline());
+        vkCmdSetViewport(cmd, 0, 1, &viewport);
+        vkCmdSetScissor(cmd, 0, 1, &scissor);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &globalDescriptorSet, 0, nullptr);
+
+        for (const auto& drawItem : glassBucket) {
+            auto& meshComp = meshPool->get(drawItem.entity);
+            auto& transformComp = transformPool->get(drawItem.entity);
+
+            VkDeviceSize offset = 0;
+            vkCmdBindVertexBuffers(cmd, 0, 1, &meshComp.model->vertexBuffer, &offset);
+            vkCmdBindIndexBuffer(cmd, meshComp.model->indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+
+            // FIX: ONLY draw the specific submesh for this bucket!
+            const auto& subMesh = meshComp.model->subMeshes[drawItem.subMeshIndex];
+
+            MeshPushConstants push{};
+            push.renderMatrix = transformComp.worldMatrix;
+            vkCmdPushConstants(cmd, layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(MeshPushConstants), &push);
+            vkCmdDrawIndexed(cmd, subMesh.indexCount, 1, subMesh.indexStart, 0, 0);
+        }
+        vkCmdEndRenderPass(cmd);
+
+        // --- C. FORWARD TRANSLUCENCY PASS ---
+        VkRenderPassBeginInfo forwardPassInfo{};
+        forwardPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+        forwardPassInfo.renderPass = forwardPass->getRenderPass();
+        forwardPassInfo.framebuffer = forwardFramebuffers[imageIndex];
+        forwardPassInfo.renderArea.offset = { 0, 0 };
+        forwardPassInfo.renderArea.extent = extent;
+        forwardPassInfo.clearValueCount = 0;
+        forwardPassInfo.pClearValues = nullptr;
+
+        vkCmdBeginRenderPass(cmd, &forwardPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, forwardPipeline->getPipeline());
+
+        vkCmdSetViewport(cmd, 0, 1, &viewport);
+        vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, forwardPipeline->getPipelineLayout(), 0, 1, &globalDescriptorSet, 0, nullptr);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, forwardPipeline->getPipelineLayout(), 2, 1, &lightingDescriptorSet, 0, nullptr);
+
+        for (const auto& drawItem : glassBucket) {
+            auto& meshComp = meshPool->get(drawItem.entity);
+            auto& transformComp = transformPool->get(drawItem.entity);
+
+            VkDeviceSize offset = 0;
+            vkCmdBindVertexBuffers(cmd, 0, 1, &meshComp.model->vertexBuffer, &offset);
+            vkCmdBindIndexBuffer(cmd, meshComp.model->indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+
+            // FIX: ONLY draw the specific submesh for this bucket!
+            const auto& subMesh = meshComp.model->subMeshes[drawItem.subMeshIndex];
+            auto& mat = meshComp.model->materials[subMesh.materialIndex];
+
+            MeshPushConstants push{};
+            push.renderMatrix = transformComp.worldMatrix;
+            push.baseColor = mat.baseColor;
+            push.metallicFactor = mat.metallicFactor;
+            push.roughnessFactor = mat.roughnessFactor;
+            push.emissiveFactor = mat.emissiveFactor;
+            push.padding = 0.0f;
+
+            vkCmdPushConstants(cmd, forwardPipeline->getPipelineLayout(),
+                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(MeshPushConstants), &push);
+
+            if (!mat.descriptorSets.empty()) {
+                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                    forwardPipeline->getPipelineLayout(), 1, 1, &mat.descriptorSets[currentFrame], 0, nullptr);
+            }
+            vkCmdDrawIndexed(cmd, subMesh.indexCount, 1, subMesh.indexStart, 0, 0);
+        }
+        vkCmdEndRenderPass(cmd);
+        };
+
+    // 4. EXECUTE THE PASSES
+    executeGlassLayer(backgroundBucket);
+    executeGlassLayer(foregroundBucket);
+
+    VkImageMemoryBarrier finalLitBarrier{ VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
+    finalLitBarrier.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    finalLitBarrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    finalLitBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    finalLitBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    finalLitBarrier.image = litSceneImage;
+    finalLitBarrier.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+    finalLitBarrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    finalLitBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+        0, 0, nullptr, 0, nullptr, 1, &finalLitBarrier);
 
     // === PASS 4: UI SWAPCHAIN ===
     // This takes the editor UI (which now samples from Pass 1) and draws it to the monitor

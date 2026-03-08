@@ -227,7 +227,9 @@ std::shared_ptr<ModelAsset> AssetManager::getModel(const std::string& path) {
 
 // ADDED AssetManager:: scope here
 std::shared_ptr<ModelAsset> AssetManager::loadModelFromFile(const std::string& path) {
-    fastgltf::Parser parser;
+    constexpr auto extensions = fastgltf::Extensions::KHR_materials_emissive_strength;
+    fastgltf::Parser parser(extensions);
+    
     auto data = fastgltf::GltfDataBuffer::FromPath(path);
     if (data.error() != fastgltf::Error::None) {
         throw std::runtime_error("Failed to load glTF file: " + path);
@@ -298,7 +300,17 @@ std::shared_ptr<ModelAsset> AssetManager::loadModelFromFile(const std::string& p
         iridiumMat.baseColor = glm::vec4(factor[0], factor[1], factor[2], factor[3]);
         iridiumMat.metallicFactor = mat.pbrData.metallicFactor;
         iridiumMat.roughnessFactor = mat.pbrData.roughnessFactor;
-
+        float maxEmissiveColor = std::max({ mat.emissiveFactor[0], mat.emissiveFactor[1], mat.emissiveFactor[2] });
+        iridiumMat.emissiveFactor = mat.emissiveStrength * maxEmissiveColor;
+        
+        // 3. THE FIX: If the material glows, inject the emissive color into the Base Color!
+        // This ensures our packed G-Buffer shader has actual color to multiply, preventing the "black hole" bug.
+        if (iridiumMat.emissiveFactor > 0.0f) {
+            iridiumMat.baseColor.r = std::max(iridiumMat.baseColor.r, mat.emissiveFactor[0]);
+            iridiumMat.baseColor.g = std::max(iridiumMat.baseColor.g, mat.emissiveFactor[1]);
+            iridiumMat.baseColor.b = std::max(iridiumMat.baseColor.b, mat.emissiveFactor[2]);
+        }
+        
         // Albedo
         if (mat.pbrData.baseColorTexture.has_value()) {
             size_t texIndex = mat.pbrData.baseColorTexture.value().textureIndex;

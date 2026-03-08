@@ -3,9 +3,10 @@
 layout(location = 0) in vec2 fragTexCoord;
 layout(location = 0) out vec4 outColor;
 
-layout(set = 0, binding = 0) uniform sampler2D gPosition;
-layout(set = 0, binding = 1) uniform sampler2D gNormal;
-layout(set = 0, binding = 2) uniform sampler2D gAlbedo;
+// THE NEW OPTIMIZED BINDINGS (96 bits total!)
+layout(set = 0, binding = 0) uniform sampler2D gDepth; 
+layout(set = 0, binding = 1) uniform sampler2D gNormalRoughMetal;
+layout(set = 0, binding = 2) uniform sampler2D gAlbedoEmissive;
 layout(set = 0, binding = 3) uniform sampler2D hdriMap;
 
 layout(push_constant) uniform PushConstants {
@@ -16,6 +17,7 @@ layout(push_constant) uniform PushConstants {
 
 const float PI = 3.14159265359;
 
+// --- PBR UTILITY FUNCTIONS ---
 float DistributionGGX(vec3 N, vec3 H, float roughness) {
     float a = roughness * roughness;
     float a2 = a * a;
@@ -53,28 +55,59 @@ vec2 SampleSphericalMap(vec3 v) {
 }
 
 vec3 ACESFilm(vec3 x) {
-    float a = 2.51f; float b = 0.03f; float c = 2.43f; float d = 0.59f; float e = 0.14f;
+    float a = 2.51f; float b = 0.03f; float c = 2.43f; 
+    float d = 0.59f; float e = 0.14f;
     return clamp((x*(a*x+b))/(x*(c*x+d)+e), 0.0, 1.0);
 }
 
+// ==========================================================
+// MAGIC TRICK 1: WORLD POSITION RECONSTRUCTION
+// ==========================================================
+vec3 ReconstructWorldPos(vec2 uv, float depth) {
+    vec4 clipSpace = vec4(uv * 2.0 - 1.0, depth, 1.0);
+    vec4 viewSpace = push.invProj * clipSpace;
+    viewSpace /= viewSpace.w; 
+    vec4 worldSpace = push.invView * viewSpace;
+    return worldSpace.xyz;
+}
+
 void main() {
-    vec4 albedoSample = texture(gAlbedo, fragTexCoord);
-    vec4 normalSample = texture(gNormal, fragTexCoord);
-    vec4 positionSample = texture(gPosition, fragTexCoord);
+    // 1. READ THE RAW VRAM DATA
+    float rawDepth = texture(gDepth, fragTexCoord).r;
+    vec4 nrmSample = texture(gNormalRoughMetal, fragTexCoord);
+    vec4 aeSample  = texture(gAlbedoEmissive, fragTexCoord);
 
-    // CRITICAL: Linearize the Albedo NOW, after it safely left the 8-bit G-Buffer!
-    vec3 Albedo = pow(albedoSample.rgb, vec3(2.2));
+    // 2. UNPACK & RECONSTRUCT EVERYTHING
+    vec3 fragPos = ReconstructWorldPos(fragTexCoord, rawDepth);
     
-    vec3 N = normalSample.rgb;
-    vec3 fragPos = positionSample.xyz;
+    // ==========================================================
+    // MAGIC TRICK 2: OCTAHEDRAL Z-NORMAL DECODING
+    // ==========================================================
+    // FIX: No more UNORM decoding! We just read the flawless float data directly.
+    vec2 f = nrmSample.xy; 
+    
+    vec3 n = vec3(f.x, f.y, 1.0 - abs(f.x) - abs(f.y));
+    float t = clamp(-n.z, 0.0, 1.0);
+    n.x += n.x >= 0.0 ? -t : t;
+    n.y += n.y >= 0.0 ? -t : t;
+    vec3 N = normalize(n);
+    
+    // Extract the rest of the material properties
+    float Roughness = nrmSample.b;
+    float Metallic  = nrmSample.a;
+    vec3 Albedo = pow(aeSample.rgb, vec3(2.2));
 
-    float Metallic  = albedoSample.a;
-    float Roughness = normalSample.a;
-    
+   // ==========================================================
+    // MAGIC TRICK 3: EMISSIVE GLOW
+    // ==========================================================
+    // No fluff needed! Because your G-Buffer is SFLOAT, aeSample.a holds the true 1000.0 HDR value!
+    float emissiveIntensity = aeSample.a;
+    vec3 Emissive = Albedo * emissiveIntensity; 
+
+    // 3. SKYBOX / BACKGROUND CHECK
     vec3 V = normalize(push.viewPos - fragPos);
 
-    // Skybox render check
-    if (length(N) < 0.1) {
+    if (rawDepth == 1.0) { // If depth is 1.0, we are looking at the sky!
         vec2 ndc = fragTexCoord * 2.0 - 1.0;
         vec4 eye = push.invProj * vec4(ndc, 1.0, 1.0);
         vec3 viewDir = normalize((push.invView * vec4(eye.xy, -1.0, 0.0)).xyz);
@@ -84,31 +117,38 @@ void main() {
         return;
     }
 
-    N = normalize(N);
+    // 4. PBR LIGHTING EQUATION
     vec3 F0 = mix(vec3(0.04), Albedo, Metallic);
 
-    vec3 R = reflect(-V, N); 
+    vec3 R = reflect(-V, N);
     vec3 reflectionColor = texture(hdriMap, SampleSphericalMap(R)).rgb;
+    reflectionColor *= (1.0 - Roughness);
 
-    // Fake Directional Light
-    vec3 L = normalize(vec3(1.0, 1.0, 1.0)); 
+    // Fake Directional Light (Sun)
+    vec3 L = normalize(vec3(1.0, 1.0, 1.0));
     vec3 H = normalize(V + L);
     vec3 radiance = vec3(3.0, 3.0, 3.0); 
 
-    float NDF = DistributionGGX(N, H, Roughness);   
+    float NDF = DistributionGGX(N, H, Roughness);
     float G   = GeometrySmith(N, V, L, Roughness);      
-    vec3 F    = FresnelSchlick(max(dot(H, V), 0.0), F0);       
-    
+    vec3 F    = FresnelSchlick(max(dot(H, V), 0.0), F0);
     vec3 specular = (NDF * G * F) / (4.0 * max(dot(N, V), 0.0) * max(dot(N, L), 0.0) + 0.0001);
-    vec3 kD = (vec3(1.0) - F) * (1.0 - Metallic); 
-    
+    vec3 kD = (vec3(1.0) - F) * (1.0 - Metallic);
     vec3 Lo = (kD * Albedo / PI + specular) * radiance * max(dot(N, L), 0.0);
-
-    // AMBIENT IBL (Heavily Boosted so dark objects are visible)
+    
+    // Ambient IBL
     vec3 kS_IBL = FresnelSchlick(max(dot(N, V), 0.0), F0);
-    vec3 kD_IBL = (1.0 - kS_IBL) * (1.0 - Metallic); 
-
+    vec3 kD_IBL = (1.0 - kS_IBL) * (1.0 - Metallic);
     vec3 ambient = (kD_IBL * (Albedo * 1.5)) + (reflectionColor * kS_IBL);
 
-    outColor = vec4(pow(ACESFilm(ambient + Lo), vec3(1.0/2.2)), 1.0);
+    // Combine Lighting + Emissive Glow!
+    vec3 finalLitColor = ambient + Lo + Emissive;
+
+    // --- NEW: CAMERA EXPOSURE ---
+    // Multiply all incoming light by a small decimal to "stop down" the camera lens.
+    // This stops the tonemapper from crushing the HDR values, revealing the true emissive steps!
+    // float exposure = 0.05; 
+    // finalLitColor *= exposure;
+
+    outColor = vec4(pow(ACESFilm(finalLitColor), vec3(1.0/2.2)), 1.0);
 }

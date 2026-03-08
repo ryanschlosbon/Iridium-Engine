@@ -22,7 +22,7 @@ public:
     void cleanup(VkDevice device);
 
     void update(Registry& registry, AssetManager* assetManager,
-        const glm::mat4& view, const glm::mat4& proj, VkDescriptorSet sceneTexture);
+        const glm::mat4& view, const glm::mat4& proj, VkDescriptorSet sceneTexture, VkDescriptorSet glassDepthTexture);
 
     void render(VkCommandBuffer cmd);
 

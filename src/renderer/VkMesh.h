@@ -79,7 +79,8 @@ struct MeshPushConstants {
 	glm::vec4 baseColor;
 	float metallicFactor;
 	float roughnessFactor;
-	glm::vec2 padding;      // Keeps Vulkan memory alignment happy
+	float emissiveFactor;
+	float padding;
 };
 
 struct UniformBufferObject {
@@ -105,6 +106,7 @@ struct Material {
 	glm::vec4 baseColor = glm::vec4(1.0f, 1.0f, 1.0f, 1.0f); // MUST default to white!
 	float metallicFactor = 1.0f;                             // glTF spec default
 	float roughnessFactor = 1.0f;                            // glTF spec default
+	float emissiveFactor = 0.0f;
 	int albedoTextureIndex = -1;  // Renamed from textureIndex
 	int normalTextureIndex = -1;  
 	int metallicRoughnessTextureIndex = -1; 

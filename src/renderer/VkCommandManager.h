@@ -11,6 +11,7 @@
 #include "VkUIRenderPass.h"
 #include "renderer/VkForwardRenderPass.h" 
 #include "renderer/VkForwardPipeline.h"
+#include "renderer/GlassDepthPipeline.h"
 
 class VkForwardRenderPass;
 class VkForwardPipeline;
@@ -55,7 +56,10 @@ public:
 		VkForwardPipeline* forwardPipeline,
 		const std::vector<VkFramebuffer>& forwardFramebuffers,
 		VkImage litSceneImage,
-		VkImage opaqueSceneCopy);
+		VkImage opaqueSceneCopy,
+		VkRenderPass glassDepthRenderPass,
+		VkFramebuffer glassDepthFramebuffer, 
+		Iridium::GlassDepthPipeline* glassDepthPipeline);
 
 	void transitionImageLayout(VkImage image, VkFormat format, VkImageLayout oldLayout, VkImageLayout newLayout);
 	void copyBufferToImage(VkBuffer buffer, VkImage image, uint32_t width, uint32_t height);

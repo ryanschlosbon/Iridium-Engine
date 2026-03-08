@@ -25,6 +25,8 @@
 #include "renderer/VkLightingPipeline.h"
 #include "renderer/VkForwardRenderPass.h"
 #include "renderer/VkForwardPipeline.h"
+#include "renderer/GlassDepthRenderPass.h"
+#include "renderer/GlassDepthPipeline.h"
 
 class Application {
 public:
@@ -54,10 +56,6 @@ private:
     std::vector<VkFramebuffer> uiFramebuffers;
 
     // --- G-BUFFER RENDER TARGETS ---
-    std::vector<VkImage> gPositionImages;
-    std::vector<VkDeviceMemory> gPositionImageMemories;
-    std::vector<VkImageView> gPositionImageViews;
-
     std::vector<VkImage> gNormalImages;
     std::vector<VkDeviceMemory> gNormalImageMemories;
     std::vector<VkImageView> gNormalImageViews;
@@ -94,13 +92,18 @@ private:
     std::vector<VkDeviceMemory> glassDepthMemories;
     std::vector<VkImageView> glassDepthViews;
 
+    Iridium::GlassDepthRenderPass* glassDepthRenderPass = nullptr;
+    Iridium::GlassDepthPipeline* glassDepthPipeline = nullptr;
+    std::vector<VkFramebuffer> glassDepthFramebuffers;
+
     // Forward Pipeline for Glass
     VkForwardRenderPass* vkForwardRenderPass = nullptr;
     VkForwardPipeline* vkForwardPipeline = nullptr;
     std::vector<VkFramebuffer> forwardFramebuffers;
 
-    // The special ImGui pointer that lets the UI draw our Vulkan texture
+    // The special ImGui pointers that lets the UI draw our Vulkan texture
     std::vector<VkDescriptorSet> sceneDescriptorSets;
+    std::vector<VkDescriptorSet> glassDepthUITextures;
 
     std::vector<Texture> modelTextures;
     std::vector<int> materialToTextureMap;
@@ -109,7 +112,7 @@ private:
 
     EditorSystem editor;
     std::vector<VkDescriptorSet> globalDescriptorSets;
-    bool enableValidation = false;
+    bool enableValidation = true;
     TransformSystem transformSystem;
     Registry registry;
     DeletionQueue frameDeletionQueues[VkSyncObjects::MAX_FRAMES_IN_FLIGHT];

@@ -6,7 +6,6 @@ layout(location = 2) in vec3 fragNormal;
 layout(location = 3) in vec3 fragWorldPos;
 layout(location = 4) in vec4 fragTangent;
 
-// 1. THE FIX: Removed cameraPos to prevent memory misalignment!
 layout(set = 0, binding = 0) uniform GlobalUBO {
     mat4 model;
     mat4 view;
@@ -16,8 +15,13 @@ layout(set = 0, binding = 0) uniform GlobalUBO {
 layout(set = 1, binding = 0) uniform sampler2D albedoMap;
 layout(set = 1, binding = 1) uniform sampler2D normalMap;
 layout(set = 1, binding = 2) uniform sampler2D metallicRoughnessMap;
+
+layout(set = 2, binding = 0) uniform sampler2D opaquePositionMap; 
+layout(set = 2, binding = 1) uniform sampler2D opaqueNormalMap;
+layout(set = 2, binding = 2) uniform sampler2D opaqueAlbedoMap;
 layout(set = 2, binding = 3) uniform sampler2D hdriMap;
 layout(set = 2, binding = 4) uniform sampler2D opaqueSceneCopyMap;
+layout(set = 2, binding = 5) uniform sampler2D glassDepthMap;
 
 layout(location = 0) out vec4 outColor;
 
@@ -29,6 +33,7 @@ layout(push_constant) uniform PushConstants {
     vec2 padding;
 } push;
 
+// --- UTILITY FUNCTIONS ---
 vec2 SampleSphericalMap(vec3 v) {
     vec2 invAtan = vec2(0.1591, 0.3183);
     vec2 uv = vec2(atan(v.z, v.x), asin(v.y));
@@ -42,54 +47,121 @@ vec3 FresnelSchlick(float cosTheta, vec3 F0) {
 }
 
 vec3 ACESFilm(vec3 x) {
-    float a = 2.51f; float b = 0.03f; float c = 2.43f; float d = 0.59f; float e = 0.14f;
+    float a = 2.51f; float b = 0.03f; float c = 2.43f;
+    float d = 0.59f; float e = 0.14f;
     return clamp((x*(a*x+b))/(x*(c*x+d)+e), 0.0, 1.0);
+}
+
+float LinearizeDepth(float depth) {
+    float near = 0.1;
+    float far = 1000.0;
+    float z = depth * 2.0 - 1.0; 
+    return (2.0 * near * far) / (far + near - z * (far - near));
 }
 
 void main() {
     vec4 texColor = texture(albedoMap, fragTexCoord);
-    float baseAlpha = texColor.a * push.baseColor.a;
-    baseAlpha = min(baseAlpha, 0.15); // Glass Hack
+    vec3 glassColor = push.baseColor.rgb * fragColor * texColor.rgb;
     
-    vec3 cameraPos = inverse(ubo.view)[3].xyz;
-    vec3 N = normalize(fragNormal);
-    vec3 V = normalize(cameraPos - fragWorldPos);
-    vec3 R = reflect(-V, N); 
+    // We still read roughness from the texture so frosted glass works!
+    float roughness = push.roughnessFactor * texture(metallicRoughnessMap, fragTexCoord).g;
 
-    // 1. Calculate perfect Screen-Space UV coordinates
+    vec3 cameraPos = inverse(ubo.view)[3].xyz;
+    
+    // ==========================================================
+    // 1. NORMAL MAP DECODING (With Tangent Safeguard)
+    // ==========================================================
+    vec3 N_geom = normalize(fragNormal);
+    if (!gl_FrontFacing) {
+        N_geom = -N_geom;
+    }
+
+    vec3 T;
+    if (length(fragTangent.xyz) < 0.001) {
+        T = cross(N_geom, vec3(0.0, 1.0, 0.0));
+        if (length(T) < 0.001) {
+            T = cross(N_geom, vec3(1.0, 0.0, 0.0));
+        }
+        T = normalize(T);
+    } else {
+        T = normalize(fragTangent.xyz);
+    }
+    
+    T = normalize(T - dot(T, N_geom) * N_geom); 
+    float handedness = (abs(fragTangent.w) < 0.001) ? 1.0 : fragTangent.w;
+    vec3 B = normalize(cross(N_geom, T)) * handedness;
+    mat3 TBN = mat3(T, B, N_geom);
+
+    vec3 normalSample = texture(normalMap, fragTexCoord).rgb;
+    vec3 N = normalize(TBN * (normalSample * 2.0 - 1.0));
+
+    // ==========================================================
+
+    vec3 V = normalize(cameraPos - fragWorldPos);
+    vec3 R = reflect(-V, N);
+    R.y = -R.y; 
+
     vec2 screenSize = vec2(textureSize(opaqueSceneCopyMap, 0));
     vec2 screenUV = gl_FragCoord.xy / screenSize;
 
-    // 2. REFRACTION MATH! 
-    // We bend the UV coordinates based on the XY tilt of the surface normal.
-    // The distortionStrength dictates how drastically the light bends.
-    float distortionStrength = 0.05; 
-    vec2 distortedUV = screenUV + (N.xy * distortionStrength);
+    float frontFaceDepth = LinearizeDepth(texture(glassDepthMap, screenUV).r);
+    float currentDepth = LinearizeDepth(gl_FragCoord.z);
+    float thickness = max(currentDepth - frontFaceDepth, 0.0);
+    float effectiveThickness = thickness + 0.05; 
+
+    // ==========================================================
+    // 3. BEER-LAMBERT LAW & BASE TINT
+    // ==========================================================
+    vec3 absorbColor = vec3(1.0) - glassColor;
+    vec3 physicalTransmittance = exp(-absorbColor * effectiveThickness * 0.5);
+
+    float materialAlpha = push.baseColor.a * texColor.a;
+    vec3 finalTransmittance = mix(physicalTransmittance, glassColor, materialAlpha);
+
+    // ==========================================================
+    // 4. SCREEN SPACE REFRACTION (True Snell's Law Physics)
+    // ==========================================================
+    // In physics, the Index of Refraction (IOR) determines how much light bends.
+    float IOR_Air = 1.0;
+    float IOR_Glass = 1.52; // Automotive windshields/headlights are typically 1.52
+    float eta = IOR_Air / IOR_Glass;
+
+    // The refract() function calculates the exact 3D trajectory of the bent light ray
+    vec3 refractedRay = refract(-V, N, eta);
+
+    // If the ray hits at an extreme grazing angle, it completely reflects (Total Internal Reflection)
+    // refract() returns a zero vector if this happens, so we fallback to no distortion
+    if (length(refractedRay) < 0.001) {
+        refractedRay = -V;
+    }
+
+    // We take the X and Y trajectory of the bent ray, and multiply it by how far it 
+    // travels through the glass (thickness) to get our physical UV offset!
+    // The 0.25 is a scaling factor to convert 3D world space units to 2D screen UV space.
+    vec2 physicalDistortion = refractedRay.xy * thickness * 0.25;
     
-    // Clamp the UVs so the refraction doesn't accidentally sample off the edge of the screen
+    // Add microscopic scattering for frosted glass (Roughness)
+    float scatter = roughness * 0.01;
+
+    vec2 distortedUV = screenUV + physicalDistortion + (N.xy * scatter);
     distortedUV = clamp(distortedUV, vec2(0.001), vec2(0.999));
 
-    // Sample the distorted background (The Photograph!)
     vec3 refractionColor = texture(opaqueSceneCopyMap, distortedUV).rgb;
+    vec3 tintedRefraction = refractionColor * finalTransmittance;
 
-    // 3. REFLECTION MATH
     vec3 reflectionColor = texture(hdriMap, SampleSphericalMap(R)).rgb;
     reflectionColor = pow(ACESFilm(reflectionColor * 1.5), vec3(1.0/2.2));
 
+    // OVERRIDE METALLIC: Real glass is strictly dielectric (0.04). 
+    // This stops artists' metallic hacks from turning your glass into chrome!
     vec3 F0 = vec3(0.04); 
     vec3 F = FresnelSchlick(max(dot(N, V), 0.0), F0);
 
-    // 4. MIXING IT ALL TOGETHER
-    vec3 glassTint = push.baseColor.rgb * fragColor * texColor.rgb;
-    
-    // Multiply the refraction by the tint of the glass
-    vec3 tintedRefraction = refractionColor * mix(vec3(1.0), glassTint, 0.5);
-
-    // Mix the Refraction (Background) with the Reflection (Foreground) using Fresnel!
     vec3 finalColor = mix(tintedRefraction, reflectionColor, F.r);
-    
-    // We add the Fresnel to the base alpha so the edges look solid, but the center is clear!
-    float finalAlpha = clamp(baseAlpha + F.r, 0.0, 1.0);
 
-    outColor = vec4(finalColor, finalAlpha);
+    // ==========================================================
+    // 5. THE GHOSTING FIX & BASELINE OPACITY
+    // ==========================================================
+    float finalAlpha = clamp(materialAlpha + F.r + (thickness * 0.5) + roughness, 0.0, 1.0);
+    outColor = vec4(finalColor, 1.0);
 }

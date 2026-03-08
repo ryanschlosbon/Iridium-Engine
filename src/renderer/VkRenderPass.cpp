@@ -11,20 +11,9 @@ VkRenderPassWrapper::~VkRenderPassWrapper() {
 }
 
 void VkRenderPassWrapper::createRenderPass(VkFormat swapChainImageFormat) {
-    // 0: POSITION ATTACHMENT (16-bit float for high precision coordinates)
-    VkAttachmentDescription positionAttachment{};
-    positionAttachment.format = VK_FORMAT_R16G16B16A16_SFLOAT;
-    positionAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
-    positionAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    positionAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    positionAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    positionAttachment.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-
-    VkAttachmentReference positionAttachmentRef{};
-    positionAttachmentRef.attachment = 0;
-    positionAttachmentRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-
-    // 1: NORMAL ATTACHMENT (16-bit float for smooth lighting)
+    // =========================================================
+    // 0: NORMAL ATTACHMENT (Packed into 32-bit: R=Nx, G=Ny, B=Rough, A=Metal)
+    // =========================================================
     VkAttachmentDescription normalAttachment{};
     normalAttachment.format = VK_FORMAT_R16G16B16A16_SFLOAT;
     normalAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
@@ -34,12 +23,14 @@ void VkRenderPassWrapper::createRenderPass(VkFormat swapChainImageFormat) {
     normalAttachment.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
     VkAttachmentReference normalAttachmentRef{};
-    normalAttachmentRef.attachment = 1;
+    normalAttachmentRef.attachment = 0; // <--- SHIFTED DOWN TO 0
     normalAttachmentRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
-    // 2: ALBEDO/COLOR ATTACHMENT (Standard 8-bit color)
+    // =========================================================
+    // 1: ALBEDO/COLOR ATTACHMENT (Standard 32-bit: RGB=Color, A=Emissive)
+    // =========================================================
     VkAttachmentDescription albedoAttachment{};
-    albedoAttachment.format = VK_FORMAT_R8G8B8A8_UNORM;
+    albedoAttachment.format = VK_FORMAT_R16G16B16A16_SFLOAT;
     albedoAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
     albedoAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
     albedoAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
@@ -47,10 +38,12 @@ void VkRenderPassWrapper::createRenderPass(VkFormat swapChainImageFormat) {
     albedoAttachment.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
     VkAttachmentReference albedoAttachmentRef{};
-    albedoAttachmentRef.attachment = 2;
+    albedoAttachmentRef.attachment = 1; // <--- SHIFTED DOWN TO 1
     albedoAttachmentRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
-    // 3: DEPTH ATTACHMENT
+    // =========================================================
+    // 2: DEPTH ATTACHMENT (Used for Depth Testing AND Position Reconstruction)
+    // =========================================================
     VkAttachmentDescription depthAttachment{};
     depthAttachment.format = VK_FORMAT_D32_SFLOAT;
     depthAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
@@ -58,15 +51,16 @@ void VkRenderPassWrapper::createRenderPass(VkFormat swapChainImageFormat) {
     depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     depthAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
     depthAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    depthAttachment.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+    depthAttachment.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
 
     VkAttachmentReference depthAttachmentRef{};
-    depthAttachmentRef.attachment = 3;
+    depthAttachmentRef.attachment = 2; // <--- SHIFTED DOWN TO 2
     depthAttachmentRef.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 
     // --- SUBPASS SETUP ---
-    std::array<VkAttachmentReference, 3> colorAttachments = {
-        positionAttachmentRef, normalAttachmentRef, albedoAttachmentRef
+    // Only 2 color attachments now!
+    std::array<VkAttachmentReference, 2> colorAttachments = {
+        normalAttachmentRef, albedoAttachmentRef
     };
 
     VkSubpassDescription subpass{};
@@ -85,8 +79,9 @@ void VkRenderPassWrapper::createRenderPass(VkFormat swapChainImageFormat) {
     dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
 
     // --- CREATE ---
-    std::array<VkAttachmentDescription, 4> attachments = {
-        positionAttachment, normalAttachment, albedoAttachment, depthAttachment
+    // Total attachments reduced from 4 to 3!
+    std::array<VkAttachmentDescription, 3> attachments = {
+        normalAttachment, albedoAttachment, depthAttachment
     };
 
     VkRenderPassCreateInfo renderPassInfo{};
