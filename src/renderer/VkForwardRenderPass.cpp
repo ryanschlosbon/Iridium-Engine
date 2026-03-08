@@ -38,7 +38,7 @@ void VkForwardRenderPass::createRenderPass(VkFormat colorFormat, VkFormat depthF
 
     // CRITICAL: We LOAD the depth buffer to hide glass behind walls, but we do NOT care about storing it after.
     depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
-    depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     depthAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
     depthAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
 

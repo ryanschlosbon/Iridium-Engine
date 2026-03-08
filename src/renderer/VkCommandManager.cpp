@@ -517,6 +517,10 @@ void VkCommandManager::recordCommands(
 
         vkCmdBeginRenderPass(cmd, &forwardPassInfo, VK_SUBPASS_CONTENTS_INLINE);
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, forwardPipeline->getPipeline());
+
+        vkCmdSetViewport(cmd, 0, 1, &viewport);
+        vkCmdSetScissor(cmd, 0, 1, &scissor);
+
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, forwardPipeline->getPipelineLayout(), 0, 1, &globalDescriptorSet, 0, nullptr);
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, forwardPipeline->getPipelineLayout(), 2, 1, &lightingDescriptorSet, 0, nullptr);
 

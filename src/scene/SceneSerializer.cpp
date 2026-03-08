@@ -1,154 +1,120 @@
 #include "SceneSerializer.h"
-#include "Components.h"
-#include "ecs/Entity.h"
-#include "assets/AssetManager.h"
+#include "scene/Components.h"
+#include "scene/components/TransformComponent.h"
+#include "scene/components/MeshComponent.h"
+#include "scene/components/LightComponent.h"
+#include <nlohmann/json.hpp>
 #include <fstream>
 #include <iostream>
-#include <nlohmann/json.hpp>
 
-// Convenience alias
 using json = nlohmann::json;
 
-// Helper to convert GLM vec3 to JSON array [x, y, z]
-namespace glm {
-    void to_json(json& j, const vec3& v) {
-        j = json{ v.x, v.y, v.z };
-    }
+SceneSerializer::SceneSerializer(Registry* registry) : registry(registry) {}
 
-    void from_json(const json& j, vec3& v) {
-        v.x = j[0];
-        v.y = j[1];
-        v.z = j[2];
-    }
-}
-
-SceneSerializer::SceneSerializer(Registry& registry, AssetManager* assetManager)
-    : m_Registry(registry), m_AssetManager(assetManager) {}
-
-void SceneSerializer::Serialize(const std::string& filepath) {
+bool SceneSerializer::serialize(const std::string& filepath) {
     json sceneJson;
-    sceneJson["Scene"] = "Untitled Scene";
-    sceneJson["Entities"] = json::array();
+    sceneJson["Scene"] = "DefaultScene";
+    json entitiesJson = json::array();
 
-    // Debug: Check if we are actually finding the pool
-    auto* transformPool = m_Registry.getPool<TransformComponent>();
-    if (!transformPool) {
-        std::cerr << "ERROR: TransformPool is null!" << std::endl;
-        return;
-    }
+    // Grab the pools we care about
+    auto* transformPool = registry->getPool<TransformComponent>();
+    auto* meshPool = registry->getPool<MeshComponent>();
+    auto* lightPool = registry->getPool<LightComponent>();
 
-    std::cout << "Serialize: Found " << transformPool->entities.size() << " entities with Transforms." << std::endl;
-
-    for (size_t i = 0; i < transformPool->entities.size(); i++) {
-        Entity entity = transformPool->entities[i];
-
-        // Skip invalid entities
-        if (entity == NULL_ENTITY) continue;
+    // We need to iterate over all active entities. 
+    // Assuming you have a way to get the max entity ID or active entity list:
+    for (uint32_t entity = 0; entity < registry->getMaxEntities(); ++entity) {
+        // If the entity doesn't have a transform, it's either dead or not a physical object
+        if (!transformPool->sparseMap.contains(entity)) continue;
 
         json entityJson;
-        entityJson["EntityID"] = (uint32_t)entity;
+        entityJson["EntityID"] = entity;
 
-        // --- Serialize Transform ---
-        if (transformPool->has(entity)) {
-            auto& tc = transformPool->get(entity);
-            entityJson["Transform"] = {
-                { "Position", tc.position },
-                { "Rotation", tc.rotation },
-                { "Scale", tc.scale }
+        // --- TRANSFORM COMPONENT ---
+        auto& tc = transformPool->get(entity);
+        entityJson["TransformComponent"] = {
+            {"position", {tc.position.x, tc.position.y, tc.position.z}},
+            {"rotation", {tc.rotation.x, tc.rotation.y, tc.rotation.z}},
+            {"scale",    {tc.scale.x, tc.scale.y, tc.scale.z}}
+        };
+
+        // --- MESH COMPONENT ---
+        if (meshPool && meshPool->sparseMap.contains(entity)) {
+            auto& mc = meshPool->get(entity);
+            // We save the file path of the asset, NOT the vertex data!
+            std::string path = mc.model ? mc.model->filePath : "";
+            entityJson["MeshComponent"] = {
+                {"meshPath", path},
+                {"enabled", mc.enabled}
             };
         }
 
-        // --- Serialize Mesh ---
-        auto* meshPool = m_Registry.getPool<MeshComponent>();
-        if (meshPool && meshPool->has(entity)) {
-            auto& mc = meshPool->get(entity);
-
-            // CHECK IF MODEL EXISTS
-            if (mc.model) {
-                entityJson["Mesh"] = {
-                    // USE THE REAL PATH
-                    { "FilePath", mc.model->filePath }
-                };
-            }
+        // --- LIGHT COMPONENT ---
+        if (lightPool && lightPool->sparseMap.contains(entity)) {
+            auto& lc = lightPool->get(entity);
+            entityJson["LightComponent"] = {
+                {"color", {lc.color.r, lc.color.g, lc.color.b}},
+                {"intensity", lc.intensity},
+                {"type", static_cast<int>(lc.type)} // 0 = Directional, 1 = Point, etc.
+            };
         }
 
-        sceneJson["Entities"].push_back(entityJson);
+        entitiesJson.push_back(entityJson);
     }
 
-    // --- WRITE TO FILE ---
-    std::ofstream fout(filepath);
+    sceneJson["Entities"] = entitiesJson;
 
-    // ERROR CHECKING
-    if (!fout.is_open()) {
-        std::cerr << "CRITICAL ERROR: Could not create file: " << filepath << std::endl;
-        std::cerr << "Check that the folder 'assets/scenes' exists!" << std::endl;
-        return;
+    // Write to file
+    std::ofstream file(filepath);
+    if (file.is_open()) {
+        file << sceneJson.dump(4); // The '4' adds pretty-printing indentation!
+        return true;
     }
-
-    fout << sceneJson.dump(4);
-    fout.close();
-
-    std::cout << "SUCCESS: Scene saved to " << filepath << std::endl;
+    return false;
 }
 
-bool SceneSerializer::Deserialize(const std::string& filepath) {
+bool SceneSerializer::deserialize(const std::string& filepath) {
     std::ifstream file(filepath);
-    if (!file.is_open()) {
-        std::cerr << "Failed to open file: " << filepath << std::endl;
-        return false;
-    }
+    if (!file.is_open()) return false;
 
-    json data;
-    try {
-        file >> data;
-    }
-    catch (json::parse_error& e) {
-        std::cerr << "JSON Parse Error: " << e.what() << std::endl;
-        return false;
-    }
+    json sceneJson;
+    file >> sceneJson;
 
-    auto entities = data["Entities"];
-    if (entities.is_null()) return false;
+    // Optional: registry->clearAllEntities(); // Reset scene before loading
 
-    // Loop through every entity in the file
-    for (auto& entityJson : entities) {
+    for (auto& entityJson : sceneJson["Entities"]) {
+        uint32_t entity = registry->createEntity();
 
-        // 1. Create a new empty entity
-        Entity deserializedEntity = m_Registry.createEntity();
+        // --- TRANSFORM COMPONENT ---
+        if (entityJson.contains("TransformComponent")) {
+            auto tcJson = entityJson["TransformComponent"];
+            glm::vec3 pos = { tcJson["position"][0], tcJson["position"][1], tcJson["position"][2] };
+            glm::vec3 rot = { tcJson["rotation"][0], tcJson["rotation"][1], tcJson["rotation"][2] };
+            glm::vec3 scale = { tcJson["scale"][0], tcJson["scale"][1], tcJson["scale"][2] };
 
-        // 2. Load Transform (If it exists)
-        if (entityJson.contains("Transform")) {
-            auto& tcJson = entityJson["Transform"];
-
-            // Extract values using our glm helper
-            glm::vec3 pos = tcJson["Position"].get<glm::vec3>();
-            glm::vec3 rot = tcJson["Rotation"].get<glm::vec3>();
-            glm::vec3 scl = tcJson["Scale"].get<glm::vec3>();
-
-            // Add the component
-            m_Registry.addComponent<TransformComponent>(deserializedEntity, pos, rot, scl);
+            registry->addComponent<TransformComponent>(entity, pos, rot, scale);
         }
 
-        // 3. Load Mesh (If it exists)
-        if (entityJson.contains("Mesh")) {
-            std::string meshPath = entityJson["Mesh"]["FilePath"];
+        // --- MESH COMPONENT ---
+        if (entityJson.contains("MeshComponent")) {
+            auto mcJson = entityJson["MeshComponent"];
+            std::string path = mcJson["meshPath"];
 
-            if (m_AssetManager) {
-                // CHANGE 'Model*' to 'auto' or 'std::shared_ptr<ModelAsset>'
-                // AND ensure you are using the correct type name 'ModelAsset'
-                std::shared_ptr<ModelAsset> model = m_AssetManager->getModel(meshPath);
+            // We set the requestedMeshPath so your ProcessMeshSwaps logic loads it on the main thread!
+            auto& mc = registry->addComponent<MeshComponent>(entity, nullptr);
+            mc.requestedMeshPath = path;
+            mc.enabled = mcJson["enabled"];
+        }
 
-                if (model) {
-                    m_Registry.addComponent<MeshComponent>(deserializedEntity, model);
-                    std::cout << "Loaded Mesh: " << meshPath << std::endl;
-                }
-                else {
-                    std::cerr << "Failed to load mesh: " << meshPath << std::endl;
-                }
-            }
+        // --- LIGHT COMPONENT ---
+        if (entityJson.contains("LightComponent")) {
+            auto lcJson = entityJson["LightComponent"];
+            auto& lc = registry->addComponent<LightComponent>(entity);
+            lc.color = { lcJson["color"][0], lcJson["color"][1], lcJson["color"][2] };
+            lc.intensity = lcJson["intensity"];
+            lc.type = static_cast<LightType>(lcJson["type"]);
         }
     }
 
-    std::cout << "Scene Loaded: " << filepath << std::endl;
     return true;
 }

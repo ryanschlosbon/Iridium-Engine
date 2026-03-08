@@ -1,17 +1,18 @@
 #pragma once
-
 #include "ecs/Registry.h"
 #include <string>
-
-class AssetManager;
+#include <memory>
 
 class SceneSerializer {
 public:
-    SceneSerializer(Registry& registry, AssetManager* assetManager);
-    void Serialize(const std::string& filepath);
-    bool Deserialize(const std::string& filepath);
+    SceneSerializer(Registry* registry);
+
+    // Saves the current state of the Registry to a JSON file
+    bool serialize(const std::string& filepath);
+
+    // Clears the Registry and loads entities/components from a JSON file
+    bool deserialize(const std::string& filepath);
 
 private:
-    Registry& m_Registry;
-    AssetManager* m_AssetManager;
+    Registry* registry;
 };
