@@ -1,5 +1,6 @@
 #include "MenuBarPanel.h"
 #include "scene/SceneSerializer.h"
+#include "utils/FileDialogs.h"
 #include <imgui.h>
 
 MenuBarPanel::MenuBarPanel(Entity* selectedEntityPtr, EditorUIState* uiStatePtr)
@@ -10,28 +11,46 @@ void MenuBarPanel::OnImGuiRender(Registry& registry, AssetManager* assetManager)
 
         // --- FILE MENU ---
         if (ImGui::BeginMenu("File")) {
-            // Save Scene
+
+            // --- SAVE SCENE ---
             if (ImGui::MenuItem("Save Scene", "Ctrl+S")) {
-                SceneSerializer serializer(registry, assetManager);
-                serializer.Serialize("assets/scenes/test_scene.json");
+                if (currentScenePath.empty()) {
+                    // THE FIX: Pass an empty string, PFD handles the filter now!
+                    std::string filepath = FileDialogs::SaveFile("Save Scene", { "Iridium Scene", "*.iridium" });
+                    if (!filepath.empty()) {
+                        currentScenePath = filepath;
+                        SceneSerializer serializer(&registry);
+                        serializer.serialize(currentScenePath);
+                    }
+                }
+                else {
+                    SceneSerializer serializer(&registry);
+                    serializer.serialize(currentScenePath);
+                }
             }
 
-            // Load Scene
-            if (ImGui::MenuItem("Load Scene", "Ctrl+O")) {
-                registry.clear();
-                SceneSerializer serializer(registry, assetManager);
-                if (serializer.Deserialize("assets/scenes/test_scene.json")) {
-                    // Reset selected entity so we don't crash
-                    *selectedEntity = NULL_ENTITY;
+            // --- SAVE AS ---
+            if (ImGui::MenuItem("Save As...", "Ctrl+Shift+S")) {
+                std::string filepath = FileDialogs::SaveFile("Save Scene As", { "Iridium Scene", "*.iridium" });
+                if (!filepath.empty()) {
+                    currentScenePath = filepath;
+                    SceneSerializer serializer(&registry);
+                    serializer.serialize(currentScenePath);
                 }
             }
 
             ImGui::Separator();
 
-            // Exit
-            if (ImGui::MenuItem("Exit", "Alt+F4")) {
-                // To make this work later, you can pass a boolean pointer like `bool* isRunning` 
-                // into this panel's constructor and set it to false here!
+            // --- LOAD SCENE ---
+            if (ImGui::MenuItem("Load Scene", "Ctrl+O")) {
+                // THE FIX: Pass an empty string here too!
+                std::string filepath = FileDialogs::OpenFile("Load Scene", { "Iridium Scene", "*.iridium" });
+                if (!filepath.empty()) {
+                    currentScenePath = filepath;
+                    registry.clear(); // Destroy the old scene before loading the new one!
+                    SceneSerializer serializer(&registry);
+                    serializer.deserialize(currentScenePath);
+                }
             }
 
             ImGui::EndMenu();

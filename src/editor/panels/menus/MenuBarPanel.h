@@ -13,4 +13,5 @@ public:
 private:
     Entity* selectedEntity;
     EditorUIState* uiState; // Store the pointer
+    std::string currentScenePath = ""; // Holds the active file location
 };

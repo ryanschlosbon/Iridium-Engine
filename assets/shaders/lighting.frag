@@ -112,6 +112,9 @@ void main() {
         vec4 eye = push.invProj * vec4(ndc, 1.0, 1.0);
         vec3 viewDir = normalize((push.invView * vec4(eye.xy, -1.0, 0.0)).xyz);
         vec3 envColor = texture(hdriMap, SampleSphericalMap(viewDir)).rgb;
+        float skyboxExposure = 0.1; // Tweak this until the sky isn't blown out
+        envColor *= skyboxExposure;        
+
         envColor = pow(ACESFilm(envColor * 1.5), vec3(1.0/2.2)); 
         outColor = vec4(envColor, 1.0);
         return;

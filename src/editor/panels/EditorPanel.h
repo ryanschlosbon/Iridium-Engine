@@ -3,6 +3,8 @@
 #include "ecs/Registry.h"
 #include "assets/AssetManager.h"
 
+class AssetManager;
+
 class EditorPanel {
 public:
     // A virtual destructor is mandatory for base classes to ensure 

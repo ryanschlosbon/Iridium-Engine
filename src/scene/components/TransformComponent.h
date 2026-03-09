@@ -15,7 +15,6 @@ struct TransformComponent {
     bool isDirty = true;
 
     // Helper: Update Local Matrix
-// Helper to build the local matrix from pos/rot/scale
     void updateLocalMatrix() {
         glm::mat4 mat = glm::mat4(1.0f);
         mat = glm::translate(mat, position);
@@ -34,16 +33,14 @@ struct TransformComponent {
     void setRotation(const glm::vec3& newRot) { rotation = newRot; isDirty = true; }
     void setScale(const glm::vec3& newScale) { scale = newScale; isDirty = true; }
 
-    void OnInspector() {
+    REFLECT_BEGIN()
         bool changed = false;
-
-        // If any of these get edited, changed becomes true
+        // Because the Archive returns bool, we can capture the ImGui slider changes!
         changed |= PROPERTY(position);
         changed |= PROPERTY(rotation);
         changed |= PROPERTY(scale);
-
-        if (changed) {
-            isDirty = true; // Now the TransformSystem will catch it next frame!
-        }
-    }
+        if (changed) isDirty = true;
+    REFLECT_END()
 };
+
+AUTO_REGISTER_COMPONENT(TransformComponent)

@@ -1,5 +1,5 @@
 #include "InspectorPanel.h"
-#include "scene/Components.h"
+#include "scene/ComponentRegistry.h"
 #include <imgui.h>
 
 InspectorPanel::InspectorPanel(Entity* selectedEntityPtr)
@@ -28,31 +28,24 @@ void InspectorPanel::OnImGuiRender(Registry& registry, AssetManager* assetManage
         ImGui::Separator();
 
         // --- AUTOMATIC COMPONENT LOOP ---
-        for (auto& [typeIndex, pool] : registry.getPools()) {
-            if (pool) {
-                std::string name = typeIndex.name();
-                if (name.find("struct ") != std::string::npos) name = name.substr(7);
-                if (name.find("class ") != std::string::npos) name = name.substr(6);
+        for (auto& [name, funcs] : ComponentRegistry::RegistryMap) {
 
-                // Draw the Header IF the entity actually has the component
-                if (pool->getVoid(*selectedEntity) != nullptr) {
-                    if (ImGui::CollapsingHeader(name.c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+            // Only draw it if the entity actually owns this component
+            if (funcs.hasComponent(registry, *selectedEntity)) {
 
-                        pool->DrawInspector(*selectedEntity);
+                // Magic: Draws the Header and all the variables using ImGuiArchive!
+                funcs.drawInspector(registry, *selectedEntity);
 
-                        ImGui::Spacing();
-
-                        if (name != "TransformComponent") {
-                            if (ImGui::Button(("Remove " + name).c_str())) {
-                                pool->remove(*selectedEntity);
-                            }
-                        }
-                        else {
-                            ImGui::TextDisabled("(Required Component)");
-                        }
-                        ImGui::Separator();
+                // Add the remove button right below the component properties
+                if (name != "TransformComponent") {
+                    if (ImGui::Button(("Remove " + name).c_str())) {
+                        funcs.removeComponent(registry, *selectedEntity);
                     }
                 }
+                else {
+                    ImGui::TextDisabled("(Required Component)");
+                }
+                ImGui::Separator();
             }
         }
 
@@ -63,30 +56,23 @@ void InspectorPanel::OnImGuiRender(Registry& registry, AssetManager* assetManage
         }
 
         if (ImGui::BeginPopup("AddComponentPopup")) {
+            bool allAdded = true;
 
-            // Only show "Light" if the entity DOES NOT have a LightComponent
-            if (!registry.getPool<LightComponent>()->has(*selectedEntity)) {
-                if (ImGui::MenuItem("Light")) {
-                    registry.addComponent<LightComponent>(*selectedEntity);
-                }
-            }
+            // Loop through the dictionary to populate the menu
+            for (auto& [name, funcs] : ComponentRegistry::RegistryMap) {
 
-            // Only show "Mesh" if the entity DOES NOT have a MeshComponent
-            if (!registry.getPool<MeshComponent>()->has(*selectedEntity)) {
-                if (ImGui::MenuItem("Mesh")) {
-                    registry.addComponent<MeshComponent>(*selectedEntity);
-                }
-            }
+                // Only show the menu item if the entity DOES NOT have it yet
+                if (!funcs.hasComponent(registry, *selectedEntity)) {
+                    allAdded = false;
 
-            if (!registry.getPool<TransformComponent>()->has(*selectedEntity)) {
-                if (ImGui::MenuItem("Transform")) {
-                    registry.addComponent<TransformComponent>(*selectedEntity);
+                    if (ImGui::MenuItem(name.c_str())) {
+                        funcs.addComponent(registry, *selectedEntity);
+                    }
                 }
             }
 
             // If the user added everything possible
-            if (registry.getPool<LightComponent>()->has(*selectedEntity) &&
-                registry.getPool<MeshComponent>()->has(*selectedEntity)) {
+            if (allAdded) {
                 ImGui::TextDisabled("All components added");
             }
 

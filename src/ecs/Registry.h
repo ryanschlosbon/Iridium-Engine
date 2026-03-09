@@ -12,7 +12,6 @@ public:
     virtual void clear() = 0;
     // virtual bool has(Entity entity) = 0;
     virtual void* getVoid(Entity entity) = 0;
-    virtual void DrawInspector(Entity entity) = 0;
 };
 
 template<typename T>
@@ -66,12 +65,6 @@ public:
     void* getVoid(Entity entity) override {
         if (!has(entity)) return nullptr;
         return &components[sparseMap[entity]];
-    }
-
-    void DrawInspector(Entity entity) override {
-        if (!has(entity)) return;
-        // This line will call OnInspector() on the specific component
-        components[sparseMap[entity]].OnInspector();
     }
 
     void clear() override {
@@ -128,6 +121,8 @@ public:
             }
         }
     }
+
+    uint32_t getMaxEntities() const { return nextEntityID; }
 
 private:
     uint32_t nextEntityID = 0;

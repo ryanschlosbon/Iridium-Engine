@@ -165,7 +165,7 @@ void Application::initVulkan() {
         this->allocateMaterialDescriptors(model);
         };
 
-    hdriMap = assetManager->loadHDRI(std::string(PROJECT_ROOT_DIR) + "assets/hdri/cobblestone_street_night_4k.hdr");
+    hdriMap = assetManager->loadHDRI(std::string(PROJECT_ROOT_DIR) + "assets/hdri/belfast_sunset_puresky_8k.hdr");
 
     createLightingRenderPass(); 
     vkLightingPipeline = new VkLightingPipeline(vkContext, lightingRenderPass);
@@ -703,34 +703,46 @@ void Application::ProcessMeshSwaps(Registry& registry, AssetManager* assetManage
     for (uint32_t entity : meshPool->entities) {
         auto& meshComp = meshPool->get(entity);
 
-        if (!meshComp.requestedMeshPath.empty()) {
+        // Does the engine need to load a mesh for the very first time?
+        bool needsLoad = (meshComp.model == nullptr && !meshComp.currentMeshPath.empty());
+
+        // Did the user click the UI button, causing the paths to mis-match?
+        bool needsSwap = (meshComp.model != nullptr && !meshComp.currentMeshPath.empty() && meshComp.model->filePath != meshComp.currentMeshPath);
+
+        if (needsLoad || needsSwap) {
             try {
-                std::string fullPath = std::string(PROJECT_ROOT_DIR) + meshComp.requestedMeshPath;
+                // NOTE: If your file browser returns an absolute path (C:/...), you may need to strip PROJECT_ROOT_DIR out!
+                std::string fullPath = meshComp.currentMeshPath;
+
+                // SAFE DESTRUCTION (Your brilliant queue!)
                 if (meshComp.model) {
                     std::shared_ptr<ModelAsset> oldModel = meshComp.model;
-                    frameDeletionQueues[currentFrame].push_function([this, oldModel]() {
-                        for (auto& mat : oldModel->materials) {
-                            if (!mat.descriptorSets.empty()) {
-                                // Free the sets back to your allocator so the pool doesn't dry up!
-                                vkFreeDescriptorSets(vkContext->getDevice(), descriptorAllocator.getPool(),
-                                    static_cast<uint32_t>(mat.descriptorSets.size()), mat.descriptorSets.data());
-                                mat.descriptorSets.clear();
-                            }
-                        }
+
+                    // The lambda captures 'oldModel', keeping its reference count above 0.
+                    // When this frame finishes and the queue clears this lambda, 'oldModel' 
+                    // will be destroyed, safely freeing its heavy Vertex/Image buffers!
+                    frameDeletionQueues[currentFrame].push_function([oldModel]() {
+                        // We do absolutely nothing here! 
+                        // The lambda's only job is to keep the oldModel alive until execution.
                         });
                 }
 
+                // LOAD THE NEW MODEL
                 meshComp.model = assetManager->getModel(fullPath);
 
-                allocateMaterialDescriptors(meshComp.model);
+                if (meshComp.model) {
+                    allocateMaterialDescriptors(meshComp.model);
+                    // Ensure the model remembers its path so needsSwap doesn't trigger infinitely!
+                    meshComp.model->filePath = meshComp.currentMeshPath;
+                }
 
-                std::cout << "Successfully swapped mesh to: " << fullPath << std::endl;
+                std::cout << "Successfully reconciled mesh to: " << fullPath << std::endl;
             }
             catch (const std::exception& e) {
                 std::cerr << "Failed to swap mesh: " << e.what() << "\n";
+                // Revert the string so it doesn't get stuck in an infinite crash loop
+                meshComp.currentMeshPath = meshComp.model ? meshComp.model->filePath : "";
             }
-
-            meshComp.requestedMeshPath.clear();
         }
     }
 }
