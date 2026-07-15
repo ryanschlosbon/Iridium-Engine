@@ -6,7 +6,7 @@ class InspectorPanel : public EditorPanel {
 public:
     InspectorPanel(Entity* selectedEntityPtr);
 
-    void OnImGuiRender(Registry& registry, AssetManager* assetManager) override;
+    void OnImGuiRender(Registry& registry, Iridium::AssetManager* assetManager) override;
 
 private:
     Entity* selectedEntity;

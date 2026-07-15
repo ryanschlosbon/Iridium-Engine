@@ -6,7 +6,7 @@ InspectorPanel::InspectorPanel(Entity* selectedEntityPtr)
     : selectedEntity(selectedEntityPtr) {
 }
 
-void InspectorPanel::OnImGuiRender(Registry& registry, AssetManager* assetManager) {
+void InspectorPanel::OnImGuiRender(Registry& registry, Iridium::AssetManager* assetManager) {
     ImGui::Begin("Inspector");
 
     // Only draw the inspector if an entity is actually selected

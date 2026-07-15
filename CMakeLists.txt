@@ -127,22 +127,22 @@ endif()
 add_executable(IridiumEngine
         ${SPV_FILES}
         src/main.cpp
-        "src/renderer/VkContext.h"
-        "src/renderer/VkContext.cpp"
-        "src/renderer/VkSwapchain.h"
-        "src/renderer/VkSwapchain.cpp"
-        "src/renderer/VkRenderPass.h"
-        "src/renderer/VkRenderPass.cpp"
-        "src/renderer/VkFramebuffer.h"
-        "src/renderer/VkFramebuffer.cpp"
+        "src/renderer/vulkan/VkContext.h"
+        "src/renderer/vulkan/VkContext.cpp"
+        "src/renderer/vulkan/VkSwapchain.h"
+        "src/renderer/vulkan/VkSwapchain.cpp"
+        "src/renderer/vulkan/VkRenderPass.h"
+        "src/renderer/vulkan/VkRenderPass.cpp"
+        "src/renderer/vulkan/VkFramebuffer.h"
+        "src/renderer/vulkan/VkFramebuffer.cpp"
         "src/utils/File.h"
-        "src/renderer/VkGraphicsPipeline.h"
-        "src/renderer/VkGraphicsPipeline.cpp"
-        "src/renderer/VkCommandManager.h"
-        "src/renderer/VkCommandManager.cpp"
-        "src/renderer/VkSyncObjects.h"
-        "src/renderer/VkSyncObjects.cpp"
-        "src/renderer/VkMesh.h"
+        "src/renderer/vulkan/VkGraphicsPipeline.h"
+        "src/renderer/vulkan/VkGraphicsPipeline.cpp"
+        "src/renderer/vulkan/VkCommandManager.h"
+        "src/renderer/vulkan/VkCommandManager.cpp"
+        "src/renderer/vulkan/VkSyncObjects.h"
+        "src/renderer/vulkan/VkSyncObjects.cpp"
+        "src/renderer/rhi/Mesh.h"
         "src/vendor/std_image_impl.cpp"
         "src/assets/AssetManager.h"
         "src/assets/AssetManager.cpp"
@@ -169,7 +169,7 @@ add_executable(IridiumEngine
         "src/vendor/fastgltf/src/fastgltf.cpp"
         "src/vendor/fastgltf/src/base64.cpp"
         "src/vendor/fastgltf/src/io.cpp"
- "src/scene/SceneSerializer.h" "src/scene/SceneSerializer.cpp" "src/scene/components/LightComponent.h" "src/editor/Reflection.h" "src/utils/DeletionQueue.h" "src/core/Application.h" "src/core/Application.cpp" "src/editor/panels/EditorPanel.h" "src/editor/panels/core/SceneHierarchyPanel.h" "src/editor/panels/core/SceneHierarchyPanel.cpp" "src/editor/panels/core/InspectorPanel.h" "src/editor/panels/core/InspectorPanel.cpp"     "src/editor/EditorUIState.h" "src/editor/panels/menus/MenuBarPanel.h" "src/editor/panels/menus/MenuBarPanel.cpp" "src/editor/panels/windows/ProjectSettingsPanel.h" "src/editor/panels/windows/ProjectSettingsPanel.cpp" "src/renderer/DescriptorAllocator.h" "src/renderer/DescriptorAllocator.cpp" "src/renderer/VkUIRenderPass.h" "src/renderer/VkUIRenderPass.cpp" "src/editor/panels/core/ViewPortPanel.h" "src/editor/panels/core/ViewPortPanel.cpp" "src/renderer/VkLightingPipeline.h" "src/renderer/VkLightingPipeline.cpp" "src/renderer/VkForwardRenderPass.cpp" "src/renderer/VkForwardRenderPass.h" "src/renderer/VkForwardPipeline.h" "src/renderer/VkForwardPipeline.cpp" "src/renderer/GlassDepthRenderPass.h" "src/renderer/GlassDepthRenderPass.cpp" "src/renderer/GlassDepthPipeline.h" "src/renderer/GlassDepthPipeline.cpp")
+ "src/scene/SceneSerializer.h" "src/scene/SceneSerializer.cpp" "src/scene/components/LightComponent.h" "src/editor/Reflection.h" "src/utils/DeletionQueue.h" "src/core/Application.h" "src/core/Application.cpp" "src/editor/panels/EditorPanel.h" "src/editor/panels/core/SceneHierarchyPanel.h" "src/editor/panels/core/SceneHierarchyPanel.cpp" "src/editor/panels/core/InspectorPanel.h" "src/editor/panels/core/InspectorPanel.cpp"     "src/editor/EditorUIState.h" "src/editor/panels/menus/MenuBarPanel.h" "src/editor/panels/menus/MenuBarPanel.cpp" "src/editor/panels/windows/ProjectSettingsPanel.h" "src/editor/panels/windows/ProjectSettingsPanel.cpp" "src/renderer/vulkan/DescriptorAllocator.h" "src/renderer/vulkan/DescriptorAllocator.cpp" "src/renderer/vulkan/VkUIRenderPass.h" "src/renderer/vulkan/VkUIRenderPass.cpp" "src/editor/panels/core/ViewPortPanel.h" "src/editor/panels/core/ViewPortPanel.cpp" "src/renderer/vulkan/VkLightingPipeline.h" "src/renderer/vulkan/VkLightingPipeline.cpp" "src/renderer/vulkan/VkForwardRenderPass.cpp" "src/renderer/vulkan/VkForwardRenderPass.h" "src/renderer/vulkan/VkForwardPipeline.h" "src/renderer/vulkan/VkForwardPipeline.cpp" "src/renderer/vulkan/GlassDepthRenderPass.h" "src/renderer/vulkan/GlassDepthRenderPass.cpp" "src/renderer/vulkan/GlassDepthPipeline.h" "src/renderer/vulkan/GlassDepthPipeline.cpp" "src/renderer/rhi/IRenderBackend.h" "src/renderer/rhi/DrawPacket.h" "src/renderer/rhi/RenderHandles.h" "src/renderer/rhi/ResourcePool.h" "src/renderer/vulkan/VulkanVertexBackend.h" "src/renderer/vulkan/VulkanVertexBackend.cpp" "src/renderer/vulkan/VulkanVertexUtils.h"  "src/renderer/rhi/PipelineTypes.h" "src/renderer/vulkan/PipelineCache.h" "src/renderer/vulkan/PipelineCache.cpp")
 
 # Defines PROJECT_ROOT_DIR for C++ to find assets
 add_compile_definitions(PROJECT_ROOT_DIR="${CMAKE_CURRENT_SOURCE_DIR}/")

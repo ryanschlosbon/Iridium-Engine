@@ -16,9 +16,9 @@ layout(set = 1, binding = 0) uniform sampler2D albedoMap;
 layout(set = 1, binding = 1) uniform sampler2D normalMap;
 layout(set = 1, binding = 2) uniform sampler2D metallicRoughnessMap;
 
-layout(set = 2, binding = 0) uniform sampler2D opaquePositionMap; 
-layout(set = 2, binding = 1) uniform sampler2D opaqueNormalMap;
-layout(set = 2, binding = 2) uniform sampler2D opaqueAlbedoMap;
+layout(set = 2, binding = 0) uniform sampler2D gDepth; 
+layout(set = 2, binding = 1) uniform sampler2D gNormalRoughMetal;
+layout(set = 2, binding = 2) uniform sampler2D gAlbedoEmissive;
 layout(set = 2, binding = 3) uniform sampler2D hdriMap;
 layout(set = 2, binding = 4) uniform sampler2D opaqueSceneCopyMap;
 layout(set = 2, binding = 5) uniform sampler2D glassDepthMap;
@@ -93,6 +93,7 @@ void main() {
     mat3 TBN = mat3(T, B, N_geom);
 
     vec3 normalSample = texture(normalMap, fragTexCoord).rgb;
+    normalSample.g = 1.0 - normalSample.g;
     vec3 N = normalize(TBN * (normalSample * 2.0 - 1.0));
 
     // ==========================================================
@@ -149,19 +150,18 @@ void main() {
     vec3 refractionColor = texture(opaqueSceneCopyMap, distortedUV).rgb;
     vec3 tintedRefraction = refractionColor * finalTransmittance;
 
+// Fallback Alpha Blending
+    vec3 baseSurface = glassColor;
+    
+    // Add reflections
     vec3 reflectionColor = texture(hdriMap, SampleSphericalMap(R)).rgb;
-    reflectionColor = pow(ACESFilm(reflectionColor * 1.5), vec3(1.0/2.2));
-
-    // OVERRIDE METALLIC: Real glass is strictly dielectric (0.04). 
-    // This stops artists' metallic hacks from turning your glass into chrome!
+    reflectionColor = clamp(reflectionColor, 0.0, 5.0); 
+    reflectionColor = ACESFilm(reflectionColor * 1.5);
+    
     vec3 F0 = vec3(0.04); 
     vec3 F = FresnelSchlick(max(dot(N, V), 0.0), F0);
-
-    vec3 finalColor = mix(tintedRefraction, reflectionColor, F.r);
-
-    // ==========================================================
-    // 5. THE GHOSTING FIX & BASELINE OPACITY
-    // ==========================================================
-    float finalAlpha = clamp(materialAlpha + F.r + (thickness * 0.5) + roughness, 0.0, 1.0);
-    outColor = vec4(finalColor, 1.0);
+    vec3 finalColor = baseSurface + (reflectionColor * F.r);
+    
+    // Output true alpha so the Vulkan pipeline blends it with the background!
+    outColor = vec4(finalColor, materialAlpha);
 }

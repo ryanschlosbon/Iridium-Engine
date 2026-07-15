@@ -5,22 +5,22 @@
 MenuBarPanel::MenuBarPanel(Entity* selectedEntityPtr, EditorUIState* uiStatePtr)
     : selectedEntity(selectedEntityPtr), uiState(uiStatePtr) {}
 
-void MenuBarPanel::OnImGuiRender(Registry& registry, AssetManager* assetManager) {
+void MenuBarPanel::OnImGuiRender(Registry& registry, Iridium::AssetManager* assetManager) {
     if (ImGui::BeginMainMenuBar()) {
 
         // --- FILE MENU ---
         if (ImGui::BeginMenu("File")) {
             // Save Scene
             if (ImGui::MenuItem("Save Scene", "Ctrl+S")) {
-                SceneSerializer serializer(registry, assetManager);
-                serializer.Serialize("assets/scenes/test_scene.json");
+                SceneSerializer serializer(&registry);
+                serializer.serialize("assets/scenes/test_scene.json");
             }
 
             // Load Scene
             if (ImGui::MenuItem("Load Scene", "Ctrl+O")) {
                 registry.clear();
-                SceneSerializer serializer(registry, assetManager);
-                if (serializer.Deserialize("assets/scenes/test_scene.json")) {
+                SceneSerializer serializer(&registry);
+                if (serializer.deserialize("assets/scenes/test_scene.json")) {
                     // Reset selected entity so we don't crash
                     *selectedEntity = NULL_ENTITY;
                 }

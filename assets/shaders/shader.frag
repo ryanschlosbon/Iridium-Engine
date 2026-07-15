@@ -46,7 +46,7 @@ void main() {
     // 3. TRUE TANGENT SPACE NORMAL MAPPING
     vec3 N = normalize(fragNormal);
     vec3 T;
-    
+
     // Polyhaven Safeguard
     if (length(fragTangent.xyz) < 0.001) {
         T = cross(N, vec3(0.0, 1.0, 0.0));
@@ -57,18 +57,18 @@ void main() {
     } else {
         T = normalize(fragTangent.xyz);
     }
-    
+
     float handedness = (abs(fragTangent.w) < 0.001) ? 1.0 : fragTangent.w;
     vec3 B = normalize(cross(N, T)) * handedness;
     mat3 TBN = mat3(T, B, N);
 
     vec3 normalSample = texture(normalMap, fragTexCoord).rgb;
+    normalSample.g = 1.0 - normalSample.g;
     N = normalize(TBN * (normalSample * 2.0 - 1.0));
 
     // ==========================================================
     // 4. THE G-BUFFER PACKING 
     // ==========================================================
-    
     // Fold the 3D normal into a 2D Octahedron
     vec3 n = N;
     n /= (abs(n.x) + abs(n.y) + abs(n.z));
@@ -77,7 +77,7 @@ void main() {
     // FIX: Because we upgraded back to SFLOAT, we don't need the UNORM * 0.5 + 0.5 bias!
     // We just write the pure, flawless float data directly to VRAM.
     outNormalRoughMetal = vec4(n.xy, roughness, metallic);
-    
     vec3 finalColor = texColor.rgb * push.baseColor.rgb;
     outAlbedoEmissive = vec4(finalColor, push.emissiveFactor);
+
 }

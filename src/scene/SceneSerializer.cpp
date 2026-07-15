@@ -21,45 +21,46 @@ bool SceneSerializer::serialize(const std::string& filepath) {
     auto* meshPool = registry->getPool<MeshComponent>();
     auto* lightPool = registry->getPool<LightComponent>();
 
-    // We need to iterate over all active entities. 
-    // Assuming you have a way to get the max entity ID or active entity list:
-    for (uint32_t entity = 0; entity < registry->getMaxEntities(); ++entity) {
-        // If the entity doesn't have a transform, it's either dead or not a physical object
-        if (!transformPool->sparseMap.contains(entity)) continue;
+    // Safety check: If there are no transforms, there's nothing to save!
+    if (transformPool) {
+        // FAST ECS ITERATION: Loop directly over the packed array of entities 
+        // that are guaranteed to have a transform component!
+        for (uint32_t entity : transformPool->entities) {
 
-        json entityJson;
-        entityJson["EntityID"] = entity;
+            json entityJson;
+            entityJson["EntityID"] = entity;
 
-        // --- TRANSFORM COMPONENT ---
-        auto& tc = transformPool->get(entity);
-        entityJson["TransformComponent"] = {
-            {"position", {tc.position.x, tc.position.y, tc.position.z}},
-            {"rotation", {tc.rotation.x, tc.rotation.y, tc.rotation.z}},
-            {"scale",    {tc.scale.x, tc.scale.y, tc.scale.z}}
-        };
-
-        // --- MESH COMPONENT ---
-        if (meshPool && meshPool->sparseMap.contains(entity)) {
-            auto& mc = meshPool->get(entity);
-            // We save the file path of the asset, NOT the vertex data!
-            std::string path = mc.model ? mc.model->filePath : "";
-            entityJson["MeshComponent"] = {
-                {"meshPath", path},
-                {"enabled", mc.enabled}
+            // --- TRANSFORM COMPONENT ---
+            auto& tc = transformPool->get(entity);
+            entityJson["TransformComponent"] = {
+                {"position", {tc.position.x, tc.position.y, tc.position.z}},
+                {"rotation", {tc.rotation.x, tc.rotation.y, tc.rotation.z}},
+                {"scale",    {tc.scale.x, tc.scale.y, tc.scale.z}}
             };
-        }
 
-        // --- LIGHT COMPONENT ---
-        if (lightPool && lightPool->sparseMap.contains(entity)) {
-            auto& lc = lightPool->get(entity);
-            entityJson["LightComponent"] = {
-                {"color", {lc.color.r, lc.color.g, lc.color.b}},
-                {"intensity", lc.intensity},
-                {"type", static_cast<int>(lc.type)} // 0 = Directional, 1 = Point, etc.
-            };
-        }
+            // --- MESH COMPONENT ---
+            if (meshPool && meshPool->sparseMap.contains(entity)) {
+                auto& mc = meshPool->get(entity);
+                // We save the file path of the asset, NOT the vertex data!
+                std::string path = mc.model ? mc.model->filePath : "";
+                entityJson["MeshComponent"] = {
+                    {"meshPath", path},
+                    {"enabled", mc.enabled}
+                };
+            }
 
-        entitiesJson.push_back(entityJson);
+            // --- LIGHT COMPONENT ---
+            if (lightPool && lightPool->sparseMap.contains(entity)) {
+                auto& lc = lightPool->get(entity);
+                entityJson["LightComponent"] = {
+                    {"color", {lc.color.r, lc.color.g, lc.color.b}},
+                    {"intensity", lc.intensity},
+                    {"type", static_cast<int>(lc.type)} // 0 = Directional, 1 = Point, etc.
+                };
+            }
+
+            entitiesJson.push_back(entityJson);
+        }
     }
 
     sceneJson["Entities"] = entitiesJson;

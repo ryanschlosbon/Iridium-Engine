@@ -1,5 +1,5 @@
 #pragma once
-#include "renderer/VkContext.h"
+#include "VkContext.h"
 #include <vulkan/vulkan.h>
 
 class VkForwardRenderPass {

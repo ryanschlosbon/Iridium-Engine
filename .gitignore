@@ -23,7 +23,8 @@ assets/shaders/*.spv
 
 # Ignore Assets
 assets/models/
-assets/hdri
+assets/hdri/
+assets/scenes/
 
 # System
 .DS_Store

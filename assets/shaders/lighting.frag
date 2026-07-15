@@ -101,8 +101,9 @@ void main() {
     // MAGIC TRICK 3: EMISSIVE GLOW
     // ==========================================================
     // No fluff needed! Because your G-Buffer is SFLOAT, aeSample.a holds the true 1000.0 HDR value!
+
     float emissiveIntensity = aeSample.a;
-    vec3 Emissive = Albedo * emissiveIntensity; 
+    vec3 Emissive = max((Albedo * emissiveIntensity), 0.0);
 
     // 3. SKYBOX / BACKGROUND CHECK
     vec3 V = normalize(push.viewPos - fragPos);
@@ -112,7 +113,8 @@ void main() {
         vec4 eye = push.invProj * vec4(ndc, 1.0, 1.0);
         vec3 viewDir = normalize((push.invView * vec4(eye.xy, -1.0, 0.0)).xyz);
         vec3 envColor = texture(hdriMap, SampleSphericalMap(viewDir)).rgb;
-        envColor = pow(ACESFilm(envColor * 1.5), vec3(1.0/2.2)); 
+        envColor = envColor = ACESFilm(envColor * 1.5);
+        envColor = clamp(envColor, 0.0, 10.0);
         outColor = vec4(envColor, 1.0);
         return;
     }
@@ -150,5 +152,5 @@ void main() {
     // float exposure = 0.05; 
     // finalLitColor *= exposure;
 
-    outColor = vec4(pow(ACESFilm(finalLitColor), vec3(1.0/2.2)), 1.0);
+    outColor = vec4(ACESFilm(finalLitColor), 1.0);
 }

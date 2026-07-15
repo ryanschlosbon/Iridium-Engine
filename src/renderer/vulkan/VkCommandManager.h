@@ -4,24 +4,28 @@
 #include "VkFramebuffer.h"
 #include "VkGraphicsPipeline.h"
 #include "VkLightingPipeline.h"
-#include "VkMesh.h"
+#include "renderer/rhi/Mesh.h"
 #include "editor/EditorSystem.h"
 #include "ecs/Registry.h"
 #include "scene/Components.h"
 #include "VkUIRenderPass.h"
-#include "renderer/VkForwardRenderPass.h" 
-#include "renderer/VkForwardPipeline.h"
-#include "renderer/GlassDepthPipeline.h"
+#include "VkForwardRenderPass.h" 
+#include "VkForwardPipeline.h"
+#include "GlassDepthPipeline.h"
 
+class VkRenderPassWrapper;
+class VkFramebufferWrapper;
+class VkGraphicsPipeline;
+class VkLightingPipeline;
 class VkForwardRenderPass;
 class VkForwardPipeline;
 
 class EditorSystem;
 
 struct RenderPacket {
-	SubMesh* subMesh;
-	Material* material;
-	ModelAsset* model;
+	Iridium::SubMesh* subMesh;
+	Iridium::Material* material;
+	Iridium::ModelAsset* model;
 	glm::mat4 transform;
 	uint32_t materialId; // Used for sorting
 };

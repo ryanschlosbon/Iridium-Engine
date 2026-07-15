@@ -3,7 +3,7 @@
 #include <stdexcept>
 
 int main() {
-    Application app;
+    Iridium::Application app;
     try {
         app.run();
     }

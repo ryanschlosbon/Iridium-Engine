@@ -8,7 +8,7 @@ public:
     // Add the new pointer to the constructor
     MenuBarPanel(Entity* selectedEntityPtr, EditorUIState* uiStatePtr);
 
-    void OnImGuiRender(Registry& registry, AssetManager* assetManager) override;
+    void OnImGuiRender(Registry& registry, Iridium::AssetManager* assetManager) override;
 
 private:
     Entity* selectedEntity;

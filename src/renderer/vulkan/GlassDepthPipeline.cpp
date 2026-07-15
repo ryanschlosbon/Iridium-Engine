@@ -1,5 +1,6 @@
 #include "GlassDepthPipeline.h"
-#include "VkMesh.h"
+#include "VulkanVertexUtils.h"
+#include "renderer/rhi/Mesh.h"
 #include <stdexcept>
 #include <vector>
 #include <fstream>
@@ -21,8 +22,8 @@ namespace Iridium {
         VkPipelineShaderStageCreateInfo shaderStages[] = { vertShaderStageInfo };
 
         // 2. Vertex Input 
-        auto bindingDescription = Vertex::getBindingDescription();
-        auto attributeDescriptions = Vertex::getAttributeDescriptions();
+        auto bindingDescription = VulkanVertexUtils::getBindingDescription();
+        auto attributeDescriptions = VulkanVertexUtils::getAttributeDescriptions();
 
         VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
         vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
@@ -30,7 +31,7 @@ namespace Iridium {
         // Pass your engine's actual vertex struct descriptions!
         vertexInputInfo.vertexBindingDescriptionCount = 1;
         vertexInputInfo.pVertexBindingDescriptions = &bindingDescription;
-        vertexInputInfo.vertexAttributeDescriptionCount = static_cast<uint32_t>(attributeDescriptions.size());
+        vertexInputInfo.vertexAttributeDescriptionCount = 1; // static_cast<uint32_t>(attributeDescriptions.size());
         vertexInputInfo.pVertexAttributeDescriptions = attributeDescriptions.data();
 
         // 3. Input Assembly
@@ -64,7 +65,7 @@ namespace Iridium {
         // IMPORTANT: For glass, you often want to render BOTH faces (front and back) 
         // to calculate thickness later. Setting this to NONE disables culling.
         rasterizer.cullMode = VK_CULL_MODE_NONE;
-        rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+        rasterizer.frontFace = VK_FRONT_FACE_CLOCKWISE;
         rasterizer.depthBiasEnable = VK_FALSE;
 
         // 6. Multisampling

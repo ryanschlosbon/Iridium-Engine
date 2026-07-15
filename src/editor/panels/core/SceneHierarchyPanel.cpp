@@ -7,7 +7,7 @@ SceneHierarchyPanel::SceneHierarchyPanel(Entity* selectedEntityPtr)
     : selectedEntity(selectedEntityPtr) {
 }
 
-void SceneHierarchyPanel::OnImGuiRender(Registry& registry, AssetManager* assetManager) {
+void SceneHierarchyPanel::OnImGuiRender(Registry& registry, Iridium::AssetManager* assetManager) {
     ImGui::Begin("Scene Hierarchy");
     auto* transformPool = registry.getPool<TransformComponent>();
 

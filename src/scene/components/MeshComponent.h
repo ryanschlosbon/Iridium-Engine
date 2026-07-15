@@ -4,7 +4,7 @@
 #include "assets/AssetManager.h" 
 
 struct MeshComponent {
-    std::shared_ptr<ModelAsset> model;
+    std::shared_ptr<Iridium::ModelAsset> model;
     bool enabled = true;
 
     // The Option A Flag: If this is not empty, the engine knows to load a new mesh next frame.

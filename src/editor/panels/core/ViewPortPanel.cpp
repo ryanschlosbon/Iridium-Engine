@@ -1,30 +1,36 @@
 #include "ViewportPanel.h"
-#include "../../scene/Components.h"
-#include <glm/gtc/type_ptr.hpp> // For glm::value_ptr
+#include "imgui.h"
+#include "vendor/imguizmo/ImGuizmo.h"
 
-void ViewportPanel::render(VkDescriptorSet sceneTexture,
-    VkDescriptorSet glassDepthTexture,
-    int& currentRenderMode,
-    ImGuizmo::OPERATION& currentGizmoOperation,
-    const glm::mat4& viewMatrix,
-    const glm::mat4& projectionMatrix,
+// Bring in the RHI and Component definitions to fix "incomplete type" errors
+#include "renderer/rhi/Mesh.h" 
+#include "scene/components/TransformComponent.h"
+
+#include <glm/gtc/type_ptr.hpp>
+#include <algorithm>
+
+void ViewportPanel::render(void* sceneTextureID, void* glassDepthTextureID,
+    int& currentRenderMode, ImGuizmo::OPERATION& currentGizmoOperation,
+    const glm::mat4& view, const glm::mat4& proj,
     TransformComponent* selectedTransform) {
 
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{ 0, 0 });
+
+    // Using "Scene Viewport" as the consistent window name
     ImGui::Begin("Scene Viewport");
-    
+
     if (ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows) && ImGui::IsMouseDown(ImGuiMouseButton_Right)) {
         ImGui::SetWindowFocus();
     }
 
-    isFocused = ImGui::IsWindowFocused(); // This returns true if the window or any of its children are focused
+    isFocused = ImGui::IsWindowFocused();
 
     // ========================================================
     // 1. THE INTEGRATED TOOLBAR
     // ========================================================
-    ImGui::SetCursorPos(ImVec2(10, 30)); // Float it slightly down so it doesn't overlap the tab bar
+    ImGui::SetCursorPos(ImVec2(10, 30));
 
-    // Move Button
+    // Move Button logic
     bool isMoveActive = (currentGizmoOperation == ImGuizmo::TRANSLATE);
     if (isMoveActive) ImGui::PushStyleColor(ImGuiCol_Button, (ImVec4)ImColor::HSV(0.0f, 0.7f, 0.7f));
     if (ImGui::Button("Move")) currentGizmoOperation = ImGuizmo::TRANSLATE;
@@ -32,7 +38,7 @@ void ViewportPanel::render(VkDescriptorSet sceneTexture,
 
     ImGui::SameLine();
 
-    // Rotate Button
+    // Rotate Button logic
     bool isRotateActive = (currentGizmoOperation == ImGuizmo::ROTATE);
     if (isRotateActive) ImGui::PushStyleColor(ImGuiCol_Button, (ImVec4)ImColor::HSV(0.33f, 0.7f, 0.7f));
     if (ImGui::Button("Rotate")) currentGizmoOperation = ImGuizmo::ROTATE;
@@ -40,7 +46,7 @@ void ViewportPanel::render(VkDescriptorSet sceneTexture,
 
     ImGui::SameLine();
 
-    // Scale Button
+    // Scale Button logic
     bool isScaleActive = (currentGizmoOperation == ImGuizmo::SCALE);
     if (isScaleActive) ImGui::PushStyleColor(ImGuiCol_Button, (ImVec4)ImColor::HSV(0.66f, 0.7f, 0.7f));
     if (ImGui::Button("Scale")) currentGizmoOperation = ImGuizmo::SCALE;
@@ -50,13 +56,12 @@ void ViewportPanel::render(VkDescriptorSet sceneTexture,
     ImGui::Text("  |  View Mode:");
     ImGui::SameLine();
 
-    // Render Mode Combo Box
+    // Render Mode Selection
     const char* items[] = { "Standard", "Wireframe", "Glass Depth" };
     ImGui::SetNextItemWidth(110);
     ImGui::Combo("##renderMode", &currentRenderMode, items, IM_ARRAYSIZE(items));
 
-    ImGui::Dummy(ImVec2(0.0f, 5.0f)); // Add a little breathing room below the toolbar
-
+    ImGui::Dummy(ImVec2(0.0f, 5.0f));
 
     // ========================================================
     // 2. MOUSE MATH & IMAGE DRAWING
@@ -72,31 +77,38 @@ void ViewportPanel::render(VkDescriptorSet sceneTexture,
     mouseY = absoluteMousePos.y - screenPos.y;
     isHovered = ImGui::IsWindowHovered();
 
-    VkDescriptorSet textureToDraw = sceneTexture;
-    if (currentRenderMode == 2) { // 2 matches "Glass Depth" in the array above
-        textureToDraw = glassDepthTexture;
+    // Fix: Using the void* handles passed from the backend
+    void* textureToDraw = sceneTextureID;
+    if (currentRenderMode == 2) { // 2 matches "Glass Depth"
+        textureToDraw = glassDepthTextureID;
     }
 
-    // Prevent crashing if window is too small
+
+    // Drawing the viewport image using the API-agnostic handle
     if (viewportWidth > 0.0f && viewportHeight > 0.0f) {
         ImGui::Image((ImTextureID)textureToDraw, availSize);
     }
 
-// ========================================================
-    // 3. DRAW GIZMOS (Must happen AFTER the image is drawn!)
+    // ========================================================
+    // 3. DRAW GIZMOS
     // ========================================================
     if (selectedTransform) {
+        ImGuizmo::SetOrthographic(false);
         ImGuizmo::SetDrawlist();
 
         ImVec2 imgMin = ImGui::GetItemRectMin();
         ImVec2 imgMax = ImGui::GetItemRectMax();
         ImGuizmo::SetRect(imgMin.x, imgMin.y, imgMax.x - imgMin.x, imgMax.y - imgMin.y);
 
-        // USE YOUR COMPONENT'S ACTUAL MATRIX
+        // Fix: Use the actual worldMatrix from your component
         glm::mat4 transformMatrix = selectedTransform->worldMatrix;
 
-        if (ImGuizmo::Manipulate(glm::value_ptr(viewMatrix),
-            glm::value_ptr(projectionMatrix),
+        // Vulkan flip for ImGuizmo compatibility
+        glm::mat4 correctedProj = proj;
+        correctedProj[1][1] *= -1;
+
+        if (ImGuizmo::Manipulate(glm::value_ptr(view),
+            glm::value_ptr(correctedProj),
             currentGizmoOperation,
             ImGuizmo::LOCAL,
             glm::value_ptr(transformMatrix))) {
@@ -104,12 +116,16 @@ void ViewportPanel::render(VkDescriptorSet sceneTexture,
             float translation[3], rotation[3], scale[3];
             ImGuizmo::DecomposeMatrixToComponents(glm::value_ptr(transformMatrix), translation, rotation, scale);
 
-            // MAP TO YOUR COMPONENT'S EXACT VARIABLE NAMES
-            selectedTransform->position = glm::make_vec3(translation);
-            selectedTransform->rotation = glm::make_vec3(rotation);
-            selectedTransform->scale = glm::make_vec3(scale);
+            // Update your component properties
+            selectedTransform->position = glm::vec3(translation[0], translation[1], translation[2]);
+            selectedTransform->rotation = glm::vec3(
+                glm::radians(rotation[0]),
+                glm::radians(rotation[1]),
+                glm::radians(rotation[2])
+            );
+            selectedTransform->scale = glm::vec3(scale[0], scale[1], scale[2]);
 
-            // Flag it as dirty so your TransformSystem recalculates the matrix next frame!
+            // Flag for the TransformSystem to update the world matrix next frame
             selectedTransform->isDirty = true;
         }
     }

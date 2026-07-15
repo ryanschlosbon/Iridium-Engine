@@ -1,6 +1,6 @@
 #include <vector>
 #include <memory>
-#include "renderer/VkMesh.h"
+#include "renderer/rhi/Mesh.h"
 #include "ecs/Entity.h"
 
 class Scene {
@@ -19,7 +19,7 @@ private:
 };
 
 struct RenderObject {
-    std::shared_ptr<ModelAsset> model; // The specific car/box/plane
+    std::shared_ptr<Iridium::ModelAsset> model; // The specific car/box/plane
     glm::mat4 transform;               // Where it is
     uint32_t entityID;
 };

@@ -21,16 +21,19 @@ public:
     ~VkLightingPipeline();
 
     VkPipeline getPipeline() const { return pipeline; }
+    VkPipeline getSelectionPipeline() const { return selectionPipeline; }
     VkPipelineLayout getPipelineLayout() const { return pipelineLayout; }
     VkDescriptorSetLayout getDescriptorSetLayout() const { return descriptorSetLayout; }
 
 private:
     VkContext* context;
     VkPipeline pipeline;
+    VkPipeline selectionPipeline;
     VkPipelineLayout pipelineLayout;
     VkDescriptorSetLayout descriptorSetLayout;
 
     VkShaderModule createShaderModule(const std::vector<char>& code);
     void createDescriptorSetLayout();
     void createPipeline(VkRenderPass renderPass);
+    void createSelectionPipeline(VkRenderPass renderPass);
 };

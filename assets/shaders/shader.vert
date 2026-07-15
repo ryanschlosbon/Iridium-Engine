@@ -32,7 +32,7 @@ void main() {
     // 1. Calculate World Position
     vec4 worldPos = push.renderMatrix * vec4(inPosition, 1.0);
     gl_Position = ubo.proj * ubo.view * worldPos;
-    
+
     // 2. Pass standard data
     fragColor = inColor;
     fragTexCoord = inTexCoord;

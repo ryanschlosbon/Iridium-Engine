@@ -1,5 +1,6 @@
 #include "VkForwardPipeline.h"
-#include "VkMesh.h"
+#include "renderer/rhi/Mesh.h"
+#include "VulkanVertexUtils.h"
 #include "utils/File.h"
 #include <stdexcept>
 #include <array>
@@ -84,8 +85,8 @@ void VkForwardPipeline::createPipeline(VkForwardRenderPass* renderPass) {
     VkPipelineShaderStageCreateInfo shaderStages[] = { vertShaderStageInfo, fragShaderStageInfo };
 
     // 2. VERTEX INPUT (Exactly the same as the G-Buffer)
-    auto bindingDescription = Vertex::getBindingDescription();
-    auto attributeDescriptions = Vertex::getAttributeDescriptions();
+    auto bindingDescription = Iridium::VulkanVertexUtils::getBindingDescription();
+    auto attributeDescriptions = Iridium::VulkanVertexUtils::getAttributeDescriptions();
 
     VkPipelineVertexInputStateCreateInfo vertexInputInfo{ VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO };
     vertexInputInfo.vertexBindingDescriptionCount = 1;
@@ -110,7 +111,7 @@ void VkForwardPipeline::createPipeline(VkForwardRenderPass* renderPass) {
     rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
     rasterizer.lineWidth = 1.0f;
     rasterizer.cullMode = VK_CULL_MODE_NONE;
-    rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    rasterizer.frontFace = VK_FRONT_FACE_CLOCKWISE;
     rasterizer.depthBiasEnable = VK_FALSE;
 
     // 6. MULTISAMPLING
@@ -134,7 +135,7 @@ void VkForwardPipeline::createPipeline(VkForwardRenderPass* renderPass) {
     colorBlendAttachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
     colorBlendAttachment.colorBlendOp = VK_BLEND_OP_ADD;
     colorBlendAttachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
-    colorBlendAttachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    colorBlendAttachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
     colorBlendAttachment.alphaBlendOp = VK_BLEND_OP_ADD;
 
     VkPipelineColorBlendStateCreateInfo colorBlending{ VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO };

@@ -5,7 +5,7 @@ ProjectSettingsPanel::ProjectSettingsPanel(bool* isOpenPtr)
     : isOpen(isOpenPtr) {
 }
 
-void ProjectSettingsPanel::OnImGuiRender(Registry& registry, AssetManager* assetManager) {
+void ProjectSettingsPanel::OnImGuiRender(Registry& registry, Iridium::AssetManager* assetManager) {
     // 1. THE GATEKEEPER
     // If the boolean is false (because the Menu Bar hasn't toggled it), we exit instantly.
     // The window draws nothing and takes up zero CPU time.
