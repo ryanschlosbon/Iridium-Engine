@@ -11,6 +11,7 @@ void DescriptorAllocator::cleanup() {
         vkDestroyDescriptorPool(device, pool, nullptr);
     }
     activePools.clear();
+    setOwners.clear();
     currentPool = VK_NULL_HANDLE;
 }
 
@@ -24,6 +25,7 @@ VkDescriptorPool DescriptorAllocator::createNewPool() {
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
     poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
     poolInfo.pPoolSizes = poolSizes.data();
     poolInfo.maxSets = 100; // Total sets per chunk
@@ -64,5 +66,30 @@ VkDescriptorSet DescriptorAllocator::allocate(VkDescriptorSetLayout layout) {
         throw std::runtime_error("Failed to allocate descriptor set!");
     }
 
+    setOwners.emplace(set, allocInfo.descriptorPool);
     return set;
+}
+
+void DescriptorAllocator::free(VkDescriptorSet set) {
+    if (set == VK_NULL_HANDLE) {
+        return;
+    }
+
+    auto owner = setOwners.find(set);
+    if (owner == setOwners.end()) {
+        return;
+    }
+
+    VkDescriptorPool pool = owner->second;
+    if (vkFreeDescriptorSets(device, pool, 1, &set) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to free descriptor set!");
+    }
+
+    setOwners.erase(owner);
+}
+
+void DescriptorAllocator::free(std::span<const VkDescriptorSet> sets) {
+    for (VkDescriptorSet set : sets) {
+        free(set);
+    }
 }

@@ -1,8 +1,15 @@
 #include "Application.h"
 #include <iostream>
 #include <algorithm>
+#include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <exception>
+#include <filesystem>
+#include <span>
+#include <string>
 
-#include "renderer/vulkan/VulkanVertexBackend.h" 
+#include "renderer/rhi/RenderBackendFactory.h"
 #include "scene/components/MeshComponent.h"
 #include "renderer/rhi/Mesh.h"
 
@@ -29,14 +36,13 @@ namespace Iridium {
 
     void Application::initRenderer() {
         // 1. Instantiate the RHI (The Strategy Pattern in action)
-        // If you write a DX12 backend later, you literally just change this ONE line.
-        renderBackend = new VulkanVertexBackend();
+        renderBackend = createRenderBackend(RenderBackendApi::Vulkan);
         renderBackend->init(window);
 
         editor.init(window);
 
         // 2. Inject the backend into the Asset Manager
-        assetManager = new AssetManager(renderBackend);
+        assetManager = std::make_unique<AssetManager>(renderBackend.get());
 
         // 3. Load your default scene/assets
         // (Your AssetManager now handles all the RHI calls internally)
@@ -101,34 +107,17 @@ namespace Iridium {
             // This recalculates all local/world matrices before we extract them.
             transformSystem.update(registry);
 
-            // --- CALCULATE REAL CAMERA MATRICES ---
-            glm::mat4 viewMatrix = glm::lookAt(cameraPos, cameraPos + cameraFront, cameraUp);
-
-            // Note: 16.0f / 9.0f is a standard 16:9 aspect ratio. You can swap this with 
-            // (float)windowWidth / (float)windowHeight later if you want dynamic resizing!
-            glm::mat4 projMatrix = glm::perspective(glm::radians(45.0f), 16.0f / 9.0f, 0.1f, 100.0f);
-            projMatrix[1][1] *= -1.0f;
-
-            // 4. Update Editor UI
-            renderBackend->beginUI();
-
-            editor.update(registry, assetManager,
-                viewMatrix, // Pass the calculated view matrix
-                projMatrix, // Pass the calculated projection matrix
-                renderBackend->getLitSceneTextureID(),
-                renderBackend->getGlassDepthTextureID());
-
-            // 5. The Magic Data-Driven Render Loop
+            // 4. The frame acquisition must precede UI construction so the
+            // viewport texture IDs correspond to the image acquired this frame.
             drawFrame();
         }
     }
 
     void Application::drawFrame() {
-        // If the window was resized, OR Vulkan tells us the swapchain is out of date:
-        if (framebufferResized || !renderBackend->beginFrame()) {
+        // If the window was resized, OR acquire requests a swapchain rebuild:
+        if (framebufferResized || renderBackend->beginFrame() == FrameStatus::RecreateSwapchain) {
             framebufferResized = false;
-            renderBackend->recreateSwapchain(window); // Safely rebuild!
-            ImGui::EndFrame(); // Cancel the UI frame we started in mainLoop
+            recreateSwapchain();
             return;
         }
 
@@ -144,6 +133,14 @@ namespace Iridium {
         glm::mat4 projMatrix = glm::perspective(glm::radians(45.0f), 16.0f / 9.0f, 0.1f, 100.0f);
         projMatrix[1][1] *= -1.0f; // Vulkan inverted Y
 
+        // Build ImGui only after beginFrame selected currentImageIndex. The UI
+        // descriptors are per swapchain image, so using them before acquisition
+        // can sample a different target that has not yet been transitioned.
+        renderBackend->beginUI();
+        editor.update(registry, assetManager.get(), viewMatrix, projMatrix,
+            renderBackend->getLitSceneTextureID(),
+            renderBackend->getGlassDepthTextureID());
+
         renderBackend->updateCamera(viewMatrix, projMatrix);
 
         // --- 3. THE EXTRACTION PHASE (Data-Oriented Design) ---
@@ -157,30 +154,40 @@ namespace Iridium {
                 // Skip disabled meshes, empty models, or entities without transforms
                 if (!meshComp.enabled || !meshComp.model || !transformPool->has(entity)) continue;
 
+                const auto& model = *meshComp.model;
+                if (!model.geometry.isValid()) continue;
+
                 auto& transformComp = transformPool->get(entity);
 
                 // Calculate distance for Back-to-Front glass sorting
                 float distToCam = glm::distance(cameraPos, glm::vec3(transformComp.worldMatrix[3]));
 
                 // Generate a DrawPacket for every submesh in the model
-                for (size_t i = 0; i < meshComp.model->subMeshes.size(); i++) {
+                for (size_t i = 0; i < model.subMeshes.size(); i++) {
+                    const auto& subMesh = model.subMeshes[i];
+                    int matIndex = subMesh.materialIndex;
+                    if (matIndex < 0 || static_cast<size_t>(matIndex) >= model.materials.size()) {
+                        continue;
+                    }
 
-                    int matIndex = meshComp.model->subMeshes[i].materialIndex;
-                    MaterialHandle matHandle = meshComp.model->materials[matIndex];
+                    const MaterialBinding& binding = model.materials[matIndex];
+                    if (!binding.material.isValid() || !binding.pipeline.isValid()) {
+                        continue;
+                    }
 
                     DrawPacket packet{};
-                    packet.geometry = meshComp.model->geometry;
-                    packet.material = matHandle;
-                    packet.indexCount = meshComp.model->subMeshes[i].indexCount;
-                    packet.firstIndex = meshComp.model->subMeshes[i].indexStart;
+                    packet.geometry = model.geometry;
+                    packet.material = binding.material;
+                    packet.pipeline = binding.pipeline;
+                    packet.opaqueSortKey = binding.opaqueSortKey;
+                    packet.indexCount = subMesh.indexCount;
+                    packet.firstIndex = subMesh.indexStart;
                     packet.worldTransform = transformComp.worldMatrix;
                     packet.distanceToCamera = distToCam;
                     packet.isSelected = (entity == selectedEntity) ? 1 : 0;
 
                     // Sort into Opaque or Transparent queues
-                    // (Assuming you track AlphaMode inside your updated Material struct or Asset)
-                    // For now, checking a hypothetical boolean:
-                    if (meshComp.model->materialIsTransparent[matIndex]) {
+                    if (binding.renderQueue == RenderQueue::Transparent) {
                         transparentQueue.push_back(packet);
                     }
                     else {
@@ -197,44 +204,57 @@ namespace Iridium {
 
         // --- 4. THE SORTING PHASE (CPU Cache Optimization) ---
 
-        // Group opaque objects by material ticket to eliminate redundant Vulkan pipeline state changes
+        // Group opaque objects by the PSO/material identity carried by each binding.
         std::sort(opaqueQueue.begin(), opaqueQueue.end(), [](const DrawPacket& a, const DrawPacket& b) {
-            return a.material < b.material;
+            if (a.opaqueSortKey != b.opaqueSortKey) return a.opaqueSortKey < b.opaqueSortKey;
+            if (a.geometry != b.geometry) return a.geometry < b.geometry;
+            return a.firstIndex < b.firstIndex;
             });
 
         // Sort transparent objects Back-to-Front to ensure perfect alpha blending and refraction
         std::sort(transparentQueue.begin(), transparentQueue.end(), [](const DrawPacket& a, const DrawPacket& b) {
-            return a.distanceToCamera > b.distanceToCamera;
+            if (a.distanceToCamera != b.distanceToCamera) return a.distanceToCamera > b.distanceToCamera;
+            if (a.pipeline != b.pipeline) return a.pipeline < b.pipeline;
+            if (a.material != b.material) return a.material < b.material;
+            return a.geometry < b.geometry;
             });
 
         // --- 5. THE SUBMISSION PHASE (The Black Box) ---
 
         // Pass 1: Opaque G-Buffer
         bool isWireframe = (editor.currentRenderMode == 1);
-        renderBackend->submitOpaqueQueue(opaqueQueue, selectionQueue, isWireframe);
+        renderBackend->submitOpaqueQueue(
+            std::span<const DrawPacket>(opaqueQueue.data(), opaqueQueue.size()),
+            std::span<const DrawPacket>(selectionQueue.data(), selectionQueue.size()),
+            isWireframe);
 
         // Pass 2: Deferred Lighting 
         renderBackend->submitLightingPass(cameraPos, viewMatrix, projMatrix);
 
-        // Pass 3 & 4: The AAA Translucency Pipeline
-        renderBackend->submitGlassDepthPass(transparentQueue);
-        renderBackend->submitTransparentQueue(transparentQueue);
+        // Pass 3: The AAA Translucency Pipeline (includes per-layer glass depth)
+        const std::span<const DrawPacket> transparentQueueView(transparentQueue.data(), transparentQueue.size());
+        renderBackend->submitTransparentQueue(transparentQueueView);
 
-        // Pass 5: ImGui/Editor UI
+        // Pass 4: ImGui/Editor UI
         renderBackend->submitUIPass();
 
-        renderBackend->endFrame();
+        if (renderBackend->endFrame() == FrameStatus::RecreateSwapchain) {
+            framebufferResized = false;
+            recreateSwapchain();
+        }
     }
 
     void Application::cleanup() {
-        if (assetManager) {
-            delete assetManager;
+        assetManager.reset();
+
+        if (renderBackend && hdriMap.isValid()) {
+            renderBackend->freeTexture(hdriMap);
+            hdriMap = {};
         }
 
-        // The backend's cleanup handles all Vulkan destruction (Swapchains, Buffers, Images)
         if (renderBackend) {
             renderBackend->cleanup();
-            delete renderBackend;
+            renderBackend.reset();
         }
 
         glfwDestroyWindow(window);
@@ -244,10 +264,7 @@ namespace Iridium {
     // --- GLFW CALLBACK STUBS ---
     void Application::framebufferResizeCallback(GLFWwindow* window, int width, int height) {
         auto app = reinterpret_cast<Application*>(glfwGetWindowUserPointer(window));
-        app->framebufferResized = true;
-        if (app->renderBackend) {
-            app->renderBackend->recreateSwapchain(window);
-        }
+        if (app) app->framebufferResized = true;
     }
 
     void Application::mouse_callback(GLFWwindow* window, double xposIn, double yposIn) {
@@ -332,8 +349,39 @@ namespace Iridium {
         }
     }
 
-    void Application::ProcessMeshSwaps() { /* ... */ }
-    void Application::recreateSwapchain() { /* ... */ }
+    void Application::ProcessMeshSwaps() {
+        if (!assetManager) return;
+
+        auto* meshPool = registry.getPool<MeshComponent>();
+        if (!meshPool) return;
+
+        for (uint32_t entity : meshPool->entities) {
+            auto& meshComp = meshPool->get(entity);
+            if (meshComp.requestedMeshPath.empty()) continue;
+
+            const std::filesystem::path requestedPath(meshComp.requestedMeshPath);
+            const std::filesystem::path modelPath = requestedPath.is_absolute()
+                ? requestedPath
+                : std::filesystem::path(PROJECT_ROOT_DIR) / requestedPath;
+
+            try {
+                meshComp.model = assetManager->getModel(modelPath.string());
+                meshComp.requestedMeshPath.clear();
+            }
+            catch (const std::exception& error) {
+                std::cerr << "Failed to load requested mesh '" << modelPath.string()
+                    << "': " << error.what() << '\n';
+                // Clear failed requests after one report; the caller must explicitly retry.
+                meshComp.requestedMeshPath.clear();
+            }
+        }
+    }
+
+    void Application::recreateSwapchain() {
+        if (renderBackend) {
+            renderBackend->recreateSwapchain(window);
+        }
+    }
     void Application::selectEntityAtMouse(double mouseX, double mouseY) { /* ... */ }
 
 } // namespace Iridium

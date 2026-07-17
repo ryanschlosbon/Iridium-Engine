@@ -23,9 +23,13 @@ layout(set = 0, binding = 0) uniform UniformBufferObject {
 layout(push_constant) uniform PushConstants {
     mat4 renderMatrix;
     vec4 baseColor;
+    vec4 emissiveFactor;
     float metallicFactor;
     float roughnessFactor;
-    vec2 padding;
+    float normalScale;
+    float alphaCutoff;
+    float transmissionFactor;
+    float padding;
 } push;
 
 void main() {

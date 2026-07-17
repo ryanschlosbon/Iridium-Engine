@@ -5,6 +5,7 @@
 #include "panels/core/ViewPortPanel.h"
 #include "panels/menus/MenuBarPanel.h"
 #include "panels/windows/ProjectSettingsPanel.h"
+#include "platform/FileDialog.h"
 
 #include <vector>
 #include <iostream>
@@ -19,6 +20,8 @@ void EditorSystem::init(GLFWwindow* window) {
     // 1. INIT: All Vulkan Descriptor Pool and ImGui_ImplVulkan logic is gone!
     // The backend's init() function handles the heavy lifting now. We just create the panels.
 
+    Iridium::setFileDialogOwner(window);
+
     panels.push_back(std::make_unique<SceneHierarchyPanel>(&selectedEntity));
     panels.push_back(std::make_unique<InspectorPanel>(&selectedEntity));
     panels.push_back(std::make_unique<MenuBarPanel>(&selectedEntity, &uiState));
@@ -28,6 +31,7 @@ void EditorSystem::init(GLFWwindow* window) {
 void EditorSystem::cleanup() {
     // 2. CLEANUP: ImGui shutdown is handled by the backend. We just clear our panel memory.
     panels.clear();
+    Iridium::setFileDialogOwner(nullptr);
 }
 
 void EditorSystem::update(Registry& registry, Iridium::AssetManager* assetManager,

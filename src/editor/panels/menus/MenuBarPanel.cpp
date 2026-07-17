@@ -1,29 +1,48 @@
 #include "MenuBarPanel.h"
+#include "platform/FileDialog.h"
 #include "scene/SceneSerializer.h"
 #include <imgui.h>
+#include <array>
+#include <filesystem>
+#include <iostream>
 
 MenuBarPanel::MenuBarPanel(Entity* selectedEntityPtr, EditorUIState* uiStatePtr)
     : selectedEntity(selectedEntityPtr), uiState(uiStatePtr) {}
 
 void MenuBarPanel::OnImGuiRender(Registry& registry, Iridium::AssetManager* assetManager) {
+    constexpr std::array sceneFilters = {
+        Iridium::FileDialogFilter{ "Iridium scenes", "*.json" },
+        Iridium::FileDialogFilter{ "All files", "*.*" },
+    };
+
+    const auto saveScene = [&](const std::filesystem::path& path) {
+        SceneSerializer serializer(&registry);
+        if (serializer.serialize(path.string())) {
+            currentScenePath = path;
+        }
+        else {
+            std::cerr << "Failed to save scene to '" << path.string() << "'.\n";
+        }
+    };
+
+    bool requestSave = ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_S);
+    bool requestSaveAs = ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_S);
+    bool requestLoad = ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_O);
+
     if (ImGui::BeginMainMenuBar()) {
 
         // --- FILE MENU ---
         if (ImGui::BeginMenu("File")) {
-            // Save Scene
-            if (ImGui::MenuItem("Save Scene", "Ctrl+S")) {
-                SceneSerializer serializer(&registry);
-                serializer.serialize("assets/scenes/test_scene.json");
+            if (ImGui::MenuItem("Save", "Ctrl+S")) {
+                requestSave = true;
             }
 
-            // Load Scene
-            if (ImGui::MenuItem("Load Scene", "Ctrl+O")) {
-                registry.clear();
-                SceneSerializer serializer(&registry);
-                if (serializer.deserialize("assets/scenes/test_scene.json")) {
-                    // Reset selected entity so we don't crash
-                    *selectedEntity = NULL_ENTITY;
-                }
+            if (ImGui::MenuItem("Save As...", "Ctrl+Shift+S")) {
+                requestSaveAs = true;
+            }
+
+            if (ImGui::MenuItem("Load...", "Ctrl+O")) {
+                requestLoad = true;
             }
 
             ImGui::Separator();
@@ -62,5 +81,39 @@ void MenuBarPanel::OnImGuiRender(Registry& registry, Iridium::AssetManager* asse
         }
 
         ImGui::EndMainMenuBar();
+    }
+
+    if (requestSaveAs) {
+        const std::filesystem::path suggestion = currentScenePath.empty()
+            ? std::filesystem::path(PROJECT_ROOT_DIR) / "assets" / "scenes" / "untitled.json"
+            : currentScenePath;
+        const auto path = Iridium::saveFileDialog(sceneFilters, suggestion, "json");
+        if (path) saveScene(*path);
+    }
+    else if (requestSave) {
+        if (currentScenePath.empty()) {
+            const auto path = Iridium::saveFileDialog(sceneFilters,
+                std::filesystem::path(PROJECT_ROOT_DIR) / "assets" / "scenes" / "untitled.json",
+                "json");
+            if (path) saveScene(*path);
+        }
+        else {
+            saveScene(currentScenePath);
+        }
+    }
+
+    if (requestLoad) {
+        const auto path = Iridium::openFileDialog(sceneFilters,
+            std::filesystem::path(PROJECT_ROOT_DIR) / "assets" / "scenes");
+        if (path) {
+            SceneSerializer serializer(&registry);
+            if (serializer.deserialize(path->string())) {
+                currentScenePath = *path;
+                *selectedEntity = NULL_ENTITY;
+            }
+            else {
+                std::cerr << "Failed to load scene from '" << path->string() << "'.\n";
+            }
+        }
     }
 }

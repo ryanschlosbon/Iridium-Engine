@@ -5,7 +5,9 @@
 #include "scene/components/LightComponent.h"
 #include <nlohmann/json.hpp>
 #include <fstream>
+#include <filesystem>
 #include <iostream>
+#include <unordered_map>
 
 using json = nlohmann::json;
 
@@ -20,6 +22,7 @@ bool SceneSerializer::serialize(const std::string& filepath) {
     auto* transformPool = registry->getPool<TransformComponent>();
     auto* meshPool = registry->getPool<MeshComponent>();
     auto* lightPool = registry->getPool<LightComponent>();
+    auto* relationshipPool = registry->getPool<RelationshipComponent>();
 
     // Safety check: If there are no transforms, there's nothing to save!
     if (transformPool) {
@@ -55,7 +58,26 @@ bool SceneSerializer::serialize(const std::string& filepath) {
                 entityJson["LightComponent"] = {
                     {"color", {lc.color.r, lc.color.g, lc.color.b}},
                     {"intensity", lc.intensity},
-                    {"type", static_cast<int>(lc.type)} // 0 = Directional, 1 = Point, etc.
+                    {"type", static_cast<int>(lc.type)},
+                    {"range", lc.range},
+                    {"radius", lc.radius},
+                    {"innerCone", lc.innerCone},
+                    {"outerCone", lc.outerCone},
+                    {"castsShadows", lc.castsShadows}
+                };
+            }
+
+            if (relationshipPool && relationshipPool->sparseMap.contains(entity)) {
+                const auto& relationship = relationshipPool->get(entity);
+                json children = json::array();
+                for (Entity child : relationship.children) children.push_back(child);
+
+                entityJson["RelationshipComponent"] = {
+                    {"parent", relationship.parent == NULL_ENTITY
+                        ? json(nullptr)
+                        : json(relationship.parent)},
+                    {"children", std::move(children)},
+                    {"depth", relationship.depth}
                 };
             }
 
@@ -66,10 +88,17 @@ bool SceneSerializer::serialize(const std::string& filepath) {
     sceneJson["Entities"] = entitiesJson;
 
     // Write to file
-    std::ofstream file(filepath);
+    const std::filesystem::path outputPath(filepath);
+    if (outputPath.has_parent_path()) {
+        std::error_code error;
+        std::filesystem::create_directories(outputPath.parent_path(), error);
+        if (error) return false;
+    }
+
+    std::ofstream file(outputPath);
     if (file.is_open()) {
         file << sceneJson.dump(4); // The '4' adds pretty-printing indentation!
-        return true;
+        return file.good();
     }
     return false;
 }
@@ -79,42 +108,94 @@ bool SceneSerializer::deserialize(const std::string& filepath) {
     if (!file.is_open()) return false;
 
     json sceneJson;
-    file >> sceneJson;
+    try {
+        file >> sceneJson;
+    }
+    catch (const json::exception&) {
+        return false;
+    }
 
-    // Optional: registry->clearAllEntities(); // Reset scene before loading
+    if (!sceneJson.contains("Entities") || !sceneJson["Entities"].is_array()) {
+        return false;
+    }
 
-    for (auto& entityJson : sceneJson["Entities"]) {
-        uint32_t entity = registry->createEntity();
+    // Do not destroy the current scene until the selected file has parsed and
+    // passed the minimum schema check.
+    registry->clear();
 
-        // --- TRANSFORM COMPONENT ---
-        if (entityJson.contains("TransformComponent")) {
-            auto tcJson = entityJson["TransformComponent"];
-            glm::vec3 pos = { tcJson["position"][0], tcJson["position"][1], tcJson["position"][2] };
-            glm::vec3 rot = { tcJson["rotation"][0], tcJson["rotation"][1], tcJson["rotation"][2] };
-            glm::vec3 scale = { tcJson["scale"][0], tcJson["scale"][1], tcJson["scale"][2] };
+    try {
+        const json& entities = sceneJson["Entities"];
+        std::vector<Entity> loadedEntities;
+        loadedEntities.reserve(entities.size());
+        std::unordered_map<Entity, Entity> savedToLoaded;
 
-            registry->addComponent<TransformComponent>(entity, pos, rot, scale);
+        // Establish every entity mapping first so relationship references are
+        // valid regardless of save order or gaps in the original entity IDs.
+        for (size_t index = 0; index < entities.size(); ++index) {
+            const Entity loaded = registry->createEntity();
+            const Entity saved = entities[index].value("EntityID", static_cast<Entity>(index));
+            loadedEntities.push_back(loaded);
+            savedToLoaded[saved] = loaded;
         }
 
-        // --- MESH COMPONENT ---
-        if (entityJson.contains("MeshComponent")) {
-            auto mcJson = entityJson["MeshComponent"];
-            std::string path = mcJson["meshPath"];
+        for (size_t index = 0; index < entities.size(); ++index) {
+            const json& entityJson = entities[index];
+            const Entity entity = loadedEntities[index];
 
-            // We set the requestedMeshPath so your ProcessMeshSwaps logic loads it on the main thread!
-            auto& mc = registry->addComponent<MeshComponent>(entity, nullptr);
-            mc.requestedMeshPath = path;
-            mc.enabled = mcJson["enabled"];
-        }
+            if (entityJson.contains("TransformComponent")) {
+                const json& tcJson = entityJson["TransformComponent"];
+                const glm::vec3 pos = { tcJson["position"][0], tcJson["position"][1], tcJson["position"][2] };
+                const glm::vec3 rot = { tcJson["rotation"][0], tcJson["rotation"][1], tcJson["rotation"][2] };
+                const glm::vec3 scale = { tcJson["scale"][0], tcJson["scale"][1], tcJson["scale"][2] };
+                registry->addComponent<TransformComponent>(entity, pos, rot, scale);
+            }
 
-        // --- LIGHT COMPONENT ---
-        if (entityJson.contains("LightComponent")) {
-            auto lcJson = entityJson["LightComponent"];
-            auto& lc = registry->addComponent<LightComponent>(entity);
-            lc.color = { lcJson["color"][0], lcJson["color"][1], lcJson["color"][2] };
-            lc.intensity = lcJson["intensity"];
-            lc.type = static_cast<LightType>(lcJson["type"]);
+            if (entityJson.contains("MeshComponent")) {
+                const json& mcJson = entityJson["MeshComponent"];
+                auto& mesh = registry->addComponent<MeshComponent>(entity, nullptr);
+                mesh.requestedMeshPath = mcJson.value("meshPath", std::string{});
+                mesh.enabled = mcJson.value("enabled", true);
+            }
+
+            if (entityJson.contains("LightComponent")) {
+                const json& lcJson = entityJson["LightComponent"];
+                auto& light = registry->addComponent<LightComponent>(entity);
+                light.color = { lcJson["color"][0], lcJson["color"][1], lcJson["color"][2] };
+                light.intensity = lcJson.value("intensity", 1.0f);
+                light.type = static_cast<LightType>(lcJson.value("type", 0));
+                light.range = lcJson.value("range", light.range);
+                light.radius = lcJson.value("radius", light.radius);
+                light.innerCone = lcJson.value("innerCone", light.innerCone);
+                light.outerCone = lcJson.value("outerCone", light.outerCone);
+                light.castsShadows = lcJson.value("castsShadows", light.castsShadows);
+            }
+
+            if (entityJson.contains("RelationshipComponent")) {
+                const json& rcJson = entityJson["RelationshipComponent"];
+                auto& relationship = registry->addComponent<RelationshipComponent>(entity);
+                relationship.depth = rcJson.value("depth", 0);
+
+                if (rcJson.contains("parent") && !rcJson["parent"].is_null()) {
+                    const Entity savedParent = rcJson["parent"];
+                    if (const auto parent = savedToLoaded.find(savedParent); parent != savedToLoaded.end()) {
+                        relationship.parent = parent->second;
+                    }
+                }
+
+                if (rcJson.contains("children") && rcJson["children"].is_array()) {
+                    for (const json& childJson : rcJson["children"]) {
+                        const Entity savedChild = childJson;
+                        if (const auto child = savedToLoaded.find(savedChild); child != savedToLoaded.end()) {
+                            relationship.children.push_back(child->second);
+                        }
+                    }
+                }
+            }
         }
+    }
+    catch (const json::exception&) {
+        registry->clear();
+        return false;
     }
 
     return true;

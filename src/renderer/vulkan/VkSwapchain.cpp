@@ -3,8 +3,8 @@
 #include <algorithm>
 #include <stdexcept>
 
-VkSwapchain::VkSwapchain(VkContext* context, GLFWwindow* window) : context(context) {
-	createSwapchain(window);
+VkSwapchain::VkSwapchain(VkContext* context, GLFWwindow* window, VkSwapchainKHR oldSwapchain) : context(context) {
+	createSwapchain(window, oldSwapchain);
 	createImageViews();
 }
 
@@ -68,7 +68,7 @@ VkExtent2D VkSwapchain::chooseSwapExtent(const VkSurfaceCapabilitiesKHR& capabil
 	}
 }
 
-void VkSwapchain::createSwapchain(GLFWwindow* window) {
+void VkSwapchain::createSwapchain(GLFWwindow* window, VkSwapchainKHR oldSwapchain) {
 	// Query GPU details
 	SwapChainSupportDetails swapChainSupport = context->querySwapChainSupport(context->getPhysicalDevice());
 
@@ -114,7 +114,7 @@ void VkSwapchain::createSwapchain(GLFWwindow* window) {
 	createInfo.presentMode = presentMode;
 	createInfo.clipped = VK_TRUE;	// Don't render pixels hidden behind other windows
 
-	createInfo.oldSwapchain = VK_NULL_HANDLE;	// Used when resizing (we will handle this later)
+	createInfo.oldSwapchain = oldSwapchain;
 
 	if (vkCreateSwapchainKHR(context->getDevice(), &createInfo, nullptr, &swapChain) != VK_SUCCESS) {
 		throw std::runtime_error("failed to create swap chain!");

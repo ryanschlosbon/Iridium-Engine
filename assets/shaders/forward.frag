@@ -15,6 +15,8 @@ layout(set = 0, binding = 0) uniform GlobalUBO {
 layout(set = 1, binding = 0) uniform sampler2D albedoMap;
 layout(set = 1, binding = 1) uniform sampler2D normalMap;
 layout(set = 1, binding = 2) uniform sampler2D metallicRoughnessMap;
+layout(set = 1, binding = 3) uniform sampler2D emissiveMap;
+layout(set = 1, binding = 4) uniform sampler2D transmissionMap;
 
 layout(set = 2, binding = 0) uniform sampler2D gDepth; 
 layout(set = 2, binding = 1) uniform sampler2D gNormalRoughMetal;
@@ -28,9 +30,13 @@ layout(location = 0) out vec4 outColor;
 layout(push_constant) uniform PushConstants {
     mat4 renderMatrix;
     vec4 baseColor;
+    vec4 emissiveFactor;
     float metallicFactor;
     float roughnessFactor;
-    vec2 padding;
+    float normalScale;
+    float alphaCutoff;
+    float transmissionFactor;
+    float padding;
 } push;
 
 // --- UTILITY FUNCTIONS ---
@@ -54,17 +60,22 @@ vec3 ACESFilm(vec3 x) {
 
 float LinearizeDepth(float depth) {
     float near = 0.1;
-    float far = 1000.0;
-    float z = depth * 2.0 - 1.0; 
-    return (2.0 * near * far) / (far + near - z * (far - near));
+    float far = 100.0;
+    return (near * far) / max(far - depth * (far - near), 0.00001);
 }
 
 void main() {
     vec4 texColor = texture(albedoMap, fragTexCoord);
+    float materialAlpha = clamp(push.baseColor.a * texColor.a, 0.0, 1.0);
+    if (push.alphaCutoff > 0.0 && materialAlpha < push.alphaCutoff) { discard; }
     vec3 glassColor = push.baseColor.rgb * fragColor * texColor.rgb;
-    
-    // We still read roughness from the texture so frosted glass works!
-    float roughness = push.roughnessFactor * texture(metallicRoughnessMap, fragTexCoord).g;
+
+    vec4 mrSample = texture(metallicRoughnessMap, fragTexCoord);
+    float roughness = clamp(push.roughnessFactor * mrSample.g, 0.04, 1.0);
+    float metallic = clamp(push.metallicFactor * mrSample.b, 0.0, 1.0);
+    float transmission = clamp(push.transmissionFactor *
+        texture(transmissionMap, fragTexCoord).r, 0.0, 1.0);
+    vec3 emissive = texture(emissiveMap, fragTexCoord).rgb * push.emissiveFactor.rgb;
 
     vec3 cameraPos = inverse(ubo.view)[3].xyz;
     
@@ -92,9 +103,9 @@ void main() {
     vec3 B = normalize(cross(N_geom, T)) * handedness;
     mat3 TBN = mat3(T, B, N_geom);
 
-    vec3 normalSample = texture(normalMap, fragTexCoord).rgb;
-    normalSample.g = 1.0 - normalSample.g;
-    vec3 N = normalize(TBN * (normalSample * 2.0 - 1.0));
+    vec3 normalSample = texture(normalMap, fragTexCoord).rgb * 2.0 - 1.0;
+    normalSample.xy *= push.normalScale;
+    vec3 N = normalize(TBN * normalSample);
 
     // ==========================================================
 
@@ -108,7 +119,7 @@ void main() {
     float frontFaceDepth = LinearizeDepth(texture(glassDepthMap, screenUV).r);
     float currentDepth = LinearizeDepth(gl_FragCoord.z);
     float thickness = max(currentDepth - frontFaceDepth, 0.0);
-    float effectiveThickness = thickness + 0.05; 
+    float effectiveThickness = thickness + 0.02;
 
     // ==========================================================
     // 3. BEER-LAMBERT LAW & BASE TINT
@@ -116,7 +127,6 @@ void main() {
     vec3 absorbColor = vec3(1.0) - glassColor;
     vec3 physicalTransmittance = exp(-absorbColor * effectiveThickness * 0.5);
 
-    float materialAlpha = push.baseColor.a * texColor.a;
     vec3 finalTransmittance = mix(physicalTransmittance, glassColor, materialAlpha);
 
     // ==========================================================
@@ -139,7 +149,7 @@ void main() {
     // We take the X and Y trajectory of the bent ray, and multiply it by how far it 
     // travels through the glass (thickness) to get our physical UV offset!
     // The 0.25 is a scaling factor to convert 3D world space units to 2D screen UV space.
-    vec2 physicalDistortion = refractedRay.xy * thickness * 0.25;
+    vec2 physicalDistortion = refractedRay.xy * effectiveThickness * 0.12;
     
     // Add microscopic scattering for frosted glass (Roughness)
     float scatter = roughness * 0.01;
@@ -149,19 +159,21 @@ void main() {
 
     vec3 refractionColor = texture(opaqueSceneCopyMap, distortedUV).rgb;
     vec3 tintedRefraction = refractionColor * finalTransmittance;
-
-// Fallback Alpha Blending
-    vec3 baseSurface = glassColor;
     
     // Add reflections
     vec3 reflectionColor = texture(hdriMap, SampleSphericalMap(R)).rgb;
     reflectionColor = clamp(reflectionColor, 0.0, 5.0); 
     reflectionColor = ACESFilm(reflectionColor * 1.5);
-    
-    vec3 F0 = vec3(0.04); 
+    reflectionColor *= mix(1.0, 0.35, roughness);
+
+    vec3 F0 = mix(vec3(0.04), glassColor, metallic);
     vec3 F = FresnelSchlick(max(dot(N, V), 0.0), F0);
-    vec3 finalColor = baseSurface + (reflectionColor * F.r);
-    
-    // Output true alpha so the Vulkan pipeline blends it with the background!
+    vec3 reflectedSurface = reflectionColor * F;
+    vec3 opaqueSurface = glassColor * (vec3(1.0) - F) * (1.0 - metallic) + reflectedSurface;
+    vec3 transmittedSurface = tintedRefraction * (vec3(1.0) - F) + reflectedSurface;
+    vec3 finalColor = mix(opaqueSurface, transmittedSurface, transmission) + emissive;
+
+    // Alpha remains coverage. Transmission is composited inside the covered
+    // portion using the scene copy, while uncovered pixels retain the target.
     outColor = vec4(finalColor, materialAlpha);
 }

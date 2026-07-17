@@ -1,10 +1,12 @@
 #pragma once
+#include <cstddef>
+#include <cstdint>
 #include <vector>
 #include <map>
 #include <memory>
 #include <string>
 #include <glm/glm.hpp>
-#include "RenderHandles.h" 
+#include "PipelineTypes.h"
 
 namespace Iridium {
 
@@ -33,11 +35,21 @@ namespace Iridium {
     struct MeshPushConstants {
         glm::mat4 renderMatrix;
         glm::vec4 baseColor;
+        glm::vec4 emissiveFactor;
         float metallicFactor;
         float roughnessFactor;
-        float emissiveFactor;
-        float padding;
+        float normalScale;
+        float alphaCutoff = 0.0f;
+        float transmissionFactor = 0.0f;
+        float padding = 0.0f;
     };
+
+    static_assert(sizeof(MeshPushConstants) == 120);
+    static_assert(offsetof(MeshPushConstants, renderMatrix) == 0);
+    static_assert(offsetof(MeshPushConstants, baseColor) == 64);
+    static_assert(offsetof(MeshPushConstants, emissiveFactor) == 80);
+    static_assert(offsetof(MeshPushConstants, metallicFactor) == 96);
+    static_assert(offsetof(MeshPushConstants, transmissionFactor) == 112);
 
     struct UniformBufferObject {
         alignas(16) glm::mat4 model;
@@ -61,11 +73,11 @@ namespace Iridium {
         std::vector<SubMesh> subMeshes;
         std::map<int, std::vector<int>> meshToSubMeshes;
 
-        // MaterialHandles allow multiple models to share the exact same material safely
-        std::vector<MaterialHandle> materials;
+        // Material bindings carry material, PSO, queue, and opaque-sort identity together.
+        std::vector<MaterialBinding> materials;
 
-        bool isTransparent = false;
-        std::vector<bool> materialIsTransparent;
+        // Textures allocated while loading this model; ownership remains RHI-handle only.
+        std::vector<TextureHandle> ownedTextures;
 
         std::vector<std::unique_ptr<Node>> rootNodes;
 

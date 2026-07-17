@@ -11,7 +11,4 @@ public:
 
 private:
     Entity* selectedEntity;
-
-    // Moved directly from EditorSystem.h
-    char importPathBuffer[256] = "assets/models/alfa_romeo/scene.gltf";
 };

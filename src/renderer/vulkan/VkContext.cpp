@@ -1,5 +1,4 @@
 #include "VkContext.h"
-#include "VkCommandManager.h"
 #include <iostream>
 #include <set>
 #include <stdexcept>
@@ -74,14 +73,11 @@ VkContext::VkContext(bool enableValidation, GLFWwindow* window) : enableValidati
 	// Turn on the GPU features
 	createLogicalDevice();
 
-	createCommandPool();
 }
 
 // Destructor
 VkContext::~VkContext() {
 	// Cleanup happens in reverse order of creation
-	vkDestroyCommandPool(device, commandPool, nullptr);
-
 	// Shutdown the Logical Device
 	vkDestroyDevice(device, nullptr);
 
@@ -367,24 +363,6 @@ void VkContext::createLogicalDevice() {
     vkGetDeviceQueue(device, indices.presentFamily.value(), 0, &presentQueue);
 }
 
-void VkContext::createCommandPool() {
-	QueueFamilyIndices queueFamilyIndices = findQueueFamilies(physicalDevice);
-
-	VkCommandPoolCreateInfo poolInfo{};
-	poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-
-	// RESET_COMMAND_BUFFER_BIT: Allows the command buffers to be rerecorded individually
-	// Allows camera control
-	poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-
-	// The pool must command buffers for the graphics queue
-	poolInfo.queueFamilyIndex = queueFamilyIndices.graphicsFamily.value();
-
-	if (vkCreateCommandPool(device, &poolInfo, nullptr, &commandPool) != VK_SUCCESS) {
-		throw std::runtime_error("failed to create command pool!");
-	}
-}
-
 SwapChainSupportDetails VkContext::querySwapChainSupport(VkPhysicalDevice device) {
 	SwapChainSupportDetails details;
 
@@ -410,124 +388,4 @@ SwapChainSupportDetails VkContext::querySwapChainSupport(VkPhysicalDevice device
 	}
 
 	return details;
-}
-
-// Find Memory Type
-// GPUs have different types of memory (VRAM, RAM, etc.)
-uint32_t VkContext::findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties) {
-	VkPhysicalDeviceMemoryProperties memProperties;
-	vkGetPhysicalDeviceMemoryProperties(physicalDevice, &memProperties);
-
-	for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++) {
-		// Check if this type is in the typeFilter and has the required properties
-		if ((typeFilter & (1 << i)) && (memProperties.memoryTypes[i].propertyFlags & properties) == properties) {
-			return i;
-		}
-	}
-	throw std::runtime_error("failed to find suitable memory type!");
-}
-
-// Create Buffer
-void VkContext::createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties, 
-	VkBuffer& buffer, VkDeviceMemory& bufferMemory) {
-	// Create the Buffer Handle
-	VkBufferCreateInfo bufferInfo{};
-	bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-	bufferInfo.size = size;
-	bufferInfo.usage = usage;
-	bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE; // Only used by 1 queue family
-
-	if (vkCreateBuffer(device, &bufferInfo, nullptr, &buffer) != VK_SUCCESS) {
-		throw std::runtime_error("failed to create buffer!");
-	}
-	// Allocate Memory for the Buffer
-	VkMemoryRequirements memRequirements;
-	vkGetBufferMemoryRequirements(device, buffer, &memRequirements);
-	
-	VkMemoryAllocateInfo allocInfo{};
-	allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-	allocInfo.allocationSize = memRequirements.size;
-	allocInfo.memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits, properties);
-
-	if (vkAllocateMemory(device, &allocInfo, nullptr, &bufferMemory) != VK_SUCCESS) {
-		throw std::runtime_error("failed to allocate buffer memory!");
-	}
-	// Bind the Memory to the Buffer
-	vkBindBufferMemory(device, buffer, bufferMemory, 0);
-}
-
-void VkContext::createImage(uint32_t width, uint32_t height, VkFormat format,
-	VkImageTiling tiling, VkImageUsageFlags usage,
-	VkMemoryPropertyFlags properties, VkImage& image,
-	VkDeviceMemory& imageMemory) {
-
-	VkImageCreateInfo imageInfo{};
-	imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-	imageInfo.imageType = VK_IMAGE_TYPE_2D;
-	imageInfo.extent.width = width;
-	imageInfo.extent.height = height;
-	imageInfo.extent.depth = 1;
-	imageInfo.mipLevels = 1;
-	imageInfo.arrayLayers = 1;
-	imageInfo.format = format;
-	imageInfo.tiling = tiling;
-	imageInfo.initialLayout = (usage & VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT) ? 
-		VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_PREINITIALIZED;
-	imageInfo.usage = usage;
-	imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
-	imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-
-	if (vkCreateImage(device, &imageInfo, nullptr, &image) != VK_SUCCESS) {
-		throw std::runtime_error("failed to create image!");
-	}
-
-	// Handle Memory Allocation
-	VkMemoryRequirements memRequirements;
-	vkGetImageMemoryRequirements(device, image, &memRequirements);
-
-	VkMemoryAllocateInfo allocInfo{};
-	allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-	allocInfo.allocationSize = memRequirements.size;
-	allocInfo.memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits, properties);
-
-	if (vkAllocateMemory(device, &allocInfo, nullptr, &imageMemory) != VK_SUCCESS) {
-		throw std::runtime_error("failed to allocate image memory!");
-	}
-
-	vkBindImageMemory(device, image, imageMemory, 0);
-}
-
-void VkContext::createGPUBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
-	const void* data, VkBuffer& buffer, VkDeviceMemory& memory,
-	VkCommandManager* commandManager) {
-	// 1. Create Staging Buffer (CPU Visible)
-	VkBuffer stagingBuffer;
-	VkDeviceMemory stagingBufferMemory;
-	createBuffer(size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-		VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-		stagingBuffer, stagingBufferMemory);
-
-	// 2. Map & Copy
-	void* mappedData;
-	vkMapMemory(device, stagingBufferMemory, 0, size, 0, &mappedData);
-	memcpy(mappedData, data, (size_t)size);
-	vkUnmapMemory(device, stagingBufferMemory);
-
-	// 3. Create GPU Buffer (Device Local)
-	createBuffer(size, VK_BUFFER_USAGE_TRANSFER_DST_BIT | usage,
-		VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-		buffer, memory);
-
-	// 4. Copy from Staging to GPU
-	VkCommandBuffer commandBuffer = commandManager->beginSingleTimeCommands();
-
-	VkBufferCopy copyRegion{};
-	copyRegion.size = size;
-	vkCmdCopyBuffer(commandBuffer, stagingBuffer, buffer, 1, &copyRegion);
-
-	commandManager->endSingleTimeCommands(commandBuffer);
-
-	// 5. Cleanup Staging
-	vkDestroyBuffer(device, stagingBuffer, nullptr);
-	vkFreeMemory(device, stagingBufferMemory, nullptr);
 }

@@ -10,6 +10,8 @@ layout(location = 4) in vec4 fragTangent;
 layout(set = 1, binding = 0) uniform sampler2D albedoMap;
 layout(set = 1, binding = 1) uniform sampler2D normalMap;
 layout(set = 1, binding = 2) uniform sampler2D metallicRoughnessMap;
+layout(set = 1, binding = 3) uniform sampler2D emissiveMap;
+layout(set = 1, binding = 4) uniform sampler2D transmissionMap;
 
 // ==========================================================
 // THE NEW 2-TARGET OUTPUTS (96 bits total per pixel)
@@ -19,14 +21,18 @@ layout(location = 0) out vec4 outNormalRoughMetal;
 
 // Target 1: Albedo R, G, B, Emissive Intensity
 layout(location = 1) out vec4 outAlbedoEmissive;
+layout(location = 2) out vec4 outEmissive;
 
 layout(push_constant) uniform PushConstants {
     mat4 renderMatrix;
     vec4 baseColor;
+    vec4 emissiveFactor;
     float metallicFactor;
     float roughnessFactor;
-    float emissiveFactor; // <--- Claimed from padding!
-    float padding;        // <--- Keeps the struct 4-byte aligned
+    float normalScale;
+    float alphaCutoff;
+    float transmissionFactor;
+    float padding;
 } push;
 
 vec2 OctWrap(vec2 v) {
@@ -36,12 +42,13 @@ vec2 OctWrap(vec2 v) {
 void main() {
     // 1. ALBEDO & ALPHA DISCARD
     vec4 texColor = texture(albedoMap, fragTexCoord);
-    if (texColor.a < 0.1) { discard; } 
+    float materialAlpha = texColor.a * push.baseColor.a;
+    if (push.alphaCutoff > 0.0 && materialAlpha < push.alphaCutoff) { discard; }
 
     // 2. METALLIC / ROUGHNESS 
     vec4 mrSample = texture(metallicRoughnessMap, fragTexCoord);
-    float roughness = mrSample.g * push.roughnessFactor;
-    float metallic = mrSample.b * push.metallicFactor;
+    float roughness = clamp(mrSample.g * push.roughnessFactor, 0.04, 1.0);
+    float metallic = clamp(mrSample.b * push.metallicFactor, 0.0, 1.0);
 
     // 3. TRUE TANGENT SPACE NORMAL MAPPING
     vec3 N = normalize(fragNormal);
@@ -62,9 +69,9 @@ void main() {
     vec3 B = normalize(cross(N, T)) * handedness;
     mat3 TBN = mat3(T, B, N);
 
-    vec3 normalSample = texture(normalMap, fragTexCoord).rgb;
-    normalSample.g = 1.0 - normalSample.g;
-    N = normalize(TBN * (normalSample * 2.0 - 1.0));
+    vec3 normalSample = texture(normalMap, fragTexCoord).rgb * 2.0 - 1.0;
+    normalSample.xy *= push.normalScale;
+    N = normalize(TBN * normalSample);
 
     // ==========================================================
     // 4. THE G-BUFFER PACKING 
@@ -77,7 +84,8 @@ void main() {
     // FIX: Because we upgraded back to SFLOAT, we don't need the UNORM * 0.5 + 0.5 bias!
     // We just write the pure, flawless float data directly to VRAM.
     outNormalRoughMetal = vec4(n.xy, roughness, metallic);
-    vec3 finalColor = texColor.rgb * push.baseColor.rgb;
-    outAlbedoEmissive = vec4(finalColor, push.emissiveFactor);
+    vec3 finalColor = texColor.rgb * push.baseColor.rgb * fragColor;
+    outAlbedoEmissive = vec4(finalColor, 1.0);
+    outEmissive = vec4(texture(emissiveMap, fragTexCoord).rgb * push.emissiveFactor.rgb, 0.0);
 
 }

@@ -16,9 +16,6 @@ layout(set = 0, binding = 0) uniform UniformBufferObject {
 // PUSH CONSTANTS: Mesh Transform
 layout(push_constant) uniform PushConstants {
     mat4 renderMatrix;
-    vec4 baseColor;
-    float metallicFactor;
-    float roughnessFactor;
 } push;
 
 void main() {

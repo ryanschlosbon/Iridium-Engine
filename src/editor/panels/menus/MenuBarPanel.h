@@ -2,6 +2,7 @@
 #include "../EditorPanel.h"
 #include "ecs/Entity.h"
 #include "editor/EditorUIState.h" // Include the new state struct
+#include <filesystem>
 
 class MenuBarPanel : public EditorPanel {
 public:
@@ -13,4 +14,5 @@ public:
 private:
     Entity* selectedEntity;
     EditorUIState* uiState; // Store the pointer
+    std::filesystem::path currentScenePath;
 };

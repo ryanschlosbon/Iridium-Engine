@@ -7,7 +7,8 @@
 class VkSwapchain {
 	public:
 		// The Constructor
-		VkSwapchain(VkContext* context, GLFWwindow* window);
+		VkSwapchain(VkContext* context, GLFWwindow* window,
+			VkSwapchainKHR oldSwapchain = VK_NULL_HANDLE);
 		~VkSwapchain();
 
 		// Getters for the raw handles
@@ -35,6 +36,6 @@ class VkSwapchain {
 		VkExtent2D chooseSwapExtent(const VkSurfaceCapabilitiesKHR& capabilities, GLFWwindow* window);
 
 		// The main builder function
-		void createSwapchain(GLFWwindow* window);
+		void createSwapchain(GLFWwindow* window, VkSwapchainKHR oldSwapchain);
 		void createImageViews();
 };

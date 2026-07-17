@@ -41,8 +41,21 @@ void VkRenderPassWrapper::createRenderPass(VkFormat swapChainImageFormat) {
     albedoAttachmentRef.attachment = 1; // <--- SHIFTED DOWN TO 1
     albedoAttachmentRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
+    // 2: EMISSIVE ATTACHMENT (RGB may contain HDR values)
+    VkAttachmentDescription emissiveAttachment{};
+    emissiveAttachment.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+    emissiveAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+    emissiveAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    emissiveAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    emissiveAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    emissiveAttachment.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+    VkAttachmentReference emissiveAttachmentRef{};
+    emissiveAttachmentRef.attachment = 2;
+    emissiveAttachmentRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
     // =========================================================
-    // 2: DEPTH ATTACHMENT (Used for Depth Testing AND Position Reconstruction)
+    // 3: DEPTH ATTACHMENT (Used for Depth Testing AND Position Reconstruction)
     // =========================================================
     VkAttachmentDescription depthAttachment{};
     depthAttachment.format = VK_FORMAT_D32_SFLOAT;
@@ -54,13 +67,12 @@ void VkRenderPassWrapper::createRenderPass(VkFormat swapChainImageFormat) {
     depthAttachment.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
 
     VkAttachmentReference depthAttachmentRef{};
-    depthAttachmentRef.attachment = 2; // <--- SHIFTED DOWN TO 2
+    depthAttachmentRef.attachment = 3;
     depthAttachmentRef.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 
     // --- SUBPASS SETUP ---
-    // Only 2 color attachments now!
-    std::array<VkAttachmentReference, 2> colorAttachments = {
-        normalAttachmentRef, albedoAttachmentRef
+    std::array<VkAttachmentReference, 3> colorAttachments = {
+        normalAttachmentRef, albedoAttachmentRef, emissiveAttachmentRef
     };
 
     VkSubpassDescription subpass{};
@@ -70,18 +82,27 @@ void VkRenderPassWrapper::createRenderPass(VkFormat swapChainImageFormat) {
     subpass.pDepthStencilAttachment = &depthAttachmentRef;
 
     // --- SYNCHRONIZATION ---
-    VkSubpassDependency dependency{};
-    dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
-    dependency.dstSubpass = 0;
-    dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
-    dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
-    dependency.srcAccessMask = 0;
-    dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    std::array<VkSubpassDependency, 2> dependencies{};
+    dependencies[0].srcSubpass = VK_SUBPASS_EXTERNAL;
+    dependencies[0].dstSubpass = 0;
+    dependencies[0].srcStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+    dependencies[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+        VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+    dependencies[0].srcAccessMask = 0;
+    dependencies[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+        VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    dependencies[1].srcSubpass = 0;
+    dependencies[1].dstSubpass = VK_SUBPASS_EXTERNAL;
+    dependencies[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+        VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+    dependencies[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    dependencies[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+        VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    dependencies[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
 
     // --- CREATE ---
-    // Total attachments reduced from 4 to 3!
-    std::array<VkAttachmentDescription, 3> attachments = {
-        normalAttachment, albedoAttachment, depthAttachment
+    std::array<VkAttachmentDescription, 4> attachments = {
+        normalAttachment, albedoAttachment, emissiveAttachment, depthAttachment
     };
 
     VkRenderPassCreateInfo renderPassInfo{};
@@ -90,8 +111,8 @@ void VkRenderPassWrapper::createRenderPass(VkFormat swapChainImageFormat) {
     renderPassInfo.pAttachments = attachments.data();
     renderPassInfo.subpassCount = 1;
     renderPassInfo.pSubpasses = &subpass;
-    renderPassInfo.dependencyCount = 1;
-    renderPassInfo.pDependencies = &dependency;
+    renderPassInfo.dependencyCount = static_cast<uint32_t>(dependencies.size());
+    renderPassInfo.pDependencies = dependencies.data();
 
     if (vkCreateRenderPass(context->getDevice(), &renderPassInfo, nullptr, &renderPass) != VK_SUCCESS) {
         throw std::runtime_error("failed to create deferred render pass!");

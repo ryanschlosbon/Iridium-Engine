@@ -4,7 +4,10 @@
 #include <string>
 #include <memory>
 #include <functional>
-#include <filesystem>
+#include <cstdint>
+#include <cstddef>
+#include <span>
+#include <vector>
 #include <fastgltf/core.hpp>
 #include "renderer/rhi/Mesh.h"
 #include "renderer/rhi/IRenderBackend.h"
@@ -41,7 +44,8 @@ namespace Iridium {
         std::shared_ptr<ModelAsset> loadModelFromFile(const std::string& path);
 
         // All texture creation functions now return the RHI tickets
-        TextureHandle loadTexture(const std::string& path);
+        TextureHandle loadTexture(const std::string& path, TextureFormat format);
+        TextureHandle loadTexture(std::span<const std::byte> encodedBytes, TextureFormat format);
         TextureHandle createDefaultTexture();
         TextureHandle createDefaultNormalTexture();
         TextureHandle createDefaultPbrTexture();

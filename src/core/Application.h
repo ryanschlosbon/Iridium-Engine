@@ -40,7 +40,7 @@ namespace Iridium {
 
         // --- THE GRAPHICS ABSTRACTION ---
         // This single pointer replaces 40+ Vulkan variables!
-        IRenderBackend* renderBackend = nullptr;
+        std::unique_ptr<IRenderBackend> renderBackend;
 
         // The Data-Driven Extraction Queues
         std::vector<DrawPacket> opaqueQueue;
@@ -48,14 +48,14 @@ namespace Iridium {
         std::vector<DrawPacket> selectionQueue;
 
         // --- SUBSYSTEMS ---
-        AssetManager* assetManager = nullptr;
+        std::unique_ptr<AssetManager> assetManager;
         Registry registry;
         TransformSystem transformSystem;
         EditorSystem editor;
 
         // --- SCENE DATA ---
         std::shared_ptr<ModelAsset> mainModel;
-        TextureHandle hdriMap; // Upgraded from the Vulkan-tied 'Texture' struct
+        TextureHandle hdriMap; // Application-owned standalone environment texture.
 
         // --- CAMERA STATE ---
         float yaw = -90.0f;
@@ -85,6 +85,7 @@ namespace Iridium {
 
         void processInput(GLFWwindow* window);
         void selectEntityAtMouse(double mouseX, double mouseY);
+        // Failed requests are reported once and cleared; callers must explicitly retry.
         void ProcessMeshSwaps();
         void recreateSwapchain();
     };

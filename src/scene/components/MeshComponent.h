@@ -1,7 +1,11 @@
 #pragma once
+#include <cstring>
+#include <array>
+#include <filesystem>
 #include <memory>
 #include <string>
 #include "assets/AssetManager.h" 
+#include "platform/FileDialog.h"
 
 struct MeshComponent {
     std::shared_ptr<Iridium::ModelAsset> model;
@@ -29,6 +33,20 @@ struct MeshComponent {
         // The Swap Interface
         static char pathBuffer[256] = ""; // Buffer to hold the typed path
         ImGui::InputText("Path", pathBuffer, sizeof(pathBuffer));
+
+        ImGui::SameLine();
+
+        if (ImGui::Button("Browse...")) {
+            constexpr std::array filters = {
+                Iridium::FileDialogFilter{ "glTF models", "*.gltf;*.glb" },
+                Iridium::FileDialogFilter{ "All files", "*.*" },
+            };
+            if (const auto selectedPath = Iridium::openFileDialog(filters,
+                std::filesystem::path(PROJECT_ROOT_DIR) / "assets" / "models")) {
+                requestedMeshPath = selectedPath->string();
+                memset(pathBuffer, 0, sizeof(pathBuffer));
+            }
+        }
 
         ImGui::SameLine();
 

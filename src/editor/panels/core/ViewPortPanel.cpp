@@ -116,13 +116,10 @@ void ViewportPanel::render(void* sceneTextureID, void* glassDepthTextureID,
             float translation[3], rotation[3], scale[3];
             ImGuizmo::DecomposeMatrixToComponents(glm::value_ptr(transformMatrix), translation, rotation, scale);
 
-            // Update your component properties
+            // ImGuizmo decomposes Euler rotation in degrees, which is also the
+            // engine/editor-facing unit used by TransformComponent.
             selectedTransform->position = glm::vec3(translation[0], translation[1], translation[2]);
-            selectedTransform->rotation = glm::vec3(
-                glm::radians(rotation[0]),
-                glm::radians(rotation[1]),
-                glm::radians(rotation[2])
-            );
+            selectedTransform->rotation = glm::vec3(rotation[0], rotation[1], rotation[2]);
             selectedTransform->scale = glm::vec3(scale[0], scale[1], scale[2]);
 
             // Flag for the TransformSystem to update the world matrix next frame

@@ -72,7 +72,7 @@ if (APPLE)
     add_compile_definitions(VK_USE_PLATFORM_MACOS_MVK)
 elseif (WIN32)
     message(STATUS "Detected Windows")
-    set(PLATFORM_LIBS)
+    set(PLATFORM_LIBS Comdlg32)
 endif()
 
 # --- AUTOMATIC SHADER COMPILATION (Folder Scan) ---
@@ -133,15 +133,9 @@ add_executable(IridiumEngine
         "src/renderer/vulkan/VkSwapchain.cpp"
         "src/renderer/vulkan/VkRenderPass.h"
         "src/renderer/vulkan/VkRenderPass.cpp"
-        "src/renderer/vulkan/VkFramebuffer.h"
-        "src/renderer/vulkan/VkFramebuffer.cpp"
         "src/utils/File.h"
         "src/renderer/vulkan/VkGraphicsPipeline.h"
         "src/renderer/vulkan/VkGraphicsPipeline.cpp"
-        "src/renderer/vulkan/VkCommandManager.h"
-        "src/renderer/vulkan/VkCommandManager.cpp"
-        "src/renderer/vulkan/VkSyncObjects.h"
-        "src/renderer/vulkan/VkSyncObjects.cpp"
         "src/renderer/rhi/Mesh.h"
         "src/vendor/std_image_impl.cpp"
         "src/assets/AssetManager.h"
@@ -169,7 +163,30 @@ add_executable(IridiumEngine
         "src/vendor/fastgltf/src/fastgltf.cpp"
         "src/vendor/fastgltf/src/base64.cpp"
         "src/vendor/fastgltf/src/io.cpp"
- "src/scene/SceneSerializer.h" "src/scene/SceneSerializer.cpp" "src/scene/components/LightComponent.h" "src/editor/Reflection.h" "src/utils/DeletionQueue.h" "src/core/Application.h" "src/core/Application.cpp" "src/editor/panels/EditorPanel.h" "src/editor/panels/core/SceneHierarchyPanel.h" "src/editor/panels/core/SceneHierarchyPanel.cpp" "src/editor/panels/core/InspectorPanel.h" "src/editor/panels/core/InspectorPanel.cpp"     "src/editor/EditorUIState.h" "src/editor/panels/menus/MenuBarPanel.h" "src/editor/panels/menus/MenuBarPanel.cpp" "src/editor/panels/windows/ProjectSettingsPanel.h" "src/editor/panels/windows/ProjectSettingsPanel.cpp" "src/renderer/vulkan/DescriptorAllocator.h" "src/renderer/vulkan/DescriptorAllocator.cpp" "src/renderer/vulkan/VkUIRenderPass.h" "src/renderer/vulkan/VkUIRenderPass.cpp" "src/editor/panels/core/ViewPortPanel.h" "src/editor/panels/core/ViewPortPanel.cpp" "src/renderer/vulkan/VkLightingPipeline.h" "src/renderer/vulkan/VkLightingPipeline.cpp" "src/renderer/vulkan/VkForwardRenderPass.cpp" "src/renderer/vulkan/VkForwardRenderPass.h" "src/renderer/vulkan/VkForwardPipeline.h" "src/renderer/vulkan/VkForwardPipeline.cpp" "src/renderer/vulkan/GlassDepthRenderPass.h" "src/renderer/vulkan/GlassDepthRenderPass.cpp" "src/renderer/vulkan/GlassDepthPipeline.h" "src/renderer/vulkan/GlassDepthPipeline.cpp" "src/renderer/rhi/IRenderBackend.h" "src/renderer/rhi/DrawPacket.h" "src/renderer/rhi/RenderHandles.h" "src/renderer/rhi/ResourcePool.h" "src/renderer/vulkan/VulkanVertexBackend.h" "src/renderer/vulkan/VulkanVertexBackend.cpp" "src/renderer/vulkan/VulkanVertexUtils.h"  "src/renderer/rhi/PipelineTypes.h" "src/renderer/vulkan/PipelineCache.h" "src/renderer/vulkan/PipelineCache.cpp")
+ "src/scene/SceneSerializer.h" "src/scene/SceneSerializer.cpp" "src/scene/components/LightComponent.h" "src/editor/Reflection.h" "src/utils/DeletionQueue.h" "src/core/Application.h" "src/core/Application.cpp" "src/editor/panels/EditorPanel.h" "src/editor/panels/core/SceneHierarchyPanel.h" "src/editor/panels/core/SceneHierarchyPanel.cpp" "src/editor/panels/core/InspectorPanel.h" "src/editor/panels/core/InspectorPanel.cpp"     "src/editor/EditorUIState.h" "src/editor/panels/menus/MenuBarPanel.h" "src/editor/panels/menus/MenuBarPanel.cpp" "src/editor/panels/windows/ProjectSettingsPanel.h" "src/editor/panels/windows/ProjectSettingsPanel.cpp" "src/renderer/vulkan/DescriptorAllocator.h" "src/renderer/vulkan/DescriptorAllocator.cpp" "src/renderer/vulkan/VkUIRenderPass.h" "src/renderer/vulkan/VkUIRenderPass.cpp" "src/editor/panels/core/ViewPortPanel.h" "src/editor/panels/core/ViewPortPanel.cpp" "src/renderer/vulkan/VkLightingPipeline.h" "src/renderer/vulkan/VkLightingPipeline.cpp" "src/renderer/vulkan/VkForwardRenderPass.cpp" "src/renderer/vulkan/VkForwardRenderPass.h" "src/renderer/vulkan/GlassDepthRenderPass.h" "src/renderer/vulkan/GlassDepthRenderPass.cpp" "src/renderer/vulkan/GlassDepthPipeline.h" "src/renderer/vulkan/GlassDepthPipeline.cpp" "src/renderer/rhi/IRenderBackend.h" "src/renderer/rhi/RenderBackendFactory.h" "src/renderer/rhi/RenderBackendFactory.cpp" "src/renderer/rhi/DrawPacket.h" "src/renderer/rhi/RenderHandles.h" "src/renderer/rhi/ResourcePool.h" "src/renderer/rhi/RhiResourceTypes.h" "src/renderer/vulkan/VulkanResourceAllocator.h" "src/renderer/vulkan/VulkanResourceState.h" "src/renderer/vulkan/VulkanResourceState.cpp" "src/renderer/vulkan/VulkanCommandList.h" "src/renderer/vulkan/VulkanUploadContext.h" "src/renderer/vulkan/VulkanVertexBackend.h" "src/renderer/vulkan/VulkanVertexBackend.cpp" "src/renderer/vulkan/VulkanVertexUtils.h" "src/renderer/vulkan/VulkanMeshLayouts.h" "src/renderer/vulkan/VulkanMeshLayouts.cpp" "src/renderer/rhi/PipelineTypes.h" "src/renderer/rhi/TextureTypes.h" "src/renderer/vulkan/VulkanPipelineLibrary.h" "src/renderer/vulkan/VulkanPipelineLibrary.cpp")
+
+target_sources(IridiumEngine PRIVATE
+        "src/platform/FileDialog.h"
+)
+
+if (APPLE)
+    enable_language(OBJCXX)
+    target_sources(IridiumEngine PRIVATE "src/platform/FileDialogMac.mm")
+else()
+    target_sources(IridiumEngine PRIVATE "src/platform/FileDialog.cpp")
+endif()
+
+# Add the Stage 3 allocator implementation alongside its contract.
+target_sources(IridiumEngine PRIVATE
+        "src/renderer/vulkan/VulkanResourceAllocator.cpp"
+        "src/renderer/vulkan/VulkanUploadContext.cpp"
+        "src/renderer/vulkan/VulkanFrameScheduler.h"
+        "src/renderer/vulkan/VulkanFrameScheduler.cpp"
+        "src/renderer/vulkan/VulkanFrameTargets.h"
+        "src/renderer/vulkan/VulkanFrameTargets.cpp"
+        "src/renderer/vulkan/VulkanSceneDescriptors.h"
+        "src/renderer/vulkan/VulkanSceneDescriptors.cpp"
+)
 
 # Defines PROJECT_ROOT_DIR for C++ to find assets
 add_compile_definitions(PROJECT_ROOT_DIR="${CMAKE_CURRENT_SOURCE_DIR}/")
@@ -190,3 +207,17 @@ target_link_libraries(IridiumEngine PRIVATE
         nlohmann_json::nlohmann_json
         ${PLATFORM_LIBS} # Links Cocoa/IOKit on Mac, nothing on Windows
 )
+
+include(CTest)
+
+if(BUILD_TESTING)
+    add_executable(Stage3ArchitectureTests
+            "tests/renderer/Stage3ArchitectureTests.cpp"
+            "src/renderer/vulkan/VulkanResourceState.cpp"
+    )
+
+    target_include_directories(Stage3ArchitectureTests PRIVATE src)
+    target_link_libraries(Stage3ArchitectureTests PRIVATE glm::glm Vulkan::Vulkan)
+
+    add_test(NAME Stage3ArchitectureTests COMMAND Stage3ArchitectureTests)
+endif()

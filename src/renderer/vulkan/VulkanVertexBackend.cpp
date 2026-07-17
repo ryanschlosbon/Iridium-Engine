@@ -1,57 +1,84 @@
 #include "VulkanVertexBackend.h"
+#include "renderer/rhi/Mesh.h"
 #include "imgui.h"
 #include "backends/imgui_impl_vulkan.h"
 #include "backends/imgui_impl_glfw.h"
 #include "vendor/imguizmo/ImGuizmo.h"
 #include <stdexcept>
 #include <array>
-#include <iostream>
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
+#include <string>
+#include <vector>
 
 namespace Iridium {
+
+    namespace {
+        VkIndexType toVkIndexType(IndexFormat format) {
+            switch (format) {
+            case IndexFormat::UInt16:
+                return VK_INDEX_TYPE_UINT16;
+            case IndexFormat::UInt32:
+                return VK_INDEX_TYPE_UINT32;
+            }
+            throw std::invalid_argument("Unsupported geometry index format.");
+        }
+    }
 
     // ==============================================================================
     // 1. SYSTEM LIFECYCLE
     // ==============================================================================
 
     void VulkanVertexBackend::init(GLFWwindow* window) {
-        vkContext = new VkContext(true, window);
-        vkSwapchain = new VkSwapchain(vkContext, window);
-        vkSyncObjects = new VkSyncObjects(vkContext, vkSwapchain->getImageCount());
+        if (initialized_) {
+            throw std::logic_error("VulkanVertexBackend was initialized more than once.");
+        }
+
+        vkContext = std::make_unique<VkContext>(true, window);
+        resourceAllocator.init(vkContext->getPhysicalDevice(), vkContext->getDevice());
+        uploadContext.init(vkContext->getDevice(), vkContext->getGraphicsQueue(),
+            vkContext->getGraphicsQueueFamily(), resourceAllocator);
+        vkSwapchain = std::make_unique<VkSwapchain>(vkContext.get(), window);
+        scheduler.init(vkContext->getDevice(), vkContext->getGraphicsQueue(),
+            vkContext->getPresentQueue(), vkContext->getGraphicsQueueFamily(),
+            vkSwapchain->getImageCount());
 
         descriptorAllocator.init(vkContext->getDevice());
 
-        // 2. G-Buffer Pass
-        gBufferPass = new VkRenderPassWrapper(vkContext, vkSwapchain);
-        gBufferPipeline = new VkGraphicsPipeline(vkContext, vkSwapchain, gBufferPass);
+        // 2. Lighting and forward pass contracts needed by the shared mesh layouts.
+        createLightingRenderPass();
+        lightingPipeline = std::make_unique<VkLightingPipeline>(vkContext.get(), lightingRenderPass);
+        forwardPass = std::make_unique<VkForwardRenderPass>(vkContext.get(), vkSwapchain->getImageFormat(), VK_FORMAT_D32_SFLOAT);
+        meshLayouts.init(vkContext->getDevice(), lightingPipeline->getDescriptorSetLayout());
 
-        // 3. Glass Depth Pass
-        glassDepthPass = new GlassDepthRenderPass();
+        // 3. G-Buffer Pass
+        gBufferPass = std::make_unique<VkRenderPassWrapper>(vkContext.get(), vkSwapchain.get());
+        gBufferPipeline = std::make_unique<VkGraphicsPipeline>(vkContext.get(), vkSwapchain.get(), gBufferPass.get(),
+            meshLayouts.getGBufferPipelineLayout());
+
+        // 4. Glass Depth Pass
+        glassDepthPass = std::make_unique<GlassDepthRenderPass>();
         glassDepthPass->init(vkContext->getDevice(), VK_FORMAT_D32_SFLOAT);
 
-        glassDepthPipeline = new GlassDepthPipeline();
+        glassDepthPipeline = std::make_unique<GlassDepthPipeline>();
         glassDepthPipeline->init(vkContext->getDevice(), glassDepthPass->getRenderPass(),
-            gBufferPipeline->getPipelineLayout(),
+            meshLayouts.getGBufferPipelineLayout(),
             std::string(PROJECT_ROOT_DIR) + "assets/shaders/glass_depth_vert.spv");
 
-        pipelineCache.init(vkContext->getDevice(),
-            gBufferPass->getRenderPass(),
-            glassDepthPass->getRenderPass(), // Or whatever your forward pass is!
-            gBufferPipeline->getPipelineLayout());
+        pipelineLibrary.init(vkContext->getDevice(),
+            { gBufferPass->getRenderPass(), meshLayouts.getGBufferPipelineLayout(), 3 },
+            { forwardPass->getRenderPass(), meshLayouts.getForwardPipelineLayout(), 1 });
 
-        // 4. Lighting Pass (Fully Activated)
-        createLightingRenderPass();
-        lightingPipeline = new VkLightingPipeline(vkContext, lightingRenderPass);
+        // 5. UI Pass
+        uiPass = std::make_unique<VkUIRenderPass>(vkContext.get(), vkSwapchain->getImageFormat());
 
-        // 5. Forward Pass (Fully Activated)
-        forwardPass = new VkForwardRenderPass(vkContext, vkSwapchain->getImageFormat(), VK_FORMAT_D32_SFLOAT);
-        forwardPipeline = new VkForwardPipeline(vkContext, forwardPass, lightingPipeline->getDescriptorSetLayout());
-
-        // 6. UI Pass
-        uiPass = new VkUIRenderPass(vkContext, vkSwapchain->getImageFormat());
-
-        // 7. Render Targets & Command Manager
-        vkCommandManager = new VkCommandManager(vkContext, gBufferFramebuffers, gBufferPipeline, VkSyncObjects::MAX_FRAMES_IN_FLIGHT);
-        createOffscreenRenderTargets();
+        // 7. Render Targets
+        initFrameTargets();
+        // Target descriptors declare shader-read layouts, so submit their initial
+        // Undefined -> ShaderResource transitions before any descriptor or ImGui
+        // registration can reference those images.
+        uploadContext.flush();
 
         // 8. Global Camera Buffers
         createUniformBuffers();
@@ -59,12 +86,12 @@ namespace Iridium {
         // --------------------------------
 
         // 2. Global Descriptor Sets (Camera Data)
-        globalDescriptorSets.resize(VkSyncObjects::MAX_FRAMES_IN_FLIGHT);
-        for (size_t i = 0; i < VkSyncObjects::MAX_FRAMES_IN_FLIGHT; i++) {
-            globalDescriptorSets[i] = descriptorAllocator.allocate(gBufferPipeline->getGlobalSetLayout());
+        globalDescriptorSets.resize(VulkanFrameScheduler::FramesInFlight);
+        for (size_t i = 0; i < VulkanFrameScheduler::FramesInFlight; i++) {
+            globalDescriptorSets[i] = descriptorAllocator.allocate(meshLayouts.getGlobalSetLayout());
 
             VkDescriptorBufferInfo bufferInfo{};
-            bufferInfo.buffer = uniformBuffers[i];
+            bufferInfo.buffer = uniformBuffers[i].buffer;
             bufferInfo.offset = 0;
             bufferInfo.range = sizeof(UniformBufferObject);
 
@@ -79,37 +106,11 @@ namespace Iridium {
             vkUpdateDescriptorSets(vkContext->getDevice(), 1, &descriptorWrite, 0, nullptr);
         }
 
-        // 3. Lighting Descriptor Sets (G-Buffer Textures)
-        uint32_t imgCount = vkSwapchain->getImageCount();
-        lightingDescriptorSets.resize(imgCount);
-        for (size_t i = 0; i < imgCount; i++) {
-            lightingDescriptorSets[i] = descriptorAllocator.allocate(lightingPipeline->getDescriptorSetLayout());
-
-            VkDescriptorImageInfo normalInfo{ gBufferSampler, gNormalImageViews[i], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
-            VkDescriptorImageInfo albedoInfo{ gBufferSampler, gAlbedoImageViews[i], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
-            VkDescriptorImageInfo depthInfo{ gBufferSampler, gDepthImageViews[i], VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL };
-            VkDescriptorImageInfo opaqueCopyInfo{ gBufferSampler, opaqueSceneCopyViews[i], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
-            VkDescriptorImageInfo glassDepthInfo{ gBufferSampler, glassDepthViews[i], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
-
-            std::array<VkWriteDescriptorSet, 5> descriptorWrites{};
-            // BINDING 0: Depth
-            descriptorWrites[0] = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, lightingDescriptorSets[i], 0, 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &depthInfo, nullptr, nullptr };
-
-            // BINDING 1: Normal
-            descriptorWrites[1] = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, lightingDescriptorSets[i], 1, 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &normalInfo, nullptr, nullptr };
-
-            // BINDING 2: Albedo
-            descriptorWrites[2] = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, lightingDescriptorSets[i], 2, 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &albedoInfo, nullptr, nullptr };
-
-            // (Binding 3 is the HDRI, which is updated dynamically elsewhere!)
-
-            // BINDING 4 & 5: Glass Data
-            descriptorWrites[3] = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, lightingDescriptorSets[i], 4, 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &opaqueCopyInfo, nullptr, nullptr };
-            descriptorWrites[4] = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, lightingDescriptorSets[i], 5, 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &glassDepthInfo, nullptr, nullptr };
-
-            // Update 5 descriptors instead of 3
-            vkUpdateDescriptorSets(vkContext->getDevice(), 5, descriptorWrites.data(), 0, nullptr);
-        }
+        // 3. Lighting descriptors (one set per swapchain image).
+        const uint32_t imgCount = vkSwapchain->getImageCount();
+        sceneDescriptors.init(vkContext->getDevice(), descriptorAllocator,
+            lightingPipeline->getDescriptorSetLayout());
+        sceneDescriptors.rebuild(frameTargets);
 
         // 4. ImGui Initialization & UI Textures
         // Create a small pool specifically for ImGui's internal fonts and textures
@@ -139,153 +140,117 @@ namespace Iridium {
         init_info.ImageCount = imgCount;
         init_info.PipelineInfoMain.RenderPass = uiPass->getRenderPass();
         ImGui_ImplVulkan_Init(&init_info);
+        imguiInitialized_ = true;
 
         // Create the initial ImGui textures for the viewport!
         uint32_t currentImgCount = vkSwapchain->getImageCount();
         uiSceneTextures.resize(currentImgCount);
         uiDepthTextures.resize(currentImgCount);
         for (size_t i = 0; i < currentImgCount; i++) {
-            uiSceneTextures[i] = ImGui_ImplVulkan_AddTexture(gBufferSampler, litSceneImageViews[i], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-            uiDepthTextures[i] = ImGui_ImplVulkan_AddTexture(gBufferSampler, glassDepthViews[i], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            const VulkanPerImageTargets& targets = frameTargets.get(i);
+            uiSceneTextures[i] = ImGui_ImplVulkan_AddTexture(frameTargets.sampler(), targets.litScene.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            uiDepthTextures[i] = ImGui_ImplVulkan_AddTexture(frameTargets.sampler(), targets.glassDepth.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         }
+
+        initialized_ = true;
+        cleaned_ = false;
     }
     
     void VulkanVertexBackend::setEnvironmentMap(TextureHandle hdriHandle) {
+        environmentMapHandle = hdriHandle;
+
         auto* payload = textureVault.get(hdriHandle);
         if (!payload) return;
 
-        for (size_t i = 0; i < vkSwapchain->getImageCount(); i++) {
-            VkDescriptorImageInfo hdriInfo{};
-            hdriInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            hdriInfo.imageView = payload->view;
-            hdriInfo.sampler = payload->sampler;
-
-            VkWriteDescriptorSet write{ VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
-            write.dstSet = lightingDescriptorSets[i];
-            write.dstBinding = 3;
-            write.dstArrayElement = 0;
-            write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            write.descriptorCount = 1;
-            write.pImageInfo = &hdriInfo;
-
-            vkUpdateDescriptorSets(vkContext->getDevice(), 1, &write, 0, nullptr);
-        }
+        const VkDescriptorImageInfo environment{
+            payload->sampler, payload->image.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+        sceneDescriptors.setEnvironment(environment);
     }
 
     void VulkanVertexBackend::cleanup() {
-        vkDeviceWaitIdle(vkContext->getDevice());
+        if (!initialized_ || cleaned_) {
+            return;
+        }
+        cleaned_ = true;
 
-        // 1. Destroy all Render Targets and Framebuffers
-        VkDevice dev = vkContext->getDevice();
-        uint32_t imageCount = vkSwapchain->getImageCount();
-        destroyOffscreenRenderTargets();
+        const VkDevice device = vkContext->getDevice();
+        vkDeviceWaitIdle(device);
+        uploadContext.flush();
+        scheduler.waitForAllFrames();
 
-        // 2. Shut down ImGui securely
-        ImGui_ImplVulkan_Shutdown();
-        vkDestroyDescriptorPool(dev, imguiPool, nullptr);
-        ImGui_ImplGlfw_Shutdown();
-        ImGui::DestroyContext();
+        pipelineLibrary.cleanup();
 
-        // Flush all pending deletions before shutting down
-        for (auto& queue : frameDeletionQueues) {
-            queue.flush();
+        for (VkDescriptorSet texture : uiSceneTextures) {
+            if (texture != VK_NULL_HANDLE) {
+                ImGui_ImplVulkan_RemoveTexture(texture);
+            }
+        }
+        for (VkDescriptorSet texture : uiDepthTextures) {
+            if (texture != VK_NULL_HANDLE) {
+                ImGui_ImplVulkan_RemoveTexture(texture);
+            }
+        }
+        uiSceneTextures.clear();
+        uiDepthTextures.clear();
+        if (imguiInitialized_) {
+            ImGui_ImplVulkan_Shutdown();
+            ImGui_ImplGlfw_Shutdown();
+            ImGui::DestroyContext();
+            imguiInitialized_ = false;
+        }
+        if (imguiPool != VK_NULL_HANDLE) {
+            vkDestroyDescriptorPool(device, imguiPool, nullptr);
+            imguiPool = VK_NULL_HANDLE;
         }
 
-        // Clean Vaults (For items that were never explicitly freed by the game)
+        sceneDescriptors.cleanup();
+        frameTargets.cleanup();
+
         geometryVault.forEach([this](VulkanGeometryPayload& payload) {
-            vkDestroyBuffer(vkContext->getDevice(), payload.vertexBuffer, nullptr);
-            vkFreeMemory(vkContext->getDevice(), payload.vertexBufferMemory, nullptr);
-            vkDestroyBuffer(vkContext->getDevice(), payload.indexBuffer, nullptr);
-            vkFreeMemory(vkContext->getDevice(), payload.indexBufferMemory, nullptr);
+            resourceAllocator.destroy(payload.vertexBuffer);
+            resourceAllocator.destroy(payload.indexBuffer);
             });
 
         textureVault.forEach([this](VulkanTexturePayload& payload) {
             vkDestroySampler(vkContext->getDevice(), payload.sampler, nullptr);
-            vkDestroyImageView(vkContext->getDevice(), payload.view, nullptr);
-            vkDestroyImage(vkContext->getDevice(), payload.image, nullptr);
-            vkFreeMemory(vkContext->getDevice(), payload.memory, nullptr);
+            resourceAllocator.destroy(payload.image);
             });
 
         for (size_t i = 0; i < uniformBuffers.size(); i++) {
-            vkDestroyBuffer(vkContext->getDevice(), uniformBuffers[i], nullptr);
-            vkFreeMemory(vkContext->getDevice(), uniformBuffersMemory[i], nullptr);
+            resourceAllocator.destroy(uniformBuffers[i]);
         }
+
+        if (glassDepthPipeline) {
+            glassDepthPipeline->cleanup();
+            glassDepthPipeline.reset();
+        }
+        if (glassDepthPass) {
+            glassDepthPass->cleanup();
+            glassDepthPass.reset();
+        }
+
+        forwardPass.reset();
+
+        lightingPipeline.reset();
+        if (lightingRenderPass != VK_NULL_HANDLE) {
+            vkDestroyRenderPass(device, lightingRenderPass, nullptr);
+            lightingRenderPass = VK_NULL_HANDLE;
+        }
+
+        uiPass.reset();
+        gBufferPipeline.reset();
+        gBufferPass.reset();
 
         descriptorAllocator.cleanup();
+        meshLayouts.cleanup();
 
-        delete glassDepthPipeline;
-        glassDepthPass->cleanup();
-        delete glassDepthPass;
+        scheduler.cleanup();
+        uploadContext.cleanup();
+        resourceAllocator.cleanup();
 
-        delete forwardPipeline;
-        delete forwardPass;
-
-        delete lightingPipeline;
-        vkDestroyRenderPass(vkContext->getDevice(), lightingRenderPass, nullptr);
-
-        delete uiPass;
-        delete gBufferPipeline;
-        delete gBufferPass;
-
-        delete vkCommandManager;
-        delete vkSyncObjects;
-        delete vkSwapchain;
-        delete vkContext;
-    }
-
-    void VulkanVertexBackend::destroyOffscreenRenderTargets() {
-        VkDevice dev = vkContext->getDevice();
-        uint32_t imageCount = vkSwapchain->getImageCount();
-
-        for (uint32_t i = 0; i < imageCount; i++) {
-            // Free the ImGui textures so they can be rebuilt
-            if (i < uiSceneTextures.size() && uiSceneTextures[i]) {
-                ImGui_ImplVulkan_RemoveTexture((VkDescriptorSet)uiSceneTextures[i]);
-                ImGui_ImplVulkan_RemoveTexture((VkDescriptorSet)uiDepthTextures[i]);
-            }
-
-            // Framebuffers
-            vkDestroyFramebuffer(dev, lightingFramebuffers[i], nullptr);
-            vkDestroyFramebuffer(dev, forwardFramebuffers[i], nullptr);
-            vkDestroyFramebuffer(dev, uiFramebuffers[i], nullptr);
-            vkDestroyFramebuffer(dev, glassDepthFramebuffers[i], nullptr);
-
-            // G-Buffer: Normal
-            vkDestroyImageView(dev, gNormalImageViews[i], nullptr);
-            vkDestroyImage(dev, gNormalImages[i], nullptr);
-            vkFreeMemory(dev, gNormalImageMemories[i], nullptr);
-
-            // G-Buffer: Albedo
-            vkDestroyImageView(dev, gAlbedoImageViews[i], nullptr);
-            vkDestroyImage(dev, gAlbedoImages[i], nullptr);
-            vkFreeMemory(dev, gAlbedoImageMemories[i], nullptr);
-
-            // G-Buffer: Depth
-            vkDestroyImageView(dev, gDepthImageViews[i], nullptr);
-            vkDestroyImage(dev, gDepthImages[i], nullptr);
-            vkFreeMemory(dev, gDepthImageMemories[i], nullptr);
-
-            // Lit Scene
-            vkDestroyImageView(dev, litSceneImageViews[i], nullptr);
-            vkDestroyImage(dev, litSceneImages[i], nullptr);
-            vkFreeMemory(dev, litSceneImageMemories[i], nullptr);
-
-            // Glass Copies
-            vkDestroyImageView(dev, opaqueSceneCopyViews[i], nullptr);
-            vkDestroyImage(dev, opaqueSceneCopyImages[i], nullptr);
-            vkFreeMemory(dev, opaqueSceneCopyMemories[i], nullptr);
-
-            vkDestroyImageView(dev, glassDepthViews[i], nullptr);
-            vkDestroyImage(dev, glassDepthImages[i], nullptr);
-            vkFreeMemory(dev, glassDepthMemories[i], nullptr);
-        }
-
-        vkDestroySampler(dev, gBufferSampler, nullptr);
-        delete gBufferFramebuffers;
-
-        // Clear the arrays to reset their size to 0
-        uiSceneTextures.clear();
-        uiDepthTextures.clear();
+        vkSwapchain.reset();
+        vkContext.reset();
+        initialized_ = false;
     }
 
     void VulkanVertexBackend::recreateSwapchain(GLFWwindow* window) {
@@ -297,67 +262,93 @@ namespace Iridium {
             glfwWaitEvents();
         }
 
-        // 2. Wait for the GPU to finish its current frame
+        const VkFormat oldImageFormat = vkSwapchain->getImageFormat();
+        const uint32_t oldImageCount = vkSwapchain->getImageCount();
+        auto candidate = std::make_unique<VkSwapchain>(vkContext.get(), window, vkSwapchain->getSwapchain());
+        if (candidate->getImageFormat() != oldImageFormat) {
+            throw std::runtime_error("Swapchain format changed; a full renderer rebuild is required.");
+        }
+
+        // Resize is the one accepted global stall, after candidate validation.
         vkDeviceWaitIdle(vkContext->getDevice());
 
-        // 3. Destroy the old size
-        destroyOffscreenRenderTargets();
-        delete vkSwapchain;
+        for (VkDescriptorSet texture : uiSceneTextures) {
+            if (texture != VK_NULL_HANDLE) {
+                ImGui_ImplVulkan_RemoveTexture(texture);
+            }
+        }
+        for (VkDescriptorSet texture : uiDepthTextures) {
+            if (texture != VK_NULL_HANDLE) {
+                ImGui_ImplVulkan_RemoveTexture(texture);
+            }
+        }
+        uiSceneTextures.clear();
+        uiDepthTextures.clear();
+        sceneDescriptors.cleanup();
+        frameTargets.cleanup();
 
-        // 4. Build the new size
-        vkSwapchain = new VkSwapchain(vkContext, window);
-        createOffscreenRenderTargets();
-
-        // 5. Re-register the new ImGui Textures
-        uiSceneTextures.resize(vkSwapchain->getImageCount());
-        uiDepthTextures.resize(vkSwapchain->getImageCount());
-        for (size_t i = 0; i < vkSwapchain->getImageCount(); i++) {
-            uiSceneTextures[i] = ImGui_ImplVulkan_AddTexture(gBufferSampler, litSceneImageViews[i], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-            uiDepthTextures[i] = ImGui_ImplVulkan_AddTexture(gBufferSampler, glassDepthViews[i], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        vkSwapchain = std::move(candidate);
+        const uint32_t newImageCount = vkSwapchain->getImageCount();
+        scheduler.resetSwapchainImages(newImageCount);
+        initFrameTargets();
+        // The replacement target images are referenced by descriptor sets and
+        // ImGui immediately below; establish their declared layouts first.
+        uploadContext.flush();
+        sceneDescriptors.init(vkContext->getDevice(), descriptorAllocator,
+            lightingPipeline->getDescriptorSetLayout());
+        sceneDescriptors.rebuild(frameTargets);
+        if (environmentMapHandle.isValid()) {
+            setEnvironmentMap(environmentMapHandle);
+        }
+        if (newImageCount != oldImageCount) {
+            ImGui_ImplVulkan_SetMinImageCount(newImageCount);
         }
 
-        // 6. UPDATE LIGHTING DESCRIPTORS WITH NEW IMAGE VIEWS
-        for (size_t i = 0; i < vkSwapchain->getImageCount(); i++) {
-            VkDescriptorImageInfo normalInfo{ gBufferSampler, gNormalImageViews[i], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
-            VkDescriptorImageInfo albedoInfo{ gBufferSampler, gAlbedoImageViews[i], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
-            VkDescriptorImageInfo depthInfo{ gBufferSampler, gDepthImageViews[i], VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL };
-            VkDescriptorImageInfo opaqueCopyInfo{ gBufferSampler, opaqueSceneCopyViews[i], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
-            VkDescriptorImageInfo glassDepthInfo{ gBufferSampler, glassDepthViews[i], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
-
-            std::array<VkWriteDescriptorSet, 5> descriptorWrites{};
-            // BINDING 0: Depth
-            descriptorWrites[0] = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, lightingDescriptorSets[i], 0, 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &depthInfo, nullptr, nullptr };
-
-            // BINDING 1: Normal
-            descriptorWrites[1] = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, lightingDescriptorSets[i], 1, 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &normalInfo, nullptr, nullptr };
-
-            // BINDING 2: Albedo
-            descriptorWrites[2] = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, lightingDescriptorSets[i], 2, 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &albedoInfo, nullptr, nullptr };
-
-            // (Binding 3 is the HDRI, which is updated dynamically elsewhere!)
-
-            // BINDING 4 & 5: Glass Data
-            descriptorWrites[3] = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, lightingDescriptorSets[i], 4, 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &opaqueCopyInfo, nullptr, nullptr };
-            descriptorWrites[4] = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, lightingDescriptorSets[i], 5, 0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &glassDepthInfo, nullptr, nullptr };
-
-            vkUpdateDescriptorSets(vkContext->getDevice(), 5, descriptorWrites.data(), 0, nullptr);
+        uiSceneTextures.resize(newImageCount);
+        uiDepthTextures.resize(newImageCount);
+        for (size_t i = 0; i < newImageCount; i++) {
+            const VulkanPerImageTargets& targets = frameTargets.get(i);
+            uiSceneTextures[i] = ImGui_ImplVulkan_AddTexture(frameTargets.sampler(), targets.litScene.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            uiDepthTextures[i] = ImGui_ImplVulkan_AddTexture(frameTargets.sampler(), targets.glassDepth.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         }
+
     }
 
     // ==============================================================================
     // 2. RESOURCE MANAGEMENT (Thread-Safe & Anti-Fragmentation)
     // ==============================================================================
 
-    GeometryHandle VulkanVertexBackend::allocateGeometry(const void* vertexData, size_t vertexSize,
-        const void* indexData, size_t indexSize) {
+    GeometryHandle VulkanVertexBackend::allocateGeometry(const GeometryDesc& desc,
+        std::span<const std::byte> vertexBytes, std::span<const std::byte> indexBytes) {
+        const uint32_t indexSize = indexElementSize(desc.indexFormat);
+        if (desc.vertexStride == 0 || indexSize == 0) {
+            throw std::invalid_argument("Geometry format must define nonzero element sizes.");
+        }
+        if (indexBytes.size_bytes() % indexSize != 0) {
+            throw std::invalid_argument("Geometry index data is not aligned to its index format.");
+        }
+
         VulkanGeometryPayload payload{};
-        payload.indexCount = static_cast<uint32_t>(indexSize / sizeof(uint32_t));
+        payload.indexCount = static_cast<uint32_t>(indexBytes.size_bytes() / indexSize);
+        payload.indexFormat = desc.indexFormat;
 
-        vkContext->createGPUBuffer(vertexSize, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, vertexData,
-            payload.vertexBuffer, payload.vertexBufferMemory, vkCommandManager);
+        payload.vertexBuffer = resourceAllocator.createBuffer(vertexBytes.size_bytes(),
+            VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        try {
+            payload.indexBuffer = resourceAllocator.createBuffer(indexBytes.size_bytes(),
+                VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 
-        vkContext->createGPUBuffer(indexSize, VK_BUFFER_USAGE_INDEX_BUFFER_BIT, indexData,
-            payload.indexBuffer, payload.indexBufferMemory, vkCommandManager);
+            uploadContext.enqueueBufferUpload(payload.vertexBuffer, vertexBytes,
+                ResourceState::VertexBuffer);
+            uploadContext.enqueueBufferUpload(payload.indexBuffer, indexBytes,
+                ResourceState::IndexBuffer);
+        } catch (...) {
+            resourceAllocator.destroy(payload.indexBuffer);
+            resourceAllocator.destroy(payload.vertexBuffer);
+            throw;
+        }
 
         return geometryVault.allocate(payload);
     }
@@ -366,68 +357,80 @@ namespace Iridium {
         auto* payload = geometryVault.get(handle);
         if (payload) {
             // Capture the Vulkan pointers by value so the lambda remembers them
-            VkBuffer vBuf = payload->vertexBuffer;
-            VkDeviceMemory vMem = payload->vertexBufferMemory;
-            VkBuffer iBuf = payload->indexBuffer;
-            VkDeviceMemory iMem = payload->indexBufferMemory;
-            VkDevice device = vkContext->getDevice();
-
             // Defer the destruction! The GPU won't crash, and the CPU won't stall.
-            frameDeletionQueues[currentFrame].push_function([=]() {
-                vkDestroyBuffer(device, vBuf, nullptr);
-                vkFreeMemory(device, vMem, nullptr);
-                vkDestroyBuffer(device, iBuf, nullptr);
-                vkFreeMemory(device, iMem, nullptr);
+            scheduler.defer([this,
+                vertex = payload->vertexBuffer, index = payload->indexBuffer]() mutable {
+                resourceAllocator.destroy(vertex);
+                resourceAllocator.destroy(index);
                 });
 
             geometryVault.free(handle);
         }
     }
 
-    TextureHandle VulkanVertexBackend::allocateTexture(uint32_t width, uint32_t height, int channels,
-        const void* pixelData, bool isHDRI) {
+    TextureHandle VulkanVertexBackend::allocateTexture(const TextureDesc& desc,
+        std::span<const std::byte> pixelBytes) {
+        if (desc.width == 0 || desc.height == 0) {
+            throw std::invalid_argument("Texture dimensions must be nonzero");
+        }
+        if (pixelBytes.empty()) {
+            throw std::invalid_argument("Texture pixel data must be nonempty");
+        }
+
+        const uint32_t texelBytes = bytesPerTexel(desc.format);
+        const size_t expectedBytes = static_cast<size_t>(desc.width) * desc.height * texelBytes;
+        if (texelBytes == 0 || pixelBytes.size() != expectedBytes) {
+            throw std::invalid_argument("Texture pixel data size does not match the descriptor");
+        }
+
         VulkanTexturePayload payload{};
-        payload.isHDRI = isHDRI;
+        payload.format = desc.format;
 
-        VkFormat format = isHDRI ? VK_FORMAT_R32G32B32A32_SFLOAT : VK_FORMAT_R8G8B8A8_UNORM;
-        size_t pixelSize = isHDRI ? sizeof(float) : sizeof(unsigned char);
-        VkDeviceSize imageSize = width * height * 4 * pixelSize;
+        VkFormat format = VK_FORMAT_UNDEFINED;
+        switch (desc.format) {
+        case TextureFormat::RGBA8_UNorm:
+            format = VK_FORMAT_R8G8B8A8_UNORM;
+            break;
+        case TextureFormat::RGBA8_sRGB:
+            format = VK_FORMAT_R8G8B8A8_SRGB;
+            break;
+        case TextureFormat::RGBA32_SFloat:
+            format = VK_FORMAT_R32G32B32A32_SFLOAT;
+            break;
+        }
 
-        VkBuffer stagingBuffer;
-        VkDeviceMemory stagingBufferMemory;
-        vkContext->createBuffer(imageSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-            stagingBuffer, stagingBufferMemory);
+        const auto toVkFilter = [](FilterMode mode) {
+            return mode == FilterMode::Nearest ? VK_FILTER_NEAREST : VK_FILTER_LINEAR;
+        };
+        const auto toVkAddressMode = [](SamplerAddressMode mode) {
+            return mode == SamplerAddressMode::ClampToEdge
+                ? VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE
+                : VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        };
 
-        void* data;
-        vkMapMemory(vkContext->getDevice(), stagingBufferMemory, 0, imageSize, 0, &data);
-        memcpy(data, pixelData, (size_t)imageSize);
-        vkUnmapMemory(vkContext->getDevice(), stagingBufferMemory);
-
-        vkContext->createImage(width, height, format, VK_IMAGE_TILING_OPTIMAL,
+        payload.image = resourceAllocator.createImage2D({ desc.width, desc.height }, format,
             VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, payload.image, payload.memory);
-
-        vkCommandManager->transitionImageLayout(payload.image, format, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-        vkCommandManager->copyBufferToImage(stagingBuffer, payload.image, width, height);
-        vkCommandManager->transitionImageLayout(payload.image, format, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-
-        vkDestroyBuffer(vkContext->getDevice(), stagingBuffer, nullptr);
-        vkFreeMemory(vkContext->getDevice(), stagingBufferMemory, nullptr);
-
-        VkImageViewCreateInfo viewInfo{ VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
-        viewInfo.image = payload.image;
-        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-        viewInfo.format = format;
-        viewInfo.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
-        vkCreateImageView(vkContext->getDevice(), &viewInfo, nullptr, &payload.view);
+            VK_IMAGE_ASPECT_COLOR_BIT);
 
         VkSamplerCreateInfo samplerInfo{ VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO };
-        samplerInfo.magFilter = VK_FILTER_LINEAR;
-        samplerInfo.minFilter = VK_FILTER_LINEAR;
-        samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-        samplerInfo.addressModeV = isHDRI ? VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE : VK_SAMPLER_ADDRESS_MODE_REPEAT;
-        vkCreateSampler(vkContext->getDevice(), &samplerInfo, nullptr, &payload.sampler);
+        samplerInfo.magFilter = toVkFilter(desc.sampler.magFilter);
+        samplerInfo.minFilter = toVkFilter(desc.sampler.minFilter);
+        samplerInfo.addressModeU = toVkAddressMode(desc.sampler.addressU);
+        samplerInfo.addressModeV = toVkAddressMode(desc.sampler.addressV);
+        samplerInfo.addressModeW = toVkAddressMode(desc.sampler.addressW);
+        VkResult result = vkCreateSampler(vkContext->getDevice(), &samplerInfo, nullptr, &payload.sampler);
+        if (result != VK_SUCCESS) {
+            resourceAllocator.destroy(payload.image);
+            throw std::runtime_error("Failed to create texture sampler.");
+        }
+
+        try {
+            uploadContext.enqueueImageUpload(payload.image, pixelBytes, ResourceState::ShaderResource);
+        } catch (...) {
+            vkDestroySampler(vkContext->getDevice(), payload.sampler, nullptr);
+            resourceAllocator.destroy(payload.image);
+            throw;
+        }
 
         return textureVault.allocate(payload);
     }
@@ -437,62 +440,98 @@ namespace Iridium {
     void VulkanVertexBackend::freeTexture(TextureHandle handle) {
         auto* payload = textureVault.get(handle);
         if (payload) {
-            VkImage img = payload->image;
-            VkDeviceMemory mem = payload->memory;
-            VkImageView view = payload->view;
             VkSampler sampler = payload->sampler;
-            VkDevice device = vkContext->getDevice();
+            VulkanImageResource image = payload->image;
 
-            frameDeletionQueues[currentFrame].push_function([=]() {
-                vkDestroySampler(device, sampler, nullptr);
-                vkDestroyImageView(device, view, nullptr);
-                vkDestroyImage(device, img, nullptr);
-                vkFreeMemory(device, mem, nullptr);
+            scheduler.defer([this, sampler, image]() mutable {
+                vkDestroySampler(vkContext->getDevice(), sampler, nullptr);
+                resourceAllocator.destroy(image);
                 });
 
             textureVault.free(handle);
         }
     }
 
-    MaterialHandle VulkanVertexBackend::allocateMaterial(const MaterialAsset& asset) {
-        // 1. Get or Create the Vulkan Pipeline from the Cache
-        VkPipeline generatedPipeline = pipelineCache.getOrCreatePipeline(asset.pipelineState);
+    MaterialBinding VulkanVertexBackend::allocateMaterial(const MaterialAsset& asset) {
+        auto* albedo = textureVault.get(asset.albedoMap);
+        auto* normal = textureVault.get(asset.normalMap);
+        auto* pbr = textureVault.get(asset.pbrMap);
+        auto* emissive = textureVault.get(asset.emissiveMap);
+        auto* transmission = textureVault.get(asset.transmissionMap);
 
-        // 2. Populate YOUR actual internal struct
-        VulkanMaterialPayload mat;
-        mat.pipeline = generatedPipeline;
-        mat.blendMode = asset.pipelineState.blendMode;
+        if (!albedo) {
+            throw std::invalid_argument("Invalid albedo texture handle in material asset");
+        }
+        if (!normal) {
+            throw std::invalid_argument("Invalid normal texture handle in material asset");
+        }
+        if (!pbr) {
+            throw std::invalid_argument("Invalid PBR texture handle in material asset");
+        }
+        if (!emissive) {
+            throw std::invalid_argument("Invalid emissive texture handle in material asset");
+        }
+        if (!transmission) {
+            throw std::invalid_argument("Invalid transmission texture handle in material asset");
+        }
 
+        VulkanMaterialPayload mat{};
+        mat.pipeline = pipelineLibrary.getOrCreatePipeline(asset.pipelineState);
+        mat.renderQueue = asset.renderQueue;
         mat.baseColor = asset.baseColor;
+        mat.emissiveFactor = asset.emissiveFactor;
         mat.metallicFactor = asset.metallic;
         mat.roughnessFactor = asset.roughness;
-        mat.emissiveFactor = asset.emissive;
+        mat.normalScale = asset.normalScale;
+        mat.alphaCutoff = asset.alphaCutoff;
+        mat.transmissionFactor = asset.transmissionFactor;
 
-        // 3. Allocate the descriptors. 
-        // NOTE: Check your VulkanTexturePayload struct! If the VkImageView is 
-        // called something other than "imageView" (like "view"), change it below!
-        VkDescriptorSet matSet = descriptorAllocator.allocateMaterialSet(
-            textureVault.get(asset.albedoMap)->imageView,
-            textureVault.get(asset.normalMap)->imageView,
-            textureVault.get(asset.pbrMap)->imageView
-        );
+        for (size_t frame = 0; frame < VulkanFrameScheduler::FramesInFlight; ++frame) {
+            VkDescriptorSet matSet = descriptorAllocator.allocate(meshLayouts.getMaterialSetLayout());
 
-        mat.descriptorSets.assign(VkSyncObjects::MAX_FRAMES_IN_FLIGHT, matSet);
+            std::array<VkDescriptorImageInfo, 5> imageInfos{};
+            imageInfos[0] = { albedo->sampler, albedo->image.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+            imageInfos[1] = { normal->sampler, normal->image.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+            imageInfos[2] = { pbr->sampler, pbr->image.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+            imageInfos[3] = { emissive->sampler, emissive->image.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+            imageInfos[4] = { transmission->sampler, transmission->image.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
 
-        // 4. Return the handle using YOUR vault's method
-        return materialVault.add(mat);
+            std::array<VkWriteDescriptorSet, 5> writes{};
+            for (size_t binding = 0; binding < writes.size(); ++binding) {
+                writes[binding].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                writes[binding].dstSet = matSet;
+                writes[binding].dstBinding = static_cast<uint32_t>(binding);
+                writes[binding].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                writes[binding].descriptorCount = 1;
+                writes[binding].pImageInfo = &imageInfos[binding];
+            }
+
+            vkUpdateDescriptorSets(vkContext->getDevice(), static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
+            mat.descriptorSets[frame] = matSet;
+        }
+
+        MaterialHandle material = materialVault.allocate(mat);
+        return { material, mat.pipeline, mat.renderQueue, makeOpaqueSortKey(mat.pipeline, material) };
     }
 
     void VulkanVertexBackend::freeMaterial(MaterialHandle handle) {
-        // We only free the slot in the vault. 
-        // The VkDescriptorSets remain in memory, attached to this slot, ready to be recycled!
+        auto* payload = materialVault.get(handle);
+        if (!payload) {
+            return;
+        }
+
+        const auto descriptorSets = payload->descriptorSets;
+        scheduler.defer([this, descriptorSets]() {
+            descriptorAllocator.free(std::span<const VkDescriptorSet>(descriptorSets));
+        });
+
         materialVault.free(handle);
     }
 
     // --- PRIVATE HELPERS ---
 
     void VulkanVertexBackend::createLightingRenderPass() {
-        // This pass writes the evaluated lighting directly to the Swapchain image
+        // This pass writes the evaluated lighting to the per-image lit-scene target.
         VkAttachmentDescription colorAttachment{};
         colorAttachment.format = vkSwapchain->getImageFormat();
         colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
@@ -500,8 +539,7 @@ namespace Iridium {
         colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
         colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
         colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-        colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        // Outputting as Color Attachment Optimal so the Forward Pass can draw glass on top of it next
+        colorAttachment.initialLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
         colorAttachment.finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
         VkAttachmentReference colorAttachmentRef{};
@@ -516,10 +554,11 @@ namespace Iridium {
         VkSubpassDependency dependency{};
         dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
         dependency.dstSubpass = 0;
-        dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
         dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-        dependency.srcAccessMask = 0;
-        dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        dependency.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT;
+        dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
 
         VkRenderPassCreateInfo renderPassInfo{};
         renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
@@ -535,193 +574,28 @@ namespace Iridium {
         }
     }
 
-    void VulkanVertexBackend::createOffscreenRenderTargets() {
-        uint32_t imageCount = vkSwapchain->getImageCount();
-        VkExtent2D extent = vkSwapchain->getExtent();
+    void VulkanVertexBackend::initFrameTargets() {
+        frameTargets.init(vkContext->getDevice(), resourceAllocator, *vkSwapchain,
+            { gBufferPass->getRenderPass(), lightingRenderPass, forwardPass->getRenderPass(),
+                glassDepthPass->getRenderPass(), uiPass->getRenderPass() });
 
-        // Resize all vectors
-        gNormalImages.resize(imageCount);   gNormalImageMemories.resize(imageCount);   gNormalImageViews.resize(imageCount);
-        gAlbedoImages.resize(imageCount);   gAlbedoImageMemories.resize(imageCount);   gAlbedoImageViews.resize(imageCount);
-        litSceneImages.resize(imageCount);  litSceneImageMemories.resize(imageCount);  litSceneImageViews.resize(imageCount);
-        gDepthImages.resize(imageCount);    gDepthImageMemories.resize(imageCount);    gDepthImageViews.resize(imageCount);
-        
-        for (size_t i = 0; i < imageCount; i++) {
-            // 1. NORMAL
-            vkContext->createImage(extent.width, extent.height, VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_TILING_OPTIMAL,
-                VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-                gNormalImages[i], gNormalImageMemories[i]);
-
-            VkImageViewCreateInfo normViewInfo{ VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
-            normViewInfo.image = gNormalImages[i];
-            normViewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-            normViewInfo.format = VK_FORMAT_R16G16B16A16_SFLOAT;
-            normViewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-            normViewInfo.subresourceRange.levelCount = 1;
-            normViewInfo.subresourceRange.layerCount = 1;
-            vkCreateImageView(vkContext->getDevice(), &normViewInfo, nullptr, &gNormalImageViews[i]);
-
-            // 2. ALBEDO
-            vkContext->createImage(extent.width, extent.height, VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_TILING_OPTIMAL,
-                VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-                gAlbedoImages[i], gAlbedoImageMemories[i]);
-
-            VkImageViewCreateInfo albedoViewInfo = normViewInfo;
-            albedoViewInfo.image = gAlbedoImages[i];
-            vkCreateImageView(vkContext->getDevice(), &albedoViewInfo, nullptr, &gAlbedoImageViews[i]);
-
-            // 2.5 MAIN SCENE DEPTH BUFFER
-            vkContext->createImage(extent.width, extent.height, VK_FORMAT_D32_SFLOAT, VK_IMAGE_TILING_OPTIMAL,
-                VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-                gDepthImages[i], gDepthImageMemories[i]);
-
-            VkImageViewCreateInfo depthViewInfo{ VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
-            depthViewInfo.image = gDepthImages[i];
-            depthViewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-            depthViewInfo.format = VK_FORMAT_D32_SFLOAT;
-            depthViewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
-            depthViewInfo.subresourceRange.levelCount = 1;
-            depthViewInfo.subresourceRange.layerCount = 1;
-            vkCreateImageView(vkContext->getDevice(), &depthViewInfo, nullptr, &gDepthImageViews[i]);
-
-            // 3. THE FINAL LIT SCENE
-            vkContext->createImage(extent.width, extent.height, vkSwapchain->getImageFormat(),
-                VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT
-                | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-                litSceneImages[i], litSceneImageMemories[i]);
-
-            VkImageViewCreateInfo litViewInfo = normViewInfo;
-            litViewInfo.image = litSceneImages[i];
-            litViewInfo.format = vkSwapchain->getImageFormat();
-            vkCreateImageView(vkContext->getDevice(), &litViewInfo, nullptr, &litSceneImageViews[i]);
-        }
-
-        opaqueSceneCopyImages.resize(imageCount); opaqueSceneCopyMemories.resize(imageCount); opaqueSceneCopyViews.resize(imageCount);
-        glassDepthImages.resize(imageCount); glassDepthMemories.resize(imageCount); glassDepthViews.resize(imageCount);
-
-        for (size_t i = 0; i < imageCount; i++) {
-            // 4. THE PHOTOGRAPH (Opaque Scene Copy)
-            vkContext->createImage(extent.width, extent.height, vkSwapchain->getImageFormat(), VK_IMAGE_TILING_OPTIMAL,
-                VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-                opaqueSceneCopyImages[i], opaqueSceneCopyMemories[i]);
-
-            VkImageViewCreateInfo copyViewInfo{ VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
-            copyViewInfo.image = opaqueSceneCopyImages[i];
-            copyViewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-            copyViewInfo.format = vkSwapchain->getImageFormat();
-            copyViewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-            copyViewInfo.subresourceRange.levelCount = 1;
-            copyViewInfo.subresourceRange.layerCount = 1;
-            vkCreateImageView(vkContext->getDevice(), &copyViewInfo, nullptr, &opaqueSceneCopyViews[i]);
-
-            // Use the backend's command manager to transition
-            vkCommandManager->transitionImageLayout(opaqueSceneCopyImages[i], vkSwapchain->getImageFormat(),
-                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-
-            // 5. THE SECRET DEPTH BUFFER (Glass Thickness)
-            // Note: Make sure findDepthFormat is accessible here, or hardcode your standard depth format
-            vkContext->createImage(extent.width, extent.height, VK_FORMAT_D32_SFLOAT, VK_IMAGE_TILING_OPTIMAL,
-                VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-                glassDepthImages[i], glassDepthMemories[i]);
-
-            vkCommandManager->transitionImageLayout(glassDepthImages[i], VK_FORMAT_D32_SFLOAT,
-                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-
-            VkImageViewCreateInfo glassDepthViewInfo = copyViewInfo;
-            glassDepthViewInfo.image = glassDepthImages[i];
-            glassDepthViewInfo.format = VK_FORMAT_D32_SFLOAT;
-            glassDepthViewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
-            vkCreateImageView(vkContext->getDevice(), &glassDepthViewInfo, nullptr, &glassDepthViews[i]);
-        }
-
-        // Create ONE Sampler for the G-Buffer
-        VkSamplerCreateInfo samplerInfo{ VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO };
-        samplerInfo.magFilter = VK_FILTER_LINEAR; samplerInfo.minFilter = VK_FILTER_LINEAR;
-        samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-        samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-        samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-        samplerInfo.maxAnisotropy = 1.0f;
-        vkCreateSampler(vkContext->getDevice(), &samplerInfo, nullptr, &gBufferSampler);
-
-        gBufferFramebuffers = new VkFramebufferWrapper(
-            vkContext,
-            gBufferPass,
-            gNormalImageViews,
-            gAlbedoImageViews,
-            gDepthImageViews,
-            vkSwapchain->getExtent()
-        );
-
-        glassDepthFramebuffers.resize(imageCount);
-        for (size_t i = 0; i < imageCount; i++) {
-            VkImageView attachments[] = { glassDepthViews[i] };
-
-            VkFramebufferCreateInfo framebufferInfo{};
-            framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-            framebufferInfo.renderPass = glassDepthPass->getRenderPass();
-            framebufferInfo.attachmentCount = 1;
-            framebufferInfo.pAttachments = attachments;
-            framebufferInfo.width = extent.width;
-            framebufferInfo.height = extent.height;
-            framebufferInfo.layers = 1;
-
-            if (vkCreateFramebuffer(vkContext->getDevice(), &framebufferInfo, nullptr, &glassDepthFramebuffers[i]) != VK_SUCCESS) {
-                throw std::runtime_error("failed to create glass depth framebuffer!");
-            }
-        }
-
-        lightingFramebuffers.resize(imageCount);
-        forwardFramebuffers.resize(imageCount);
-        uiFramebuffers.resize(imageCount);
-
-        for (size_t i = 0; i < imageCount; i++) {
-            // 1. Lighting Framebuffer (Draws color into the Lit Scene)
-            VkImageView lightingAttachments[] = { litSceneImageViews[i] };
-            VkFramebufferCreateInfo lightingFbInfo{ VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO };
-            lightingFbInfo.renderPass = lightingRenderPass;
-            lightingFbInfo.attachmentCount = 1;
-            lightingFbInfo.pAttachments = lightingAttachments;
-            lightingFbInfo.width = extent.width;
-            lightingFbInfo.height = extent.height;
-            lightingFbInfo.layers = 1;
-            if (vkCreateFramebuffer(vkContext->getDevice(), &lightingFbInfo, nullptr, &lightingFramebuffers[i]) != VK_SUCCESS)
-                throw std::runtime_error("failed to create lighting framebuffer");
-
-            // 2. Forward Framebuffer (Draws glass into the Lit Scene, reads from Main Depth)
-            VkImageView forwardAttachments[] = { litSceneImageViews[i], gDepthImageViews[i] };
-            VkFramebufferCreateInfo forwardFbInfo = lightingFbInfo;
-            forwardFbInfo.renderPass = forwardPass->getRenderPass();
-            forwardFbInfo.attachmentCount = 2;
-            forwardFbInfo.pAttachments = forwardAttachments;
-            if (vkCreateFramebuffer(vkContext->getDevice(), &forwardFbInfo, nullptr, &forwardFramebuffers[i]) != VK_SUCCESS)
-                throw std::runtime_error("failed to create forward framebuffer");
-
-            // 3. UI Framebuffer (Draws the editor directly to the OS Swapchain window)
-            // Note: Make sure your vkSwapchain->getImageViews() getter exists!
-            VkImageView uiAttachments[] = { vkSwapchain->getImageViews()[i] };
-            VkFramebufferCreateInfo uiFbInfo = lightingFbInfo;
-            uiFbInfo.renderPass = uiPass->getRenderPass();
-            uiFbInfo.attachmentCount = 1;
-            uiFbInfo.pAttachments = uiAttachments;
-            if (vkCreateFramebuffer(vkContext->getDevice(), &uiFbInfo, nullptr, &uiFramebuffers[i]) != VK_SUCCESS)
-                throw std::runtime_error("failed to create UI framebuffer");
+        for (VulkanPerImageTargets& target : frameTargets.targets()) {
+            uploadContext.enqueueTransition(target.opaqueCopy, ResourceState::ShaderResource);
+            uploadContext.enqueueTransition(target.glassDepth, ResourceState::ShaderResource);
         }
     }
 
     void VulkanVertexBackend::createUniformBuffers() {
         VkDeviceSize bufferSize = sizeof(UniformBufferObject);
-        size_t frameCount = VkSyncObjects::MAX_FRAMES_IN_FLIGHT;
+        size_t frameCount = VulkanFrameScheduler::FramesInFlight;
 
         uniformBuffers.resize(frameCount);
-        uniformBuffersMemory.resize(frameCount);
-        uniformBuffersMapped.resize(frameCount);
 
         for (size_t i = 0; i < frameCount; i++) {
-            vkContext->createBuffer(bufferSize,
+            uniformBuffers[i] = resourceAllocator.createBuffer(bufferSize,
                 VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                uniformBuffers[i], uniformBuffersMemory[i]);
-
-            vkMapMemory(vkContext->getDevice(), uniformBuffersMemory[i], 0, bufferSize, 0, &uniformBuffersMapped[i]);
+                true);
         }
     }
 
@@ -729,52 +603,30 @@ namespace Iridium {
     // 3. THE FRAME PIPELINE (Data-Driven Execution)
     // ==============================================================================
 
-    bool VulkanVertexBackend::beginFrame() {
-        VkFence inFlightFence = vkSyncObjects->getInFlightFence(currentFrame);
-        vkWaitForFences(vkContext->getDevice(), 1, &inFlightFence, VK_TRUE, UINT64_MAX);
-
-        // 1. Flush any deleted resources now that we know the GPU is absolutely 
-        // finished with this specific frame index.
-        frameDeletionQueues[currentFrame].flush();
-
-        // 2. Acquire the next canvas from the OS
-        VkResult result = vkAcquireNextImageKHR(vkContext->getDevice(), vkSwapchain->getSwapchain(),
-            UINT64_MAX, vkSyncObjects->getImageAvailableSemaphore(currentFrame),
-            VK_NULL_HANDLE, &currentImageIndex);
-
-        if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
-            // Note: Application.cpp will check this and call recreateSwapchain()
-            return false;
-        }
-        else if (result != VK_SUCCESS) {
-            throw std::runtime_error("Failed to acquire swap chain image!");
+    FrameStatus VulkanVertexBackend::beginFrame() {
+        uploadContext.flush();
+        const VulkanFrameBegin frame = scheduler.beginFrame(vkSwapchain->getSwapchain());
+        if (frame.status == FrameStatus::RecreateSwapchain) {
+            return frame.status;
         }
 
-        vkResetFences(vkContext->getDevice(), 1, &inFlightFence);
-
-        // 3. Begin Command Buffer Recording
-        currentCmd = vkCommandManager->getCommandBuffer(currentFrame);
-        vkResetCommandBuffer(currentCmd, 0);
-
-        VkCommandBufferBeginInfo beginInfo{ VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
-        if (vkBeginCommandBuffer(currentCmd, &beginInfo) != VK_SUCCESS) {
-            throw std::runtime_error("failed to begin recording command buffer!");
-        }
-
-        return true;
+        currentImageIndex = frame.imageIndex;
+        currentCmd = frame.commandBuffer;
+        return frame.status;
     }
 
-    void VulkanVertexBackend::submitOpaqueQueue(const std::vector<DrawPacket>& opaqueQueue,
-        const std::vector<DrawPacket>& selectionQueue, bool isWireframe) {
+    void VulkanVertexBackend::submitOpaqueQueue(std::span<const DrawPacket> opaqueQueue,
+        std::span<const DrawPacket> selectionQueue, bool isWireframe) {
         VkRenderPassBeginInfo rpInfo{ VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
         rpInfo.renderPass = gBufferPass->getRenderPass();
-        rpInfo.framebuffer = gBufferFramebuffers->getFramebuffer(currentImageIndex);
+        rpInfo.framebuffer = frameTargets.get(currentImageIndex).gBufferFramebuffer;
         rpInfo.renderArea.extent = vkSwapchain->getExtent();
 
-        std::array<VkClearValue, 3> clearValues{};
+        std::array<VkClearValue, 4> clearValues{};
         clearValues[0].color = { {0.0f, 0.0f, 0.0f, 1.0f} }; // Normal
         clearValues[1].color = { {0.1f, 0.1f, 0.1f, 1.0f} }; // Albedo
-        clearValues[2].depthStencil = { 1.0f, 0 };           // Depth
+        clearValues[2].color = { {0.0f, 0.0f, 0.0f, 0.0f} }; // Emissive
+        clearValues[3].depthStencil = { 1.0f, 0 };            // Depth
 
         rpInfo.clearValueCount = static_cast<uint32_t>(clearValues.size());
         rpInfo.pClearValues = clearValues.data();
@@ -794,52 +646,104 @@ namespace Iridium {
         VkRect2D scissor{ {0, 0}, rpInfo.renderArea.extent };
         vkCmdSetScissor(currentCmd, 0, 1, &scissor);
 
-        VkPipelineLayout layout = gBufferPipeline->getPipelineLayout();
+        const VkPipelineLayout meshLayout = meshLayouts.getGBufferPipelineLayout();
 
         // ==============================================================================
-        // PHASE 1: DRAW OPAQUE SCENE (Standard Depth Testing)
+        // PHASE 1: DRAW OPAQUE SCENE
         // ==============================================================================
+
+        PipelineHandle lastBoundPipeline{};
+        MaterialHandle lastBoundMaterial{};
+        GeometryHandle lastBoundGeometry{};
 
         if (isWireframe) {
+            // Editor wireframe is a deliberate fixed override, not a material PSO.
             vkCmdBindPipeline(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS, gBufferPipeline->getWireframePipeline());
+            vkCmdBindDescriptorSets(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout,
+                0, 1, &globalDescriptorSets[scheduler.currentFrameIndex()], 0, nullptr);
+
+            for (const auto& packet : opaqueQueue) {
+                auto* geometry = geometryVault.get(packet.geometry);
+                auto* material = materialVault.get(packet.material);
+                if (!geometry || !material) continue;
+
+                if (packet.material != lastBoundMaterial) {
+                    vkCmdBindDescriptorSets(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout,
+                        1, 1, &material->descriptorSets[scheduler.currentFrameIndex()], 0, nullptr);
+                    lastBoundMaterial = packet.material;
+                }
+                if (packet.geometry != lastBoundGeometry) {
+                    VkDeviceSize offset = 0;
+                    vkCmdBindVertexBuffers(currentCmd, 0, 1, &geometry->vertexBuffer.buffer, &offset);
+                    vkCmdBindIndexBuffer(currentCmd, geometry->indexBuffer.buffer, 0,
+                        toVkIndexType(geometry->indexFormat));
+                    lastBoundGeometry = packet.geometry;
+                }
+
+                MeshPushConstants push{};
+                push.renderMatrix = packet.worldTransform;
+                push.baseColor = material->baseColor;
+                push.emissiveFactor = material->emissiveFactor;
+                push.metallicFactor = material->metallicFactor;
+                push.roughnessFactor = material->roughnessFactor;
+                push.normalScale = material->normalScale;
+                push.alphaCutoff = material->alphaCutoff;
+                push.transmissionFactor = material->transmissionFactor;
+                vkCmdPushConstants(currentCmd, meshLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                    0, sizeof(MeshPushConstants), &push);
+                vkCmdDrawIndexed(currentCmd, packet.indexCount, 1, packet.firstIndex, 0, 0);
+            }
         }
         else {
-            vkCmdBindPipeline(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS, gBufferPipeline->getPipeline());
-        }
+            VkPipelineLayout activeLayout = VK_NULL_HANDLE;
 
-        vkCmdBindDescriptorSets(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &globalDescriptorSets[currentFrame], 0, nullptr);
+            for (const auto& packet : opaqueQueue) {
+                auto* geometry = geometryVault.get(packet.geometry);
+                auto* material = materialVault.get(packet.material);
+                const VulkanPipelineRecord* record = pipelineLibrary.get(packet.pipeline);
+                if (!geometry || !material) continue;
 
-        MaterialHandle lastBoundMaterial;
-        bool firstOpaque = true;
+                // Invalid/stale handles and non-G-buffer records are not drawable here.
+                if (!record || record->pipeline == VK_NULL_HANDLE ||
+                    record->pipelineLayout == VK_NULL_HANDLE ||
+                    record->renderPass != RenderPassClass::GBuffer) {
+                    continue;
+                }
 
-        for (const auto& packet : opaqueQueue) {
-            auto* geometry = geometryVault.get(packet.geometry);
-            auto* material = materialVault.get(packet.material);
+                if (packet.pipeline != lastBoundPipeline) {
+                    vkCmdBindPipeline(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS, record->pipeline);
+                    activeLayout = record->pipelineLayout;
+                    vkCmdBindDescriptorSets(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS, activeLayout,
+                        0, 1, &globalDescriptorSets[scheduler.currentFrameIndex()], 0, nullptr);
+                    lastBoundPipeline = packet.pipeline;
+                    lastBoundMaterial = MaterialHandle{};
+                }
+                if (packet.material != lastBoundMaterial) {
+                    vkCmdBindDescriptorSets(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS, activeLayout,
+                        1, 1, &material->descriptorSets[scheduler.currentFrameIndex()], 0, nullptr);
+                    lastBoundMaterial = packet.material;
+                }
+                if (packet.geometry != lastBoundGeometry) {
+                    VkDeviceSize offset = 0;
+                    vkCmdBindVertexBuffers(currentCmd, 0, 1, &geometry->vertexBuffer.buffer, &offset);
+                    vkCmdBindIndexBuffer(currentCmd, geometry->indexBuffer.buffer, 0,
+                        toVkIndexType(geometry->indexFormat));
+                    lastBoundGeometry = packet.geometry;
+                }
 
-            if (!geometry || !material) continue;
-
-            VkDeviceSize offset = 0;
-            vkCmdBindVertexBuffers(currentCmd, 0, 1, &geometry->vertexBuffer, &offset);
-            vkCmdBindIndexBuffer(currentCmd, geometry->indexBuffer, 0, VK_INDEX_TYPE_UINT32);
-
-            MeshPushConstants push{};
-            push.renderMatrix = packet.worldTransform;
-            push.baseColor = material->baseColor;
-            push.metallicFactor = material->metallicFactor;
-            push.roughnessFactor = material->roughnessFactor;
-
-            // FIX: Removed the isSelected hack. We draw the real material here.
-            push.emissiveFactor = material->emissiveFactor;
-
-            vkCmdPushConstants(currentCmd, layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(MeshPushConstants), &push);
-
-            if (firstOpaque || packet.material != lastBoundMaterial) {
-                vkCmdBindDescriptorSets(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 1, 1, &material->descriptorSets[currentFrame], 0, nullptr);
-                lastBoundMaterial = packet.material;
-                firstOpaque = false;
+                MeshPushConstants push{};
+                push.renderMatrix = packet.worldTransform;
+                push.baseColor = material->baseColor;
+                push.emissiveFactor = material->emissiveFactor;
+                push.metallicFactor = material->metallicFactor;
+                push.roughnessFactor = material->roughnessFactor;
+                push.normalScale = material->normalScale;
+                push.alphaCutoff = material->alphaCutoff;
+                push.transmissionFactor = material->transmissionFactor;
+                vkCmdPushConstants(currentCmd, activeLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                    0, sizeof(MeshPushConstants), &push);
+                vkCmdDrawIndexed(currentCmd, packet.indexCount, 1, packet.firstIndex, 0, 0);
             }
-
-            vkCmdDrawIndexed(currentCmd, packet.indexCount, 1, packet.firstIndex, 0, 0);
         }
 
         // ==============================================================================
@@ -847,11 +751,12 @@ namespace Iridium {
         // ==============================================================================
 
         if (!selectionQueue.empty()) {
-            // Bind the outline pipeline we set up to ignore depth
             vkCmdBindPipeline(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS, gBufferPipeline->getOutlinePipeline());
+            vkCmdBindDescriptorSets(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout,
+                0, 1, &globalDescriptorSets[scheduler.currentFrameIndex()], 0, nullptr);
 
-            lastBoundMaterial = MaterialHandle{}; // Reset for the new loop
-            bool firstSelection = true;
+            lastBoundMaterial = MaterialHandle{};
+            lastBoundGeometry = GeometryHandle{};
 
             for (const auto& packet : selectionQueue) {
                 auto* geometry = geometryVault.get(packet.geometry);
@@ -859,32 +764,44 @@ namespace Iridium {
 
                 if (!geometry || !material) continue;
 
-                VkDeviceSize offset = 0;
-                vkCmdBindVertexBuffers(currentCmd, 0, 1, &geometry->vertexBuffer, &offset);
-                vkCmdBindIndexBuffer(currentCmd, geometry->indexBuffer, 0, VK_INDEX_TYPE_UINT32);
-
                 MeshPushConstants push{};
                 push.renderMatrix = packet.worldTransform;
-
-                // Mask shader doesn't use these, but we fill them to satisfy the struct size
                 push.baseColor = material->baseColor;
+                push.emissiveFactor = material->emissiveFactor;
                 push.metallicFactor = material->metallicFactor;
                 push.roughnessFactor = material->roughnessFactor;
-                push.emissiveFactor = material->emissiveFactor;
+                push.normalScale = material->normalScale;
+                push.alphaCutoff = material->alphaCutoff;
+                push.transmissionFactor = material->transmissionFactor;
 
-                vkCmdPushConstants(currentCmd, layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(MeshPushConstants), &push);
-
-                if (firstSelection || packet.material != lastBoundMaterial) {
-                    vkCmdBindDescriptorSets(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 1, 1, &material->descriptorSets[currentFrame], 0, nullptr);
+                if (packet.material != lastBoundMaterial) {
+                    vkCmdBindDescriptorSets(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout,
+                        1, 1, &material->descriptorSets[scheduler.currentFrameIndex()], 0, nullptr);
                     lastBoundMaterial = packet.material;
-                    firstSelection = false;
                 }
+                if (packet.geometry != lastBoundGeometry) {
+                    VkDeviceSize offset = 0;
+                    vkCmdBindVertexBuffers(currentCmd, 0, 1, &geometry->vertexBuffer.buffer, &offset);
+                    vkCmdBindIndexBuffer(currentCmd, geometry->indexBuffer.buffer, 0,
+                        toVkIndexType(geometry->indexFormat));
+                    lastBoundGeometry = packet.geometry;
+                }
+
+                vkCmdPushConstants(currentCmd, meshLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                    0, sizeof(MeshPushConstants), &push);
 
                 vkCmdDrawIndexed(currentCmd, packet.indexCount, 1, packet.firstIndex, 0, 0);
             }
         }
 
         vkCmdEndRenderPass(currentCmd);
+
+        VulkanPerImageTargets& targets = frameTargets.get(currentImageIndex);
+        VulkanCommandList commandList(scheduler.currentCommandBuffer());
+        commandList.markState(targets.normal, ResourceState::ShaderResource);
+        commandList.markState(targets.albedo, ResourceState::ShaderResource);
+        commandList.markState(targets.emissive, ResourceState::ShaderResource);
+        commandList.markState(targets.depth, ResourceState::DepthRead);
     }
 
     void VulkanVertexBackend::updateCamera(const glm::mat4& view, const glm::mat4& proj) {
@@ -894,13 +811,17 @@ namespace Iridium {
         ubo.proj = proj;
 
         // Push the matrices to the GPU!
-        memcpy(uniformBuffersMapped[currentFrame], &ubo, sizeof(ubo));
+        std::memcpy(uniformBuffers[scheduler.currentFrameIndex()].mapped, &ubo, sizeof(ubo));
     }
 
     void VulkanVertexBackend::submitLightingPass(const glm::vec3& cameraPos, const glm::mat4& view, const glm::mat4& proj) {
+        VulkanPerImageTargets& targets = frameTargets.get(currentImageIndex);
+        VulkanCommandList commandList(scheduler.currentCommandBuffer());
+        commandList.transition(targets.litScene, ResourceState::ColorAttachment);
+
         VkRenderPassBeginInfo lightingPassInfo{ VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
         lightingPassInfo.renderPass = lightingRenderPass;
-        lightingPassInfo.framebuffer = lightingFramebuffers[currentImageIndex];
+        lightingPassInfo.framebuffer = frameTargets.get(currentImageIndex).lightingFramebuffer;
         lightingPassInfo.renderArea.extent = vkSwapchain->getExtent();
 
         VkClearValue lightingClearColor = { {{0.0f, 0.0f, 0.0f, 1.0f}} };
@@ -911,8 +832,9 @@ namespace Iridium {
         vkCmdBindPipeline(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS, lightingPipeline->getPipeline());
 
         // Bind the G-Buffer Textures internally managed by the backend
+        const VkDescriptorSet sceneSet = sceneDescriptors.get(currentImageIndex);
         vkCmdBindDescriptorSets(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS, lightingPipeline->getPipelineLayout(),
-            0, 1, &lightingDescriptorSets[currentImageIndex], 0, nullptr);
+            0, 1, &sceneSet, 0, nullptr);
 
         LightingPushConstants push{};
         push.viewPos = glm::vec4(cameraPos, 1.0f);
@@ -932,132 +854,44 @@ namespace Iridium {
         vkCmdDraw(currentCmd, 3, 1, 0, 0);
 
         vkCmdEndRenderPass(currentCmd);
+        commandList.markState(targets.litScene, ResourceState::ColorAttachment);
     }
 
-    void VulkanVertexBackend::submitGlassDepthPass(const std::vector<DrawPacket>& transparentQueue) {
-        if (transparentQueue.empty()) return;
-
-        VkRenderPassBeginInfo glassDepthPassInfo{ VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
-        glassDepthPassInfo.renderPass = glassDepthPass->getRenderPass();
-        glassDepthPassInfo.framebuffer = glassDepthFramebuffers[currentImageIndex];
-        glassDepthPassInfo.renderArea.extent = vkSwapchain->getExtent();
-
-        VkClearValue depthClearValue{};
-        depthClearValue.depthStencil = { 1.0f, 0 };
-        glassDepthPassInfo.clearValueCount = 1;
-        glassDepthPassInfo.pClearValues = &depthClearValue;
-
-        vkCmdBeginRenderPass(currentCmd, &glassDepthPassInfo, VK_SUBPASS_CONTENTS_INLINE);
-        vkCmdBindPipeline(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS, glassDepthPipeline->getPipeline());
-
-        VkViewport viewport{};
-        viewport.x = 0.0f;
-        viewport.y = 0.0f;            // Start at the bottom
-        viewport.width = (float)vkSwapchain->getExtent().width;
-        viewport.height = (float)vkSwapchain->getExtent().height;       // Draw upwards!
-        viewport.minDepth = 0.0f;
-        viewport.maxDepth = 1.0f;        
-        vkCmdSetViewport(currentCmd, 0, 1, &viewport);
-
-        VkRect2D scissor{ {0, 0}, vkSwapchain->getExtent() };
-        vkCmdSetScissor(currentCmd, 0, 1, &scissor);
-
-        vkCmdBindDescriptorSets(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS, gBufferPipeline->getPipelineLayout(), 0, 1, &globalDescriptorSets[currentFrame], 0, nullptr);
-
-        for (const auto& packet : transparentQueue) {
-            auto* geometry = geometryVault.get(packet.geometry);
-            if (!geometry) continue;
-
-            VkDeviceSize offset = 0;
-            vkCmdBindVertexBuffers(currentCmd, 0, 1, &geometry->vertexBuffer, &offset);
-            vkCmdBindIndexBuffer(currentCmd, geometry->indexBuffer, 0, VK_INDEX_TYPE_UINT32);
-
-            MeshPushConstants push{};
-            push.renderMatrix = packet.worldTransform;
-            vkCmdPushConstants(currentCmd, gBufferPipeline->getPipelineLayout(), VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(MeshPushConstants), &push);
-
-            vkCmdDrawIndexed(currentCmd, packet.indexCount, 1, packet.firstIndex, 0, 0);
-        }
-
-        vkCmdEndRenderPass(currentCmd);
-    }
-
-    void VulkanVertexBackend::submitTransparentQueue(const std::vector<DrawPacket>& transparentQueue) {
-        if (transparentQueue.empty()) return;
+    void VulkanVertexBackend::submitTransparentQueue(std::span<const DrawPacket> transparentQueue) {
 
         // 1. BUCKETIZE INTO BACKGROUND & FOREGROUND
-        // The queue is already sorted Back-to-Front by the frontend!
-        std::vector<DrawPacket> backgroundBucket;
-        std::vector<DrawPacket> foregroundBucket;
-
-        if (transparentQueue.size() > 1) {
-            // Everything except the last element is background
-            backgroundBucket.assign(transparentQueue.begin(), transparentQueue.end() - 1);
-            // The last element is the absolute closest piece of glass
-            foregroundBucket.push_back(transparentQueue.back());
-        }
-        else {
-            foregroundBucket.push_back(transparentQueue.back());
-        }
+        // The queue is already sorted Back-to-Front by the frontend.
+        const std::span<const DrawPacket> foregroundBucket = transparentQueue.empty()
+            ? std::span<const DrawPacket>{}
+            : transparentQueue.last(1);
+        const std::span<const DrawPacket> backgroundBucket = transparentQueue.size() > 1
+            ? transparentQueue.first(transparentQueue.size() - 1)
+            : std::span<const DrawPacket>{};
 
         // 2. THE REUSABLE RENDER LAMBDA
-        auto executeGlassLayer = [&](const std::vector<DrawPacket>& glassBucket) {
+        auto executeGlassLayer = [&](std::span<const DrawPacket> glassBucket) {
             if (glassBucket.empty()) return;
 
             // --- A. VRAM PHOTOGRAPH: COPY LIT SCENE ---
-            VkImage litSceneImage = litSceneImages[currentImageIndex];
-            VkImage opaqueSceneCopy = opaqueSceneCopyImages[currentImageIndex];
-
-            VkImageMemoryBarrier litSrcBarrier{ VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
-            litSrcBarrier.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-            litSrcBarrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-            litSrcBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            litSrcBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            litSrcBarrier.image = litSceneImage;
-            litSrcBarrier.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
-            litSrcBarrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-            litSrcBarrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-
-            VkImageMemoryBarrier copyDstBarrier = litSrcBarrier;
-            copyDstBarrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-            copyDstBarrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-            copyDstBarrier.image = opaqueSceneCopy;
-            copyDstBarrier.srcAccessMask = 0;
-            copyDstBarrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-
-            VkImageMemoryBarrier copyBarriers[] = { litSrcBarrier, copyDstBarrier };
-            vkCmdPipelineBarrier(currentCmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                0, 0, nullptr, 0, nullptr, 2, copyBarriers);
+            VulkanPerImageTargets& targets = frameTargets.get(currentImageIndex);
+            VulkanCommandList commandList(scheduler.currentCommandBuffer());
+            commandList.transition(targets.litScene, ResourceState::CopySource);
+            commandList.transition(targets.opaqueCopy, ResourceState::CopyDestination);
 
             VkImageCopy imageCopyRegion{};
             imageCopyRegion.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
             imageCopyRegion.dstSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
             imageCopyRegion.extent = { vkSwapchain->getExtent().width, vkSwapchain->getExtent().height, 1 };
 
-            vkCmdCopyImage(currentCmd, litSceneImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                opaqueSceneCopy, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &imageCopyRegion);
-
-            VkImageMemoryBarrier litDstBarrier = litSrcBarrier;
-            litDstBarrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-            litDstBarrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-            litDstBarrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-            litDstBarrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-
-            VkImageMemoryBarrier copyReadBarrier = copyDstBarrier;
-            copyReadBarrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-            copyReadBarrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            copyReadBarrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-            copyReadBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-
-            VkImageMemoryBarrier endBarriers[] = { litDstBarrier, copyReadBarrier };
-            vkCmdPipelineBarrier(currentCmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                0, 0, nullptr, 0, nullptr, 2, endBarriers);
+            commandList.copyImage(targets.litScene, targets.opaqueCopy, imageCopyRegion);
+            commandList.transition(targets.litScene, ResourceState::ColorAttachment);
+            commandList.transition(targets.opaqueCopy, ResourceState::ShaderResource);
 
             // --- B. GLASS DEPTH PASS ---
+            commandList.transition(targets.glassDepth, ResourceState::DepthWrite);
             VkRenderPassBeginInfo glassDepthPassInfo{ VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
             glassDepthPassInfo.renderPass = glassDepthPass->getRenderPass();
-            glassDepthPassInfo.framebuffer = glassDepthFramebuffers[currentImageIndex];
+            glassDepthPassInfo.framebuffer = frameTargets.get(currentImageIndex).glassDepthFramebuffer;
             glassDepthPassInfo.renderArea.extent = vkSwapchain->getExtent();
 
             VkClearValue depthClearValue{};
@@ -1067,7 +901,7 @@ namespace Iridium {
 
             vkCmdBeginRenderPass(currentCmd, &glassDepthPassInfo, VK_SUBPASS_CONTENTS_INLINE);
 
-            VkPipelineLayout gLayout = gBufferPipeline->getPipelineLayout();
+            VkPipelineLayout gLayout = meshLayouts.getGBufferPipelineLayout();
             vkCmdBindPipeline(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS, glassDepthPipeline->getPipeline());
 
             VkViewport viewport{};
@@ -1082,15 +916,16 @@ namespace Iridium {
             VkRect2D scissor{ {0, 0}, vkSwapchain->getExtent() };
             vkCmdSetScissor(currentCmd, 0, 1, &scissor);
 
-            vkCmdBindDescriptorSets(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS, gLayout, 0, 1, &globalDescriptorSets[currentFrame], 0, nullptr);
+            vkCmdBindDescriptorSets(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS, gLayout, 0, 1, &globalDescriptorSets[scheduler.currentFrameIndex()], 0, nullptr);
 
             for (const auto& packet : glassBucket) {
                 auto* geometry = geometryVault.get(packet.geometry);
                 if (!geometry) continue;
 
                 VkDeviceSize offset = 0;
-                vkCmdBindVertexBuffers(currentCmd, 0, 1, &geometry->vertexBuffer, &offset);
-                vkCmdBindIndexBuffer(currentCmd, geometry->indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+                vkCmdBindVertexBuffers(currentCmd, 0, 1, &geometry->vertexBuffer.buffer, &offset);
+                vkCmdBindIndexBuffer(currentCmd, geometry->indexBuffer.buffer, 0,
+                    toVkIndexType(geometry->indexFormat));
 
                 MeshPushConstants push{};
                 push.renderMatrix = packet.worldTransform;
@@ -1098,50 +933,73 @@ namespace Iridium {
                 vkCmdDrawIndexed(currentCmd, packet.indexCount, 1, packet.firstIndex, 0, 0);
             }
             vkCmdEndRenderPass(currentCmd);
+            commandList.markState(targets.glassDepth, ResourceState::DepthWrite);
+            commandList.transition(targets.glassDepth, ResourceState::ShaderResource);
 
             // --- C. FORWARD TRANSLUCENCY PASS ---
             VkRenderPassBeginInfo forwardPassInfo{ VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
             forwardPassInfo.renderPass = forwardPass->getRenderPass();
-            forwardPassInfo.framebuffer = forwardFramebuffers[currentImageIndex];
+            forwardPassInfo.framebuffer = frameTargets.get(currentImageIndex).forwardFramebuffer;
             forwardPassInfo.renderArea.extent = vkSwapchain->getExtent();
 
             vkCmdBeginRenderPass(currentCmd, &forwardPassInfo, VK_SUBPASS_CONTENTS_INLINE);
 
-            VkPipelineLayout fLayout = forwardPipeline->getPipelineLayout();
-            vkCmdBindPipeline(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS, forwardPipeline->getPipeline());
+            PipelineHandle lastBoundPipeline{};
+            MaterialHandle lastBoundMaterial{};
+            GeometryHandle lastBoundGeometry{};
+            VkPipelineLayout activeLayout = VK_NULL_HANDLE;
+            const VkDescriptorSet sceneSet = sceneDescriptors.get(currentImageIndex);
 
             vkCmdSetViewport(currentCmd, 0, 1, &viewport);
             vkCmdSetScissor(currentCmd, 0, 1, &scissor);
 
-            vkCmdBindDescriptorSets(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS, fLayout, 0, 1, &globalDescriptorSets[currentFrame], 0, nullptr);
-            vkCmdBindDescriptorSets(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS, fLayout, 2, 1, &lightingDescriptorSets[currentImageIndex], 0, nullptr);
-
-            MaterialHandle lastBoundMaterial;
-            bool firstGlass = true;
-
             for (const auto& packet : glassBucket) {
                 auto* geometry = geometryVault.get(packet.geometry);
                 auto* material = materialVault.get(packet.material);
+                const VulkanPipelineRecord* record = pipelineLibrary.get(packet.pipeline);
                 if (!geometry || !material) continue;
+                if (!record || record->pipeline == VK_NULL_HANDLE ||
+                    record->pipelineLayout == VK_NULL_HANDLE ||
+                    record->renderPass != RenderPassClass::Forward) {
+                    continue;
+                }
 
-                VkDeviceSize offset = 0;
-                vkCmdBindVertexBuffers(currentCmd, 0, 1, &geometry->vertexBuffer, &offset);
-                vkCmdBindIndexBuffer(currentCmd, geometry->indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+                if (packet.pipeline != lastBoundPipeline) {
+                    vkCmdBindPipeline(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS, record->pipeline);
+                    activeLayout = record->pipelineLayout;
+                    vkCmdBindDescriptorSets(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS, activeLayout,
+                        0, 1, &globalDescriptorSets[scheduler.currentFrameIndex()], 0, nullptr);
+                    vkCmdBindDescriptorSets(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS, activeLayout,
+                        2, 1, &sceneSet, 0, nullptr);
+                    lastBoundPipeline = packet.pipeline;
+                    lastBoundMaterial = MaterialHandle{};
+                }
+                if (packet.material != lastBoundMaterial) {
+                    vkCmdBindDescriptorSets(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS, activeLayout,
+                        1, 1, &material->descriptorSets[scheduler.currentFrameIndex()], 0, nullptr);
+                    lastBoundMaterial = packet.material;
+                }
+                if (packet.geometry != lastBoundGeometry) {
+                    VkDeviceSize offset = 0;
+                    vkCmdBindVertexBuffers(currentCmd, 0, 1, &geometry->vertexBuffer.buffer, &offset);
+                    vkCmdBindIndexBuffer(currentCmd, geometry->indexBuffer.buffer, 0,
+                        toVkIndexType(geometry->indexFormat));
+                    lastBoundGeometry = packet.geometry;
+                }
 
                 MeshPushConstants push{};
                 push.renderMatrix = packet.worldTransform;
                 push.baseColor = material->baseColor;
+                push.emissiveFactor = material->emissiveFactor;
                 push.metallicFactor = material->metallicFactor;
                 push.roughnessFactor = material->roughnessFactor;
-                push.emissiveFactor = material->emissiveFactor;
+                push.normalScale = material->normalScale;
+                push.alphaCutoff = material->alphaCutoff;
+                push.transmissionFactor = material->transmissionFactor;
 
-                vkCmdPushConstants(currentCmd, fLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(MeshPushConstants), &push);
-
-                if (firstGlass || packet.material != lastBoundMaterial) {
-                    vkCmdBindDescriptorSets(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS, fLayout, 1, 1, &material->descriptorSets[currentFrame], 0, nullptr);
-                    lastBoundMaterial = packet.material;
-                    firstGlass = false;
-                }
+                vkCmdPushConstants(currentCmd, activeLayout,
+                    VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                    0, sizeof(MeshPushConstants), &push);
 
                 vkCmdDrawIndexed(currentCmd, packet.indexCount, 1, packet.firstIndex, 0, 0);
             }
@@ -1152,24 +1010,17 @@ namespace Iridium {
         executeGlassLayer(backgroundBucket);
         executeGlassLayer(foregroundBucket);
 
-        // Transition lit scene back for ImGui reading
-        VkImageMemoryBarrier finalLitBarrier{ VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
-        finalLitBarrier.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-        finalLitBarrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        finalLitBarrier.image = litSceneImages[currentImageIndex];
-        finalLitBarrier.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
-        finalLitBarrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-        finalLitBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-
-        vkCmdPipelineBarrier(currentCmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-            0, 0, nullptr, 0, nullptr, 1, &finalLitBarrier);
+        VulkanPerImageTargets& targets = frameTargets.get(currentImageIndex);
+        VulkanCommandList commandList(scheduler.currentCommandBuffer());
+        commandList.transition(targets.litScene, ResourceState::ShaderResource);
+        commandList.transition(targets.glassDepth, ResourceState::ShaderResource);
     }
 
     void VulkanVertexBackend::submitUIPass() {
         ImGui::Render();
         VkRenderPassBeginInfo uiPassInfo{ VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
         uiPassInfo.renderPass = uiPass->getRenderPass();
-        uiPassInfo.framebuffer = uiFramebuffers[currentImageIndex];
+        uiPassInfo.framebuffer = frameTargets.get(currentImageIndex).uiFramebuffer;
         uiPassInfo.renderArea.extent = vkSwapchain->getExtent();
 
         VkClearValue uiClearColor = { {{0.0f, 0.0f, 0.0f, 1.0f}} };
@@ -1188,47 +1039,8 @@ namespace Iridium {
         vkCmdEndRenderPass(currentCmd);
     }
 
-    void VulkanVertexBackend::endFrame() {
-        if (vkEndCommandBuffer(currentCmd) != VK_SUCCESS) {
-            throw std::runtime_error("failed to record command buffer!");
-        }
-
-        VkSubmitInfo submitInfo{ VK_STRUCTURE_TYPE_SUBMIT_INFO };
-        VkSemaphore waitSemaphores[] = { vkSyncObjects->getImageAvailableSemaphore(currentFrame) };
-        VkPipelineStageFlags waitStages[] = { VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT };
-        submitInfo.waitSemaphoreCount = 1;
-        submitInfo.pWaitSemaphores = waitSemaphores;
-        submitInfo.pWaitDstStageMask = waitStages;
-        submitInfo.commandBufferCount = 1;
-        submitInfo.pCommandBuffers = &currentCmd;
-
-        VkSemaphore signalSemaphores[] = { vkSyncObjects->getRenderFinishedSemaphore(currentImageIndex) };
-        submitInfo.signalSemaphoreCount = 1;
-        submitInfo.pSignalSemaphores = signalSemaphores;
-
-        if (vkQueueSubmit(vkContext->getGraphicsQueue(), 1, &submitInfo, vkSyncObjects->getInFlightFence(currentFrame)) != VK_SUCCESS) {
-            throw std::runtime_error("failed to submit draw command buffer!");
-        }
-
-        VkPresentInfoKHR presentInfo{ VK_STRUCTURE_TYPE_PRESENT_INFO_KHR };
-        presentInfo.waitSemaphoreCount = 1;
-        presentInfo.pWaitSemaphores = signalSemaphores;
-
-        VkSwapchainKHR swapChains[] = { vkSwapchain->getSwapchain() };
-        presentInfo.swapchainCount = 1;
-        presentInfo.pSwapchains = swapChains;
-        presentInfo.pImageIndices = &currentImageIndex;
-
-        VkResult presentResult = vkQueuePresentKHR(vkContext->getPresentQueue(), &presentInfo);
-
-        if (presentResult == VK_ERROR_OUT_OF_DATE_KHR || presentResult == VK_SUBOPTIMAL_KHR) {
-            // Handled by Application.cpp flag
-        }
-        else if (presentResult != VK_SUCCESS) {
-            throw std::runtime_error("Failed to present swap chain image!");
-        }
-
-        currentFrame = (currentFrame + 1) % VkSyncObjects::MAX_FRAMES_IN_FLIGHT;
+    FrameStatus VulkanVertexBackend::endFrame() {
+        return scheduler.endFrame(vkSwapchain->getSwapchain(), currentImageIndex);
     }
 
     // ==============================================================================

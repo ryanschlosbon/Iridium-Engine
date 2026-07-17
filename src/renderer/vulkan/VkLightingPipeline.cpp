@@ -29,9 +29,9 @@ VkShaderModule VkLightingPipeline::createShaderModule(const std::vector<char>& c
 }
 
 void VkLightingPipeline::createDescriptorSetLayout() {
-    std::array<VkDescriptorSetLayoutBinding, 6> bindings{};
+    std::array<VkDescriptorSetLayoutBinding, 7> bindings{};
 
-    for (uint32_t i = 0; i < 6; i++) {
+    for (uint32_t i = 0; i < bindings.size(); i++) {
         bindings[i].binding = i;
         bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         bindings[i].descriptorCount = 1;

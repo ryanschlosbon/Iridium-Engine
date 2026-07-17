@@ -1,6 +1,9 @@
 #pragma once
-#include <vector>
+#include <cstddef>
 #include <cstdint>
+#include <stdexcept>
+#include <utility>
+#include <vector>
 
 namespace Iridium {
 
@@ -16,36 +19,66 @@ namespace Iridium {
         std::vector<Slot> pool;
         std::vector<uint32_t> freeIndices;
 
-    public:
-        // Pre-allocate to prevent vector resizing during gameplay
-        ResourcePool(size_t reserveSize = 4096) {
-            pool.resize(reserveSize);
-            // Populate free list backwards so we pull from index 0 first
-            for (int i = reserveSize - 1; i >= 0; --i) {
-                freeIndices.push_back(i);
+        static constexpr size_t MaxCapacity = static_cast<size_t>(HandleType::MaxIndex) + 1;
+
+        void appendFreeIndices(size_t firstIndex, size_t endIndex) {
+            for (size_t index = endIndex; index-- > firstIndex;) {
+                freeIndices.push_back(static_cast<uint32_t>(index));
             }
         }
 
-        HandleType allocate(const T& data) {
-            if (freeIndices.empty()) {
-                // Expand the pool if we run out of space
-                size_t oldSize = pool.size();
-                pool.resize(oldSize * 2);
-                for (int i = pool.size() - 1; i >= oldSize; --i) {
-                    freeIndices.push_back(i);
-                }
+        void grow() {
+            const size_t oldSize = pool.size();
+            if (oldSize >= MaxCapacity) {
+                throw std::overflow_error("ResourcePool exhausted the 20-bit handle index capacity");
             }
 
-            uint32_t index = freeIndices.back();
+            size_t newSize = oldSize == 0 ? 1 : oldSize * 2;
+            if (newSize > MaxCapacity) {
+                newSize = MaxCapacity;
+            }
+
+            pool.resize(newSize);
+            appendFreeIndices(oldSize, newSize);
+        }
+
+        uint32_t nextFreeIndex() {
+            if (freeIndices.empty()) {
+                grow();
+            }
+
+            return freeIndices.back();
+        }
+
+    public:
+        // Pre-allocate to prevent vector resizing during gameplay
+        ResourcePool(size_t reserveSize = 4096) {
+            if (reserveSize > MaxCapacity) {
+                throw std::invalid_argument("ResourcePool initial capacity exceeds the 20-bit handle index capacity");
+            }
+
+            pool.resize(reserveSize);
+            // Populate free list backwards so we pull from index 0 first
+            appendFreeIndices(0, reserveSize);
+        }
+
+        HandleType allocate(const T& data) {
+            return emplace(data);
+        }
+
+        HandleType allocate(T&& data) {
+            return emplace(std::move(data));
+        }
+
+        template <typename... Args>
+        HandleType emplace(Args&&... args) {
+            const uint32_t index = nextFreeIndex();
+            Slot& slot = pool[index];
+
+            slot.payload = T(std::forward<Args>(args)...);
             freeIndices.pop_back();
-
-            pool[index].payload = data;
-            pool[index].isFree = false;
-
-            // Combine the generation and index into a single 32-bit integer
-            HandleType handle;
-            handle.id = (pool[index].generation << 20) | index;
-            return handle;
+            slot.isFree = false;
+            return HandleType::fromParts(index, slot.generation);
         }
 
         void free(HandleType handle) {
@@ -57,9 +90,23 @@ namespace Iridium {
             // Safety check: Only free if the generation matches!
             if (pool[index].generation != handle.getGeneration()) return;
 
-            pool[index].isFree = true;
-            pool[index].generation++; // Increment to invalidate old handles
+            Slot& slot = pool[index];
+            slot.payload = T{};
+            slot.isFree = true;
+            slot.generation = slot.generation == HandleType::MaxGeneration ? 1 : slot.generation + 1;
             freeIndices.push_back(index);
+        }
+
+        [[nodiscard]] size_t activeCount() const noexcept {
+            return pool.size() - freeIndices.size();
+        }
+
+        [[nodiscard]] size_t capacity() const noexcept {
+            return pool.size();
+        }
+
+        [[nodiscard]] bool empty() const noexcept {
+            return activeCount() == 0;
         }
 
         // Safely iterates over all active (non-freed) items in the pool
@@ -79,6 +126,26 @@ namespace Iridium {
             if (index >= pool.size() || pool[index].isFree) return nullptr;
 
             // Safety check: Detect stale pointers
+            if (pool[index].generation != handle.getGeneration()) return nullptr;
+
+            return &pool[index].payload;
+        }
+
+        template <typename Func>
+        void forEach(Func callback) const {
+            for (const auto& slot : pool) {
+                if (!slot.isFree) {
+                    callback(slot.payload);
+                }
+            }
+        }
+
+        const T* get(HandleType handle) const {
+            if (!handle.isValid()) return nullptr;
+
+            uint32_t index = handle.getIndex();
+            if (index >= pool.size() || pool[index].isFree) return nullptr;
+
             if (pool[index].generation != handle.getGeneration()) return nullptr;
 
             return &pool[index].payload;

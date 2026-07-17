@@ -1,6 +1,9 @@
 #include "SceneHierarchyPanel.h"
 #include "scene/Components.h" 
+#include "platform/FileDialog.h"
 #include <imgui.h>
+#include <array>
+#include <filesystem>
 #include <iostream>
 
 SceneHierarchyPanel::SceneHierarchyPanel(Entity* selectedEntityPtr)
@@ -29,23 +32,27 @@ void SceneHierarchyPanel::OnImGuiRender(Registry& registry, Iridium::AssetManage
     }
 
     ImGui::Separator();
-    ImGui::Text("Import New Model");
-    ImGui::InputText("Path", importPathBuffer, sizeof(importPathBuffer));
+    if (ImGui::Button("Import Model...", ImVec2(-1.0f, 0.0f))) {
+        constexpr std::array filters = {
+            Iridium::FileDialogFilter{ "glTF models", "*.gltf;*.glb" },
+            Iridium::FileDialogFilter{ "All files", "*.*" },
+        };
+        const auto selectedPath = Iridium::openFileDialog(filters,
+            std::filesystem::path(PROJECT_ROOT_DIR) / "assets" / "models");
 
-    if (ImGui::Button("Import")) {
-        try {
-            std::string fullPath = std::string(PROJECT_ROOT_DIR) + importPathBuffer;
-            auto newModel = assetManager->getModel(fullPath);
-            Entity newEntity = registry.createEntity();
+        if (selectedPath) {
+            try {
+                auto newModel = assetManager->getModel(selectedPath->string());
+                Entity newEntity = registry.createEntity();
 
-            registry.addComponent<MeshComponent>(newEntity, newModel);
-            registry.addComponent<TransformComponent>(newEntity);
+                registry.addComponent<MeshComponent>(newEntity, newModel);
+                registry.addComponent<TransformComponent>(newEntity);
 
-            // Automatically select the newly imported entity
-            *selectedEntity = newEntity;
-        }
-        catch (const std::exception& e) {
-            std::cerr << "IMPORT ERROR: " << e.what() << std::endl;
+                *selectedEntity = newEntity;
+            }
+            catch (const std::exception& error) {
+                std::cerr << "IMPORT ERROR: " << error.what() << std::endl;
+            }
         }
     }
     ImGui::End();

@@ -1,24 +1,34 @@
 #pragma once
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <span>
+#include <vector>
+
 #include "../rhi/IRenderBackend.h"
 #include "../rhi/ResourcePool.h"
 
 #include "VkContext.h"
 #include "VkSwapchain.h"
-#include "VkCommandManager.h"
-#include "VkSyncObjects.h"
 #include "DescriptorAllocator.h"
 
 // Pipelines & Passes
 #include "VkGraphicsPipeline.h"
 #include "VkLightingPipeline.h"
-#include "VkForwardPipeline.h"
 #include "GlassDepthPipeline.h"
 #include "VkRenderPass.h"
 #include "VkForwardRenderPass.h"
 #include "GlassDepthRenderPass.h"
-#include "VkFramebuffer.h"
 #include "VkUIRenderPass.h"
-#include "PipelineCache.h"
+#include "VulkanPipelineLibrary.h"
+#include "VulkanMeshLayouts.h"
+#include "VulkanResourceAllocator.h"
+#include "VulkanCommandList.h"
+#include "VulkanUploadContext.h"
+#include "VulkanFrameScheduler.h"
+#include "VulkanFrameTargets.h"
+#include "VulkanSceneDescriptors.h"
 
 #include "utils/DeletionQueue.h"
 
@@ -30,33 +40,31 @@ namespace Iridium {
     // ==============================================================================
 
     struct VulkanGeometryPayload {
-        VkBuffer vertexBuffer;
-        VkDeviceMemory vertexBufferMemory;
-        VkBuffer indexBuffer;
-        VkDeviceMemory indexBufferMemory;
-        uint32_t indexCount;
+        VulkanBufferResource vertexBuffer;
+        VulkanBufferResource indexBuffer;
+        uint32_t indexCount = 0;
+        IndexFormat indexFormat = IndexFormat::UInt32;
     };
 
     struct VulkanTexturePayload {
-        VkImage image;
-        VkDeviceMemory memory;
-        VkImageView view;
-        VkSampler sampler;
-        bool isHDRI = false;
+        VulkanImageResource image;
+        VkSampler sampler = VK_NULL_HANDLE;
+        TextureFormat format = TextureFormat::RGBA8_UNorm;
     };
 
     struct VulkanMaterialPayload {
-        // A material is ultimately just the Vulkan descriptor sets bound to the pipeline.
-        // We need one set per frame-in-flight to prevent GPU/CPU synchronization crashes.
-        std::vector<VkDescriptorSet> descriptorSets;
+        // One descriptor set per frame-in-flight prevents GPU/CPU synchronization crashes.
+        std::array<VkDescriptorSet, VulkanFrameScheduler::FramesInFlight> descriptorSets{};
 
         glm::vec4 baseColor;
+        glm::vec4 emissiveFactor;
         float metallicFactor;
         float roughnessFactor;
-        float emissiveFactor;
-
-        VkPipeline pipeline = VK_NULL_HANDLE;
-        BlendMode blendMode = BlendMode::Opaque;
+        float normalScale;
+        PipelineHandle pipeline;
+        RenderQueue renderQueue = RenderQueue::Opaque;
+        float alphaCutoff = 0.0f;
+        float transmissionFactor = 0.0f;
     };
 
     // ==============================================================================
@@ -67,59 +75,44 @@ namespace Iridium {
     private:
         // --- 1. THE SUBSYSTEMS (Composition) ---
         // We moved all of these pointers out of Application.cpp and into here.
-        VkContext* vkContext = nullptr;
-        VkSwapchain* vkSwapchain = nullptr;
-        VkCommandManager* vkCommandManager = nullptr;
-        VkSyncObjects* vkSyncObjects = nullptr;
+        std::unique_ptr<VkContext> vkContext;
+        VulkanResourceAllocator resourceAllocator;
+        VulkanUploadContext uploadContext;
+        VulkanFrameScheduler scheduler;
+        std::unique_ptr<VkSwapchain> vkSwapchain;
         DescriptorAllocator descriptorAllocator;
-        PipelineCache pipelineCache;
+        VulkanPipelineLibrary pipelineLibrary;
+        VulkanMeshLayouts meshLayouts;
 
         // G-Buffer Pass (Opaque)
-        VkRenderPassWrapper* gBufferPass = nullptr;
-        VkFramebufferWrapper* gBufferFramebuffers = nullptr;
-        VkGraphicsPipeline* gBufferPipeline = nullptr;
+        std::unique_ptr<VkRenderPassWrapper> gBufferPass;
+        std::unique_ptr<VkGraphicsPipeline> gBufferPipeline;
 
         // --- MISSING RAW IMAGE ARRAYS ---
-        VkSampler gBufferSampler = VK_NULL_HANDLE;
+        VulkanFrameTargets frameTargets;
 
         // G-Buffer Raw Images
-        std::vector<VkImage> gNormalImages, gAlbedoImages;
-        std::vector<VkDeviceMemory> gNormalImageMemories, gAlbedoImageMemories;
-        std::vector<VkImageView> gNormalImageViews, gAlbedoImageViews;
 
         // Lighting Pass Raw Images & Descriptors
-        std::vector<VkDescriptorSet> lightingDescriptorSets;
-        std::vector<VkImage> litSceneImages;
-        std::vector<VkDeviceMemory> litSceneImageMemories;
-        std::vector<VkImageView> litSceneImageViews;
+        VulkanSceneDescriptors sceneDescriptors;
+        TextureHandle environmentMapHandle;
 
         // Translucency Pass Raw Images
-        std::vector<VkImage> opaqueSceneCopyImages, glassDepthImages;
-        std::vector<VkDeviceMemory> opaqueSceneCopyMemories, glassDepthMemories;
-        std::vector<VkImageView> opaqueSceneCopyViews, glassDepthViews;
 
         // Depth Pass
-        std::vector<VkImage> gDepthImages;
-        std::vector<VkDeviceMemory> gDepthImageMemories;
-        std::vector<VkImageView> gDepthImageViews;
 
         // Deferred Lighting Pass
         VkRenderPass lightingRenderPass = VK_NULL_HANDLE;
-        VkLightingPipeline* lightingPipeline = nullptr;
-        std::vector<VkFramebuffer> lightingFramebuffers;
+        std::unique_ptr<VkLightingPipeline> lightingPipeline;
 
         // Translucency Passes
-        GlassDepthRenderPass* glassDepthPass = nullptr;
-        GlassDepthPipeline* glassDepthPipeline = nullptr;
-        std::vector<VkFramebuffer> glassDepthFramebuffers;
+        std::unique_ptr<GlassDepthRenderPass> glassDepthPass;
+        std::unique_ptr<GlassDepthPipeline> glassDepthPipeline;
 
-        VkForwardRenderPass* forwardPass = nullptr;
-        VkForwardPipeline* forwardPipeline = nullptr;
-        std::vector<VkFramebuffer> forwardFramebuffers;
+        std::unique_ptr<VkForwardRenderPass> forwardPass;
 
         // UI Pass
-        VkUIRenderPass* uiPass = nullptr;
-        std::vector<VkFramebuffer> uiFramebuffers;
+        std::unique_ptr<VkUIRenderPass> uiPass;
 
         // --- IMGUI STATE ---
         VkDescriptorPool imguiPool = VK_NULL_HANDLE;
@@ -127,9 +120,7 @@ namespace Iridium {
         std::vector<VkDescriptorSet> uiDepthTextures;
 
         // Global Camera Data
-        std::vector<VkBuffer> uniformBuffers;
-        std::vector<VkDeviceMemory> uniformBuffersMemory;
-        std::vector<void*> uniformBuffersMapped;
+        std::vector<VulkanBufferResource> uniformBuffers;
         std::vector<VkDescriptorSet> globalDescriptorSets;
 
         // --- 2. THE MEMORY VAULTS ---
@@ -140,52 +131,52 @@ namespace Iridium {
 
 
         // --- 3. RUNTIME STATE ---
-        uint32_t currentFrame = 0;
         uint32_t currentImageIndex = 0;
         VkCommandBuffer currentCmd = VK_NULL_HANDLE;
-        std::array<DeletionQueue, VkSyncObjects::MAX_FRAMES_IN_FLIGHT> frameDeletionQueues;
+        bool initialized_ = false;
+        bool cleaned_ = false;
+        bool imguiInitialized_ = false;
 
         // Private helpers that Application.cpp no longer needs to worry about
-        void createOffscreenRenderTargets();
         void createUniformBuffers();
+        void initFrameTargets();
         void updateUniformBuffer(const glm::mat4& view, const glm::mat4& proj);
         void createLightingRenderPass();
-        void destroyOffscreenRenderTargets();
 
     public:
         VulkanVertexBackend() = default;
-        ~VulkanVertexBackend() override = default;
+        ~VulkanVertexBackend() override { cleanup(); }
 
         // --- IRenderBackend Interface Implementation ---
         void init(GLFWwindow* window) override;
         void cleanup() override;
         void recreateSwapchain(GLFWwindow* window) override;
-        bool beginFrame() override;
+        FrameStatus beginFrame() override;
         void updateCamera(const glm::mat4& view, const glm::mat4& proj) override;
 
-        virtual void submitOpaqueQueue(const std::vector<DrawPacket>& opaqueQueue, 
-            const std::vector<DrawPacket>& selectionQueue, bool isWireframe) override;
+        void submitOpaqueQueue(std::span<const DrawPacket> opaqueQueue,
+            std::span<const DrawPacket> selectionQueue, bool isWireframe) override;
         void submitLightingPass(const glm::vec3& cameraPos, const glm::mat4& view, const glm::mat4& proj) override;
-        void submitGlassDepthPass(const std::vector<DrawPacket>& transparentQueue) override;
-        void submitTransparentQueue(const std::vector<DrawPacket>& transparentQueue) override;
+        void submitTransparentQueue(std::span<const DrawPacket> transparentQueue) override;
         void submitUIPass() override;
 
         void beginUI() override;
         void* getLitSceneTextureID() override;
         void* getGlassDepthTextureID() override;
 
-        void endFrame() override;
+        FrameStatus endFrame() override;
 
         // Resource Allocation
-        GeometryHandle allocateGeometry(const void* vertexData, size_t vertexSize,
-            const void* indexData, size_t indexSize) override;
+        GeometryHandle allocateGeometry(const GeometryDesc& desc,
+            std::span<const std::byte> vertexBytes,
+            std::span<const std::byte> indexBytes) override;
         void freeGeometry(GeometryHandle handle) override;
 
-        TextureHandle allocateTexture(uint32_t width, uint32_t height, int channels,
-            const void* pixelData, bool isHDRI = false) override;
+        TextureHandle allocateTexture(const TextureDesc& desc,
+            std::span<const std::byte> pixelBytes) override;
         void freeTexture(TextureHandle handle) override;
 
-        MaterialHandle allocateMaterial(const MaterialAsset& desc) override;
+        MaterialBinding allocateMaterial(const MaterialAsset& desc) override;
         void freeMaterial(MaterialHandle handle) override;
 
         void setEnvironmentMap(TextureHandle hdriHandle) override;

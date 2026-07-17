@@ -5,24 +5,17 @@
 #include <iostream>
 #include <array>
 
-VkGraphicsPipeline::VkGraphicsPipeline(VkContext* context, VkSwapchain* swapchain, VkRenderPassWrapper* renderPass)
-	: context(context) {
-    createPipelineLayouts();
+VkGraphicsPipeline::VkGraphicsPipeline(VkContext* context, VkSwapchain* swapchain, VkRenderPassWrapper* renderPass,
+    VkPipelineLayout pipelineLayout)
+	: context(context), pipelineLayout(pipelineLayout) {
     
-    graphicsPipeline = createPipeline(swapchain, renderPass, false, false); // solid
     wireframePipeline = createPipeline(swapchain, renderPass, true, false); // wireframe
     outlinePipeline = createPipeline(swapchain, renderPass, false, true); // outline
-    outlineWireframePipeline = createPipeline(swapchain, renderPass, true, true);
 }
 
 VkGraphicsPipeline::~VkGraphicsPipeline() {
-	vkDestroyPipeline(context->getDevice(), graphicsPipeline, nullptr);
     vkDestroyPipeline(context->getDevice(), wireframePipeline, nullptr);
     vkDestroyPipeline(context->getDevice(), outlinePipeline, nullptr);
-    vkDestroyPipeline(context->getDevice(), outlineWireframePipeline, nullptr);
-	vkDestroyPipelineLayout(context->getDevice(), pipelineLayout, nullptr);
-	vkDestroyDescriptorSetLayout(context->getDevice(), globalSetLayout, nullptr);
-	vkDestroyDescriptorSetLayout(context->getDevice(), materialSetLayout, nullptr);
 }
 
 VkShaderModule VkGraphicsPipeline::createShaderModule(const std::vector<char>& code) {
@@ -35,68 +28,6 @@ VkShaderModule VkGraphicsPipeline::createShaderModule(const std::vector<char>& c
 		throw std::runtime_error("failed to create shader module!");
 	}
 	return shaderModule;
-}
-
-void VkGraphicsPipeline::createPipelineLayouts() {
-    // -------------------------------------------------------------
-    // 1. DESCRIPTOR SET LAYOUTS
-    // -------------------------------------------------------------
-
-    // --- SET 0: Global Camera (UBO) ---
-    VkDescriptorSetLayoutBinding uboBinding{};
-    uboBinding.binding = 0;
-    uboBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    uboBinding.descriptorCount = 1;
-    uboBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
-
-    VkDescriptorSetLayoutCreateInfo globalInfo{ VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
-    globalInfo.bindingCount = 1;
-    globalInfo.pBindings = &uboBinding;
-
-    if (vkCreateDescriptorSetLayout(context->getDevice(), &globalInfo, nullptr, &globalSetLayout) != VK_SUCCESS) {
-        throw std::runtime_error("failed to create global descriptor set layout!");
-    }
-
-    // --- SET 1: Material Textures (3 Samplers) ---
-    std::array<VkDescriptorSetLayoutBinding, 3> samplerBindings{};
-
-    for (int i = 0; i < 3; i++) {
-        samplerBindings[i].binding = i;
-        samplerBindings[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        samplerBindings[i].descriptorCount = 1;
-        samplerBindings[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-    }
-
-    VkDescriptorSetLayoutCreateInfo materialInfo{ VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
-    materialInfo.bindingCount = static_cast<uint32_t>(samplerBindings.size());
-    materialInfo.pBindings = samplerBindings.data();
-
-    if (vkCreateDescriptorSetLayout(context->getDevice(), &materialInfo, nullptr, &materialSetLayout) != VK_SUCCESS) {
-        throw std::runtime_error("failed to create material descriptor set layout!");
-    }
-
-    // -------------------------------------------------------------
-    // 2. PIPELINE LAYOUT (Combine Sets + Push Constants)
-    // -------------------------------------------------------------
-
-    // Push Constant for Mesh Transform
-    VkPushConstantRange pushConstant{};
-    pushConstant.offset = 0;
-    pushConstant.size = sizeof(Iridium::MeshPushConstants);
-    pushConstant.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
-
-    // Combine Layouts: [ Set 0, Set 1 ]
-    std::array<VkDescriptorSetLayout, 2> setLayouts = { globalSetLayout, materialSetLayout };
-
-    VkPipelineLayoutCreateInfo pipelineLayoutInfo{ VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
-    pipelineLayoutInfo.setLayoutCount = static_cast<uint32_t>(setLayouts.size());
-    pipelineLayoutInfo.pSetLayouts = setLayouts.data();
-    pipelineLayoutInfo.pushConstantRangeCount = 1;
-    pipelineLayoutInfo.pPushConstantRanges = &pushConstant;
-
-    if (vkCreatePipelineLayout(context->getDevice(), &pipelineLayoutInfo, nullptr, &pipelineLayout) != VK_SUCCESS) {
-        throw std::runtime_error("failed to create pipeline layout!");
-    }
 }
 
 VkPipeline VkGraphicsPipeline::createPipeline(VkSwapchain* swapchain, VkRenderPassWrapper* renderPass, 
@@ -210,8 +141,13 @@ VkPipeline VkGraphicsPipeline::createPipeline(VkSwapchain* swapchain, VkRenderPa
     albedoBlendAttachment.colorWriteMask = isOutline ? VK_COLOR_COMPONENT_A_BIT :
         (VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT);
 
-    std::array<VkPipelineColorBlendAttachmentState, 2> blendAttachments = {
-        normalBlendAttachment, albedoBlendAttachment
+    VkPipelineColorBlendAttachmentState emissiveBlendAttachment{};
+    emissiveBlendAttachment.blendEnable = VK_FALSE;
+    emissiveBlendAttachment.colorWriteMask = isOutline ? 0 :
+        (VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT);
+
+    std::array<VkPipelineColorBlendAttachmentState, 3> blendAttachments = {
+        normalBlendAttachment, albedoBlendAttachment, emissiveBlendAttachment
     };
 
     VkPipelineColorBlendStateCreateInfo colorBlending{ VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO };
@@ -242,7 +178,7 @@ VkPipeline VkGraphicsPipeline::createPipeline(VkSwapchain* swapchain, VkRenderPa
     pipelineInfo.pDepthStencilState = &depthStencil;
     pipelineInfo.pColorBlendState = &colorBlending;
 
-    // IMPORTANT: Use the member variable created in createPipelineLayouts()
+    // The layout is owned by VulkanMeshLayouts and borrowed by this fixed wrapper.
     pipelineInfo.layout = pipelineLayout;
 
     pipelineInfo.renderPass = renderPass->getRenderPass();

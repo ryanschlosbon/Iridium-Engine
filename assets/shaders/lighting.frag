@@ -8,6 +8,7 @@ layout(set = 0, binding = 0) uniform sampler2D gDepth;
 layout(set = 0, binding = 1) uniform sampler2D gNormalRoughMetal;
 layout(set = 0, binding = 2) uniform sampler2D gAlbedoEmissive;
 layout(set = 0, binding = 3) uniform sampler2D hdriMap;
+layout(set = 0, binding = 6) uniform sampler2D gEmissive;
 
 layout(push_constant) uniform PushConstants {
     vec3 viewPos;
@@ -76,6 +77,7 @@ void main() {
     float rawDepth = texture(gDepth, fragTexCoord).r;
     vec4 nrmSample = texture(gNormalRoughMetal, fragTexCoord);
     vec4 aeSample  = texture(gAlbedoEmissive, fragTexCoord);
+    vec3 emissiveSample = texture(gEmissive, fragTexCoord).rgb;
 
     // 2. UNPACK & RECONSTRUCT EVERYTHING
     vec3 fragPos = ReconstructWorldPos(fragTexCoord, rawDepth);
@@ -95,15 +97,14 @@ void main() {
     // Extract the rest of the material properties
     float Roughness = nrmSample.b;
     float Metallic  = nrmSample.a;
-    vec3 Albedo = pow(aeSample.rgb, vec3(2.2));
+    vec3 Albedo = aeSample.rgb;
 
    // ==========================================================
     // MAGIC TRICK 3: EMISSIVE GLOW
     // ==========================================================
     // No fluff needed! Because your G-Buffer is SFLOAT, aeSample.a holds the true 1000.0 HDR value!
 
-    float emissiveIntensity = aeSample.a;
-    vec3 Emissive = max((Albedo * emissiveIntensity), 0.0);
+    vec3 Emissive = max(emissiveSample, vec3(0.0));
 
     // 3. SKYBOX / BACKGROUND CHECK
     vec3 V = normalize(push.viewPos - fragPos);

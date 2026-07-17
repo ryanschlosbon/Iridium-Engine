@@ -28,8 +28,6 @@ struct SwapChainSupportDetails {
 	std::vector<VkPresentModeKHR> presentModes;	// Sync modes (e.g., vsync)
 };
 
-class VkCommandManager;
-
 class VkContext {
 public:
 	// The Constructor takes the Window pointer so we can create the Surface
@@ -43,22 +41,10 @@ public:
 	VkQueue getGraphicsQueue() const { return graphicsQueue; }
 	VkQueue getPresentQueue() const { return presentQueue; }
 	SwapChainSupportDetails querySwapChainSupport(VkPhysicalDevice device);
-	VkCommandPool getCommandPool() const { return commandPool; }
 	VkInstance getInstance() const { return instance; }
 	uint32_t getGraphicsQueueFamily() const { return graphicsQueueFamilyIndex; }
 
 	bool enableValidationLayers;
-	void createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties, 
-		VkBuffer& buffer, VkDeviceMemory& bufferMemory);
-	uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties);
-	void createImage(uint32_t width, uint32_t height, VkFormat format,
-		VkImageTiling tiling, VkImageUsageFlags usage,
-		VkMemoryPropertyFlags properties, VkImage& image,
-		VkDeviceMemory& imageMemory);
-	void createGPUBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
-		const void* data, VkBuffer& buffer, VkDeviceMemory& memory,
-		VkCommandManager* commandManager);
-
 private:
 	// The Connection to the Driver
 	VkInstance instance;
@@ -77,8 +63,6 @@ private:
 	VkQueue graphicsQueue;
 	VkQueue presentQueue;
 
-	VkCommandPool commandPool;
-
 	uint32_t graphicsQueueFamilyIndex;
 
 	// Internal Setup Functions
@@ -88,8 +72,6 @@ private:
 	void createSurface(GLFWwindow* window);
 	void pickPhysicalDevice();
 	void createLogicalDevice();
-	void createCommandPool();
-
 	// Helpers
 	bool isDeviceSuitable(VkPhysicalDevice device);
 	QueueFamilyIndices findQueueFamilies(VkPhysicalDevice device);
