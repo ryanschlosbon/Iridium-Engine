@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "assetGuid": "01890f4c-0000-7000-8000-000000000040",
+  "assetType": "iridium.scene",
+  "importer": { "id": "iridium.scene", "version": 1 },
+  "settings": { "schemaVersion": 1, "values": {} },
+  "subassets": [],
+  "tags": ["m4-acceptance"]
+}

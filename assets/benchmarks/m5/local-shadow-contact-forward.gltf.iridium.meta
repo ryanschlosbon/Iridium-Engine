@@ -1,0 +1,60 @@
+{
+  "schemaVersion": 1,
+  "assetGuid": "019fefbb-7e91-7870-83b7-9f86458ce380",
+  "assetType": "iridium.model",
+  "importer": {
+    "id": "iridium.gltf-model",
+    "version": 3
+  },
+  "settings": {
+    "schemaVersion": 1,
+    "values": {
+      "bake_node_transforms": true,
+      "generate_missing_tangents": true,
+      "import_scale": 1.0,
+      "preserve_rt_geometry": true,
+      "recalculate_normals": false,
+      "recalculate_tangents": false,
+      "reverse_winding": false
+    }
+  },
+  "subassets": [
+    {
+      "guid": "019fefbb-7e91-773e-a641-648f4d8ca4e3",
+      "assetType": "iridium.material",
+      "sourceKey": "materials/0",
+      "structuralFingerprint": "c7e55b71505ef269fa3489f07b5b7e00bbd36e7cbdfc402a01875bfd5a3570fc"
+    },
+    {
+      "guid": "019fefbb-7e91-708c-a6ce-80be69df834f",
+      "assetType": "iridium.material",
+      "sourceKey": "materials/1",
+      "structuralFingerprint": "c7e0c95ddbb6936cad9cc2687c21bfe0169528fb4d4eb7233e532a3e8bb49342"
+    },
+    {
+      "guid": "019fefbb-7e91-7d98-be27-8c44d9746c81",
+      "assetType": "iridium.material",
+      "sourceKey": "materials/2",
+      "structuralFingerprint": "893ecaa053d8ec623d94cc079a601183df7e3a31590d1ac2afc2e0191d2e96fb"
+    },
+    {
+      "guid": "019fefbb-7e91-7245-bd8d-d39c871dc860",
+      "assetType": "iridium.model-primitive",
+      "sourceKey": "nodes/0/meshes/0/primitives/0",
+      "structuralFingerprint": "1f240aaf7daca83756f2890fe1c97eca42977526194956225c15239d0e22e003"
+    },
+    {
+      "guid": "019fefbb-7e91-7237-85c9-e9898fd716ed",
+      "assetType": "iridium.model-primitive",
+      "sourceKey": "nodes/0/meshes/0/primitives/1",
+      "structuralFingerprint": "25927b164bbdfc76873dbdd6b15571c64ccaeb64cd76106d62cecd4ed52a0048"
+    },
+    {
+      "guid": "019fefbb-7e91-7964-98a3-0fb5718edd8a",
+      "assetType": "iridium.model-primitive",
+      "sourceKey": "nodes/1/meshes/1/primitives/0",
+      "structuralFingerprint": "f801739a410e537d91c3f9683351446d288ab14a244e8f54f2aaecf94b384c30"
+    }
+  ],
+  "tags": []
+}

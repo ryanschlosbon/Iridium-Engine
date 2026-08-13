@@ -1,0 +1,69 @@
+#version 450
+#include "include/clustered_lighting.glsl"
+
+layout(local_size_x = 256) in;
+
+layout(push_constant) uniform ScanPushConstants {
+    uint mode;         // 0 counts->headers, 1 scratch scan, 2 scratch add, 3 header add
+    uint inputOffset;
+    uint outputOffset;
+    uint elementCount;
+} scanPush;
+
+shared uint scanValues[256];
+
+void scanBlock(uint value, uint index) {
+    uint lane = gl_LocalInvocationID.x;
+    scanValues[lane] = value;
+    barrier();
+    for (uint offset = 1u; offset < 256u; offset <<= 1u) {
+        uint addend = lane >= offset ? scanValues[lane - offset] : 0u;
+        barrier();
+        scanValues[lane] += addend;
+        barrier();
+    }
+    uint exclusive = scanValues[lane] - value;
+    if (scanPush.mode == 0u) {
+        if (index < scanPush.elementCount) {
+            clusterHeaders[index].offset = exclusive;
+            clusterHeaders[index].count = value;
+        }
+    }
+    else if (index < scanPush.elementCount) {
+        clusterScanScratch[scanPush.inputOffset + index] = exclusive;
+    }
+    if (lane == 255u || index + 1u == scanPush.elementCount) {
+        clusterScanScratch[scanPush.outputOffset + gl_WorkGroupID.x] =
+            scanValues[lane];
+        if (gl_NumWorkGroups.x == 1u) {
+            if (clusterDiagnostics[IRIDIUM_DIAGNOSTIC_OVERFLOW] == 0u)
+                clusterDiagnostics[IRIDIUM_DIAGNOSTIC_REQUESTED] = scanValues[lane];
+            if (scanValues[lane] > clusterLimits.z) {
+                atomicMax(clusterDiagnostics[IRIDIUM_DIAGNOSTIC_OVERFLOW],
+                    IRIDIUM_CLUSTER_OVERFLOW_REFERENCES);
+            }
+        }
+    }
+}
+
+void main() {
+    uint index = gl_GlobalInvocationID.x;
+    if (scanPush.mode == 0u) {
+        uint value = index < scanPush.elementCount
+            ? min(clusterCounts[index], clusterLimits.y) : 0u;
+        scanBlock(value, index);
+    }
+    else if (scanPush.mode == 1u) {
+        uint value = index < scanPush.elementCount
+            ? clusterScanScratch[scanPush.inputOffset + index] : 0u;
+        scanBlock(value, index);
+    }
+    else if (scanPush.mode == 2u && index < scanPush.elementCount) {
+        uint parent = clusterScanScratch[scanPush.outputOffset + index / 256u];
+        clusterScanScratch[scanPush.inputOffset + index] += parent;
+    }
+    else if (scanPush.mode == 3u && index < scanPush.elementCount) {
+        clusterHeaders[index].offset +=
+            clusterScanScratch[scanPush.inputOffset + index / 256u];
+    }
+}

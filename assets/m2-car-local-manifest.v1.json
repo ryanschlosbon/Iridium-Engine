@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "fixtures": [
+    {
+      "id": "m2_sample_car_local_v1",
+      "revision": 2,
+      "required": false,
+      "source_asset": "models/alfa_romeo/alfa_romeo.gltf",
+      "environment": {
+        "kind": "procedural_constant",
+        "constant_linear_rgb": [0.18, 0.18, 0.18]
+      },
+      "camera": {
+        "id": "legacy_front_v1",
+        "position": [0.0, 1.0, 3.0],
+        "target": [0.0, 1.0, 0.0],
+        "up": [0.0, 1.0, 0.0],
+        "vertical_fov_degrees": 45.0,
+        "near": 0.1,
+        "far": 100.0
+      },
+      "scene_factory": {
+        "kind": "instanced_grid",
+        "instance_grid": [1, 1, 1],
+        "instance_spacing": [0.0, 0.0, 0.0]
+      },
+      "output_label": "m2.6_sample_car_local_diagnostic",
+      "warmup_frames": 8,
+      "measured_frames": 1,
+      "content_files": [{
+        "path": "models/alfa_romeo/alfa_romeo.gltf",
+        "sha256": "be2981b07dc2bb440627a4bca78e71eec9792cff527ab8652cb230831e32b324"
+      }],
+      "expected_behavior": [
+        "Paint clearcoat and lens transmission use explicit complex-forward records; standard opaque surfaces remain deferred.",
+        "Normal and roughness detail remain sourced from the asset, and its zero authored emissive contribution remains zero.",
+        "Material 84, the opaque Dunlop tire surface, writes non-background depth and material identity at every visible pixel; selection-mask coverage alone is not accepted as proof."
+      ],
+      "unavailable_capabilities": [
+        "redistributable commercial acceptance status",
+        "M5 production clustered lighting",
+        "M6 production transparent ordering and refraction"
+      ]
+    }
+  ]
+}

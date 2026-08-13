@@ -3,6 +3,7 @@
 #include <set>
 #include <stdexcept>
 #include <cstring>
+#include <algorithm>
 
 // The list of validation layers we want (The Police)
 // These catch errors. We have to call it manually
@@ -57,7 +58,11 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(VkDebugUtilsMessageSeverityF
 }
 
 // Constructor
-VkContext::VkContext(bool enableValidation, GLFWwindow* window) : enableValidationLayers(enableValidation) {
+VkContext::VkContext(bool enableValidation, bool enableDebugUtils,
+	bool enablePipelineStatistics, GLFWwindow* window)
+	: enableValidationLayers(enableValidation),
+	  requestDebugUtils(enableValidation || enableDebugUtils),
+	  pipelineStatisticsRequested(enablePipelineStatistics) {
 	// Initialize the library
 	createInstance();
 
@@ -94,6 +99,11 @@ VkContext::~VkContext() {
 }
 
 void VkContext::createInstance() {
+	auto enumerateInstanceVersion = reinterpret_cast<PFN_vkEnumerateInstanceVersion>(
+		vkGetInstanceProcAddr(VK_NULL_HANDLE, "vkEnumerateInstanceVersion"));
+	if (enumerateInstanceVersion != nullptr) {
+		(void)enumerateInstanceVersion(&loaderApiVersion);
+	}
 	// App Info
 	// Optional, but allows GPU drivers to look at this name. This allows them to load optimized driver profiles
 	// For now it will load the default profile
@@ -124,9 +134,31 @@ void VkContext::createInstance() {
 		extensions.push_back(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME);
 	#endif
 
-	// If we are debugging, we add the Debug Utils extension
-	if (enableValidationLayers) {
+	uint32_t availableExtensionCount = 0;
+	vkEnumerateInstanceExtensionProperties(nullptr, &availableExtensionCount, nullptr);
+	std::vector<VkExtensionProperties> availableExtensions(availableExtensionCount);
+	vkEnumerateInstanceExtensionProperties(nullptr, &availableExtensionCount,
+		availableExtensions.data());
+	debugUtilsEnabled = requestDebugUtils && std::any_of(availableExtensions.begin(),
+		availableExtensions.end(), [](const VkExtensionProperties& extension) {
+			return strcmp(extension.extensionName,
+				VK_EXT_DEBUG_UTILS_EXTENSION_NAME) == 0;
+		});
+	swapchainColorspaceEnabled = std::any_of(availableExtensions.begin(),
+		availableExtensions.end(), [](const VkExtensionProperties& extension) {
+			return strcmp(extension.extensionName,
+				VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME) == 0;
+		});
+	if (enableValidationLayers && !debugUtilsEnabled) {
+		throw std::runtime_error("Vulkan validation requires VK_EXT_debug_utils");
+	}
+
+	// Validation messages and GPU profiler annotations share Debug Utils.
+	if (debugUtilsEnabled) {
 		extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+	}
+	if (swapchainColorspaceEnabled) {
+		extensions.push_back(VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME);
 	}
 	createInfo.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
 	createInfo.ppEnabledExtensionNames = extensions.data();
@@ -203,6 +235,43 @@ void VkContext::pickPhysicalDevice() {
 		throw std::runtime_error("failed to find a suitable GPU");
 	}
 
+	physicalDeviceIdProperties.pNext = &physicalDeviceDriverProperties;
+	VkPhysicalDeviceProperties2 properties2{
+		VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2 };
+	properties2.pNext = &physicalDeviceIdProperties;
+	vkGetPhysicalDeviceProperties2(physicalDevice, &properties2);
+	physicalDeviceProperties = properties2.properties;
+	timestampPeriodNanoseconds = physicalDeviceProperties.limits.timestampPeriod;
+
+	uint32_t toolCount = 0;
+	if (vkGetPhysicalDeviceToolProperties(physicalDevice, &toolCount, nullptr) ==
+		VK_SUCCESS && toolCount != 0) {
+		std::vector<VkPhysicalDeviceToolProperties> tools(toolCount);
+		for (auto& tool : tools) {
+			tool.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TOOL_PROPERTIES;
+		}
+		if (vkGetPhysicalDeviceToolProperties(physicalDevice, &toolCount,
+			tools.data()) == VK_SUCCESS) {
+			activeTools.reserve(toolCount);
+			for (uint32_t index = 0; index < toolCount; ++index) {
+				std::string description = tools[index].name;
+				if (tools[index].version[0] != '\0') {
+					description += " ";
+					description += tools[index].version;
+				}
+				activeTools.push_back(std::move(description));
+			}
+		}
+	}
+	uint32_t queueFamilyCount = 0;
+	vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &queueFamilyCount, nullptr);
+	std::vector<VkQueueFamilyProperties> queueFamilies(queueFamilyCount);
+	vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &queueFamilyCount,
+		queueFamilies.data());
+	if (graphicsQueueFamilyIndex < queueFamilies.size()) {
+		timestampValidBits = queueFamilies[graphicsQueueFamilyIndex].timestampValidBits;
+	}
+
 	std::cout << "Physical Device Selected" << std::endl;
 }
 
@@ -223,7 +292,13 @@ bool VkContext::isDeviceSuitable(VkPhysicalDevice device) {
 		swapChainAdequate = !swapChainSupport.formats.empty() && !swapChainSupport.presentModes.empty();
 	}
 
-	return indices.isComplete() && extensionsSupported && swapChainAdequate;
+	VkPhysicalDeviceFeatures features{};
+	vkGetPhysicalDeviceFeatures(device, &features);
+	return indices.isComplete() && extensionsSupported && swapChainAdequate &&
+		features.samplerAnisotropy == VK_TRUE &&
+		features.fillModeNonSolid == VK_TRUE &&
+		features.independentBlend == VK_TRUE &&
+		features.imageCubeArray == VK_TRUE;
 }
 
 // Extension checker
@@ -312,6 +387,50 @@ void VkContext::createLogicalDevice() {
     deviceFeatures.samplerAnisotropy = VK_TRUE;
 	deviceFeatures.fillModeNonSolid = VK_TRUE;
 	deviceFeatures.independentBlend = VK_TRUE;
+    deviceFeatures.imageCubeArray = VK_TRUE;
+    VkPhysicalDeviceFeatures supportedFeatures{};
+	vkGetPhysicalDeviceFeatures(physicalDevice, &supportedFeatures);
+	pipelineStatisticsEnabled = pipelineStatisticsRequested &&
+		supportedFeatures.pipelineStatisticsQuery == VK_TRUE;
+	deviceFeatures.pipelineStatisticsQuery = pipelineStatisticsEnabled
+		? VK_TRUE : VK_FALSE;
+
+    VkPhysicalDeviceVulkan12Features supportedVulkan12{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES };
+    VkPhysicalDeviceFeatures2 supportedFeatures2{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2 };
+    supportedFeatures2.pNext = &supportedVulkan12;
+    vkGetPhysicalDeviceFeatures2(physicalDevice, &supportedFeatures2);
+
+    descriptorIndexingEnabled =
+        supportedVulkan12.runtimeDescriptorArray == VK_TRUE &&
+        supportedVulkan12.descriptorBindingPartiallyBound == VK_TRUE &&
+        supportedVulkan12.descriptorBindingSampledImageUpdateAfterBind == VK_TRUE &&
+        supportedVulkan12.descriptorBindingVariableDescriptorCount == VK_TRUE &&
+        supportedVulkan12.shaderSampledImageArrayNonUniformIndexing == VK_TRUE;
+
+    VkPhysicalDeviceVulkan12Features enabledVulkan12{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES };
+    if (descriptorIndexingEnabled) {
+        enabledVulkan12.runtimeDescriptorArray = VK_TRUE;
+        enabledVulkan12.descriptorBindingPartiallyBound = VK_TRUE;
+        enabledVulkan12.descriptorBindingSampledImageUpdateAfterBind = VK_TRUE;
+        enabledVulkan12.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
+        enabledVulkan12.descriptorBindingVariableDescriptorCount = VK_TRUE;
+
+        VkPhysicalDeviceDescriptorIndexingProperties indexingProperties{
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_PROPERTIES };
+        VkPhysicalDeviceProperties2 properties2{
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2 };
+        properties2.pNext = &indexingProperties;
+        vkGetPhysicalDeviceProperties2(physicalDevice, &properties2);
+        maxIndexedTextureViews =
+            indexingProperties.maxDescriptorSetUpdateAfterBindSampledImages;
+        maxIndexedSamplers =
+            indexingProperties.maxDescriptorSetUpdateAfterBindSamplers;
+        maxUpdateAfterBindDescriptors =
+            indexingProperties.maxUpdateAfterBindDescriptorsInAllPools;
+    }
 
     // 3. Extensions Setup (THE MAC COMPATIBILITY FIX)
     // Start with the Swapchain extension, which is required on all platforms.
@@ -329,8 +448,15 @@ void VkContext::createLogicalDevice() {
     for (const auto& extension : availableExtensions) {
         if (strcmp(extension.extensionName, "VK_KHR_portability_subset") == 0) {
             deviceExtensions.push_back("VK_KHR_portability_subset");
-            break;
         }
+        if (strcmp(extension.extensionName, VK_EXT_MEMORY_BUDGET_EXTENSION_NAME) == 0) {
+            deviceExtensions.push_back(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
+            memoryBudgetEnabled = true;
+        }
+		if (strcmp(extension.extensionName, VK_EXT_HDR_METADATA_EXTENSION_NAME) == 0) {
+			deviceExtensions.push_back(VK_EXT_HDR_METADATA_EXTENSION_NAME);
+			hdrMetadataEnabled = true;
+		}
     }
 
     // 4. Create the Logical Device
@@ -341,18 +467,17 @@ void VkContext::createLogicalDevice() {
     createInfo.pQueueCreateInfos = queueCreateInfos.data();
 
     createInfo.pEnabledFeatures = &deviceFeatures;
+    createInfo.pNext = descriptorIndexingEnabled ? &enabledVulkan12 : nullptr;
 
     // Pass the dynamically created list of extensions
     createInfo.enabledExtensionCount = static_cast<uint32_t>(deviceExtensions.size());
     createInfo.ppEnabledExtensionNames = deviceExtensions.data();
 
-    if (enableValidationLayers) {
-       createInfo.enabledLayerCount = static_cast<uint32_t>(validationLayers.size());
-       createInfo.ppEnabledLayerNames = validationLayers.data();
-    }
-    else {
-       createInfo.enabledLayerCount = 0;
-    }
+    // Device layers are deprecated and ignored. Validation is enabled at the
+    // instance; keeping this pair zeroed also avoids capture-layer rewrites that
+    // can otherwise leave an invalid count/pointer pair at vkCreateDevice.
+    createInfo.enabledLayerCount = 0;
+    createInfo.ppEnabledLayerNames = nullptr;
 
     if (vkCreateDevice(physicalDevice, &createInfo, nullptr, &device) != VK_SUCCESS) {
        throw std::runtime_error("failed to create logical device");

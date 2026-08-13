@@ -6,11 +6,13 @@
 #include <array>
 
 VkGraphicsPipeline::VkGraphicsPipeline(VkContext* context, VkSwapchain* swapchain, VkRenderPassWrapper* renderPass,
-    VkPipelineLayout pipelineLayout)
+    VkPipelineLayout pipelineLayout, Iridium::GBufferLayout layout)
 	: context(context), pipelineLayout(pipelineLayout) {
     
-    wireframePipeline = createPipeline(swapchain, renderPass, true, false); // wireframe
-    outlinePipeline = createPipeline(swapchain, renderPass, false, true); // outline
+    wireframePipeline = createPipeline(swapchain, renderPass, true, false,
+        layout);
+    outlinePipeline = createPipeline(swapchain, renderPass, false, true,
+        layout);
 }
 
 VkGraphicsPipeline::~VkGraphicsPipeline() {
@@ -31,21 +33,31 @@ VkShaderModule VkGraphicsPipeline::createShaderModule(const std::vector<char>& c
 }
 
 VkPipeline VkGraphicsPipeline::createPipeline(VkSwapchain* swapchain, VkRenderPassWrapper* renderPass, 
-    bool isWireframe, bool isOutline) {
+    bool isWireframe, bool isOutline, Iridium::GBufferLayout layout) {
     // -------------------------------------------------------------
     // 1. SHADER LOADING
     // -------------------------------------------------------------
-    auto vertCode = readFile(std::string(PROJECT_ROOT_DIR) + "assets/shaders/shader_vert.spv");
-    auto fragCode = readFile(std::string(PROJECT_ROOT_DIR) + "assets/shaders/shader_frag.spv");
+    auto vertCode = readFile(std::string(PROJECT_ROOT_DIR) +
+        "assets/shaders/canonical_material_vert.spv");
+    const char* canonicalGBufferShader = nullptr;
+    if (layout == Iridium::GBufferLayout::CanonicalReference) {
+        canonicalGBufferShader =
+            "assets/shaders/canonical_reference_indexed_frag.spv";
+    } else {
+        canonicalGBufferShader =
+            "assets/shaders/canonical_packed_indexed_frag.spv";
+    }
+    auto fragCode = readFile(std::string(PROJECT_ROOT_DIR) + canonicalGBufferShader);
 
     if (isOutline) {
         // This MUST be your standard 3D mesh vertex shader, not the select shader
-        vertCode = readFile(std::string(PROJECT_ROOT_DIR) + "assets/shaders/shader_vert.spv");
-        fragCode = readFile(std::string(PROJECT_ROOT_DIR) + "assets/shaders/mask_frag.spv");
+        vertCode = readFile(std::string(PROJECT_ROOT_DIR) +
+            "assets/shaders/canonical_material_vert.spv");
+        fragCode = readFile(std::string(PROJECT_ROOT_DIR) +
+            "assets/shaders/canonical_mask_frag.spv");
     }
     else {
-        vertCode = readFile(std::string(PROJECT_ROOT_DIR) + "assets/shaders/shader_vert.spv");
-        fragCode = readFile(std::string(PROJECT_ROOT_DIR) + "assets/shaders/shader_frag.spv");
+        // Initial shader selection above already matches the active layout.
     }
 
     VkShaderModule vertModule = createShaderModule(vertCode);
@@ -96,7 +108,10 @@ VkPipeline VkGraphicsPipeline::createPipeline(VkSwapchain* swapchain, VkRenderPa
     rasterizer.depthBiasEnable = VK_FALSE;
 
     if (isOutline) {
-        rasterizer.cullMode = VK_CULL_MODE_BACK_BIT; // Keep this (Flip normals)
+        // Selection is a visibility mask, not material shading. Include both
+        // sides so double-sided panels and thin imported geometry contribute to
+        // one stable silhouette.
+        rasterizer.cullMode = VK_CULL_MODE_NONE;
 
         // CHANGED: Check isWireframe to decide between FILL (Solid) or LINE (Cage)
         if (isWireframe) {
@@ -137,22 +152,25 @@ VkPipeline VkGraphicsPipeline::createPipeline(VkSwapchain* swapchain, VkRenderPa
 
     VkPipelineColorBlendAttachmentState albedoBlendAttachment{};
     albedoBlendAttachment.blendEnable = VK_FALSE;
-    // Mask pass ONLY writes to the Alpha channel. Leaves RGB (car color) perfectly intact!
-    albedoBlendAttachment.colorWriteMask = isOutline ? VK_COLOR_COMPONENT_A_BIT :
+    // Albedo alpha is material AO. Selection must not alter any closure field.
+    albedoBlendAttachment.colorWriteMask = isOutline ? 0 :
         (VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT);
 
     VkPipelineColorBlendAttachmentState emissiveBlendAttachment{};
     emissiveBlendAttachment.blendEnable = VK_FALSE;
-    emissiveBlendAttachment.colorWriteMask = isOutline ? 0 :
+    // Emissive alpha is outside the current closure and temporarily carries the
+    // editor selection mask. RGB remains the material's scene-linear emissive.
+    emissiveBlendAttachment.colorWriteMask = isOutline ? VK_COLOR_COMPONENT_A_BIT :
         (VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT);
 
-    std::array<VkPipelineColorBlendAttachmentState, 3> blendAttachments = {
-        normalBlendAttachment, albedoBlendAttachment, emissiveBlendAttachment
+    std::array<VkPipelineColorBlendAttachmentState, 5> blendAttachments = {
+        normalBlendAttachment, albedoBlendAttachment, emissiveBlendAttachment,
+        normalBlendAttachment, normalBlendAttachment
     };
 
     VkPipelineColorBlendStateCreateInfo colorBlending{ VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO };
     colorBlending.logicOpEnable = VK_FALSE;
-    colorBlending.attachmentCount = static_cast<uint32_t>(blendAttachments.size());
+    colorBlending.attachmentCount = 5;
     colorBlending.pAttachments = blendAttachments.data();
 
     // Dynamic State

@@ -1,0 +1,53 @@
+#version 450
+#include "include/clustered_lighting.glsl"
+
+layout(local_size_x = 64) in;
+
+shared uvec3 sharedMinimum;
+shared uvec3 sharedSpan;
+shared uint sharedEnabled;
+
+void main() {
+    uint activeIndex = gl_WorkGroupID.x;
+    uint lane = gl_LocalInvocationID.x;
+    if (lane == 0u) {
+        sharedEnabled = 0u;
+        if (activeIndex < clusterInput.x &&
+            clusterDiagnostics[IRIDIUM_DIAGNOSTIC_OVERFLOW] == 0u) {
+            uint slot = activeLightSlots[activeIndex];
+            PackedGpuLight light = lights[slot];
+            if (iridiumLightType(light) == IRIDIUM_LIGHT_TYPE_DIRECTIONAL) {
+                uint globalIndex = atomicAdd(
+                    clusterDiagnostics[IRIDIUM_DIAGNOSTIC_DIRECTIONAL], 1u);
+                if (globalIndex < clusterLimits.w)
+                    globalLightSlots[globalIndex] = slot;
+                else atomicMax(clusterDiagnostics[IRIDIUM_DIAGNOSTIC_OVERFLOW],
+                    IRIDIUM_CLUSTER_OVERFLOW_DIRECTIONAL);
+            }
+            else {
+                atomicAdd(clusterDiagnostics[IRIDIUM_DIAGNOSTIC_LOCAL], 1u);
+                IridiumClusterBounds bounds = iridiumLocalLightBounds(light);
+                if (bounds.valid) {
+                    sharedMinimum = bounds.minimum;
+                    sharedSpan = bounds.maximum - bounds.minimum + uvec3(1u);
+                    sharedEnabled = iridiumReserveReferences(
+                        sharedSpan.x * sharedSpan.y * sharedSpan.z) ? 1u : 0u;
+                }
+            }
+        }
+    }
+    barrier();
+    if (sharedEnabled == 0u) return;
+
+    uint volume = sharedSpan.x * sharedSpan.y * sharedSpan.z;
+    uint plane = sharedSpan.x * sharedSpan.y;
+    for (uint linear = lane; linear < volume; linear += 64u) {
+        if (clusterDiagnostics[IRIDIUM_DIAGNOSTIC_OVERFLOW] != 0u) return;
+        uint z = linear / plane;
+        uint remainder = linear - z * plane;
+        uint y = remainder / sharedSpan.x;
+        uint x = remainder - y * sharedSpan.x;
+        iridiumSaturatingIncrementCount(iridiumClusterIndex(
+            sharedMinimum + uvec3(x, y, z)));
+    }
+}

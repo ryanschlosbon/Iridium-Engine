@@ -1,0 +1,13 @@
+#version 450
+#extension GL_KHR_shader_subgroup_basic : require
+#include "include/clustered_lighting.glsl"
+
+layout(local_size_x = 1) in;
+
+void main() {
+    uint subgroupsPerFastWorkgroup =
+        (1024u + gl_SubgroupSize - 1u) / gl_SubgroupSize;
+    clusterIndirectArgs[0] = (clusterIndirectArgs[3] +
+        subgroupsPerFastWorkgroup - 1u) / subgroupsPerFastWorkgroup;
+    clusterIndirectArgs[4] = clusterIndirectArgs[7];
+}

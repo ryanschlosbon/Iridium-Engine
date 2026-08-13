@@ -5,7 +5,8 @@
 
 class VkUIRenderPass {
 public:
-    VkUIRenderPass(VkContext* context, VkFormat swapChainImageFormat);
+    VkUIRenderPass(VkContext* context, VkFormat imageFormat,
+        bool presentAfterPass = true);
     ~VkUIRenderPass();
 
     VkRenderPass getRenderPass() const { return renderPass; }

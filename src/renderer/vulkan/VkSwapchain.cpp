@@ -3,7 +3,9 @@
 #include <algorithm>
 #include <stdexcept>
 
-VkSwapchain::VkSwapchain(VkContext* context, GLFWwindow* window, VkSwapchainKHR oldSwapchain) : context(context) {
+VkSwapchain::VkSwapchain(VkContext* context, GLFWwindow* window,
+	Iridium::Color::OutputTransport requestedTransport,
+	VkSwapchainKHR oldSwapchain) : context(context), requestedTransport_(requestedTransport) {
 	createSwapchain(window, oldSwapchain);
 	createImageViews();
 }
@@ -20,13 +22,26 @@ VkSwapchain::~VkSwapchain() {
 
 // Choose the Color Format
 VkSurfaceFormatKHR VkSwapchain::chooseSwapSurfaceFormat(const std::vector<VkSurfaceFormatKHR>& availableFormats) {
-	for (const auto& availableFormat : availableFormats) {
-		if (availableFormat.format == VK_FORMAT_B8G8R8A8_SRGB &&
-			availableFormat.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
-			return availableFormat;
+	supportedOutputTransports.clear();
+	for (const Iridium::Color::OutputTransport transport : {
+		Iridium::Color::OutputTransport::SdrSrgb,
+		Iridium::Color::OutputTransport::ScRgb,
+		Iridium::Color::OutputTransport::Hdr10Pq }) {
+		try {
+			const auto candidate = Iridium::selectVulkanOutputTransport(
+				transport, availableFormats, context->hasHdrMetadata());
+			if (!candidate.usedSdrFallback && candidate.effective == transport) {
+				supportedOutputTransports.push_back(transport);
+			}
+		}
+		catch (const std::runtime_error&) {
+			// The actual mandatory SDR selection below supplies the fatal diagnostic.
 		}
 	}
-	return availableFormats[0];
+	outputTransportSelection = Iridium::selectVulkanOutputTransport(
+		requestedTransport_,
+		availableFormats, context->hasHdrMetadata());
+	return outputTransportSelection.surfaceFormat;
 }
 
 // Choose the Sync Mode
@@ -128,6 +143,8 @@ void VkSwapchain::createSwapchain(GLFWwindow* window, VkSwapchainKHR oldSwapchai
 
 	// Save settings for later
 	swapChainImageFormat = surfaceFormat.format;
+	swapChainColorSpace = surfaceFormat.colorSpace;
+	swapChainPresentMode = presentMode;
 	swapChainExtent = extent;
 }
 
@@ -160,4 +177,28 @@ void VkSwapchain::createImageViews() {
 			throw std::runtime_error("failed to create image views!");
 		}
 	}
+}
+
+void VkSwapchain::setHdrMetadata(float peakNits) const {
+    if (!context->hasHdrMetadata() ||
+        outputTransportSelection.effective !=
+            Iridium::Color::OutputTransport::Hdr10Pq) {
+        return;
+    }
+    const auto setMetadata = reinterpret_cast<PFN_vkSetHdrMetadataEXT>(
+        vkGetDeviceProcAddr(context->getDevice(), "vkSetHdrMetadataEXT"));
+    if (setMetadata == nullptr) {
+        throw std::runtime_error(
+            "VK_EXT_hdr_metadata was enabled but vkSetHdrMetadataEXT is unavailable.");
+    }
+    VkHdrMetadataEXT metadata{ VK_STRUCTURE_TYPE_HDR_METADATA_EXT };
+    metadata.displayPrimaryRed = { 0.680f, 0.320f };
+    metadata.displayPrimaryGreen = { 0.265f, 0.690f };
+    metadata.displayPrimaryBlue = { 0.150f, 0.060f };
+    metadata.whitePoint = { 0.3127f, 0.3290f };
+    metadata.maxLuminance = peakNits;
+    metadata.minLuminance = 0.0f;
+    metadata.maxContentLightLevel = 0.0f;
+    metadata.maxFrameAverageLightLevel = 0.0f;
+    setMetadata(context->getDevice(), 1, &swapChain, &metadata);
 }

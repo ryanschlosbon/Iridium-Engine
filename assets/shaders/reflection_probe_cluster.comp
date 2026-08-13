@@ -1,0 +1,184 @@
+#version 450
+
+#include "include/reflection_probe_records.glsl"
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+struct ReflectionProbeClusterHeader {
+    uint offset;
+    uint count;
+};
+
+layout(std430, set = 0, binding = 0) readonly buffer ProbeRecords {
+    PackedGpuReflectionProbe probeRecords[];
+};
+layout(std430, set = 0, binding = 1) readonly buffer ActiveProbeSlots {
+    uint activeProbeSlots[];
+};
+layout(std140, set = 0, binding = 2) uniform ProbeClusterParameters {
+    mat4 probeClusterView;
+    mat4 probeClusterProjection;
+    mat4 probeClusterInverseView;
+    uvec4 probeClusterGrid;   // width, height, tiles-x, tiles-y
+    vec4 probeClusterDepth;   // near, far, slices/log(far/near), reserved
+    uvec4 probeClusterLimits; // slices, per-cluster, references, active probes
+    uvec4 probeClusterTiles;  // tile width, tile height, reserved, reserved
+};
+layout(std430, set = 0, binding = 3) writeonly buffer ProbeClusterHeaders {
+    ReflectionProbeClusterHeader probeClusterHeaders[];
+};
+layout(std430, set = 0, binding = 4) writeonly buffer ProbeClusterIndices {
+    uint probeClusterSlots[];
+};
+
+struct ProbeBounds {
+    uvec3 minimum;
+    uvec3 maximum;
+    bool valid;
+};
+
+uint probeDepthSlice(float positiveDepth) {
+    float depth = clamp(positiveDepth, probeClusterDepth.x,
+        probeClusterDepth.y);
+    return min(probeClusterLimits.x - 1u,
+        uint(log(depth / probeClusterDepth.x) * probeClusterDepth.z));
+}
+
+uint probeTile(float ndc, uint pixels, uint count, uint tileSize) {
+    float pixel = clamp(ndc * 0.5 + 0.5, 0.0, 1.0) * float(pixels);
+    return min(count - 1u, uint(pixel) / tileSize);
+}
+
+ProbeBounds probeBounds(PackedGpuReflectionProbe probe) {
+    ProbeBounds result;
+    result.minimum = uvec3(0u);
+    result.maximum = uvec3(0u);
+    result.valid = false;
+    bool box = (probe.metadata.x & IRIDIUM_PROBE_BOX_SHAPE_BIT) != 0u;
+    float radius = box ? length(probe.influence.xyz) : probe.influence.x;
+    if (!(radius > 0.0) || isnan(radius) || isinf(radius)) return result;
+    vec3 viewCenter = (probeClusterView *
+        vec4(probe.positionIntensity.xyz, 1.0)).xyz;
+    float positiveDepth = -viewCenter.z;
+    float minimumDepth = max(probeClusterDepth.x, positiveDepth - radius);
+    float maximumDepth = min(probeClusterDepth.y, positiveDepth + radius);
+    if (maximumDepth < probeClusterDepth.x ||
+        minimumDepth > probeClusterDepth.y ||
+        minimumDepth > maximumDepth) return result;
+    result.minimum.z = probeDepthSlice(minimumDepth);
+    result.maximum.z = probeDepthSlice(maximumDepth);
+    if (positiveDepth - radius <= probeClusterDepth.x) {
+        result.maximum.xy = probeClusterGrid.zw - uvec2(1u);
+        result.valid = true;
+        return result;
+    }
+    float inverseDepth = 1.0 / positiveDepth;
+    vec2 center = vec2(probeClusterProjection[0][0] * viewCenter.x,
+        probeClusterProjection[1][1] * viewCenter.y) * inverseDepth;
+    float conservativeDepth = max(probeClusterDepth.x,
+        positiveDepth - radius);
+    vec2 projectedRadius = abs(vec2(probeClusterProjection[0][0],
+        probeClusterProjection[1][1])) * radius / conservativeDepth;
+    vec2 minimumNdc = center - projectedRadius;
+    vec2 maximumNdc = center + projectedRadius;
+    if (maximumNdc.x < -1.0 || minimumNdc.x > 1.0 ||
+        maximumNdc.y < -1.0 || minimumNdc.y > 1.0) return result;
+    result.minimum.x = probeTile(minimumNdc.x, probeClusterGrid.x,
+        probeClusterGrid.z, probeClusterTiles.x);
+    result.maximum.x = probeTile(maximumNdc.x, probeClusterGrid.x,
+        probeClusterGrid.z, probeClusterTiles.x);
+    result.minimum.y = probeTile(minimumNdc.y, probeClusterGrid.y,
+        probeClusterGrid.w, probeClusterTiles.y);
+    result.maximum.y = probeTile(maximumNdc.y, probeClusterGrid.y,
+        probeClusterGrid.w, probeClusterTiles.y);
+    result.valid = true;
+    return result;
+}
+
+float probeInfluence(PackedGpuReflectionProbe probe, vec3 worldPosition) {
+    vec3 local = (probe.worldToProbe * vec4(worldPosition, 1.0)).xyz;
+    float boundary;
+    if ((probe.metadata.x & IRIDIUM_PROBE_BOX_SHAPE_BIT) != 0u) {
+        vec3 margin = probe.influence.xyz - abs(local);
+        boundary = min(margin.x, min(margin.y, margin.z));
+    }
+    else boundary = probe.influence.x - length(local);
+    if (!(boundary >= 0.0)) return 0.0;
+    return probe.influence.w > 0.0
+        ? clamp(boundary / probe.influence.w, 0.0, 1.0) : 1.0;
+}
+
+bool preferred(PackedGpuReflectionProbe candidate, float candidateInfluence,
+    PackedGpuReflectionProbe current, float currentInfluence) {
+    int candidatePriority = int(candidate.metadata.z);
+    int currentPriority = int(current.metadata.z);
+    if (candidatePriority != currentPriority)
+        return candidatePriority > currentPriority;
+    if (candidateInfluence != currentInfluence)
+        return candidateInfluence > currentInfluence;
+    return candidate.metadata.w < current.metadata.w;
+}
+
+void main() {
+    uint cluster = gl_GlobalInvocationID.x;
+    uint clusterCount = probeClusterGrid.z * probeClusterGrid.w *
+        probeClusterLimits.x;
+    if (cluster >= clusterCount) return;
+    uint maximumPerCluster = probeClusterLimits.y;
+    uint outputOffset = cluster * maximumPerCluster;
+    if (outputOffset + maximumPerCluster > probeClusterLimits.z) {
+        probeClusterHeaders[cluster] = ReflectionProbeClusterHeader(0u, 0u);
+        return;
+    }
+
+    uint plane = probeClusterGrid.z * probeClusterGrid.w;
+    uvec3 coordinate = uvec3(cluster % probeClusterGrid.z,
+        (cluster / probeClusterGrid.z) % probeClusterGrid.w,
+        cluster / plane);
+    float normalizedDepth = (float(coordinate.z) + 0.5) /
+        float(probeClusterLimits.x);
+    float positiveDepth = probeClusterDepth.x * pow(
+        probeClusterDepth.y / probeClusterDepth.x, normalizedDepth);
+    vec2 ndc = (vec2(coordinate.xy) + vec2(0.5)) /
+        vec2(probeClusterGrid.zw) * 2.0 - 1.0;
+    vec3 viewCenter = vec3(ndc.x * positiveDepth /
+        probeClusterProjection[0][0], ndc.y * positiveDepth /
+        probeClusterProjection[1][1], -positiveDepth);
+    vec3 worldCenter = (probeClusterInverseView *
+        vec4(viewCenter, 1.0)).xyz;
+
+    uint selectedSlots[4];
+    float selectedInfluences[4];
+    uint selectedCount = 0u;
+    for (uint activeIndex = 0u; activeIndex < probeClusterLimits.w;
+        ++activeIndex) {
+        uint slot = activeProbeSlots[activeIndex];
+        PackedGpuReflectionProbe probe = probeRecords[slot];
+        ProbeBounds bounds = probeBounds(probe);
+        if (!bounds.valid || any(lessThan(coordinate, bounds.minimum)) ||
+            any(greaterThan(coordinate, bounds.maximum))) continue;
+        float influence = probeInfluence(probe, worldCenter);
+        uint position = selectedCount;
+        for (uint index = 0u; index < selectedCount; ++index) {
+            if (preferred(probe, influence,
+                    probeRecords[selectedSlots[index]],
+                    selectedInfluences[index])) {
+                position = index;
+                break;
+            }
+        }
+        if (position >= maximumPerCluster) continue;
+        uint newCount = min(selectedCount + 1u, maximumPerCluster);
+        for (uint index = newCount - 1u; index > position; --index) {
+            selectedSlots[index] = selectedSlots[index - 1u];
+            selectedInfluences[index] = selectedInfluences[index - 1u];
+        }
+        selectedSlots[position] = slot;
+        selectedInfluences[position] = influence;
+        selectedCount = newCount;
+    }
+    probeClusterHeaders[cluster] = ReflectionProbeClusterHeader(
+        outputOffset, selectedCount);
+    for (uint index = 0u; index < selectedCount; ++index)
+        probeClusterSlots[outputOffset + index] = selectedSlots[index];
+}

@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "milestone": "M3.7",
+  "resolution": [3840, 2160],
+  "cache_state": "warm-steady-state",
+  "warmup_frames": 500,
+  "measured_frames": 10000,
+  "performance_gate": {
+    "ranges": ["gpu.gbuffer.opaque", "gpu.lighting.deferred"],
+    "maximum_regression_ms": 0.02,
+    "maximum_regression_fraction": 0.10,
+    "comparison": "accepted_m3.3_indexed_baseline"
+  },
+  "required_modes": [
+    {
+      "id": "indexed_production",
+      "arguments": [],
+      "expected_render_mode_suffix": "indexed_views_separate_samplers"
+    }
+  ],
+  "required_scale_runs": [
+    {
+      "id": "indexed_material_table_65536",
+      "arguments": ["--validate-material-table-scale", "65536"]
+    },
+    {
+      "id": "indexed_texture_sampler_tables_8192",
+      "arguments": ["--validate-texture-table-scale", "8192"],
+      "warmup_frames": 2
+    }
+  ],
+  "required_capture_fixtures": [
+    "material_gpu_lab_v1",
+    "standard_shading_opaque_v1",
+    "standard_shading_forward_v1",
+    "complex_closure_lab_v1"
+  ],
+  "required_debug_views": [
+    "final",
+    "depth",
+    "base-color",
+    "normal",
+    "material-id",
+    "closure-class",
+    "wireframe"
+  ],
+  "required_artifacts": [
+    "profile_jsonl",
+    "scene_pfm",
+    "capture_metadata",
+    "validation_log",
+    "descriptor_residency_counters",
+    "memory_snapshot"
+  ]
+}

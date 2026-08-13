@@ -1,0 +1,40 @@
+{
+  "format": "iridium.scene",
+  "schemaVersion": 1,
+  "name": "M5 Lighting Contract",
+  "entities": [
+    {
+      "uuid": "019fb7d3-0500-7000-8000-000000000101",
+      "components": [
+        { "id": "iridium.component.name", "version": 1, "data": { "value": "M5 Sun" } },
+        { "id": "iridium.component.transform", "version": 1, "data": { "position": [0.0, 8.0, 0.0], "rotation": [-35.0, 25.0, 0.0], "scale": [1.0, 1.0, 1.0] } },
+        { "id": "iridium.component.relationship", "version": 1, "data": { "parent": null, "siblingOrder": 0 } },
+        { "id": "iridium.component.light", "version": 1, "data": { "type": 0, "color": [1.0, 0.956, 0.84], "intensity": 100000.0, "range": 10.0, "radius": 0.25, "innerCone": 12.5, "outerCone": 45.0, "castsShadows": true } }
+      ]
+    },
+    {
+      "uuid": "019fb7d3-0500-7000-8000-000000000102",
+      "components": [
+        { "id": "iridium.component.name", "version": 1, "data": { "value": "M5 Point" } },
+        { "id": "iridium.component.transform", "version": 1, "data": { "position": [-2.0, 2.0, 1.0], "rotation": [0.0, 0.0, 0.0], "scale": [1.0, 1.0, 1.0] } },
+        { "id": "iridium.component.relationship", "version": 1, "data": { "parent": null, "siblingOrder": 1 } },
+        { "id": "iridium.component.light", "version": 1, "data": { "type": 1, "color": [1.0, 0.25, 0.05], "intensity": 1000.0, "range": 12.0, "radius": 0.05, "innerCone": 12.5, "outerCone": 45.0, "castsShadows": true } }
+      ]
+    },
+    {
+      "uuid": "019fb7d3-0500-7000-8000-000000000103",
+      "components": [
+        { "id": "iridium.component.name", "version": 1, "data": { "value": "M5 Spot" } },
+        { "id": "iridium.component.transform", "version": 1, "data": { "position": [2.0, 3.0, 2.0], "rotation": [-45.0, -35.0, 0.0], "scale": [1.0, 1.0, 1.0] } },
+        { "id": "iridium.component.relationship", "version": 1, "data": { "parent": null, "siblingOrder": 2 } },
+        { "id": "iridium.component.light", "version": 1, "data": { "type": 2, "color": [0.08, 0.35, 1.0], "intensity": 1500.0, "range": 18.0, "radius": 0.1, "innerCone": 15.0, "outerCone": 30.0, "castsShadows": true } }
+      ]
+    }
+  ],
+  "extensions": {
+    "iridium.m5.fixture": {
+      "purpose": "Freeze the readable v1 light contract before the approved photometric v2 migration",
+      "currentRendererConsumesLights": false
+    }
+  }
+}

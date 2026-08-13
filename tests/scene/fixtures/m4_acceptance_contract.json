@@ -1,0 +1,42 @@
+{
+  "schema": "iridium.m4.acceptance-contract",
+  "version": 1,
+  "source": "tests/scene/fixtures/m4_acceptance_schema1.iridium.scene.json",
+  "sourceSha256": "8053f5b8b38190e89d2588df328b6a2e1afd31e22e37a289c95137cf55536944",
+  "canonicalSha256": "497a4499ff5533d2595ae175582936b8d4aed80750a6a0e05133b0118789b24e",
+  "runtimeComponentManifestSha256": "ddcf859e4d422acda824e84c6bd44bfd8b9a404c3a8d81197d50f9ddcc0fa18a",
+  "target": {
+    "platform": "windows-x64",
+    "profile": "release",
+    "qualityPolicy": "high"
+  },
+  "cookKey": "f27b18a39dd3efa7140caea45a74ee2f7bb55e00e0b2b8288c70625bd1bb58a6",
+  "artifactSha256": "515e26d7e118e022d797b52496fae493ce33d304ce62400ddeb54d1a63a55f31",
+  "artifactBytes": 1568,
+  "sceneAssetGuid": "01890f4c-0000-7000-8000-000000000040",
+  "entityCount": 2,
+  "m5_1Supersession": {
+    "contract": "M5.1-light-component-v2",
+    "canonicalSha256": "b09265e80869bc40ee9771755f43da67f35d5443c5ee96aa363ee538a561dd1a",
+    "runtimeComponentManifestSha256": "6e8a840aa3ac0a0b20a0749434695a934407e72d484e925a6eb66c77465a7c5c",
+    "cookKey": "1dabf87e847049cb95decbfe2f81b08eed9a4e0232f9296025f69c4db435218e",
+    "artifactSha256": "bf2f3d5dcfc5fe336ec8f0f890d5d439b6b41ad436a1550c370f880bc1daa370",
+    "artifactBytes": 1576
+  },
+  "m5_8Supersession": {
+    "contract": "M5.8-sky-and-reflection-probe-components",
+    "canonicalSha256": "b09265e80869bc40ee9771755f43da67f35d5443c5ee96aa363ee538a561dd1a",
+    "runtimeComponentManifestSha256": "bfbee430f43df1ed3ff89fe214508ecdb1ad964661fb55164a426539f56f60eb",
+    "cookKey": "9ebd0224e29f356e6677759b5ddfb84a2c902b0730150e86e37326347b60e8f3",
+    "artifactSha256": "8b38a20256dfcbfe7ab4cec93f52a228bfec177da2e913354bb6566237bbf8f1",
+    "artifactBytes": 1820
+  },
+  "m5_10Supersession": {
+    "contract": "M5.10-baked-lighting-set-component",
+    "canonicalSha256": "b09265e80869bc40ee9771755f43da67f35d5443c5ee96aa363ee538a561dd1a",
+    "runtimeComponentManifestSha256": "1588e0f6971c784ddedf5dd9473e974b1ad9ecad952e8363665de71452328a0d",
+    "cookKey": "de48aa5394e761d6d6bfdb0b6d785a0c0df8fd7f05f8263dab2eb9e9c832a602",
+    "artifactSha256": "7ae058c23fad76c4a3fd85d1f03ce01fab5a7d6c20e4258cfa00d45ffba6deb2",
+    "artifactBytes": 1956
+  }
+}

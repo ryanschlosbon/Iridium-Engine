@@ -1,0 +1,331 @@
+{
+  "allocationScope": "C++ global new/new[] requested bytes",
+  "configuration": "Release",
+  "schema": "iridium.editor.transaction-benchmark.v1",
+  "workloads": [
+    {
+      "apply": {
+        "allocationBytes": {
+          "max": 120.0,
+          "median": 120.0,
+          "min": 120.0,
+          "p95": 120.0,
+          "p99": 120.0
+        },
+        "allocationCount": {
+          "max": 1.0,
+          "median": 1.0,
+          "min": 1.0,
+          "p95": 1.0,
+          "p99": 1.0
+        },
+        "nanoseconds": {
+          "max": 2700.0,
+          "median": 100.0,
+          "min": 0.0,
+          "p95": 200.0,
+          "p99": 2700.0
+        },
+        "nanosecondsPerTarget": {
+          "max": 2700.0,
+          "median": 100.0,
+          "min": 0.0,
+          "p95": 200.0,
+          "p99": 2700.0
+        }
+      },
+      "estimatedHistoryBytes": {
+        "max": 387.0,
+        "median": 387.0,
+        "min": 387.0,
+        "p95": 387.0,
+        "p99": 387.0
+      },
+      "estimatedHistoryBytesPerTarget": {
+        "max": 387.0,
+        "median": 387.0,
+        "min": 387.0,
+        "p95": 387.0,
+        "p99": 387.0
+      },
+      "redo": {
+        "allocationBytes": {
+          "max": 0.0,
+          "median": 0.0,
+          "min": 0.0,
+          "p95": 0.0,
+          "p99": 0.0
+        },
+        "allocationCount": {
+          "max": 0.0,
+          "median": 0.0,
+          "min": 0.0,
+          "p95": 0.0,
+          "p99": 0.0
+        },
+        "nanoseconds": {
+          "max": 100.0,
+          "median": 0.0,
+          "min": 0.0,
+          "p95": 100.0,
+          "p99": 100.0
+        },
+        "nanosecondsPerTarget": {
+          "max": 100.0,
+          "median": 0.0,
+          "min": 0.0,
+          "p95": 100.0,
+          "p99": 100.0
+        }
+      },
+      "samples": 30,
+      "targetCount": 1,
+      "undo": {
+        "allocationBytes": {
+          "max": 0.0,
+          "median": 0.0,
+          "min": 0.0,
+          "p95": 0.0,
+          "p99": 0.0
+        },
+        "allocationCount": {
+          "max": 0.0,
+          "median": 0.0,
+          "min": 0.0,
+          "p95": 0.0,
+          "p99": 0.0
+        },
+        "nanoseconds": {
+          "max": 100.0,
+          "median": 0.0,
+          "min": 0.0,
+          "p95": 100.0,
+          "p99": 100.0
+        },
+        "nanosecondsPerTarget": {
+          "max": 100.0,
+          "median": 0.0,
+          "min": 0.0,
+          "p95": 100.0,
+          "p99": 100.0
+        }
+      }
+    },
+    {
+      "apply": {
+        "allocationBytes": {
+          "max": 120.0,
+          "median": 120.0,
+          "min": 120.0,
+          "p95": 120.0,
+          "p99": 120.0
+        },
+        "allocationCount": {
+          "max": 1.0,
+          "median": 1.0,
+          "min": 1.0,
+          "p95": 1.0,
+          "p99": 1.0
+        },
+        "nanoseconds": {
+          "max": 1000.0,
+          "median": 800.0,
+          "min": 700.0,
+          "p95": 1000.0,
+          "p99": 1000.0
+        },
+        "nanosecondsPerTarget": {
+          "max": 10.0,
+          "median": 8.0,
+          "min": 7.0,
+          "p95": 10.0,
+          "p99": 10.0
+        }
+      },
+      "estimatedHistoryBytes": {
+        "max": 24840.0,
+        "median": 24840.0,
+        "min": 24840.0,
+        "p95": 24840.0,
+        "p99": 24840.0
+      },
+      "estimatedHistoryBytesPerTarget": {
+        "max": 248.4,
+        "median": 248.4,
+        "min": 248.4,
+        "p95": 248.4,
+        "p99": 248.4
+      },
+      "redo": {
+        "allocationBytes": {
+          "max": 0.0,
+          "median": 0.0,
+          "min": 0.0,
+          "p95": 0.0,
+          "p99": 0.0
+        },
+        "allocationCount": {
+          "max": 0.0,
+          "median": 0.0,
+          "min": 0.0,
+          "p95": 0.0,
+          "p99": 0.0
+        },
+        "nanoseconds": {
+          "max": 600.0,
+          "median": 500.0,
+          "min": 400.0,
+          "p95": 600.0,
+          "p99": 600.0
+        },
+        "nanosecondsPerTarget": {
+          "max": 6.0,
+          "median": 5.0,
+          "min": 4.0,
+          "p95": 6.0,
+          "p99": 6.0
+        }
+      },
+      "samples": 30,
+      "targetCount": 100,
+      "undo": {
+        "allocationBytes": {
+          "max": 0.0,
+          "median": 0.0,
+          "min": 0.0,
+          "p95": 0.0,
+          "p99": 0.0
+        },
+        "allocationCount": {
+          "max": 0.0,
+          "median": 0.0,
+          "min": 0.0,
+          "p95": 0.0,
+          "p99": 0.0
+        },
+        "nanoseconds": {
+          "max": 500.0,
+          "median": 500.0,
+          "min": 400.0,
+          "p95": 500.0,
+          "p99": 500.0
+        },
+        "nanosecondsPerTarget": {
+          "max": 5.0,
+          "median": 5.0,
+          "min": 4.0,
+          "p95": 5.0,
+          "p99": 5.0
+        }
+      }
+    },
+    {
+      "apply": {
+        "allocationBytes": {
+          "max": 120.0,
+          "median": 120.0,
+          "min": 120.0,
+          "p95": 120.0,
+          "p99": 120.0
+        },
+        "allocationCount": {
+          "max": 1.0,
+          "median": 1.0,
+          "min": 1.0,
+          "p95": 1.0,
+          "p99": 1.0
+        },
+        "nanoseconds": {
+          "max": 122300.0,
+          "median": 100100.0,
+          "min": 85400.0,
+          "p95": 116700.0,
+          "p99": 122300.0
+        },
+        "nanosecondsPerTarget": {
+          "max": 12.23,
+          "median": 10.01,
+          "min": 8.54,
+          "p95": 11.67,
+          "p99": 12.23
+        }
+      },
+      "estimatedHistoryBytes": {
+        "max": 2470140.0,
+        "median": 2470140.0,
+        "min": 2470140.0,
+        "p95": 2470140.0,
+        "p99": 2470140.0
+      },
+      "estimatedHistoryBytesPerTarget": {
+        "max": 247.014,
+        "median": 247.014,
+        "min": 247.014,
+        "p95": 247.014,
+        "p99": 247.014
+      },
+      "redo": {
+        "allocationBytes": {
+          "max": 0.0,
+          "median": 0.0,
+          "min": 0.0,
+          "p95": 0.0,
+          "p99": 0.0
+        },
+        "allocationCount": {
+          "max": 0.0,
+          "median": 0.0,
+          "min": 0.0,
+          "p95": 0.0,
+          "p99": 0.0
+        },
+        "nanoseconds": {
+          "max": 51700.0,
+          "median": 44300.0,
+          "min": 41900.0,
+          "p95": 47000.0,
+          "p99": 51700.0
+        },
+        "nanosecondsPerTarget": {
+          "max": 5.17,
+          "median": 4.43,
+          "min": 4.19,
+          "p95": 4.7,
+          "p99": 5.17
+        }
+      },
+      "samples": 30,
+      "targetCount": 10000,
+      "undo": {
+        "allocationBytes": {
+          "max": 0.0,
+          "median": 0.0,
+          "min": 0.0,
+          "p95": 0.0,
+          "p99": 0.0
+        },
+        "allocationCount": {
+          "max": 0.0,
+          "median": 0.0,
+          "min": 0.0,
+          "p95": 0.0,
+          "p99": 0.0
+        },
+        "nanoseconds": {
+          "max": 54900.0,
+          "median": 47200.0,
+          "min": 40400.0,
+          "p95": 53800.0,
+          "p99": 54900.0
+        },
+        "nanosecondsPerTarget": {
+          "max": 5.49,
+          "median": 4.72,
+          "min": 4.04,
+          "p95": 5.38,
+          "p99": 5.49
+        }
+      }
+    }
+  ]
+}

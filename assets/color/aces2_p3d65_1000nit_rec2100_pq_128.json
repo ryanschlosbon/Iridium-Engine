@@ -1,0 +1,158 @@
+{
+  "schema": "iridium.aces_output_lut",
+  "schema_version": 1,
+  "asset": {
+    "path": "assets/color/aces2_p3d65_1000nit_rec2100_pq_128.irlt",
+    "sha256": "742a0fff9f8048adf56513f4760180d9d07fa28757628a7a051df084a62bac52",
+    "size": 128,
+    "layout": "2d_tiled_z_slices_rgba32f_rec2100_pq_values",
+    "interpolation": "tetrahedral",
+    "width": 16384,
+    "height": 128
+  },
+  "shaper": {
+    "type": "log2_offset",
+    "minimum_log2": -10.0,
+    "maximum_log2": 16.0
+  },
+  "source": {
+    "aces_package": "v2.0.0+2025.04.04",
+    "aces_core_commit": "2d7af39344725aaa8ac3bf1746693c9a1d6c4792",
+    "aces_output_commit": "aab74723f76728c37345ed01e51ebb24fb1f2f1f",
+    "opencolorio": "2.4.2",
+    "input_builtin": "ACEScg_to_ACES2065-1",
+    "output_builtin": "ACES-OUTPUT - ACES2065-1_to_CIE-XYZ-D65 - HDR-1000nit-P3-D65_2.0",
+    "display_builtin": "DISPLAY - CIE-XYZ-D65_to_REC.2100-PQ",
+    "transform_id": "urn:ampas:aces:transformId:v2.0:Output.Academy.P3-D65_1000nit_in_Rec2100-D65_ST2084.a2.v1",
+    "profile": "hdr-p3d65-1000-rec2100-pq",
+    "encoding": "st2084_rec2020"
+  },
+  "validation": {
+    "seed": "0x1A2CE520",
+    "random_rgb_samples": 20000,
+    "encoded_absolute_error_max": 0.09376312856436778,
+    "encoded_absolute_error_p99": 0.000523759318566408,
+    "encoded_absolute_error_mean": 4.0037710024122806e-05,
+    "vectors": [
+      {
+        "acescg": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "reference_rec2100_pq": [
+          7.30942701920867e-07,
+          7.30942701920867e-07,
+          7.30942701920867e-07
+        ],
+        "lut_rec2100_pq": [
+          7.30942701920867e-07,
+          7.30942701920867e-07,
+          7.30942701920867e-07
+        ]
+      },
+      {
+        "acescg": [
+          0.18,
+          0.18,
+          0.18
+        ],
+        "reference_rec2100_pq": [
+          0.3298368752002716,
+          0.3298371732234955,
+          0.32983705401420593
+        ],
+        "lut_rec2100_pq": [
+          0.32983666994241473,
+          0.3298366639723405,
+          0.32983665801427847
+        ]
+      },
+      {
+        "acescg": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "reference_rec2100_pq": [
+          0.5144723653793335,
+          0.5144726634025574,
+          0.5144725441932678
+        ],
+        "lut_rec2100_pq": [
+          0.5144586532267322,
+          0.514458712831377,
+          0.514458712831377
+        ]
+      },
+      {
+        "acescg": [
+          4.0,
+          4.0,
+          4.0
+        ],
+        "reference_rec2100_pq": [
+          0.6398004293441772,
+          0.639800488948822,
+          0.639800488948822
+        ],
+        "lut_rec2100_pq": [
+          0.6397320318411707,
+          0.6397320914458154,
+          0.6397320318411707
+        ]
+      },
+      {
+        "acescg": [
+          1.0,
+          0.0,
+          0.0
+        ],
+        "reference_rec2100_pq": [
+          0.4931071400642395,
+          0.2510705888271332,
+          0.13869348168373108
+        ],
+        "lut_rec2100_pq": [
+          0.49309593801157214,
+          0.2510752189172612,
+          0.13869875127057138
+        ]
+      },
+      {
+        "acescg": [
+          0.0,
+          1.0,
+          0.0
+        ],
+        "reference_rec2100_pq": [
+          0.35394206643104553,
+          0.49764952063560486,
+          0.28495892882347107
+        ],
+        "lut_rec2100_pq": [
+          0.35393879829201247,
+          0.4976378065849739,
+          0.284957793422794
+        ]
+      },
+      {
+        "acescg": [
+          0.0,
+          0.0,
+          1.0
+        ],
+        "reference_rec2100_pq": [
+          0.21925897896289825,
+          0.23239050805568695,
+          0.4467929005622864
+        ],
+        "lut_rec2100_pq": [
+          0.21926658003955884,
+          0.232396452045425,
+          0.4467821652542574
+        ]
+      }
+    ]
+  }
+}

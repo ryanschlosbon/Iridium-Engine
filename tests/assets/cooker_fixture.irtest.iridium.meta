@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "assetGuid": "019f9bce-85b8-7010-9011-121314151617",
+  "assetType": "iridium.fixture-text",
+  "importer": {
+    "id": "iridium.fixture-text",
+    "version": 1
+  },
+  "settings": {
+    "schemaVersion": 2,
+    "values": {
+      "repeat": 2,
+      "transform": "uppercase"
+    }
+  },
+  "subassets": [],
+  "tags": [
+    "m3-framework-fixture",
+    "tracked"
+  ]
+}

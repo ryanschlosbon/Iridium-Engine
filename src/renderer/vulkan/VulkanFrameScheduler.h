@@ -6,18 +6,47 @@
 #include <vulkan/vulkan.h>
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <vector>
 
 namespace Iridium {
 
+    class CpuProfiler;
+    inline constexpr size_t MaxVulkanGpuRangesPerFrame = 32;
+
+    struct VulkanGpuRangeToken {
+        uint32_t frameIndex = 0;
+        uint32_t endQuery = 0;
+        bool active = false;
+    };
+
+    struct VulkanGpuQueryRange {
+        const char* name = nullptr;
+        uint32_t beginQuery = 0;
+        uint32_t endQuery = 0;
+        bool ended = false;
+    };
+
     struct VulkanFrameContext {
         VkCommandPool commandPool = VK_NULL_HANDLE;
         VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
         VkSemaphore imageAvailable = VK_NULL_HANDLE;
         VkFence inFlight = VK_NULL_HANDLE;
+        VkQueryPool timestampQueryPool = VK_NULL_HANDLE;
+        VkQueryPool transparentPipelineStatisticsQueryPool = VK_NULL_HANDLE;
         DeletionQueue deferredDeletes;
+        std::array<VulkanGpuQueryRange, MaxVulkanGpuRangesPerFrame> gpuRanges{};
+        uint64_t profileFrameId = 0;
+        uint32_t timestampQueryCount = 0;
+        uint32_t gpuRangeCount = 0;
+        uint32_t droppedGpuRanges = 0;
+        bool gpuResultsPending = false;
+        bool transparentPipelineStatisticsActive = false;
+        bool transparentPipelineStatisticsRecorded = false;
+        bool transparentPipelineStatisticsResultsPending = false;
+        bool fenceInFlight = false;
     };
 
     struct VulkanFrameBegin {
@@ -40,10 +69,15 @@ namespace Iridium {
         VulkanFrameScheduler& operator=(const VulkanFrameScheduler&) = delete;
 
         void init(VkDevice device, VkQueue graphicsQueue, VkQueue presentQueue,
-            uint32_t graphicsFamily, uint32_t swapchainImageCount);
+            uint32_t graphicsFamily, uint32_t swapchainImageCount,
+            CpuProfiler* cpuProfiler, bool enableGpuProfiling,
+            double timestampPeriodNanoseconds, uint32_t timestampValidBits,
+            bool enableDebugLabels, bool enableTransparentPipelineStatistics,
+            uint64_t transparentTargetPixelCount);
         // Waits the current frame, flushes its deferred deletes, acquires an image,
         // and waits the image's previous frame-fence owner before reuse. The frame
-        // fence and command pool reset only after a usable image is acquired.
+        // command pool resets only after a usable image is acquired. The fence
+        // remains signaled until endFrame is ready to submit recorded work.
         [[nodiscard]] VulkanFrameBegin beginFrame(VkSwapchainKHR swapchain);
         // Submits with the acquired image's present-wait semaphore, then presents
         // waiting on that same semaphore. A suboptimal acquire is remembered here
@@ -53,6 +87,17 @@ namespace Iridium {
         void resetSwapchainImages(uint32_t imageCount);
         void waitForAllFrames();
         void cleanup();
+
+        [[nodiscard]] VulkanGpuRangeToken beginGpuRange(const char* name) noexcept;
+        void endGpuRange(VulkanGpuRangeToken& token) noexcept;
+        [[nodiscard]] bool beginTransparentPipelineStatistics() noexcept;
+        void endTransparentPipelineStatistics() noexcept;
+        void setTransparentTargetPixelCount(uint64_t pixelCount) noexcept {
+            transparentTargetPixelCount_ = pixelCount;
+        }
+        [[nodiscard]] bool isGpuProfilingEnabled() const noexcept {
+            return gpuProfilingEnabled_;
+        }
 
         [[nodiscard]] uint32_t currentFrameIndex() const noexcept { return currentFrame_; }
         [[nodiscard]] VkCommandBuffer currentCommandBuffer() const noexcept {
@@ -70,6 +115,31 @@ namespace Iridium {
         std::vector<VkSemaphore> renderFinishedPerImage_;
         uint32_t currentFrame_ = 0;
         bool acquireSuboptimal_ = false;
+        CpuProfiler* cpuProfiler_ = nullptr;
+        VulkanGpuRangeToken frameGpuRange_{};
+        double timestampPeriodNanoseconds_ = 0.0;
+        uint32_t timestampValidBits_ = 0;
+        bool gpuProfilingEnabled_ = false;
+        bool transparentPipelineStatisticsEnabled_ = false;
+        uint64_t transparentTargetPixelCount_ = 0;
+        PFN_vkCmdBeginDebugUtilsLabelEXT beginDebugLabel_ = nullptr;
+        PFN_vkCmdEndDebugUtilsLabelEXT endDebugLabel_ = nullptr;
+
+        void collectGpuResults(VulkanFrameContext& frame);
+    };
+
+    class VulkanGpuScope final {
+    public:
+        VulkanGpuScope(VulkanFrameScheduler& scheduler, const char* name) noexcept
+            : scheduler_(&scheduler), token_(scheduler.beginGpuRange(name)) {}
+        ~VulkanGpuScope() { scheduler_->endGpuRange(token_); }
+
+        VulkanGpuScope(const VulkanGpuScope&) = delete;
+        VulkanGpuScope& operator=(const VulkanGpuScope&) = delete;
+
+    private:
+        VulkanFrameScheduler* scheduler_ = nullptr;
+        VulkanGpuRangeToken token_{};
     };
 
 } // namespace Iridium

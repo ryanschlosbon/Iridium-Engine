@@ -1,0 +1,43 @@
+{
+  "schema": "iridium.m5.lighting-fixture-contract",
+  "version": 1,
+  "source": "tests/scene/fixtures/m5_lighting_v1.iridium.scene.json",
+  "sourceSha256": "13ed37bcef83d92251f25f4ffc7d2517fa52593079f5f4a3bb2fa419419c6d1b",
+  "canonicalSha256": "4bf23e5cb76fe3c3472ed3e7adf4b4d834e340dc989e84aace1b7cf45adb8625",
+  "runtimeComponentManifestSha256": "ddcf859e4d422acda824e84c6bd44bfd8b9a404c3a8d81197d50f9ddcc0fa18a",
+  "target": {
+    "platform": "windows-x64",
+    "profile": "release",
+    "qualityPolicy": "high"
+  },
+  "cookKey": "c281fd2307ab5fc859698d4a90a9794ddfdef21c66c4f62d2af6e67f3cefecf4",
+  "artifactSha256": "a96a8bc21b74c9e9055a3a77d85d40991b8d3f52480df285dbd1f2893f81c29c",
+  "artifactBytes": 1776,
+  "sceneAssetGuid": "01890f4c-0000-7000-8000-000000000050",
+  "entityCount": 3,
+  "lightCounts": { "directional": 1, "point": 1, "spot": 1 },
+  "m5_1Supersession": {
+    "contract": "M5.1-light-component-v2",
+    "canonicalSha256": "27361a36120b21c3fa170cb13660eb2f2fdd2a705cfb442b9311d57cf4028a36",
+    "runtimeComponentManifestSha256": "6e8a840aa3ac0a0b20a0749434695a934407e72d484e925a6eb66c77465a7c5c",
+    "cookKey": "32d4354c0191e8deb5741c0709ccb873d8ed08cd2a85060173491976e3836a09",
+    "artifactSha256": "71f0e8226c0c6c597ffea30ab79d32855d38e912dce5f2a0dede953f466c6166",
+    "artifactBytes": 1808
+  },
+  "m5_8Supersession": {
+    "contract": "M5.8-sky-and-reflection-probe-components",
+    "canonicalSha256": "27361a36120b21c3fa170cb13660eb2f2fdd2a705cfb442b9311d57cf4028a36",
+    "runtimeComponentManifestSha256": "bfbee430f43df1ed3ff89fe214508ecdb1ad964661fb55164a426539f56f60eb",
+    "cookKey": "f1c19144aa38d05cc7a03465ac3e8566a5652b6b06135773c6dfa324e506a036",
+    "artifactSha256": "c969c2a1c9d25246e6a71e86c15287a711327244582902837ec689e4f395dbd7",
+    "artifactBytes": 2060
+  },
+  "m5_10Supersession": {
+    "contract": "M5.10-baked-lighting-set-component",
+    "canonicalSha256": "27361a36120b21c3fa170cb13660eb2f2fdd2a705cfb442b9311d57cf4028a36",
+    "runtimeComponentManifestSha256": "1588e0f6971c784ddedf5dd9473e974b1ad9ecad952e8363665de71452328a0d",
+    "cookKey": "5a4ceaa4938de6a9f3fa6d49a64485be3536aabb1dec05b595e316ec474852b0",
+    "artifactSha256": "8bf1243a2b4103b86acc130a9b3176ee279970ca510fcf8c13b006f7a82c9fec",
+    "artifactBytes": 2196
+  }
+}

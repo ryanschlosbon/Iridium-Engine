@@ -1,0 +1,63 @@
+#version 450
+#include "include/clustered_lighting.glsl"
+
+layout(local_size_x = 64) in;
+
+shared uvec3 sharedMinimum;
+shared uvec3 sharedSpan;
+shared uint sharedSlot;
+shared uint sharedEnabled;
+
+void main() {
+    uint activeIndex = gl_WorkGroupID.x;
+    uint lane = gl_LocalInvocationID.x;
+    if (lane == 0u) {
+        sharedEnabled = 0u;
+        if (activeIndex < clusterInput.x &&
+            clusterDiagnostics[IRIDIUM_DIAGNOSTIC_OVERFLOW] == 0u) {
+            sharedSlot = activeLightSlots[activeIndex];
+            PackedGpuLight light = lights[sharedSlot];
+            if (iridiumLightType(light) != IRIDIUM_LIGHT_TYPE_DIRECTIONAL) {
+                IridiumClusterBounds bounds = iridiumLocalLightBounds(light);
+                if (bounds.valid) {
+                    sharedMinimum = bounds.minimum;
+                    sharedSpan = bounds.maximum - bounds.minimum + uvec3(1u);
+                    sharedEnabled = 1u;
+                }
+            }
+        }
+    }
+    barrier();
+    if (sharedEnabled == 0u) return;
+
+    uint volume = sharedSpan.x * sharedSpan.y * sharedSpan.z;
+    uint plane = sharedSpan.x * sharedSpan.y;
+    for (uint linear = lane; linear < volume; linear += 64u) {
+        uint z = linear / plane;
+        uint remainder = linear - z * plane;
+        uint y = remainder / sharedSpan.x;
+        uint x = remainder - y * sharedSpan.x;
+        uint cluster = iridiumClusterIndex(
+            sharedMinimum + uvec3(x, y, z));
+        uint cursor = atomicAdd(clusterCursors[cluster], 1u);
+        ClusterLightHeader header = clusterHeaders[cluster];
+        if (cursor == 0u && header.count > 0u) {
+            if (header.count <= 32u) {
+                uint usedIndex = atomicAdd(clusterIndirectArgs[3], 1u);
+                clusterCounts[usedIndex] = cluster;
+            }
+            else {
+                uint usedIndex = atomicAdd(clusterIndirectArgs[7], 1u);
+                clusterCounts[iridiumClusterCount() - 1u - usedIndex] =
+                    cluster;
+            }
+            atomicAdd(clusterDiagnostics[
+                IRIDIUM_DIAGNOSTIC_CLUSTERS_USED], 1u);
+            atomicMax(clusterDiagnostics[
+                IRIDIUM_DIAGNOSTIC_MAX_OCCUPANCY], header.count);
+        }
+        uint destination = header.offset + cursor;
+        if (cursor < header.count && destination < clusterLimits.z)
+            clusterLightSlots[destination] = sharedSlot;
+    }
+}

@@ -5,6 +5,7 @@
 #include <vulkan/vulkan.h>
 #include <vector>
 #include <optional>
+#include <string>
 
 
 // A helper struct
@@ -31,7 +32,8 @@ struct SwapChainSupportDetails {
 class VkContext {
 public:
 	// The Constructor takes the Window pointer so we can create the Surface
-	VkContext(bool enableValidation, GLFWwindow* window);
+	VkContext(bool enableValidation, bool enableDebugUtils,
+		bool enablePipelineStatistics, GLFWwindow* window);
 	~VkContext();
 
 	// Getters: The rest of the engine will need these handles later.
@@ -43,9 +45,35 @@ public:
 	SwapChainSupportDetails querySwapChainSupport(VkPhysicalDevice device);
 	VkInstance getInstance() const { return instance; }
 	uint32_t getGraphicsQueueFamily() const { return graphicsQueueFamilyIndex; }
+	double getTimestampPeriodNanoseconds() const { return timestampPeriodNanoseconds; }
+	uint32_t getTimestampValidBits() const { return timestampValidBits; }
+	bool hasMemoryBudget() const { return memoryBudgetEnabled; }
+	bool hasDebugUtils() const { return debugUtilsEnabled; }
+	bool hasPipelineStatistics() const { return pipelineStatisticsEnabled; }
+	bool hasSwapchainColorspace() const { return swapchainColorspaceEnabled; }
+	bool hasHdrMetadata() const { return hdrMetadataEnabled; }
+	bool hasDescriptorIndexing() const { return descriptorIndexingEnabled; }
+	uint32_t getMaxIndexedTextureViews() const { return maxIndexedTextureViews; }
+	uint32_t getMaxIndexedSamplers() const { return maxIndexedSamplers; }
+	uint32_t getMaxUpdateAfterBindDescriptors() const {
+		return maxUpdateAfterBindDescriptors;
+	}
+	uint32_t getLoaderApiVersion() const { return loaderApiVersion; }
+	const VkPhysicalDeviceProperties& getPhysicalDeviceProperties() const {
+		return physicalDeviceProperties;
+	}
+	const VkPhysicalDeviceIDProperties& getPhysicalDeviceIdProperties() const {
+		return physicalDeviceIdProperties;
+	}
+	const VkPhysicalDeviceDriverProperties& getPhysicalDeviceDriverProperties() const {
+		return physicalDeviceDriverProperties;
+	}
+	const std::vector<std::string>& getActiveTools() const { return activeTools; }
 
 	bool enableValidationLayers;
 private:
+	bool requestDebugUtils = false;
+	bool debugUtilsEnabled = false;
 	// The Connection to the Driver
 	VkInstance instance;
 	VkDebugUtilsMessengerEXT debugMessenger;
@@ -64,6 +92,24 @@ private:
 	VkQueue presentQueue;
 
 	uint32_t graphicsQueueFamilyIndex;
+	double timestampPeriodNanoseconds = 0.0;
+	uint32_t timestampValidBits = 0;
+	bool memoryBudgetEnabled = false;
+	bool pipelineStatisticsRequested = false;
+	bool pipelineStatisticsEnabled = false;
+	bool swapchainColorspaceEnabled = false;
+	bool hdrMetadataEnabled = false;
+	bool descriptorIndexingEnabled = false;
+	uint32_t maxIndexedTextureViews = 0;
+	uint32_t maxIndexedSamplers = 0;
+	uint32_t maxUpdateAfterBindDescriptors = 0;
+	uint32_t loaderApiVersion = VK_API_VERSION_1_0;
+	VkPhysicalDeviceProperties physicalDeviceProperties{};
+	VkPhysicalDeviceIDProperties physicalDeviceIdProperties{
+		VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES };
+	VkPhysicalDeviceDriverProperties physicalDeviceDriverProperties{
+		VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES };
+	std::vector<std::string> activeTools;
 
 	// Internal Setup Functions
 	// These break the massive intialization process into small steps.

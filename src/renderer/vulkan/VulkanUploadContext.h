@@ -1,6 +1,7 @@
 #pragma once
 
 #include "VulkanResourceAllocator.h"
+#include "renderer/rhi/RenderBackendRuntimeInfo.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -8,6 +9,8 @@
 #include <vector>
 
 namespace Iridium {
+
+    class CpuProfiler;
 
     // Batches uploads on the graphics queue. Commands begin lazily on the first
     // enqueue; flush submits once, waits once on the batch fence, then has the
@@ -19,7 +22,7 @@ namespace Iridium {
         VulkanUploadContext& operator=(const VulkanUploadContext&) = delete;
 
         void init(VkDevice device, VkQueue graphicsQueue, uint32_t graphicsQueueFamily,
-            VulkanResourceAllocator& allocator);
+            VulkanResourceAllocator& allocator, CpuProfiler* cpuProfiler);
         void cleanup();
 
         void enqueueBufferUpload(VulkanBufferResource& destination, std::span<const std::byte> data,
@@ -30,6 +33,12 @@ namespace Iridium {
         void flush();
 
         [[nodiscard]] bool hasPendingWork() const noexcept;
+        [[nodiscard]] BackendUploadTelemetry telemetry() const noexcept {
+            return {
+                totalSubmittedBytes_, totalSubmittedBatches_,
+                totalSubmitAndWaitNanoseconds_
+            };
+        }
 
     private:
         VkDevice device_ = VK_NULL_HANDLE;
@@ -41,6 +50,11 @@ namespace Iridium {
         VkCommandBuffer commandBuffer_ = VK_NULL_HANDLE;
         VkFence fence_ = VK_NULL_HANDLE;
         bool batchOpen_ = false;
+        uint64_t pendingBytes_ = 0;
+        uint64_t totalSubmittedBytes_ = 0;
+        uint64_t totalSubmittedBatches_ = 0;
+        uint64_t totalSubmitAndWaitNanoseconds_ = 0;
+        CpuProfiler* cpuProfiler_ = nullptr;
         std::vector<VulkanBufferResource> stagingBuffers_;
     };
 

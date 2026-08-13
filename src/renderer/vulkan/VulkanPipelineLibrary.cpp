@@ -89,9 +89,10 @@ namespace Iridium {
         }
 
         void validateProgramPassPair(const PipelineStateDesc& desc) {
-            const bool valid = (desc.shaderProgram == ShaderProgram::PbrGBuffer
+            const bool valid = (desc.shaderProgram == ShaderProgram::CanonicalPbrGBuffer
                     && desc.renderPass == RenderPassClass::GBuffer)
-                || (desc.shaderProgram == ShaderProgram::PbrForward
+                || ((desc.shaderProgram == ShaderProgram::CanonicalComplexOpaqueForward ||
+                        desc.shaderProgram == ShaderProgram::CanonicalComplexForward)
                     && desc.renderPass == RenderPassClass::Forward);
             if (!valid) {
                 throw std::invalid_argument("shader program and render pass class must use matching PBR targets");
@@ -100,14 +101,15 @@ namespace Iridium {
     }
 
     void VulkanPipelineLibrary::init(VkDevice device, VulkanPipelineTarget gBufferTarget,
-        VulkanPipelineTarget forwardTarget) {
+        VulkanPipelineTarget forwardTarget, GBufferLayout gBufferLayout) {
         if (device_ != VK_NULL_HANDLE) {
             throw std::logic_error("VulkanPipelineLibrary is already initialized");
         }
         if (device == VK_NULL_HANDLE
             || gBufferTarget.renderPass == VK_NULL_HANDLE
             || gBufferTarget.pipelineLayout == VK_NULL_HANDLE
-            || gBufferTarget.colorAttachmentCount != 3
+            || (gBufferTarget.colorAttachmentCount != 3 &&
+                gBufferTarget.colorAttachmentCount != 5)
             || forwardTarget.renderPass == VK_NULL_HANDLE
             || forwardTarget.pipelineLayout == VK_NULL_HANDLE
             || forwardTarget.colorAttachmentCount != 1) {
@@ -117,6 +119,7 @@ namespace Iridium {
         device_ = device;
         gBufferTarget_ = gBufferTarget;
         forwardTarget_ = forwardTarget;
+        gBufferLayout_ = gBufferLayout;
     }
 
     void VulkanPipelineLibrary::cleanup() noexcept {
@@ -136,6 +139,7 @@ namespace Iridium {
         pipelineMap_.clear();
         gBufferTarget_ = {};
         forwardTarget_ = {};
+        gBufferLayout_ = GBufferLayout::CanonicalReference;
         device_ = VK_NULL_HANDLE;
     }
 
@@ -174,15 +178,29 @@ namespace Iridium {
         const VulkanPipelineTarget& target) {
         const char* fragmentShaderPath = nullptr;
         switch (desc.shaderProgram) {
-        case ShaderProgram::PbrGBuffer:
-            fragmentShaderPath = "assets/shaders/shader_frag.spv";
+        case ShaderProgram::CanonicalPbrGBuffer:
+            if (gBufferLayout_ == GBufferLayout::CanonicalReference) {
+                fragmentShaderPath =
+                    "assets/shaders/canonical_reference_indexed_frag.spv";
+            }
+            else {
+                fragmentShaderPath =
+                    "assets/shaders/canonical_packed_indexed_frag.spv";
+            }
             break;
-        case ShaderProgram::PbrForward:
-            fragmentShaderPath = "assets/shaders/forward_frag.spv";
+        case ShaderProgram::CanonicalComplexOpaqueForward:
+            fragmentShaderPath =
+                "assets/shaders/complex_opaque_material_indexed_frag.spv";
+            break;
+        case ShaderProgram::CanonicalComplexForward:
+            fragmentShaderPath =
+                "assets/shaders/complex_material_indexed_frag.spv";
             break;
         }
 
-        const std::vector<char> vertexShaderCode = readFile(std::string(PROJECT_ROOT_DIR) + "assets/shaders/shader_vert.spv");
+        const char* vertexShaderPath = "assets/shaders/canonical_material_vert.spv";
+        const std::vector<char> vertexShaderCode = readFile(
+            std::string(PROJECT_ROOT_DIR) + vertexShaderPath);
         const std::vector<char> fragmentShaderCode = readFile(std::string(PROJECT_ROOT_DIR) + fragmentShaderPath);
         VkShaderModule vertexShader = VK_NULL_HANDLE;
         VkShaderModule fragmentShader = VK_NULL_HANDLE;
@@ -242,8 +260,9 @@ namespace Iridium {
 
             VkPipelineColorBlendAttachmentState blendAttachment{};
             configureBlendAttachment(blendAttachment, desc.blendMode, toVulkanColorWriteMask(desc.colorWriteMask));
-            std::array<VkPipelineColorBlendAttachmentState, 3> blendAttachments = {
-                blendAttachment, blendAttachment, blendAttachment };
+            std::array<VkPipelineColorBlendAttachmentState, 5> blendAttachments = {
+                blendAttachment, blendAttachment, blendAttachment,
+                blendAttachment, blendAttachment };
             VkPipelineColorBlendStateCreateInfo colorBlending{ VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO };
             colorBlending.logicOpEnable = VK_FALSE;
             colorBlending.attachmentCount = target.colorAttachmentCount;

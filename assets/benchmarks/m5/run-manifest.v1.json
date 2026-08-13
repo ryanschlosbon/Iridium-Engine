@@ -1,0 +1,220 @@
+{
+  "schema_version": 1,
+  "milestone": "M5.0",
+  "resolution": [3840, 2160],
+  "warmup_frames": 500,
+  "measured_frames": 10000,
+  "independent_processes": 5,
+  "comparison_baseline": "M4.10",
+  "fixture_matrix": "assets/benchmarks/m5/fixture-matrix.v1.json",
+  "required_existing_fixtures": [
+    { "manifest": "assets/benchmarks/m0/manifest.v1.json", "fixture": "material_lab_v1" },
+    { "manifest": "assets/benchmarks/m0/manifest.v1.json", "fixture": "opaque_emissive_v1" },
+    { "manifest": "assets/benchmarks/m2/fixture-matrix.v1.json", "fixture": "complex_closure_grid_v1" }
+  ],
+  "optional_local_fixtures": ["sample_car_lighting_local_v1"],
+  "capture_contract": {
+    "scene-linear": { "extension": ".pfm", "color_space": "ACEScg/AP1", "output_transform_applied": false },
+    "final-sdr": { "extension": ".tga", "color_space": "sRGB", "output_transform_applied": true },
+    "scrgb": { "extension": ".pfm", "color_space": "linear Rec.709 scRGB", "output_transform_applied": true },
+    "hdr10": { "extension": ".pfm", "color_space": "Rec.2100 PQ", "output_transform_applied": true }
+  },
+  "required_metadata": [
+    "git_revision", "dirty_worktree_manifest", "build_configuration",
+    "gpu_name", "driver_version", "cpu_name", "display_transport",
+    "clock_and_power_state", "validation_enabled", "cache_state",
+    "scene_hash", "camera_hash", "product_hashes", "output_mode",
+    "warmup_frames", "measured_frames"
+  ],
+  "statistics": ["median", "p95", "p99"],
+  "required_counters": [
+    "cpu_frame_ms", "gpu_frame_ms", "gpu_pass_ranges", "requested_live_bytes",
+    "requested_peak_bytes", "committed_live_bytes", "committed_peak_bytes",
+    "cpp_allocation_count", "upload_bytes", "upload_range_count"
+  ],
+  "current_defects": [
+    "Deferred and complex-forward shaders use independent fixed vec3(1) light directions and vec3(3) radiance.",
+    "The runtime ignores persisted Light components.",
+    "The environment is a raw sampler2D equirectangular lookup without cooked irradiance, GGX prefilter, or BRDF LUT.",
+    "Production startup parses a source HDR image rather than resolving a cooked environment product."
+  ],
+  "current_defect_shader_hashes": {
+    "assets/shaders/include/canonical_lighting_body.glsl": "09a75d9e9940ec097213ce12e0f89b799f51f631780182dda9f9aa1b396cac6a",
+    "assets/shaders/include/complex_material_body.glsl": "877de707e48376b28e57fac6ae4b8d5eb47d23f7a3b7739a19cf8e4bb0ddabc4"
+  },
+  "m5_2Supersession": {
+    "status": "M5.2 GPU light-record declaration added; M5.0 defect hashes remain historical",
+    "current_shader_hashes": {
+      "assets/shaders/include/canonical_lighting_body.glsl": "13ece561efee65de2000ab80d37ed62a586dcfc36ea7a7a6526a068c97f33f41",
+      "assets/shaders/include/complex_material_body.glsl": "877de707e48376b28e57fac6ae4b8d5eb47d23f7a3b7739a19cf8e4bb0ddabc4",
+      "assets/shaders/include/lighting_records.glsl": "9ba0551363ec93b690d19c6dd6881f629611f97b3334440beeb246542ca476eb"
+    },
+    "current_spirv_hashes": {
+      "assets/shaders/canonical_reference_lighting_frag.spv": "18751c19262060bf8247d482dacb590e9e8923c963485231876ce8703694f2c3",
+      "assets/shaders/canonical_packed_lighting_frag.spv": "29f49bd6f0327dcc6bda078c0022af27be7f8b2f41156bb9903895f716cd6365"
+    }
+  },
+  "m5_3Supersession": {
+    "status": "M5.3 shared cluster declarations and diagnostic views added; M5.0/M5.2 hashes remain historical",
+    "current_shader_hashes": {
+      "assets/shaders/include/canonical_lighting_body.glsl": "e05aab93105530a54a817ecf3270a30973ec5202ce388fc23cfc518e2275d51a",
+      "assets/shaders/include/complex_material_body.glsl": "877de707e48376b28e57fac6ae4b8d5eb47d23f7a3b7739a19cf8e4bb0ddabc4",
+      "assets/shaders/include/lighting_records.glsl": "9ba0551363ec93b690d19c6dd6881f629611f97b3334440beeb246542ca476eb"
+    },
+    "current_spirv_hashes": {
+      "assets/shaders/canonical_reference_lighting_frag.spv": "84cbc14a007d05ef73abfd91f77476b395cc383efeea82eaafe8d1efc5a0a2ce",
+      "assets/shaders/canonical_packed_lighting_frag.spv": "2a88de401fc67021a06ef011b6741d293574bb1434b955e1e9d32da812d8cdff"
+    }
+  },
+  "m5_4Supersession": {
+    "status": "M5.4 authored clustered direct lighting replaces both fixed production lights; all earlier hashes remain historical",
+    "current_shader_hashes": {
+      "assets/shaders/include/canonical_lighting_body.glsl": "42dfb06971863e87953968f07de46f743509dd9c500361a7ec53382ec6eb8c3d",
+      "assets/shaders/include/complex_material_body.glsl": "68c585eae878e4775e019af3fed2ba544e8dac2f5149f09614e50c7d7408d48d",
+      "assets/shaders/include/direct_lighting.glsl": "9e729d04b0be82223dbdd24f0ffa0c1572d1cdf657241bccc3bd3e7c591c5f3c",
+      "assets/shaders/include/clustered_light_access.glsl": "928d8a86649bf672fadb7c2c806cbc4feb99add07f07786a656a5fc18b58a30e",
+      "assets/shaders/include/lighting_records.glsl": "9ba0551363ec93b690d19c6dd6881f629611f97b3334440beeb246542ca476eb"
+    },
+    "current_spirv_hashes": {
+      "assets/shaders/canonical_reference_lighting_frag.spv": "f1386cde3a731a4e7367ecd60f4ae586a4ffb5150a5196351c97793fecb2f12e",
+      "assets/shaders/canonical_packed_lighting_frag.spv": "ecd0613d8efb703fe1286ce765753c2660b8c20f02c7b9ac5860185c40899d91",
+      "assets/shaders/complex_material_indexed_frag.spv": "2b4b6c7664034ebae1f97dff0b1aa2cf35dcc6b20a487f7321d24f93ed85b966",
+      "assets/shaders/complex_opaque_material_indexed_frag.spv": "f1db3abc354ccec136fb15d32e5568e7c61dc0d319f29051cc90640ea9f575f2"
+    }
+  },
+  "m5_5Supersession": {
+    "status": "M5.5 candidate cooked AP1 irradiance, GGX prefilter, F0/F90 split-sum, and radiance cubes replace raw equirectangular production sampling; earlier hashes remain historical",
+    "current_shader_hashes": {
+      "assets/shaders/include/canonical_lighting_body.glsl": "c017daef0bd76489fc9e24e390056f332084cc3572c83e33deb06742845e28da",
+      "assets/shaders/include/complex_material_body.glsl": "1e8f1cf7bf6817e68d367c8e2a77f0eca1071acb22c1753637131ce058b7ebdc",
+      "assets/shaders/include/environment_ibl.glsl": "74e72d3233bfa894469d206becd2d137b3c163e66b3d65b656977e63c272b222",
+      "assets/shaders/include/direct_lighting.glsl": "9e729d04b0be82223dbdd24f0ffa0c1572d1cdf657241bccc3bd3e7c591c5f3c",
+      "assets/shaders/include/clustered_light_access.glsl": "928d8a86649bf672fadb7c2c806cbc4feb99add07f07786a656a5fc18b58a30e",
+      "assets/shaders/include/lighting_records.glsl": "9ba0551363ec93b690d19c6dd6881f629611f97b3334440beeb246542ca476eb"
+    },
+    "current_spirv_hashes": {
+      "assets/shaders/canonical_reference_lighting_frag.spv": "016818a1ebb6efd8a6965dfae528e09fc43e9a92d2fe251add694f4c8e75a2fb",
+      "assets/shaders/canonical_packed_lighting_frag.spv": "f618ba72b807164cbd0cfd1acb6270d2545aab7ab00eb69ed9dcdc560e74fd8c",
+      "assets/shaders/complex_material_indexed_frag.spv": "9bc968aa6072dbada0c62b090d88e2ae67dcb84adce5e5d53afd58c1ed8746b5",
+      "assets/shaders/complex_opaque_material_indexed_frag.spv": "b6eaa257d257cc4f1114c6887ecd6a4aefde4789adbfa35f150ce7a21f7c19b4"
+    }
+  },
+  "m5_6Supersession": {
+    "status": "M5.6 candidate stabilized directional cascade rendering and shared deferred/forward compare sampling; earlier hashes remain historical",
+    "current_shader_hashes": {
+      "assets/shaders/include/canonical_lighting_body.glsl": "57435481b110248d98f710174be847fb8cb0483e4643e4b85b48b5ea57033ffb",
+      "assets/shaders/include/complex_material_body.glsl": "65060ed10dcac7dc52a40208a0eff0a4d3a6672fc5840cb55c0fb8bc821b3212",
+      "assets/shaders/include/directional_shadow.glsl": "90d3a70b9fe1af4a50e5ff781564c79cf58691e4672b1b631704494fc6779a90",
+      "assets/shaders/directional_shadow.vert": "56f7f181871651c5ed7400c2e8e5bf6d36e329609f678e96c7b3cf535d62e7d9",
+      "assets/shaders/directional_shadow_mask.frag": "b95726919520e87f3ee93e7da211ab33da8139d948bf201220e1c9b1d272564d"
+    },
+    "current_spirv_hashes": {
+      "assets/shaders/canonical_reference_lighting_frag.spv": "aedbf2df197803a8734419083ca48be2b82f76a06f9637d5988400932738f7b9",
+      "assets/shaders/canonical_packed_lighting_frag.spv": "71927d265340fb2305458784073fca44f970f56ea63ff4acea0b50ea7bf5fe09",
+      "assets/shaders/complex_material_indexed_frag.spv": "0ca107c645f96c3b892016b5347c5c68e503d174ceeb4793f52107e4c4c5a051",
+      "assets/shaders/complex_opaque_material_indexed_frag.spv": "89b4b7b4bd6440915ced0fcf03d557dcbf852f1e41de6179ddb545308ae326ba",
+      "assets/shaders/directional_shadow_vert.spv": "6f83a388beb7461d042d78fa872fb34ea2f0325608f44272380c0922152071cb",
+      "assets/shaders/directional_shadow_mask_frag.spv": "09ba27fe02e01d23b8b7c820252c6d74112145eb204c4fd58eb622fac63c23ef"
+    }
+  },
+  "m5_7Supersession": {
+    "status": "M5.7 multi-owner directional visibility plus persistent spot-atlas and tiered point-cube GPU slices supersede only the M5.6 single-owner capacity; M5.6 hashes remain historical",
+    "current_shader_hashes": {
+      "assets/shaders/include/canonical_lighting_body.glsl": "91ca6cfd538b901880f1b8cc337c4eccbbaa9f51231995400a9b6c9aae5f5108",
+      "assets/shaders/include/complex_material_body.glsl": "16190ce01175b99721cdfa740a66be2e4ff8b1980d08c3fd0859d5faa03e4605",
+      "assets/shaders/include/directional_shadow.glsl": "22d8bb9805908ba9d90965775de616f5c4b02d026e4cc5c9ea8ca27b42665d22",
+      "assets/shaders/include/spot_shadow.glsl": "059b76c0d3ce4588347a6c04a1eedb5feba5b2d1bd9bd327be397f14ba94a418",
+      "assets/shaders/include/point_shadow.glsl": "23d6d037fcc247b12e634d2667aba8325c8271e5b9d09399cf64a38cff6193eb",
+      "assets/shaders/directional_shadow.vert": "323ca6ad02a9279b2e035d3e741767e3659679ab85db3096bab543e2a7ae9081",
+      "assets/shaders/directional_shadow_mask.frag": "b95726919520e87f3ee93e7da211ab33da8139d948bf201220e1c9b1d272564d",
+      "assets/shaders/spot_shadow.vert": "eaa3a46fff0a4c3f77913c47a84e2aab9e502cde987f62558c19c02c6672b7df",
+      "assets/shaders/point_shadow.vert": "85b5faf9da65d7958c3cce53f332ea227efc15c05f8925736dde08b6d6244595"
+    },
+    "current_spirv_hashes": {
+      "assets/shaders/canonical_reference_lighting_frag.spv": "d3158c541ee0dbe4d6007b976b31a033d51a34109c13d0d04970a891285981f7",
+      "assets/shaders/canonical_packed_lighting_frag.spv": "ec774ac54b743d5fe0980b9ac65ad41f4dbf5fde56ba25fd93625055fb485eab",
+      "assets/shaders/complex_material_indexed_frag.spv": "9c4d98d9e888fd109263f34d34bb6efe7f0372bd0837059f3f39ea04bbb085f5",
+      "assets/shaders/complex_opaque_material_indexed_frag.spv": "c9aa3947cf0dbd98c01533e66e0b2982647f9442254bc3b044dc7b147336edc0",
+      "assets/shaders/directional_shadow_vert.spv": "8e859fc12f40359894848aba995eea85aee9b5134f881fb42fca0534da28b5ff",
+      "assets/shaders/directional_shadow_mask_frag.spv": "09ba27fe02e01d23b8b7c820252c6d74112145eb204c4fd58eb622fac63c23ef",
+      "assets/shaders/spot_shadow_vert.spv": "a226c03e6c3ab527712a97d7c6b23b0d3adb9239f187c3da7143154fc0025c65",
+      "assets/shaders/point_shadow_vert.spv": "299cf1b016f17107b832591aed64c5bb589af746bcd0b67afcafcbcc09c6efcc"
+    }
+  },
+  "m5_8Supersession": {
+    "status": "M5.8 HDRI Sky plus bounded local reflection-probe GPU assignment, indexed prefiltered cubemaps, boundary blending, and box projection are current; M5.7 hashes remain historical",
+    "current_shader_hashes": {
+      "assets/shaders/include/canonical_lighting_body.glsl": "ffa87cf13543215df2de5ff330b65a737144e33dec18007fe1c56ba2b94f95e6",
+      "assets/shaders/include/complex_material_body.glsl": "6b377ce876617b16158d6e2b1c0df46d68fe2031789b8d567b17a4da06579fda",
+      "assets/shaders/include/clustered_light_access.glsl": "90383ea8703d821bdeba771ed0c83d61ce00cc670b71ac4ea5839b2392df6dc6",
+      "assets/shaders/include/environment_ibl.glsl": "08d801bfa9cb7b6712e8e49accc11e23375102d5949c7c15b8278ea3f3912d7b",
+      "assets/shaders/include/reflection_probe_records.glsl": "a8e3be259ed008b42ac02b94c3e00407a80201482594bd2541afd8e40a5e63dc",
+      "assets/shaders/reflection_probe_cluster.comp": "1cf38bb72cf744ad01ab58ff9c7bda51d1bee5a48fea140d589b3db67279a00b"
+    },
+    "current_spirv_hashes": {
+      "assets/shaders/canonical_reference_lighting_frag.spv": "1b8291a9db68994a2bf578fa23b30a87f420844b62453b6e5f5e446b9fb4d8cc",
+      "assets/shaders/canonical_packed_lighting_frag.spv": "2edbb990351e113281446cc8e1231ce88e9b14bf8f5ea43c9d13e7df7144fa20",
+      "assets/shaders/complex_material_indexed_frag.spv": "677a31bcf21b8239d35467052b9917b24559f3ded4d9efc5486288232306e4c0",
+      "assets/shaders/complex_opaque_material_indexed_frag.spv": "c89af6c484bf818a0b5141904b5ad4dbc6b61c5390d4212c9af81c0e01a29f3e",
+      "assets/shaders/reflection_probe_cluster_comp.spv": "cea70c7fc488aca6fd4ae30c993b5f3c8f00b779653e419bfbcd704171bf90e4"
+    }
+  },
+  "m5_9Supersession": {
+    "status": "M5.9 bounded spatial PCSS uses physical emitter extent, deterministic raw-depth blocker search, quality ceilings, and fixed-PCF or hard-shadow fallback; M9 owns temporal reconstruction",
+    "current_shader_hashes": {
+      "assets/shaders/include/directional_shadow.glsl": "592842851af338cf64d6ad4baba4e24a7bf2aca4804193450d4af52055b7ca9f",
+      "assets/shaders/include/spot_shadow.glsl": "619ca8d7a56cf0c3814c8846eb5f5aa552ba40ab4f2ad01bc5d4e66558be3d00",
+      "assets/shaders/include/point_shadow.glsl": "01ceb01500d46563a1550bf7c4439ecb59706e6f15e1df1c751da592a9fc9f6e",
+      "assets/shaders/include/shadow_filter.glsl": "d4d2416990f4c5c8ab6b63e5a98697a1cf93da4d54a8e3e3d4186107119640dd"
+    },
+    "current_spirv_hashes": {
+      "assets/shaders/canonical_reference_lighting_frag.spv": "a972c4963615564c4d98f55ab70917bfa25722066c2bda0a3b3ce853afcf018f",
+      "assets/shaders/canonical_packed_lighting_frag.spv": "173b3ff2d309864ff4b6705c7669b14051a79d9f2ee87ea9874919ce74ac3218",
+      "assets/shaders/complex_material_indexed_frag.spv": "08432f6b30b920f71ec597d7a39b62aae4460fd2907ecc0ee8bdd61ffd5ecffd",
+      "assets/shaders/complex_opaque_material_indexed_frag.spv": "4974aa57a7ebef72c43bf928b2b76fd2f4cc0bb3b83c9ce5c5fabae0b85f30d9",
+      "assets/shaders/reflection_probe_capture_frag.spv": "4bd5186a42e9699185e0ec6558a9682836b0cd03d2d0d01d3944985a3b0efae5"
+    }
+  },
+  "m5_11Acceptance": {
+    "status": "Accepted 2026-08-13: M5 production light, sky, shadow, reflection-probe, baked-lighting, and qualification-fixture contracts are frozen; later milestones must supersede changed hashes explicitly",
+    "contract_hashes": {
+      "src/scene/components/LightComponent.h": "d58dec43c5f291acca2eafa6f60d86ed7a00a500b8aaf162e02aaeb9ed67629f",
+      "src/scene/components/SkyComponent.h": "55263d9513db4eaae8606a222da9ea70c25491bf9aa2e41d29abb23c396eb2b3",
+      "src/scene/components/ReflectionProbeComponent.h": "7afb0c07a67f7503e7ffbda3858794ffe1303084bdcd2847ea33ec04981996b0",
+      "src/scene/components/BakedLightingSetComponent.h": "3fba603b111dfeb3b13f0aa8b66fafd97f14cfec35161ff4c2337b5930859e03",
+      "src/renderer/rhi/ShadowSettings.h": "2387e1b7ca187d8df3774fa6d5d64b45c2ae8c5b673e9556eafbd332523f00ce",
+      "src/renderer/rhi/ReflectionProbeSettings.h": "217d93dd0960c4a2bac76d257168bf19220c546da2b1b5bd1dec21d52b810e5e",
+      "src/assets/lighting/BakedLightingProduct.h": "802cbeaa486424f35752bf8733265ce8a40327af3e645494121fda924d2486a7",
+      "assets/benchmarks/m5/directional-shadow-manifest.v1.json": "4bdc7ecd28c90669f046779b7ba2091d9626435538012f2603159f70562d7648",
+      "assets/m5-sample-car-manifest.v1.json": "2b6e14fb3896929f9ca137c6915919c92dc558a401373423883c086f2ab3c240"
+    }
+  },
+  "m5_13CorrectiveHardening": {
+    "status": "Post-acceptance corrective hardening: local +Z is the common visible emission direction, receiver bias is expressed in world-space shadow texels instead of normalized depth or fixed centimeters, hard/contact edges use compare-then-filter reconstruction, Ultra filtering is denser, high-end directional/spot defaults increase spatial density, and point raw-depth filtering no longer interpolates nonlinear projected depth. Historical acceptance hashes remain unchanged and are explicitly superseded here.",
+    "current_contract_hashes": {
+      "src/scene/components/LightComponent.h": "a7c117f9f33dc3bffb06bc7c0acdc31e31dc784ca966d365b7da6cc9d4cfb3f1",
+      "src/renderer/rhi/ShadowSettings.h": "516c95eb863f63b4fb6530e10a22d80006b4dc8c831f4cc69cb66460d57af289",
+      "src/renderer/rhi/LightingTypes.h": "7969758d946b22b07e5c5c2f37e6a4b52e5c17238746e047ec68e4fb357ed53f",
+      "src/renderer/lighting/LightExtractor.h": "26ecb91046ab89b887d5ede14bb331fdf3dad754a339076172f671ad59cff0c4",
+      "src/renderer/lighting/LightExtractor.cpp": "aece2d46ef532a7d5d3e582ecebfb5eb05310809324ce53f5eddd08139c6320b",
+      "src/renderer/lighting/ClusteredLighting.cpp": "992748bf05e390626aa8e4435ee483f71fd754d18667513d39ce31d0d5f8255f",
+      "src/renderer/lighting/LocalShadow.cpp": "09084af5a2d4f4a988fe94793d34d44033c9838d221a4e72beeda1d0e1ada6e7",
+      "src/renderer/vulkan/VulkanDirectionalShadowMap.h": "1fa1b8ebd43dff49861cb3f1a5159e5aa8cb9a1ff68970315c4edcd205ab5cc0",
+      "src/renderer/vulkan/VulkanDirectionalShadowMap.cpp": "2c3914e9147954d7a4d438bfd110e2acab3dc04140d90948f5bde29f8f068a24",
+      "src/renderer/vulkan/VulkanSpotShadowAtlas.h": "26b85faa6ba3b9a928cdc65df1a47dc1e4aa1de395844aac7e2ef460376108a5",
+      "src/renderer/vulkan/VulkanSpotShadowAtlas.cpp": "75035b2ad1f709ff459f8b3e6a59e7ea450adf6259e679e8e9c5d61ec0d1eb39",
+      "src/renderer/vulkan/VulkanPointShadowPools.h": "90c73c04ccc982dca24a3ceb5d0e5aaaa948a4e88bc74b08e6950593f9da933c",
+      "src/renderer/vulkan/VulkanPointShadowPools.cpp": "8743d08743cea25527d965edf5c8df1c8cfc83c1c007721c8bfc7d7d3df0e183",
+      "assets/shaders/include/direct_lighting.glsl": "c0d904c7b94d3a5911903e90a3036d034c5d93d930dee3f774942e55660d5a9a",
+      "assets/shaders/include/clustered_lighting.glsl": "20e7f128c8a4c7098ad90439e405dbaa38a4f064d22e4339a75c8424c06fed83",
+      "assets/shaders/include/directional_shadow.glsl": "5dc5d3228716ebf14b70169588990a178bda7343100c81d7460d32867abe135e",
+      "assets/shaders/include/spot_shadow.glsl": "f0a2fe066b4cb5e06ba2ed3e7f44542bb3e12577e7eb35fc04b2ef5289e59b71",
+      "assets/shaders/include/point_shadow.glsl": "bf9af10cffcfba892b5b2b8bb5472e5533982a8f6359b1f9a1ec3d6ed0d0437d",
+      "assets/shaders/canonical_reference_lighting_frag.spv": "30a545117cae70f552a8fc04d21961767118a941de860f51b205c48d1e9c6974",
+      "assets/shaders/canonical_packed_lighting_frag.spv": "7b733eb34769bb94703c2d5d53205f9828bde4759a442d9ee3ed985819651569",
+      "assets/shaders/complex_material_indexed_frag.spv": "f52826ab050dfad0226dfa4b0ee80fa6d529477fdceeb8b8222cdf8fef9b8966",
+      "assets/shaders/complex_opaque_material_indexed_frag.spv": "60fe9b73a91629034aadab2ffaf75e046f22ccc339f99ffa44ba4e049955a209",
+      "assets/shaders/reflection_probe_capture_frag.spv": "7e7caf114f5fa6b21deb615936a5b6cd686aa53e61b25b0dbdae420906198a7c"
+    }
+  }
+}

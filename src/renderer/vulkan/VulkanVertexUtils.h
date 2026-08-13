@@ -18,8 +18,8 @@ namespace Iridium {
             return bindingDescription;
         }
 
-        static std::array<VkVertexInputAttributeDescription, 5> getAttributeDescriptions() {
-            std::array<VkVertexInputAttributeDescription, 5> attributeDescriptions{};
+        static std::array<VkVertexInputAttributeDescription, 6> getAttributeDescriptions() {
+            std::array<VkVertexInputAttributeDescription, 6> attributeDescriptions{};
 
             // 1. Position (vec3)
             attributeDescriptions[0].binding = 0;
@@ -27,10 +27,10 @@ namespace Iridium {
             attributeDescriptions[0].format = VK_FORMAT_R32G32B32_SFLOAT;
             attributeDescriptions[0].offset = offsetof(Vertex, pos);
 
-            // 2. Color (vec3)
+            // 2. Color (vec4; glTF vertex alpha is material coverage input)
             attributeDescriptions[1].binding = 0;
             attributeDescriptions[1].location = 1;
-            attributeDescriptions[1].format = VK_FORMAT_R32G32B32_SFLOAT;
+            attributeDescriptions[1].format = VK_FORMAT_R32G32B32A32_SFLOAT;
             attributeDescriptions[1].offset = offsetof(Vertex, color);
 
             // 3. Normal (vec3)
@@ -43,7 +43,7 @@ namespace Iridium {
             attributeDescriptions[3].binding = 0;
             attributeDescriptions[3].location = 3;
             attributeDescriptions[3].format = VK_FORMAT_R32G32_SFLOAT;
-            attributeDescriptions[3].offset = offsetof(Vertex, uv);
+            attributeDescriptions[3].offset = offsetof(Vertex, uv0);
 
             // 5. Tangent (vec4) 
             // We pass the 4th component (the handedness sign) so the shader 
@@ -52,6 +52,12 @@ namespace Iridium {
             attributeDescriptions[4].location = 4;
             attributeDescriptions[4].format = VK_FORMAT_R32G32B32A32_SFLOAT;
             attributeDescriptions[4].offset = offsetof(Vertex, tangent);
+
+            // 6. UV1 remains distinct from UV0 for per-texture glTF selection.
+            attributeDescriptions[5].binding = 0;
+            attributeDescriptions[5].location = 5;
+            attributeDescriptions[5].format = VK_FORMAT_R32G32_SFLOAT;
+            attributeDescriptions[5].offset = offsetof(Vertex, uv1);
 
             return attributeDescriptions;
         }

@@ -1,0 +1,49 @@
+{
+  "asset": { "version": "2.0", "generator": "Iridium M5.6 deterministic fixture" },
+  "scene": 0,
+  "scenes": [{ "nodes": [0, 1] }],
+  "nodes": [
+    { "mesh": 0, "name": "Shadow contact fixture" },
+    { "mesh": 1, "name": "Fully clipped alpha-mask caster", "translation": [2.2, 0.0, 0.0] }
+  ],
+  "meshes": [
+    {
+      "name": "Receiver and blocker",
+      "primitives": [
+        { "attributes": { "POSITION": 0, "NORMAL": 2, "TEXCOORD_0": 4 }, "indices": 6, "material": 0 },
+        { "attributes": { "POSITION": 1, "NORMAL": 3, "TEXCOORD_0": 5 }, "indices": 7, "material": 1 }
+      ]
+    },
+    {
+      "name": "Alpha-mask caster oracle",
+      "primitives": [
+        { "attributes": { "POSITION": 1, "NORMAL": 3, "TEXCOORD_0": 5 }, "indices": 7, "material": 2 }
+      ]
+    }
+  ],
+  "materials": [
+    { "name": "Neutral receiver", "doubleSided": true, "pbrMetallicRoughness": { "baseColorFactor": [0.6, 0.6, 0.6, 1.0], "metallicFactor": 0.0, "roughnessFactor": 0.8 } },
+    { "name": "Warm blocker", "pbrMetallicRoughness": { "baseColorFactor": [0.8, 0.18, 0.04, 1.0], "metallicFactor": 0.0, "roughnessFactor": 0.5 } },
+    { "name": "Fully clipped blocker", "alphaMode": "MASK", "alphaCutoff": 0.5, "pbrMetallicRoughness": { "baseColorFactor": [0.1, 0.8, 0.2, 0.0], "metallicFactor": 0.0, "roughnessFactor": 0.5 } }
+  ],
+  "buffers": [{
+    "byteLength": 244,
+    "uri": "data:application/octet-stream;base64,AACAwAAAQMAAAIC/AACAQAAAQMAAAIC/AACAQAAAQEAAAIC/AACAwAAAQEAAAIC/zcxMv83MTL8AAAAAzcxMP83MTL8AAAAAAAAAAM3MTD8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAgD8AAIA/AAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAPwAAgD8AAAEAAgACAAMAAAAAAAEAAgAAAA=="
+  }],
+  "bufferViews": [
+    { "buffer": 0, "byteOffset": 0, "byteLength": 84, "target": 34962 },
+    { "buffer": 0, "byteOffset": 84, "byteLength": 84, "target": 34962 },
+    { "buffer": 0, "byteOffset": 168, "byteLength": 56, "target": 34962 },
+    { "buffer": 0, "byteOffset": 224, "byteLength": 20, "target": 34963 }
+  ],
+  "accessors": [
+    { "bufferView": 0, "byteOffset": 0, "componentType": 5126, "count": 4, "type": "VEC3", "min": [-4, -3, -1], "max": [4, 3, -1] },
+    { "bufferView": 0, "byteOffset": 48, "componentType": 5126, "count": 3, "type": "VEC3", "min": [-0.8, -0.8, 0], "max": [0.8, 0.8, 0] },
+    { "bufferView": 1, "byteOffset": 0, "componentType": 5126, "count": 4, "type": "VEC3" },
+    { "bufferView": 1, "byteOffset": 48, "componentType": 5126, "count": 3, "type": "VEC3" },
+    { "bufferView": 2, "byteOffset": 0, "componentType": 5126, "count": 4, "type": "VEC2" },
+    { "bufferView": 2, "byteOffset": 32, "componentType": 5126, "count": 3, "type": "VEC2" },
+    { "bufferView": 3, "byteOffset": 0, "componentType": 5123, "count": 6, "type": "SCALAR" },
+    { "bufferView": 3, "byteOffset": 12, "componentType": 5123, "count": 3, "type": "SCALAR" }
+  ]
+}

@@ -1,0 +1,326 @@
+{
+  "schema_version": 1,
+  "fixtures": [
+    {
+      "id": "material_lab_v1",
+      "revision": 1,
+      "required": true,
+      "source_asset": "material_lab.gltf",
+      "environment": {
+        "kind": "procedural_constant",
+        "constant_linear_rgb": [0.18, 0.18, 0.18]
+      },
+      "camera": {
+        "id": "front_v1",
+        "position": [0.0, 0.0, 7.0],
+        "target": [0.0, 0.0, 0.0],
+        "up": [0.0, 1.0, 0.0],
+        "vertical_fov_degrees": 45.0,
+        "near": 0.1,
+        "far": 100.0
+      },
+      "scene_factory": {
+        "kind": "instanced_grid",
+        "instance_grid": [1, 1, 1],
+        "instance_spacing": [0.0, 0.0, 0.0]
+      },
+      "output_label": "legacy_display_referred_srgb_target",
+      "warmup_frames": 500,
+      "measured_frames": 10000,
+      "content_files": [
+        {
+          "path": "material_lab.gltf",
+          "sha256": "9aaaa326f4378a88de0805b17707095853411a208b528e382255660ad0eec1f3"
+        }
+      ],
+      "expected_behavior": [
+        "Five separated primitives retain stable material indices and camera framing.",
+        "The first material reports omitted metallic and roughness as glTF defaults.",
+        "The red metal reports clearcoat and specular as present but not consumed.",
+        "The final primitive uses the current forward transmission and emissive path."
+      ],
+      "unavailable_capabilities": [
+        "scene-linear final output",
+        "normal-map detail in the required material fixture",
+        "volume absorption",
+        "specular-glossiness workflow",
+        "material ID",
+        "motion vectors",
+        "authored light consumption",
+        "shadows",
+        "probes"
+      ]
+    },
+    {
+      "id": "transparency_v1",
+      "revision": 2,
+      "required": true,
+      "source_asset": "transparency_layers.gltf",
+      "environment": {
+        "kind": "procedural_constant",
+        "constant_linear_rgb": [0.12, 0.14, 0.18]
+      },
+      "camera": {
+        "id": "front_layers_v1",
+        "position": [0.0, 0.0, 6.0],
+        "target": [0.0, 0.0, 0.0],
+        "up": [0.0, 1.0, 0.0],
+        "vertical_fov_degrees": 45.0,
+        "near": 0.1,
+        "far": 100.0
+      },
+      "scene_factory": {
+        "kind": "instanced_grid",
+        "instance_grid": [1, 1, 1],
+        "instance_spacing": [0.0, 0.0, 0.0]
+      },
+      "output_label": "legacy_display_referred_srgb_target",
+      "warmup_frames": 500,
+      "measured_frames": 10000,
+      "content_files": [
+        {
+          "path": "transparency_layers.gltf",
+          "sha256": "5c860b5b777acf98c9fd255d904a060fff4ccb3531be2017ff791f2758e4e13a"
+        }
+      ],
+      "expected_behavior": [
+        "One opaque backdrop and three disconnected overlapping transparent primitives remain separate submeshes.",
+        "Two concentric closed tetrahedral shells share a center but use distinct mesh primitives and distinct transparent materials, so the current per-material importer merge retains two separate submeshes.",
+        "The legacy depth prepass, entity-origin sort, and two-bucket forward path may hide or miscompose inner-shell faces; the fixture records that current failure instead of certifying nested transparency correctness.",
+        "The current legacy sorter and two-bucket glass path remain measurable rather than being presented as correct classification.",
+        "KHR_materials_ior is reported but not consumed; transmission is consumed for four layers."
+      ],
+      "unavailable_capabilities": [
+        "classified hybrid transparency",
+        "correct nested closed-shell composition",
+        "particle transparency",
+        "rough-refraction fidelity reference",
+        "off-screen refraction fallback samples",
+        "source IOR consumption",
+        "scene-linear transparency composition",
+        "material ID",
+        "motion vectors"
+      ]
+    },
+    {
+      "id": "opaque_emissive_v1",
+      "revision": 1,
+      "required": true,
+      "source_asset": "opaque_emissive_range.gltf",
+      "environment": {
+        "kind": "procedural_constant",
+        "constant_linear_rgb": [0.0, 0.0, 0.0]
+      },
+      "camera": {
+        "id": "front_emissive_range_v1",
+        "position": [0.0, 0.0, 8.0],
+        "target": [0.0, 0.0, 0.0],
+        "up": [0.0, 1.0, 0.0],
+        "vertical_fov_degrees": 45.0,
+        "near": 0.1,
+        "far": 100.0
+      },
+      "scene_factory": {
+        "kind": "instanced_grid",
+        "instance_grid": [1, 1, 1],
+        "instance_spacing": [0.0, 0.0, 0.0]
+      },
+      "output_label": "legacy_display_referred_srgb_target",
+      "warmup_frames": 500,
+      "measured_frames": 10000,
+      "content_files": [
+        {
+          "path": "opaque_emissive_range.gltf",
+          "sha256": "baa16ec7e45d47a236095867395c2df79b26c25a87f66276af556a9810637e6f"
+        }
+      ],
+      "expected_behavior": [
+        "Six separated primitives remain opaque, double-sided, and independent material buckets with authored linear emissive strengths 0.0, 0.03125, 0.125, 0.5, 1.0, and 2.0.",
+        "The emissive debug view must show a monotonic six-step range after its documented x/(1+x) display mapping, beginning at black without forward-transparency suppression.",
+        "The final view must retain a visible monotonic emissive range in the current legacy display-referred pipeline.",
+        "Current emissive is self-emission only: it does not illuminate neighboring primitives and no bloom or automatic exposure is available."
+      ],
+      "unavailable_capabilities": [
+        "scene-linear final output",
+        "emissive contribution to global illumination",
+        "bloom",
+        "automatic exposure",
+        "wide-gamut HDR output",
+        "material ID",
+        "motion vectors"
+      ]
+    },
+    {
+      "id": "lighting_legacy_v1",
+      "revision": 1,
+      "required": true,
+      "source_asset": "material_lab.gltf",
+      "environment": {
+        "kind": "procedural_constant",
+        "constant_linear_rgb": [0.04, 0.04, 0.04]
+      },
+      "camera": {
+        "id": "front_low_environment_v1",
+        "position": [0.0, 0.0, 7.0],
+        "target": [0.0, 0.0, 0.0],
+        "up": [0.0, 1.0, 0.0],
+        "vertical_fov_degrees": 45.0,
+        "near": 0.1,
+        "far": 100.0
+      },
+      "scene_factory": {
+        "kind": "instanced_grid",
+        "instance_grid": [1, 1, 1],
+        "instance_spacing": [0.0, 0.0, 0.0]
+      },
+      "output_label": "legacy_display_referred_srgb_target",
+      "warmup_frames": 500,
+      "measured_frames": 10000,
+      "content_files": [
+        {
+          "path": "material_lab.gltf",
+          "sha256": "9aaaa326f4378a88de0805b17707095853411a208b528e382255660ad0eec1f3"
+        }
+      ],
+      "expected_behavior": [
+        "The fixed shader directional light remains visible against a low neutral environment.",
+        "Authored ECS lights, shadows, probes, and baking are explicitly unavailable."
+      ],
+      "unavailable_capabilities": [
+        "authored light consumption",
+        "shadows",
+        "probes",
+        "baking",
+        "non-ray-traced GI"
+      ]
+    },
+    {
+      "id": "geometry_cpu_v1",
+      "revision": 1,
+      "required": true,
+      "source_asset": "material_lab.gltf",
+      "environment": {
+        "kind": "procedural_constant",
+        "constant_linear_rgb": [0.08, 0.08, 0.08]
+      },
+      "camera": {
+        "id": "grid_wide_v1",
+        "position": [0.0, 0.0, 110.0],
+        "target": [0.0, 0.0, 0.0],
+        "up": [0.0, 1.0, 0.0],
+        "vertical_fov_degrees": 55.0,
+        "near": 0.1,
+        "far": 500.0
+      },
+      "scene_factory": {
+        "kind": "instanced_grid",
+        "instance_grid": [16, 8, 1],
+        "instance_spacing": [6.2, 2.5, 0.0],
+        "object_motion": {
+          "enabled": true,
+          "amplitude": 0.15,
+          "period_frames": 120
+        }
+      },
+      "output_label": "legacy_display_referred_srgb_target",
+      "warmup_frames": 500,
+      "measured_frames": 10000,
+      "content_files": [
+        {
+          "path": "material_lab.gltf",
+          "sha256": "9aaaa326f4378a88de0805b17707095853411a208b528e382255660ad0eec1f3"
+        }
+      ],
+      "expected_behavior": [
+        "Exactly 128 model instances produce 640 requested submeshes per frame.",
+        "All instance transforms change from frame-index-driven motion without wall-clock input.",
+        "The fixture stresses current CPU extraction, sorting, and per-draw submission."
+      ],
+      "unavailable_capabilities": [
+        "persistent GPU scene",
+        "indexed indirect rendering",
+        "mesh shaders",
+        "LOD transitions"
+      ]
+    },
+    {
+      "id": "temporal_proxy_v1",
+      "revision": 1,
+      "required": true,
+      "source_asset": "material_lab.gltf",
+      "environment": {
+        "kind": "procedural_constant",
+        "constant_linear_rgb": [0.1, 0.1, 0.1]
+      },
+      "camera": {
+        "id": "motion_and_cut_v1",
+        "position": [-0.5, 0.0, 7.0],
+        "target": [0.0, 0.0, 0.0],
+        "up": [0.0, 1.0, 0.0],
+        "vertical_fov_degrees": 45.0,
+        "near": 0.1,
+        "far": 100.0
+      },
+      "scene_factory": {
+        "kind": "instanced_grid",
+        "instance_grid": [1, 1, 1],
+        "instance_spacing": [0.0, 0.0, 0.0],
+        "object_motion": {
+          "enabled": true,
+          "amplitude": 0.35,
+          "period_frames": 120
+        },
+        "camera_motion": {
+          "velocity_per_frame": [0.003, 0.0, 0.0],
+          "cut": {
+            "frame": 120,
+            "position": [0.0, 1.0, 6.0],
+            "target": [0.0, 0.0, 0.0]
+          }
+        }
+      },
+      "output_label": "legacy_display_referred_srgb_target",
+      "warmup_frames": 0,
+      "measured_frames": 240,
+      "content_files": [
+        {
+          "path": "material_lab.gltf",
+          "sha256": "9aaaa326f4378a88de0805b17707095853411a208b528e382255660ad0eec1f3"
+        }
+      ],
+      "expected_behavior": [
+        "Object and camera motion are derived only from frame index.",
+        "A deterministic camera cut occurs at frame 120.",
+        "The fixture records temporal inputs while motion vectors and reconstruction remain unavailable."
+      ],
+      "unavailable_capabilities": [
+        "motion vectors",
+        "temporal reconstruction",
+        "DLSS",
+        "history rejection diagnostics"
+      ]
+    }
+  ],
+  "optional_local_diagnostics": [
+    {
+      "id": "sample_car_local_v1",
+      "category": "sample car",
+      "source_asset": "assets/models/alfa_romeo/alfa_romeo.gltf",
+      "license": "CC-BY-NC-SA-4.0; optional non-commercial diagnostic, never a required acceptance asset",
+      "tree_sha256": "9ff1c6e9a6c66a15e89b616a1e9d2cf0cde634745245083c88fae3621e5d6c1d",
+      "invocation": "IridiumEngine --no-validation --borderless-window --window-size 3840x2160 --warmup-frames 500 --frame-limit 10000 --profile-gpu",
+      "expected_behavior": [
+        "Paint materials 0 and 36 report omitted metallic as the glTF default 1.0 and ignored clearcoat/specular extensions.",
+        "Window material 6 reports BLEND with omitted metallic 1.0 and no transmission.",
+        "Lens materials 3 and 4 report BLEND, omitted metallic 1.0, and explicit transmission 1.0."
+      ],
+      "unavailable_capabilities": [
+        "redistributable commercial acceptance status",
+        "licensed deterministic environment dependency",
+        "canonical deferred closure",
+        "clearcoat/specular consumption",
+        "source IOR consumption"
+      ]
+    }
+  ]
+}

@@ -30,9 +30,9 @@ namespace Iridium {
             barrier.image = resource.image;
             barrier.subresourceRange.aspectMask = resource.aspect;
             barrier.subresourceRange.baseMipLevel = 0;
-            barrier.subresourceRange.levelCount = 1;
+            barrier.subresourceRange.levelCount = resource.mipLevels;
             barrier.subresourceRange.baseArrayLayer = 0;
-            barrier.subresourceRange.layerCount = 1;
+            barrier.subresourceRange.layerCount = resource.arrayLayers;
 
             vkCmdPipelineBarrier(commandBuffer_, oldInfo.stages, newInfo.stages, 0,
                 0, nullptr, 0, nullptr, 1, &barrier);
@@ -81,6 +81,12 @@ namespace Iridium {
             const VkBufferImageCopy& region) const {
             vkCmdCopyBufferToImage(commandBuffer_, source.buffer, destination.image,
                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+        }
+
+        void copyImageToBuffer(const VulkanImageResource& source,
+            VulkanBufferResource& destination, const VkBufferImageCopy& region) const {
+            vkCmdCopyImageToBuffer(commandBuffer_, source.image,
+                VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, destination.buffer, 1, &region);
         }
 
         void copyImage(const VulkanImageResource& source, VulkanImageResource& destination,

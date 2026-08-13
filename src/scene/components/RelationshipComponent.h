@@ -6,17 +6,8 @@ struct RelationshipComponent {
     Entity parent = NULL_ENTITY;
     std::vector<Entity> children;
     int depth = 0;
+    // Stable editor-facing order among entities with the same parent.
+    // This is serialized independently of transient ECS dense-array order.
+    int siblingOrder = 0;
 
-    void OnInspector() {
-        // Read-only display for now
-        ImGui::Text("Depth: %d", depth);
-        ImGui::Text("Children: %d", (int)children.size());
-
-        if (parent != NULL_ENTITY) {
-            ImGui::Text("Parent ID: %d", (int)parent);
-        }
-        else {
-            ImGui::Text("Parent: None");
-        }
-    }
 };

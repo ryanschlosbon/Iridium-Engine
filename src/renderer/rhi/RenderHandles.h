@@ -45,17 +45,24 @@ namespace Iridium {
     struct GeometryTag {};
     struct MaterialTag {};
     struct TextureTag {};
+    struct TextureViewTag {};
+    struct SamplerTag {};
     struct PipelineTag {};
 
     // The explicit Handle types you will use throughout the engine
     using GeometryHandle = RenderHandle<GeometryTag>;
     using MaterialHandle = RenderHandle<MaterialTag>;
     using TextureHandle = RenderHandle<TextureTag>;
+    using TextureViewHandle = RenderHandle<TextureViewTag>;
+    using SamplerHandle = RenderHandle<SamplerTag>;
     using PipelineHandle = RenderHandle<PipelineTag>;
 
     static_assert(sizeof(GeometryHandle) == 4 && std::is_trivially_copyable_v<GeometryHandle>);
     static_assert(sizeof(MaterialHandle) == 4 && std::is_trivially_copyable_v<MaterialHandle>);
     static_assert(sizeof(TextureHandle) == 4 && std::is_trivially_copyable_v<TextureHandle>);
+    static_assert(sizeof(TextureViewHandle) == 4 &&
+        std::is_trivially_copyable_v<TextureViewHandle>);
+    static_assert(sizeof(SamplerHandle) == 4 && std::is_trivially_copyable_v<SamplerHandle>);
     static_assert(sizeof(PipelineHandle) == 4 && std::is_trivially_copyable_v<PipelineHandle>);
 
 } // namespace Iridium

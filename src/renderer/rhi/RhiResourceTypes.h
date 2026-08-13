@@ -34,6 +34,28 @@ namespace Iridium {
         RecreateSwapchain,
     };
 
+    struct RenderExtent {
+        uint32_t width = 0;
+        uint32_t height = 0;
+    };
+
+    struct RenderBackendCapabilities {
+        bool gpuTimestampProfiling = false;
+        double gpuTimestampPeriodNanoseconds = 0.0;
+        uint32_t gpuTimestampValidBits = 0;
+        bool engineAllocationTracking = false;
+        bool driverMemoryBudget = false;
+        bool transparentPipelineStatistics = false;
+        bool indexedTextureViews = false;
+        bool separateTextureSamplers = false;
+        bool descriptorUpdateAfterBind = false;
+        bool gpuLightRecords = false;
+        uint32_t maxIndexedTextureViews = 0;
+        uint32_t maxIndexedSamplers = 0;
+        uint32_t maxUpdateAfterBindDescriptors = 0;
+        uint32_t maxGpuLightRecords = 0;
+    };
+
     constexpr uint32_t indexElementSize(IndexFormat format) noexcept {
         switch (format) {
         case IndexFormat::UInt16:
@@ -48,6 +70,8 @@ namespace Iridium {
     static_assert(sizeof(ResourceState) == 1);
     static_assert(sizeof(IndexFormat) == 1);
     static_assert(sizeof(FrameStatus) == 1);
+    static_assert(std::is_trivially_copyable_v<RenderExtent>);
+    static_assert(std::is_trivially_copyable_v<RenderBackendCapabilities>);
     static_assert(std::is_trivially_copyable_v<GeometryDesc>);
 
 } // namespace Iridium

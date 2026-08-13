@@ -26,6 +26,12 @@ Accepted architecture records are authoritative. If evidence requires changing o
 - Use the RHI boundary for backend-neutral contracts. Keep Vulkan details in the Vulkan backend unless a capability genuinely belongs in the RHI.
 - Keep scene lighting and transparency in linear scene-referred HDR until the final output transform.
 - Share BSDF functions between deferred, forward, and future ray-tracing paths.
+- Treat the M2 reference/production GBuffer as a measured canonical surface cache,
+  not a permanent requirement that geometry always emit a full GBuffer. Keep material,
+  geometry, and RHI contracts compatible with the accepted future visibility-buffer
+  path in ADR-0006.
+- When clustered lighting arrives in M5, use one light-assignment representation for
+  deferred/material-resolve and complex-forward consumers.
 - Keep runtime component data independent of ImGui, native file dialogs, and editor-only behavior.
 - Do not merge disconnected transparent surfaces merely because they share a material.
 - Prefer stable asset/component/entity identities over paths, RTTI names, or transient ECS indices.
@@ -62,4 +68,3 @@ For a roadmap slice, report:
 - visual/performance comparison against baseline;
 - remaining risks or deliberately deferred work;
 - whether any ADR or roadmap status changed.
-

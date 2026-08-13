@@ -1,0 +1,65 @@
+{
+  "schemaVersion": 1,
+  "assetGuid": "019f9bce-85b8-7100-8203-040506070809",
+  "assetType": "iridium.model",
+  "importer": {
+    "id": "iridium.gltf-model",
+    "version": 3
+  },
+  "settings": {
+    "schemaVersion": 1,
+    "values": {
+      "bake_node_transforms": true,
+      "generate_missing_tangents": true,
+      "preserve_rt_geometry": true
+    }
+  },
+  "subassets": [
+    {
+      "guid": "019f9bce-85b8-7101-8304-05060708090a",
+      "assetType": "iridium.material",
+      "sourceKey": "materials/0",
+      "structuralFingerprint": "47c98fea39ef71116967105c7594033da820c565dce028a2bf1788bf86ced0a0"
+    },
+    {
+      "guid": "019f9bce-85b8-7102-8405-060708090a0b",
+      "assetType": "iridium.material",
+      "sourceKey": "materials/1",
+      "structuralFingerprint": "9d3302238f42d1923f82b0d3b1508891664db5fab1f3a079d033f1a23cc8a8f7"
+    },
+    {
+      "guid": "019f9bce-85b8-7120-890a-0b0c0d0e0f10",
+      "assetType": "iridium.texture",
+      "sourceKey": "images/0",
+      "structuralFingerprint": "431ced6916a2a21a156e38701afe55bbd7f88969fbbfc56d7fe099d47f265460"
+    },
+    {
+      "guid": "019f9bce-85b8-7110-8506-0708090a0b0c",
+      "assetType": "iridium.model-primitive",
+      "sourceKey": "nodes/0/meshes/0/primitives/0",
+      "structuralFingerprint": "23329e981c3576bf8fdc85e65c7b6e93d765bb2f33e1b335ece55caecf7dcd3c"
+    },
+    {
+      "guid": "019f9bce-85b8-7111-8607-08090a0b0c0d",
+      "assetType": "iridium.model-primitive",
+      "sourceKey": "nodes/0/meshes/0/primitives/1",
+      "structuralFingerprint": "916e0ed053615ce6ac4e939be9722fa89dae1f481a41156269313bd245b0f0b4"
+    },
+    {
+      "guid": "019f9bce-85b8-7112-8708-090a0b0c0d0e",
+      "assetType": "iridium.model-primitive",
+      "sourceKey": "nodes/1/meshes/0/primitives/0",
+      "structuralFingerprint": "c13b78feaec92b49bf7d4023164d7c6d59e5fc74a1df801a6aa160e174052271"
+    },
+    {
+      "guid": "019f9bce-85b8-7113-8809-0a0b0c0d0e0f",
+      "assetType": "iridium.model-primitive",
+      "sourceKey": "nodes/1/meshes/0/primitives/1",
+      "structuralFingerprint": "deaac54ec1432f3bc226d83e5556cc647549bf423b422b327437d6e66745b79c"
+    }
+  ],
+  "tags": [
+    "m3.4-fixture",
+    "tracked"
+  ]
+}

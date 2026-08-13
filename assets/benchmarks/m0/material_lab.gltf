@@ -1,0 +1,108 @@
+{
+  "asset": {
+    "version": "2.0",
+    "generator": "Iridium Engine M0 deterministic material lab"
+  },
+  "extensionsUsed": [
+    "KHR_materials_clearcoat",
+    "KHR_materials_specular",
+    "KHR_materials_emissive_strength",
+    "KHR_materials_transmission"
+  ],
+  "buffers": [
+    {
+      "uri": "data:application/octet-stream;base64,AABAvwAAQL8AAAAAAABAPwAAQL8AAAAAAAAAAAAAQD8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAD8AAIA/AAACAAEA",
+      "byteLength": 102
+    }
+  ],
+  "bufferViews": [
+    { "buffer": 0, "byteOffset": 0, "byteLength": 36, "target": 34962 },
+    { "buffer": 0, "byteOffset": 36, "byteLength": 36, "target": 34962 },
+    { "buffer": 0, "byteOffset": 72, "byteLength": 24, "target": 34962 },
+    { "buffer": 0, "byteOffset": 96, "byteLength": 6, "target": 34963 }
+  ],
+  "accessors": [
+    {
+      "bufferView": 0,
+      "componentType": 5126,
+      "count": 3,
+      "type": "VEC3",
+      "min": [-0.75, -0.75, 0.0],
+      "max": [0.75, 0.75, 0.0]
+    },
+    { "bufferView": 1, "componentType": 5126, "count": 3, "type": "VEC3" },
+    { "bufferView": 2, "componentType": 5126, "count": 3, "type": "VEC2" },
+    { "bufferView": 3, "componentType": 5123, "count": 3, "type": "SCALAR" }
+  ],
+  "materials": [
+    {
+      "name": "Omitted factors - glTF metallic default"
+    },
+    {
+      "name": "Smooth dielectric",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [0.72, 0.72, 0.72, 1.0],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.18
+      }
+    },
+    {
+      "name": "Red metal with ignored coating",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [0.55, 0.025, 0.02, 1.0],
+        "metallicFactor": 1.0,
+        "roughnessFactor": 0.28
+      },
+      "extensions": {
+        "KHR_materials_clearcoat": {
+          "clearcoatFactor": 1.0,
+          "clearcoatRoughnessFactor": 0.04
+        },
+        "KHR_materials_specular": {
+          "specularFactor": 0.8
+        }
+      }
+    },
+    {
+      "name": "Rough dielectric",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [0.05, 0.3, 0.75, 1.0],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.9
+      }
+    },
+    {
+      "name": "Emissive transmissive",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [0.8, 0.9, 1.0, 0.35],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.08
+      },
+      "emissiveFactor": [1.0, 0.2, 0.04],
+      "alphaMode": "BLEND",
+      "doubleSided": true,
+      "extensions": {
+        "KHR_materials_emissive_strength": { "emissiveStrength": 8.0 },
+        "KHR_materials_transmission": { "transmissionFactor": 1.0 }
+      }
+    }
+  ],
+  "meshes": [
+    { "primitives": [{ "attributes": { "POSITION": 0, "NORMAL": 1, "TEXCOORD_0": 2 }, "indices": 3, "material": 0 }] },
+    { "primitives": [{ "attributes": { "POSITION": 0, "NORMAL": 1, "TEXCOORD_0": 2 }, "indices": 3, "material": 1 }] },
+    { "primitives": [{ "attributes": { "POSITION": 0, "NORMAL": 1, "TEXCOORD_0": 2 }, "indices": 3, "material": 2 }] },
+    { "primitives": [{ "attributes": { "POSITION": 0, "NORMAL": 1, "TEXCOORD_0": 2 }, "indices": 3, "material": 3 }] },
+    { "primitives": [{ "attributes": { "POSITION": 0, "NORMAL": 1, "TEXCOORD_0": 2 }, "indices": 3, "material": 4 }] }
+  ],
+  "nodes": [
+    { "name": "default", "mesh": 0, "translation": [-2.4, 0.0, 0.0] },
+    { "name": "dielectric", "mesh": 1, "translation": [-1.2, 0.0, 0.0] },
+    { "name": "red_metal", "mesh": 2, "translation": [0.0, 0.0, 0.0] },
+    { "name": "rough", "mesh": 3, "translation": [1.2, 0.0, 0.0] },
+    { "name": "emissive_transmissive", "mesh": 4, "translation": [2.4, 0.0, 0.0] }
+  ],
+  "scenes": [
+    { "name": "material_lab_v1", "nodes": [0, 1, 2, 3, 4] }
+  ],
+  "scene": 0
+}

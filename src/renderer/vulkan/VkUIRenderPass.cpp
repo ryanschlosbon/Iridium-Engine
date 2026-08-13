@@ -1,10 +1,11 @@
 #include "VkUIRenderPass.h"
 #include <stdexcept>
 
-VkUIRenderPass::VkUIRenderPass(VkContext* context, VkFormat swapChainImageFormat) : context(context) {
+VkUIRenderPass::VkUIRenderPass(VkContext* context, VkFormat imageFormat,
+    bool presentAfterPass) : context(context) {
     // 1. Color Attachment (The OS Window)
     VkAttachmentDescription colorAttachment{};
-    colorAttachment.format = swapChainImageFormat;
+    colorAttachment.format = imageFormat;
     colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
     colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
     colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
@@ -13,7 +14,9 @@ VkUIRenderPass::VkUIRenderPass(VkContext* context, VkFormat swapChainImageFormat
     colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
     // CRITICAL: This transition makes the image ready for the monitor
-    colorAttachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    colorAttachment.finalLayout = presentAfterPass
+        ? VK_IMAGE_LAYOUT_PRESENT_SRC_KHR
+        : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
     VkAttachmentReference colorAttachmentRef{};
     colorAttachmentRef.attachment = 0;

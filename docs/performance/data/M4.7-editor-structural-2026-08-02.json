@@ -1,0 +1,835 @@
+{
+  "allocationScope": "C++ global new/new[] requested bytes",
+  "configuration": "Release",
+  "schema": "iridium.editor.structural-benchmark.v1",
+  "workloads": [
+    {
+      "entityCount": 100,
+      "measurement": {
+        "allocationBytes": {
+          "max": 10464.0,
+          "median": 9672.0,
+          "min": 9672.0,
+          "p95": 9672.0,
+          "p99": 10464.0
+        },
+        "allocationCount": {
+          "max": 22.0,
+          "median": 21.0,
+          "min": 21.0,
+          "p95": 21.0,
+          "p99": 22.0
+        },
+        "nanoseconds": {
+          "max": 15500.0,
+          "median": 4700.0,
+          "min": 4600.0,
+          "p95": 8300.0,
+          "p99": 15500.0
+        },
+        "nanosecondsPerEntity": {
+          "max": 155.0,
+          "median": 47.0,
+          "min": 46.0,
+          "p95": 83.0,
+          "p99": 155.0
+        }
+      },
+      "name": "rebuild_hierarchy",
+      "samples": 30,
+      "topology": "breadth_children"
+    },
+    {
+      "entityCount": 100,
+      "measurement": {
+        "allocationBytes": {
+          "max": 15968.0,
+          "median": 11776.0,
+          "min": 11776.0,
+          "p95": 11776.0,
+          "p99": 15968.0
+        },
+        "allocationCount": {
+          "max": 318.0,
+          "median": 206.0,
+          "min": 206.0,
+          "p95": 206.0,
+          "p99": 318.0
+        },
+        "nanoseconds": {
+          "max": 19700.0,
+          "median": 12200.0,
+          "min": 11900.0,
+          "p95": 16400.0,
+          "p99": 19700.0
+        },
+        "nanosecondsPerEntity": {
+          "max": 197.0,
+          "median": 122.0,
+          "min": 119.0,
+          "p95": 164.0,
+          "p99": 197.0
+        }
+      },
+      "name": "collect_subtree",
+      "samples": 30,
+      "topology": "depth_chain"
+    },
+    {
+      "entityCount": 10000,
+      "measurement": {
+        "allocationBytes": {
+          "max": 1074282.0,
+          "median": 994251.0,
+          "min": 994251.0,
+          "p95": 994251.0,
+          "p99": 1074282.0
+        },
+        "allocationCount": {
+          "max": 34.0,
+          "median": 33.0,
+          "min": 33.0,
+          "p95": 33.0,
+          "p99": 34.0
+        },
+        "nanoseconds": {
+          "max": 1230900.0,
+          "median": 1100700.0,
+          "min": 1086800.0,
+          "p95": 1196300.0,
+          "p99": 1230900.0
+        },
+        "nanosecondsPerEntity": {
+          "max": 123.09,
+          "median": 110.07,
+          "min": 108.68,
+          "p95": 119.63,
+          "p99": 123.09
+        }
+      },
+      "name": "rebuild_hierarchy",
+      "samples": 30,
+      "topology": "breadth_children"
+    },
+    {
+      "entityCount": 10000,
+      "measurement": {
+        "allocationBytes": {
+          "max": 1594147.0,
+          "median": 1222467.0,
+          "min": 1222467.0,
+          "p95": 1222467.0,
+          "p99": 1594147.0
+        },
+        "allocationCount": {
+          "max": 30029.0,
+          "median": 20006.0,
+          "min": 20006.0,
+          "p95": 20006.0,
+          "p99": 30029.0
+        },
+        "nanoseconds": {
+          "max": 2423500.0,
+          "median": 1944000.0,
+          "min": 1899200.0,
+          "p95": 2030400.0,
+          "p99": 2423500.0
+        },
+        "nanosecondsPerEntity": {
+          "max": 242.35,
+          "median": 194.4,
+          "min": 189.92,
+          "p95": 203.04,
+          "p99": 242.35
+        }
+      },
+      "name": "collect_subtree",
+      "samples": 30,
+      "topology": "depth_chain"
+    },
+    {
+      "entityCount": 100000,
+      "measurement": {
+        "allocationBytes": {
+          "max": 10616356.0,
+          "median": 9816325.0,
+          "min": 9816325.0,
+          "p95": 9816325.0,
+          "p99": 10616356.0
+        },
+        "allocationCount": {
+          "max": 40.0,
+          "median": 39.0,
+          "min": 39.0,
+          "p95": 39.0,
+          "p99": 40.0
+        },
+        "nanoseconds": {
+          "max": 17609900.0,
+          "median": 15852100.0,
+          "min": 14898700.0,
+          "p95": 17439400.0,
+          "p99": 17609900.0
+        },
+        "nanosecondsPerEntity": {
+          "max": 176.099,
+          "median": 158.521,
+          "min": 148.987,
+          "p95": 174.394,
+          "p99": 176.099
+        }
+      },
+      "name": "rebuild_hierarchy",
+      "samples": 30,
+      "topology": "breadth_children"
+    },
+    {
+      "entityCount": 100000,
+      "measurement": {
+        "allocationBytes": {
+          "max": 15816221.0,
+          "median": 11697475.0,
+          "min": 11697475.0,
+          "p95": 11697475.0,
+          "p99": 15816221.0
+        },
+        "allocationCount": {
+          "max": 300035.0,
+          "median": 200006.0,
+          "min": 200006.0,
+          "p95": 200006.0,
+          "p99": 300035.0
+        },
+        "nanoseconds": {
+          "max": 44369100.0,
+          "median": 36364400.0,
+          "min": 33244000.0,
+          "p95": 41809200.0,
+          "p99": 44369100.0
+        },
+        "nanosecondsPerEntity": {
+          "max": 443.691,
+          "median": 363.644,
+          "min": 332.44,
+          "p95": 418.092,
+          "p99": 443.691
+        }
+      },
+      "name": "collect_subtree",
+      "samples": 30,
+      "topology": "depth_chain"
+    },
+    {
+      "entityCount": 1,
+      "estimatedHistoryBytes": {
+        "max": 593.0,
+        "median": 593.0,
+        "min": 593.0,
+        "p95": 593.0,
+        "p99": 593.0
+      },
+      "execute": {
+        "allocationBytes": {
+          "max": 1820.0,
+          "median": 1820.0,
+          "min": 1820.0,
+          "p95": 1820.0,
+          "p99": 1820.0
+        },
+        "allocationCount": {
+          "max": 28.0,
+          "median": 28.0,
+          "min": 28.0,
+          "p95": 28.0,
+          "p99": 28.0
+        },
+        "nanoseconds": {
+          "max": 26700.0,
+          "median": 1500.0,
+          "min": 1400.0,
+          "p95": 2600.0,
+          "p99": 26700.0
+        },
+        "nanosecondsPerEntity": {
+          "max": 26700.0,
+          "median": 1500.0,
+          "min": 1400.0,
+          "p95": 2600.0,
+          "p99": 26700.0
+        }
+      },
+      "name": "delete_subtree",
+      "redo": {
+        "allocationBytes": {
+          "max": 8.0,
+          "median": 8.0,
+          "min": 8.0,
+          "p95": 8.0,
+          "p99": 8.0
+        },
+        "allocationCount": {
+          "max": 1.0,
+          "median": 1.0,
+          "min": 1.0,
+          "p95": 1.0,
+          "p99": 1.0
+        },
+        "nanoseconds": {
+          "max": 300.0,
+          "median": 200.0,
+          "min": 100.0,
+          "p95": 300.0,
+          "p99": 300.0
+        },
+        "nanosecondsPerEntity": {
+          "max": 300.0,
+          "median": 200.0,
+          "min": 100.0,
+          "p95": 300.0,
+          "p99": 300.0
+        }
+      },
+      "samples": 30,
+      "undo": {
+        "allocationBytes": {
+          "max": 432.0,
+          "median": 432.0,
+          "min": 432.0,
+          "p95": 432.0,
+          "p99": 432.0
+        },
+        "allocationCount": {
+          "max": 13.0,
+          "median": 13.0,
+          "min": 13.0,
+          "p95": 13.0,
+          "p99": 13.0
+        },
+        "nanoseconds": {
+          "max": 4200.0,
+          "median": 700.0,
+          "min": 600.0,
+          "p95": 1000.0,
+          "p99": 4200.0
+        },
+        "nanosecondsPerEntity": {
+          "max": 4200.0,
+          "median": 700.0,
+          "min": 600.0,
+          "p95": 1000.0,
+          "p99": 4200.0
+        }
+      }
+    },
+    {
+      "entityCount": 1,
+      "estimatedHistoryBytes": {
+        "max": 597.0,
+        "median": 597.0,
+        "min": 597.0,
+        "p95": 597.0,
+        "p99": 597.0
+      },
+      "execute": {
+        "allocationBytes": {
+          "max": 4184.0,
+          "median": 4184.0,
+          "min": 4184.0,
+          "p95": 4184.0,
+          "p99": 4184.0
+        },
+        "allocationCount": {
+          "max": 69.0,
+          "median": 69.0,
+          "min": 69.0,
+          "p95": 69.0,
+          "p99": 69.0
+        },
+        "nanoseconds": {
+          "max": 6200.0,
+          "median": 3300.0,
+          "min": 3100.0,
+          "p95": 3600.0,
+          "p99": 6200.0
+        },
+        "nanosecondsPerEntity": {
+          "max": 6200.0,
+          "median": 3300.0,
+          "min": 3100.0,
+          "p95": 3600.0,
+          "p99": 6200.0
+        }
+      },
+      "name": "duplicate_subtree",
+      "redo": {
+        "allocationBytes": {
+          "max": 480.0,
+          "median": 480.0,
+          "min": 480.0,
+          "p95": 480.0,
+          "p99": 480.0
+        },
+        "allocationCount": {
+          "max": 14.0,
+          "median": 14.0,
+          "min": 14.0,
+          "p95": 14.0,
+          "p99": 14.0
+        },
+        "nanoseconds": {
+          "max": 900.0,
+          "median": 700.0,
+          "min": 700.0,
+          "p95": 900.0,
+          "p99": 900.0
+        },
+        "nanosecondsPerEntity": {
+          "max": 900.0,
+          "median": 700.0,
+          "min": 700.0,
+          "p95": 900.0,
+          "p99": 900.0
+        }
+      },
+      "samples": 30,
+      "undo": {
+        "allocationBytes": {
+          "max": 228.0,
+          "median": 228.0,
+          "min": 228.0,
+          "p95": 228.0,
+          "p99": 228.0
+        },
+        "allocationCount": {
+          "max": 8.0,
+          "median": 8.0,
+          "min": 8.0,
+          "p95": 8.0,
+          "p99": 8.0
+        },
+        "nanoseconds": {
+          "max": 600.0,
+          "median": 500.0,
+          "min": 400.0,
+          "p95": 500.0,
+          "p99": 600.0
+        },
+        "nanosecondsPerEntity": {
+          "max": 600.0,
+          "median": 500.0,
+          "min": 400.0,
+          "p95": 500.0,
+          "p99": 600.0
+        }
+      }
+    },
+    {
+      "entityCount": 100,
+      "estimatedHistoryBytes": {
+        "max": 25938.0,
+        "median": 25938.0,
+        "min": 25938.0,
+        "p95": 25938.0,
+        "p99": 25938.0
+      },
+      "execute": {
+        "allocationBytes": {
+          "max": 121420.0,
+          "median": 121420.0,
+          "min": 121420.0,
+          "p95": 121420.0,
+          "p99": 121420.0
+        },
+        "allocationCount": {
+          "max": 1538.0,
+          "median": 1538.0,
+          "min": 1538.0,
+          "p95": 1538.0,
+          "p99": 1538.0
+        },
+        "nanoseconds": {
+          "max": 96600.0,
+          "median": 85800.0,
+          "min": 79100.0,
+          "p95": 95100.0,
+          "p99": 96600.0
+        },
+        "nanosecondsPerEntity": {
+          "max": 966.0,
+          "median": 858.0,
+          "min": 791.0,
+          "p95": 951.0,
+          "p99": 966.0
+        }
+      },
+      "name": "delete_subtree",
+      "redo": {
+        "allocationBytes": {
+          "max": 800.0,
+          "median": 800.0,
+          "min": 800.0,
+          "p95": 800.0,
+          "p99": 800.0
+        },
+        "allocationCount": {
+          "max": 1.0,
+          "median": 1.0,
+          "min": 1.0,
+          "p95": 1.0,
+          "p99": 1.0
+        },
+        "nanoseconds": {
+          "max": 12000.0,
+          "median": 11700.0,
+          "min": 11300.0,
+          "p95": 12000.0,
+          "p99": 12000.0
+        },
+        "nanosecondsPerEntity": {
+          "max": 120.0,
+          "median": 117.0,
+          "min": 113.0,
+          "p95": 120.0,
+          "p99": 120.0
+        }
+      },
+      "samples": 30,
+      "undo": {
+        "allocationBytes": {
+          "max": 34160.0,
+          "median": 34160.0,
+          "min": 34160.0,
+          "p95": 34160.0,
+          "p99": 34160.0
+        },
+        "allocationCount": {
+          "max": 905.0,
+          "median": 905.0,
+          "min": 905.0,
+          "p95": 905.0,
+          "p99": 905.0
+        },
+        "nanoseconds": {
+          "max": 52500.0,
+          "median": 47800.0,
+          "min": 46300.0,
+          "p95": 50000.0,
+          "p99": 52500.0
+        },
+        "nanosecondsPerEntity": {
+          "max": 525.0,
+          "median": 478.0,
+          "min": 463.0,
+          "p95": 500.0,
+          "p99": 525.0
+        }
+      }
+    },
+    {
+      "entityCount": 100,
+      "estimatedHistoryBytes": {
+        "max": 25941.0,
+        "median": 25941.0,
+        "min": 25941.0,
+        "p95": 25941.0,
+        "p99": 25941.0
+      },
+      "execute": {
+        "allocationBytes": {
+          "max": 303195.0,
+          "median": 303195.0,
+          "min": 303195.0,
+          "p95": 303195.0,
+          "p99": 303195.0
+        },
+        "allocationCount": {
+          "max": 3951.0,
+          "median": 3951.0,
+          "min": 3951.0,
+          "p95": 3951.0,
+          "p99": 3951.0
+        },
+        "nanoseconds": {
+          "max": 254300.0,
+          "median": 227200.0,
+          "min": 213100.0,
+          "p95": 253800.0,
+          "p99": 254300.0
+        },
+        "nanosecondsPerEntity": {
+          "max": 2543.0,
+          "median": 2272.0,
+          "min": 2131.0,
+          "p95": 2538.0,
+          "p99": 2543.0
+        }
+      },
+      "name": "duplicate_subtree",
+      "redo": {
+        "allocationBytes": {
+          "max": 45799.0,
+          "median": 45799.0,
+          "min": 45799.0,
+          "p95": 45799.0,
+          "p99": 45799.0
+        },
+        "allocationCount": {
+          "max": 1104.0,
+          "median": 1104.0,
+          "min": 1104.0,
+          "p95": 1104.0,
+          "p99": 1104.0
+        },
+        "nanoseconds": {
+          "max": 63500.0,
+          "median": 59300.0,
+          "min": 58700.0,
+          "p95": 61500.0,
+          "p99": 63500.0
+        },
+        "nanosecondsPerEntity": {
+          "max": 635.0,
+          "median": 593.0,
+          "min": 587.0,
+          "p95": 615.0,
+          "p99": 635.0
+        }
+      },
+      "samples": 30,
+      "undo": {
+        "allocationBytes": {
+          "max": 14268.0,
+          "median": 14268.0,
+          "min": 14268.0,
+          "p95": 14268.0,
+          "p99": 14268.0
+        },
+        "allocationCount": {
+          "max": 219.0,
+          "median": 219.0,
+          "min": 219.0,
+          "p95": 219.0,
+          "p99": 219.0
+        },
+        "nanoseconds": {
+          "max": 25800.0,
+          "median": 25100.0,
+          "min": 24400.0,
+          "p95": 25800.0,
+          "p99": 25800.0
+        },
+        "nanosecondsPerEntity": {
+          "max": 258.0,
+          "median": 251.0,
+          "min": 244.0,
+          "p95": 258.0,
+          "p99": 258.0
+        }
+      }
+    },
+    {
+      "entityCount": 10000,
+      "estimatedHistoryBytes": {
+        "max": 2560338.0,
+        "median": 2560338.0,
+        "min": 2560338.0,
+        "p95": 2560338.0,
+        "p99": 2560338.0
+      },
+      "execute": {
+        "allocationBytes": {
+          "max": 12060777.0,
+          "median": 12060777.0,
+          "min": 12060777.0,
+          "p95": 12060777.0,
+          "p99": 12060777.0
+        },
+        "allocationCount": {
+          "max": 150060.0,
+          "median": 150060.0,
+          "min": 150060.0,
+          "p95": 150060.0,
+          "p99": 150060.0
+        },
+        "nanoseconds": {
+          "max": 12984900.0,
+          "median": 12219100.0,
+          "min": 11596000.0,
+          "p95": 12682400.0,
+          "p99": 12984900.0
+        },
+        "nanosecondsPerEntity": {
+          "max": 1298.49,
+          "median": 1221.91,
+          "min": 1159.6,
+          "p95": 1268.24,
+          "p99": 1298.49
+        }
+      },
+      "name": "delete_subtree",
+      "redo": {
+        "allocationBytes": {
+          "max": 80039.0,
+          "median": 80039.0,
+          "min": 80039.0,
+          "p95": 80039.0,
+          "p99": 80039.0
+        },
+        "allocationCount": {
+          "max": 1.0,
+          "median": 1.0,
+          "min": 1.0,
+          "p95": 1.0,
+          "p99": 1.0
+        },
+        "nanoseconds": {
+          "max": 2458000.0,
+          "median": 2136100.0,
+          "min": 1786600.0,
+          "p95": 2373600.0,
+          "p99": 2458000.0
+        },
+        "nanosecondsPerEntity": {
+          "max": 245.8,
+          "median": 213.61,
+          "min": 178.66,
+          "p95": 237.36,
+          "p99": 245.8
+        }
+      },
+      "samples": 30,
+      "undo": {
+        "allocationBytes": {
+          "max": 3462490.0,
+          "median": 3462490.0,
+          "min": 3462490.0,
+          "p95": 3462490.0,
+          "p99": 3462490.0
+        },
+        "allocationCount": {
+          "max": 90005.0,
+          "median": 90005.0,
+          "min": 90005.0,
+          "p95": 90005.0,
+          "p99": 90005.0
+        },
+        "nanoseconds": {
+          "max": 10598500.0,
+          "median": 7215200.0,
+          "min": 6627200.0,
+          "p95": 7688500.0,
+          "p99": 10598500.0
+        },
+        "nanosecondsPerEntity": {
+          "max": 1059.85,
+          "median": 721.52,
+          "min": 662.72,
+          "p95": 768.85,
+          "p99": 1059.85
+        }
+      }
+    },
+    {
+      "entityCount": 10000,
+      "estimatedHistoryBytes": {
+        "max": 2560341.0,
+        "median": 2560341.0,
+        "min": 2560341.0,
+        "p95": 2560341.0,
+        "p99": 2560341.0
+      },
+      "execute": {
+        "allocationBytes": {
+          "max": 39674253.0,
+          "median": 39674253.0,
+          "min": 39674253.0,
+          "p95": 39674253.0,
+          "p99": 39674253.0
+        },
+        "allocationCount": {
+          "max": 390074.0,
+          "median": 390074.0,
+          "min": 390074.0,
+          "p95": 390074.0,
+          "p99": 390074.0
+        },
+        "nanoseconds": {
+          "max": 77593000.0,
+          "median": 71116200.0,
+          "min": 37967500.0,
+          "p95": 76549200.0,
+          "p99": 77593000.0
+        },
+        "nanosecondsPerEntity": {
+          "max": 7759.3,
+          "median": 7111.62,
+          "min": 3796.75,
+          "p95": 7654.92,
+          "p99": 7759.3
+        }
+      },
+      "name": "duplicate_subtree",
+      "redo": {
+        "allocationBytes": {
+          "max": 4684586.0,
+          "median": 4684586.0,
+          "min": 4684586.0,
+          "p95": 4684586.0,
+          "p99": 4684586.0
+        },
+        "allocationCount": {
+          "max": 110004.0,
+          "median": 110004.0,
+          "min": 110004.0,
+          "p95": 110004.0,
+          "p99": 110004.0
+        },
+        "nanoseconds": {
+          "max": 26808500.0,
+          "median": 23456900.0,
+          "min": 10583700.0,
+          "p95": 26050900.0,
+          "p99": 26808500.0
+        },
+        "nanosecondsPerEntity": {
+          "max": 2680.85,
+          "median": 2345.69,
+          "min": 1058.37,
+          "p95": 2605.09,
+          "p99": 2680.85
+        }
+      },
+      "samples": 30,
+      "undo": {
+        "allocationBytes": {
+          "max": 1448459.0,
+          "median": 1448459.0,
+          "min": 1448459.0,
+          "p95": 1448459.0,
+          "p99": 1448459.0
+        },
+        "allocationCount": {
+          "max": 20030.0,
+          "median": 20030.0,
+          "min": 20030.0,
+          "p95": 20030.0,
+          "p99": 20030.0
+        },
+        "nanoseconds": {
+          "max": 12141300.0,
+          "median": 10640700.0,
+          "min": 5055000.0,
+          "p95": 12031000.0,
+          "p99": 12141300.0
+        },
+        "nanosecondsPerEntity": {
+          "max": 1214.13,
+          "median": 1064.07,
+          "min": 505.5,
+          "p95": 1203.1,
+          "p99": 1214.13
+        }
+      }
+    }
+  ]
+}

@@ -119,6 +119,15 @@ namespace Iridium {
             }
         }
 
+        template <typename Func>
+        void forEachIndexed(Func callback) {
+            for (uint32_t index = 0; index < pool.size(); ++index) {
+                Slot& slot = pool[index];
+                if (!slot.isFree)
+                    callback(HandleType::fromParts(index, slot.generation), slot.payload);
+            }
+        }
+
         T* get(HandleType handle) {
             if (!handle.isValid()) return nullptr;
 

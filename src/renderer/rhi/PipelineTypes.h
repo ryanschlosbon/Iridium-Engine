@@ -4,16 +4,31 @@
 #include <type_traits>
 #include <glm/glm.hpp>
 #include "renderer/rhi/RenderHandles.h" 
+#include "material/MaterialRuntime.h"
 
 namespace Iridium {
 
-    enum class ShaderProgram : uint8_t { PbrGBuffer, PbrForward };
+    enum class ShaderProgram : uint8_t {
+        CanonicalPbrGBuffer,
+        CanonicalComplexOpaqueForward,
+        CanonicalComplexForward,
+    };
     enum class RenderPassClass : uint8_t { GBuffer, Forward };
     enum class PrimitiveTopology : uint8_t { TriangleList };
     enum class PolygonMode : uint8_t { Fill, Line };
     enum class CullMode : uint8_t { None, Front, Back };
     enum class FrontFace : uint8_t { Clockwise, CounterClockwise };
-    enum class RenderQueue : uint8_t { Opaque, Transparent };
+    enum class RenderQueue : uint8_t {
+        Opaque,
+        ForwardOpaque,
+        Transparent,
+    };
+
+    constexpr bool renderQueueWritesDepth(RenderQueue queue) noexcept {
+        return queue == RenderQueue::Opaque ||
+            queue == RenderQueue::ForwardOpaque;
+    }
+
     enum class BlendMode : uint8_t { Opaque, AlphaBlend, Additive };
     enum class DepthCompare : uint8_t { Less, LessOrEqual, Greater, Always };
 
@@ -25,7 +40,7 @@ namespace Iridium {
 
     // Defines exactly how the GPU should render this specific material
     struct PipelineStateDesc {
-        ShaderProgram shaderProgram = ShaderProgram::PbrGBuffer;
+        ShaderProgram shaderProgram = ShaderProgram::CanonicalPbrGBuffer;
         RenderPassClass renderPass = RenderPassClass::GBuffer;
         PrimitiveTopology topology = PrimitiveTopology::TriangleList;
         PolygonMode polygonMode = PolygonMode::Fill;
@@ -71,6 +86,13 @@ namespace Iridium {
         PipelineHandle pipeline;
         RenderQueue renderQueue;
         uint64_t opaqueSortKey;
+    };
+
+    struct CanonicalMaterialAsset {
+        std::string name;
+        PackedGpuMaterial packed;
+        std::array<TextureHandle, PackedGpuMaterial::MaxTextureUses> textures{};
+        PipelineStateDesc pipelineState;
     };
 
     constexpr uint64_t makeOpaqueSortKey(PipelineHandle pipeline, MaterialHandle material) noexcept {

@@ -1,0 +1,19 @@
+{
+  "Scene": "Removed runtime path names",
+  "Entities": [
+    {
+      "EntityID": 2,
+      "Name": "Legacy runtime paths",
+      "TransformComponent": {
+        "position": [0, 0, 0],
+        "rotation": [0, 0, 0],
+        "scale": [1, 1, 1]
+      },
+      "MeshComponent": {
+        "enabled": true,
+        "currentMeshPath": "models/current.gltf",
+        "requestedMeshPath": "models/requested.gltf"
+      }
+    }
+  ]
+}

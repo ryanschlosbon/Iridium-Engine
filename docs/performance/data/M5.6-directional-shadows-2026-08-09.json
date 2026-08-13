@@ -1,0 +1,107 @@
+{
+  "schema": "iridium.m5_6_directional_shadows.v1",
+  "date": "2026-08-09",
+  "hardware": {
+    "gpu": "NVIDIA GeForce RTX 4090",
+    "cpu": "Intel Core i9-14900K",
+    "resolution": [3840, 2160],
+    "configuration": "x64-release",
+    "validation_configuration": "x64-debug",
+    "driver": "NVIDIA 610.74",
+    "vulkan_sdk": "1.4.335"
+  },
+  "policy": {
+    "selected_directional_lights": 1,
+    "cascade_count": 4,
+    "resolution": 2048,
+    "format": "D32_SFLOAT",
+    "split_lambda": 0.7,
+    "guard_band_fraction": 0.05,
+    "depth_padding_meters": 100.0,
+    "cascade_blend_fraction": 0.1,
+    "filter": "hardware_compare_5x5_tent",
+    "raster_bias": { "constant": 1.25, "slope": 1.75 },
+    "receiver_depth_bias": 0.001,
+    "world_normal_offset_texels": 1.0,
+    "maximum_cascade_updates_per_frame": 4
+  },
+  "fixture": {
+    "manifest": "assets/benchmarks/m5/directional-shadow-manifest.v1.json",
+    "manifest_sha256": "86f36ee026de5181d41ae284db5eb0d8da1a07cc2bd60b360cf508c470e21d23",
+    "source": "assets/benchmarks/m5/directional-shadow-contact.gltf",
+    "source_sha256": "d1c8cb68508d8e2b43ab1bc6639d0fadffce7683429c8d2129d6c764faa9bc3e",
+    "asset_guid": "019fe593-65be-799f-8a19-1bac0f4a3612",
+    "cook_key": "d3fc05ef38dfc39aa849c48bdd36dce0545cec879f9c8cafbe6db99554f80717",
+    "artifact": "out/benchmarks/m5.6/contact-ddc-alpha/d3/fc05ef38dfc39aa849c48bdd36dce0545cec879f9c8cafbe6db99554f80717.irartifact",
+    "artifact_sha256": "71b0c124bffee25a3171f110b64c42856e2140d02704a8c43e7ec5e2c6e3773a",
+    "artifact_bytes": 3616,
+    "opaque_caster": "one-sided foreground triangle",
+    "receiver": "two-sided plane",
+    "alpha_mask_oracle": "fully clipped duplicate triangle"
+  },
+  "validation_capture": {
+    "path": "out/benchmarks/m5.6/contact-final-accepted-v2/directional_shadow_contact_v1__r1__contact_front_v1__final__1280x720__mf0__final-sdr.tga",
+    "sha256": "2fcfa1ff658f96e76bb3b804a4b203074526deb0ad08601437858e736d5fccf6",
+    "validation_clean": true,
+    "active": true,
+    "sampleable_mask": 15,
+    "alpha_mask_image_identity_with_pre_oracle_capture": true
+  },
+  "visual_comparison_to_initial_directional_candidate": {
+    "changed_pixel_count": 3056,
+    "changed_pixel_fraction": 0.0033159722222222223,
+    "maximum_rgba_code_delta": 70,
+    "mean_luma_ssim": 0.9994944274119578,
+    "interpretation": "localized accepted normal-offset and final filtering change"
+  },
+  "release_4k": {
+    "warmup_frames": 64,
+    "measured_frames": 64,
+    "cache_hit": {
+      "gpu_frame_us": { "median": 654.336, "p95": 995.424, "p99": 1010.720 },
+      "gpu_shadow_samples": 0,
+      "cpu_frame_us": { "median": 979.9, "p95": 1943.8, "p99": 2028.4 },
+      "cascades": { "dirty": 0, "updated": 0, "cached": 4 },
+      "shadow_draws": 0,
+      "raw_profile": "out/benchmarks/m5.6/profiles/directional-cache-hit-release-4k-final.jsonl"
+    },
+    "moving_caster_full_refresh": {
+      "gpu_frame_us": { "median": 669.312, "p95": 1022.400, "p99": 1127.136 },
+      "gpu_shadow_us": { "median": 17.088, "p95": 17.696, "p99": 17.824 },
+      "cpu_frame_us": { "median": 1206.3, "p95": 2101.3, "p99": 2505.3 },
+      "cpu_shadow_record_us": { "median": 21.6, "p95": 27.1, "p99": 30.6 },
+      "cascades": { "dirty": 4, "updated": 4, "cached": 0 },
+      "shadow_draws": 12,
+      "alpha_mask_shadow_draws": 4,
+      "raw_profile": "out/benchmarks/m5.6/profiles/directional-moving-update-release-4k-final.jsonl"
+    },
+    "deferred_direct_ibl_shadow_sampling_us": {
+      "cache_hit_median": 272.384,
+      "moving_median": 270.336
+    },
+    "dropped_frames": 0
+  },
+  "memory": {
+    "category": "image.shadow.directional",
+    "requested_live_bytes": 67108864,
+    "committed_live_bytes": 67108864,
+    "live_allocations": 1,
+    "render_graph_physical_slot_delta": 0,
+    "reason": "imported external persistent array"
+  },
+  "render_graph": {
+    "sdr_passes": 20,
+    "sdr_logical_resources": 22,
+    "physical_slots": 18,
+    "shadow_resource": "shadow.directional",
+    "ownership": "imported external"
+  },
+  "verification": {
+    "debug_ctest": "66/66",
+    "release_ctest": "66/66",
+    "vulkan_validation": "clean",
+    "shader_provenance": "assets/benchmarks/m5/run-manifest.v1.json#m5_6Supersession",
+    "accepted_adr": "docs/architecture/ADR-0008-raster-shadow-ownership-and-caching.md"
+  }
+}
+

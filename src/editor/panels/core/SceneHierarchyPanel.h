@@ -1,14 +1,35 @@
 #pragma once
+
 #include "../EditorPanel.h"
 #include "ecs/Entity.h"
+#include "editor/EditorSelectionState.h"
+
+#include <array>
+
+namespace Iridium {
+    class EditorSceneCommandService;
+    class EditorTransactionService;
+}
 
 class SceneHierarchyPanel : public EditorPanel {
 public:
-    // We pass a pointer to the EditorSystem's selected entity so the panel can update it!
-    SceneHierarchyPanel(Entity* selectedEntityPtr);
+    explicit SceneHierarchyPanel(
+        Iridium::EditorSelectionState* selection,
+        Iridium::EditorTransactionService* transactions,
+        Iridium::EditorSceneCommandService* sceneCommands);
 
-    void OnImGuiRender(Registry& registry, Iridium::AssetManager* assetManager) override;
+    void OnImGuiRender(
+        Registry& registry,
+        Iridium::AssetManager* assetManager) override;
 
 private:
-    Entity* selectedEntity;
+    void beginRename(
+        Registry& registry,
+        Entity entity);
+
+    Iridium::EditorSelectionState* selection_ = nullptr;
+    Iridium::EditorTransactionService* transactions_ = nullptr;
+    Iridium::EditorSceneCommandService* sceneCommands_ = nullptr;
+    Entity renamingEntity_ = NULL_ENTITY;
+    std::array<char, 256> renameBuffer_{};
 };

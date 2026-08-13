@@ -1,0 +1,154 @@
+{
+  "schema_version": 1,
+  "fixtures": [
+    {
+      "id": "material_gpu_lab_v1",
+      "revision": 1,
+      "required": true,
+      "source_asset": "material_gpu_lab.gltf",
+      "environment": {
+        "kind": "procedural_constant",
+        "constant_linear_rgb": [0.18, 0.18, 0.18]
+      },
+      "camera": {
+        "id": "front_v1",
+        "position": [0.0, 0.0, 6.0],
+        "target": [0.0, 0.0, 0.0],
+        "up": [0.0, 1.0, 0.0],
+        "vertical_fov_degrees": 45.0,
+        "near": 0.1,
+        "far": 100.0
+      },
+      "scene_factory": {
+        "kind": "instanced_grid",
+        "instance_grid": [1, 1, 1],
+        "instance_spacing": [0.0, 0.0, 0.0]
+      },
+      "output_label": "m2.4_canonical_material_gpu_lab",
+      "warmup_frames": 8,
+      "measured_frames": 1,
+      "content_files": [
+        {
+          "path": "material_gpu_lab.gltf",
+          "sha256": "f44ae95deb2ecbd0c7417d2a1976b67ee989040935872a4f63def463e029ffb5"
+        }
+      ],
+      "expected_behavior": [
+        "Factor-only, textured standard, and masked emissive triangles remain separated.",
+        "The textured material exercises sRGB base color, linear normal/MR/AO, both vertex UV attributes, mirrored/clamped sampling, and a generated mip chain."
+      ],
+      "unavailable_capabilities": [
+        "M2.8 canonical reference GBuffer"
+      ]
+    },
+    {
+      "id": "standard_shading_opaque_v1",
+      "revision": 1,
+      "required": true,
+      "source_asset": "standard_shading_opaque.gltf",
+      "environment": {
+        "kind": "procedural_constant",
+        "constant_linear_rgb": [0.18, 0.18, 0.18]
+      },
+      "camera": {
+        "id": "front_v1",
+        "position": [0.0, 0.0, 6.0],
+        "target": [0.0, 0.0, 0.0],
+        "up": [0.0, 1.0, 0.0],
+        "vertical_fov_degrees": 45.0,
+        "near": 0.1,
+        "far": 100.0
+      },
+      "scene_factory": {
+        "kind": "instanced_grid",
+        "instance_grid": [1, 1, 1],
+        "instance_spacing": [0.0, 0.0, 0.0]
+      },
+      "output_label": "m2.5_standard_opaque_twin",
+      "warmup_frames": 8,
+      "measured_frames": 1,
+      "content_files": [{
+        "path": "standard_shading_opaque.gltf",
+        "sha256": "27f6470288c6103ead4c10d23cb1d47ec983e84da5dd1284205bf896d536ab7b"
+      }],
+      "expected_behavior": [
+        "The standard closure uses the canonical deferred path and generated positive-handed tangent frame."
+      ],
+      "unavailable_capabilities": ["M2.8 canonical reference GBuffer"]
+    },
+    {
+      "id": "standard_shading_forward_v1",
+      "revision": 1,
+      "required": true,
+      "source_asset": "standard_shading_forward.gltf",
+      "environment": {
+        "kind": "procedural_constant",
+        "constant_linear_rgb": [0.18, 0.18, 0.18]
+      },
+      "camera": {
+        "id": "front_v1",
+        "position": [0.0, 0.0, 6.0],
+        "target": [0.0, 0.0, 0.0],
+        "up": [0.0, 1.0, 0.0],
+        "vertical_fov_degrees": 45.0,
+        "near": 0.1,
+        "far": 100.0
+      },
+      "scene_factory": {
+        "kind": "instanced_grid",
+        "instance_grid": [1, 1, 1],
+        "instance_spacing": [0.0, 0.0, 0.0]
+      },
+      "output_label": "m2.5_standard_forced_forward_twin",
+      "warmup_frames": 8,
+      "measured_frames": 1,
+      "content_files": [{
+        "path": "standard_shading_forward.gltf",
+        "sha256": "b45680cbfb84a95f6145008b93b1592c206265f490a77e69afb6acbb9a23be68"
+      }],
+      "expected_behavior": [
+        "Alpha BLEND forces the same non-transmissive standard closure through forward shading using the shared BSDF."
+      ],
+      "unavailable_capabilities": ["M6 production transparent ordering"]
+    },
+    {
+      "id": "complex_closure_lab_v1",
+      "revision": 1,
+      "required": true,
+      "source_asset": "complex_closure_lab.gltf",
+      "environment": {
+        "kind": "procedural_constant",
+        "constant_linear_rgb": [0.18, 0.18, 0.18]
+      },
+      "camera": {
+        "id": "front_grid_v1",
+        "position": [0.0, 0.0, 8.0],
+        "target": [0.0, 0.0, 0.0],
+        "up": [0.0, 1.0, 0.0],
+        "vertical_fov_degrees": 45.0,
+        "near": 0.1,
+        "far": 100.0
+      },
+      "scene_factory": {
+        "kind": "instanced_grid",
+        "instance_grid": [1, 1, 1],
+        "instance_spacing": [0.0, 0.0, 0.0]
+      },
+      "output_label": "m2.6_complex_closure_lab",
+      "warmup_frames": 8,
+      "measured_frames": 1,
+      "content_files": [{
+        "path": "complex_closure_lab.gltf",
+        "sha256": "234836529da3186a49269d73cb5483547dc0917c46f8399103beeab6c5ac10d1"
+      }],
+      "expected_behavior": [
+        "Standard and dormant controls remain deferred while active clearcoat, sheen, anisotropy, iridescence, transmission/volume/dispersion, diffuse transmission, and unlit records use canonical forward evaluation.",
+        "Every active lobe produces a spatially isolated, explainable difference without expanding the universal GBuffer."
+      ],
+      "unavailable_capabilities": [
+        "M5 production clustered lighting",
+        "M6 production ordering/refraction/dispersion"
+      ]
+    }
+  ]
+}

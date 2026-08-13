@@ -1,6 +1,7 @@
 #include "VulkanResourceAllocator.h"
 
 #include <cstring>
+#include <algorithm>
 #include <stdexcept>
 #include <string>
 
@@ -17,9 +18,55 @@ namespace Iridium {
             throw std::runtime_error(std::string(operation) + " failed with VkResult " +
                 std::to_string(static_cast<int>(result)) + ".");
         }
+
+        uint64_t imageRequestedBytes(VkExtent2D extent, VkFormat format,
+            uint32_t mipLevels, uint32_t arrayLayers) noexcept {
+            uint64_t bytesPerTexel = 0;
+            uint64_t bytesPerBlock = 0;
+            switch (format) {
+            case VK_FORMAT_R8G8B8A8_UNORM:
+            case VK_FORMAT_R8G8B8A8_SRGB:
+            case VK_FORMAT_B8G8R8A8_UNORM:
+            case VK_FORMAT_B8G8R8A8_SRGB:
+            case VK_FORMAT_D32_SFLOAT:
+                bytesPerTexel = 4;
+                break;
+            case VK_FORMAT_R16G16_SFLOAT:
+                bytesPerTexel = 4;
+                break;
+            case VK_FORMAT_R16G16B16A16_SFLOAT:
+                bytesPerTexel = 8;
+                break;
+            case VK_FORMAT_R32G32B32A32_SFLOAT:
+                bytesPerTexel = 16;
+                break;
+            case VK_FORMAT_BC4_UNORM_BLOCK:
+                bytesPerBlock = 8;
+                break;
+            case VK_FORMAT_BC5_UNORM_BLOCK:
+            case VK_FORMAT_BC6H_UFLOAT_BLOCK:
+            case VK_FORMAT_BC7_UNORM_BLOCK:
+            case VK_FORMAT_BC7_SRGB_BLOCK:
+                bytesPerBlock = 16;
+                break;
+            default:
+                break;
+            }
+            uint64_t result = 0;
+            for (uint32_t level = 0; level < mipLevels; ++level) {
+                result += bytesPerBlock != 0
+                    ? ((static_cast<uint64_t>(extent.width) + 3) / 4) *
+                        ((static_cast<uint64_t>(extent.height) + 3) / 4) * bytesPerBlock
+                    : static_cast<uint64_t>(extent.width) * extent.height * bytesPerTexel;
+                extent.width = extent.width > 1 ? extent.width / 2 : 1;
+                extent.height = extent.height > 1 ? extent.height / 2 : 1;
+            }
+            return result * arrayLayers;
+        }
     } // namespace
 
-    void VulkanResourceAllocator::init(VkPhysicalDevice physicalDevice, VkDevice device) {
+    void VulkanResourceAllocator::init(VkPhysicalDevice physicalDevice, VkDevice device,
+        bool memoryBudgetAvailable) {
         if (physicalDevice == VK_NULL_HANDLE || device == VK_NULL_HANDLE) {
             throw std::invalid_argument("VulkanResourceAllocator requires valid Vulkan devices.");
         }
@@ -28,6 +75,9 @@ namespace Iridium {
         }
         physicalDevice_ = physicalDevice;
         device_ = device;
+        memoryProfile_ = MemoryProfileAccumulator{};
+        memoryBudgetAvailable_ = memoryBudgetAvailable;
+        vkGetPhysicalDeviceMemoryProperties(physicalDevice_, &memoryProperties_);
     }
 
     void VulkanResourceAllocator::cleanup() {
@@ -35,17 +85,17 @@ namespace Iridium {
         // resource before cleanup; this method only releases allocator device references.
         physicalDevice_ = VK_NULL_HANDLE;
         device_ = VK_NULL_HANDLE;
+        memoryProperties_ = {};
+        memoryBudgetAvailable_ = false;
     }
 
     uint32_t VulkanResourceAllocator::findMemoryType(
         uint32_t typeFilter, VkMemoryPropertyFlags properties) const {
         requireInitialized(physicalDevice_, device_);
 
-        VkPhysicalDeviceMemoryProperties memoryProperties{};
-        vkGetPhysicalDeviceMemoryProperties(physicalDevice_, &memoryProperties);
-        for (uint32_t i = 0; i < memoryProperties.memoryTypeCount; ++i) {
+        for (uint32_t i = 0; i < memoryProperties_.memoryTypeCount; ++i) {
             if ((typeFilter & (1u << i)) != 0 &&
-                (memoryProperties.memoryTypes[i].propertyFlags & properties) == properties) {
+                (memoryProperties_.memoryTypes[i].propertyFlags & properties) == properties) {
                 return i;
             }
         }
@@ -54,7 +104,8 @@ namespace Iridium {
 
     VulkanBufferResource VulkanResourceAllocator::createBuffer(
         VkDeviceSize size, VkBufferUsageFlags usage,
-        VkMemoryPropertyFlags memoryProperties, bool persistentlyMapped) {
+        VkMemoryPropertyFlags memoryProperties, bool persistentlyMapped,
+        ProfileMemoryCategory category) {
         requireInitialized(physicalDevice_, device_);
 
         VkBufferCreateInfo bufferInfo{ VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
@@ -99,19 +150,37 @@ namespace Iridium {
             }
         }
         resource.size = size;
+        const uint32_t memoryTypeIndex = allocateInfo.memoryTypeIndex;
+        const uint32_t memoryHeapIndex =
+            memoryProperties_.memoryTypes[memoryTypeIndex].heapIndex;
+        memoryProfile_.recordAllocation(resource.allocation, category,
+            static_cast<uint64_t>(size), static_cast<uint64_t>(requirements.size),
+            memoryTypeIndex, memoryHeapIndex);
         return resource;
     }
 
     VulkanImageResource VulkanResourceAllocator::createImage2D(
-        VkExtent2D extent, VkFormat format, VkImageUsageFlags usage, VkImageAspectFlags aspect) {
+        VkExtent2D extent, VkFormat format, VkImageUsageFlags usage,
+        VkImageAspectFlags aspect, ProfileMemoryCategory category,
+        uint32_t mipLevels, uint32_t arrayLayers, VkImageCreateFlags flags,
+        VkImageViewType viewType) {
         requireInitialized(physicalDevice_, device_);
+        if (mipLevels == 0) throw std::invalid_argument("image mip count must be nonzero");
+        if (arrayLayers == 0) throw std::invalid_argument("image layer count must be nonzero");
+        if (viewType == VK_IMAGE_VIEW_TYPE_CUBE &&
+            (arrayLayers != 6 || extent.width != extent.height ||
+                (flags & VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT) == 0)) {
+            throw std::invalid_argument(
+                "cube images require six square cube-compatible layers");
+        }
 
         VkImageCreateInfo imageInfo{ VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
+        imageInfo.flags = flags;
         imageInfo.imageType = VK_IMAGE_TYPE_2D;
         imageInfo.format = format;
         imageInfo.extent = { extent.width, extent.height, 1 };
-        imageInfo.mipLevels = 1;
-        imageInfo.arrayLayers = 1;
+        imageInfo.mipLevels = mipLevels;
+        imageInfo.arrayLayers = arrayLayers;
         imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
         imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
         imageInfo.usage = usage;
@@ -150,9 +219,9 @@ namespace Iridium {
 
         VkImageViewCreateInfo viewInfo{ VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
         viewInfo.image = resource.image;
-        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        viewInfo.viewType = viewType;
         viewInfo.format = format;
-        viewInfo.subresourceRange = { aspect, 0, 1, 0, 1 };
+        viewInfo.subresourceRange = { aspect, 0, mipLevels, 0, arrayLayers };
         result = vkCreateImageView(device_, &viewInfo, nullptr, &resource.view);
         if (result != VK_SUCCESS) {
             vkDestroyImage(device_, resource.image, nullptr);
@@ -163,10 +232,20 @@ namespace Iridium {
         resource.extent = extent;
         resource.format = format;
         resource.aspect = aspect;
+        resource.mipLevels = mipLevels;
+        resource.arrayLayers = arrayLayers;
+        resource.viewType = viewType;
+        const uint32_t memoryTypeIndex = allocateInfo.memoryTypeIndex;
+        const uint32_t memoryHeapIndex =
+            memoryProperties_.memoryTypes[memoryTypeIndex].heapIndex;
+        memoryProfile_.recordAllocation(resource.allocation, category,
+            imageRequestedBytes(extent, format, mipLevels, arrayLayers),
+            static_cast<uint64_t>(requirements.size), memoryTypeIndex,
+            memoryHeapIndex);
         return resource;
     }
 
-    void VulkanResourceAllocator::destroy(VulkanBufferResource& resource) {
+    void VulkanResourceAllocator::destroy(VulkanBufferResource& resource) noexcept {
         if (device_ != VK_NULL_HANDLE) {
             if (resource.mapped != nullptr && resource.memory != VK_NULL_HANDLE) {
                 vkUnmapMemory(device_, resource.memory);
@@ -178,10 +257,11 @@ namespace Iridium {
                 vkFreeMemory(device_, resource.memory, nullptr);
             }
         }
+        memoryProfile_.recordFree(resource.allocation);
         resource = {};
     }
 
-    void VulkanResourceAllocator::destroy(VulkanImageResource& resource) {
+    void VulkanResourceAllocator::destroy(VulkanImageResource& resource) noexcept {
         if (device_ != VK_NULL_HANDLE) {
             if (resource.view != VK_NULL_HANDLE) {
                 vkDestroyImageView(device_, resource.view, nullptr);
@@ -193,6 +273,7 @@ namespace Iridium {
                 vkFreeMemory(device_, resource.memory, nullptr);
             }
         }
+        memoryProfile_.recordFree(resource.allocation);
         resource = {};
     }
 
@@ -206,6 +287,40 @@ namespace Iridium {
         }
         std::memcpy(static_cast<std::byte*>(resource.mapped) + offset,
             data.data(), data.size_bytes());
+    }
+
+    void VulkanResourceAllocator::reclassify(VulkanImageResource& resource,
+        ProfileMemoryCategory category) noexcept {
+        memoryProfile_.reclassify(resource.allocation, category);
+    }
+
+    FrameMemoryProfile VulkanResourceAllocator::memorySnapshot() const noexcept {
+        FrameMemoryProfile result = memoryProfile_.snapshot();
+        result.heapCount = std::min<uint32_t>(memoryProperties_.memoryHeapCount,
+            static_cast<uint32_t>(result.heaps.size()));
+        for (uint32_t index = 0; index < result.heapCount; ++index) {
+            result.heaps[index].heapSizeBytes =
+                static_cast<uint64_t>(memoryProperties_.memoryHeaps[index].size);
+            result.heaps[index].flags = memoryProperties_.memoryHeaps[index].flags;
+        }
+
+        if (memoryBudgetAvailable_ && physicalDevice_ != VK_NULL_HANDLE) {
+            VkPhysicalDeviceMemoryBudgetPropertiesEXT budget{
+                VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_BUDGET_PROPERTIES_EXT };
+            VkPhysicalDeviceMemoryProperties2 properties{
+                VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PROPERTIES_2 };
+            properties.pNext = &budget;
+            vkGetPhysicalDeviceMemoryProperties2(physicalDevice_, &properties);
+            result.driverHeapBudgetAvailable = true;
+            for (uint32_t index = 0; index < result.heapCount; ++index) {
+                result.heaps[index].driverBudgetBytes =
+                    static_cast<uint64_t>(budget.heapBudget[index]);
+                result.heaps[index].driverUsageBytes =
+                    static_cast<uint64_t>(budget.heapUsage[index]);
+                result.heaps[index].driverBudgetAvailable = true;
+            }
+        }
+        return result;
     }
 
 } // namespace Iridium

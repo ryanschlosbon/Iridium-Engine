@@ -21,5 +21,5 @@ private:
 struct RenderObject {
     std::shared_ptr<Iridium::ModelAsset> model; // The specific car/box/plane
     glm::mat4 transform;               // Where it is
-    uint32_t entityID;
+    Entity entity;
 };

@@ -7,7 +7,10 @@
 
 namespace Iridium {
 
-    void VulkanMeshLayouts::init(VkDevice device, VkDescriptorSetLayout lightingSetLayout) {
+    void VulkanMeshLayouts::init(VkDevice device,
+        VkDescriptorSetLayout lightingSetLayout,
+        VkDescriptorSetLayout indexedMaterialSetLayout,
+        VkDescriptorSetLayout indexedSamplerSetLayout) {
         if (device_ != VK_NULL_HANDLE) {
             throw std::logic_error("VulkanMeshLayouts is already initialized");
         }
@@ -32,33 +35,23 @@ namespace Iridium {
                 throw std::runtime_error("failed to create global descriptor set layout");
             }
 
-            std::array<VkDescriptorSetLayoutBinding, 5> materialBindings{};
-            for (uint32_t binding = 0; binding < materialBindings.size(); ++binding) {
-                materialBindings[binding].binding = binding;
-                materialBindings[binding].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                materialBindings[binding].descriptorCount = 1;
-                materialBindings[binding].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+            if (indexedMaterialSetLayout == VK_NULL_HANDLE ||
+                indexedSamplerSetLayout == VK_NULL_HANDLE) {
+                throw std::invalid_argument(
+                    "Indexed material and sampler layouts are required");
             }
-
-            VkDescriptorSetLayoutCreateInfo materialLayoutInfo{ VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
-            materialLayoutInfo.bindingCount = static_cast<uint32_t>(materialBindings.size());
-            materialLayoutInfo.pBindings = materialBindings.data();
-
-            if (vkCreateDescriptorSetLayout(device_, &materialLayoutInfo, nullptr, &materialSetLayout_) != VK_SUCCESS) {
-                throw std::runtime_error("failed to create material descriptor set layout");
-            }
+            materialSetLayout_ = indexedMaterialSetLayout;
+            samplerSetLayout_ = indexedSamplerSetLayout;
 
             VkPushConstantRange meshPushConstants{};
             meshPushConstants.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
             meshPushConstants.offset = 0;
-            meshPushConstants.size = sizeof(MeshPushConstants);
+            meshPushConstants.size = sizeof(CanonicalMeshPushConstants);
 
-            const std::array<VkDescriptorSetLayout, 2> gBufferSetLayouts = {
-                globalSetLayout_,
-                materialSetLayout_,
-            };
+            std::array<VkDescriptorSetLayout, 3> gBufferSetLayouts{
+                globalSetLayout_, materialSetLayout_, samplerSetLayout_ };
             VkPipelineLayoutCreateInfo gBufferLayoutInfo{ VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
-            gBufferLayoutInfo.setLayoutCount = static_cast<uint32_t>(gBufferSetLayouts.size());
+            gBufferLayoutInfo.setLayoutCount = 3u;
             gBufferLayoutInfo.pSetLayouts = gBufferSetLayouts.data();
             gBufferLayoutInfo.pushConstantRangeCount = 1;
             gBufferLayoutInfo.pPushConstantRanges = &meshPushConstants;
@@ -67,13 +60,11 @@ namespace Iridium {
                 throw std::runtime_error("failed to create G-buffer pipeline layout");
             }
 
-            const std::array<VkDescriptorSetLayout, 3> forwardSetLayouts = {
-                globalSetLayout_,
-                materialSetLayout_,
-                lightingSetLayout,
-            };
+            std::array<VkDescriptorSetLayout, 4> forwardSetLayouts{
+                globalSetLayout_, materialSetLayout_,
+                samplerSetLayout_, lightingSetLayout };
             VkPipelineLayoutCreateInfo forwardLayoutInfo{ VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
-            forwardLayoutInfo.setLayoutCount = static_cast<uint32_t>(forwardSetLayouts.size());
+            forwardLayoutInfo.setLayoutCount = 4u;
             forwardLayoutInfo.pSetLayouts = forwardSetLayouts.data();
             forwardLayoutInfo.pushConstantRangeCount = 1;
             forwardLayoutInfo.pPushConstantRanges = &meshPushConstants;
@@ -100,10 +91,8 @@ namespace Iridium {
             vkDestroyPipelineLayout(device_, gBufferPipelineLayout_, nullptr);
             gBufferPipelineLayout_ = VK_NULL_HANDLE;
         }
-        if (materialSetLayout_ != VK_NULL_HANDLE) {
-            vkDestroyDescriptorSetLayout(device_, materialSetLayout_, nullptr);
-            materialSetLayout_ = VK_NULL_HANDLE;
-        }
+        materialSetLayout_ = VK_NULL_HANDLE;
+        samplerSetLayout_ = VK_NULL_HANDLE;
         if (globalSetLayout_ != VK_NULL_HANDLE) {
             vkDestroyDescriptorSetLayout(device_, globalSetLayout_, nullptr);
             globalSetLayout_ = VK_NULL_HANDLE;

@@ -1,2 +1,8 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# M0 manifests hash working-tree fixture bytes; keep them checkout-stable.
+assets/benchmarks/** text eol=lf
+
+# M4 production-contract fixture hashes include exact source bytes.
+tests/scene/fixtures/m4_acceptance_schema1.iridium.scene.json text eol=lf

@@ -1,0 +1,140 @@
+{
+  "schema_version": 1,
+  "milestone": "M2",
+  "source_baseline": "30252593f8fdd2de5dffbb8da31bb570ff49a7c0",
+  "color_domain": "scene_linear_acescg_ap1",
+  "required_axes": [
+    "factors_and_gltf_defaults",
+    "texture_channels_and_color_spaces",
+    "uv0_uv1_and_texture_transform",
+    "sampler_and_mip_semantics",
+    "metallic_roughness_equivalence",
+    "specular_glossiness_equivalence",
+    "normal_and_tangent_detail",
+    "ambient_occlusion",
+    "scene_linear_emissive",
+    "clearcoat_sheen_anisotropy_iridescence",
+    "transmission_volume_and_dispersion",
+    "alpha_double_sided_and_unlit",
+    "invalid_conflicting_and_required_extensions",
+    "sample_car_provenance"
+  ],
+  "cases": [
+    {
+      "id": "legacy_factor_defaults_v1",
+      "availability": "existing_runtime",
+      "earliest_slice": "M2.0",
+      "source_asset": "assets/benchmarks/m0/material_lab.gltf",
+      "source_sha256": "9aaaa326f4378a88de0805b17707095853411a208b528e382255660ad0eec1f3",
+      "axes": [
+        "factors_and_gltf_defaults",
+        "metallic_roughness_equivalence",
+        "alpha_double_sided_and_unlit"
+      ],
+      "expected_current": "Five separated materials exercise defaults, explicit metallic/roughness factors, ignored clearcoat/specular declarations, and current forward transmission.",
+      "expected_m2": "Every source/default origin is explicit and each material compiles to a documented standard, complex-forward, or unlit closure."
+    },
+    {
+      "id": "source_texture_semantics_v1",
+      "availability": "existing_source_only",
+      "earliest_slice": "M2.1",
+      "source_asset": "tests/assets/material_provenance_fixture.gltf",
+      "source_sha256": "c3e3899ddc2d8111c8b591d6cc698e7afe0c80e712173822e87c8b299a5efcdc",
+      "axes": [
+        "texture_channels_and_color_spaces",
+        "uv0_uv1_and_texture_transform",
+        "sampler_and_mip_semantics",
+        "ambient_occlusion",
+        "clearcoat_sheen_anisotropy_iridescence",
+        "transmission_volume_and_dispersion",
+        "invalid_conflicting_and_required_extensions"
+      ],
+      "expected_current": "The M0 provenance sidecar reports selected values but runtime ignores UV selection, transforms, samplers, AO, clearcoat, specular, and the unknown optional extension.",
+      "expected_m2": "SourceMaterial preserves every texture use, origin, sampler, transform, channel, transfer function, extension, and diagnostic without requiring referenced images to render."
+    },
+    {
+      "id": "scene_linear_emissive_v1",
+      "availability": "existing_runtime",
+      "earliest_slice": "M2.0",
+      "source_asset": "assets/benchmarks/m0/opaque_emissive_range.gltf",
+      "source_sha256": "baa16ec7e45d47a236095867395c2df79b26c25a87f66276af556a9810637e6f",
+      "axes": ["scene_linear_emissive"],
+      "expected_current": "Six opaque emissive strengths are visible through the accepted M1 scene-linear graph path.",
+      "expected_m2": "Compiled AP1 emissive values and packed GPU values remain monotonic and match CPU reference evaluation."
+    },
+    {
+      "id": "m1_color_volume_transport_v1",
+      "availability": "existing_runtime",
+      "earliest_slice": "M2.0",
+      "source_asset": "assets/benchmarks/m1/color_volume_transparency.gltf",
+      "source_sha256": "76e4fd4952101c1bf54b28c5d48001851c0708b7b845cade869aa060c98c2072",
+      "axes": [
+        "scene_linear_emissive",
+        "transmission_volume_and_dispersion",
+        "alpha_double_sided_and_unlit"
+      ],
+      "expected_current": "The accepted M1 graph preserves values above 1.0 and one transparent overlap before the final output transform.",
+      "expected_m2": "Material migration preserves the accepted scene/final capture domains and transport-independent AP1 values."
+    },
+    {
+      "id": "canonical_conversion_vectors_v1",
+      "availability": "contract_frozen_fixture_pending",
+      "earliest_slice": "M2.2",
+      "axes": [
+        "metallic_roughness_equivalence",
+        "specular_glossiness_equivalence",
+        "invalid_conflicting_and_required_extensions"
+      ],
+      "source_contract": "CPU vectors cover dielectric, conductor, mixed metallic, RGB specular, glossiness endpoints, IOR, scalar F90, NaN/Inf, and conflicting workflow declarations.",
+      "expected_current": "No pure compiler or equivalence vectors exist.",
+      "expected_m2": "CPU reference equations select exact standard closures or explicit complex/error results with stable diagnostics."
+    },
+    {
+      "id": "normal_roughness_ao_texture_grid_v1",
+      "availability": "contract_frozen_fixture_pending",
+      "earliest_slice": "M2.4",
+      "axes": [
+        "texture_channels_and_color_spaces",
+        "uv0_uv1_and_texture_transform",
+        "sampler_and_mip_semantics",
+        "normal_and_tangent_detail",
+        "ambient_occlusion"
+      ],
+      "source_contract": "Tracked redistributable runtime fixture uses real images, UV0/UV1, texture transforms, distinct samplers/mip filters, MR G/B channels, AO R, authored and generated tangents, and mirrored UVs.",
+      "expected_current": "Current runtime uses one UV stream, fixed sampler without mips, ignores AO, and supplies approximate positive-handed generated tangents.",
+      "expected_m2": "CPU, shader, debug-view, and capture results expose correct channels, transfer functions, UVs, samplers, mips, tangent handedness, and AO."
+    },
+    {
+      "id": "complex_closure_grid_v1",
+      "availability": "contract_frozen_fixture_pending",
+      "earliest_slice": "M2.6",
+      "axes": [
+        "clearcoat_sheen_anisotropy_iridescence",
+        "transmission_volume_and_dispersion",
+        "alpha_double_sided_and_unlit"
+      ],
+      "source_contract": "Tracked redistributable materials isolate nonzero and dormant clearcoat, sheen, anisotropy, iridescence, transmission, volume, dispersion, diffuse transmission, and unlit tags.",
+      "expected_current": "Most extensions are ignored or routed through one ad hoc transmission shader.",
+      "expected_m2": "Active non-equivalent lobes select explicit complex-forward tags; dormant zero-effect lobes may select standard only with diagnostics."
+    },
+    {
+      "id": "sample_car_local_v1",
+      "availability": "optional_local",
+      "earliest_slice": "M2.0",
+      "source_asset": "assets/models/alfa_romeo/alfa_romeo.gltf",
+      "source_sha256": "be2981b07dc2bb440627a4bca78e71eec9792cff527ab8652cb230831e32b324",
+      "license": "CC-BY-NC-SA-4.0; optional non-commercial diagnostic only",
+      "axes": [
+        "factors_and_gltf_defaults",
+        "texture_channels_and_color_spaces",
+        "normal_and_tangent_detail",
+        "ambient_occlusion",
+        "clearcoat_sheen_anisotropy_iridescence",
+        "transmission_volume_and_dispersion",
+        "sample_car_provenance"
+      ],
+      "expected_current": "Paint ignores coating/specular data, windows preserve suspicious authored metallic BLEND data, lenses use conflicting metallic plus transmission, AO is ignored, and no emissive material is authored.",
+      "expected_m2": "Diagnostics explain source/default/compiled/packed values and closure selection without inventing glass, emissive, or lighting fixes."
+    }
+  ]
+}

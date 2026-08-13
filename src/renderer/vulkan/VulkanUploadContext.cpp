@@ -1,8 +1,11 @@
 #include "VulkanUploadContext.h"
 
 #include "VulkanCommandList.h"
+#include "profiling/CpuProfiler.h"
 
+#include <algorithm>
 #include <limits>
+#include <chrono>
 #include <stdexcept>
 #include <string>
 
@@ -30,10 +33,37 @@ namespace Iridium {
             stagingBuffers.clear();
         }
 
+        VkDeviceSize mipByteSize(
+            VkFormat format, uint32_t width, uint32_t height) {
+            switch (format) {
+            case VK_FORMAT_BC4_UNORM_BLOCK:
+                return ((static_cast<VkDeviceSize>(width) + 3) / 4) *
+                    ((static_cast<VkDeviceSize>(height) + 3) / 4) * 8;
+            case VK_FORMAT_BC5_UNORM_BLOCK:
+            case VK_FORMAT_BC6H_UFLOAT_BLOCK:
+            case VK_FORMAT_BC7_UNORM_BLOCK:
+            case VK_FORMAT_BC7_SRGB_BLOCK:
+                return ((static_cast<VkDeviceSize>(width) + 3) / 4) *
+                    ((static_cast<VkDeviceSize>(height) + 3) / 4) * 16;
+            case VK_FORMAT_R8G8B8A8_UNORM:
+            case VK_FORMAT_R8G8B8A8_SRGB:
+                return static_cast<VkDeviceSize>(width) * height * 4;
+            case VK_FORMAT_R16G16_SFLOAT:
+                return static_cast<VkDeviceSize>(width) * height * 4;
+            case VK_FORMAT_R16G16B16A16_SFLOAT:
+                return static_cast<VkDeviceSize>(width) * height * 8;
+            case VK_FORMAT_R32G32B32A32_SFLOAT:
+                return static_cast<VkDeviceSize>(width) * height * 16;
+            default:
+                throw std::invalid_argument("Unsupported Vulkan upload image format");
+            }
+        }
+
     } // namespace
 
     void VulkanUploadContext::init(VkDevice device, VkQueue graphicsQueue,
-        uint32_t graphicsQueueFamily, VulkanResourceAllocator& allocator) {
+        uint32_t graphicsQueueFamily, VulkanResourceAllocator& allocator,
+        CpuProfiler* cpuProfiler) {
         if (device == VK_NULL_HANDLE || graphicsQueue == VK_NULL_HANDLE) {
             throw std::invalid_argument("VulkanUploadContext requires valid Vulkan handles.");
         }
@@ -46,6 +76,7 @@ namespace Iridium {
         graphicsQueue_ = graphicsQueue;
         graphicsQueueFamily_ = graphicsQueueFamily;
         allocator_ = &allocator;
+        cpuProfiler_ = cpuProfiler;
 
         VkCommandPoolCreateInfo poolInfo{ VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO };
         poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
@@ -56,6 +87,7 @@ namespace Iridium {
             device_ = VK_NULL_HANDLE;
             graphicsQueue_ = VK_NULL_HANDLE;
             allocator_ = nullptr;
+            cpuProfiler_ = nullptr;
             throwVkError("vkCreateCommandPool", result);
         }
 
@@ -70,6 +102,7 @@ namespace Iridium {
             device_ = VK_NULL_HANDLE;
             graphicsQueue_ = VK_NULL_HANDLE;
             allocator_ = nullptr;
+            cpuProfiler_ = nullptr;
             throwVkError("vkAllocateCommandBuffers", result);
         }
 
@@ -84,6 +117,7 @@ namespace Iridium {
             device_ = VK_NULL_HANDLE;
             graphicsQueue_ = VK_NULL_HANDLE;
             allocator_ = nullptr;
+            cpuProfiler_ = nullptr;
             throwVkError("vkCreateFence", result);
         }
     }
@@ -92,6 +126,8 @@ namespace Iridium {
         if (device_ == VK_NULL_HANDLE) {
             stagingBuffers_.clear();
             batchOpen_ = false;
+            pendingBytes_ = 0;
+            cpuProfiler_ = nullptr;
             return;
         }
 
@@ -115,10 +151,12 @@ namespace Iridium {
         graphicsQueue_ = VK_NULL_HANDLE;
         graphicsQueueFamily_ = 0;
         allocator_ = nullptr;
+        cpuProfiler_ = nullptr;
         commandPool_ = VK_NULL_HANDLE;
         commandBuffer_ = VK_NULL_HANDLE;
         fence_ = VK_NULL_HANDLE;
         batchOpen_ = false;
+        pendingBytes_ = 0;
         stagingBuffers_.clear();
     }
 
@@ -132,6 +170,10 @@ namespace Iridium {
             return;
         }
 
+        CpuScope uploadScope(cpuProfiler_, "cpu.renderer.upload_wait");
+        const auto flushStart = std::chrono::steady_clock::now();
+        const uint64_t submittedBytes = pendingBytes_;
+
         auto discardPending = [this]() noexcept {
             if (allocator_ != nullptr) {
                 destroyStagingBuffers(*allocator_, stagingBuffers_);
@@ -139,6 +181,7 @@ namespace Iridium {
                 stagingBuffers_.clear();
             }
             batchOpen_ = false;
+            pendingBytes_ = 0;
         };
 
         auto resetCommandPoolAfterFailure = [this]() noexcept -> VkResult {
@@ -194,8 +237,19 @@ namespace Iridium {
         }
 
         destroyStagingBuffers(*allocator_, stagingBuffers_);
+        ++totalSubmittedBatches_;
+        totalSubmittedBytes_ += submittedBytes;
+        totalSubmitAndWaitNanoseconds_ += static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - flushStart).count());
+        if (cpuProfiler_ != nullptr) {
+            cpuProfiler_->recordCounter("upload.bytes", submittedBytes,
+                ProfileCounterStatus::Exact, ProfileCounterUnit::Bytes);
+            cpuProfiler_->recordCounter("upload.batches", 1);
+        }
         VkResult result = vkResetCommandPool(device_, commandPool_, 0);
         batchOpen_ = false;
+        pendingBytes_ = 0;
         if (result != VK_SUCCESS) {
             throwVkError("vkResetCommandPool", result);
         }
@@ -224,7 +278,8 @@ namespace Iridium {
         VulkanBufferResource staging{};
         try {
             staging = allocator_->createBuffer(data.size_bytes(), VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, true);
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                true, ProfileMemoryCategory::UploadStaging);
             allocator_->write(staging, 0, data);
 
             VulkanCommandList commands(commandBuffer_);
@@ -233,6 +288,7 @@ namespace Iridium {
             commands.copyBuffer(staging, destination, data.size_bytes());
             commands.transition(destination, finalState);
             stagingBuffers_.push_back(staging);
+            pendingBytes_ += static_cast<uint64_t>(data.size_bytes());
             staging = {};
         } catch (...) {
             allocator_->destroy(staging);
@@ -263,26 +319,46 @@ namespace Iridium {
         VulkanBufferResource staging{};
         try {
             staging = allocator_->createBuffer(data.size_bytes(), VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, true);
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                true, ProfileMemoryCategory::UploadStaging);
             allocator_->write(staging, 0, data);
 
-            VkBufferImageCopy region{};
-            region.bufferOffset = 0;
-            region.bufferRowLength = 0;
-            region.bufferImageHeight = 0;
-            region.imageSubresource.aspectMask = destination.aspect;
-            region.imageSubresource.mipLevel = 0;
-            region.imageSubresource.baseArrayLayer = 0;
-            region.imageSubresource.layerCount = 1;
-            region.imageOffset = { 0, 0, 0 };
-            region.imageExtent = { destination.extent.width, destination.extent.height, 1 };
+            std::vector<VkBufferImageCopy> regions;
+            regions.reserve(static_cast<size_t>(destination.mipLevels) *
+                destination.arrayLayers);
+            VkDeviceSize byteOffset = 0;
+            // Upload ABI is layer-major, with a complete largest-to-smallest mip
+            // chain for each layer. Cube faces use Vulkan layer order +X,-X,+Y,
+            // -Y,+Z,-Z.
+            for (uint32_t layer = 0; layer < destination.arrayLayers; ++layer) {
+                uint32_t width = destination.extent.width;
+                uint32_t height = destination.extent.height;
+                for (uint32_t level = 0; level < destination.mipLevels; ++level) {
+                    VkBufferImageCopy region{};
+                    region.bufferOffset = byteOffset;
+                    region.imageSubresource.aspectMask = destination.aspect;
+                    region.imageSubresource.mipLevel = level;
+                    region.imageSubresource.baseArrayLayer = layer;
+                    region.imageSubresource.layerCount = 1;
+                    region.imageExtent = { width, height, 1 };
+                    regions.push_back(region);
+                    byteOffset += mipByteSize(destination.format, width, height);
+                    width = width > 1 ? width / 2 : 1;
+                    height = height > 1 ? height / 2 : 1;
+                }
+            }
+            if (byteOffset != data.size_bytes())
+                throw std::invalid_argument("Image upload byte count does not match mip extents");
 
             VulkanCommandList commands(commandBuffer_);
             commands.transition(staging, ResourceState::CopySource);
             commands.transition(destination, ResourceState::CopyDestination);
-            commands.copyBufferToImage(staging, destination, region);
+            vkCmdCopyBufferToImage(commandBuffer_, staging.buffer, destination.image,
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                static_cast<uint32_t>(regions.size()), regions.data());
             commands.transition(destination, finalState);
             stagingBuffers_.push_back(staging);
+            pendingBytes_ += static_cast<uint64_t>(data.size_bytes());
             staging = {};
         } catch (...) {
             allocator_->destroy(staging);

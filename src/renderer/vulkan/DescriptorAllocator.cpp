@@ -20,7 +20,10 @@ VkDescriptorPool DescriptorAllocator::createNewPool() {
     // You can make these smaller (e.g., 100) since we generate them dynamically!
     std::vector<VkDescriptorPoolSize> poolSizes = {
         { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 100 },
-        { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1000 }
+        { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 100 },
+        { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1000 },
+        { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 100 },
+        { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 256 }
     };
 
     VkDescriptorPoolCreateInfo poolInfo{};

@@ -2,54 +2,49 @@
 #include <cstddef>
 #include <cstdint>
 #include <vector>
-#include <map>
-#include <memory>
 #include <string>
 #include <glm/glm.hpp>
+#include "assets/AssetGuid.h"
 #include "PipelineTypes.h"
 
 namespace Iridium {
 
-    struct Node;
-
     struct SubMesh {
-        uint32_t indexStart;
-        uint32_t indexCount;
-        int materialIndex;
-    };
-
-    struct BakedMesh {
-        int subMeshIndex;
-        glm::mat4 transform;
+        uint32_t indexStart = 0;
+        uint32_t indexCount = 0;
+        int materialIndex = -1;
+        AssetGuid primitiveGuid;
+        AssetGuid materialGuid;
+        uint32_t sourceNode = 0;
+        uint32_t sourceMesh = 0;
+        uint32_t sourcePrimitive = 0;
+        uint32_t attributeMask = 0;
+        uint32_t flags = 0;
+        uint8_t coverage = 0;
+        glm::vec3 boundsMin{ 0.0f };
+        glm::vec3 boundsMax{ 0.0f };
+        glm::vec3 boundsSphereCenter{ 0.0f };
+        float boundsSphereRadius = 0.0f;
     };
 
     // The Vertex is Plain Old Data (POD)
     struct Vertex {
         glm::vec3 pos;
-        glm::vec3 color = glm::vec3(1.0f, 1.0f, 1.0f);
+        glm::vec4 color = glm::vec4(1.0f);
         glm::vec3 normal;
-        glm::vec2 uv;
+        glm::vec2 uv0;
         glm::vec4 tangent;
+        glm::vec2 uv1;
     };
 
-    struct MeshPushConstants {
+    struct CanonicalMeshPushConstants {
         glm::mat4 renderMatrix;
-        glm::vec4 baseColor;
-        glm::vec4 emissiveFactor;
-        float metallicFactor;
-        float roughnessFactor;
-        float normalScale;
-        float alphaCutoff = 0.0f;
-        float transmissionFactor = 0.0f;
-        float padding = 0.0f;
+        uint32_t materialIndex = 0;
+        uint32_t padding[3]{};
     };
 
-    static_assert(sizeof(MeshPushConstants) == 120);
-    static_assert(offsetof(MeshPushConstants, renderMatrix) == 0);
-    static_assert(offsetof(MeshPushConstants, baseColor) == 64);
-    static_assert(offsetof(MeshPushConstants, emissiveFactor) == 80);
-    static_assert(offsetof(MeshPushConstants, metallicFactor) == 96);
-    static_assert(offsetof(MeshPushConstants, transmissionFactor) == 112);
+    static_assert(sizeof(CanonicalMeshPushConstants) == 80);
+    static_assert(offsetof(CanonicalMeshPushConstants, materialIndex) == 64);
 
     struct UniformBufferObject {
         alignas(16) glm::mat4 model;
@@ -65,13 +60,14 @@ namespace Iridium {
 
     struct ModelAsset {
         std::string filePath;
+        AssetGuid assetGuid;
+        std::string artifactCookKey;
 
         // The single ticket to the GPU buffers
         GeometryHandle geometry;
 
-        uint32_t totalIndices;
+        uint32_t totalIndices = 0;
         std::vector<SubMesh> subMeshes;
-        std::map<int, std::vector<int>> meshToSubMeshes;
 
         // Material bindings carry material, PSO, queue, and opaque-sort identity together.
         std::vector<MaterialBinding> materials;
@@ -79,14 +75,11 @@ namespace Iridium {
         // Textures allocated while loading this model; ownership remains RHI-handle only.
         std::vector<TextureHandle> ownedTextures;
 
-        std::vector<std::unique_ptr<Node>> rootNodes;
-
-        struct BakedPart {
-            int subMeshIndex;
-            glm::mat4 transform;
-        };
-
-        std::map<int, std::vector<BakedPart>> materialBuckets;
+        // Cooked runtime models own their uploaded geometry while material
+        // revisions remain owned by the asset-runtime publisher.
+        bool ownsGeometry = true;
+        bool ownsMaterials = true;
+        bool ownsTextures = true;
     };
 
 } // namespace Iridium

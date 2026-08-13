@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "assetGuid": "019fb73d-5ab5-748e-82ec-9dae33096ef0",
+  "assetType": "iridium.model",
+  "importer": {
+    "id": "iridium.gltf-model",
+    "version": 3
+  },
+  "settings": {
+    "schemaVersion": 1,
+    "values": {
+      "bake_node_transforms": true,
+      "generate_missing_tangents": true,
+      "import_scale": 1.0,
+      "preserve_rt_geometry": true
+    }
+  },
+  "subassets": [
+    {
+      "guid": "019fb73d-5ab5-7a4e-b4f5-2268e715f6aa",
+      "assetType": "iridium.material",
+      "sourceKey": "materials/0",
+      "structuralFingerprint": "61d7d4335ad3d99e8b4a5a4da98c2899c7d1bb2f1f990e3a11131da25b1062ce"
+    },
+    {
+      "guid": "019fb73d-5ab5-780a-a4eb-1bc813c5cbaa",
+      "assetType": "iridium.model-primitive",
+      "sourceKey": "nodes/0/meshes/0/primitives/0",
+      "structuralFingerprint": "09dbf0cd087a3fe20261db9f68b50a667d88847897050edc9526220340735a87"
+    }
+  ],
+  "tags": []
+}

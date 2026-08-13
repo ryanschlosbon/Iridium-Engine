@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "fixtures": [
+    {
+      "id": "color_volume_transparency_v1",
+      "revision": 1,
+      "required": true,
+      "source_asset": "color_volume_transparency.gltf",
+      "environment": {
+        "kind": "procedural_constant",
+        "constant_linear_rgb": [0.02, 0.02, 0.02]
+      },
+      "camera": {
+        "id": "front_transparent_highlight_v1",
+        "position": [0.0, 0.0, 6.0],
+        "target": [0.0, 0.0, 0.0],
+        "up": [0.0, 1.0, 0.0],
+        "vertical_fov_degrees": 45.0,
+        "near": 0.1,
+        "far": 100.0
+      },
+      "scene_factory": {
+        "kind": "instanced_grid",
+        "instance_grid": [1, 1, 1],
+        "instance_spacing": [0.0, 0.0, 0.0]
+      },
+      "output_label": "scene_linear_acescg_ap1",
+      "warmup_frames": 500,
+      "measured_frames": 10000,
+      "content_files": [
+        {
+          "path": "color_volume_transparency.gltf",
+          "sha256": "76e4fd4952101c1bf54b28c5d48001851c0708b7b845cade869aa060c98c2072"
+        }
+      ],
+      "expected_behavior": [
+        "The top row orders 0.01, 0.18, 1.0, and 8.0 neutral emissive samples for near-black, grayscale, display-white, and highlight evaluation.",
+        "The middle row contains saturated source red, green, and blue primaries plus a neutral reference.",
+        "The bottom row contains 8.0-strength red, green, and blue gamut-stress samples and a 4.0-strength warm emissive source.",
+        "A distinct forward transparent primitive overlaps the warm source and contributes 2.0-strength blue emissive plus transmission.",
+        "Pixels covered by the transparent primitive retain finite scene-linear values above 1.0 before the compatibility output pass.",
+        "The benchmark compositor adds authored-sRGB 64/128/192 gray and display-primary UI patches whose final codes remain exposure-independent.",
+        "The fixture records current two-bucket transparency behavior; it does not certify future classified-transparency correctness."
+      ],
+      "unavailable_capabilities": [
+        "classified hybrid transparency",
+        "bloom",
+        "automatic exposure",
+        "wide-gamut HDR transport",
+        "material ID",
+        "motion vectors"
+      ]
+    }
+  ]
+}

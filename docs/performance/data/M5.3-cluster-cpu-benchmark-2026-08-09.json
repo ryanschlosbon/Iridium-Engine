@@ -1,0 +1,20 @@
+{
+  "schema": "iridium.m5.cluster-cpu-benchmark.v1",
+  "date": "2026-08-09",
+  "extent": [3840, 2160],
+  "results": [
+    {"tile": 16, "slices": 24, "lights": 64, "clusters": 777600, "bytes_per_frame": 29231404, "median_ns": 2808900, "p95_ns": 2841300, "references": 29788, "consumer_proxy_iterations": 7625728, "max_occupancy": 8, "overflow": 0},
+    {"tile": 16, "slices": 24, "lights": 512, "clusters": 777600, "bytes_per_frame": 29231404, "median_ns": 11419200, "p95_ns": 11438800, "references": 3335496, "consumer_proxy_iterations": 853886976, "max_occupancy": 24, "overflow": 0},
+    {"tile": 16, "slices": 24, "lights": 4096, "clusters": 777600, "bytes_per_frame": 29231404, "median_ns": 19368500, "p95_ns": 19368500, "references": 0, "consumer_proxy_iterations": 0, "max_occupancy": 192, "overflow": 3},
+    {"tile": 16, "slices": 32, "lights": 64, "clusters": 1036800, "bytes_per_frame": 33382668, "median_ns": 3758900, "p95_ns": 3811500, "references": 33235, "consumer_proxy_iterations": 8508160, "max_occupancy": 8, "overflow": 0},
+    {"tile": 16, "slices": 32, "lights": 512, "clusters": 1036800, "bytes_per_frame": 33382668, "median_ns": 5379100, "p95_ns": 5392400, "references": 0, "consumer_proxy_iterations": 0, "max_occupancy": 24, "overflow": 3},
+    {"tile": 16, "slices": 32, "lights": 4096, "clusters": 1036800, "bytes_per_frame": 33382668, "median_ns": 24925300, "p95_ns": 24925300, "references": 0, "consumer_proxy_iterations": 0, "max_occupancy": 192, "overflow": 3},
+    {"tile": 32, "slices": 24, "lights": 64, "clusters": 195840, "bytes_per_frame": 19914116, "median_ns": 773700, "p95_ns": 804300, "references": 8384, "consumer_proxy_iterations": 8585216, "max_occupancy": 8, "overflow": 0},
+    {"tile": 32, "slices": 24, "lights": 512, "clusters": 195840, "bytes_per_frame": 19914116, "median_ns": 2597900, "p95_ns": 2604600, "references": 846919, "consumer_proxy_iterations": 867245056, "max_occupancy": 24, "overflow": 0},
+    {"tile": 32, "slices": 24, "lights": 4096, "clusters": 195840, "bytes_per_frame": 19914116, "median_ns": 5345700, "p95_ns": 5345700, "references": 0, "consumer_proxy_iterations": 0, "max_occupancy": 192, "overflow": 3},
+    {"tile": 32, "slices": 32, "lights": 64, "clusters": 261120, "bytes_per_frame": 20959620, "median_ns": 962700, "p95_ns": 991600, "references": 9353, "consumer_proxy_iterations": 9577472, "max_occupancy": 8, "overflow": 0},
+    {"tile": 32, "slices": 32, "lights": 512, "clusters": 261120, "bytes_per_frame": 20959620, "median_ns": 3745700, "p95_ns": 3750500, "references": 1084489, "consumer_proxy_iterations": 1110516736, "max_occupancy": 24, "overflow": 0},
+    {"tile": 32, "slices": 32, "lights": 4096, "clusters": 261120, "bytes_per_frame": 20959620, "median_ns": 6648600, "p95_ns": 6648600, "references": 0, "consumer_proxy_iterations": 0, "max_occupancy": 192, "overflow": 3}
+  ],
+  "checksum": 5347984
+}

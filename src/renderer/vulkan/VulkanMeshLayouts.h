@@ -15,7 +15,9 @@ namespace Iridium {
         VulkanMeshLayouts(VulkanMeshLayouts&&) = delete;
         VulkanMeshLayouts& operator=(VulkanMeshLayouts&&) = delete;
 
-        void init(VkDevice device, VkDescriptorSetLayout lightingSetLayout);
+        void init(VkDevice device, VkDescriptorSetLayout lightingSetLayout,
+            VkDescriptorSetLayout indexedMaterialSetLayout,
+            VkDescriptorSetLayout indexedSamplerSetLayout);
         void cleanup() noexcept;
 
         VkDescriptorSetLayout getGlobalSetLayout() const noexcept { return globalSetLayout_; }
@@ -27,6 +29,7 @@ namespace Iridium {
         VkDevice device_ = VK_NULL_HANDLE;
         VkDescriptorSetLayout globalSetLayout_ = VK_NULL_HANDLE;
         VkDescriptorSetLayout materialSetLayout_ = VK_NULL_HANDLE;
+        VkDescriptorSetLayout samplerSetLayout_ = VK_NULL_HANDLE;
         VkPipelineLayout gBufferPipelineLayout_ = VK_NULL_HANDLE;
         VkPipelineLayout forwardPipelineLayout_ = VK_NULL_HANDLE;
     };

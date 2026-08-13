@@ -2,6 +2,7 @@
 
 #include "VkContext.h"
 #include "VkRenderPass.h"
+#include "renderer/rhi/GBufferLayout.h"
 #include "utils/File.h"
 #include <glm/glm.hpp>
 #include <vector>
@@ -11,29 +12,30 @@
 struct LightingPushConstants {
     glm::vec4 viewPos; // Use vec4 for strict 16-byte Vulkan alignment
     glm::mat4 invView; 
-    glm::mat4 invProj; 
+    glm::mat4 invProj;
+    glm::ivec4 debugView;
 };
+
+static_assert(sizeof(LightingPushConstants) == 160);
 
 class VkLightingPipeline {
 public:
     // Notice we don't need the swapchain here, just the render pass it will draw to!
-    VkLightingPipeline(VkContext* context, VkRenderPass renderPass);
+    VkLightingPipeline(VkContext* context, VkRenderPass renderPass,
+        Iridium::GBufferLayout gBufferLayout);
     ~VkLightingPipeline();
 
     VkPipeline getPipeline() const { return pipeline; }
-    VkPipeline getSelectionPipeline() const { return selectionPipeline; }
     VkPipelineLayout getPipelineLayout() const { return pipelineLayout; }
     VkDescriptorSetLayout getDescriptorSetLayout() const { return descriptorSetLayout; }
 
 private:
     VkContext* context;
     VkPipeline pipeline;
-    VkPipeline selectionPipeline;
     VkPipelineLayout pipelineLayout;
     VkDescriptorSetLayout descriptorSetLayout;
 
     VkShaderModule createShaderModule(const std::vector<char>& code);
     void createDescriptorSetLayout();
-    void createPipeline(VkRenderPass renderPass);
-    void createSelectionPipeline(VkRenderPass renderPass);
+    void createPipeline(VkRenderPass renderPass, Iridium::GBufferLayout gBufferLayout);
 };

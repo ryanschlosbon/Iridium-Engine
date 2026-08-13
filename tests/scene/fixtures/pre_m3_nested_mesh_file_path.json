@@ -1,0 +1,17 @@
+{
+  "Scene": "Removed nested Mesh.FilePath shape",
+  "Entities": [
+    {
+      "EntityID": 3,
+      "Name": "Legacy nested mesh path",
+      "TransformComponent": {
+        "position": [0, 0, 0],
+        "rotation": [0, 0, 0],
+        "scale": [1, 1, 1]
+      },
+      "Mesh": {
+        "FilePath": "models/historical.gltf"
+      }
+    }
+  ]
+}
