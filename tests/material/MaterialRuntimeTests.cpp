@@ -141,10 +141,18 @@ namespace {
         static_assert(offsetof(PackedGpuMaterial, complexLobes) == 144);
         static_assert(offsetof(PackedGpuMaterial, textureUses) == 400);
         static_assert(offsetof(PackedGpuMaterial, textureIndices) == 736);
-        static_assert(offsetof(PackedGpuMaterial, reserved) == 820);
+        static_assert(offsetof(PackedGpuMaterial, transparencyPolicy) == 820);
+        static_assert(offsetof(PackedGpuMaterial, transparencyPriority) == 824);
+        static_assert(offsetof(PackedGpuMaterial, thinSheetThicknessMeters) == 828);
         static_assert(offsetof(PackedGpuTextureUse, samplerIndex) == 12);
 
         SourceMaterial source = standardSource(true);
+        source.transparencyPolicy = {
+            .requestedClass = TransparencyClass::ThinGlass,
+            .quality = TransparencyQuality::Hero4,
+            .priority = -9,
+            .thinSheetThicknessMeters = 0.03125f,
+        };
         const auto compiled = compile(source);
         const std::array bindings{ MaterialTextureBinding{ TextureHandle::fromParts(3, 2),
                 SamplerHandle::fromParts(4, 3) },
@@ -172,25 +180,102 @@ namespace {
         CHECK(second.succeeded());
         CHECK(std::memcmp(&*first.material, &*second.material, sizeof(PackedGpuMaterial)) == 0);
         CHECK(first.material->schemaVersion == PackedGpuMaterial::SchemaVersion);
-        CHECK(first.material->featureFlags == compiled->featureFlags);
+        CHECK(first.material->featureFlags ==
+            (compiled->featureFlags |
+                MaterialFeaturePackedNormalReconstructZ));
         CHECK(first.material->textureMask == compiled->standard.textureMask);
         CHECK(first.material->textureIndices[0] == 8);
         CHECK(first.material->textureIndices[2] == 5);
         CHECK(first.material->textureIndices[3] == 7);
         CHECK(packedTextureReconstructNormalZMask(
             *first.material) == (1u << 2u));
+        CHECK(first.material->transparencyPolicy ==
+            packTransparencyPolicyWord(compiled->transparency));
+        CHECK(first.material->transparencyPriority == -9);
+        CHECK(first.material->thinSheetThicknessMeters == 0.03125f);
         CHECK(first.material->textureUses[0].samplerIndex == 4);
         CHECK(first.material->textureUses[0].texCoord == 1);
 
         const UnpackedGpuMaterial unpacked = unpackGpuMaterial(*first.material);
         CHECK(unpacked.values.baseColorFactor == instance.values().baseColorFactor);
         CHECK(unpacked.values.roughnessFactor == 0.35f);
+        CHECK(unpacked.transparency == compiled->transparency);
         CHECK(near(unpacked.textureUses[0].offset.x, 0.25f));
         CHECK(near(unpacked.textureUses[0].offset.y, -0.5f));
         CHECK(near(unpacked.textureUses[0].scale.x, 2.0f));
         CHECK(near(unpacked.textureUses[0].rotation, 0.125f));
         CHECK(near(unpacked.textureUses[2].scalar, 0.75f));
         CHECK(near(unpacked.textureUses[3].scalar, 0.375f));
+        return true;
+    }
+
+    bool testTransparencyClassesSurviveGpuPacking() {
+        struct PolicyCase {
+            TransparencyClass requestedClass;
+            TransparencyTopology topology;
+            SourceAlphaMode alphaMode;
+            bool volume;
+        };
+        constexpr std::array cases{
+            PolicyCase{ TransparencyClass::AlphaClip,
+                TransparencyTopology::Unknown, SourceAlphaMode::Mask, false },
+            PolicyCase{ TransparencyClass::SortedSurface,
+                TransparencyTopology::Unknown, SourceAlphaMode::Blend, false },
+            PolicyCase{ TransparencyClass::ThinGlass,
+                TransparencyTopology::Unknown, SourceAlphaMode::Blend, false },
+            PolicyCase{ TransparencyClass::LayeredGlass,
+                TransparencyTopology::ValidClosed, SourceAlphaMode::Blend, true },
+            PolicyCase{ TransparencyClass::WeightedOit,
+                TransparencyTopology::Unknown, SourceAlphaMode::Blend, false },
+        };
+
+        int32_t priority = -17;
+        for (const PolicyCase& policyCase : cases) {
+            SourceMaterial source = standardSource();
+            source.alphaMode.value = policyCase.alphaMode;
+            source.transparencyPolicy = {
+                .requestedClass = policyCase.requestedClass,
+                .quality = TransparencyQuality::Cinematic8,
+                .priority = priority++,
+                .thinSheetThicknessMeters = 0.00625f,
+            };
+            if (policyCase.volume) {
+                source.extensions.push_back(extension(
+                    "KHR_materials_transmission", {
+                        { "transmissionFactor", "1.0",
+                            SourceValueOrigin::Authored },
+                    }));
+                source.extensions.push_back(extension(
+                    "KHR_materials_volume", {
+                        { "thicknessFactor", "0.1",
+                            SourceValueOrigin::Authored },
+                    }));
+            }
+
+            MaterialCompileResult compiled = compileSourceMaterial(source);
+            CHECK(compiled.succeeded());
+            if (policyCase.topology == TransparencyTopology::ValidClosed) {
+                compiled = applyCompiledTransparencyPolicy(*compiled.material,
+                    source.transparencyPolicy, policyCase.topology);
+                CHECK(compiled.succeeded());
+            }
+            CHECK(compiled.material->transparency.resolvedClass ==
+                policyCase.requestedClass);
+
+            const MaterialInstance instance(compiled.material);
+            const MaterialPackResult packed = packMaterialInstance(instance, {});
+            CHECK(packed.succeeded());
+            CHECK(packed.material->transparencyPolicy ==
+                packTransparencyPolicyWord(compiled.material->transparency));
+            CHECK(packed.material->transparencyPriority ==
+                compiled.material->transparency.priority);
+            CHECK(packed.material->thinSheetThicknessMeters ==
+                compiled.material->transparency.thinSheetThicknessMeters);
+
+            const UnpackedGpuMaterial unpacked =
+                unpackGpuMaterial(*packed.material);
+            CHECK(unpacked.transparency == compiled.material->transparency);
+        }
         return true;
     }
 
@@ -351,7 +436,9 @@ namespace {
         CHECK(first.sha256 == second.sha256);
         CHECK(first.json == second.json);
         const Json document = Json::parse(first.json);
-        CHECK(document.at("schema_version") == 1);
+        CHECK(document.at("schema_version") == 2);
+        CHECK(document.at("source").at("transparency_policy")
+            .at("requested_class") == "auto");
         CHECK(document.at("source").at("base_color_origin") == "authored");
         CHECK(document.at("source").at("textures").size() == 3);
         CHECK(document.at("source").at("textures").at(0).contains("wrap_s"));
@@ -359,10 +446,13 @@ namespace {
         CHECK(document.at("compiled").at("hash") == compiled->contentHash);
         CHECK(document.at("compiled").at("closure") == "standard-deferred");
         CHECK(document.at("compiled").at("texture_operations").size() == 3);
+        CHECK(document.at("compiled").at("transparency")
+            .at("resolved_class") == "none");
         CHECK(document.at("instance").at("overrides").at(0) == "metallic");
         CHECK(document.at("instance").at("texture_bindings").at(0).at("sampler_index") == 4);
         CHECK(document.at("packed").at("byte_size") == sizeof(PackedGpuMaterial));
         CHECK(document.at("packed").at("texture_half_bits").size() == 3);
+        CHECK(document.at("packed").contains("transparency_policy"));
         CHECK(!document.at("diagnostics").empty());
         CHECK(document.at("diagnostics").at(0).at("stage") == "compile");
         return true;
@@ -416,6 +506,7 @@ int main() {
     const struct { const char* name; bool (*test)(); } tests[] = {
         { "immutable compiled asset and constrained overrides", testImmutableCompiledAssetAndOverrides },
         { "packed ABI and deterministic round trip", testPackedLayoutAndRoundTrip },
+        { "five transparency classes survive GPU packing", testTransparencyClassesSurviveGpuPacking },
         { "FP16 boundaries and explicit packing failures", testHalfBoundariesAndPackingFailures },
         { "typed complex lobe packing", testComplexLobePacking },
         { "generational handles and changed-only upload", testGenerationalStoreAndChangedOnlyUpload },

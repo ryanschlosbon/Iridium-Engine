@@ -2,9 +2,50 @@
 
 #include "assets/cooker/ImporterRegistry.h"
 
+#include <glm/vec3.hpp>
+
+#include <cstdint>
+#include <span>
+#include <vector>
+
 namespace Iridium {
 
-    inline constexpr uint32_t kGltfModelImporterVersion = 3;
+    inline constexpr uint32_t kGltfModelImporterVersion = 6;
+
+    struct TriangleConnectedComponent {
+        uint32_t sourceTriangleSeed = 0;
+        std::vector<uint32_t> sourceTriangleIndices;
+
+        bool operator==(const TriangleConnectedComponent&) const = default;
+    };
+
+    [[nodiscard]] std::vector<TriangleConnectedComponent>
+        findTriangleConnectedComponents(
+            std::span<const uint32_t> triangleIndices);
+
+    struct ClosedTriangleTopologyAnalysis {
+        uint32_t triangleCount = 0;
+        uint32_t boundaryEdgeCount = 0;
+        uint32_t nonManifoldEdgeCount = 0;
+        uint32_t inconsistentOrientationEdgeCount = 0;
+        uint32_t degenerateTriangleCount = 0;
+        double signedVolume = 0.0;
+
+        [[nodiscard]] bool validClosed() const noexcept {
+            return triangleCount >= 4 && boundaryEdgeCount == 0 &&
+                nonManifoldEdgeCount == 0 &&
+                inconsistentOrientationEdgeCount == 0 &&
+                degenerateTriangleCount == 0 && signedVolume != 0.0;
+        }
+    };
+
+    // Proves that one canonical triangle component is a consistently oriented,
+    // edge-manifold closed volume. Geometry is used to reject zero-area and
+    // zero-volume shells; self-intersection remains outside this bounded proof.
+    [[nodiscard]] ClosedTriangleTopologyAnalysis analyzeClosedTriangleTopology(
+        std::span<const glm::vec3> positions,
+        std::span<const uint32_t> triangleIndices,
+        std::span<const uint32_t> sourceTriangleIndices);
 
     // Source parsing produces a renderer-independent, deterministic intermediate
     // document. CPU cooking then canonicalizes topology, tangents, transforms,

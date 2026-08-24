@@ -11,6 +11,7 @@
 
 namespace Iridium {
 
+    enum class EditorEntityPreset;
     class EditorSceneDocumentService;
     class EditorSelectionState;
     class EditorTransactionService;
@@ -34,6 +35,9 @@ namespace Iridium {
         [[nodiscard]] Entity createModel(
             AssetGuid modelGuid,
             std::string_view preferredName = "Model",
+            glm::vec3 position = {});
+        [[nodiscard]] Entity createPreset(
+            EditorEntityPreset preset,
             glm::vec3 position = {});
         [[nodiscard]] bool deleteEntity(Entity root);
         [[nodiscard]] bool reorder(

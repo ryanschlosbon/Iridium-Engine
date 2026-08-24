@@ -125,6 +125,24 @@ namespace {
             makeAssetThumbnail(
                 *results[0].product, record);
         CHECK(modelThumbnail.valid());
+        CookedModelProductData splitIdentityProduct =
+            *results[0].product;
+        CHECK(!splitIdentityProduct.manifest.primitives.empty());
+        const AssetGuid sourcePrimitiveGuid =
+            splitIdentityProduct.manifest.primitives.front()
+                .sourcePrimitiveGuid;
+        CHECK(!sourcePrimitiveGuid.isNil());
+        splitIdentityProduct.manifest.primitives.front()
+            .primitiveGuid = createAssetGuidV7();
+        const AssetCatalogRecord sourcePrimitiveRecord{
+            .guid = sourcePrimitiveGuid,
+            .parentGuid = record.guid,
+            .assetType = "iridium.model-primitive",
+            .status = AssetCatalogStatus::Ready,
+        };
+        CHECK(makeAssetThumbnail(
+            splitIdentityProduct,
+            sourcePrimitiveRecord).valid());
         const AssetCatalogRecord materialRecord{
             .guid = *AssetGuid::parse(
                 "019f9bce-85b8-7101-8304-05060708090a"),

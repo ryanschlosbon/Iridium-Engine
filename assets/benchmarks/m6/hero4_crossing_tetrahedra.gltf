@@ -1,0 +1,73 @@
+{
+  "asset": {
+    "version": "2.0",
+    "generator": "Iridium Engine M6.6 Hero4 crossing-interface fixture"
+  },
+  "extensionsUsed": [
+    "KHR_materials_ior",
+    "KHR_materials_transmission",
+    "KHR_materials_volume"
+  ],
+  "buffers": [{
+    "uri": "data:application/octet-stream;base64,zcxMv5qZGb8AAAAAzcxMP5qZGb8AAAAAAAAAAM3MTD8AAAAAAAAAAAAAAACamZk/MzMzvwAAAL8AAAC/MzMzPwAAAL8AAAC/AAAAAM3MTD8AAAC/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAD8AAIA/AAAAPwAAAD8AAAIAAQAAAAEAAwABAAIAAwAAAAMAAgA=",
+    "byteLength": 152
+  }],
+  "bufferViews": [
+    { "buffer": 0, "byteOffset": 0, "byteLength": 48, "target": 34962 },
+    { "buffer": 0, "byteOffset": 48, "byteLength": 48, "target": 34962 },
+    { "buffer": 0, "byteOffset": 96, "byteLength": 32, "target": 34962 },
+    { "buffer": 0, "byteOffset": 128, "byteLength": 24, "target": 34963 }
+  ],
+  "accessors": [
+    { "bufferView": 0, "componentType": 5126, "count": 4, "type": "VEC3", "min": [-0.8, -0.6, 0.0], "max": [0.8, 0.8, 1.2] },
+    { "bufferView": 1, "componentType": 5126, "count": 4, "type": "VEC3" },
+    { "bufferView": 2, "componentType": 5126, "count": 4, "type": "VEC2" },
+    { "bufferView": 3, "componentType": 5123, "count": 12, "type": "SCALAR" }
+  ],
+  "materials": [{
+    "name": "Crossing dielectric absorbing glass",
+    "pbrMetallicRoughness": {
+      "baseColorFactor": [0.86, 0.95, 1.0, 0.68],
+      "metallicFactor": 0.0,
+      "roughnessFactor": 0.08
+    },
+    "alphaMode": "BLEND",
+    "doubleSided": true,
+    "extensions": {
+      "KHR_materials_ior": { "ior": 1.5 },
+      "KHR_materials_transmission": { "transmissionFactor": 1.0 },
+      "KHR_materials_volume": {
+        "thicknessFactor": 0.8,
+        "attenuationDistance": 1.8,
+        "attenuationColor": [0.68, 0.90, 1.0]
+      }
+    }
+  }],
+  "meshes": [{
+    "name": "closed_tetrahedron",
+    "primitives": [{
+      "attributes": { "POSITION": 0, "NORMAL": 1, "TEXCOORD_0": 2 },
+      "indices": 3,
+      "material": 0
+    }]
+  }],
+  "nodes": [
+    {
+      "name": "hero4_crossing_near_tetrahedron",
+      "mesh": 0,
+      "scale": [0.34, 0.34, 0.34],
+      "translation": [-0.04, 0.0, 0.08]
+    },
+    {
+      "name": "hero4_crossing_far_tetrahedron",
+      "mesh": 0,
+      "scale": [0.34, 0.34, 0.34],
+      "translation": [0.04, 0.0, -0.08]
+    }
+  ],
+  "scenes": [{
+    "name": "m6_hero4_crossing_capture",
+    "nodes": [0, 1]
+  }],
+  "scene": 0
+}

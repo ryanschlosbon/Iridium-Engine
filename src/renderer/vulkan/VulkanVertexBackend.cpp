@@ -16,6 +16,7 @@
 #include <stdexcept>
 #include <array>
 #include <bit>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -31,6 +32,59 @@
 namespace Iridium {
 
     namespace {
+        constexpr std::array<std::string_view, 6> Hero4PassNames{
+            "transparent.layered.hero4.interface.0.capture",
+            "transparent.layered.hero4.interface.1.capture",
+            "transparent.layered.hero4.interface.2.capture",
+            "transparent.layered.hero4.interface.3.capture",
+            "transparent.layered.hero4.local-compose",
+            "transparent.layered.hero4.validation-readback-hook",
+        };
+        constexpr std::array<std::string_view, 10> Cinematic8PassNames{
+            "transparent.layered.cinematic8.interface.0.capture",
+            "transparent.layered.cinematic8.interface.1.capture",
+            "transparent.layered.cinematic8.interface.2.capture",
+            "transparent.layered.cinematic8.interface.3.capture",
+            "transparent.layered.cinematic8.interface.4.capture",
+            "transparent.layered.cinematic8.interface.5.capture",
+            "transparent.layered.cinematic8.interface.6.capture",
+            "transparent.layered.cinematic8.interface.7.capture",
+            "transparent.layered.cinematic8.local-compose",
+            "transparent.layered.cinematic8.validation-readback-hook",
+        };
+        constexpr std::array<const char*, 4> Hero4CaptureGpuRanges{
+            "gpu.transparency.layered.hero4.interface.0.capture",
+            "gpu.transparency.layered.hero4.interface.1.capture",
+            "gpu.transparency.layered.hero4.interface.2.capture",
+            "gpu.transparency.layered.hero4.interface.3.capture",
+        };
+        constexpr std::array<const char*, 8> Cinematic8CaptureGpuRanges{
+            "gpu.transparency.layered.cinematic8.interface.0.capture",
+            "gpu.transparency.layered.cinematic8.interface.1.capture",
+            "gpu.transparency.layered.cinematic8.interface.2.capture",
+            "gpu.transparency.layered.cinematic8.interface.3.capture",
+            "gpu.transparency.layered.cinematic8.interface.4.capture",
+            "gpu.transparency.layered.cinematic8.interface.5.capture",
+            "gpu.transparency.layered.cinematic8.interface.6.capture",
+            "gpu.transparency.layered.cinematic8.interface.7.capture",
+        };
+        constexpr std::array<const char*, 4> Hero4TerminationGpuRanges{
+            "gpu.transparency.layered.hero4.interface.0.terminate-tiles",
+            "gpu.transparency.layered.hero4.interface.1.terminate-tiles",
+            "gpu.transparency.layered.hero4.interface.2.terminate-tiles",
+            "gpu.transparency.layered.hero4.interface.3.terminate-tiles",
+        };
+        constexpr std::array<const char*, 8> Cinematic8TerminationGpuRanges{
+            "gpu.transparency.layered.cinematic8.interface.0.terminate-tiles",
+            "gpu.transparency.layered.cinematic8.interface.1.terminate-tiles",
+            "gpu.transparency.layered.cinematic8.interface.2.terminate-tiles",
+            "gpu.transparency.layered.cinematic8.interface.3.terminate-tiles",
+            "gpu.transparency.layered.cinematic8.interface.4.terminate-tiles",
+            "gpu.transparency.layered.cinematic8.interface.5.terminate-tiles",
+            "gpu.transparency.layered.cinematic8.interface.6.terminate-tiles",
+            "gpu.transparency.layered.cinematic8.interface.7.terminate-tiles",
+        };
+
         VkIndexType toVkIndexType(IndexFormat format) {
             switch (format) {
             case IndexFormat::UInt16:
@@ -51,6 +105,11 @@ namespace Iridium {
             GlassDepth = FixedPipelineIdentityMask | 5,
             ImGui = FixedPipelineIdentityMask | 6,
             OutputTransform = FixedPipelineIdentityMask | 7,
+            LayeredInterfaceCapture = FixedPipelineIdentityMask | 8,
+            LayeredLocalComposition = FixedPipelineIdentityMask | 9,
+            LayeredSceneResolve = FixedPipelineIdentityMask | 10,
+            LayeredResidualComposition = FixedPipelineIdentityMask | 11,
+            LayeredTileTermination = FixedPipelineIdentityMask | 12,
         };
 
         constexpr uint64_t pipelineIdentity(FixedPipelineIdentity identity) noexcept {
@@ -308,6 +367,8 @@ namespace Iridium {
         }
         forwardPass = std::make_unique<VkForwardRenderPass>(vkContext.get(),
             VulkanSceneColorFormat, VK_FORMAT_D32_SFLOAT);
+        transparentPass = std::make_unique<VkForwardRenderPass>(vkContext.get(),
+            VulkanSceneColorFormat, VK_FORMAT_D32_SFLOAT, true);
 		outputPass.init(*vkContext, descriptorAllocator, outputTargetFormat_);
         if (outputTransport_ == Color::OutputTransport::Hdr10Pq) {
             hdrEncodePass.init(*vkContext, descriptorAllocator,
@@ -317,6 +378,20 @@ namespace Iridium {
             lightingPipeline->getDescriptorSetLayout(),
             indexedTextureTable_.materialViewLayout(),
             indexedTextureTable_.samplerLayout());
+        layeredInterfaceCapture_.init(vkContext->getDevice(),
+            descriptorAllocator, meshLayouts.getGlobalSetLayout(),
+            indexedTextureTable_.materialViewLayout(),
+            indexedTextureTable_.samplerLayout());
+        layeredLocalComposition_.init(vkContext->getDevice(),
+            descriptorAllocator, meshLayouts.getGlobalSetLayout(),
+            indexedTextureTable_.materialViewLayout(),
+            indexedTextureTable_.samplerLayout(),
+            lightingPipeline->getDescriptorSetLayout());
+        layeredSceneResolve_.init(vkContext->getDevice(),
+            descriptorAllocator, meshLayouts.getGlobalSetLayout(),
+            transparentPass->getRenderPass());
+        transparencyPyramid_.init(vkContext->getDevice(),
+            descriptorAllocator, meshLayouts.getGlobalSetLayout());
         directionalShadow_.init(vkContext->getDevice(), resourceAllocator,
             uploadContext, descriptorAllocator,
             indexedTextureTable_.materialViewLayout(),
@@ -361,6 +436,8 @@ namespace Iridium {
             { gBufferPass->getRenderPass(), meshLayouts.getGBufferPipelineLayout(),
                 vulkanGBufferFormats(gBufferLayout_).colorAttachmentCount },
             { forwardPass->getRenderPass(), meshLayouts.getForwardPipelineLayout(), 1 },
+            { transparentPass->getRenderPass(),
+                meshLayouts.getForwardPipelineLayout(), 1 },
             gBufferLayout_);
 
         // 5. UI Pass
@@ -451,6 +528,10 @@ namespace Iridium {
 
             vkUpdateDescriptorSets(vkContext->getDevice(), 1, &descriptorWrite, 0, nullptr);
         }
+        transparencyPyramid_.rebuild(frameTargets);
+        layeredInterfaceCapture_.rebuildDescriptors(frameTargets);
+        layeredLocalComposition_.rebuildDescriptors(frameTargets);
+        layeredSceneResolve_.rebuildDescriptors(frameTargets);
 
         // 3. Lighting descriptors (one set per frame context).
         const uint32_t imgCount = vkSwapchain->getImageCount();
@@ -748,6 +829,12 @@ namespace Iridium {
         scheduler.waitForAllFrames();
         destroyPendingFrameCaptures();
         completedFrameCaptures_.clear();
+        destroyPendingOrdinary2CaptureValidations();
+        completedOrdinary2CaptureValidations_.clear();
+        ordinary2CaptureValidationRequest_.reset();
+        destroyPendingDeepLayeredCaptureValidations();
+        completedDeepLayeredCaptureValidations_.clear();
+        deepLayeredCaptureValidationRequest_.reset();
 
         pipelineLibrary.cleanup();
 
@@ -780,6 +867,10 @@ namespace Iridium {
         reflectionProbePipeline_.clearDescriptors();
         outputPass.clearDescriptors();
         hdrEncodePass.clearTargets();
+        transparencyPyramid_.clearDescriptors();
+        layeredInterfaceCapture_.clearDescriptors();
+        layeredLocalComposition_.clearDescriptors();
+        layeredSceneResolve_.clearDescriptors();
         frameTargets.cleanup();
         renderGraph_.cleanupAfterDeviceIdle();
         directionalShadow_.cleanup();
@@ -843,6 +934,7 @@ namespace Iridium {
         }
 
         forwardPass.reset();
+        transparentPass.reset();
 
         lightingPipeline.reset();
         if (lightingRenderPass != VK_NULL_HANDLE) {
@@ -856,6 +948,10 @@ namespace Iridium {
         gBufferPipeline.reset();
         gBufferPass.reset();
 
+        transparencyPyramid_.cleanup();
+        layeredSceneResolve_.cleanup();
+        layeredLocalComposition_.cleanup();
+        layeredInterfaceCapture_.cleanup();
         meshLayouts.cleanup();
         indexedTextureTable_.cleanup();
         clusteredLighting_.cleanup();
@@ -870,6 +966,10 @@ namespace Iridium {
         vkContext.reset();
         initialized_ = false;
         frameOpen_ = false;
+        transparencyPyramidResidency_.restore(false);
+        ordinary2AtlasResidency_.restore(false);
+        ordinary2AtlasExtent_ = {};
+        frameTopologyPrewarm_ = {};
         cpuProfiler_ = nullptr;
         collectFrameCounters_ = false;
         uniqueMaterialIds_.clear();
@@ -947,7 +1047,15 @@ namespace Iridium {
         }
 
         const uint64_t transparentDraws = frameCounters_.drawTransparentDepth +
-            frameCounters_.drawTransparentForward;
+            frameCounters_.drawTransparentForward +
+            frameCounters_.ordinary2CaptureEntryDraws +
+            frameCounters_.ordinary2CaptureExitDraws +
+            frameCounters_.ordinary2LocalCompositionDraws +
+            frameCounters_.ordinary2SceneResolveDraws +
+            frameCounters_.deepLayeredInterfaceDraws +
+            frameCounters_.deepLayeredResidualProbeDraws +
+            frameCounters_.deepLayeredLocalCompositionDraws +
+            frameCounters_.deepLayeredSceneResolveDraws;
         const uint64_t totalDraws = frameCounters_.drawOpaque +
             frameCounters_.drawSelection +
             frameCounters_.drawShadowDirectional +
@@ -1037,6 +1145,105 @@ namespace Iridium {
             frameCounters_.transparentForegroundPackets);
         cpuProfiler_->recordCounter("transparent.bucket.nonempty",
             frameCounters_.transparentNonemptyBuckets);
+        cpuProfiler_->recordCounter("transparent.sorted.packets",
+            frameCounters_.transparentSortedPackets);
+        cpuProfiler_->recordCounter("transparent.pyramid.builds",
+            frameCounters_.transparencyPyramidBuilds);
+        cpuProfiler_->recordCounter("transparent.pyramid.mip_dispatches",
+            frameCounters_.transparencyPyramidMipDispatches);
+        cpuProfiler_->recordCounter("transparent.pyramid.resident",
+            static_cast<uint64_t>(transparencyPyramidResidency_.enabled()));
+        cpuProfiler_->recordCounter("transparent.pyramid.topology_rebuilds",
+            frameCounters_.transparencyPyramidTopologyRebuilds);
+        cpuProfiler_->recordCounter(
+            "transparent.pyramid.topology_rebuild_failures",
+            frameCounters_.transparencyPyramidTopologyRebuildFailures);
+        cpuProfiler_->recordCounter("transparent.pyramid.fallback_frames",
+            frameCounters_.transparencyPyramidFallbackFrames);
+        cpuProfiler_->recordCounter("transparent.ordinary2.probe_frames",
+            frameCounters_.ordinary2ProbeFrames);
+        cpuProfiler_->recordCounter("transparent.ordinary2.candidate_packets",
+            frameCounters_.ordinary2CandidatePackets);
+        cpuProfiler_->recordCounter("transparent.ordinary2.projected_packets",
+            frameCounters_.ordinary2ProjectedPackets);
+        cpuProfiler_->recordCounter(
+            "transparent.ordinary2.projection_culled_packets",
+            frameCounters_.ordinary2ProjectionCulledPackets);
+        cpuProfiler_->recordCounter(
+            "transparent.ordinary2.fallback.invalid_bounds_packets",
+            frameCounters_.ordinary2InvalidBoundsFallbackPackets);
+        cpuProfiler_->recordCounter(
+            "transparent.ordinary2.fallback.near_plane_packets",
+            frameCounters_.ordinary2NearPlaneFallbackPackets);
+        cpuProfiler_->recordCounter(
+            "transparent.ordinary2.fallback.unsafe_projection_packets",
+            frameCounters_.ordinary2UnsafeProjectionFallbackPackets);
+        cpuProfiler_->recordCounter(
+            "transparent.ordinary2.fallback.request_capacity_packets",
+            frameCounters_.ordinary2RequestCapacityFallbackPackets);
+        cpuProfiler_->recordCounter(
+            "transparent.ordinary2.atlas.accepted_packets",
+            frameCounters_.ordinary2AtlasAcceptedPackets);
+        cpuProfiler_->recordCounter(
+            "transparent.ordinary2.atlas.accepted_islands",
+            frameCounters_.ordinary2AtlasAcceptedIslands);
+        cpuProfiler_->recordCounter(
+            "transparent.ordinary2.atlas.rejected_packets",
+            frameCounters_.ordinary2AtlasRejectedPackets);
+        cpuProfiler_->recordCounter(
+            "transparent.ordinary2.atlas.allocated_texels",
+            frameCounters_.ordinary2AtlasAllocatedTexels);
+        cpuProfiler_->recordCounter(
+            "transparent.ordinary2.capture.prepared_draws",
+            frameCounters_.ordinary2CapturePreparedDraws);
+        cpuProfiler_->recordCounter(
+            "transparent.ordinary2.capture.preparation_fallback_packets",
+            frameCounters_.ordinary2CapturePreparationFallbackPackets);
+        cpuProfiler_->recordCounter(
+            "transparent.ordinary2.capture.entry_draws",
+            frameCounters_.ordinary2CaptureEntryDraws);
+        cpuProfiler_->recordCounter(
+            "transparent.ordinary2.capture.exit_draws",
+            frameCounters_.ordinary2CaptureExitDraws);
+        cpuProfiler_->recordCounter(
+            "transparent.ordinary2.local_composition_draws",
+            frameCounters_.ordinary2LocalCompositionDraws);
+        cpuProfiler_->recordCounter(
+            "transparent.ordinary2.scene_resolve_draws",
+            frameCounters_.ordinary2SceneResolveDraws);
+        cpuProfiler_->recordCounter(
+            "transparent.layered.deep.candidate_packets",
+            frameCounters_.deepLayeredCandidatePackets);
+        cpuProfiler_->recordCounter(
+            "transparent.layered.deep.projected_packets",
+            frameCounters_.deepLayeredProjectedPackets);
+        cpuProfiler_->recordCounter(
+            "transparent.layered.deep.atlas.accepted_packets",
+            frameCounters_.deepLayeredAtlasAcceptedPackets);
+        cpuProfiler_->recordCounter(
+            "transparent.layered.deep.atlas.accepted_islands",
+            frameCounters_.deepLayeredAtlasAcceptedIslands);
+        cpuProfiler_->recordCounter(
+            "transparent.layered.deep.atlas.rejected_packets",
+            frameCounters_.deepLayeredAtlasRejectedPackets);
+        cpuProfiler_->recordCounter(
+            "transparent.layered.deep.capture.prepared_draws",
+            frameCounters_.deepLayeredCapturePreparedDraws);
+        cpuProfiler_->recordCounter(
+            "transparent.layered.deep.capture.preparation_fallback_packets",
+            frameCounters_.deepLayeredCapturePreparationFallbackPackets);
+        cpuProfiler_->recordCounter(
+            "transparent.layered.deep.capture.interface_draws",
+            frameCounters_.deepLayeredInterfaceDraws);
+        cpuProfiler_->recordCounter(
+            "transparent.layered.deep.residual.probe_draws",
+            frameCounters_.deepLayeredResidualProbeDraws);
+        cpuProfiler_->recordCounter(
+            "transparent.layered.deep.local_composition_draws",
+            frameCounters_.deepLayeredLocalCompositionDraws);
+        cpuProfiler_->recordCounter(
+            "transparent.layered.deep.scene_resolve_draws",
+            frameCounters_.deepLayeredSceneResolveDraws);
         cpuProfiler_->recordCounter("ui.untracked_callbacks",
             frameCounters_.uiUntrackedCallbacks);
         cpuProfiler_->recordCounter("texture.resident",
@@ -1185,7 +1392,179 @@ namespace Iridium {
             outputTargetFormat_, outputTransport_ ==
                 Color::OutputTransport::Hdr10Pq, gBufferLayout_,
             clusterConfig_, directionalShadowResolution_,
-            spotShadowAtlasResolution_));
+            spotShadowAtlasResolution_,
+            transparencyPyramidResidency_.enabled(),
+            VulkanLayeredGraphConfig{ ordinary2AtlasExtent_,
+                hero4AtlasExtent_, cinematic8AtlasExtent_ }));
+    }
+
+    void VulkanVertexBackend::applyTransparencyPyramidTopologyChange(
+        std::optional<VkExtent2D> requestedOrdinary2AtlasExtent,
+        std::optional<VkExtent2D> requestedHero4AtlasExtent,
+        std::optional<VkExtent2D> requestedCinematic8AtlasExtent) {
+        const VkExtent2D previousOrdinary2AtlasExtent =
+            ordinary2AtlasExtent_;
+        const VkExtent2D previousHero4AtlasExtent = hero4AtlasExtent_;
+        const VkExtent2D previousCinematic8AtlasExtent =
+            cinematic8AtlasExtent_;
+        const auto requestedExtent = [&](std::optional<VkExtent2D> explicitExtent,
+                const TransparencyPyramidResidency& residency,
+                TransparencyQuality quality) {
+            if (explicitExtent) return *explicitExtent;
+            if (!residency.requestedEnabled()) return VkExtent2D{};
+            const Ordinary2AtlasExtent capacity = layeredAtlasCapacityExtent(
+                sceneExtent_.width, sceneExtent_.height, quality);
+            return VkExtent2D{ capacity.width, capacity.height };
+        };
+        const VkExtent2D nextOrdinary2AtlasExtent = requestedExtent(
+            requestedOrdinary2AtlasExtent, ordinary2AtlasResidency_,
+            TransparencyQuality::Ordinary2);
+        const VkExtent2D nextHero4AtlasExtent = requestedExtent(
+            requestedHero4AtlasExtent, hero4AtlasResidency_,
+            TransparencyQuality::Hero4);
+        const VkExtent2D nextCinematic8AtlasExtent = requestedExtent(
+            requestedCinematic8AtlasExtent, cinematic8AtlasResidency_,
+            TransparencyQuality::Cinematic8);
+        const auto extentChanged = [](VkExtent2D lhs, VkExtent2D rhs) {
+            return lhs.width != rhs.width || lhs.height != rhs.height;
+        };
+        const bool ordinary2AtlasChange = extentChanged(
+            previousOrdinary2AtlasExtent, nextOrdinary2AtlasExtent);
+        const bool hero4AtlasChange = extentChanged(
+            previousHero4AtlasExtent, nextHero4AtlasExtent);
+        const bool cinematic8AtlasChange = extentChanged(
+            previousCinematic8AtlasExtent, nextCinematic8AtlasExtent);
+        if (!transparencyPyramidResidency_.changePending() &&
+            !ordinary2AtlasResidency_.changePending() &&
+            !hero4AtlasResidency_.changePending() &&
+            !cinematic8AtlasResidency_.changePending() &&
+            !ordinary2AtlasChange && !hero4AtlasChange &&
+            !cinematic8AtlasChange)
+            return;
+
+        CpuScope topologyChangeScope(cpuProfiler_,
+            "cpu.renderer.transparency_topology_change");
+
+        const bool previousEnabled =
+            transparencyPyramidResidency_.enabled();
+        const bool previousOrdinary2Enabled =
+            ordinary2AtlasResidency_.enabled();
+        const bool previousHero4Enabled = hero4AtlasResidency_.enabled();
+        const bool previousCinematic8Enabled =
+            cinematic8AtlasResidency_.enabled();
+        const auto releaseTargets = [&] {
+            for (VkDescriptorSet texture : uiSceneTextures) {
+                if (texture != VK_NULL_HANDLE)
+                    ImGui_ImplVulkan_RemoveTexture(texture);
+            }
+            for (VkDescriptorSet texture : uiDepthTextures) {
+                if (texture != VK_NULL_HANDLE)
+                    ImGui_ImplVulkan_RemoveTexture(texture);
+            }
+            uiSceneTextures.clear();
+            uiDepthTextures.clear();
+            sceneDescriptors.cleanup();
+            clusteredLighting_.clearDescriptors();
+            outputPass.clearDescriptors();
+            hdrEncodePass.clearTargets();
+            transparencyPyramid_.clearDescriptors();
+            layeredInterfaceCapture_.clearDescriptors();
+            layeredLocalComposition_.clearDescriptors();
+            layeredSceneResolve_.clearDescriptors();
+            frameTargets.cleanup();
+            renderGraph_.cleanupAfterDeviceIdle();
+        };
+        const auto createTargets = [&] {
+            rebuildRenderGraphAfterDeviceIdle();
+            initFrameTargets();
+            if (outputTransport_ == Color::OutputTransport::Hdr10Pq) {
+                hdrEncodePass.rebuild(frameTargets,
+                    vkSwapchain->getImageViews(), vkSwapchain->getExtent());
+            }
+            uploadContext.flush();
+            sceneDescriptors.init(vkContext->getDevice(), descriptorAllocator,
+                lightingPipeline->getDescriptorSetLayout());
+            bindLightRecordBuffers();
+            bindSceneClusterBuffers();
+            bindEnvironmentProducts();
+            bindDirectionalShadowDescriptors();
+            bindSpotShadowDescriptors();
+            bindPointShadowDescriptors();
+            bindReflectionProbeBuffers();
+            bindReflectionProbeEnvironments();
+            sceneDescriptors.rebuild(frameTargets);
+            transparencyPyramid_.rebuild(frameTargets);
+            layeredInterfaceCapture_.rebuildDescriptors(frameTargets);
+            layeredLocalComposition_.rebuildDescriptors(frameTargets);
+            layeredSceneResolve_.rebuildDescriptors(frameTargets);
+            bindClusterBuffers();
+            if (VulkanTexturePayload* lut = textureVault.get(
+                    outputTransformLut_); lut != nullptr && !lut->retired) {
+                outputPass.rebuildDescriptors(frameTargets,
+                    lut->image.view, lut->sampler);
+            }
+            else {
+                outputPass.rebuildDescriptors(frameTargets);
+            }
+            uiSceneTextures.resize(frameTargets.size());
+            uiDepthTextures.resize(frameTargets.size());
+            for (size_t index = 0; index < frameTargets.size(); ++index) {
+                const VulkanFrameContextTargets& targets =
+                    frameTargets.get(index);
+                uiSceneTextures[index] = ImGui_ImplVulkan_AddTexture(
+                    frameTargets.sampler(), targets.output.view,
+                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                uiDepthTextures[index] = ImGui_ImplVulkan_AddTexture(
+                    frameTargets.sampler(), targets.glassDepth.view,
+                    VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
+            }
+        };
+
+        // This executes only between frames. All shared descriptor sets and
+        // scene targets must be unreferenced before the topology is retired.
+        {
+            CpuScope waitScope(cpuProfiler_,
+                "cpu.renderer.transparency_topology_wait");
+            scheduler.waitForAllFrames();
+        }
+        try {
+            CpuScope rebuildScope(cpuProfiler_,
+                "cpu.renderer.transparency_topology_rebuild");
+            releaseTargets();
+            transparencyPyramidResidency_.publishRequested();
+            ordinary2AtlasResidency_.publishRequested();
+            hero4AtlasResidency_.publishRequested();
+            cinematic8AtlasResidency_.publishRequested();
+            ordinary2AtlasExtent_ = nextOrdinary2AtlasExtent;
+            hero4AtlasExtent_ = nextHero4AtlasExtent;
+            cinematic8AtlasExtent_ = nextCinematic8AtlasExtent;
+            createTargets();
+            if (collectFrameCounters_)
+                ++frameCounters_.transparencyPyramidTopologyRebuilds;
+        }
+        catch (const std::exception& exception) {
+            if (collectFrameCounters_)
+                ++frameCounters_.transparencyPyramidTopologyRebuildFailures;
+            try {
+                CpuScope restoreScope(cpuProfiler_,
+                    "cpu.renderer.transparency_topology_restore");
+                releaseTargets();
+                transparencyPyramidResidency_.restore(previousEnabled);
+                ordinary2AtlasResidency_.restore(previousOrdinary2Enabled);
+                hero4AtlasResidency_.restore(previousHero4Enabled);
+                cinematic8AtlasResidency_.restore(previousCinematic8Enabled);
+                ordinary2AtlasExtent_ = previousOrdinary2AtlasExtent;
+                hero4AtlasExtent_ = previousHero4AtlasExtent;
+                cinematic8AtlasExtent_ = previousCinematic8AtlasExtent;
+                createTargets();
+            }
+            catch (const std::exception& restoreException) {
+                throw std::runtime_error(std::string(
+                    "Transparency topology rebuild failed: ") +
+                    exception.what() + "; restoring the previous topology "
+                    "failed: " + restoreException.what());
+            }
+        }
     }
 
     void VulkanVertexBackend::recreateSwapchain(GLFWwindow* window) {
@@ -1227,6 +1606,10 @@ namespace Iridium {
         clusteredLighting_.clearDescriptors();
         outputPass.clearDescriptors();
         hdrEncodePass.clearTargets();
+        transparencyPyramid_.clearDescriptors();
+        layeredInterfaceCapture_.clearDescriptors();
+        layeredLocalComposition_.clearDescriptors();
+        layeredSceneResolve_.clearDescriptors();
         frameTargets.cleanup();
 
         vkSwapchain = std::move(candidate);
@@ -1256,6 +1639,10 @@ namespace Iridium {
         bindReflectionProbeBuffers();
         bindReflectionProbeEnvironments();
         sceneDescriptors.rebuild(frameTargets);
+        transparencyPyramid_.rebuild(frameTargets);
+        layeredInterfaceCapture_.rebuildDescriptors(frameTargets);
+        layeredLocalComposition_.rebuildDescriptors(frameTargets);
+        layeredSceneResolve_.rebuildDescriptors(frameTargets);
         bindClusterBuffers();
         if (VulkanTexturePayload* lut = textureVault.get(outputTransformLut_);
             lut != nullptr && !lut->retired) {
@@ -1315,13 +1702,40 @@ namespace Iridium {
         // Compile first so invalid graph contracts cannot disturb the active
         // target. Resource allocation is retried with the previous extent if
         // the replacement fails after the fence-safe cutover begins.
+        const VkExtent2D previousOrdinary2AtlasExtent =
+            ordinary2AtlasExtent_;
+        const VkExtent2D previousHero4AtlasExtent = hero4AtlasExtent_;
+        const VkExtent2D previousCinematic8AtlasExtent =
+            cinematic8AtlasExtent_;
+        VkExtent2D requestedOrdinary2AtlasExtent{};
+        VkExtent2D requestedHero4AtlasExtent{};
+        VkExtent2D requestedCinematic8AtlasExtent{};
+        const auto resizeTier = [&](bool resident, TransparencyQuality quality,
+                VkExtent2D& atlasExtent) {
+            if (!resident) return;
+            const Ordinary2AtlasExtent capacity = layeredAtlasCapacityExtent(
+                requested.width, requested.height, quality);
+            atlasExtent = { capacity.width, capacity.height };
+        };
+        resizeTier(ordinary2AtlasResidency_.enabled(),
+            TransparencyQuality::Ordinary2,
+            requestedOrdinary2AtlasExtent);
+        resizeTier(hero4AtlasResidency_.enabled(),
+            TransparencyQuality::Hero4, requestedHero4AtlasExtent);
+        resizeTier(cinematic8AtlasResidency_.enabled(),
+            TransparencyQuality::Cinematic8,
+            requestedCinematic8AtlasExtent);
         try {
             (void)buildVulkanProductionRenderGraph(requested,
                 vkSwapchain->getExtent(), vkSwapchain->getImageFormat(),
                 outputTargetFormat_, outputTransport_ ==
                     Color::OutputTransport::Hdr10Pq, gBufferLayout_,
-                    clusterConfig_, directionalShadowResolution_,
-                    spotShadowAtlasResolution_);
+                clusterConfig_, directionalShadowResolution_,
+                spotShadowAtlasResolution_,
+                transparencyPyramidResidency_.enabled(),
+                VulkanLayeredGraphConfig{ requestedOrdinary2AtlasExtent,
+                    requestedHero4AtlasExtent,
+                    requestedCinematic8AtlasExtent });
         }
         catch (const std::exception& exception) {
             diagnostic = exception.what();
@@ -1346,6 +1760,10 @@ namespace Iridium {
             clusteredLighting_.clearDescriptors();
             outputPass.clearDescriptors();
             hdrEncodePass.clearTargets();
+            transparencyPyramid_.clearDescriptors();
+            layeredInterfaceCapture_.clearDescriptors();
+            layeredLocalComposition_.clearDescriptors();
+            layeredSceneResolve_.clearDescriptors();
             frameTargets.cleanup();
             renderGraph_.cleanupAfterDeviceIdle();
         };
@@ -1368,6 +1786,10 @@ namespace Iridium {
             bindReflectionProbeBuffers();
             bindReflectionProbeEnvironments();
             sceneDescriptors.rebuild(frameTargets);
+            transparencyPyramid_.rebuild(frameTargets);
+            layeredInterfaceCapture_.rebuildDescriptors(frameTargets);
+            layeredLocalComposition_.rebuildDescriptors(frameTargets);
+            layeredSceneResolve_.rebuildDescriptors(frameTargets);
             bindClusterBuffers();
             if (VulkanTexturePayload* lut = textureVault.get(outputTransformLut_);
                 lut != nullptr && !lut->retired) {
@@ -1397,6 +1819,9 @@ namespace Iridium {
         scheduler.waitForAllFrames();
         releaseTargets();
         sceneExtent_ = requested;
+        ordinary2AtlasExtent_ = requestedOrdinary2AtlasExtent;
+        hero4AtlasExtent_ = requestedHero4AtlasExtent;
+        cinematic8AtlasExtent_ = requestedCinematic8AtlasExtent;
         try {
             createTargets();
             return true;
@@ -1406,6 +1831,9 @@ namespace Iridium {
                 exception.what();
             releaseTargets();
             sceneExtent_ = previous;
+            ordinary2AtlasExtent_ = previousOrdinary2AtlasExtent;
+            hero4AtlasExtent_ = previousHero4AtlasExtent;
+            cinematic8AtlasExtent_ = previousCinematic8AtlasExtent;
             try {
                 createTargets();
             }
@@ -1524,12 +1952,130 @@ namespace Iridium {
         info.renderGraphCommittedBytes = graphStats.committedBytes;
         info.renderGraphRebuildCount = graphStats.rebuildCount;
         info.renderGraphCacheMissCount = graphStats.cacheMissCount;
+        info.refractionPyramidsResident =
+            transparencyPyramidResidency_.enabled();
+        info.ordinary2AtlasResident = ordinary2AtlasResidency_.enabled() &&
+            ordinary2AtlasExtent_.width != 0u &&
+            ordinary2AtlasExtent_.height != 0u;
+        info.ordinary2AtlasWidth = ordinary2AtlasExtent_.width;
+        info.ordinary2AtlasHeight = ordinary2AtlasExtent_.height;
+        info.hero4AtlasResident = hero4AtlasResidency_.enabled() &&
+            hero4AtlasExtent_.width != 0u && hero4AtlasExtent_.height != 0u;
+        info.hero4AtlasWidth = hero4AtlasExtent_.width;
+        info.hero4AtlasHeight = hero4AtlasExtent_.height;
+        info.cinematic8AtlasResident = cinematic8AtlasResidency_.enabled() &&
+            cinematic8AtlasExtent_.width != 0u &&
+            cinematic8AtlasExtent_.height != 0u;
+        info.cinematic8AtlasWidth = cinematic8AtlasExtent_.width;
+        info.cinematic8AtlasHeight = cinematic8AtlasExtent_.height;
+        info.frameTopologyPrewarmRequested =
+            frameTopologyPrewarm_.requested;
+        info.frameTopologyPrewarmChanged = frameTopologyPrewarm_.changed;
+        info.frameTopologyPrewarmNanoseconds =
+            frameTopologyPrewarm_.durationNanoseconds;
         info.gpuLightCapacity = lightRecordCapacity_;
         info.gpuLightActiveCount = activeLightCount_;
         info.gpuLightUploadBytes = lightUploadBytes_;
         info.gpuLightUploadRanges = lightUploadRangeCount_;
         info.uploads = uploadContext.telemetry();
         return info;
+    }
+
+    FrameTopologyPreparation VulkanVertexBackend::prepareFrameTopology(
+        const FrameTopologyRequirements& requirements) {
+        if (frameOpen_) {
+            throw std::logic_error(
+                "Frame topology preparation is only valid between frames");
+        }
+
+        FrameTopologyPreparation result{
+            .requested = requirements.refractionPyramids ||
+                requirements.ordinary2LayeredInterfaces ||
+                requirements.hero4LayeredInterfaces ||
+                requirements.cinematic8LayeredInterfaces,
+        };
+        const bool previousPyramids =
+            transparencyPyramidResidency_.enabled();
+        const VkExtent2D previousOrdinary2AtlasExtent =
+            ordinary2AtlasExtent_;
+        const VkExtent2D previousHero4AtlasExtent = hero4AtlasExtent_;
+        const VkExtent2D previousCinematic8AtlasExtent =
+            cinematic8AtlasExtent_;
+        const bool requirePyramids = requirements.refractionPyramids ||
+            requirements.ordinary2LayeredInterfaces ||
+            requirements.hero4LayeredInterfaces ||
+            requirements.cinematic8LayeredInterfaces;
+        VkExtent2D requestedOrdinary2AtlasExtent = ordinary2AtlasExtent_;
+        VkExtent2D requestedHero4AtlasExtent = hero4AtlasExtent_;
+        VkExtent2D requestedCinematic8AtlasExtent = cinematic8AtlasExtent_;
+        const auto requireTier = [&](bool required,
+                TransparencyQuality quality, VkExtent2D& requestedExtent,
+                const char* name) {
+            if (!required) return;
+            const Ordinary2AtlasExtent capacity = layeredAtlasCapacityExtent(
+                sceneExtent_.width, sceneExtent_.height, quality);
+            if (capacity.empty()) {
+                throw std::runtime_error(std::string(name) +
+                    " startup topology requires a tile-sized scene extent");
+            }
+            requestedExtent = { capacity.width, capacity.height };
+        };
+        requireTier(requirements.ordinary2LayeredInterfaces,
+            TransparencyQuality::Ordinary2, requestedOrdinary2AtlasExtent,
+            "Ordinary2");
+        requireTier(requirements.hero4LayeredInterfaces,
+            TransparencyQuality::Hero4, requestedHero4AtlasExtent, "Hero4");
+        requireTier(requirements.cinematic8LayeredInterfaces,
+            TransparencyQuality::Cinematic8,
+            requestedCinematic8AtlasExtent, "Cinematic8");
+        const auto extentChanged = [](VkExtent2D lhs, VkExtent2D rhs) {
+            return lhs.width != rhs.width || lhs.height != rhs.height;
+        };
+        const bool ordinary2Change = extentChanged(
+            requestedOrdinary2AtlasExtent, ordinary2AtlasExtent_);
+        const bool hero4Change = extentChanged(
+            requestedHero4AtlasExtent, hero4AtlasExtent_);
+        const bool cinematic8Change = extentChanged(
+            requestedCinematic8AtlasExtent, cinematic8AtlasExtent_);
+        if (!requirePyramids) {
+            frameTopologyPrewarm_ = result;
+            return result;
+        }
+
+        transparencyPyramidResidency_.observe(true);
+        ordinary2AtlasResidency_.observe(
+            requirements.ordinary2LayeredInterfaces);
+        hero4AtlasResidency_.observe(requirements.hero4LayeredInterfaces);
+        cinematic8AtlasResidency_.observe(
+            requirements.cinematic8LayeredInterfaces);
+        if (!transparencyPyramidResidency_.changePending() &&
+            !ordinary2AtlasResidency_.changePending() &&
+            !hero4AtlasResidency_.changePending() &&
+            !cinematic8AtlasResidency_.changePending() &&
+            !ordinary2Change && !hero4Change && !cinematic8Change) {
+            frameTopologyPrewarm_ = result;
+            return result;
+        }
+
+        const auto start = std::chrono::steady_clock::now();
+        applyTransparencyPyramidTopologyChange(
+            requestedOrdinary2AtlasExtent, requestedHero4AtlasExtent,
+            requestedCinematic8AtlasExtent);
+        result.durationNanoseconds = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - start).count());
+        result.changed =
+            previousPyramids != transparencyPyramidResidency_.enabled() ||
+            previousOrdinary2AtlasExtent.width != ordinary2AtlasExtent_.width ||
+            previousOrdinary2AtlasExtent.height != ordinary2AtlasExtent_.height ||
+            previousHero4AtlasExtent.width != hero4AtlasExtent_.width ||
+            previousHero4AtlasExtent.height != hero4AtlasExtent_.height ||
+            previousCinematic8AtlasExtent.width !=
+                cinematic8AtlasExtent_.width ||
+            previousCinematic8AtlasExtent.height !=
+                cinematic8AtlasExtent_.height;
+        frameTopologyPrewarm_ = result;
+        return result;
     }
 
     // ==============================================================================
@@ -1747,17 +2293,23 @@ namespace Iridium {
                 static_cast<uint32_t>(MaterialClosureClass::StandardDeferred) &&
             asset.pipelineState.shaderProgram == ShaderProgram::CanonicalPbrGBuffer &&
             asset.pipelineState.renderPass == RenderPassClass::GBuffer;
+        const bool complexProgram =
+            asset.pipelineState.shaderProgram ==
+                ShaderProgram::CanonicalComplexOpaqueForward ||
+            asset.pipelineState.shaderProgram ==
+                ShaderProgram::CanonicalComplexForward;
         const bool forward = asset.packed.closureClass !=
                 static_cast<uint32_t>(MaterialClosureClass::StandardDeferred) &&
             asset.packed.closureClass !=
                 static_cast<uint32_t>(MaterialClosureClass::Invalid) &&
-            (asset.pipelineState.shaderProgram ==
-                    ShaderProgram::CanonicalComplexOpaqueForward ||
-                asset.pipelineState.shaderProgram ==
-                    ShaderProgram::CanonicalComplexForward) &&
+            complexProgram &&
             asset.pipelineState.renderPass == RenderPassClass::Forward;
+        const bool transparent = asset.packed.closureClass !=
+                static_cast<uint32_t>(MaterialClosureClass::Invalid) &&
+            complexProgram &&
+            asset.pipelineState.renderPass == RenderPassClass::Transparent;
         if (asset.packed.schemaVersion != PackedGpuMaterial::SchemaVersion ||
-            (!deferred && !forward))
+            (!deferred && !forward && !transparent))
             throw std::invalid_argument("canonical material asset has an incompatible contract");
 
         std::array<VulkanTexturePayload*, PackedGpuMaterial::MaxTextureUses> textures{};
@@ -1769,7 +2321,20 @@ namespace Iridium {
 
         VulkanMaterialPayload materialPayload{};
         materialPayload.pipeline = pipelineLibrary.getOrCreatePipeline(asset.pipelineState);
-        materialPayload.renderQueue = forward
+        PipelineStateDesc mirroredPipelineState = asset.pipelineState;
+        if (mirroredPipelineState.renderPass ==
+                RenderPassClass::Transparent &&
+            mirroredPipelineState.cullMode != CullMode::None) {
+            mirroredPipelineState.frontFace =
+                mirroredPipelineState.frontFace == FrontFace::Clockwise
+                ? FrontFace::CounterClockwise : FrontFace::Clockwise;
+            materialPayload.mirroredPipeline =
+                pipelineLibrary.getOrCreatePipeline(mirroredPipelineState);
+        }
+        else {
+            materialPayload.mirroredPipeline = materialPayload.pipeline;
+        }
+        materialPayload.renderQueue = forward || transparent
             ? (asset.pipelineState.blendMode == BlendMode::Opaque
                 ? RenderQueue::ForwardOpaque : RenderQueue::Transparent)
             : RenderQueue::Opaque;
@@ -1870,11 +2435,17 @@ namespace Iridium {
 
     void VulkanVertexBackend::initFrameTargets() {
         frameTargets.init(vkContext->getDevice(), *vkSwapchain, sceneExtent_,
-            { gBufferPass->getRenderPass(), lightingRenderPass, forwardPass->getRenderPass(),
-                glassDepthPass->getRenderPass(), outputPass.renderPass(),
+            { gBufferPass->getRenderPass(), lightingRenderPass,
+                forwardPass->getRenderPass(), transparentPass->getRenderPass(),
+                glassDepthPass->getRenderPass(),
+                layeredInterfaceCapture_.renderPass(),
+                layeredLocalComposition_.renderPass(), outputPass.renderPass(),
                 uiPass->getRenderPass() },
             VulkanFrameScheduler::FramesInFlight,
             outputTransport_ == Color::OutputTransport::Hdr10Pq,
+            transparencyPyramidResidency_.enabled(),
+            VulkanLayeredGraphConfig{ ordinary2AtlasExtent_,
+                hero4AtlasExtent_, cinematic8AtlasExtent_ },
             renderGraph_);
     }
 
@@ -1899,6 +2470,7 @@ namespace Iridium {
     FrameStatus VulkanVertexBackend::beginFrame() {
         frameOpen_ = false;
         finalCaptureHookRecorded_ = false;
+        ordinary2ViewProjectionValid_ = false;
         collectFrameCounters_ = cpuProfiler_ != nullptr && cpuProfiler_->isFrameOpen();
         if (collectFrameCounters_ && uniqueMaterialIds_.capacity() == 0) {
             uniqueMaterialIds_.reserve(MaxUniqueResourcesPerFrame);
@@ -1907,11 +2479,14 @@ namespace Iridium {
         resetFrameCounters();
         CpuScope beginFrameScope(cpuProfiler_, "cpu.renderer.begin_frame");
         uploadContext.flush();
+        applyTransparencyPyramidTopologyChange();
         const uint32_t completedFrameIndex = scheduler.currentFrameIndex();
         const VulkanFrameBegin frame = scheduler.beginFrame(vkSwapchain->getSwapchain());
         // beginFrame has waited this slot's fence before returning, including
         // the out-of-date acquire path. Its capture readbacks are now CPU-safe.
         collectFrameCapturesForSlot(completedFrameIndex);
+        collectOrdinary2CaptureValidationsForSlot(completedFrameIndex);
+        collectDeepLayeredCaptureValidationsForSlot(completedFrameIndex);
         collectClusterDiagnostics(completedFrameIndex);
         {
             CpuScope graphScope(cpuProfiler_, "cpu.render_graph.lookup");
@@ -3509,11 +4084,20 @@ namespace Iridium {
         clusterDiagnosticReadbackPending_[frameIndex] = false;
     }
 
-    void VulkanVertexBackend::updateCamera(const glm::mat4& view, const glm::mat4& proj) {
+    void VulkanVertexBackend::updateCamera(const ViewTransportRecord& view) {
         UniformBufferObject ubo{};
         ubo.model = glm::mat4(1.0f); // Handled individually via push constants
-        ubo.view = view;
-        ubo.proj = proj;
+        ubo.view = view.view;
+        ubo.proj = view.projection;
+        ubo.inverseView = view.inverseView;
+        ubo.inverseProjection = view.inverseProjection;
+        ubo.cameraPosition = view.cameraPosition;
+        ubo.depthRange = view.depthRange;
+        ubo.renderInfo = view.renderInfo;
+        ubo.renderInfo.w &= ~ViewTransportRefractionPyramidsAvailable;
+        if (transparencyPyramidResidency_.enabled())
+            ubo.renderInfo.w |= ViewTransportRefractionPyramidsAvailable;
+        ubo.worldUnits = view.worldUnits;
 
         // Push the matrices to the GPU!
         std::memcpy(uniformBuffers[scheduler.currentFrameIndex()].mapped, &ubo, sizeof(ubo));
@@ -3525,6 +4109,8 @@ namespace Iridium {
         const LightingFramePacket& lights,
         const ReflectionProbeGpuFramePacket& reflectionProbes) {
         CpuScope recordScope(cpuProfiler_, "cpu.render.record.lighting");
+        ordinary2ViewProjection_ = proj * view;
+        ordinary2ViewProjectionValid_ = true;
         const uint32_t frameIndex = scheduler.currentFrameIndex();
         uploadLightsForFrame(frameIndex, lights);
         updateClusterFallbackCandidates(frameIndex, view, lights);
@@ -3614,15 +4200,1360 @@ namespace Iridium {
         vkCmdEndRenderPass(currentCmd);
     }
 
+    void VulkanVertexBackend::recordOrdinary2InterfaceCapture(
+        std::span<const DrawPacket> packets,
+        std::span<const Ordinary2CaptureDraw> draws,
+        bool exitCapture) {
+        const char* passName = exitCapture
+            ? "transparent.layered.exit.capture"
+            : "transparent.layered.entry.capture";
+        if (draws.empty()) {
+            renderGraph_.skipPass(passName);
+            return;
+        }
+        if (ordinary2AtlasExtent_.width == 0u ||
+            ordinary2AtlasExtent_.height == 0u ||
+            layeredInterfaceCapture_.pipeline() == VK_NULL_HANDLE ||
+            layeredInterfaceCapture_.descriptorFrameCount() <=
+                scheduler.currentFrameIndex()) {
+            throw std::logic_error(
+                "Ordinary2 capture recording requires resident atlas targets");
+        }
+
+        VulkanFrameContextTargets& targets = frameTargets.get(
+            scheduler.currentFrameIndex());
+        const VkFramebuffer framebuffer = exitCapture
+            ? targets.layeredExitFramebuffer
+            : targets.layeredEntryFramebuffer;
+        if (framebuffer == VK_NULL_HANDLE)
+            throw std::logic_error(
+                "Ordinary2 capture framebuffer is unavailable");
+
+        VulkanGpuRangeToken gpuRange = scheduler.beginGpuRange(exitCapture
+            ? "gpu.transparency.layered.exit.capture"
+            : "gpu.transparency.layered.entry.capture");
+        renderGraph_.beginPass(currentCmd, passName);
+        std::array<VkClearValue, 2> clears{};
+        clears[0].color.uint32[0] = 0u;
+        clears[1].depthStencil = { 1.0f, 0u };
+        VkRenderPassBeginInfo passInfo{
+            VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
+        passInfo.renderPass = layeredInterfaceCapture_.renderPass();
+        passInfo.framebuffer = framebuffer;
+        passInfo.renderArea.extent = ordinary2AtlasExtent_;
+        passInfo.clearValueCount = static_cast<uint32_t>(clears.size());
+        passInfo.pClearValues = clears.data();
+        vkCmdBeginRenderPass(currentCmd, &passInfo,
+            VK_SUBPASS_CONTENTS_INLINE);
+
+        const VkPipelineLayout layout =
+            layeredInterfaceCapture_.pipelineLayout();
+        vkCmdBindPipeline(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+            layeredInterfaceCapture_.pipeline());
+        recordPipelineBind(pipelineIdentity(
+            FixedPipelineIdentity::LayeredInterfaceCapture));
+        const VkDescriptorSet globalSet = globalDescriptorSets[
+            scheduler.currentFrameIndex()];
+        vkCmdBindDescriptorSets(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+            layout, 0u, 1u, &globalSet, 0u, nullptr);
+        bindMaterialDescriptors(layout);
+        const VkDescriptorSet captureSet =
+            layeredInterfaceCapture_.descriptorSet(
+                scheduler.currentFrameIndex(), exitCapture);
+        vkCmdBindDescriptorSets(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+            layout, 3u, 1u, &captureSet, 0u, nullptr);
+
+        GeometryHandle lastGeometry{};
+        for (const Ordinary2CaptureDraw& draw : draws) {
+            if (draw.packetIndex >= packets.size())
+                continue;
+            const DrawPacket& packet = packets[draw.packetIndex];
+            const VulkanGeometryPayload* geometry =
+                geometryVault.get(packet.geometry);
+            if (geometry == nullptr || materialVault.get(packet.material) == nullptr)
+                continue;
+            const VkViewport viewport{
+                -static_cast<float>(draw.viewportOffsetX),
+                -static_cast<float>(draw.viewportOffsetY),
+                static_cast<float>(frameTargets.extent().width),
+                static_cast<float>(frameTargets.extent().height),
+                0.0f, 1.0f };
+            const VkRect2D scissor{
+                { static_cast<int32_t>(draw.atlasX),
+                    static_cast<int32_t>(draw.atlasY) },
+                { draw.width, draw.height } };
+            vkCmdSetViewport(currentCmd, 0u, 1u, &viewport);
+            vkCmdSetScissor(currentCmd, 0u, 1u, &scissor);
+            if (packet.geometry != lastGeometry) {
+                const VkDeviceSize offset = 0u;
+                vkCmdBindVertexBuffers(currentCmd, 0u, 1u,
+                    &geometry->vertexBuffer.buffer, &offset);
+                vkCmdBindIndexBuffer(currentCmd, geometry->indexBuffer.buffer,
+                    0u, toVkIndexType(geometry->indexFormat));
+                lastGeometry = packet.geometry;
+            }
+            LayeredInterfaceCapturePushConstants push{};
+            push.renderMatrix = packet.worldTransform;
+            push.materialIndex = packet.material.getIndex();
+            push.workTableIndex = draw.workTableIndex;
+            push.flags |= kLayeredCaptureRequirePairedOrientation;
+            if ((packet.transparentWorkFlags &
+                    TransparentWorkMirrored) != 0u)
+                push.flags |= kLayeredCaptureMirrored;
+            if (exitCapture)
+                push.flags |= kLayeredCaptureHasPrevious;
+            push.packedViewportOffset = packLayeredViewportOffset(
+                draw.viewportOffsetX, draw.viewportOffsetY);
+            vkCmdPushConstants(currentCmd, layout,
+                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                0u, sizeof(push), &push);
+            vkCmdDrawIndexed(currentCmd, packet.indexCount, 1u,
+                packet.firstIndex, 0, 0u);
+            if (exitCapture) {
+                recordDraw(frameCounters_.ordinary2CaptureExitDraws,
+                    packet.indexCount / 3u);
+            }
+            else {
+                recordDraw(frameCounters_.ordinary2CaptureEntryDraws,
+                    packet.indexCount / 3u);
+            }
+        }
+        vkCmdEndRenderPass(currentCmd);
+        scheduler.endGpuRange(gpuRange);
+    }
+
+    void VulkanVertexBackend::recordOrdinary2Captures(
+        std::span<const DrawPacket> packets,
+        std::span<const Ordinary2CaptureDraw> draws) {
+        recordOrdinary2InterfaceCapture(packets, draws, false);
+        recordOrdinary2InterfaceCapture(packets, draws, true);
+    }
+
+    void VulkanVertexBackend::recordDeepLayeredInterfaceCapture(
+        std::span<const DrawPacket> packets,
+        std::span<const LayeredCaptureDraw> draws,
+        TransparencyQuality quality, uint32_t interfaceIndex) {
+        const std::span<const std::string_view> passNames = quality ==
+                TransparencyQuality::Hero4
+            ? std::span<const std::string_view>(Hero4PassNames).first(4u)
+            : quality == TransparencyQuality::Cinematic8
+                ? std::span<const std::string_view>(
+                    Cinematic8PassNames).first(8u)
+                : std::span<const std::string_view>{};
+        const std::span<const char* const> gpuRanges = quality ==
+                TransparencyQuality::Hero4
+            ? std::span<const char* const>(Hero4CaptureGpuRanges)
+            : quality == TransparencyQuality::Cinematic8
+                ? std::span<const char* const>(Cinematic8CaptureGpuRanges)
+                : std::span<const char* const>{};
+        if (interfaceIndex >= passNames.size() ||
+            interfaceIndex >= gpuRanges.size()) {
+            throw std::out_of_range(
+                "Deep layered interface index is invalid");
+        }
+        const std::string_view passName = passNames[interfaceIndex];
+        const bool hasTierDraws = std::ranges::any_of(draws,
+            [quality](const LayeredCaptureDraw& draw) {
+                return draw.quality == quality;
+            });
+        if (!hasTierDraws) {
+            renderGraph_.skipPass(passName);
+            return;
+        }
+
+        const uint32_t frameIndex = scheduler.currentFrameIndex();
+        VulkanFrameContextTargets& targets = frameTargets.get(frameIndex);
+        VulkanFrameContextTargets::DeepLayeredTier* tier = quality ==
+                TransparencyQuality::Hero4
+            ? &targets.hero4 : &targets.cinematic8;
+        if (!tier->active() || interfaceIndex >= tier->interfaceCount ||
+            layeredInterfaceCapture_.pipeline() == VK_NULL_HANDLE ||
+            layeredInterfaceCapture_.descriptorInterfaceCount(
+                frameIndex, quality) != tier->interfaceCount) {
+            throw std::logic_error(
+                "Deep layered capture requires a complete resident tier");
+        }
+        const VkFramebuffer framebuffer =
+            tier->interfaceFramebuffers[interfaceIndex];
+        if (framebuffer == VK_NULL_HANDLE)
+            throw std::logic_error(
+                "Deep layered capture framebuffer is unavailable");
+
+        VulkanGpuRangeToken gpuRange = scheduler.beginGpuRange(
+            gpuRanges[interfaceIndex]);
+        renderGraph_.beginPass(currentCmd, passName);
+        std::array<VkClearValue, 2> clears{};
+        clears[0].color.uint32[0] = 0u;
+        clears[1].depthStencil = { 1.0f, 0u };
+        VkRenderPassBeginInfo passInfo{
+            VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
+        passInfo.renderPass = layeredInterfaceCapture_.renderPass();
+        passInfo.framebuffer = framebuffer;
+        passInfo.renderArea.extent = tier->atlasExtent;
+        passInfo.clearValueCount = static_cast<uint32_t>(clears.size());
+        passInfo.pClearValues = clears.data();
+        vkCmdBeginRenderPass(currentCmd, &passInfo,
+            VK_SUBPASS_CONTENTS_INLINE);
+
+        const VkPipelineLayout layout =
+            layeredInterfaceCapture_.pipelineLayout();
+        vkCmdBindPipeline(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+            layeredInterfaceCapture_.pipeline());
+        recordPipelineBind(pipelineIdentity(
+            FixedPipelineIdentity::LayeredInterfaceCapture));
+        const VkDescriptorSet globalSet = globalDescriptorSets[frameIndex];
+        vkCmdBindDescriptorSets(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+            layout, 0u, 1u, &globalSet, 0u, nullptr);
+        bindMaterialDescriptors(layout);
+        const VkDescriptorSet captureSet =
+            layeredInterfaceCapture_.descriptorSet(frameIndex, quality,
+                interfaceIndex);
+        vkCmdBindDescriptorSets(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+            layout, 3u, 1u, &captureSet, 0u, nullptr);
+
+        GeometryHandle lastGeometry{};
+        for (const LayeredCaptureDraw& draw : draws) {
+            if (draw.quality != quality || draw.packetIndex >= packets.size())
+                continue;
+            const DrawPacket& packet = packets[draw.packetIndex];
+            const VulkanGeometryPayload* geometry =
+                geometryVault.get(packet.geometry);
+            if (geometry == nullptr ||
+                materialVault.get(packet.material) == nullptr) {
+                continue;
+            }
+            const VkViewport viewport{
+                -static_cast<float>(draw.viewportOffsetX),
+                -static_cast<float>(draw.viewportOffsetY),
+                static_cast<float>(frameTargets.extent().width),
+                static_cast<float>(frameTargets.extent().height),
+                0.0f, 1.0f };
+            const VkRect2D scissor{
+                { static_cast<int32_t>(draw.atlasX),
+                    static_cast<int32_t>(draw.atlasY) },
+                { draw.width, draw.height } };
+            vkCmdSetViewport(currentCmd, 0u, 1u, &viewport);
+            vkCmdSetScissor(currentCmd, 0u, 1u, &scissor);
+            if (packet.geometry != lastGeometry) {
+                const VkDeviceSize offset = 0u;
+                vkCmdBindVertexBuffers(currentCmd, 0u, 1u,
+                    &geometry->vertexBuffer.buffer, &offset);
+                vkCmdBindIndexBuffer(currentCmd,
+                    geometry->indexBuffer.buffer, 0u,
+                    toVkIndexType(geometry->indexFormat));
+                lastGeometry = packet.geometry;
+            }
+            LayeredInterfaceCapturePushConstants push{};
+            push.renderMatrix = packet.worldTransform;
+            push.materialIndex = packet.material.getIndex();
+            push.workTableIndex = draw.workTableIndex;
+            if ((packet.transparentWorkFlags &
+                    TransparentWorkMirrored) != 0u) {
+                push.flags |= kLayeredCaptureMirrored;
+            }
+            if (interfaceIndex != 0u)
+                push.flags |= kLayeredCaptureHasPrevious;
+            if (interfaceIndex >= 2u)
+                push.flags |= kLayeredCaptureHasTerminationMask;
+            push.packedViewportOffset = packLayeredViewportOffset(
+                draw.viewportOffsetX, draw.viewportOffsetY);
+            vkCmdPushConstants(currentCmd, layout,
+                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                0u, sizeof(push), &push);
+            vkCmdDrawIndexed(currentCmd, packet.indexCount, 1u,
+                packet.firstIndex, 0, 0u);
+            recordDraw(frameCounters_.deepLayeredInterfaceDraws,
+                packet.indexCount / 3u);
+        }
+        vkCmdEndRenderPass(currentCmd);
+        scheduler.endGpuRange(gpuRange);
+    }
+
+    void VulkanVertexBackend::recordDeepLayeredCaptures(
+        std::span<const DrawPacket> packets,
+        std::span<const LayeredCaptureDraw> draws,
+        TransparencyQuality quality) {
+        const uint32_t interfaceCount = layeredQualityTierContract(
+            quality).maximumInterfaceCount;
+        for (uint32_t interfaceIndex = 0u;
+            interfaceIndex < interfaceCount; ++interfaceIndex) {
+            recordDeepLayeredInterfaceCapture(packets, draws, quality,
+                interfaceIndex);
+            if (deepLayeredTerminationInterface(interfaceIndex,
+                    interfaceCount)) {
+                recordDeepLayeredTileTermination(draws, quality,
+                    interfaceIndex);
+            }
+        }
+    }
+
+    void VulkanVertexBackend::recordDeepLayeredTileTermination(
+        std::span<const LayeredCaptureDraw> draws,
+        TransparencyQuality quality, uint32_t interfaceIndex) {
+        const char* tierName = quality == TransparencyQuality::Hero4
+            ? "hero4" : quality == TransparencyQuality::Cinematic8
+                ? "cinematic8" : nullptr;
+        if (tierName == nullptr)
+            throw std::invalid_argument(
+                "Tile termination requires Hero4 or Cinematic8");
+        const uint32_t interfaceCount = layeredQualityTierContract(
+            quality).maximumInterfaceCount;
+        if (interfaceIndex >= interfaceCount)
+            throw std::out_of_range(
+                "Layered tile-termination interface is invalid");
+        const uint32_t frameIndex = scheduler.currentFrameIndex();
+        VulkanFrameContextTargets& targets = frameTargets.get(frameIndex);
+        VulkanFrameContextTargets::DeepLayeredTier& tier = quality ==
+                TransparencyQuality::Hero4
+            ? targets.hero4 : targets.cinematic8;
+        if (!tier.active() ||
+            layeredInterfaceCapture_.tileTerminationPipeline() ==
+                VK_NULL_HANDLE) {
+            throw std::logic_error(
+                "Layered tile termination requires a resident tier");
+        }
+        const std::string passName = std::string(
+            "transparent.layered.") + tierName + ".interface." +
+            std::to_string(interfaceIndex) + ".terminate-tiles";
+        const bool hasTierDraws = std::ranges::any_of(draws,
+            [quality](const LayeredCaptureDraw& draw) {
+                return draw.quality == quality;
+            });
+        if (!hasTierDraws) {
+            renderGraph_.skipPass(passName);
+            return;
+        }
+        const char* gpuRangeName = quality == TransparencyQuality::Hero4
+            ? Hero4TerminationGpuRanges[interfaceIndex]
+            : Cinematic8TerminationGpuRanges[interfaceIndex];
+        VulkanGpuRangeToken gpuRange = scheduler.beginGpuRange(
+            gpuRangeName);
+        renderGraph_.beginPass(currentCmd, passName);
+        layeredInterfaceCapture_.recordTileTermination(currentCmd,
+            frameIndex, quality, interfaceIndex, tier.atlasExtent);
+        recordPipelineBind(pipelineIdentity(
+            FixedPipelineIdentity::LayeredTileTermination));
+        scheduler.endGpuRange(gpuRange);
+    }
+
+    void VulkanVertexBackend::recordDeepLayeredLocalComposition(
+        std::span<const DrawPacket> packets,
+        std::span<const LayeredCaptureDraw> draws,
+        TransparencyQuality quality) {
+        const LayeredQualityTierContract tierContract =
+            layeredQualityTierContract(quality);
+        if (quality != TransparencyQuality::Hero4 &&
+            quality != TransparencyQuality::Cinematic8) {
+            throw std::invalid_argument(
+                "Deep local composition requires Hero4 or Cinematic8");
+        }
+        const uint32_t interfaceCount =
+            tierContract.maximumInterfaceCount;
+        const std::span<const std::string_view> passNames = quality ==
+                TransparencyQuality::Hero4
+            ? std::span<const std::string_view>(Hero4PassNames)
+            : std::span<const std::string_view>(Cinematic8PassNames);
+        const std::string_view passName = passNames[interfaceCount];
+        const bool hasTierDraws = std::ranges::any_of(draws,
+            [quality](const LayeredCaptureDraw& draw) {
+                return draw.quality == quality;
+            });
+        if (!hasTierDraws) {
+            renderGraph_.skipPass(passName);
+            return;
+        }
+
+        const uint32_t frameIndex = scheduler.currentFrameIndex();
+        VulkanFrameContextTargets& targets = frameTargets.get(frameIndex);
+        VulkanFrameContextTargets::DeepLayeredTier& tier = quality ==
+                TransparencyQuality::Hero4
+            ? targets.hero4 : targets.cinematic8;
+        if (!tier.active() || tier.interfaceCount != interfaceCount ||
+            tier.localCompositionFramebuffer == VK_NULL_HANDLE ||
+            layeredLocalComposition_.deepPipeline() == VK_NULL_HANDLE ||
+            layeredLocalComposition_.deepResidualPipeline() ==
+                VK_NULL_HANDLE ||
+            layeredLocalComposition_.deepDescriptorInterfaceCount(
+                frameIndex, quality) != interfaceCount) {
+            throw std::logic_error(
+                "Deep local composition requires a complete resident tier");
+        }
+
+        const char* gpuRangeName = quality == TransparencyQuality::Hero4
+            ? "gpu.transparency.layered.hero4.local-compose"
+            : "gpu.transparency.layered.cinematic8.local-compose";
+        VulkanGpuRangeToken gpuRange = scheduler.beginGpuRange(gpuRangeName);
+        renderGraph_.beginPass(currentCmd, passName);
+        VkClearValue clear{};
+        clear.color = { { 0.0f, 0.0f, 0.0f, 0.0f } };
+        VkRenderPassBeginInfo passInfo{
+            VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
+        passInfo.renderPass = layeredLocalComposition_.renderPass();
+        passInfo.framebuffer = tier.localCompositionFramebuffer;
+        passInfo.renderArea.extent = tier.atlasExtent;
+        passInfo.clearValueCount = 1u;
+        passInfo.pClearValues = &clear;
+        vkCmdBeginRenderPass(currentCmd, &passInfo,
+            VK_SUBPASS_CONTENTS_INLINE);
+
+        const VkPipelineLayout layout =
+            layeredLocalComposition_.deepPipelineLayout();
+        const VkDescriptorSet globalSet = globalDescriptorSets[frameIndex];
+        vkCmdBindDescriptorSets(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+            layout, 0u, 1u, &globalSet, 0u, nullptr);
+        bindMaterialDescriptors(layout);
+        const VkDescriptorSet sceneSet = sceneDescriptors.get(frameIndex);
+        vkCmdBindDescriptorSets(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+            layout, 3u, 1u, &sceneSet, 0u, nullptr);
+        const VkDescriptorSet interfaceSet =
+            layeredLocalComposition_.deepDescriptorSet(frameIndex, quality);
+        vkCmdBindDescriptorSets(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+            layout, 4u, 1u, &interfaceSet, 0u, nullptr);
+
+        GeometryHandle lastGeometry{};
+        // The bounded tail is evaluated first into the cleared local atlas.
+        // Only semantic entries strictly behind the final stored interface
+        // survive the residual shader. This compresses arbitrarily many
+        // uncaptured interfaces into deterministic non-refractive operators
+        // without adding another interface image or per-frame allocation.
+        vkCmdBindPipeline(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+            layeredLocalComposition_.deepResidualPipeline());
+        recordPipelineBind(pipelineIdentity(
+            FixedPipelineIdentity::LayeredResidualComposition));
+        const uint32_t residualQuerySlot = quality ==
+                TransparencyQuality::Hero4
+            ? 0u : 1u;
+        const bool residualQueryActive =
+            scheduler.beginLayeredResidualQuery(residualQuerySlot);
+        for (const LayeredCaptureDraw& draw : draws) {
+            if (draw.quality != quality || draw.packetIndex >= packets.size())
+                continue;
+            const DrawPacket& packet = packets[draw.packetIndex];
+            const VulkanGeometryPayload* geometry =
+                geometryVault.get(packet.geometry);
+            if (geometry == nullptr ||
+                materialVault.get(packet.material) == nullptr) {
+                continue;
+            }
+            const VkViewport viewport{
+                -static_cast<float>(draw.viewportOffsetX),
+                -static_cast<float>(draw.viewportOffsetY),
+                static_cast<float>(frameTargets.extent().width),
+                static_cast<float>(frameTargets.extent().height),
+                0.0f, 1.0f };
+            const VkRect2D scissor{
+                { static_cast<int32_t>(draw.atlasX),
+                    static_cast<int32_t>(draw.atlasY) },
+                { draw.width, draw.height } };
+            vkCmdSetViewport(currentCmd, 0u, 1u, &viewport);
+            vkCmdSetScissor(currentCmd, 0u, 1u, &scissor);
+            if (packet.geometry != lastGeometry) {
+                const VkDeviceSize offset = 0u;
+                vkCmdBindVertexBuffers(currentCmd, 0u, 1u,
+                    &geometry->vertexBuffer.buffer, &offset);
+                vkCmdBindIndexBuffer(currentCmd,
+                    geometry->indexBuffer.buffer, 0u,
+                    toVkIndexType(geometry->indexFormat));
+                lastGeometry = packet.geometry;
+            }
+            CanonicalMeshPushConstants push{};
+            push.renderMatrix = packet.worldTransform;
+            push.materialIndex = packet.material.getIndex();
+            push.padding[0] = draw.workTableIndex;
+            const uint32_t mirrored = (packet.transparentWorkFlags &
+                TransparentWorkMirrored) != 0u ? 1u : 0u;
+            push.padding[1] = mirrored | (interfaceCount << 16u);
+            push.padding[2] = packLayeredViewportOffset(
+                draw.viewportOffsetX, draw.viewportOffsetY);
+            vkCmdPushConstants(currentCmd, layout,
+                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                0u, sizeof(push), &push);
+            vkCmdDrawIndexed(currentCmd, packet.indexCount, 1u,
+                packet.firstIndex, 0, 0u);
+            recordDraw(frameCounters_.deepLayeredResidualProbeDraws,
+                packet.indexCount / 3u);
+        }
+        if (residualQueryActive)
+            scheduler.endLayeredResidualQuery(residualQuerySlot);
+
+        vkCmdBindPipeline(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+            layeredLocalComposition_.deepPipeline());
+        recordPipelineBind(pipelineIdentity(
+            FixedPipelineIdentity::LayeredLocalComposition));
+        // Captured slots are front-to-back. Rerasterizing them in reverse
+        // makes premultiplied over blending deterministic per pixel without a
+        // global object sort. The fragment shader accepts entry slots only and
+        // validates the exact captured depth before evaluating shared transport.
+        for (uint32_t interfaceIndex = interfaceCount;
+            interfaceIndex-- > 0u;) {
+            for (const LayeredCaptureDraw& draw : draws) {
+                if (draw.quality != quality ||
+                    draw.packetIndex >= packets.size()) {
+                    continue;
+                }
+                const DrawPacket& packet = packets[draw.packetIndex];
+                const VulkanGeometryPayload* geometry =
+                    geometryVault.get(packet.geometry);
+                if (geometry == nullptr ||
+                    materialVault.get(packet.material) == nullptr) {
+                    continue;
+                }
+                const VkViewport viewport{
+                    -static_cast<float>(draw.viewportOffsetX),
+                    -static_cast<float>(draw.viewportOffsetY),
+                    static_cast<float>(frameTargets.extent().width),
+                    static_cast<float>(frameTargets.extent().height),
+                    0.0f, 1.0f };
+                const VkRect2D scissor{
+                    { static_cast<int32_t>(draw.atlasX),
+                        static_cast<int32_t>(draw.atlasY) },
+                    { draw.width, draw.height } };
+                vkCmdSetViewport(currentCmd, 0u, 1u, &viewport);
+                vkCmdSetScissor(currentCmd, 0u, 1u, &scissor);
+                if (packet.geometry != lastGeometry) {
+                    const VkDeviceSize offset = 0u;
+                    vkCmdBindVertexBuffers(currentCmd, 0u, 1u,
+                        &geometry->vertexBuffer.buffer, &offset);
+                    vkCmdBindIndexBuffer(currentCmd,
+                        geometry->indexBuffer.buffer, 0u,
+                        toVkIndexType(geometry->indexFormat));
+                    lastGeometry = packet.geometry;
+                }
+                CanonicalMeshPushConstants push{};
+                push.renderMatrix = packet.worldTransform;
+                push.materialIndex = packet.material.getIndex();
+                push.padding[0] = draw.workTableIndex;
+                const uint32_t mirrored = (packet.transparentWorkFlags &
+                    TransparentWorkMirrored) != 0u ? 1u : 0u;
+                push.padding[1] = mirrored | (interfaceIndex << 8u) |
+                    (interfaceCount << 16u);
+                push.padding[2] = packLayeredViewportOffset(
+                    draw.viewportOffsetX, draw.viewportOffsetY);
+                vkCmdPushConstants(currentCmd, layout,
+                    VK_SHADER_STAGE_VERTEX_BIT |
+                        VK_SHADER_STAGE_FRAGMENT_BIT,
+                    0u, sizeof(push), &push);
+                vkCmdDrawIndexed(currentCmd, packet.indexCount, 1u,
+                    packet.firstIndex, 0, 0u);
+                recordDraw(frameCounters_.deepLayeredLocalCompositionDraws,
+                    packet.indexCount / 3u);
+            }
+        }
+        vkCmdEndRenderPass(currentCmd);
+        scheduler.endGpuRange(gpuRange);
+    }
+
+    void VulkanVertexBackend::recordOrdinary2LocalComposition(
+        std::span<const DrawPacket> packets,
+        std::span<const Ordinary2CaptureDraw> draws) {
+        constexpr std::string_view PassName =
+            "transparent.layered.local-compose";
+        if (draws.empty()) {
+            renderGraph_.skipPass(PassName);
+            return;
+        }
+        const uint32_t frameIndex = scheduler.currentFrameIndex();
+        if (ordinary2AtlasExtent_.width == 0u ||
+            ordinary2AtlasExtent_.height == 0u ||
+            layeredLocalComposition_.pipeline() == VK_NULL_HANDLE ||
+            layeredLocalComposition_.descriptorFrameCount() <= frameIndex) {
+            throw std::logic_error(
+                "Ordinary2 local composition requires resident atlas targets");
+        }
+        VulkanFrameContextTargets& targets = frameTargets.get(frameIndex);
+        if (targets.layeredLocalCompositionFramebuffer == VK_NULL_HANDLE)
+            throw std::logic_error(
+                "Ordinary2 local-composition framebuffer is unavailable");
+
+        VulkanGpuRangeToken gpuRange = scheduler.beginGpuRange(
+            "gpu.transparency.layered.local-compose");
+        renderGraph_.beginPass(currentCmd, PassName);
+        VkClearValue clear{};
+        clear.color = { { 0.0f, 0.0f, 0.0f, 0.0f } };
+        VkRenderPassBeginInfo passInfo{
+            VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
+        passInfo.renderPass = layeredLocalComposition_.renderPass();
+        passInfo.framebuffer =
+            targets.layeredLocalCompositionFramebuffer;
+        passInfo.renderArea.extent = ordinary2AtlasExtent_;
+        passInfo.clearValueCount = 1u;
+        passInfo.pClearValues = &clear;
+        vkCmdBeginRenderPass(currentCmd, &passInfo,
+            VK_SUBPASS_CONTENTS_INLINE);
+
+        const VkPipelineLayout layout =
+            layeredLocalComposition_.pipelineLayout();
+        vkCmdBindPipeline(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+            layeredLocalComposition_.pipeline());
+        recordPipelineBind(pipelineIdentity(
+            FixedPipelineIdentity::LayeredLocalComposition));
+        const VkDescriptorSet globalSet = globalDescriptorSets[frameIndex];
+        vkCmdBindDescriptorSets(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+            layout, 0u, 1u, &globalSet, 0u, nullptr);
+        bindMaterialDescriptors(layout);
+        const VkDescriptorSet sceneSet = sceneDescriptors.get(frameIndex);
+        vkCmdBindDescriptorSets(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+            layout, 3u, 1u, &sceneSet, 0u, nullptr);
+        const VkDescriptorSet interfaceSet =
+            layeredLocalComposition_.descriptorSet(frameIndex);
+        vkCmdBindDescriptorSets(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+            layout, 4u, 1u, &interfaceSet, 0u, nullptr);
+
+        GeometryHandle lastGeometry{};
+        // Reverse the stable capture order. Ordinary2 stores one shell, while
+        // this order is the bounded back-to-front contract extended by M6.6.
+        for (auto iterator = draws.rbegin(); iterator != draws.rend();
+            ++iterator) {
+            const Ordinary2CaptureDraw& draw = *iterator;
+            if (draw.packetIndex >= packets.size())
+                continue;
+            const DrawPacket& packet = packets[draw.packetIndex];
+            const VulkanGeometryPayload* geometry =
+                geometryVault.get(packet.geometry);
+            if (geometry == nullptr ||
+                materialVault.get(packet.material) == nullptr)
+                continue;
+            const VkViewport viewport{
+                -static_cast<float>(draw.viewportOffsetX),
+                -static_cast<float>(draw.viewportOffsetY),
+                static_cast<float>(frameTargets.extent().width),
+                static_cast<float>(frameTargets.extent().height),
+                0.0f, 1.0f };
+            const VkRect2D scissor{
+                { static_cast<int32_t>(draw.atlasX),
+                    static_cast<int32_t>(draw.atlasY) },
+                { draw.width, draw.height } };
+            vkCmdSetViewport(currentCmd, 0u, 1u, &viewport);
+            vkCmdSetScissor(currentCmd, 0u, 1u, &scissor);
+            if (packet.geometry != lastGeometry) {
+                const VkDeviceSize offset = 0u;
+                vkCmdBindVertexBuffers(currentCmd, 0u, 1u,
+                    &geometry->vertexBuffer.buffer, &offset);
+                vkCmdBindIndexBuffer(currentCmd,
+                    geometry->indexBuffer.buffer, 0u,
+                    toVkIndexType(geometry->indexFormat));
+                lastGeometry = packet.geometry;
+            }
+            CanonicalMeshPushConstants push{};
+            push.renderMatrix = packet.worldTransform;
+            push.materialIndex = packet.material.getIndex();
+            push.padding[0] = draw.workTableIndex;
+            push.padding[1] = (packet.transparentWorkFlags &
+                TransparentWorkMirrored) != 0u ? 1u : 0u;
+            push.padding[2] = packLayeredViewportOffset(
+                draw.viewportOffsetX, draw.viewportOffsetY);
+            vkCmdPushConstants(currentCmd, layout,
+                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                0u, sizeof(push), &push);
+            vkCmdDrawIndexed(currentCmd, packet.indexCount, 1u,
+                packet.firstIndex, 0, 0u);
+            recordDraw(frameCounters_.ordinary2LocalCompositionDraws,
+                packet.indexCount / 3u);
+        }
+        vkCmdEndRenderPass(currentCmd);
+        scheduler.endGpuRange(gpuRange);
+    }
+
+    void VulkanVertexBackend::prepareOrdinary2ResolvedPacketIndices(
+        std::span<const Ordinary2CaptureDraw> draws) {
+        ordinary2ResolvedPacketCount_ = static_cast<uint32_t>((std::min)(
+            draws.size(), ordinary2ResolvedDraws_.size()));
+        std::copy_n(draws.begin(), ordinary2ResolvedPacketCount_,
+            ordinary2ResolvedDraws_.begin());
+        std::sort(ordinary2ResolvedDraws_.begin(),
+            ordinary2ResolvedDraws_.begin() + ordinary2ResolvedPacketCount_,
+            [](const Ordinary2CaptureDraw& lhs,
+                const Ordinary2CaptureDraw& rhs) {
+                return lhs.packetIndex < rhs.packetIndex;
+            });
+    }
+
+    bool VulkanVertexBackend::isOrdinary2PacketResolved(
+        uint32_t packetIndex) const noexcept {
+        const auto begin = ordinary2ResolvedDraws_.begin();
+        const auto end = begin + ordinary2ResolvedPacketCount_;
+        const auto found = std::lower_bound(begin, end, packetIndex,
+            [](const Ordinary2CaptureDraw& draw, uint32_t index) {
+                return draw.packetIndex < index;
+            });
+        return found != end && found->packetIndex == packetIndex;
+    }
+
+    void VulkanVertexBackend::prepareDeepResolvedPacketIndices(
+        std::span<const LayeredCaptureDraw> draws) {
+        deepResolvedPacketCount_ = 0u;
+        for (const LayeredCaptureDraw& draw : draws) {
+            if ((draw.quality != TransparencyQuality::Hero4 &&
+                    draw.quality != TransparencyQuality::Cinematic8) ||
+                deepResolvedPacketCount_ >= deepResolvedDraws_.size()) {
+                continue;
+            }
+            deepResolvedDraws_[deepResolvedPacketCount_++] = draw;
+        }
+        std::sort(deepResolvedDraws_.begin(),
+            deepResolvedDraws_.begin() + deepResolvedPacketCount_,
+            [](const LayeredCaptureDraw& lhs,
+                const LayeredCaptureDraw& rhs) {
+                return lhs.packetIndex < rhs.packetIndex;
+            });
+    }
+
+    bool VulkanVertexBackend::isDeepPacketResolved(
+        uint32_t packetIndex) const noexcept {
+        const auto begin = deepResolvedDraws_.begin();
+        const auto end = begin + deepResolvedPacketCount_;
+        const auto found = std::lower_bound(begin, end, packetIndex,
+            [](const LayeredCaptureDraw& draw, uint32_t index) {
+                return draw.packetIndex < index;
+            });
+        return found != end && found->packetIndex == packetIndex;
+    }
+
+    bool VulkanVertexBackend::isLayeredPacketResolved(
+        uint32_t packetIndex) const noexcept {
+        return isOrdinary2PacketResolved(packetIndex) ||
+            isDeepPacketResolved(packetIndex);
+    }
+
+    void VulkanVertexBackend::recordOrdinary2SceneResolve(
+        std::span<const DrawPacket> packets,
+        std::span<const Ordinary2CaptureDraw> draws) {
+        constexpr std::string_view PassName =
+            "transparent.layered.compose-hook";
+        if (draws.empty()) {
+            renderGraph_.skipPass(PassName);
+            return;
+        }
+        const uint32_t frameIndex = scheduler.currentFrameIndex();
+        if (layeredSceneResolve_.pipeline() == VK_NULL_HANDLE ||
+            layeredSceneResolve_.descriptorFrameCount() <= frameIndex) {
+            throw std::logic_error(
+                "Ordinary2 scene resolve requires resident atlas descriptors");
+        }
+        VulkanFrameContextTargets& targets = frameTargets.get(frameIndex);
+        if (targets.transparentFramebuffer == VK_NULL_HANDLE)
+            throw std::logic_error(
+                "Ordinary2 scene resolve requires the scene framebuffer");
+
+        VulkanGpuRangeToken gpuRange = scheduler.beginGpuRange(
+            "gpu.transparency.layered.scene-resolve");
+        renderGraph_.beginPass(currentCmd, PassName);
+        VkRenderPassBeginInfo passInfo{
+            VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
+        passInfo.renderPass = transparentPass->getRenderPass();
+        passInfo.framebuffer = targets.transparentFramebuffer;
+        passInfo.renderArea.extent = frameTargets.extent();
+        vkCmdBeginRenderPass(currentCmd, &passInfo,
+            VK_SUBPASS_CONTENTS_INLINE);
+
+        const VkPipelineLayout layout =
+            layeredSceneResolve_.pipelineLayout();
+        vkCmdBindPipeline(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+            layeredSceneResolve_.pipeline());
+        recordPipelineBind(pipelineIdentity(
+            FixedPipelineIdentity::LayeredSceneResolve));
+        const VkDescriptorSet globalSet = globalDescriptorSets[frameIndex];
+        vkCmdBindDescriptorSets(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+            layout, 0u, 1u, &globalSet, 0u, nullptr);
+        const VkDescriptorSet localSet =
+            layeredSceneResolve_.descriptorSet(frameIndex);
+        vkCmdBindDescriptorSets(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+            layout, 1u, 1u, &localSet, 0u, nullptr);
+
+        GeometryHandle lastGeometry{};
+        const VkExtent2D sceneExtent = frameTargets.extent();
+        // Packet-index order is the frontend's stable back-to-front order.
+        for (uint32_t resolvedIndex = 0u;
+            resolvedIndex < ordinary2ResolvedPacketCount_; ++resolvedIndex) {
+            const Ordinary2CaptureDraw& draw =
+                ordinary2ResolvedDraws_[resolvedIndex];
+            if (draw.packetIndex >= packets.size())
+                continue;
+            const DrawPacket& packet = packets[draw.packetIndex];
+            const VulkanGeometryPayload* geometry =
+                geometryVault.get(packet.geometry);
+            if (geometry == nullptr)
+                continue;
+            const int64_t screenX = static_cast<int64_t>(draw.atlasX) +
+                draw.viewportOffsetX;
+            const int64_t screenY = static_cast<int64_t>(draw.atlasY) +
+                draw.viewportOffsetY;
+            if (screenX < 0 || screenY < 0 ||
+                screenX >= sceneExtent.width || screenY >= sceneExtent.height)
+                continue;
+            const uint32_t scissorWidth = (std::min)(draw.width,
+                sceneExtent.width - static_cast<uint32_t>(screenX));
+            const uint32_t scissorHeight = (std::min)(draw.height,
+                sceneExtent.height - static_cast<uint32_t>(screenY));
+            if (scissorWidth == 0u || scissorHeight == 0u)
+                continue;
+            const VkViewport viewport{ 0.0f, 0.0f,
+                static_cast<float>(sceneExtent.width),
+                static_cast<float>(sceneExtent.height), 0.0f, 1.0f };
+            const VkRect2D scissor{
+                { static_cast<int32_t>(screenX),
+                    static_cast<int32_t>(screenY) },
+                { scissorWidth, scissorHeight } };
+            vkCmdSetViewport(currentCmd, 0u, 1u, &viewport);
+            vkCmdSetScissor(currentCmd, 0u, 1u, &scissor);
+            if (packet.geometry != lastGeometry) {
+                const VkDeviceSize offset = 0u;
+                vkCmdBindVertexBuffers(currentCmd, 0u, 1u,
+                    &geometry->vertexBuffer.buffer, &offset);
+                vkCmdBindIndexBuffer(currentCmd, geometry->indexBuffer.buffer,
+                    0u, toVkIndexType(geometry->indexFormat));
+                lastGeometry = packet.geometry;
+            }
+            CanonicalMeshPushConstants push{};
+            push.renderMatrix = packet.worldTransform;
+            push.materialIndex = draw.workTableIndex;
+            push.padding[0] = 1u;
+            push.padding[1] = (packet.transparentWorkFlags &
+                TransparentWorkMirrored) != 0u ? 1u : 0u;
+            push.padding[2] = packLayeredViewportOffset(
+                draw.viewportOffsetX, draw.viewportOffsetY);
+            vkCmdPushConstants(currentCmd, layout,
+                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                0u, sizeof(push), &push);
+            vkCmdDrawIndexed(currentCmd, packet.indexCount, 1u,
+                packet.firstIndex, 0, 0u);
+            recordDraw(frameCounters_.ordinary2SceneResolveDraws,
+                packet.indexCount / 3u);
+        }
+        vkCmdEndRenderPass(currentCmd);
+        scheduler.endGpuRange(gpuRange);
+    }
+
+    void VulkanVertexBackend::recordDeepLayeredSceneResolve(
+        std::span<const DrawPacket> packets,
+        std::span<const LayeredCaptureDraw> draws) {
+        const bool hero4Active = hero4AtlasExtent_.width != 0u &&
+            hero4AtlasExtent_.height != 0u;
+        const bool cinematic8Active = cinematic8AtlasExtent_.width != 0u &&
+            cinematic8AtlasExtent_.height != 0u;
+        const std::string_view passName = hero4Active && cinematic8Active
+            ? "transparent.layered.deep.compose-hook"
+            : hero4Active
+                ? "transparent.layered.hero4.compose-hook"
+                : "transparent.layered.cinematic8.compose-hook";
+        if (draws.empty() || deepResolvedPacketCount_ == 0u) {
+            renderGraph_.skipPass(passName);
+            return;
+        }
+        const uint32_t frameIndex = scheduler.currentFrameIndex();
+        if (layeredSceneResolve_.pipeline() == VK_NULL_HANDLE) {
+            throw std::logic_error(
+                "Deep scene resolve requires a resident pipeline");
+        }
+        VulkanFrameContextTargets& targets = frameTargets.get(frameIndex);
+        if (targets.transparentFramebuffer == VK_NULL_HANDLE) {
+            throw std::logic_error(
+                "Deep scene resolve requires resident scene targets");
+        }
+
+        VulkanGpuRangeToken gpuRange = scheduler.beginGpuRange(
+            hero4Active && cinematic8Active
+                ? "gpu.transparency.layered.deep.scene-resolve"
+                : hero4Active
+                    ? "gpu.transparency.layered.hero4.scene-resolve"
+                    : "gpu.transparency.layered.cinematic8.scene-resolve");
+        renderGraph_.beginPass(currentCmd, passName);
+        VkRenderPassBeginInfo passInfo{
+            VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
+        passInfo.renderPass = transparentPass->getRenderPass();
+        passInfo.framebuffer = targets.transparentFramebuffer;
+        passInfo.renderArea.extent = frameTargets.extent();
+        vkCmdBeginRenderPass(currentCmd, &passInfo,
+            VK_SUBPASS_CONTENTS_INLINE);
+
+        const VkPipelineLayout layout =
+            layeredSceneResolve_.pipelineLayout();
+        vkCmdBindPipeline(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+            layeredSceneResolve_.pipeline());
+        recordPipelineBind(pipelineIdentity(
+            FixedPipelineIdentity::LayeredSceneResolve));
+        const VkDescriptorSet globalSet = globalDescriptorSets[frameIndex];
+        vkCmdBindDescriptorSets(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+            layout, 0u, 1u, &globalSet, 0u, nullptr);
+        GeometryHandle lastGeometry{};
+        TransparencyQuality lastQuality = TransparencyQuality::Ordinary2;
+        const VkExtent2D sceneExtent = frameTargets.extent();
+        std::array<uint32_t, kLayeredQualityTierCount>
+            sceneResolveDrawCounts{};
+        for (uint32_t resolvedIndex = 0u;
+            resolvedIndex < deepResolvedPacketCount_; ++resolvedIndex) {
+            const LayeredCaptureDraw& draw =
+                deepResolvedDraws_[resolvedIndex];
+            const bool tierActive = draw.quality ==
+                    TransparencyQuality::Hero4
+                ? targets.hero4.active()
+                : draw.quality == TransparencyQuality::Cinematic8 &&
+                    targets.cinematic8.active();
+            if (!tierActive ||
+                layeredSceneResolve_.descriptorFrameCount(draw.quality) <=
+                    frameIndex) {
+                throw std::logic_error(
+                    "Deep scene resolve requires resident tier descriptors");
+            }
+            if (draw.packetIndex >= packets.size()) continue;
+            const DrawPacket& packet = packets[draw.packetIndex];
+            const VulkanGeometryPayload* geometry =
+                geometryVault.get(packet.geometry);
+            if (geometry == nullptr) continue;
+            const int64_t screenX = static_cast<int64_t>(draw.atlasX) +
+                draw.viewportOffsetX;
+            const int64_t screenY = static_cast<int64_t>(draw.atlasY) +
+                draw.viewportOffsetY;
+            if (screenX < 0 || screenY < 0 ||
+                screenX >= sceneExtent.width || screenY >= sceneExtent.height) {
+                continue;
+            }
+            const uint32_t scissorWidth = (std::min)(draw.width,
+                sceneExtent.width - static_cast<uint32_t>(screenX));
+            const uint32_t scissorHeight = (std::min)(draw.height,
+                sceneExtent.height - static_cast<uint32_t>(screenY));
+            if (scissorWidth == 0u || scissorHeight == 0u) continue;
+            const VkViewport viewport{ 0.0f, 0.0f,
+                static_cast<float>(sceneExtent.width),
+                static_cast<float>(sceneExtent.height), 0.0f, 1.0f };
+            const VkRect2D scissor{
+                { static_cast<int32_t>(screenX),
+                    static_cast<int32_t>(screenY) },
+                { scissorWidth, scissorHeight } };
+            vkCmdSetViewport(currentCmd, 0u, 1u, &viewport);
+            vkCmdSetScissor(currentCmd, 0u, 1u, &scissor);
+            if (draw.quality != lastQuality) {
+                const VkDescriptorSet localSet =
+                    layeredSceneResolve_.descriptorSet(frameIndex,
+                        draw.quality);
+                vkCmdBindDescriptorSets(currentCmd,
+                    VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 1u, 1u,
+                    &localSet, 0u, nullptr);
+                lastQuality = draw.quality;
+            }
+            if (packet.geometry != lastGeometry) {
+                const VkDeviceSize offset = 0u;
+                vkCmdBindVertexBuffers(currentCmd, 0u, 1u,
+                    &geometry->vertexBuffer.buffer, &offset);
+                vkCmdBindIndexBuffer(currentCmd,
+                    geometry->indexBuffer.buffer, 0u,
+                    toVkIndexType(geometry->indexFormat));
+                lastGeometry = packet.geometry;
+            }
+            CanonicalMeshPushConstants push{};
+            push.renderMatrix = packet.worldTransform;
+            push.materialIndex = draw.workTableIndex;
+            push.padding[1] = (packet.transparentWorkFlags &
+                TransparentWorkMirrored) != 0u ? 1u : 0u;
+            push.padding[2] = packLayeredViewportOffset(
+                draw.viewportOffsetX, draw.viewportOffsetY);
+            vkCmdPushConstants(currentCmd, layout,
+                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                0u, sizeof(push), &push);
+            vkCmdDrawIndexed(currentCmd, packet.indexCount, 1u,
+                packet.firstIndex, 0, 0u);
+            recordDraw(frameCounters_.deepLayeredSceneResolveDraws,
+                packet.indexCount / 3u);
+            ++sceneResolveDrawCounts[layeredQualityTierIndex(draw.quality)];
+        }
+        vkCmdEndRenderPass(currentCmd);
+        scheduler.endGpuRange(gpuRange);
+        for (PendingDeepLayeredCaptureValidation& pending :
+            pendingDeepLayeredCaptureValidations_) {
+            if (pending.frameIndex == frameIndex) {
+                pending.sceneResolveDrawCount = sceneResolveDrawCounts[
+                    layeredQualityTierIndex(pending.quality)];
+            }
+        }
+    }
+
+    void VulkanVertexBackend::recordOrdinary2CaptureValidationReadback(
+        std::span<const Ordinary2CaptureDraw> draws) {
+        if (!ordinary2CaptureValidationRequest_ || draws.empty()) {
+            renderGraph_.skipPass(
+                "transparent.layered.validation-readback-hook");
+            return;
+        }
+        if (ordinary2AtlasExtent_.width == 0u ||
+            ordinary2AtlasExtent_.height == 0u) {
+            throw std::logic_error(
+                "Ordinary2 validation readback requires a resident atlas");
+        }
+
+        const uint64_t pixelCount =
+            static_cast<uint64_t>(ordinary2AtlasExtent_.width) *
+            ordinary2AtlasExtent_.height;
+        constexpr uint64_t BytesPerImagePixel = sizeof(uint32_t);
+        constexpr uint64_t InterfaceImageCount = 4u;
+        if (pixelCount > std::numeric_limits<VkDeviceSize>::max() /
+                (BytesPerImagePixel * InterfaceImageCount + 8u)) {
+            throw std::overflow_error(
+                "Ordinary2 validation readback exceeds VkDeviceSize");
+        }
+        const VkDeviceSize imageBytes = pixelCount * BytesPerImagePixel;
+        const VkDeviceSize localColorBytes = pixelCount * 8u;
+        const VkDeviceSize totalBytes =
+            imageBytes * InterfaceImageCount + localColorBytes;
+
+        PendingOrdinary2CaptureValidation pending{};
+        pending.validationId = *ordinary2CaptureValidationRequest_;
+        pending.frameIndex = scheduler.currentFrameIndex();
+        pending.extent = ordinary2AtlasExtent_;
+        pending.expectedDrawCount = static_cast<uint32_t>(draws.size());
+        pending.workItemCount = static_cast<uint32_t>(
+            ordinary2AtlasPlan_.workIdentities().size());
+        pending.readback = resourceAllocator.createBuffer(totalBytes,
+            VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            true, ProfileMemoryCategory::CaptureReadback);
+        try {
+            pendingOrdinary2CaptureValidations_.push_back(std::move(pending));
+        }
+        catch (...) {
+            resourceAllocator.destroy(pending.readback);
+            throw;
+        }
+        ordinary2CaptureValidationRequest_.reset();
+
+        VulkanGpuRangeToken gpuRange = scheduler.beginGpuRange(
+            "gpu.transparency.layered.validation-readback");
+        renderGraph_.beginPass(currentCmd,
+            "transparent.layered.validation-readback-hook");
+        PendingOrdinary2CaptureValidation& recorded =
+            pendingOrdinary2CaptureValidations_.back();
+        VulkanCommandList commandList(currentCmd);
+        commandList.transition(recorded.readback,
+            ResourceState::CopyDestination);
+        VulkanFrameContextTargets& targets = frameTargets.get(
+            scheduler.currentFrameIndex());
+        const auto copyImage = [&](const VulkanImageResource& image,
+                VkImageAspectFlags aspect, VkDeviceSize offset) {
+            VkBufferImageCopy copy{};
+            copy.bufferOffset = offset;
+            copy.imageSubresource.aspectMask = aspect;
+            copy.imageSubresource.layerCount = 1u;
+            copy.imageExtent = { ordinary2AtlasExtent_.width,
+                ordinary2AtlasExtent_.height, 1u };
+            commandList.copyImageToBuffer(image, recorded.readback, copy);
+        };
+        copyImage(targets.layeredEntryIdentity, VK_IMAGE_ASPECT_COLOR_BIT,
+            0u);
+        copyImage(targets.layeredEntryDepth, VK_IMAGE_ASPECT_DEPTH_BIT,
+            imageBytes);
+        copyImage(targets.layeredExitIdentity, VK_IMAGE_ASPECT_COLOR_BIT,
+            imageBytes * 2u);
+        copyImage(targets.layeredExitDepth, VK_IMAGE_ASPECT_DEPTH_BIT,
+            imageBytes * 3u);
+        copyImage(targets.layeredLocalColor, VK_IMAGE_ASPECT_COLOR_BIT,
+            imageBytes * InterfaceImageCount);
+        scheduler.endGpuRange(gpuRange);
+    }
+
+    void VulkanVertexBackend::recordDeepLayeredCaptureValidationReadback(
+        std::span<const LayeredCaptureDraw> draws,
+        TransparencyQuality quality) {
+        const uint32_t interfaceCount = layeredQualityTierContract(
+            quality).maximumInterfaceCount;
+        const std::span<const std::string_view> passNames = quality ==
+                TransparencyQuality::Hero4
+            ? std::span<const std::string_view>(Hero4PassNames)
+            : quality == TransparencyQuality::Cinematic8
+                ? std::span<const std::string_view>(
+                    Cinematic8PassNames)
+                : std::span<const std::string_view>{};
+        if (passNames.empty()) {
+            throw std::invalid_argument(
+                "Deep validation requires Hero4 or Cinematic8");
+        }
+        const std::string_view passName = passNames[interfaceCount + 1u];
+        const bool requested = deepLayeredCaptureValidationRequest_ &&
+            deepLayeredCaptureValidationRequest_->quality == quality;
+        const uint32_t expectedDrawCount = static_cast<uint32_t>(
+            std::ranges::count_if(draws,
+                [quality](const LayeredCaptureDraw& draw) {
+                    return draw.quality == quality;
+                }));
+        if (!requested || expectedDrawCount == 0u) {
+            renderGraph_.skipPass(passName);
+            return;
+        }
+
+        VulkanFrameContextTargets& targets = frameTargets.get(
+            scheduler.currentFrameIndex());
+        VulkanFrameContextTargets::DeepLayeredTier& tier = quality ==
+                TransparencyQuality::Hero4
+            ? targets.hero4 : targets.cinematic8;
+        if (!tier.active() || tier.interfaceCount != interfaceCount ||
+            tier.atlasExtent.width == 0u || tier.atlasExtent.height == 0u) {
+            throw std::logic_error(
+                "Deep validation readback requires a complete resident tier");
+        }
+        const uint64_t pixelCount =
+            static_cast<uint64_t>(tier.atlasExtent.width) *
+            tier.atlasExtent.height;
+        constexpr uint64_t BytesPerImagePixel = sizeof(uint32_t);
+        const uint64_t interfaceImageCount = interfaceCount * 2ull;
+        const uint64_t bytesPerPixel =
+            BytesPerImagePixel * interfaceImageCount + 8ull;
+        if (pixelCount > std::numeric_limits<VkDeviceSize>::max() /
+                bytesPerPixel) {
+            throw std::overflow_error(
+                "Deep validation readback exceeds VkDeviceSize");
+        }
+        const VkDeviceSize imageBytes = pixelCount * BytesPerImagePixel;
+        const VkExtent2D tileExtent{
+            (tier.atlasExtent.width +
+                kDeepLayeredEarlyTerminationTileSize - 1u) /
+                kDeepLayeredEarlyTerminationTileSize,
+            (tier.atlasExtent.height +
+                kDeepLayeredEarlyTerminationTileSize - 1u) /
+                kDeepLayeredEarlyTerminationTileSize };
+        const VkDeviceSize tileImageBytes = static_cast<VkDeviceSize>(
+            tileExtent.width) * tileExtent.height * sizeof(uint32_t);
+        const VkDeviceSize interfaceAndLocalBytes = pixelCount * bytesPerPixel;
+        if (tileImageBytes > ((std::numeric_limits<VkDeviceSize>::max)() -
+                interfaceAndLocalBytes) / interfaceCount) {
+            throw std::overflow_error(
+                "Deep validation tile readback exceeds VkDeviceSize");
+        }
+        const VkDeviceSize totalBytes = interfaceAndLocalBytes +
+            tileImageBytes * interfaceCount;
+
+        PendingDeepLayeredCaptureValidation pending{};
+        pending.validationId =
+            deepLayeredCaptureValidationRequest_->validationId;
+        pending.frameIndex = scheduler.currentFrameIndex();
+        pending.extent = tier.atlasExtent;
+        pending.quality = quality;
+        pending.interfaceCount = interfaceCount;
+        pending.expectedDrawCount = expectedDrawCount;
+        pending.workItemCount = static_cast<uint32_t>(
+            deepLayeredAtlasPlan_.workIdentities().size());
+        pending.readback = resourceAllocator.createBuffer(totalBytes,
+            VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            true, ProfileMemoryCategory::CaptureReadback);
+        try {
+            pendingDeepLayeredCaptureValidations_.push_back(
+                std::move(pending));
+        }
+        catch (...) {
+            resourceAllocator.destroy(pending.readback);
+            throw;
+        }
+        deepLayeredCaptureValidationRequest_.reset();
+
+        const char* gpuRangeName = quality == TransparencyQuality::Hero4
+            ? "gpu.transparency.layered.hero4.validation-readback"
+            : "gpu.transparency.layered.cinematic8.validation-readback";
+        VulkanGpuRangeToken gpuRange = scheduler.beginGpuRange(gpuRangeName);
+        renderGraph_.beginPass(currentCmd, passName);
+        PendingDeepLayeredCaptureValidation& recorded =
+            pendingDeepLayeredCaptureValidations_.back();
+        VulkanCommandList commandList(currentCmd);
+        commandList.transition(recorded.readback,
+            ResourceState::CopyDestination);
+        const auto copyImage = [&](const VulkanImageResource& image,
+                VkImageAspectFlags aspect, VkDeviceSize offset) {
+            VkBufferImageCopy copy{};
+            copy.bufferOffset = offset;
+            copy.imageSubresource.aspectMask = aspect;
+            copy.imageSubresource.layerCount = 1u;
+            copy.imageExtent = { tier.atlasExtent.width,
+                tier.atlasExtent.height, 1u };
+            commandList.copyImageToBuffer(image, recorded.readback, copy);
+        };
+        for (uint32_t interfaceIndex = 0u;
+            interfaceIndex < interfaceCount; ++interfaceIndex) {
+            copyImage(tier.interfaceIdentity[interfaceIndex],
+                VK_IMAGE_ASPECT_COLOR_BIT,
+                imageBytes * (interfaceIndex * 2u));
+            copyImage(tier.interfaceDepth[interfaceIndex],
+                VK_IMAGE_ASPECT_DEPTH_BIT,
+                imageBytes * (interfaceIndex * 2u + 1u));
+        }
+        copyImage(tier.localColor, VK_IMAGE_ASPECT_COLOR_BIT,
+            imageBytes * interfaceImageCount);
+        const VkDeviceSize tileBaseOffset = imageBytes *
+            interfaceImageCount + pixelCount * 8ull;
+        for (uint32_t interfaceIndex = 0u;
+            interfaceIndex < interfaceCount; ++interfaceIndex) {
+            if (!deepLayeredTerminationInterface(interfaceIndex,
+                    interfaceCount)) {
+                continue;
+            }
+            VkBufferImageCopy copy{};
+            copy.bufferOffset = tileBaseOffset +
+                tileImageBytes * interfaceIndex;
+            copy.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            copy.imageSubresource.layerCount = 1u;
+            copy.imageExtent = { tileExtent.width, tileExtent.height, 1u };
+            commandList.copyImageToBuffer(
+                tier.tileTermination[interfaceIndex], recorded.readback,
+                copy);
+        }
+        scheduler.endGpuRange(gpuRange);
+    }
+
     void VulkanVertexBackend::submitForwardQueues(
         std::span<const DrawPacket> opaqueForwardQueue,
-        std::span<const DrawPacket> transparentQueue) {
+        std::span<const DrawPacket> sortedSurfaceQueue,
+        std::span<const DrawPacket> compatibilityTransparentQueue) {
         CpuScope recordScope(cpuProfiler_, "cpu.render.record.forward");
         const bool pipelineStatisticsActive =
             scheduler.beginTransparentPipelineStatistics();
 
+        const bool ordinary2CaptureTopologyActive =
+            ordinary2AtlasExtent_.width != 0u &&
+            ordinary2AtlasExtent_.height != 0u;
+        const bool requiresOrdinary2Atlas = std::ranges::any_of(
+            compatibilityTransparentQueue, isOrdinary2LayeredGlassPacket);
+        ordinary2AtlasResidency_.observe(requiresOrdinary2Atlas);
+        const bool requiresHero4Atlas = std::ranges::any_of(
+            compatibilityTransparentQueue, [](const DrawPacket& packet) {
+                return isLayeredGlassPacket(packet,
+                    TransparencyQuality::Hero4);
+            });
+        const bool requiresCinematic8Atlas = std::ranges::any_of(
+            compatibilityTransparentQueue, [](const DrawPacket& packet) {
+                return isLayeredGlassPacket(packet,
+                    TransparencyQuality::Cinematic8);
+            });
+        hero4AtlasResidency_.observe(requiresHero4Atlas);
+        cinematic8AtlasResidency_.observe(requiresCinematic8Atlas);
+        bool ordinary2PreparedThisFrame = false;
+        // Active Ordinary2 topology prepares the fixed-capacity draw plan every
+        // frame. When inactive, profiler frames retain the earlier demand probe
+        // without changing topology or recording commands.
+        if ((ordinary2CaptureTopologyActive || collectFrameCounters_) &&
+            ordinary2ViewProjectionValid_) {
+            CpuScope preparationScope(cpuProfiler_,
+                ordinary2CaptureTopologyActive
+                    ? "cpu.render.prepare.ordinary2"
+                    : "cpu.render.prepare.ordinary2_probe");
+            const VkExtent2D extent = frameTargets.extent();
+            ordinary2RequestCollector_.collect(compatibilityTransparentQueue,
+                ordinary2ViewProjection_, extent.width, extent.height);
+            (void)ordinary2AtlasPlan_.prepare(
+                ordinary2RequestCollector_.requests(),
+                extent.width, extent.height);
+            (void)ordinary2CaptureDrawPlan_.prepare(
+                ordinary2AtlasPlan_.decisions(),
+                compatibilityTransparentQueue,
+                ordinary2AtlasPlan_.atlasExtent());
+            ordinary2PreparedThisFrame = true;
+            if (collectFrameCounters_) {
+                const Ordinary2RequestCollectionStats& collection =
+                    ordinary2RequestCollector_.stats();
+                const Ordinary2AtlasStats& atlas = ordinary2AtlasPlan_.stats();
+                const Ordinary2CaptureDrawStats& capture =
+                    ordinary2CaptureDrawPlan_.stats();
+                ++frameCounters_.ordinary2ProbeFrames;
+                frameCounters_.ordinary2CandidatePackets =
+                    collection.candidatePacketCount;
+                frameCounters_.ordinary2ProjectedPackets =
+                    collection.projectedPacketCount;
+                frameCounters_.ordinary2ProjectionCulledPackets =
+                    collection.culledPacketCount;
+                frameCounters_.ordinary2InvalidBoundsFallbackPackets =
+                    collection.invalidBoundsFallbackCount;
+                frameCounters_.ordinary2NearPlaneFallbackPackets =
+                    collection.nearPlaneFallbackCount;
+                frameCounters_.ordinary2UnsafeProjectionFallbackPackets =
+                    collection.unsafeProjectionFallbackCount;
+                frameCounters_.ordinary2RequestCapacityFallbackPackets =
+                    collection.requestCapacityFallbackCount;
+                frameCounters_.ordinary2AtlasAcceptedPackets =
+                    atlas.acceptedPacketCount;
+                frameCounters_.ordinary2AtlasAcceptedIslands =
+                    atlas.acceptedIslandCount;
+                frameCounters_.ordinary2AtlasRejectedPackets =
+                    atlas.requestCount - atlas.acceptedPacketCount;
+                frameCounters_.ordinary2AtlasAllocatedTexels =
+                    atlas.allocatedTexelCount;
+                frameCounters_.ordinary2CapturePreparedDraws =
+                    capture.preparedDrawCount;
+                frameCounters_.ordinary2CapturePreparationFallbackPackets =
+                    capture.invalidPacketIndexCount +
+                    capture.incompatiblePacketCount +
+                    capture.invalidPlacementCount;
+            }
+        }
+
+        std::span<const Ordinary2CaptureDraw> captureDraws{};
+        if (ordinary2CaptureTopologyActive && ordinary2PreparedThisFrame)
+            captureDraws = ordinary2CaptureDrawPlan_.draws();
+        prepareOrdinary2ResolvedPacketIndices(captureDraws);
+
+        const bool hero4CaptureTopologyActive =
+            hero4AtlasExtent_.width != 0u && hero4AtlasExtent_.height != 0u;
+        const bool cinematic8CaptureTopologyActive =
+            cinematic8AtlasExtent_.width != 0u &&
+            cinematic8AtlasExtent_.height != 0u;
+        std::span<const LayeredCaptureDraw> deepCaptureDraws{};
+        if ((hero4CaptureTopologyActive || cinematic8CaptureTopologyActive) &&
+            ordinary2ViewProjectionValid_) {
+            CpuScope preparationScope(cpuProfiler_,
+                "cpu.render.prepare.layered_deep");
+            uint32_t activeTierMask = 0u;
+            if (hero4CaptureTopologyActive)
+                activeTierMask |= 1u << layeredQualityTierIndex(
+                    TransparencyQuality::Hero4);
+            if (cinematic8CaptureTopologyActive)
+                activeTierMask |= 1u << layeredQualityTierIndex(
+                    TransparencyQuality::Cinematic8);
+            const VkExtent2D extent = frameTargets.extent();
+            deepLayeredRequestCollector_.collect(
+                compatibilityTransparentQueue, ordinary2ViewProjection_,
+                extent.width, extent.height, activeTierMask);
+            (void)deepLayeredAtlasPlan_.prepare(
+                deepLayeredRequestCollector_.requests(),
+                extent.width, extent.height);
+            const std::array<Ordinary2AtlasExtent,
+                kLayeredQualityTierCount> residentExtents{
+                Ordinary2AtlasExtent{},
+                { hero4AtlasExtent_.width, hero4AtlasExtent_.height },
+                { cinematic8AtlasExtent_.width,
+                    cinematic8AtlasExtent_.height },
+            };
+            (void)deepLayeredCaptureDrawPlan_.prepare(
+                deepLayeredAtlasPlan_.decisions(),
+                compatibilityTransparentQueue, residentExtents);
+            deepCaptureDraws = deepLayeredCaptureDrawPlan_.draws();
+            if (collectFrameCounters_) {
+                const LayeredRequestCollectionStats& collection =
+                    deepLayeredRequestCollector_.stats();
+                const LayeredAtlasStats& atlas =
+                    deepLayeredAtlasPlan_.stats();
+                const LayeredCaptureDrawStats& capture =
+                    deepLayeredCaptureDrawPlan_.stats();
+                frameCounters_.deepLayeredCandidatePackets =
+                    collection.candidatePacketCount;
+                frameCounters_.deepLayeredProjectedPackets =
+                    collection.projectedPacketCount;
+                frameCounters_.deepLayeredAtlasAcceptedPackets =
+                    atlas.acceptedPacketCount;
+                frameCounters_.deepLayeredAtlasAcceptedIslands =
+                    atlas.acceptedIslandCount;
+                frameCounters_.deepLayeredAtlasRejectedPackets =
+                    atlas.requestCount - atlas.acceptedPacketCount;
+                frameCounters_.deepLayeredCapturePreparedDraws =
+                    capture.preparedDrawCount;
+                frameCounters_.deepLayeredCapturePreparationFallbackPackets =
+                    capture.invalidPacketIndexCount +
+                    capture.incompatiblePacketCount +
+                    capture.invalidPlacementCount;
+            }
+        }
+        prepareDeepResolvedPacketIndices(deepCaptureDraws);
+
         const auto recordForwardPass = [&](std::span<const DrawPacket> queue,
-            std::string_view passName, std::string_view gpuRangeName) {
+            std::string_view passName, std::string_view gpuRangeName,
+            VkRenderPass renderPass, VkFramebuffer framebuffer,
+            RenderPassClass expectedPassClass,
+            bool skipResolvedLayered) {
             if (queue.empty()) {
                 renderGraph_.skipPass(passName);
                 return;
@@ -3633,9 +5564,8 @@ namespace Iridium {
             renderGraph_.beginPass(currentCmd, passName);
             VkRenderPassBeginInfo passInfo{
                 VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
-            passInfo.renderPass = forwardPass->getRenderPass();
-            passInfo.framebuffer = frameTargets.get(
-                scheduler.currentFrameIndex()).forwardFramebuffer;
+            passInfo.renderPass = renderPass;
+            passInfo.framebuffer = framebuffer;
             passInfo.renderArea.extent = frameTargets.extent();
             vkCmdBeginRenderPass(currentCmd, &passInfo,
                 VK_SUBPASS_CONTENTS_INLINE);
@@ -3656,21 +5586,32 @@ namespace Iridium {
                 scheduler.currentFrameIndex());
 
             for (const DrawPacket& packet : queue) {
+                if (skipResolvedLayered) {
+                    const uint32_t packetIndex = static_cast<uint32_t>(
+                        &packet - compatibilityTransparentQueue.data());
+                    if (isLayeredPacketResolved(packetIndex))
+                        continue;
+                }
                 auto* geometry = geometryVault.get(packet.geometry);
                 auto* material = materialVault.get(packet.material);
+                const bool mirrored = (packet.transparentWorkFlags &
+                    TransparentWorkMirrored) != 0;
+                const PipelineHandle effectivePipeline = mirrored
+                    ? material ? material->mirroredPipeline : PipelineHandle{}
+                    : packet.pipeline;
                 const VulkanPipelineRecord* record =
-                    pipelineLibrary.get(packet.pipeline);
+                    pipelineLibrary.get(effectivePipeline);
                 if (!geometry || !material || !record ||
                     record->pipeline == VK_NULL_HANDLE ||
                     record->pipelineLayout == VK_NULL_HANDLE ||
-                    record->renderPass != RenderPassClass::Forward) {
+                    record->renderPass != expectedPassClass) {
                     continue;
                 }
 
-                if (packet.pipeline != lastBoundPipeline) {
+                if (effectivePipeline != lastBoundPipeline) {
                     vkCmdBindPipeline(currentCmd,
                         VK_PIPELINE_BIND_POINT_GRAPHICS, record->pipeline);
-                    recordPipelineBind(packet.pipeline.id);
+                    recordPipelineBind(effectivePipeline.id);
                     activeLayout = record->pipelineLayout;
                     vkCmdBindDescriptorSets(currentCmd,
                         VK_PIPELINE_BIND_POINT_GRAPHICS, activeLayout,
@@ -3680,7 +5621,7 @@ namespace Iridium {
                         VK_PIPELINE_BIND_POINT_GRAPHICS, activeLayout,
                         3u,
                         1, &sceneSet, 0, nullptr);
-                    lastBoundPipeline = packet.pipeline;
+                    lastBoundPipeline = effectivePipeline;
                     lastBoundMaterial = MaterialHandle{};
                 }
                 if (packet.material != lastBoundMaterial) {
@@ -3702,6 +5643,7 @@ namespace Iridium {
                 push.renderMatrix = packet.worldTransform;
                 push.materialIndex = packet.material.getIndex();
                 push.padding[0] = static_cast<uint32_t>(debugView_);
+                push.padding[1] = mirrored ? 1u : 0u;
                 vkCmdPushConstants(currentCmd, activeLayout,
                     VK_SHADER_STAGE_VERTEX_BIT |
                         VK_SHADER_STAGE_FRAGMENT_BIT,
@@ -3737,64 +5679,151 @@ namespace Iridium {
             scheduler.endGpuRange(forwardGpuRange);
         };
 
+        const VulkanFrameContextTargets& targets = frameTargets.get(
+            scheduler.currentFrameIndex());
         recordForwardPass(opaqueForwardQueue, "forward-opaque",
-            "gpu.forward.opaque");
+            "gpu.forward.opaque", forwardPass->getRenderPass(),
+            targets.forwardFramebuffer, RenderPassClass::Forward, false);
+
+        const bool requiresRefractionPyramids =
+            !compatibilityTransparentQueue.empty();
+        transparencyPyramidResidency_.observe(requiresRefractionPyramids);
+        if (transparencyPyramidResidency_.requiresFallback(
+                requiresRefractionPyramids) && collectFrameCounters_) {
+            ++frameCounters_.transparencyPyramidFallbackFrames;
+        }
+        if (transparencyPyramidResidency_.enabled() &&
+            !requiresRefractionPyramids) {
+            renderGraph_.skipPass("transparent.refraction-pyramids");
+        }
+        else if (transparencyPyramidResidency_.enabled()) {
+            VulkanGpuRangeToken pyramidGpuRange = scheduler.beginGpuRange(
+                "gpu.transparency.refraction-pyramids");
+            renderGraph_.beginPass(currentCmd,
+                "transparent.refraction-pyramids");
+            const uint32_t dispatches = transparencyPyramid_.record(
+                currentCmd, scheduler.currentFrameIndex(),
+                globalDescriptorSets[scheduler.currentFrameIndex()],
+                frameTargets);
+            if (collectFrameCounters_)
+                frameCounters_.dispatchRecorded += dispatches;
+            if (collectFrameCounters_) {
+                ++frameCounters_.transparencyPyramidBuilds;
+                frameCounters_.transparencyPyramidMipDispatches += dispatches;
+            }
+            scheduler.endGpuRange(pyramidGpuRange);
+        }
+        recordForwardPass(sortedSurfaceQueue, "transparent.sorted.forward",
+            "gpu.transparency.sorted.forward", transparentPass->getRenderPass(),
+            targets.transparentFramebuffer, RenderPassClass::Transparent,
+            false);
+        if (collectFrameCounters_) {
+            frameCounters_.transparentSortedPackets = sortedSurfaceQueue.size();
+        }
+        if (ordinary2CaptureTopologyActive) {
+            recordOrdinary2Captures(compatibilityTransparentQueue,
+                captureDraws);
+            recordOrdinary2LocalComposition(compatibilityTransparentQueue,
+                captureDraws);
+            recordOrdinary2CaptureValidationReadback(captureDraws);
+            recordOrdinary2SceneResolve(compatibilityTransparentQueue,
+                captureDraws);
+        }
+
+        if (hero4CaptureTopologyActive) {
+            recordDeepLayeredCaptures(compatibilityTransparentQueue,
+                deepCaptureDraws, TransparencyQuality::Hero4);
+            recordDeepLayeredLocalComposition(compatibilityTransparentQueue,
+                deepCaptureDraws, TransparencyQuality::Hero4);
+            recordDeepLayeredCaptureValidationReadback(deepCaptureDraws,
+                TransparencyQuality::Hero4);
+        }
+        if (cinematic8CaptureTopologyActive) {
+            recordDeepLayeredCaptures(compatibilityTransparentQueue,
+                deepCaptureDraws, TransparencyQuality::Cinematic8);
+            recordDeepLayeredLocalComposition(compatibilityTransparentQueue,
+                deepCaptureDraws, TransparencyQuality::Cinematic8);
+            recordDeepLayeredCaptureValidationReadback(deepCaptureDraws,
+                TransparencyQuality::Cinematic8);
+        }
+        if (hero4CaptureTopologyActive || cinematic8CaptureTopologyActive) {
+            recordDeepLayeredSceneResolve(compatibilityTransparentQueue,
+                deepCaptureDraws);
+        }
 
         // Bucketize the genuinely transparent queue into the retained bounded
         // M2 background/foreground layers.
         // The queue is already sorted Back-to-Front by the frontend.
-        const std::span<const DrawPacket> foregroundBucket = transparentQueue.empty()
-            ? std::span<const DrawPacket>{}
-            : transparentQueue.last(1);
-        const std::span<const DrawPacket> backgroundBucket = transparentQueue.size() > 1
-            ? transparentQueue.first(transparentQueue.size() - 1)
+        std::optional<size_t> foregroundPacketIndex;
+        uint64_t fallbackPacketCount = 0u;
+        std::array<uint32_t, kLayeredQualityTierCount>
+            deepCompatibilityForwardDrawCounts{};
+        for (size_t packetIndex = 0u;
+            packetIndex < compatibilityTransparentQueue.size(); ++packetIndex) {
+            if (!isLayeredPacketResolved(
+                    static_cast<uint32_t>(packetIndex))) {
+                foregroundPacketIndex = packetIndex;
+                ++fallbackPacketCount;
+                const DrawPacket& packet =
+                    compatibilityTransparentQueue[packetIndex];
+                if (isLayeredGlassPacket(packet,
+                        TransparencyQuality::Hero4) ||
+                    isLayeredGlassPacket(packet,
+                        TransparencyQuality::Cinematic8)) {
+                    ++deepCompatibilityForwardDrawCounts[
+                        layeredQualityTierIndex(
+                            packet.transparency.quality)];
+                }
+            }
+        }
+        const uint32_t frameIndex = scheduler.currentFrameIndex();
+        for (PendingDeepLayeredCaptureValidation& pending :
+            pendingDeepLayeredCaptureValidations_) {
+            if (pending.frameIndex == frameIndex) {
+                pending.compatibilityForwardDrawCount =
+                    deepCompatibilityForwardDrawCounts[
+                        layeredQualityTierIndex(pending.quality)];
+            }
+        }
+        const std::span<const DrawPacket> foregroundBucket =
+            foregroundPacketIndex
+            ? compatibilityTransparentQueue.subspan(*foregroundPacketIndex, 1u)
             : std::span<const DrawPacket>{};
+        const std::span<const DrawPacket> backgroundBucket =
+            foregroundPacketIndex && *foregroundPacketIndex != 0u
+            ? compatibilityTransparentQueue.first(*foregroundPacketIndex)
+            : std::span<const DrawPacket>{};
+        const uint64_t backgroundFallbackPacketCount =
+            fallbackPacketCount - static_cast<uint64_t>(
+                foregroundPacketIndex.has_value());
         if (collectFrameCounters_) {
-            frameCounters_.transparentBackgroundPackets = backgroundBucket.size();
-            frameCounters_.transparentForegroundPackets = foregroundBucket.size();
+            frameCounters_.transparentBackgroundPackets =
+                backgroundFallbackPacketCount;
+            frameCounters_.transparentForegroundPackets =
+                static_cast<uint64_t>(foregroundPacketIndex.has_value());
             frameCounters_.transparentNonemptyBuckets =
-                static_cast<uint64_t>(!backgroundBucket.empty()) +
-                static_cast<uint64_t>(!foregroundBucket.empty());
+                static_cast<uint64_t>(backgroundFallbackPacketCount != 0u) +
+                static_cast<uint64_t>(foregroundPacketIndex.has_value());
         }
 
         // 2. THE REUSABLE RENDER LAMBDA
         auto executeGlassLayer = [&](std::span<const DrawPacket> glassBucket,
-            bool foreground) {
-            const std::string_view copyPassName = foreground
-                ? "transparent.foreground.copy"
-                : "transparent.background.copy";
+            uint64_t renderedPacketCount, bool foreground) {
             const std::string_view depthPassName = foreground
                 ? "transparent.foreground.depth"
                 : "transparent.background.depth";
             const std::string_view forwardPassName = foreground
                 ? "transparent.foreground.forward"
                 : "transparent.background.forward";
-            if (glassBucket.empty()) {
-                renderGraph_.skipPass(copyPassName);
+            if (renderedPacketCount == 0u) {
                 renderGraph_.skipPass(depthPassName);
                 renderGraph_.skipPass(forwardPassName);
                 return;
             }
 
-            // --- A. VRAM PHOTOGRAPH: COPY LIT SCENE ---
-            VulkanGpuRangeToken copyGpuRange = scheduler.beginGpuRange(foreground
-                ? "gpu.transparency.foreground.copy"
-                : "gpu.transparency.background.copy");
             VulkanFrameContextTargets& targets = frameTargets.get(
                 scheduler.currentFrameIndex());
-            VulkanCommandList commandList(scheduler.currentCommandBuffer());
-            renderGraph_.beginPass(currentCmd, copyPassName);
-
-            VkImageCopy imageCopyRegion{};
-            imageCopyRegion.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
-            imageCopyRegion.dstSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
-            imageCopyRegion.extent = {
-                frameTargets.extent().width, frameTargets.extent().height, 1 };
-
-            commandList.copyImage(targets.litScene, targets.opaqueCopy, imageCopyRegion);
-            scheduler.endGpuRange(copyGpuRange);
-
-            // --- B. GLASS DEPTH PASS ---
+            // --- A. GLASS DEPTH PASS ---
             VulkanGpuRangeToken depthGpuRange = scheduler.beginGpuRange(foreground
                 ? "gpu.transparency.foreground.depth"
                 : "gpu.transparency.background.depth");
@@ -3831,6 +5860,10 @@ namespace Iridium {
             vkCmdBindDescriptorSets(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS, gLayout, 0, 1, &globalDescriptorSets[scheduler.currentFrameIndex()], 0, nullptr);
 
             for (const auto& packet : glassBucket) {
+                const uint32_t packetIndex = static_cast<uint32_t>(
+                    &packet - compatibilityTransparentQueue.data());
+                if (isLayeredPacketResolved(packetIndex))
+                    continue;
                 auto* geometry = geometryVault.get(packet.geometry);
                 if (!geometry) continue;
 
@@ -3850,12 +5883,16 @@ namespace Iridium {
 
             recordForwardPass(glassBucket, forwardPassName,
                 foreground ? "gpu.transparency.foreground.forward"
-                    : "gpu.transparency.background.forward");
+                    : "gpu.transparency.background.forward",
+                forwardPass->getRenderPass(),
+                targets.forwardFramebuffer, RenderPassClass::Forward, true);
             };
 
         // 3. EXECUTE THE PASSES
-        executeGlassLayer(backgroundBucket, false);
-        executeGlassLayer(foregroundBucket, true);
+        executeGlassLayer(backgroundBucket, backgroundFallbackPacketCount,
+            false);
+        executeGlassLayer(foregroundBucket,
+            static_cast<uint64_t>(foregroundPacketIndex.has_value()), true);
 
         if (pipelineStatisticsActive) {
             scheduler.endTransparentPipelineStatistics();
@@ -4054,11 +6091,575 @@ namespace Iridium {
         return result;
     }
 
+    void VulkanVertexBackend::requestOrdinary2CaptureValidation(
+        uint64_t validationId) {
+        if (!frameOpen_ || currentCmd == VK_NULL_HANDLE) {
+            throw std::logic_error(
+                "Ordinary2 capture validation must be requested during a frame");
+        }
+        const bool duplicatePending = std::ranges::any_of(
+            pendingOrdinary2CaptureValidations_,
+            [validationId](const PendingOrdinary2CaptureValidation& pending) {
+                return pending.validationId == validationId;
+            });
+        const bool duplicateCompleted = std::ranges::any_of(
+            completedOrdinary2CaptureValidations_,
+            [validationId](const Ordinary2CaptureValidationResult& completed) {
+                return completed.validationId == validationId;
+            });
+        if (ordinary2CaptureValidationRequest_ || duplicatePending ||
+            duplicateCompleted) {
+            throw std::invalid_argument(
+                "Ordinary2 capture validation permits one unique request at a time");
+        }
+        ordinary2CaptureValidationRequest_ = validationId;
+    }
+
+    void VulkanVertexBackend::collectOrdinary2CaptureValidationsForSlot(
+        uint32_t frameIndex) {
+        constexpr uint32_t OrientationBit = 0x80000000u;
+        constexpr uint32_t WorkMask = kLayeredInterfaceWorkMask;
+        size_t pendingIndex = 0u;
+        while (pendingIndex < pendingOrdinary2CaptureValidations_.size()) {
+            PendingOrdinary2CaptureValidation& pending =
+                pendingOrdinary2CaptureValidations_[pendingIndex];
+            if (pending.frameIndex != frameIndex) {
+                ++pendingIndex;
+                continue;
+            }
+            if (pending.readback.mapped == nullptr) {
+                resourceAllocator.destroy(pending.readback);
+                throw std::runtime_error(
+                    "Completed Ordinary2 readback is not host mapped");
+            }
+
+            Ordinary2CaptureValidationResult result{};
+            result.validationId = pending.validationId;
+            result.atlasWidth = pending.extent.width;
+            result.atlasHeight = pending.extent.height;
+            result.expectedDrawCount = pending.expectedDrawCount;
+            result.workItemCount = pending.workItemCount;
+            result.inspectedPixelCount =
+                static_cast<uint64_t>(pending.extent.width) *
+                pending.extent.height;
+            const size_t pixelCount = static_cast<size_t>(
+                result.inspectedPixelCount);
+            const size_t imageBytes = pixelCount * sizeof(uint32_t);
+            const auto* bytes = static_cast<const std::byte*>(
+                pending.readback.mapped);
+            const auto readUint = [&](size_t base, size_t pixel) {
+                uint32_t value = 0u;
+                std::memcpy(&value,
+                    bytes + base + pixel * sizeof(uint32_t), sizeof(value));
+                return value;
+            };
+            const auto readFloat = [&](size_t base, size_t pixel) {
+                float value = 0.0f;
+                std::memcpy(&value,
+                    bytes + base + pixel * sizeof(float), sizeof(value));
+                return value;
+            };
+            float minimumDelta = (std::numeric_limits<float>::max)();
+            float maximumDelta = 0.0f;
+            float minimumLocalAlpha = (std::numeric_limits<float>::max)();
+            float maximumLocalAlpha = 0.0f;
+            for (size_t pixel = 0; pixel < pixelCount; ++pixel) {
+                const uint32_t entryIdentity = readUint(0u, pixel);
+                const float entryDepth = readFloat(imageBytes, pixel);
+                const uint32_t exitIdentity = readUint(
+                    imageBytes * 2u, pixel);
+                const float exitDepth = readFloat(
+                    imageBytes * 3u, pixel);
+                const bool hasEntry = entryIdentity != 0u;
+                const bool hasExit = exitIdentity != 0u;
+                const uint32_t entryWork = entryIdentity & WorkMask;
+                const uint32_t exitWork = exitIdentity & WorkMask;
+                const auto validDepth = [](float depth) {
+                    return std::isfinite(depth) && depth >= 0.0f &&
+                        depth <= 1.0f;
+                };
+
+                if (hasEntry) {
+                    ++result.entryPixelCount;
+                    if ((entryIdentity & OrientationBit) != 0u)
+                        ++result.invalidOrientationPixelCount;
+                    if (entryWork == 0u ||
+                        entryWork > pending.workItemCount)
+                        ++result.invalidWorkIndexPixelCount;
+                    if (!validDepth(entryDepth))
+                        ++result.invalidDepthPixelCount;
+                }
+                if (hasExit) {
+                    ++result.exitPixelCount;
+                    if ((exitIdentity & OrientationBit) == 0u)
+                        ++result.invalidOrientationPixelCount;
+                    if (exitWork == 0u || exitWork > pending.workItemCount)
+                        ++result.invalidWorkIndexPixelCount;
+                    if (!validDepth(exitDepth))
+                        ++result.invalidDepthPixelCount;
+                    if (!hasEntry) {
+                        ++result.unpairedExitPixelCount;
+                    }
+                    else {
+                        ++result.pairedPixelCount;
+                        if (entryWork != exitWork)
+                            ++result.workMismatchPixelCount;
+                        if (validDepth(entryDepth) && validDepth(exitDepth)) {
+                            if (!(exitDepth > entryDepth)) {
+                                ++result.nonIncreasingDepthPixelCount;
+                            }
+                            else {
+                                const float delta = exitDepth - entryDepth;
+                                minimumDelta = (std::min)(minimumDelta, delta);
+                                maximumDelta = (std::max)(maximumDelta, delta);
+                            }
+                        }
+                    }
+                }
+                if (hasEntry && !hasExit)
+                    ++result.entryOnlyPixelCount;
+
+                std::array<uint16_t, 4> localHalf{};
+                std::memcpy(localHalf.data(),
+                    bytes + imageBytes * 4u + pixel * 8u, 8u);
+                const std::array<float, 4> local{
+                    Color::halfToFloat(localHalf[0]),
+                    Color::halfToFloat(localHalf[1]),
+                    Color::halfToFloat(localHalf[2]),
+                    Color::halfToFloat(localHalf[3]) };
+                const bool occupied = local[0] != 0.0f ||
+                    local[1] != 0.0f || local[2] != 0.0f ||
+                    local[3] != 0.0f;
+                if (occupied) {
+                    ++result.localColorPixelCount;
+                    const bool valid = std::ranges::all_of(local,
+                        [](float value) { return std::isfinite(value); }) &&
+                        local[0] >= 0.0f && local[1] >= 0.0f &&
+                        local[2] >= 0.0f && local[3] > 0.0f &&
+                        local[3] <= 1.0f;
+                    if (!valid) {
+                        ++result.localColorInvalidPixelCount;
+                    }
+                    else {
+                        minimumLocalAlpha = (std::min)(minimumLocalAlpha,
+                            local[3]);
+                        maximumLocalAlpha = (std::max)(maximumLocalAlpha,
+                            local[3]);
+                    }
+                }
+            }
+            if (minimumDelta != (std::numeric_limits<float>::max)()) {
+                result.minimumPairedDepthDelta = minimumDelta;
+                result.maximumPairedDepthDelta = maximumDelta;
+            }
+            if (minimumLocalAlpha != (std::numeric_limits<float>::max)()) {
+                result.minimumLocalAlpha = minimumLocalAlpha;
+                result.maximumLocalAlpha = maximumLocalAlpha;
+            }
+            completedOrdinary2CaptureValidations_.push_back(result);
+            resourceAllocator.destroy(pending.readback);
+            if (pendingIndex + 1u !=
+                    pendingOrdinary2CaptureValidations_.size()) {
+                pendingOrdinary2CaptureValidations_[pendingIndex] = std::move(
+                    pendingOrdinary2CaptureValidations_.back());
+            }
+            pendingOrdinary2CaptureValidations_.pop_back();
+        }
+    }
+
+    std::vector<Ordinary2CaptureValidationResult>
+    VulkanVertexBackend::collectOrdinary2CaptureValidations(
+        bool waitForPending) {
+        if (frameOpen_) {
+            throw std::logic_error(
+                "Ordinary2 validation cannot be collected during a frame");
+        }
+        if (waitForPending &&
+            !pendingOrdinary2CaptureValidations_.empty()) {
+            scheduler.waitForAllFrames();
+            for (uint32_t frameIndex = 0;
+                frameIndex < VulkanFrameScheduler::FramesInFlight;
+                ++frameIndex) {
+                collectOrdinary2CaptureValidationsForSlot(frameIndex);
+            }
+        }
+        std::vector<Ordinary2CaptureValidationResult> result =
+            std::move(completedOrdinary2CaptureValidations_);
+        completedOrdinary2CaptureValidations_.clear();
+        return result;
+    }
+
+    void VulkanVertexBackend::requestDeepLayeredCaptureValidation(
+        uint64_t validationId, TransparencyQuality quality) {
+        if (!frameOpen_ || currentCmd == VK_NULL_HANDLE) {
+            throw std::logic_error(
+                "Deep layered validation must be requested during a frame");
+        }
+        if (quality != TransparencyQuality::Hero4 &&
+            quality != TransparencyQuality::Cinematic8) {
+            throw std::invalid_argument(
+                "Deep layered validation requires Hero4 or Cinematic8");
+        }
+        const bool duplicatePending = std::ranges::any_of(
+            pendingDeepLayeredCaptureValidations_,
+            [validationId](
+                const PendingDeepLayeredCaptureValidation& pending) {
+                return pending.validationId == validationId;
+            });
+        const bool duplicateCompleted = std::ranges::any_of(
+            completedDeepLayeredCaptureValidations_,
+            [validationId](
+                const DeepLayeredCaptureValidationResult& completed) {
+                return completed.validationId == validationId;
+            });
+        if (deepLayeredCaptureValidationRequest_ || duplicatePending ||
+            duplicateCompleted) {
+            throw std::invalid_argument(
+                "Deep layered validation permits one unique request at a time");
+        }
+        deepLayeredCaptureValidationRequest_ =
+            DeepLayeredCaptureValidationRequest{ validationId, quality };
+    }
+
+    void VulkanVertexBackend::collectDeepLayeredCaptureValidationsForSlot(
+        uint32_t frameIndex) {
+        constexpr uint32_t OrientationBit = 0x80000000u;
+        constexpr uint32_t WorkMask = kDeepLayeredWorkMask;
+        size_t pendingIndex = 0u;
+        while (pendingIndex < pendingDeepLayeredCaptureValidations_.size()) {
+            PendingDeepLayeredCaptureValidation& pending =
+                pendingDeepLayeredCaptureValidations_[pendingIndex];
+            if (pending.frameIndex != frameIndex) {
+                ++pendingIndex;
+                continue;
+            }
+            if (pending.readback.mapped == nullptr) {
+                resourceAllocator.destroy(pending.readback);
+                throw std::runtime_error(
+                    "Completed deep layered readback is not host mapped");
+            }
+
+            DeepLayeredCaptureValidationResult result{};
+            result.validationId = pending.validationId;
+            result.quality = pending.quality;
+            result.atlasWidth = pending.extent.width;
+            result.atlasHeight = pending.extent.height;
+            result.interfaceCount = pending.interfaceCount;
+            result.expectedDrawCount = pending.expectedDrawCount;
+            result.sceneResolveDrawCount = pending.sceneResolveDrawCount;
+            result.compatibilityForwardDrawCount =
+                pending.compatibilityForwardDrawCount;
+            result.workItemCount = pending.workItemCount;
+            result.inspectedPixelCount =
+                static_cast<uint64_t>(pending.extent.width) *
+                pending.extent.height;
+            const size_t pixelCount = static_cast<size_t>(
+                result.inspectedPixelCount);
+            const size_t imageBytes = pixelCount * sizeof(uint32_t);
+            const size_t localColorOffset = imageBytes *
+                pending.interfaceCount * 2u;
+            const uint32_t tileWidth = (pending.extent.width +
+                kDeepLayeredEarlyTerminationTileSize - 1u) /
+                kDeepLayeredEarlyTerminationTileSize;
+            const uint32_t tileHeight = (pending.extent.height +
+                kDeepLayeredEarlyTerminationTileSize - 1u) /
+                kDeepLayeredEarlyTerminationTileSize;
+            const size_t tileImageBytes = static_cast<size_t>(tileWidth) *
+                tileHeight * sizeof(uint32_t);
+            const size_t tileBaseOffset = localColorOffset + pixelCount * 8u;
+            const auto* bytes = static_cast<const std::byte*>(
+                pending.readback.mapped);
+            const auto readUint = [&](size_t base, size_t pixel) {
+                uint32_t value = 0u;
+                std::memcpy(&value,
+                    bytes + base + pixel * sizeof(uint32_t), sizeof(value));
+                return value;
+            };
+            const auto readFloat = [&](size_t base, size_t pixel) {
+                float value = 0.0f;
+                std::memcpy(&value,
+                    bytes + base + pixel * sizeof(float), sizeof(value));
+                return value;
+            };
+            const auto validDepth = [](float depth) {
+                return std::isfinite(depth) && depth >= 0.0f &&
+                    depth <= 1.0f;
+            };
+            float minimumDelta = (std::numeric_limits<float>::max)();
+            float maximumDelta = 0.0f;
+            float minimumLocalAlpha = (std::numeric_limits<float>::max)();
+            float maximumLocalAlpha = 0.0f;
+
+            for (size_t pixel = 0u; pixel < pixelCount; ++pixel) {
+                std::array<uint32_t, kMaximumLayeredInterfaceCount>
+                    openWorks{};
+                uint32_t openCount = 0u;
+                uint32_t observedCount = 0u;
+                uint32_t maximumOpenCount = 0u;
+                uint32_t pairCount = 0u;
+                uint32_t lastIdentity = 0u;
+                bool crossingPair = false;
+                bool seenEmpty = false;
+                bool pixelInvalid = false;
+                bool hasPreviousDepth = false;
+                float previousDepth = 0.0f;
+                for (uint32_t interfaceIndex = 0u;
+                    interfaceIndex < pending.interfaceCount;
+                    ++interfaceIndex) {
+                    const size_t identityOffset = imageBytes *
+                        (interfaceIndex * 2u);
+                    const size_t depthOffset = identityOffset + imageBytes;
+                    const uint32_t identity = readUint(identityOffset, pixel);
+                    if (identity == 0u) {
+                        seenEmpty = true;
+                        continue;
+                    }
+                    ++result.interfacePixelCounts[interfaceIndex];
+                    ++observedCount;
+                    lastIdentity = identity;
+                    if (seenEmpty) {
+                        ++result.interfaceGapPixelCount;
+                        pixelInvalid = true;
+                    }
+                    const uint32_t work = identity & WorkMask;
+                    if (work == 0u || work > pending.workItemCount) {
+                        ++result.invalidWorkIndexPixelCount;
+                        pixelInvalid = true;
+                    }
+                    const float depth = readFloat(depthOffset, pixel);
+                    if (!validDepth(depth)) {
+                        ++result.invalidDepthPixelCount;
+                        pixelInvalid = true;
+                    }
+                    else if (hasPreviousDepth) {
+                        if (!(depth > previousDepth)) {
+                            ++result.nonIncreasingDepthPixelCount;
+                            pixelInvalid = true;
+                        }
+                        else {
+                            const float delta = depth - previousDepth;
+                            minimumDelta = (std::min)(minimumDelta, delta);
+                            maximumDelta = (std::max)(maximumDelta, delta);
+                        }
+                    }
+                    if (validDepth(depth)) {
+                        previousDepth = depth;
+                        hasPreviousDepth = true;
+                    }
+
+                    const bool exit = (identity & OrientationBit) != 0u;
+                    if (!exit) {
+                        const bool duplicate = std::find(
+                            openWorks.begin(), openWorks.begin() + openCount,
+                            work) != openWorks.begin() + openCount;
+                        if (duplicate ||
+                            openCount >= openWorks.size()) {
+                            ++result.duplicateEntryPixelCount;
+                            pixelInvalid = true;
+                        }
+                        else {
+                            openWorks[openCount++] = work;
+                            maximumOpenCount = (std::max)(maximumOpenCount,
+                                openCount);
+                        }
+                    }
+                    else {
+                        uint32_t match = openCount;
+                        while (match > 0u &&
+                            openWorks[match - 1u] != work) {
+                            --match;
+                        }
+                        if (match == 0u) {
+                            ++result.unmatchedExitPixelCount;
+                            pixelInvalid = true;
+                        }
+                        else {
+                            const uint32_t matchIndex = match - 1u;
+                            // Closing something other than the most recently
+                            // opened work proves a valid crossing sequence:
+                            // Entry(A), Entry(B), Exit(A), Exit(B).
+                            crossingPair |= matchIndex + 1u != openCount;
+                            for (uint32_t move = matchIndex + 1u;
+                                move < openCount; ++move) {
+                                openWorks[move - 1u] = openWorks[move];
+                            }
+                            --openCount;
+                            ++pairCount;
+                        }
+                    }
+                }
+                result.maximumObservedInterfaceCount = (std::max)(
+                    result.maximumObservedInterfaceCount, observedCount);
+                if (openCount != 0u) {
+                    if (observedCount == pending.interfaceCount) {
+                        // A topology-validated closed workload that fills the
+                        // tier while volumes remain open is a saturated exact
+                        // prefix, not malformed capture. The unmatched entry
+                        // and uncaptured entry surfaces are evaluated by the
+                        // bounded residual material path.
+                        ++result.saturatedResidualPixelCount;
+                    }
+                    else {
+                        ++result.unclosedEntryPixelCount;
+                        pixelInvalid = true;
+                    }
+                }
+                const bool paired = !pixelInvalid && pairCount != 0u;
+                if (paired) {
+                    ++result.pairedPixelCount;
+                    if (observedCount >= 4u && maximumOpenCount >= 2u)
+                        ++result.nestedFourInterfacePixelCount;
+                    if (crossingPair)
+                        ++result.crossingPairPixelCount;
+                    if (observedCount < pending.interfaceCount &&
+                        deepLayeredOpenCount(lastIdentity) == 0u &&
+                        deepLayeredTransmissionQuantized(lastIdentity) <=
+                            kDeepLayeredTerminationThresholdQuantized) {
+                        ++result.earlyTerminatedPixelCount;
+                    }
+                }
+
+                std::array<uint16_t, 4> localHalf{};
+                std::memcpy(localHalf.data(),
+                    bytes + localColorOffset + pixel * 8u, 8u);
+                const std::array<float, 4> local{
+                    Color::halfToFloat(localHalf[0]),
+                    Color::halfToFloat(localHalf[1]),
+                    Color::halfToFloat(localHalf[2]),
+                    Color::halfToFloat(localHalf[3]) };
+                const bool occupied = local[0] != 0.0f ||
+                    local[1] != 0.0f || local[2] != 0.0f ||
+                    local[3] != 0.0f;
+                if (occupied) {
+                    ++result.localColorPixelCount;
+                    const bool valid = std::ranges::all_of(local,
+                        [](float value) { return std::isfinite(value); }) &&
+                        local[0] >= 0.0f && local[1] >= 0.0f &&
+                        local[2] >= 0.0f && local[3] > 0.0f &&
+                        local[3] <= 1.0f;
+                    if (!valid || !paired) {
+                        ++result.localColorInvalidPixelCount;
+                    }
+                    else {
+                        minimumLocalAlpha = (std::min)(minimumLocalAlpha,
+                            local[3]);
+                        maximumLocalAlpha = (std::max)(maximumLocalAlpha,
+                            local[3]);
+                    }
+                }
+            }
+
+            for (uint32_t interfaceIndex = 0u;
+                interfaceIndex < pending.interfaceCount; ++interfaceIndex) {
+                if (!deepLayeredTerminationInterface(interfaceIndex,
+                        pending.interfaceCount)) {
+                    continue;
+                }
+                const size_t identityOffset = imageBytes *
+                    (interfaceIndex * 2u);
+                const size_t maskOffset = tileBaseOffset +
+                    tileImageBytes * interfaceIndex;
+                for (uint32_t tileY = 0u; tileY < tileHeight; ++tileY) {
+                    for (uint32_t tileX = 0u; tileX < tileWidth; ++tileX) {
+                        const size_t tileIndex = static_cast<size_t>(tileY) *
+                            tileWidth + tileX;
+                        if (readUint(maskOffset, tileIndex) == 0u)
+                            continue;
+                        bool occupied = false;
+                        const uint32_t beginX = tileX *
+                            kDeepLayeredEarlyTerminationTileSize;
+                        const uint32_t beginY = tileY *
+                            kDeepLayeredEarlyTerminationTileSize;
+                        const uint32_t endX = (std::min)(beginX +
+                            kDeepLayeredEarlyTerminationTileSize,
+                            pending.extent.width);
+                        const uint32_t endY = (std::min)(beginY +
+                            kDeepLayeredEarlyTerminationTileSize,
+                            pending.extent.height);
+                        for (uint32_t y = beginY; y < endY && !occupied;
+                            ++y) {
+                            for (uint32_t x = beginX; x < endX; ++x) {
+                                const size_t pixel = static_cast<size_t>(y) *
+                                    pending.extent.width + x;
+                                if ((readUint(identityOffset, pixel) &
+                                        kDeepLayeredWorkMask) != 0u) {
+                                    occupied = true;
+                                    break;
+                                }
+                            }
+                        }
+                        if (occupied) {
+                            ++result.terminatedOccupiedTileCounts[
+                                interfaceIndex];
+                            ++result.terminatedOccupiedTileCount;
+                        }
+                    }
+                }
+            }
+            if (minimumDelta != (std::numeric_limits<float>::max)()) {
+                result.minimumDepthDelta = minimumDelta;
+                result.maximumDepthDelta = maximumDelta;
+            }
+            if (minimumLocalAlpha != (std::numeric_limits<float>::max)()) {
+                result.minimumLocalAlpha = minimumLocalAlpha;
+                result.maximumLocalAlpha = maximumLocalAlpha;
+            }
+            completedDeepLayeredCaptureValidations_.push_back(result);
+            resourceAllocator.destroy(pending.readback);
+            if (pendingIndex + 1u !=
+                    pendingDeepLayeredCaptureValidations_.size()) {
+                pendingDeepLayeredCaptureValidations_[pendingIndex] =
+                    std::move(pendingDeepLayeredCaptureValidations_.back());
+            }
+            pendingDeepLayeredCaptureValidations_.pop_back();
+        }
+    }
+
+    std::vector<DeepLayeredCaptureValidationResult>
+    VulkanVertexBackend::collectDeepLayeredCaptureValidations(
+        bool waitForPending) {
+        if (frameOpen_) {
+            throw std::logic_error(
+                "Deep layered validation cannot be collected during a frame");
+        }
+        if (waitForPending &&
+            !pendingDeepLayeredCaptureValidations_.empty()) {
+            scheduler.waitForAllFrames();
+            for (uint32_t frameIndex = 0u;
+                frameIndex < VulkanFrameScheduler::FramesInFlight;
+                ++frameIndex) {
+                collectDeepLayeredCaptureValidationsForSlot(frameIndex);
+            }
+        }
+        std::vector<DeepLayeredCaptureValidationResult> result =
+            std::move(completedDeepLayeredCaptureValidations_);
+        completedDeepLayeredCaptureValidations_.clear();
+        return result;
+    }
+
     void VulkanVertexBackend::destroyPendingFrameCaptures() noexcept {
         for (PendingFrameCapture& pending : pendingFrameCaptures_) {
             resourceAllocator.destroy(pending.readback);
         }
         pendingFrameCaptures_.clear();
+    }
+
+    void VulkanVertexBackend::destroyPendingOrdinary2CaptureValidations()
+        noexcept {
+        for (PendingOrdinary2CaptureValidation& pending :
+                pendingOrdinary2CaptureValidations_) {
+            resourceAllocator.destroy(pending.readback);
+        }
+        pendingOrdinary2CaptureValidations_.clear();
+    }
+
+    void VulkanVertexBackend::destroyPendingDeepLayeredCaptureValidations()
+        noexcept {
+        for (PendingDeepLayeredCaptureValidation& pending :
+                pendingDeepLayeredCaptureValidations_) {
+            resourceAllocator.destroy(pending.readback);
+        }
+        pendingDeepLayeredCaptureValidations_.clear();
     }
 
     void VulkanVertexBackend::submitOutputPass() {

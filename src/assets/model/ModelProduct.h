@@ -16,7 +16,7 @@
 
 namespace Iridium {
 
-    inline constexpr uint32_t kCookedModelSchemaVersion = 3;
+    inline constexpr uint32_t kCookedModelSchemaVersion = 5;
     inline constexpr uint32_t kCookedModelManifestSection = 0x4d444d31;   // MDM1
     inline constexpr uint32_t kCookedModelMaterialSection = 0x4d544c31;   // MTL1
     inline constexpr uint32_t kCookedModelTextureViewSection = 0x4d545831; // MTX1
@@ -94,6 +94,7 @@ namespace Iridium {
     };
 
     struct CookedModelPrimitive {
+        AssetGuid sourcePrimitiveGuid;
         AssetGuid primitiveGuid;
         AssetGuid materialGuid;
         std::string sourceKey;
@@ -117,6 +118,7 @@ namespace Iridium {
         uint32_t rtFlags = ModelRtBuildInput | ModelRtOpaque;
         uint32_t lodSection = kNoModelSection;
         uint32_t meshletSection = kNoModelSection;
+        CompiledTransparencyPolicy transparency;
         CookedModelBounds bounds;
 
         bool operator==(const CookedModelPrimitive&) const = default;
@@ -129,6 +131,8 @@ namespace Iridium {
         uint64_t indexCount = 0;
         uint64_t rtPositionCount = 0;
         uint64_t rtIndexCount = 0;
+        TransparencyExecutionMode transparencyExecutionMode =
+            TransparencyExecutionMode::LegacyTwoBucket;
         std::vector<CookedModelPrimitive> primitives;
 
         bool operator==(const CookedModelManifest&) const = default;

@@ -146,8 +146,16 @@ namespace Iridium {
                 factory.at("instance_grid"), "scene_factory.instance_grid");
             fixture.sceneFactory.instanceSpacing = readVec3(
                 factory.at("instance_spacing"), "scene_factory.instance_spacing");
-            if (!finiteVec3(fixture.sceneFactory.instanceSpacing)) {
-                throw std::runtime_error("Benchmark instance spacing must be finite: " +
+            fixture.sceneFactory.instanceScale = readVec3(
+                factory.value("instance_scale",
+                    Json::array({ 1.0, 1.0, 1.0 })),
+                "scene_factory.instance_scale");
+            if (!finiteVec3(fixture.sceneFactory.instanceSpacing) ||
+                !finiteVec3(fixture.sceneFactory.instanceScale) ||
+                std::abs(fixture.sceneFactory.instanceScale.x) <= 1.0e-7f ||
+                std::abs(fixture.sceneFactory.instanceScale.y) <= 1.0e-7f ||
+                std::abs(fixture.sceneFactory.instanceScale.z) <= 1.0e-7f) {
+                throw std::runtime_error("Benchmark instance spacing/scale must be finite and scale must be nonzero: " +
                     fixture.id);
             }
             const uint64_t instanceCount = benchmarkInstanceCount(

@@ -253,16 +253,73 @@ namespace {
         const Json& corrective = manifest.at("m5_13CorrectiveHardening");
         CHECK(corrective.at("status").is_string());
         const Json& correctiveHashes = corrective.at("current_contract_hashes");
+        const Json& m6Supersession = manifest.at("m6_1Supersession");
+        CHECK(m6Supersession.at("status").is_string());
+        const Json& m6Hashes = m6Supersession.at("current_contract_hashes");
+        const Json& m6_2Supersession = manifest.at("m6_2Supersession");
+        CHECK(m6_2Supersession.at("status").is_string());
+        const Json& m6_2Hashes =
+            m6_2Supersession.at("current_contract_hashes");
+        const Json& m6_3Supersession = manifest.at("m6_3Supersession");
+        CHECK(m6_3Supersession.at("status").is_string());
+        const Json& m6_3Hashes =
+            m6_3Supersession.at("current_contract_hashes");
+        const Json& m6_4Supersession = manifest.at("m6_4Supersession");
+        CHECK(m6_4Supersession.at("status").is_string());
+        const Json& m6_4Hashes =
+            m6_4Supersession.at("current_contract_hashes");
+        const Json& m6_5Supersession = manifest.at("m6_5Supersession");
+        CHECK(m6_5Supersession.at("status").is_string());
+        const Json& m6_5Hashes =
+            m6_5Supersession.at("current_contract_hashes");
+        const Json& m6_6Supersession = manifest.at("m6_6Supersession");
+        CHECK(m6_6Supersession.at("status").is_string());
+        const Json& m6_6Hashes =
+            m6_6Supersession.at("current_contract_hashes");
+        const auto latestHash = [&](const std::string& path,
+            const std::string& priorHash) {
+            const std::string m6_1Hash = m6Hashes.contains(path)
+                ? m6Hashes.at(path).get<std::string>() : priorHash;
+            const std::string m6_2Hash = m6_2Hashes.contains(path)
+                ? m6_2Hashes.at(path).get<std::string>() : m6_1Hash;
+            const std::string m6_3Hash = m6_3Hashes.contains(path)
+                ? m6_3Hashes.at(path).get<std::string>() : m6_2Hash;
+            const std::string m6_4Hash = m6_4Hashes.contains(path)
+                ? m6_4Hashes.at(path).get<std::string>() : m6_3Hash;
+            const std::string m6_5Hash = m6_5Hashes.contains(path)
+                ? m6_5Hashes.at(path).get<std::string>() : m6_4Hash;
+            return m6_6Hashes.contains(path)
+                ? m6_6Hashes.at(path).get<std::string>() : m6_5Hash;
+        };
         for (auto entry = correctiveHashes.begin();
             entry != correctiveHashes.end(); ++entry) {
             CHECK(Iridium::sha256File(root() / entry.key()) ==
-                entry.value().get<std::string>());
+                latestHash(entry.key(), entry.value().get<std::string>()));
         }
+        for (auto entry = m6Hashes.begin(); entry != m6Hashes.end(); ++entry)
+            CHECK(Iridium::sha256File(root() / entry.key()) ==
+                latestHash(entry.key(), entry.value().get<std::string>()));
+        for (auto entry = m6_2Hashes.begin(); entry != m6_2Hashes.end(); ++entry)
+            CHECK(Iridium::sha256File(root() / entry.key()) ==
+                latestHash(entry.key(), entry.value().get<std::string>()));
+        for (auto entry = m6_3Hashes.begin(); entry != m6_3Hashes.end(); ++entry)
+            CHECK(Iridium::sha256File(root() / entry.key()) ==
+                latestHash(entry.key(), entry.value().get<std::string>()));
+        for (auto entry = m6_4Hashes.begin(); entry != m6_4Hashes.end(); ++entry)
+            CHECK(Iridium::sha256File(root() / entry.key()) ==
+                latestHash(entry.key(), entry.value().get<std::string>()));
+        for (auto entry = m6_5Hashes.begin(); entry != m6_5Hashes.end(); ++entry)
+            CHECK(Iridium::sha256File(root() / entry.key()) ==
+                latestHash(entry.key(), entry.value().get<std::string>()));
+        for (auto entry = m6_6Hashes.begin(); entry != m6_6Hashes.end(); ++entry)
+            CHECK(Iridium::sha256File(root() / entry.key()) ==
+                entry.value().get<std::string>());
         const auto expectedCurrentHash = [&](const std::string& path,
             const std::string& acceptedHash) {
-            return correctiveHashes.contains(path)
+            const std::string corrected = correctiveHashes.contains(path)
                 ? correctiveHashes.at(path).get<std::string>()
                 : acceptedHash;
+            return latestHash(path, corrected);
         };
         const Json& supersession = manifest.at("m5_9Supersession");
         for (const char* group : { "current_shader_hashes",

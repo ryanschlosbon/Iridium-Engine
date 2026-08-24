@@ -79,6 +79,11 @@ namespace Iridium {
         std::vector<DrawPacket> opaqueQueue;
         std::vector<DrawPacket> forwardOpaqueQueue;
         std::vector<DrawPacket> transparentQueue;
+        std::vector<DrawPacket> sortedSurfaceQueue;
+        std::vector<TransparentIntervalEndpoint>
+            transparentIntervalEndpointScratch;
+        std::vector<float> transparentIntervalNearScratch;
+        std::vector<uint32_t> transparentIntervalFenwickScratch;
         std::vector<DrawPacket> selectionQueue;
         std::vector<DrawPacket> shadowCasterQueue;
 
@@ -162,6 +167,28 @@ namespace Iridium {
         std::string viewportExtentDiagnostic_;
         RenderBackendCapabilities renderCapabilities_{};
         RenderBackendRuntimeInfo renderRuntimeInfo_{};
+        struct Ordinary2ResizeValidationState {
+            RenderExtent originalExtent{};
+            uint64_t initialRenderGraphRebuildCount = 0;
+            uint32_t requests = 0;
+            uint32_t successes = 0;
+            uint32_t failures = 0;
+            std::string lastDiagnostic;
+        } ordinary2ResizeValidation_;
+        struct DeepLayeredLifecycleValidationState {
+            enum class Phase : uint8_t {
+                Initial,
+                WaitingForRetirement,
+                WaitingForReactivation,
+                Complete,
+            };
+            Phase phase = Phase::Initial;
+            uint32_t retirements = 0;
+            uint32_t reactivations = 0;
+            uint32_t visibilityChanges = 0;
+            uint64_t firstMeasuredFrame = 0;
+            uint64_t completionMeasuredFrame = 0;
+        } deepLayeredLifecycleValidation_;
         struct StartupProfile {
             uint64_t totalNanoseconds = 0;
             uint64_t windowNanoseconds = 0;
@@ -171,6 +198,7 @@ namespace Iridium {
             uint64_t modelLoadNanoseconds = 0;
             uint64_t environmentCreationNanoseconds = 0;
             uint64_t sceneConstructionNanoseconds = 0;
+            uint64_t frameTopologyPrewarmNanoseconds = 0;
         } startupProfile_;
         std::optional<BenchmarkFixture> activeBenchmark_;
         std::string benchmarkManifestPath_;
@@ -202,7 +230,9 @@ namespace Iridium {
         void cleanup();
 
         void drawFrame(std::optional<uint64_t> captureFrameIndex,
-            uint64_t applicationFrameIndex);
+            uint64_t applicationFrameIndex,
+            bool validateOrdinary2Capture,
+            bool validateDeepLayeredCapture);
 
         void processInput(GLFWwindow* window);
         void selectEntityAtMouse(double mouseX, double mouseY);
@@ -214,6 +244,9 @@ namespace Iridium {
         void configureCookedEnvironmentHotReload();
         void recreateSwapchain();
         void updateBenchmarkState(uint64_t frameIndex);
+        void updateOrdinary2ResizeValidation(uint64_t measuredFrameIndex);
+        [[nodiscard]] bool updateDeepLayeredLifecycleValidation(
+            uint64_t measuredFrameIndex);
         void updateTextureResidencyChurn(uint64_t frameIndex);
     };
 

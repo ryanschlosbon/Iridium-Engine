@@ -328,6 +328,111 @@ namespace {
         return true;
     }
 
+    bool testVersionedTransparencyPolicyResolution() {
+        SourceMaterial masked = dielectric(glm::vec3(0.5f));
+        masked.alphaMode.value = SourceAlphaMode::Mask;
+        MaterialCompileResult alphaClip = compileSourceMaterial(masked);
+        CHECK(alphaClip.succeeded());
+        CHECK(alphaClip.material->schemaVersion == 2);
+        CHECK(alphaClip.material->transparency.resolvedClass ==
+            TransparencyClass::AlphaClip);
+
+        SourceMaterial blended = dielectric(glm::vec3(0.5f));
+        blended.alphaMode.value = SourceAlphaMode::Blend;
+        MaterialCompileResult sorted = compileSourceMaterial(blended);
+        CHECK(sorted.succeeded());
+        CHECK(sorted.material->transparency.resolvedClass ==
+            TransparencyClass::SortedSurface);
+
+        SourceMaterial thin = dielectric(glm::vec3(0.5f));
+        thin.extensions.push_back(extension(
+            "KHR_materials_transmission", {
+                { "transmissionFactor", 1.0f },
+            }));
+        thin.transparencyPolicy = {
+            .requestedClass = TransparencyClass::ThinGlass,
+            .quality = TransparencyQuality::Hero4,
+            .priority = 23,
+            .thinSheetThicknessMeters = 0.0075f,
+        };
+        MaterialCompileResult thinResult = compileSourceMaterial(thin);
+        CHECK(thinResult.succeeded());
+        CHECK(thinResult.material->transparency.resolvedClass ==
+            TransparencyClass::ThinGlass);
+        CHECK(thinResult.material->transparency.quality ==
+            TransparencyQuality::Hero4);
+        CHECK(thinResult.material->transparency.priority == 23);
+        CHECK(near(thinResult.material->transparency
+            .thinSheetThicknessMeters, 0.0075f));
+
+        SourceMaterial volume = thin;
+        volume.transparencyPolicy.requestedClass =
+            TransparencyClass::LayeredGlass;
+        volume.extensions.push_back(extension(
+            "KHR_materials_volume", {
+                { "thicknessFactor", 0.1f },
+                { "attenuationDistance", 2.0f },
+                { "attenuationColor", { 0.9f, 0.8f, 0.7f } },
+            }));
+        MaterialCompileResult unresolvedLayered =
+            compileSourceMaterial(volume);
+        CHECK(unresolvedLayered.succeeded());
+        CHECK(unresolvedLayered.material->transparency.resolvedClass ==
+            TransparencyClass::ThinGlass);
+        CHECK((unresolvedLayered.material->transparency.flags &
+            CompiledTransparencyTopologyRequired) != 0);
+        CHECK((unresolvedLayered.material->transparency.flags &
+            CompiledTransparencyFallbackApplied) != 0);
+        MaterialCompileResult layered = applyCompiledTransparencyPolicy(
+            *unresolvedLayered.material, volume.transparencyPolicy,
+            TransparencyTopology::ValidClosed);
+        CHECK(layered.succeeded());
+        CHECK(layered.material->transparency.resolvedClass ==
+            TransparencyClass::LayeredGlass);
+        CHECK((layered.material->transparency.flags &
+            CompiledTransparencyFallbackApplied) == 0);
+
+        SourceMaterial oit = blended;
+        oit.transparencyPolicy.requestedClass =
+            TransparencyClass::WeightedOit;
+        MaterialCompileResult oitResult = compileSourceMaterial(oit);
+        CHECK(oitResult.succeeded());
+        CHECK(oitResult.material->transparency.resolvedClass ==
+            TransparencyClass::WeightedOit);
+
+        TransparencyPolicyV1 incompatibleOit =
+            volume.transparencyPolicy;
+        incompatibleOit.requestedClass =
+            TransparencyClass::WeightedOit;
+        MaterialCompileResult oitFallback =
+            applyCompiledTransparencyPolicy(
+                *unresolvedLayered.material, incompatibleOit);
+        CHECK(oitFallback.succeeded());
+        CHECK(oitFallback.material->transparency.resolvedClass ==
+            TransparencyClass::SortedSurface);
+        CHECK(hasDiagnostic(oitFallback,
+            "MATERIAL_TRANSPARENCY_OIT_INCOMPATIBLE"));
+
+        SourceMaterial invalid = blended;
+        invalid.transparencyPolicy.thinSheetThicknessMeters =
+            std::numeric_limits<float>::quiet_NaN();
+        MaterialCompileResult sanitized =
+            compileSourceMaterial(invalid);
+        CHECK(sanitized.succeeded());
+        CHECK(sanitized.material->transparency
+            .thinSheetThicknessMeters == 0.0f);
+        CHECK((sanitized.material->transparency.flags &
+            CompiledTransparencyPolicySanitized) != 0);
+        CHECK(hasDiagnostic(sanitized,
+            "MATERIAL_TRANSPARENCY_THICKNESS_INVALID"));
+
+        CHECK(alphaClip.material->contentHash !=
+            sorted.material->contentHash);
+        CHECK(thinResult.material->contentHash !=
+            unresolvedLayered.material->contentHash);
+        return true;
+    }
+
     bool testOptionalCarClassificationSnapshot() {
         const std::filesystem::path path = std::filesystem::path(PROJECT_ROOT_DIR) /
             "assets" / "models" / "alfa_romeo" / "scene.gltf";
@@ -405,6 +510,7 @@ int main() {
         { "classification and dormant lobes", testClassificationAndDormantLobes },
         { "conflict and unsupported policy", testConflictAndUnsupportedPolicy },
         { "invalid input and deterministic hash", testInvalidAndDeterministicHash },
+        { "versioned transparency policy resolution", testVersionedTransparencyPolicyResolution },
         { "tracked fixture classification", testTrackedFixtureClassification },
         { "optional Alfa classification snapshot", testOptionalCarClassificationSnapshot },
     };

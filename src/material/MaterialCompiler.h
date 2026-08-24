@@ -70,6 +70,10 @@ namespace Iridium {
         MaterialFeatureDispersion = 1u << 15u,
         MaterialFeatureDiffuseTransmission = 1u << 16u,
         MaterialFeatureUnlit = 1u << 17u,
+        MaterialFeaturePackedNormalReconstructZ = 1u << 18u,
+        // Applied only while publishing a classified cooked product; source
+        // material identity remains independent of the selected execution mode.
+        MaterialFeatureClassifiedTransparencyExecution = 1u << 19u,
     };
 
     struct MaterialCompileDiagnostic {
@@ -167,7 +171,7 @@ namespace Iridium {
     };
 
     struct CompiledMaterial {
-        static constexpr uint32_t SchemaVersion = 1;
+        static constexpr uint32_t SchemaVersion = 2;
 
         uint32_t schemaVersion = SchemaVersion;
         uint32_t sourceMaterialIndex = 0;
@@ -175,6 +179,7 @@ namespace Iridium {
         MaterialWorkflow workflow = MaterialWorkflow::MetallicRoughness;
         MaterialClosureClass closureClass = MaterialClosureClass::Invalid;
         uint32_t featureFlags = MaterialFeatureNone;
+        CompiledTransparencyPolicy transparency;
         StandardClosureRecipe standard;
         std::vector<CompiledTextureOperation> textureOperations;
         std::vector<ComplexLobeRecord> complexLobes;
@@ -235,6 +240,10 @@ namespace Iridium {
     [[nodiscard]] MaterialCompileDocumentResult compileSourceMaterialDocument(
         const SourceMaterialDocument& document,
         MaterialCompilePolicy policy = MaterialCompilePolicy::Strict);
+    [[nodiscard]] MaterialCompileResult applyCompiledTransparencyPolicy(
+        const CompiledMaterial& material,
+        const TransparencyPolicyV1& policy,
+        TransparencyTopology topology = TransparencyTopology::Unknown);
     // Canonical compiled-closure identity used by cooked material products.
     // Source names and local source indices are provenance, not render identity,
     // and intentionally do not participate in this hash.

@@ -24,6 +24,42 @@ namespace {
     constexpr const char*
         kEntityOrderPayload =
             "IRIDIUM_SCENE_ENTITY_ORDER_V1";
+
+    void drawCreateItems(
+        Iridium::EditorSceneCommandService& commands) {
+        if (ImGui::MenuItem("Empty Entity")) {
+            (void)commands.createEmpty();
+        }
+        if (ImGui::BeginMenu("3D Object")) {
+            if (ImGui::MenuItem("Cube")) {
+                (void)commands.createPreset(
+                    Iridium::EditorEntityPreset::Cube);
+            }
+            ImGui::EndMenu();
+        }
+        if (ImGui::BeginMenu("Light")) {
+            if (ImGui::MenuItem("Directional (Sun)")) {
+                (void)commands.createPreset(
+                    Iridium::EditorEntityPreset::DirectionalLight);
+            }
+            if (ImGui::MenuItem("Point")) {
+                (void)commands.createPreset(
+                    Iridium::EditorEntityPreset::PointLight);
+            }
+            if (ImGui::MenuItem("Spot")) {
+                (void)commands.createPreset(
+                    Iridium::EditorEntityPreset::SpotLight);
+            }
+            ImGui::EndMenu();
+        }
+        if (ImGui::BeginMenu("Sky")) {
+            if (ImGui::MenuItem("HDRI Sky")) {
+                (void)commands.createPreset(
+                    Iridium::EditorEntityPreset::HdriSky);
+            }
+            ImGui::EndMenu();
+        }
+    }
 }
 
 SceneHierarchyPanel::SceneHierarchyPanel(
@@ -204,6 +240,11 @@ void SceneHierarchyPanel::OnImGuiRender(
             }
             if (ImGui::BeginPopupContextItem(
                     "entity-context")) {
+                if (ImGui::BeginMenu("Create")) {
+                    drawCreateItems(*sceneCommands_);
+                    ImGui::EndMenu();
+                }
+                ImGui::Separator();
                 if (ImGui::MenuItem(
                         "Rename", "F2")) {
                     beginRename(
@@ -268,6 +309,17 @@ void SceneHierarchyPanel::OnImGuiRender(
             }
         }
         ImGui::EndDragDropTarget();
+    }
+
+    if (ImGui::BeginPopupContextWindow(
+            "hierarchy-context",
+            ImGuiPopupFlags_MouseButtonRight |
+                ImGuiPopupFlags_NoOpenOverItems)) {
+        if (ImGui::BeginMenu("Create")) {
+            drawCreateItems(*sceneCommands_);
+            ImGui::EndMenu();
+        }
+        ImGui::EndPopup();
     }
 
     if (deleteEntity != NULL_ENTITY) {

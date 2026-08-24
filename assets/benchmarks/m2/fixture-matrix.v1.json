@@ -122,7 +122,7 @@
       "availability": "optional_local",
       "earliest_slice": "M2.0",
       "source_asset": "assets/models/alfa_romeo/alfa_romeo.gltf",
-      "source_sha256": "be2981b07dc2bb440627a4bca78e71eec9792cff527ab8652cb230831e32b324",
+      "source_sha256": "96f80eb8b302219aaec343920431877386cebb0ea5bf1a4a6df6e97b38456816",
       "license": "CC-BY-NC-SA-4.0; optional non-commercial diagnostic only",
       "axes": [
         "factors_and_gltf_defaults",

@@ -40,6 +40,13 @@ namespace {
             std::string_view("--profile-transparent-overdraw"),
             std::string_view("--validate-texture-residency-churn"),
             std::string_view("--validate-reflection-probes"),
+            std::string_view("--validate-ordinary2-capture"),
+            std::string_view("--validate-ordinary2-fallback"),
+            std::string_view("--validate-ordinary2-resize"),
+            std::string_view("--validate-deep-layered-capture"),
+            std::string_view("--validate-deep-layered-lifecycle"),
+            std::string_view("--deep-layered-validation-quality"),
+            std::string_view("cinematic8"),
             std::string_view("--validate-texture-table-scale"),
             std::string_view("8192"),
             std::string_view("--validate-material-table-scale"),
@@ -56,6 +63,13 @@ namespace {
         CHECK(config.enableTransparentPipelineStatistics);
         CHECK(config.validateTextureResidencyChurn);
         CHECK(config.validateReflectionProbes);
+        CHECK(config.validateOrdinary2Capture);
+        CHECK(config.validateOrdinary2Fallback);
+        CHECK(config.validateOrdinary2Resize);
+        CHECK(config.validateDeepLayeredCapture);
+        CHECK(config.validateDeepLayeredLifecycle);
+        CHECK(config.deepLayeredCaptureQuality ==
+            TransparencyQuality::Cinematic8);
         CHECK(config.validateTextureTableScale == 8192);
         CHECK(config.validateMaterialTableScale == 65'536);
         CHECK(config.validateLightTableScale == 4'096);
@@ -211,6 +225,18 @@ namespace {
             std::string::npos);
         CHECK(applicationUsage().find("--validate-reflection-probes") !=
             std::string::npos);
+        CHECK(applicationUsage().find("--validate-ordinary2-capture") !=
+            std::string::npos);
+        CHECK(applicationUsage().find("--validate-ordinary2-fallback") !=
+            std::string::npos);
+        CHECK(applicationUsage().find("--validate-ordinary2-resize") !=
+            std::string::npos);
+        CHECK(applicationUsage().find("--validate-deep-layered-capture") !=
+            std::string::npos);
+        CHECK(applicationUsage().find("--validate-deep-layered-lifecycle") !=
+            std::string::npos);
+        CHECK(applicationUsage().find("--deep-layered-validation-quality") !=
+            std::string::npos);
         CHECK(applicationUsage().find("--validate-texture-table-scale") !=
             std::string::npos);
         CHECK(applicationUsage().find("--validate-material-table-scale") !=
@@ -346,6 +372,11 @@ namespace {
         CHECK(rejects(std::array{
             std::string_view("--validate-light-table-scale"),
             std::string_view("65537") }));
+        CHECK(rejects(std::array{
+            std::string_view("--deep-layered-validation-quality") }));
+        CHECK(rejects(std::array{
+            std::string_view("--deep-layered-validation-quality"),
+            std::string_view("ordinary2") }));
         CHECK(rejects(std::array{ std::string_view("--exposure-ev") }));
         CHECK(rejects(std::array{
             std::string_view("--exposure-ev"), std::string_view("17") }));

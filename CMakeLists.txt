@@ -628,6 +628,16 @@ target_sources(IridiumEngine PRIVATE
         "src/renderer/vulkan/VulkanRenderGraphExecutor.cpp"
         "src/renderer/vulkan/VulkanProductionRenderGraph.h"
         "src/renderer/vulkan/VulkanProductionRenderGraph.cpp"
+        "src/renderer/vulkan/VulkanTransparencyPyramid.h"
+        "src/renderer/vulkan/VulkanTransparencyPyramid.cpp"
+        "src/renderer/vulkan/VulkanLayeredInterfaceCapturePass.h"
+        "src/renderer/vulkan/VulkanLayeredInterfaceCapturePass.cpp"
+        "src/renderer/vulkan/VulkanLayeredLocalCompositionPass.h"
+        "src/renderer/vulkan/VulkanLayeredLocalCompositionPass.cpp"
+        "src/renderer/vulkan/VulkanLayeredSceneResolvePass.h"
+        "src/renderer/vulkan/VulkanLayeredSceneResolvePass.cpp"
+        "src/renderer/transparency/Ordinary2Atlas.h"
+        "src/renderer/transparency/LayeredAtlas.h"
         "src/renderer/vulkan/VulkanClusteredLightingPipeline.h"
         "src/renderer/vulkan/VulkanClusteredLightingPipeline.cpp"
         "src/renderer/vulkan/VulkanReflectionProbePipeline.h"
@@ -957,6 +967,18 @@ if(BUILD_TESTING)
     )
     add_test(NAME M5FixtureContractTests COMMAND M5FixtureContractTests)
 
+    add_executable(M6FixtureContractTests
+            "tests/scene/M6FixtureContractTests.cpp"
+    )
+    target_include_directories(M6FixtureContractTests PRIVATE src)
+    target_link_libraries(M6FixtureContractTests PRIVATE
+            IridiumAssetCore
+            nlohmann_json::nlohmann_json)
+    target_compile_definitions(M6FixtureContractTests PRIVATE
+            PROJECT_ROOT_DIR="${CMAKE_SOURCE_DIR}"
+    )
+    add_test(NAME M6FixtureContractTests COMMAND M6FixtureContractTests)
+
     add_executable(EditorSceneDocumentServiceTests
             "tests/editor/EditorSceneDocumentServiceTests.cpp"
             "src/editor/EditorSceneDocumentService.cpp"
@@ -1012,6 +1034,7 @@ if(BUILD_TESTING)
     add_executable(Stage3ArchitectureTests
             "tests/renderer/Stage3ArchitectureTests.cpp"
             "src/renderer/vulkan/VulkanResourceState.cpp"
+            "src/profiling/CpuAllocationProfile.cpp"
     )
 
     target_include_directories(Stage3ArchitectureTests PRIVATE src)

@@ -2,6 +2,7 @@
 #include "include/packed_material.glsl"
 #include "include/material_normal.glsl"
 #include "include/material_complex.glsl"
+#include "include/transparency_transport.glsl"
 
 layout(location = 0) in vec4 fragColor;
 layout(location = 1) in vec2 fragTexCoord0;
@@ -14,6 +15,12 @@ layout(set = 0, binding = 0) uniform GlobalUBO {
     mat4 model;
     mat4 view;
     mat4 proj;
+    mat4 inverseView;
+    mat4 inverseProjection;
+    vec4 cameraPosition;
+    vec4 depthRange;
+    uvec4 renderInfo;
+    vec4 worldUnits;
 } ubo;
 
 #if defined(IRIDIUM_INDEXED_MATERIAL_TEXTURES)
@@ -66,8 +73,35 @@ layout(set = IRIDIUM_SCENE_SET, binding = 0) uniform sampler2D gDepth;
 layout(set = IRIDIUM_SCENE_SET, binding = 1) uniform sampler2D gNormalRoughMetal;
 layout(set = IRIDIUM_SCENE_SET, binding = 2) uniform sampler2D gAlbedoEmissive;
 #ifndef IRIDIUM_OPAQUE_FORWARD
-layout(set = IRIDIUM_SCENE_SET, binding = 4) uniform sampler2D opaqueSceneCopyMap;
-layout(set = IRIDIUM_SCENE_SET, binding = 5) uniform sampler2D glassDepthMap;
+layout(set = IRIDIUM_SCENE_SET, binding = 4) uniform sampler2D
+    refractionColorPyramid;
+layout(set = IRIDIUM_SCENE_SET, binding = 5) uniform sampler2D
+    refractionDepthPyramid;
+#endif
+
+#if defined(IRIDIUM_LAYERED_ORDINARY2_COMPOSITION) || \
+    defined(IRIDIUM_LAYERED_DEEP_COMPOSITION) || \
+    defined(IRIDIUM_LAYERED_DEEP_RESIDUAL)
+#define IRIDIUM_LAYERED_LOCAL_COMPOSITION 1
+#endif
+
+#ifdef IRIDIUM_LAYERED_ORDINARY2_COMPOSITION
+// Kept outside the shared scene set so the ordinary forward pipelines retain
+// their existing descriptor-layout compatibility. The composition object owns
+// this small, conditionally resident set with the packed-atlas interface data.
+layout(set = 4, binding = 0) uniform sampler2D layeredEntryDepth;
+layout(set = 4, binding = 1) uniform usampler2D layeredEntryIdentity;
+layout(set = 4, binding = 2) uniform sampler2D layeredExitDepth;
+layout(set = 4, binding = 3) uniform usampler2D layeredExitIdentity;
+#elif defined(IRIDIUM_LAYERED_DEEP_COMPOSITION) || \
+    defined(IRIDIUM_LAYERED_DEEP_RESIDUAL)
+// Fixed capacity keeps the descriptor layout identical for Hero4 and
+// Cinematic8. Hero4 repeats its final descriptor in unused slots, which the
+// pushed interface count makes unreachable.
+layout(set = 4, binding = 0) uniform sampler2D
+    layeredInterfaceDepth[8];
+layout(set = 4, binding = 1) uniform usampler2D
+    layeredInterfaceIdentity[8];
 #endif
 
 layout(location = 0) out vec4 outColor;
@@ -79,6 +113,212 @@ layout(push_constant) uniform CanonicalPushConstants {
     uint padding1;
     uint padding2;
 } push;
+
+#ifdef IRIDIUM_LAYERED_LOCAL_COMPOSITION
+const uint IRIDIUM_LAYERED_ORIENTATION_BIT = 0x80000000u;
+const uint IRIDIUM_LAYERED_WORK_MASK = 0x7fffffffu;
+const uint IRIDIUM_LAYERED_DEEP_WORK_MASK = 0x00001fffu;
+
+int iridiumLayeredUnpackSigned16(uint value) {
+    return int((value & 0xffffu) ^ 0x8000u) - 0x8000;
+}
+
+ivec2 iridiumLayeredAtlasPixel() {
+    return ivec2(gl_FragCoord.xy);
+}
+
+ivec2 iridiumLayeredScenePixel() {
+    ivec2 viewportOffset = ivec2(
+        iridiumLayeredUnpackSigned16(push.padding2),
+        iridiumLayeredUnpackSigned16(push.padding2 >> 16u));
+    return iridiumLayeredAtlasPixel() + viewportOffset;
+}
+
+bool iridiumLayeredMirrored() {
+    return (push.padding1 & 1u) != 0u;
+}
+
+#ifdef IRIDIUM_LAYERED_ORDINARY2_COMPOSITION
+
+bool iridiumLayeredOrdinary2PairIsValid() {
+    ivec2 atlasPixel = iridiumLayeredAtlasPixel();
+    ivec2 atlasExtent = textureSize(layeredEntryDepth, 0);
+    if (any(lessThan(atlasPixel, ivec2(0))) ||
+        any(greaterThanEqual(atlasPixel, atlasExtent)))
+        return false;
+    uint oneBasedWork = push.padding0 + 1u;
+    if (oneBasedWork == 0u ||
+        (oneBasedWork & ~IRIDIUM_LAYERED_WORK_MASK) != 0u)
+        return false;
+    uint entryIdentity = texelFetch(layeredEntryIdentity,
+        atlasPixel, 0).r;
+    uint exitIdentity = texelFetch(layeredExitIdentity,
+        atlasPixel, 0).r;
+    if (entryIdentity != oneBasedWork ||
+        exitIdentity != (oneBasedWork | IRIDIUM_LAYERED_ORIENTATION_BIT))
+        return false;
+    float entryDepth = texelFetch(layeredEntryDepth, atlasPixel, 0).r;
+    float exitDepth = texelFetch(layeredExitDepth, atlasPixel, 0).r;
+    return !(isnan(entryDepth) || isinf(entryDepth) ||
+        isnan(exitDepth) || isinf(exitDepth)) && exitDepth > entryDepth;
+}
+
+float iridiumLayeredOrdinary2PathMeters(float authoredMaximumMeters) {
+    ivec2 scenePixel = iridiumLayeredScenePixel();
+    ivec2 sceneExtent = textureSize(gDepth, 0);
+    if (any(lessThan(scenePixel, ivec2(0))) ||
+        any(greaterThanEqual(scenePixel, sceneExtent)))
+        return 0.0;
+    ivec2 atlasPixel = iridiumLayeredAtlasPixel();
+    float entryDepth = texelFetch(layeredEntryDepth, atlasPixel, 0).r;
+    float exitDepth = texelFetch(layeredExitDepth, atlasPixel, 0).r;
+    vec2 sceneUv = (vec2(scenePixel) + vec2(0.5)) / vec2(sceneExtent);
+    vec3 entryView = iridiumReconstructViewPosition(sceneUv,
+        entryDepth, ubo.inverseProjection);
+    vec3 exitView = iridiumReconstructViewPosition(sceneUv,
+        exitDepth, ubo.inverseProjection);
+    float measuredChordMeters = length(exitView - entryView) *
+        max(iridiumTransparencyFiniteOr(ubo.worldUnits.x, 1.0), 0.0);
+    authoredMaximumMeters = max(iridiumTransparencyFiniteOr(
+        authoredMaximumMeters, 0.0), 0.0);
+    return authoredMaximumMeters > 0.0
+        ? min(measuredChordMeters, authoredMaximumMeters)
+        : measuredChordMeters;
+}
+#else
+uint iridiumLayeredDeepInterfaceIndex() {
+    return (push.padding1 >> 8u) & 0xffu;
+}
+
+uint iridiumLayeredDeepInterfaceCount() {
+    return (push.padding1 >> 16u) & 0xffu;
+}
+
+bool iridiumLayeredDeepFindPair(out float entryDepth,
+    out float exitDepth) {
+    ivec2 atlasPixel = iridiumLayeredAtlasPixel();
+    ivec2 atlasExtent = textureSize(layeredInterfaceDepth[0], 0);
+    if (any(lessThan(atlasPixel, ivec2(0))) ||
+        any(greaterThanEqual(atlasPixel, atlasExtent)))
+        return false;
+    uint interfaceIndex = iridiumLayeredDeepInterfaceIndex();
+    uint interfaceCount = iridiumLayeredDeepInterfaceCount();
+    if (interfaceCount < 2u || interfaceCount > 8u ||
+        interfaceIndex >= interfaceCount)
+        return false;
+    uint oneBasedWork = push.padding0 + 1u;
+    if (oneBasedWork == 0u ||
+        (oneBasedWork & ~IRIDIUM_LAYERED_WORK_MASK) != 0u)
+        return false;
+    uint entryIdentity = texelFetch(
+        layeredInterfaceIdentity[interfaceIndex], atlasPixel, 0).r;
+    if ((entryIdentity & IRIDIUM_LAYERED_DEEP_WORK_MASK) != oneBasedWork)
+        return false;
+    entryDepth = texelFetch(layeredInterfaceDepth[interfaceIndex],
+        atlasPixel, 0).r;
+    if (isnan(entryDepth) || isinf(entryDepth))
+        return false;
+    // Identity alone is insufficient for a non-convex work item that appears
+    // more than once in the same pixel. Matching the rerasterized fragment to
+    // the captured slot prevents duplicate shading.
+    float depthTolerance = max(2.0e-6, abs(entryDepth) * 2.0e-6);
+    if (abs(gl_FragCoord.z - entryDepth) > depthTolerance)
+        return false;
+    for (uint candidate = interfaceIndex + 1u;
+        candidate < interfaceCount; ++candidate) {
+        uint identity = texelFetch(layeredInterfaceIdentity[candidate],
+            atlasPixel, 0).r;
+        if ((identity & IRIDIUM_LAYERED_DEEP_WORK_MASK) != oneBasedWork)
+            continue;
+        if ((identity & IRIDIUM_LAYERED_ORIENTATION_BIT) == 0u)
+            return false;
+        exitDepth = texelFetch(layeredInterfaceDepth[candidate],
+            atlasPixel, 0).r;
+        return !(isnan(exitDepth) || isinf(exitDepth)) &&
+            exitDepth > entryDepth;
+    }
+    return false;
+}
+
+bool iridiumLayeredDeepWorkOpenAtCapacity() {
+    ivec2 atlasPixel = iridiumLayeredAtlasPixel();
+    ivec2 atlasExtent = textureSize(layeredInterfaceDepth[0], 0);
+    if (any(lessThan(atlasPixel, ivec2(0))) ||
+        any(greaterThanEqual(atlasPixel, atlasExtent)))
+        return false;
+    uint interfaceCount = iridiumLayeredDeepInterfaceCount();
+    if (interfaceCount < 2u || interfaceCount > 8u)
+        return false;
+    uint oneBasedWork = push.padding0 + 1u;
+    if (oneBasedWork == 0u ||
+        (oneBasedWork & ~IRIDIUM_LAYERED_WORK_MASK) != 0u)
+        return false;
+    uint finalIdentity = texelFetch(
+        layeredInterfaceIdentity[interfaceCount - 1u], atlasPixel, 0).r;
+    if ((finalIdentity & IRIDIUM_LAYERED_DEEP_WORK_MASK) == 0u)
+        return false;
+    int balance = 0;
+    for (uint candidate = 0u; candidate < interfaceCount; ++candidate) {
+        uint identity = texelFetch(
+            layeredInterfaceIdentity[candidate], atlasPixel, 0).r;
+        if ((identity & IRIDIUM_LAYERED_DEEP_WORK_MASK) != oneBasedWork)
+            continue;
+        balance += (identity & IRIDIUM_LAYERED_ORIENTATION_BIT) == 0u
+            ? 1 : -1;
+    }
+    return balance > 0;
+}
+
+bool iridiumLayeredDeepResidualEntryIsValid() {
+    ivec2 atlasPixel = iridiumLayeredAtlasPixel();
+    ivec2 atlasExtent = textureSize(layeredInterfaceDepth[0], 0);
+    if (any(lessThan(atlasPixel, ivec2(0))) ||
+        any(greaterThanEqual(atlasPixel, atlasExtent)))
+        return false;
+    uint interfaceCount = iridiumLayeredDeepInterfaceCount();
+    if (interfaceCount < 2u || interfaceCount > 8u)
+        return false;
+    uint finalIdentity = texelFetch(
+        layeredInterfaceIdentity[interfaceCount - 1u], atlasPixel, 0).r;
+    if ((finalIdentity & IRIDIUM_LAYERED_DEEP_WORK_MASK) == 0u)
+        return false;
+    float finalDepth = texelFetch(
+        layeredInterfaceDepth[interfaceCount - 1u], atlasPixel, 0).r;
+    if (isnan(finalDepth) || isinf(finalDepth))
+        return false;
+    float depthTolerance = max(2.0e-6, abs(finalDepth) * 2.0e-6);
+    return gl_FragCoord.z > finalDepth + depthTolerance;
+}
+
+float iridiumLayeredDeepPathMeters(float authoredMaximumMeters) {
+    float entryDepth = 0.0;
+    float exitDepth = 0.0;
+    if (!iridiumLayeredDeepFindPair(entryDepth, exitDepth))
+        return 0.0;
+    ivec2 scenePixel = iridiumLayeredScenePixel();
+    ivec2 sceneExtent = textureSize(gDepth, 0);
+    if (any(lessThan(scenePixel, ivec2(0))) ||
+        any(greaterThanEqual(scenePixel, sceneExtent)))
+        return 0.0;
+    vec2 sceneUv = (vec2(scenePixel) + vec2(0.5)) / vec2(sceneExtent);
+    vec3 entryView = iridiumReconstructViewPosition(sceneUv,
+        entryDepth, ubo.inverseProjection);
+    vec3 exitView = iridiumReconstructViewPosition(sceneUv,
+        exitDepth, ubo.inverseProjection);
+    float measuredChordMeters = length(exitView - entryView) *
+        max(iridiumTransparencyFiniteOr(ubo.worldUnits.x, 1.0), 0.0);
+    authoredMaximumMeters = max(iridiumTransparencyFiniteOr(
+        authoredMaximumMeters, 0.0), 0.0);
+    return authoredMaximumMeters > 0.0
+        ? min(measuredChordMeters, authoredMaximumMeters)
+        : measuredChordMeters;
+}
+#endif
+
+#define IRIDIUM_MATERIAL_SCENE_PIXEL uvec2(iridiumLayeredScenePixel())
+#else
+#define IRIDIUM_MATERIAL_SCENE_PIXEL uvec2(gl_FragCoord.xy)
+#endif
 
 vec4 sampleMaterialTexture(PackedMaterial material, uint semantic) {
     vec2 uv = packedMaterialUv(material, semantic, fragTexCoord0, fragTexCoord1);
@@ -118,16 +358,43 @@ vec4 materialSampleOrOne(PackedMaterial material, uint semantic) {
         ? sampleMaterialTexture(material, semantic) : vec4(1.0);
 }
 
-float linearizeDepth(float depth) {
-    const float nearPlane = 0.1;
-    const float farPlane = 100.0;
-    return (nearPlane * farPlane) /
-        max(farPlane - depth * (farPlane - nearPlane), 0.00001);
-}
-
 void main() {
     PackedMaterial material = materials[push.materialIndex];
     if (material.schemaVersion != MATERIAL_SCHEMA_VERSION) discard;
+    bool layeredNonRefractiveResidual = false;
+#ifdef IRIDIUM_LAYERED_ORDINARY2_COMPOSITION
+    uint resolvedTransparencyClass =
+        (material.transparencyPolicy >> 8u) & 0xffu;
+    bool mirrored = push.padding1 != 0u;
+    bool semanticEntry = gl_FrontFacing != mirrored;
+    if (resolvedTransparencyClass != 5u || !semanticEntry ||
+        !iridiumLayeredOrdinary2PairIsValid())
+        discard;
+#elif defined(IRIDIUM_LAYERED_DEEP_COMPOSITION)
+    uint resolvedTransparencyClass =
+        (material.transparencyPolicy >> 8u) & 0xffu;
+    bool mirrored = iridiumLayeredMirrored();
+    bool semanticEntry = gl_FrontFacing != mirrored;
+    float layeredEntryDepth = 0.0;
+    float layeredExitDepth = 0.0;
+    bool hasExactPair = iridiumLayeredDeepFindPair(
+        layeredEntryDepth, layeredExitDepth);
+    if (resolvedTransparencyClass != 5u || !semanticEntry ||
+        !hasExactPair)
+        discard;
+#elif defined(IRIDIUM_LAYERED_DEEP_RESIDUAL)
+    uint resolvedTransparencyClass =
+        (material.transparencyPolicy >> 8u) & 0xffu;
+    bool mirrored = iridiumLayeredMirrored();
+    bool semanticEntry = gl_FrontFacing != mirrored;
+    bool closesOpenPrefix = !semanticEntry &&
+        iridiumLayeredDeepWorkOpenAtCapacity();
+    layeredNonRefractiveResidual = true;
+    if (resolvedTransparencyClass != 5u ||
+        (!semanticEntry && !closesOpenPrefix) ||
+        !iridiumLayeredDeepResidualEntryIsValid())
+        discard;
+#endif
 
     vec4 baseSample = materialSampleOrOne(material, 0u);
     vec3 baseColor = linearSrgbToAcesCg(
@@ -169,6 +436,12 @@ void main() {
     }
 
     float handedness = abs(fragTangent.w) < 0.001 ? 1.0 : fragTangent.w;
+#ifdef IRIDIUM_LAYERED_LOCAL_COMPOSITION
+    if (iridiumLayeredMirrored())
+#else
+    if (push.padding1 != 0u)
+#endif
+        handedness = -handedness;
     MaterialTangentFrame frame = materialBuildTangentFrame(fragNormal,
         fragTangent.xyz, handedness, material.doubleSided != 0u, gl_FrontFacing);
     if (packedMaterialHasTexture(material, 2u)) {
@@ -192,6 +465,7 @@ void main() {
         emissive *= sampleMaterialTexture(material, 4u).rgb;
     emissive = linearSrgbToAcesCg(emissive);
 
+#ifndef IRIDIUM_LAYERED_LOCAL_COMPOSITION
     if (push.padding0 != 0u && push.padding0 != 15u &&
         push.padding0 != 16u && push.padding0 != 17u) {
         if (push.padding0 == 1u) outColor = vec4(baseColor, 1.0);
@@ -218,6 +492,7 @@ void main() {
         else outColor = vec4(vec3(gl_FragCoord.z), 1.0);
         return;
     }
+#endif
 
     float shadowViewDepth = -(ubo.view * vec4(fragWorldPos, 1.0)).z;
     if (push.padding0 == 16u) {
@@ -234,7 +509,7 @@ void main() {
         return;
     }
 
-    vec3 cameraPosition = inverse(ubo.view)[3].xyz;
+    vec3 cameraPosition = ubo.cameraPosition.xyz;
     vec3 view = normalize(cameraPosition - fragWorldPos);
 
     vec3 reflection = textureLod(iridiumEnvironmentPrefiltered,
@@ -248,6 +523,7 @@ void main() {
 #ifndef IRIDIUM_OPAQUE_FORWARD
     float transmission = 0.0;
     float transmissionIor = ior;
+    float transmissionSpecularWeight = specularWeight;
     vec3 transmissionSpecularColor = specularColor;
     float volumeThickness = 0.0;
     float attenuationDistance = 3.402823e38;
@@ -316,6 +592,7 @@ void main() {
             transmission = clamp(lobe.parameters[0] *
                 materialSampleOrOne(material, 17u).r, 0.0, 1.0);
             transmissionIor = lobe.parameters[1];
+            transmissionSpecularWeight = lobe.parameters[2];
             transmissionSpecularColor = vec3(lobe.parameters[3],
                 lobe.parameters[4], lobe.parameters[5]);
         }
@@ -338,7 +615,7 @@ void main() {
 
     vec3 result = iridiumEvaluateStandardIbl(baseColor, f0, f90, metallic,
         roughness, frame.normal, view, ao, fragWorldPos,
-        uvec2(gl_FragCoord.xy)) * baseLayerAttenuation;
+        IRIDIUM_MATERIAL_SCENE_PIXEL) * baseLayerAttenuation;
     vec3 iblLobes = vec3(0.0);
     for (uint lobeIndex = 0u; lobeIndex < material.complexLobeCount;
         ++lobeIndex) {
@@ -348,7 +625,7 @@ void main() {
             iblLobes += iridiumSceneSpecular(vec3(0.04 * factor),
                 vec3(factor), directLobeData[lobeIndex].y,
                 directLobeNormals[lobeIndex], view, fragWorldPos,
-                uvec2(gl_FragCoord.xy)) * ao;
+                IRIDIUM_MATERIAL_SCENE_PIXEL) * ao;
         }
         else if (lobeType == 1u) {
             // Product v1 has no Charlie sheen convolution. Use the named
@@ -356,7 +633,7 @@ void main() {
             vec3 color = directLobeData[lobeIndex].rgb;
             iblLobes += iridiumSceneSpecular(color, color,
                 directLobeData[lobeIndex].a, frame.normal, view,
-                fragWorldPos, uvec2(gl_FragCoord.xy)) * ao *
+                fragWorldPos, IRIDIUM_MATERIAL_SCENE_PIXEL) * ao *
                 baseLayerAttenuation;
         }
         else if (lobeType == 2u) {
@@ -366,9 +643,10 @@ void main() {
         else if (lobeType == 3u) {
             vec3 filmF0 = directLobeData[lobeIndex].rgb;
             iblLobes += (iridiumSceneSpecular(filmF0, f90, roughness,
-                frame.normal, view, fragWorldPos, uvec2(gl_FragCoord.xy)) -
+                frame.normal, view, fragWorldPos,
+                    IRIDIUM_MATERIAL_SCENE_PIXEL) -
                 iridiumSceneSpecular(f0, f90, roughness, frame.normal, view,
-                    fragWorldPos, uvec2(gl_FragCoord.xy))) * ao *
+                    fragWorldPos, IRIDIUM_MATERIAL_SCENE_PIXEL)) * ao *
                 baseLayerAttenuation;
         }
     }
@@ -377,7 +655,7 @@ void main() {
     float shadowVisibility = 1.0;
 
     IridiumDirectLightRange lightRange = iridiumDirectLightRange(
-        fragWorldPos, uvec2(gl_FragCoord.xy));
+        fragWorldPos, IRIDIUM_MATERIAL_SCENE_PIXEL);
     uint directLightCount = iridiumDirectLightCount(lightRange);
     for (uint lightIndex = 0u; lightIndex < directLightCount; ++lightIndex) {
         uint lightSlot = iridiumDirectLightSlot(lightRange, lightIndex);
@@ -473,36 +751,188 @@ void main() {
 #ifndef IRIDIUM_OPAQUE_FORWARD
 
     if (transmission > 0.0) {
-        vec2 screenUv = gl_FragCoord.xy / vec2(textureSize(opaqueSceneCopyMap, 0));
-        float frontDepth = linearizeDepth(texture(glassDepthMap, screenUv).r);
-        float currentDepth = linearizeDepth(gl_FragCoord.z);
-        float measuredThickness = max(currentDepth - frontDepth, 0.0) + 0.02;
-        float opticalThickness = measuredThickness * max(volumeThickness, 1.0);
-        vec3 attenuation = vec3(1.0);
-        if (!isinf(attenuationDistance))
-            attenuation = pow(max(attenuationColor, vec3(0.0001)),
-                vec3(opticalThickness / max(attenuationDistance, 0.0001)));
-        vec3 refracted = refract(-view, frame.normal,
-            1.0 / max(transmissionIor, 1.0));
-        if (dot(refracted, refracted) < 0.000001) refracted = -view;
-        vec2 distortedUv = clamp(screenUv + refracted.xy *
-            measuredThickness * 0.12 + frame.normal.xy * roughness * 0.01,
-            vec2(0.001), vec2(0.999));
-        vec3 transmitted = texture(opaqueSceneCopyMap, distortedUv).rgb * attenuation;
-        float dielectric = pow((transmissionIor - 1.0) /
-            (transmissionIor + 1.0), 2.0);
-        vec3 transmissionF0 = linearSrgbToAcesCg(
-            dielectric * transmissionSpecularColor);
-        vec3 fresnel = materialFresnelSchlick(transmissionF0, vec3(1.0),
-            max(dot(frame.normal, view), 0.0));
-        result = mix(result, transmitted * (vec3(1.0) - fresnel) +
-            reflection * fresnel, transmission * (1.0 - metallic));
-        // The transmitted scene color above is already composited for this
-        // interface. Blending it again by a low base-color alpha suppresses
-        // Fresnel and normal-map detail (notably etched headlamp glass).
-        outputAlpha = max(alpha, transmission);
+        uvec2 refractionExtent = uvec2(textureSize(
+            refractionColorPyramid, 0));
+        vec3 geometricNormal = normalize(fragNormal);
+        if (material.doubleSided != 0u && !gl_FrontFacing)
+            geometricNormal = -geometricNormal;
+#ifdef IRIDIUM_LAYERED_ORDINARY2_COMPOSITION
+        // The peeled entry/exit chord is authoritative. glTF volume thickness
+        // (factor times the green texture channel, resolved above) is only a
+        // maximum cap; zero means no cap rather than zero absorption.
+        float opticalPathMeters =
+            iridiumLayeredOrdinary2PathMeters(volumeThickness);
+#elif defined(IRIDIUM_LAYERED_DEEP_COMPOSITION) || \
+    defined(IRIDIUM_LAYERED_DEEP_RESIDUAL)
+        // Each accepted entry uses the matching later exit from the bounded
+        // front-to-back interface list. The same shared transport code below
+        // then evaluates the measured chord.
+        float worldThicknessScale = ubo.worldUnits.x /
+            max(length(fragNormal), 1.0e-7);
+        float residualSheetMeters = material.thinSheetThicknessMeters;
+        if (residualSheetMeters <= 0.0)
+            residualSheetMeters = volumeThickness;
+        float opticalPathMeters = layeredNonRefractiveResidual
+            ? iridiumThinSheetPathLength(residualSheetMeters,
+                worldThicknessScale, dot(geometricNormal, view))
+            : iridiumLayeredDeepPathMeters(volumeThickness);
+#else
+        float worldThicknessScale = ubo.worldUnits.x /
+            max(length(fragNormal), 1.0e-7);
+        uint resolvedTransparencyClass =
+            (material.transparencyPolicy >> 8u) & 0xffu;
+        float sheetThicknessMeters = material.thinSheetThicknessMeters;
+        // Until Ordinary2 composition is selected, LayeredGlass preserves its
+        // authored cap as a safe thin-sheet compatibility path.
+        if (resolvedTransparencyClass == 5u && sheetThicknessMeters <= 0.0)
+            sheetThicknessMeters = volumeThickness;
+        float opticalPathMeters = iridiumThinSheetPathLength(
+            sheetThicknessMeters, worldThicknessScale,
+            dot(geometricNormal, view));
+#endif
+        // The shared transport helper sanitizes every sampled/authored input
+        // before evaluating the per-channel extinction coefficients.
+        vec3 attenuation = iridiumBeerLambert(attenuationColor,
+            attenuationDistance, opticalPathMeters);
+        bool totalInternalReflection = false;
+        vec3 opticalNormal = dot(frame.normal, geometricNormal) >= 0.0
+            ? frame.normal : -frame.normal;
+        vec3 transmittedDirection = iridiumRefractTransparencyRay(
+            -view, opticalNormal, 1.0, transmissionIor,
+            totalInternalReflection);
+        if (layeredNonRefractiveResidual) {
+            transmittedDirection = -view;
+            totalInternalReflection = false;
+        }
+        float interfaceFresnel = iridiumDielectricFresnel(1.0,
+            transmissionIor, dot(frame.normal, view),
+            totalInternalReflection);
+        vec3 fresnelTint = linearSrgbToAcesCg(
+            transmissionSpecularColor) * transmissionSpecularWeight;
+        vec3 fresnel = totalInternalReflection ? vec3(1.0) :
+            clamp(interfaceFresnel * fresnelTint, vec3(0.0), vec3(1.0));
+        bool classifiedLocalInterface =
+            (material.featureFlags & (1u << 19u)) != 0u &&
+            opticalPathMeters <= 1.0e-7;
+        if (classifiedLocalInterface) {
+            // A zero-distance sheet has no displacement, rough-refraction
+            // footprint, or absorption. Compose only its opaque fraction and
+            // reflected interface here; fixed-function destination blending
+            // supplies transmission from the current scene, including sorted
+            // transparent reflector surfaces rendered after the pyramid.
+            bool geometricTotalInternalReflection = false;
+            float geometricInterfaceFresnel = iridiumDielectricFresnel(
+                1.0, transmissionIor, dot(geometricNormal, view),
+                geometricTotalInternalReflection);
+            vec3 geometricFresnel = geometricTotalInternalReflection
+                ? vec3(1.0) : clamp(geometricInterfaceFresnel *
+                    fresnelTint, vec3(0.0), vec3(1.0));
+            vec2 weights = iridiumThinGlassLocalCompositionWeights(
+                transmission, metallic, geometricFresnel);
+            outputAlpha = 1.0 - weights.y;
+            vec3 premultipliedInterface =
+                result * (1.0 - weights.x) +
+                reflection * fresnel * weights.x;
+            result = outputAlpha > 1.0e-7
+                ? premultipliedInterface / outputAlpha : vec3(0.0);
+        }
+        else {
+            vec3 environmentTransmission =
+                iridiumSampleTransmissionEnvironment(fragWorldPos,
+                    transmittedDirection, roughness,
+                    IRIDIUM_MATERIAL_SCENE_PIXEL);
+            vec3 sceneTransmission = environmentTransmission;
+            float sceneConfidence = 0.0;
+            if (layeredNonRefractiveResidual) {
+                sceneTransmission = texelFetch(refractionColorPyramid,
+                    ivec2(IRIDIUM_MATERIAL_SCENE_PIXEL), 0).rgb;
+                sceneConfidence = 1.0;
+            }
+            else if ((ubo.renderInfo.w &
+                    IRIDIUM_VIEW_REFRACTION_PYRAMIDS_AVAILABLE) != 0u) {
+                uint pyramidLevels = uint(textureQueryLevels(
+                    refractionColorPyramid));
+                IridiumRefractionProjection refraction =
+                    iridiumProjectTransparencyRay(fragWorldPos,
+                        transmittedDirection, opticalPathMeters,
+                        ubo.worldUnits.x, roughness, 1.0 /
+                        max(transmissionIor, IRIDIUM_TRANSPARENCY_MIN_IOR),
+                        ubo.view, ubo.proj, refractionExtent, pyramidLevels);
+                if (refraction.onScreen) {
+                    float selectedLod = refraction.lod;
+                    float nearestDepth = textureLod(refractionDepthPyramid,
+                        refraction.sampleUv, selectedLod).r;
+                    float depthTolerance = max(0.05,
+                        refraction.expectedViewDepthMeters * 0.01);
+                    bool foregroundLeak = nearestDepth + depthTolerance <
+                        refraction.expectedViewDepthMeters;
+                    if (foregroundLeak && selectedLod > 0.0) {
+                        selectedLod = max(selectedLod - 1.0, 0.0);
+                        nearestDepth = textureLod(refractionDepthPyramid,
+                            refraction.sampleUv, selectedLod).r;
+                        foregroundLeak = nearestDepth + depthTolerance <
+                            refraction.expectedViewDepthMeters;
+                    }
+                    if (!foregroundLeak) {
+                        sceneTransmission = textureLod(
+                            refractionColorPyramid,
+                            refraction.sampleUv, selectedLod).rgb;
+                        sceneConfidence = refraction.edgeConfidence;
+                    }
+                }
+            }
+            vec3 transmitted = mix(environmentTransmission,
+                sceneTransmission, sceneConfidence) * attenuation;
+#if defined(IRIDIUM_LAYERED_DEEP_COMPOSITION) || \
+    defined(IRIDIUM_LAYERED_DEEP_RESIDUAL)
+            // A deep atlas must retain residual transmission so later entry
+            // slots can be composed behind this one. Encode a premultiplied
+            // source term plus scalar residual coverage in RGBA. The refracted
+            // scene sample is preserved as a delta from the unrefracted source
+            // pixel; colored extinction is reduced conservatively to luminance
+            // because the current local product has one transmittance channel.
+            float transportWeight = transmission * (1.0 - metallic);
+            vec3 desired = mix(result,
+                transmitted * (vec3(1.0) - fresnel) +
+                    reflection * fresnel,
+                transportWeight);
+            vec3 sourceScene = texelFetch(refractionColorPyramid,
+                ivec2(IRIDIUM_MATERIAL_SCENE_PIXEL), 0).rgb;
+            vec3 channelResidual = clamp(transportWeight *
+                (vec3(1.0) - fresnel) * attenuation,
+                vec3(0.0), vec3(1.0));
+            float residualTransmission = clamp(dot(channelResidual,
+                vec3(0.2722287, 0.6740818, 0.0536895)), 0.0, 1.0);
+            outputAlpha = 1.0 - residualTransmission;
+            vec3 premultipliedSource = max(desired -
+                sourceScene * residualTransmission, vec3(0.0));
+            result = outputAlpha > 1.0e-7
+                ? premultipliedSource / outputAlpha : vec3(0.0);
+#else
+            result = mix(result, transmitted * (vec3(1.0) - fresnel) +
+                reflection * fresnel,
+                transmission * (1.0 - metallic));
+            // Nonlocal transport is already composited against the pyramid;
+            // replace the current destination rather than blending it twice.
+            outputAlpha = max(alpha, transmission);
+#endif
+        }
     }
 #endif
 
-    outColor = vec4(max(result + emissive, vec3(0.0)), outputAlpha);
+    vec3 outputColor = max(result + emissive, vec3(0.0));
+#if defined(IRIDIUM_LAYERED_DEEP_COMPOSITION) || \
+    defined(IRIDIUM_LAYERED_DEEP_RESIDUAL)
+    // Deep local blending always consumes premultiplied source-over output.
+    outputColor *= outputAlpha;
+#elif defined(IRIDIUM_LAYERED_ORDINARY2_COMPOSITION)
+    // The atlas has one blending contract regardless of source alpha mode.
+    // Its geometry-addressed scene resolve uses premultiplied ONE / ONE_MINUS_A.
+    if ((material.featureFlags & (1u << 19u)) == 0u)
+        outputColor *= outputAlpha;
+#else
+    if ((material.featureFlags & (1u << 19u)) != 0u)
+        outputColor *= outputAlpha;
+#endif
+    outColor = vec4(outputColor, outputAlpha);
 }

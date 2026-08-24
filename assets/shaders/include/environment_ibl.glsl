@@ -238,4 +238,75 @@ vec3 iridiumSampleEnvironmentSky(vec3 direction) {
         iridiumEnvironmentSettings.y;
 }
 
+vec3 iridiumSampleTransmissionEnvironment(vec3 worldPosition,
+    vec3 direction, float perceptualRoughness, uvec2 pixel) {
+    uint cluster = iridiumShadingClusterIndex(worldPosition, pixel);
+    IridiumReflectionProbeClusterHeader header =
+        iridiumReflectionProbeHeaders[cluster];
+    uint selectedSlots[2];
+    float selectedInfluences[2];
+    uint selectedCount = 0u;
+    for (uint candidate = 0u; candidate < min(header.count, 4u);
+        ++candidate) {
+        uint slot = iridiumReflectionProbeSlots[header.offset + candidate];
+        PackedGpuReflectionProbe probe = iridiumReflectionProbes[slot];
+        float influence = iridiumReflectionProbeInfluence(probe,
+            worldPosition);
+        if (!(influence > 0.0)) continue;
+        uint position = selectedCount;
+        for (uint index = 0u; index < selectedCount; ++index) {
+            if (iridiumReflectionProbePreferred(probe, influence,
+                    iridiumReflectionProbes[selectedSlots[index]],
+                    selectedInfluences[index])) {
+                position = index;
+                break;
+            }
+        }
+        if (position >= 2u) continue;
+        uint newCount = min(selectedCount + 1u, 2u);
+        for (uint index = newCount - 1u; index > position; --index) {
+            selectedSlots[index] = selectedSlots[index - 1u];
+            selectedInfluences[index] = selectedInfluences[index - 1u];
+        }
+        selectedSlots[position] = slot;
+        selectedInfluences[position] = influence;
+        selectedCount = newCount;
+    }
+
+    float localCoverage = selectedCount == 0u ? 0.0 :
+        clamp(selectedInfluences[0], 0.0, 1.0);
+    float influenceSum = selectedCount == 0u ? 1.0 :
+        selectedInfluences[0] +
+        (selectedCount > 1u ? selectedInfluences[1] : 0.0);
+    vec3 local = vec3(0.0);
+    for (uint index = 0u; index < selectedCount; ++index) {
+        PackedGpuReflectionProbe probe =
+            iridiumReflectionProbes[selectedSlots[index]];
+        uint environment = probe.metadata.y;
+        float levelCount = float(textureQueryLevels(
+            iridiumReflectionProbePrefiltered[nonuniformEXT(environment)]));
+        float lod = clamp(perceptualRoughness, 0.0, 1.0) *
+            max(levelCount - 1.0, 0.0);
+        vec3 sampleDirection = iridiumReflectionProbeDirection(probe,
+            worldPosition, direction);
+        local += textureLod(
+            iridiumReflectionProbePrefiltered[nonuniformEXT(environment)],
+            sampleDirection, lod).rgb * probe.positionIntensity.w *
+            selectedInfluences[index] / influenceSum * localCoverage;
+    }
+
+    int flags = int(iridiumEnvironmentSettings.w + 0.5);
+    vec3 global = vec3(0.0);
+    if ((flags & 1) != 0) {
+        float levelCount = float(textureQueryLevels(
+            iridiumEnvironmentRadiance));
+        float lod = clamp(perceptualRoughness, 0.0, 1.0) *
+            max(levelCount - 1.0, 0.0);
+        global = textureLod(iridiumEnvironmentRadiance,
+            iridiumRotateEnvironmentDirection(direction), lod).rgb *
+            iridiumEnvironmentSettings.y;
+    }
+    return local + global * (1.0 - localCoverage);
+}
+
 #endif

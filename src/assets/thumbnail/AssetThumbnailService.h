@@ -25,6 +25,16 @@ namespace Iridium {
             const = default;
     };
 
+    struct AssetThumbnailTransparencyDetail {
+        AssetGuid assetGuid;
+        CompiledTransparencyPolicy policy;
+        uint32_t runtimePrimitiveCount = 0;
+        bool uniformPolicy = true;
+
+        bool operator==(const AssetThumbnailTransparencyDetail&)
+            const = default;
+    };
+
     struct PreparedAssetThumbnailBatch {
         AssetGuid rootAssetGuid;
         std::vector<AssetThumbnailPixels> thumbnails;
@@ -32,6 +42,8 @@ namespace Iridium {
         std::vector<AssetDependency> dependencies;
         std::vector<AssetThumbnailAssociation>
             associations;
+        std::vector<AssetThumbnailTransparencyDetail>
+            transparencyDetails;
         std::string deferredReason;
         std::string diagnostic;
     };
@@ -66,6 +78,8 @@ namespace Iridium {
         std::vector<AssetDependency> dependencies;
         std::vector<AssetThumbnailAssociation>
             associations;
+        std::vector<AssetThumbnailTransparencyDetail>
+            transparencyDetails;
         std::string diagnostic;
     };
 

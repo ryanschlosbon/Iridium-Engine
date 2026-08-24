@@ -25,7 +25,8 @@ namespace Iridium {
             globalBinding.binding = 0;
             globalBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
             globalBinding.descriptorCount = 1;
-            globalBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+            globalBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT |
+                VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
 
             VkDescriptorSetLayoutCreateInfo globalLayoutInfo{ VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
             globalLayoutInfo.bindingCount = 1;

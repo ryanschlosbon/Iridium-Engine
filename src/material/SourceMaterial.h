@@ -1,5 +1,7 @@
 #pragma once
 
+#include "material/TransparencyPolicy.h"
+
 #include <glm/glm.hpp>
 
 #include <cstdint>
@@ -130,6 +132,7 @@ namespace Iridium {
         SourceValue<SourceAlphaMode> alphaMode{ SourceAlphaMode::Opaque, SourceValueOrigin::FormatDefault };
         SourceValue<float> alphaCutoff{ 0.5f, SourceValueOrigin::FormatDefault };
         SourceValue<bool> doubleSided{ false, SourceValueOrigin::FormatDefault };
+        TransparencyPolicyV1 transparencyPolicy;
         std::vector<SourceTextureUse> textures;
         std::vector<SourceMaterialExtension> extensions;
     };

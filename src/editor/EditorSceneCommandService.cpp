@@ -1,5 +1,6 @@
 #include "editor/EditorSceneCommandService.h"
 
+#include "assets/BuiltInAssets.h"
 #include "editor/CoreEditorComponentRegistry.h"
 #include "editor/EditorSceneActions.h"
 #include "editor/EditorSceneDocumentService.h"
@@ -427,7 +428,8 @@ namespace Iridium {
         }
 
         [[nodiscard]] Entity create(std::string_view preferredName,
-            glm::vec3 position, std::optional<AssetGuid> modelGuid) {
+            glm::vec3 position, std::optional<AssetGuid> modelGuid,
+            std::optional<EditorEntityPreset> preset = std::nullopt) {
             diagnostic.clear();
             if (!components) {
                 diagnostic = "Editor component registry is unavailable";
@@ -451,6 +453,10 @@ namespace Iridium {
                     world.registry(), preferredName) });
             TransformComponent transform;
             transform.position = position;
+            if (preset &&
+                *preset == EditorEntityPreset::DirectionalLight) {
+                transform.rotation = { 45.0f, -30.0f, 0.0f };
+            }
             transform.isDirty = true;
             appendComponent(entity, CoreTransformComponentId, transform);
             RelationshipComponent relationship;
@@ -471,6 +477,34 @@ namespace Iridium {
                 mesh.requestedAssetGuid = *modelGuid;
                 appendComponent(entity, CoreMeshComponentId, std::move(mesh));
             }
+            if (preset) {
+                switch (*preset) {
+                case EditorEntityPreset::Empty:
+                case EditorEntityPreset::Cube:
+                    break;
+                case EditorEntityPreset::DirectionalLight:
+                case EditorEntityPreset::PointLight:
+                case EditorEntityPreset::SpotLight: {
+                    LightComponent light;
+                    light.type = *preset == EditorEntityPreset::DirectionalLight
+                        ? LightType::Directional
+                        : *preset == EditorEntityPreset::PointLight
+                            ? LightType::Point : LightType::Spot;
+                    appendComponent(entity, CoreLightComponentId, light);
+                    break;
+                }
+                case EditorEntityPreset::HdriSky: {
+                    SkyComponent sky;
+                    sky.mode = SkyMode::Hdri;
+                    sky.hdri.environmentAssetGuid =
+                        kDefaultEditorEnvironmentAssetGuid;
+                    sky.requestedEnvironmentAssetGuid =
+                        kDefaultEditorEnvironmentAssetGuid;
+                    appendComponent(entity, CoreSkyComponentId, std::move(sky));
+                    break;
+                }
+                }
+            }
             bundle.afterSelection = exclusiveSelection(entity.uuid);
             bundle.estimatedBytes = sizeof(EntitySnapshot) +
                 entity.components.size() * sizeof(ComponentSnapshot);
@@ -486,7 +520,9 @@ namespace Iridium {
                 });
             const SceneEntityUuid uuid = state->snapshot.entities.front().uuid;
             EditorTransaction transaction;
-            transaction.label = modelGuid ? "Create Model" : "Create Entity";
+            transaction.label = modelGuid ? "Create Model" : preset
+                ? "Create " + std::string(editorEntityPresetName(*preset))
+                : "Create Entity";
             transaction.operations.push_back(structuralOperation(
                 std::move(state), uuid.toString()));
             const EditorTransactionResult result =
@@ -1032,6 +1068,16 @@ namespace Iridium {
         AssetGuid modelGuid, std::string_view preferredName,
         glm::vec3 position) {
         return impl_->create(preferredName, position, modelGuid);
+    }
+
+    Entity EditorSceneCommandService::createPreset(
+        EditorEntityPreset preset, glm::vec3 position) {
+        const std::optional<AssetGuid> modelGuid =
+            preset == EditorEntityPreset::Cube
+            ? std::optional<AssetGuid>{ kBuiltInCubeAssetGuid }
+            : std::nullopt;
+        return impl_->create(
+            editorEntityPresetName(preset), position, modelGuid, preset);
     }
 
     bool EditorSceneCommandService::deleteEntity(Entity root) {

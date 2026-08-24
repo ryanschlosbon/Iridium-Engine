@@ -58,7 +58,9 @@ namespace Iridium {
         VulkanPipelineLibrary& operator=(VulkanPipelineLibrary&&) = delete;
 
         void init(VkDevice device, VulkanPipelineTarget gBufferTarget,
-            VulkanPipelineTarget forwardTarget, GBufferLayout gBufferLayout);
+            VulkanPipelineTarget forwardTarget,
+            VulkanPipelineTarget transparentTarget,
+            GBufferLayout gBufferLayout);
         void cleanup() noexcept;
 
         PipelineHandle getOrCreatePipeline(const PipelineStateDesc& desc);
@@ -69,6 +71,7 @@ namespace Iridium {
         VkDevice device_ = VK_NULL_HANDLE;
         VulkanPipelineTarget gBufferTarget_{};
         VulkanPipelineTarget forwardTarget_{};
+        VulkanPipelineTarget transparentTarget_{};
         GBufferLayout gBufferLayout_ = GBufferLayout::CanonicalReference;
         ResourcePool<VulkanPipelineRecord, PipelineHandle> pipelineRecords_;
         std::unordered_map<PipelineStateDesc, PipelineHandle, PipelineStateDescHash> pipelineMap_;

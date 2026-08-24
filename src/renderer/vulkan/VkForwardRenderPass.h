@@ -4,7 +4,8 @@
 
 class VkForwardRenderPass {
 public:
-    VkForwardRenderPass(VkContext* context, VkFormat colorFormat, VkFormat depthFormat);
+    VkForwardRenderPass(VkContext* context, VkFormat colorFormat,
+        VkFormat depthFormat, bool depthReadOnly = false);
     ~VkForwardRenderPass();
 
     VkRenderPass getRenderPass() const { return renderPass; }
@@ -13,5 +14,6 @@ private:
     VkContext* context;
     VkRenderPass renderPass;
 
-    void createRenderPass(VkFormat colorFormat, VkFormat depthFormat);
+    void createRenderPass(VkFormat colorFormat, VkFormat depthFormat,
+        bool depthReadOnly);
 };

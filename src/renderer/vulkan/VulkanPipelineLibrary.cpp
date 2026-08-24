@@ -75,6 +75,17 @@ namespace Iridium {
                 attachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
                 attachment.alphaBlendOp = VK_BLEND_OP_ADD;
                 return;
+            case BlendMode::PremultipliedAlpha:
+                attachment.blendEnable = VK_TRUE;
+                attachment.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+                attachment.dstColorBlendFactor =
+                    VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+                attachment.colorBlendOp = VK_BLEND_OP_ADD;
+                attachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+                attachment.dstAlphaBlendFactor =
+                    VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+                attachment.alphaBlendOp = VK_BLEND_OP_ADD;
+                return;
             case BlendMode::Additive:
                 attachment.blendEnable = VK_TRUE;
                 attachment.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
@@ -93,7 +104,8 @@ namespace Iridium {
                     && desc.renderPass == RenderPassClass::GBuffer)
                 || ((desc.shaderProgram == ShaderProgram::CanonicalComplexOpaqueForward ||
                         desc.shaderProgram == ShaderProgram::CanonicalComplexForward)
-                    && desc.renderPass == RenderPassClass::Forward);
+                    && (desc.renderPass == RenderPassClass::Forward ||
+                        desc.renderPass == RenderPassClass::Transparent));
             if (!valid) {
                 throw std::invalid_argument("shader program and render pass class must use matching PBR targets");
             }
@@ -101,7 +113,9 @@ namespace Iridium {
     }
 
     void VulkanPipelineLibrary::init(VkDevice device, VulkanPipelineTarget gBufferTarget,
-        VulkanPipelineTarget forwardTarget, GBufferLayout gBufferLayout) {
+        VulkanPipelineTarget forwardTarget,
+        VulkanPipelineTarget transparentTarget,
+        GBufferLayout gBufferLayout) {
         if (device_ != VK_NULL_HANDLE) {
             throw std::logic_error("VulkanPipelineLibrary is already initialized");
         }
@@ -112,13 +126,17 @@ namespace Iridium {
                 gBufferTarget.colorAttachmentCount != 5)
             || forwardTarget.renderPass == VK_NULL_HANDLE
             || forwardTarget.pipelineLayout == VK_NULL_HANDLE
-            || forwardTarget.colorAttachmentCount != 1) {
+            || forwardTarget.colorAttachmentCount != 1
+            || transparentTarget.renderPass == VK_NULL_HANDLE
+            || transparentTarget.pipelineLayout == VK_NULL_HANDLE
+            || transparentTarget.colorAttachmentCount != 1) {
             throw std::invalid_argument("VulkanPipelineLibrary requires valid targets and device");
         }
 
         device_ = device;
         gBufferTarget_ = gBufferTarget;
         forwardTarget_ = forwardTarget;
+        transparentTarget_ = transparentTarget;
         gBufferLayout_ = gBufferLayout;
     }
 
@@ -139,6 +157,7 @@ namespace Iridium {
         pipelineMap_.clear();
         gBufferTarget_ = {};
         forwardTarget_ = {};
+        transparentTarget_ = {};
         gBufferLayout_ = GBufferLayout::CanonicalReference;
         device_ = VK_NULL_HANDLE;
     }
@@ -318,6 +337,7 @@ namespace Iridium {
         switch (renderPass) {
         case RenderPassClass::GBuffer: return gBufferTarget_;
         case RenderPassClass::Forward: return forwardTarget_;
+        case RenderPassClass::Transparent: return transparentTarget_;
         }
         throw std::invalid_argument("unsupported render pass class");
     }

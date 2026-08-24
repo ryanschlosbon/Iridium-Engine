@@ -1,4 +1,5 @@
 #include "assets/AssetManager.h"
+#include "assets/BuiltInAssets.h"
 #include "assets/environment/EnvironmentProduct.h"
 #include "assets/model/ModelProduct.h"
 #include "assets/model/ModelRuntimeProduct.h"
@@ -284,6 +285,8 @@ namespace Iridium {
         model->filePath = "asset://" + artifact.assetGuid.toString();
         model->assetGuid = artifact.assetGuid;
         model->artifactCookKey = artifact.cookKey;
+        model->transparencyExecutionMode =
+            resolved.data->geometry.transparencyExecutionMode;
         model->ownsMaterials = false;
         model->ownsTextures = false;
         model->subMeshes =
@@ -295,6 +298,151 @@ namespace Iridium {
         uploadToGPU(model.get(), resolved.data->geometry.vertices,
             resolved.data->geometry.indices);
         cookedModelCache.emplace(artifact.assetGuid, model);
+        if (onModelLoadedCallback) onModelLoadedCallback(model);
+        return model;
+    }
+
+    std::shared_ptr<ModelAsset> AssetManager::loadBuiltInCubeModel() {
+        if (const auto cached = cookedModelCache.find(kBuiltInCubeAssetGuid);
+            cached != cookedModelCache.end()) {
+            return cached->second;
+        }
+
+        struct Face {
+            glm::vec3 normal;
+            glm::vec3 tangent;
+            glm::vec3 bitangent;
+        };
+        constexpr std::array faces{
+            Face{ { 0.0f, 0.0f, 1.0f }, { 1.0f, 0.0f, 0.0f },
+                { 0.0f, 1.0f, 0.0f } },
+            Face{ { 0.0f, 0.0f, -1.0f }, { -1.0f, 0.0f, 0.0f },
+                { 0.0f, 1.0f, 0.0f } },
+            Face{ { 1.0f, 0.0f, 0.0f }, { 0.0f, 0.0f, -1.0f },
+                { 0.0f, 1.0f, 0.0f } },
+            Face{ { -1.0f, 0.0f, 0.0f }, { 0.0f, 0.0f, 1.0f },
+                { 0.0f, 1.0f, 0.0f } },
+            Face{ { 0.0f, 1.0f, 0.0f }, { 1.0f, 0.0f, 0.0f },
+                { 0.0f, 0.0f, -1.0f } },
+            Face{ { 0.0f, -1.0f, 0.0f }, { 1.0f, 0.0f, 0.0f },
+                { 0.0f, 0.0f, 1.0f } },
+        };
+        constexpr std::array<glm::vec2, 4> corners{
+            glm::vec2{ -0.5f, -0.5f }, glm::vec2{ 0.5f, -0.5f },
+            glm::vec2{ 0.5f, 0.5f }, glm::vec2{ -0.5f, 0.5f },
+        };
+        constexpr std::array<glm::vec2, 4> uvs{
+            glm::vec2{ 0.0f, 0.0f }, glm::vec2{ 1.0f, 0.0f },
+            glm::vec2{ 1.0f, 1.0f }, glm::vec2{ 0.0f, 1.0f },
+        };
+        constexpr std::array<uint32_t, 6> faceIndices{ 0, 2, 1, 0, 3, 2 };
+
+        std::vector<Vertex> vertices;
+        std::vector<uint32_t> indices;
+        vertices.reserve(faces.size() * corners.size());
+        indices.reserve(faces.size() * faceIndices.size());
+        for (const Face& face : faces) {
+            const uint32_t firstVertex = static_cast<uint32_t>(vertices.size());
+            for (size_t index = 0; index < corners.size(); ++index) {
+                const glm::vec2 corner = corners[index];
+                vertices.push_back({
+                    .pos = face.normal * 0.5f + face.tangent * corner.x +
+                        face.bitangent * corner.y,
+                    .color = glm::vec4(1.0f),
+                    .normal = face.normal,
+                    .uv0 = uvs[index],
+                    .tangent = glm::vec4(face.tangent, 1.0f),
+                    .uv1 = uvs[index],
+                });
+            }
+            for (uint32_t index : faceIndices) {
+                indices.push_back(firstVertex + index);
+            }
+        }
+
+        CanonicalMaterialAsset material{};
+        material.name = "Built-in Cube Material";
+        material.packed.closureClass = static_cast<uint32_t>(
+            MaterialClosureClass::StandardDeferred);
+        material.packed.transparencyPolicy =
+            packTransparencyPolicyWord(CompiledTransparencyPolicy{});
+        material.packed.textureIndices.fill(
+            PackedGpuMaterial::InvalidTextureIndex);
+        material.packed.baseColorFactor = { 0.62f, 0.68f, 0.78f, 1.0f };
+        material.packed.metallicRoughnessIorSpecular = {
+            0.0f, 0.55f, 1.5f, 1.0f };
+        material.packed.specularColorNormalScale = {
+            1.0f, 1.0f, 1.0f, 1.0f };
+        material.packed.diffuseFactor = { 1.0f, 1.0f, 1.0f, 1.0f };
+        material.packed.specularGlossinessFactorGloss = {
+            1.0f, 1.0f, 1.0f, 1.0f };
+        material.packed.emissiveFactorStrength = { 0.0f, 0.0f, 0.0f, 1.0f };
+        material.packed.surfaceParameters = { 1.0f, 0.5f, 0.0f, 0.0f };
+
+        auto model = std::make_shared<ModelAsset>();
+        model->filePath = "builtin://cube";
+        model->assetGuid = kBuiltInCubeAssetGuid;
+        model->artifactCookKey = "builtin-cube-v1";
+        model->totalIndices = static_cast<uint32_t>(indices.size());
+        model->subMeshes.push_back({
+            .indexStart = 0,
+            .indexCount = model->totalIndices,
+            .materialIndex = 0,
+            .sourcePrimitiveGuid = kBuiltInCubePrimitiveGuid,
+            .primitiveGuid = kBuiltInCubePrimitiveGuid,
+            .materialGuid = kBuiltInCubeMaterialGuid,
+            .attributeMask = ModelAttributePosition | ModelAttributeColor0 |
+                ModelAttributeNormal | ModelAttributeTexCoord0 |
+                ModelAttributeTangent | ModelAttributeTexCoord1,
+            .coverage = static_cast<uint8_t>(ModelCoverage::Opaque),
+            .boundsMin = glm::vec3(-0.5f),
+            .boundsMax = glm::vec3(0.5f),
+            .boundsSphereCenter = glm::vec3(0.0f),
+            .boundsSphereRadius = 0.8660254f,
+        });
+
+        std::vector<TextureHandle> allocatedTextures;
+        const auto remember = [&allocatedTextures](TextureHandle texture) {
+            allocatedTextures.push_back(texture);
+            return texture;
+        };
+        try {
+            const TextureHandle white = remember(createDefaultTexture());
+            const TextureHandle normal =
+                remember(createDefaultNormalTexture());
+            const TextureHandle linearData =
+                remember(createDefaultPbrTexture());
+            material.textures.fill(white);
+            material.textures[static_cast<uint32_t>(
+                SourceTextureSemantic::Normal)] = normal;
+            material.textures[static_cast<uint32_t>(
+                SourceTextureSemantic::ClearcoatNormal)] = normal;
+            material.textures[static_cast<uint32_t>(
+                SourceTextureSemantic::MetallicRoughness)] = linearData;
+            material.textures[static_cast<uint32_t>(
+                SourceTextureSemantic::Occlusion)] = linearData;
+            material.textures[static_cast<uint32_t>(
+                SourceTextureSemantic::Transmission)] = linearData;
+            material.textures[static_cast<uint32_t>(
+                SourceTextureSemantic::Thickness)] = linearData;
+            model->materials.push_back(
+                renderBackend->allocateCanonicalMaterial(material));
+            uploadToGPU(model.get(), vertices, indices);
+            model->ownedTextures = std::move(allocatedTextures);
+        } catch (...) {
+            for (const MaterialBinding& binding : model->materials) {
+                if (binding.material.isValid()) {
+                    renderBackend->freeMaterial(binding.material);
+                }
+            }
+            for (TextureHandle texture : allocatedTextures) {
+                if (texture.isValid()) {
+                    renderBackend->freeTexture(texture);
+                }
+            }
+            throw;
+        }
+        cookedModelCache.emplace(kBuiltInCubeAssetGuid, model);
         if (onModelLoadedCallback) onModelLoadedCallback(model);
         return model;
     }
@@ -375,6 +523,7 @@ namespace Iridium {
                 canonical.materials) {
                 runtimeBindings.push_back({
                     .materialGuid = material.materialGuid,
+                    .transparency = material.transparency,
                     .binding =
                         renderBackend->allocateCanonicalMaterial(
                             material.asset),
@@ -406,12 +555,24 @@ namespace Iridium {
             throw std::runtime_error(
                 "Complete cooked model material GUID resolution failed.");
         }
+        for (const RuntimeMaterialBinding& binding : runtimeBindings) {
+            const bool retained = std::ranges::any_of(
+                resolved.data->materials,
+                [&binding](const MaterialBinding& candidate) {
+                    return candidate.material == binding.binding.material;
+                });
+            if (!retained && binding.binding.material.isValid()) {
+                renderBackend->freeMaterial(binding.binding.material);
+            }
+        }
 
         auto model = std::make_shared<ModelAsset>();
         model->filePath =
             "asset://" + artifact.assetGuid.toString();
         model->assetGuid = artifact.assetGuid;
         model->artifactCookKey = artifact.cookKey;
+        model->transparencyExecutionMode =
+            resolved.data->geometry.transparencyExecutionMode;
         model->ownsMaterials = true;
         model->ownsTextures = false;
         model->subMeshes =
@@ -704,6 +865,15 @@ namespace Iridium {
     std::optional<MaterialBinding>
         AssetManager::findCookedMaterial(
             AssetGuid materialGuid) const {
+        const auto runtime = findCookedMaterialRuntime(materialGuid);
+        return runtime
+            ? std::optional<MaterialBinding>{ runtime->binding }
+            : std::nullopt;
+    }
+
+    std::optional<CookedMaterialRuntimeBinding>
+        AssetManager::findCookedMaterialRuntime(
+            AssetGuid materialGuid) const {
         for (const auto& [guid, model] :
             cookedModelCache) {
             (void)guid;
@@ -718,9 +888,15 @@ namespace Iridium {
                         model->materials.size()) {
                     continue;
                 }
-                return model->materials[
-                    static_cast<size_t>(
-                        primitive.materialIndex)];
+                return CookedMaterialRuntimeBinding{
+                    .materialGuid = materialGuid,
+                    .transparency = primitive.transparency,
+                    .transparencyExecutionMode =
+                        model->transparencyExecutionMode,
+                    .binding = model->materials[
+                        static_cast<size_t>(
+                            primitive.materialIndex)],
+                };
             }
         }
         return std::nullopt;

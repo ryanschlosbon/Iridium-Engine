@@ -303,12 +303,57 @@ Acceptance gate: no hardcoded demonstration light is required; deferred/material
 
 ### M6 - Hybrid transparency
 
-Status: `Proposed`
+Status: `In Progress`
 
 Lead handover: `docs/milestones/M6-hybrid-transparency-handover-2026-08-13.md`
 records the post-M5.12/M5.13 renderer state, temporary glass limitations, inherited
 lighting/shadow/reflection contracts, resize risks, and recommended qualification
-order. Read it before producing the M6 execution plan.
+order. The active execution plan is
+`docs/milestones/M6-hybrid-transparency.md`.
+M6.0-M6.6 are complete; M6.7 WeightedOIT approximate workloads are the active
+implementation slice. M6.6's CPU stack-reduction and
+deterministic per-tier atlas-preparation contracts are complete. GPU tier storage
+topology is complete. Same-tier projected overlap now forms deterministic shared
+optical islands, and the indexed peel contract supports nested cross-work interface
+sequences while preserving Ordinary2's paired behavior. Deep capture/composition
+frame targets, capture framebuffers, and previous-interface descriptor chains are
+conditionally materialized with topology rollback. Stable bounded draw plans and
+sequential 4/8 capture execution are active for explicitly authored deep tiers. Deep
+local composition now rerasterizes exact captured entry slots deepest-to-nearest,
+matches later same-work exits, and evaluates the shared measured-chord material path
+into premultiplied AP1 tier atlases. Hero4 and Cinematic8 scene resolve are active with
+interface-zero stable-identity ownership, and accepted deep packets no longer draw
+through compatibility forward. A deterministic two-shell Hero4 fixture proves 10,922
+paired pixels and 3,890 four-interface pixels. A four-shell Cinematic8 fixture proves
+15,042 paired pixels and reaches all eight interfaces at 1,636 pixels. Both produce the
+exact expected resolve draws, zero compatibility draws, and zero validation errors;
+lit Belfast captures are visibly correct. Mixed Hero4/Cinematic8 content uses one
+global-order scene-resolve pass with tier descriptor switches. These short Debug
+readback runs are semantic rather than performance evidence. The bounded residual-tail
+operator is also active without an additional graph resource or pass. A five-shell
+Cinematic8 fixture requests ten interfaces, stores eight, and proves 650 saturated
+prefix pixels and 1,300 estimated residual samples per measured frame versus zero in
+the four-shell control, with zero fallback, semantic, or Vulkan errors. Its Belfast
+capture remains finite and legible. A two-shell Hero4 crossing fixture additionally
+proves 2,705 non-LIFO `Entry(A), Entry(B), Exit(A), Exit(B)` pixels within 14,211
+valid paired/local-color pixels, with exact two-draw resolve and no fallback or
+validation errors. Per-tile early termination is also active at the accepted 1/1024
+threshold: a Q14 conservative transport/open-stack state reuses deep R32 identity
+records, useful odd non-final interfaces reduce 16x16 masks, and later peels reject
+terminated tiles before material/texture evaluation. A two-shell separated Hero4
+fixture proves 7,522 suppressed deeper-interface pixels across 43 occupied tiles with
+zero fallback or validation errors. Hero4 and Cinematic8 each pass two real
+120-frame retire/reactivate cycles and a final GPU readback. Five native-4K
+Cinematic8 Release processes cover 50,000 measured frames at 1.680448 ms GPU-frame
+median-of-medians and 1.276928 ms complete-transparency median, with identical graph
+and live memory and zero actual compatibility draws, rejects, topology events,
+profiler errors, or dropped frames. M6.6 is complete.
+M6.7's first foundation slice now freezes the backend-neutral WeightedOIT numerical
+contract: explicit nonrefractive work uses premultiplied AP1 input, bounded
+depth/coverage weights, a documented FP16 radiance/overdraw envelope, weighted
+average plus revealage resolve, and exactly 82,944,000 logical native-4K bytes per
+frame context with no owned depth. CPU reference tests are active; Vulkan resources
+and visible routing remain deliberately unchanged pending the next vertical slice.
 
 Dependencies: M1, M2, M3, M5.
 
@@ -333,14 +378,41 @@ Deliverables:
 
 - Persistent GPU buffers for instances, current/previous transforms, geometry, materials, bounds, and visibility metadata.
 - Compact CPU update streams rather than repeated full draw packets.
-- Compute frustum/LOD culling, visibility compaction, and indexed indirect-count submission.
-- Hi-Z occlusion path with temporal conservatism and diagnostics.
+- Explicit static, movable, and animated instance update policies. Unchanged static
+  instances retain GPU records and shadow-cache identity; movable/animated instances
+  upload only changed current/previous data. Mobility is authored or derived by a
+  documented policy, never silently guessed from a short period without motion.
+- Conservative instance and primitive frustum culling, screen-space-error LOD
+  selection with hysteresis, visibility compaction, and indexed indirect-count
+  submission. Cooked or authored LOD chains retain stable primitive/material
+  identity and expose quality overrides for hero content.
+- Hi-Z occlusion culling with temporal conservatism, camera-cut/disocclusion
+  handling, small-object safeguards, and requested/visible/rejected diagnostics.
+- Separate conservative visibility for the main view, conventional/virtual shadow
+  views, and reflection capture views; an object invisible to the camera is not
+  incorrectly removed from a light or probe view.
+- Draw/dispatch construction that batches compatible geometry/material work and
+  scales with visible work rather than issuing one CPU `vkCmdDrawIndexed` per source
+  submesh.
 - Shared visible-instance representation for raster, shadows, and future RT updates.
 - Sparse virtual-shadow page tables, GPU page marking/caster culling, physical-page
   pools, cache invalidation/age diagnostics, directional clip levels, and local-light
   residency, retained only if they beat conventional maps in matched 4K tests.
-- Progressive, budgeted publication of independently resident texture products with
-  semantic fallback views instead of monolithic full-model texture admission.
+- Progressive, budgeted publication of independently resident model products:
+  texture views, geometry/LOD sections, and later meshlet/RT sections use semantic
+  fallback textures and a bounds/proxy or coarser-LOD fallback instead of requiring
+  one monolithic full-model upload. Publication is revision-safe, cancelable,
+  prioritized by visible demand, and retains the last complete usable revision.
+- Fine-grained geometry cooking and DDC reuse. Each source primitive and its
+  dependent geometry, LOD, meshlet, and RT products receive deterministic child
+  recipes/CookKeys; a material-only edit reuses geometry and texture products, and a
+  one-primitive edit rebuilds only that primitive and its dependent children before
+  a deterministic parent-manifest update.
+- A bounded cook job graph for independent texture and geometry products with
+  deterministic output slots, memory/worker limits, cancellation, editor priority,
+  and stage/worker/cache-hit telemetry. Parallelism is selected from measured work;
+  parsing, geometry, or serialization are not parallelized merely to increase thread
+  count.
 - Stable instance/primitive/material identities and reconstructable triangle data for
   the ADR-0006 visibility payload.
 - Indexed visibility-buffer experiment for standard opaque surfaces, including
@@ -348,7 +420,18 @@ Deliverables:
 - Matched conventional packed-deferred versus visibility-resolved 4K image, timing,
   bandwidth, memory, and material-coherence evidence.
 
-Acceptance gate: CPU render preparation and submission scale primarily with changed data rather than total draws; the indexed visibility path resolves correct surface/motion data and demonstrates a representative-scene benefit before becoming production; classic indexed packed-deferred remains available as a fallback.
+Acceptance gate: CPU render preparation and submission scale primarily with changed
+data and visible batches rather than total source draws. A fixed native-4K scene with
+three high-fidelity assets records presentation wait separately from CPU and GPU
+work, covers static/moving/off-screen/occluded/LOD cases, and demonstrates a measured
+frame-time and submission reduction without visible popping or missing shadow/probe
+casters. Material-only and one-primitive recooks prove unaffected child-product
+cache hits, deterministic parent bytes, bounded peak memory, and responsive
+cancel/reimport behavior. Oversized models become visible progressively without a
+single upload hitch or incomplete-revision corruption. The indexed visibility path
+resolves correct surface/motion data and demonstrates a representative-scene benefit
+before becoming production; classic indexed packed-deferred remains available as a
+fallback.
 
 ### M8 - Meshlet cooker and mesh-shader path
 
@@ -361,6 +444,8 @@ Deliverables:
 - Offline meshlet construction with tunable vendor-neutral limits, local indices, bounds, and normal cones.
 - Mesh-shader capability detection and pipeline path using `VK_EXT_mesh_shader`.
 - Meshlet culling and indirect mesh-task dispatch consuming the M7 visibility architecture.
+- Per-LOD meshlets use screen-space error, bounds, and normal-cone rejection so very
+  dense assets can discard invisible clusters after M7 instance/primitive culling.
 - Meshlet-driven shadow-caster submission feeding the same conventional/virtual
   visibility ownership and cached page requests as the indexed path.
 - Visibility-buffer emission consumes the same payload/material-resolve contract as
@@ -432,6 +517,64 @@ Deliverables:
 
 Acceptance gate: RT features are optional capabilities, share material/light/scene data with raster, and have measured quality and performance fallbacks.
 
+### M12 - Material authoring and graph editor
+
+Status: `Proposed` (scheduled after M0-M11)
+
+Dependencies: M2 material/closure contracts, M3 asset/DDC infrastructure, M4 editor
+transactions and asset documents, M6 transparency policy, and the M11 shared
+raster/RT material semantics.
+
+Deliverables:
+
+- A versioned, GUID-addressed source material graph with deterministic serialization,
+  explicit migrations, copy/paste, comments/groups, search, validation, undo/redo,
+  and recoverable autosave.
+- Nodes that compile into the existing standard, complex-forward, transparent, and
+  RT-compatible closure contracts rather than introducing an editor-only shading
+  representation.
+- Live material-instance parameters, texture/sampler selection, transparency/layer
+  policy, compile diagnostics, generated-code/closure inspection, and an isolated
+  HDR model/sphere preview using the production renderer.
+- Asynchronous incremental graph compilation and DDC publication. Unaffected
+  functions, textures, geometry, and material instances remain resident; failed
+  compiles retain the last-known-good product.
+- Artist-facing cost diagnostics for closure class, texture sampling, transparency
+  tier, shader permutations, and expected forward/RT consequences.
+
+Acceptance gate: artists can build and debug representative opaque, coated,
+transmissive, and emissive materials without editing glTF metadata or source code;
+saved graphs round-trip deterministically, live preview and scene results agree, bad
+graphs fail safely, and interactive edits do not stall the editor or recook geometry.
+
+### M13 - Animation runtime and animation graph editor
+
+Status: `Proposed` (scheduled after M12 and the current M0-M11 renderer program)
+
+Dependencies: M3 assets/cooking, M4 scene/editor identity, M7 static/dynamic GPU
+scene updates and visibility, M9 current/previous motion data and temporal
+invalidation, and M12's mature graph-editor interaction patterns where reusable.
+
+Deliverables:
+
+- Versioned skeleton, skin, animation-clip, retargeting, compression, root-motion,
+  curve, event, and animation-controller products with stable bone/clip identities.
+- A runtime animation graph supporting states, transitions, parameters, blend trees,
+  additive layers, masks, sync groups, cached poses, events, and deterministic
+  evaluation/fallback behavior.
+- A transaction-safe graph editor with searchable nodes, live state/transition
+  debugging, pose inspection, timeline/scrubbing, validation, and isolated preview.
+- Multithreaded pose evaluation and bounded GPU skinning integrated with M7 visible
+  instance/LOD selection. Off-screen and distant animation uses measured update-rate,
+  pose-cache, or skip policies while preserving root motion and gameplay events.
+- Correct current/previous skinned positions for motion vectors, temporal
+  reconstruction, shadows, reflection captures, and future BLAS update policy.
+
+Acceptance gate: representative characters blend and transition deterministically,
+motion vectors and shadows remain correct, graph edits hot-reload without corrupting
+runtime state, and CPU/GPU animation cost scales with visible animated work and
+quality policy rather than every loaded clip or character.
+
 ## Program controls
 
 M5 post-acceptance hardening is tracked in M5.12 (reflection resolution) and M5.13
@@ -439,6 +582,21 @@ M5 post-acceptance hardening is tracked in M5.12 (reflection resolution) and M5.
 maps, an 8192 spot atlas with 4096 Ultra tiles, denser PCSS, and an antialiased
 point-like hard-shadow limit. This conventional-map baseline is inherited by M7
 virtual shadows and M9 temporal filtering; it does not replace those successors.
+
+The owner-observed approximately 180 FPS with three high-fidelity assets versus
+approximately 1,700 FPS empty on the same 240 Hz display during M6 is a useful
+workload signal, not a frozen baseline. It rules out a 180 Hz refresh ceiling and
+indicates roughly 4.97 ms of scene-dependent wall work, while the coarse title
+window and mailbox acquire/present behavior still prevent bottleneck attribution.
+Before M7 work, capture the exact assets/camera/settings as a native-4K Release
+fixture and report GPU pass times, non-waiting CPU stages, acquire/present waits,
+requested/visible geometry, draws, transparency, shadow work, and residency. M7/M8
+optimization is accepted from those counters and matched imagery, not title FPS
+alone.
+
+Scheduling order remains M6 through M11. M12 material authoring and M13 animation
+graph work are intentionally placed afterward and must not expand active renderer
+milestones.
 
 - Do not start a milestone before its dependencies and acceptance criteria are understood.
 - Every milestone begins with a checked-in execution plan following `PLANS.md`.

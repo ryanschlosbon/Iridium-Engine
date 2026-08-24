@@ -107,9 +107,9 @@ namespace Iridium {
     };
 
     struct alignas(16) PackedGpuMaterial {
-        // Schema 2 is laid out so the record can be consumed directly as a
+        // Schema 3 is laid out so the record can be consumed directly as a
         // std430 storage-buffer element. Texture uses map to uvec4 values.
-        static constexpr uint32_t SchemaVersion = 2;
+        static constexpr uint32_t SchemaVersion = 3;
         static constexpr uint32_t MaxTextureUses = 21;
         static constexpr uint32_t MaxComplexLobes = 8;
         static constexpr uint32_t InvalidTextureIndex = 0xffffffffu;
@@ -132,7 +132,9 @@ namespace Iridium {
         std::array<PackedGpuComplexLobe, MaxComplexLobes> complexLobes{};
         std::array<PackedGpuTextureUse, MaxTextureUses> textureUses{};
         std::array<uint32_t, MaxTextureUses> textureIndices{};
-        std::array<std::byte, 12> reserved{};
+        uint32_t transparencyPolicy = 0;
+        int32_t transparencyPriority = 0;
+        float thinSheetThicknessMeters = 0.0f;
     };
 
     static_assert(sizeof(PackedGpuTextureUse) == 16);
@@ -186,6 +188,7 @@ namespace Iridium {
         MaterialClosureClass closureClass = MaterialClosureClass::Invalid;
         MaterialWorkflow workflow = MaterialWorkflow::MetallicRoughness;
         uint32_t featureFlags = 0;
+        CompiledTransparencyPolicy transparency;
         std::array<uint32_t, 21> textureIndices{};
         std::array<UnpackedGpuTextureUse, 21> textureUses{};
         std::array<PackedGpuComplexLobe, 8> complexLobes{};

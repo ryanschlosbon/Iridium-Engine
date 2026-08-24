@@ -1,0 +1,44 @@
+#version 450
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform usampler2D interfaceIdentity;
+layout(r32ui, set = 0, binding = 1) uniform writeonly uimage2D tileTermination;
+
+const uint IRIDIUM_DEEP_WORK_MASK = 0x00001fffu;
+const uint IRIDIUM_DEEP_TRANSMISSION_SHIFT = 13u;
+const uint IRIDIUM_DEEP_TRANSMISSION_MAXIMUM = 0x00003fffu;
+const uint IRIDIUM_DEEP_OPEN_COUNT_SHIFT = 27u;
+const uint IRIDIUM_DEEP_OPEN_COUNT_MASK = 0x78000000u;
+const uint IRIDIUM_DEEP_TERMINATION_THRESHOLD = 16u;
+
+shared uint tileRequiresAnotherInterface;
+
+void main() {
+    if (gl_LocalInvocationIndex == 0u)
+        tileRequiresAnotherInterface = 0u;
+    barrier();
+
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 extent = textureSize(interfaceIdentity, 0);
+    if (all(lessThan(pixel, extent))) {
+        uint identity = texelFetch(interfaceIdentity, pixel, 0).r;
+        uint oneBasedWork = identity & IRIDIUM_DEEP_WORK_MASK;
+        if (oneBasedWork != 0u) {
+            uint remainingTransmission = (identity >>
+                IRIDIUM_DEEP_TRANSMISSION_SHIFT) &
+                IRIDIUM_DEEP_TRANSMISSION_MAXIMUM;
+            uint openCount = (identity & IRIDIUM_DEEP_OPEN_COUNT_MASK) >>
+                IRIDIUM_DEEP_OPEN_COUNT_SHIFT;
+            if (openCount != 0u || remainingTransmission >
+                    IRIDIUM_DEEP_TERMINATION_THRESHOLD)
+                atomicOr(tileRequiresAnotherInterface, 1u);
+        }
+    }
+    barrier();
+
+    if (gl_LocalInvocationIndex == 0u) {
+        imageStore(tileTermination, ivec2(gl_WorkGroupID.xy),
+            uvec4(tileRequiresAnotherInterface == 0u ? 1u : 0u));
+    }
+}

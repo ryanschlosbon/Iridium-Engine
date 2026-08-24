@@ -15,6 +15,7 @@ namespace Iridium {
 
     class CpuProfiler;
     inline constexpr size_t MaxVulkanGpuRangesPerFrame = 32;
+    inline constexpr size_t LayeredResidualQuerySlotCount = 2;
 
     struct VulkanGpuRangeToken {
         uint32_t frameIndex = 0;
@@ -36,6 +37,7 @@ namespace Iridium {
         VkFence inFlight = VK_NULL_HANDLE;
         VkQueryPool timestampQueryPool = VK_NULL_HANDLE;
         VkQueryPool transparentPipelineStatisticsQueryPool = VK_NULL_HANDLE;
+        VkQueryPool layeredResidualOcclusionQueryPool = VK_NULL_HANDLE;
         DeletionQueue deferredDeletes;
         std::array<VulkanGpuQueryRange, MaxVulkanGpuRangesPerFrame> gpuRanges{};
         uint64_t profileFrameId = 0;
@@ -46,6 +48,12 @@ namespace Iridium {
         bool transparentPipelineStatisticsActive = false;
         bool transparentPipelineStatisticsRecorded = false;
         bool transparentPipelineStatisticsResultsPending = false;
+        std::array<bool, LayeredResidualQuerySlotCount>
+            layeredResidualQueryActive{};
+        std::array<bool, LayeredResidualQuerySlotCount>
+            layeredResidualQueryRecorded{};
+        std::array<bool, LayeredResidualQuerySlotCount>
+            layeredResidualQueryResultsPending{};
         bool fenceInFlight = false;
     };
 
@@ -92,6 +100,8 @@ namespace Iridium {
         void endGpuRange(VulkanGpuRangeToken& token) noexcept;
         [[nodiscard]] bool beginTransparentPipelineStatistics() noexcept;
         void endTransparentPipelineStatistics() noexcept;
+        [[nodiscard]] bool beginLayeredResidualQuery(uint32_t slot) noexcept;
+        void endLayeredResidualQuery(uint32_t slot) noexcept;
         void setTransparentTargetPixelCount(uint64_t pixelCount) noexcept {
             transparentTargetPixelCount_ = pixelCount;
         }

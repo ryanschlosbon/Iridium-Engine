@@ -11,7 +11,7 @@
 
 namespace Iridium {
 
-    inline constexpr uint32_t kCompiledMaterialProductSchemaVersion = 1;
+    inline constexpr uint32_t kCompiledMaterialProductSchemaVersion = 2;
 
     struct CompiledMaterialReadResult {
         std::optional<CompiledMaterial> material;

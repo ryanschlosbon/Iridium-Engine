@@ -1,0 +1,458 @@
+{
+  "schema_version": 1,
+  "fixtures": [
+    {
+      "id": "ordinary2_lit_closed_v1",
+      "revision": 1,
+      "required": true,
+      "source_asset": "ordinary2_closed_tetrahedron.gltf",
+      "environment": {
+        "kind": "procedural_constant",
+        "constant_linear_rgb": [0.08, 0.10, 0.14]
+      },
+      "camera": {
+        "id": "ordinary2_close_v1",
+        "position": [0.0, 0.05, 3.0],
+        "target": [0.0, 0.05, 0.15],
+        "up": [0.0, 1.0, 0.0],
+        "vertical_fov_degrees": 45.0,
+        "near": 0.05,
+        "far": 20.0
+      },
+      "scene_factory": {
+        "kind": "instanced_grid",
+        "instance_grid": [1, 1, 1],
+        "instance_spacing": [0.0, 0.0, 0.0],
+        "instance_scale": [1.0, 1.0, 1.0]
+      },
+      "output_label": "ordinary2_lit_closed_scene_linear_ap1",
+      "warmup_frames": 8,
+      "measured_frames": 4,
+      "content_files": [
+        {
+          "path": "ordinary2_closed_tetrahedron.gltf",
+          "sha256": "cd32649825a8c9e5a06f2aa4785f781150a81d9bc706f9fab9c90e081fa7b836"
+        },
+        {
+          "path": "ordinary2_closed_tetrahedron.gltf.iridium.meta",
+          "sha256": "f33ad04102d048af6645fe74261cfc7c3326f917ba9c244ad67b79f0416b0f91"
+        }
+      ],
+      "expected_behavior": [
+        "The one-shell closed volume resolves through Ordinary2 without compatibility draws.",
+        "Environment lighting, measured chord absorption, and the final scene resolve remain finite and visible.",
+        "Entry and exit pixels use the same stable work identity and strictly increasing depth."
+      ],
+      "unavailable_capabilities": [
+        "Hero4 nested-shell execution",
+        "Cinematic8 nested-shell execution"
+      ]
+    },
+    {
+      "id": "ordinary2_lit_closed_mirrored_v1",
+      "revision": 1,
+      "required": true,
+      "source_asset": "ordinary2_closed_tetrahedron.gltf",
+      "environment": {
+        "kind": "procedural_constant",
+        "constant_linear_rgb": [0.08, 0.10, 0.14]
+      },
+      "camera": {
+        "id": "ordinary2_close_mirrored_v1",
+        "position": [0.0, 0.05, 3.0],
+        "target": [0.0, 0.05, 0.15],
+        "up": [0.0, 1.0, 0.0],
+        "vertical_fov_degrees": 45.0,
+        "near": 0.05,
+        "far": 20.0
+      },
+      "scene_factory": {
+        "kind": "instanced_grid",
+        "instance_grid": [1, 1, 1],
+        "instance_spacing": [0.0, 0.0, 0.0],
+        "instance_scale": [-1.0, 1.0, 1.0]
+      },
+      "output_label": "ordinary2_lit_closed_mirrored_scene_linear_ap1",
+      "warmup_frames": 8,
+      "measured_frames": 4,
+      "content_files": [
+        {
+          "path": "ordinary2_closed_tetrahedron.gltf",
+          "sha256": "cd32649825a8c9e5a06f2aa4785f781150a81d9bc706f9fab9c90e081fa7b836"
+        },
+        {
+          "path": "ordinary2_closed_tetrahedron.gltf.iridium.meta",
+          "sha256": "f33ad04102d048af6645fe74261cfc7c3326f917ba9c244ad67b79f0416b0f91"
+        }
+      ],
+      "expected_behavior": [
+        "A negative runtime world-transform determinant flips semantic entry and exit exactly once.",
+        "The mirrored shell retains same-work pairing, increasing depth, finite local color, and scene resolve.",
+        "No mirrored shell packet falls back to compatibility rendering."
+      ],
+      "unavailable_capabilities": [
+        "Hero4 nested-shell execution",
+        "Cinematic8 nested-shell execution"
+      ]
+    },
+    {
+      "id": "ordinary2_lit_populated_grid_v1",
+      "revision": 1,
+      "required": true,
+      "source_asset": "ordinary2_closed_tetrahedron.gltf",
+      "environment": {
+        "kind": "procedural_constant",
+        "constant_linear_rgb": [0.08, 0.10, 0.14]
+      },
+      "camera": {
+        "id": "ordinary2_populated_grid_v1",
+        "position": [0.0, 0.05, 3.0],
+        "target": [0.0, 0.05, 0.15],
+        "up": [0.0, 1.0, 0.0],
+        "vertical_fov_degrees": 45.0,
+        "near": 0.05,
+        "far": 20.0
+      },
+      "scene_factory": {
+        "kind": "instanced_grid",
+        "instance_grid": [4, 2, 1],
+        "instance_spacing": [0.50, 0.50, 0.0],
+        "instance_scale": [1.0, 1.0, 1.0]
+      },
+      "output_label": "ordinary2_lit_populated_grid_scene_linear_ap1",
+      "warmup_frames": 8,
+      "measured_frames": 8,
+      "content_files": [
+        {
+          "path": "ordinary2_closed_tetrahedron.gltf",
+          "sha256": "cd32649825a8c9e5a06f2aa4785f781150a81d9bc706f9fab9c90e081fa7b836"
+        },
+        {
+          "path": "ordinary2_closed_tetrahedron.gltf.iridium.meta",
+          "sha256": "f33ad04102d048af6645fe74261cfc7c3326f917ba9c244ad67b79f0416b0f91"
+        }
+      ],
+      "expected_behavior": [
+        "Eight visible closed shells resolve through Ordinary2 without compatibility draws.",
+        "Atlas capacity follows 960x540, 1600x900, and restored 1280x720 scene-target rebuilds.",
+        "Eight entry, exit, local composition, and scene resolve draws return on every resized frame."
+      ],
+      "unavailable_capabilities": [
+        "Hero4 nested-shell execution",
+        "Cinematic8 nested-shell execution"
+      ]
+    },
+    {
+      "id": "ordinary2_invalid_open_fallback_v1",
+      "revision": 1,
+      "required": true,
+      "source_asset": "ordinary2_invalid_open_tetrahedron.gltf",
+      "environment": {
+        "kind": "procedural_constant",
+        "constant_linear_rgb": [0.08, 0.10, 0.14]
+      },
+      "camera": {
+        "id": "ordinary2_invalid_open_v1",
+        "position": [0.0, 0.05, 3.0],
+        "target": [0.0, 0.05, 0.15],
+        "up": [0.0, 1.0, 0.0],
+        "vertical_fov_degrees": 45.0,
+        "near": 0.05,
+        "far": 20.0
+      },
+      "scene_factory": {
+        "kind": "instanced_grid",
+        "instance_grid": [1, 1, 1],
+        "instance_spacing": [0.0, 0.0, 0.0]
+      },
+      "output_label": "ordinary2_invalid_open_thin_glass_fallback_scene_linear_ap1",
+      "warmup_frames": 8,
+      "measured_frames": 4,
+      "content_files": [
+        {
+          "path": "ordinary2_invalid_open_tetrahedron.gltf",
+          "sha256": "0a26da850f8f2d6448fcacc20d69bbc36303744087ce8438f7d056f2979f0399"
+        },
+        {
+          "path": "ordinary2_invalid_open_tetrahedron.gltf.iridium.meta",
+          "sha256": "58f9330e92acf14cc8cb03a88c83ba3ff737fb1afe46ec957c4011875fdc731f"
+        }
+      ],
+      "expected_behavior": [
+        "The missing tetrahedron face produces a stable boundary-edge topology failure during cooking.",
+        "The authored volume resolves to ThinGlass with the fallback-applied flag instead of entering Ordinary2.",
+        "Runtime keeps the Ordinary2 atlas absent and records exactly one compatibility transparent draw."
+      ],
+      "unavailable_capabilities": [
+        "LayeredGlass execution for invalid topology",
+        "Hero4 nested-shell execution",
+        "Cinematic8 nested-shell execution"
+      ]
+    },
+    {
+      "id": "hero4_nested_tetrahedra_v1",
+      "revision": 1,
+      "required": true,
+      "source_asset": "hero4_nested_tetrahedra.gltf",
+      "environment": {
+        "kind": "procedural_constant",
+        "constant_linear_rgb": [0.08, 0.10, 0.14]
+      },
+      "camera": {
+        "id": "hero4_nested_close_v1",
+        "position": [0.0, 0.05, 3.0],
+        "target": [0.0, 0.05, 0.18],
+        "up": [0.0, 1.0, 0.0],
+        "vertical_fov_degrees": 45.0,
+        "near": 0.05,
+        "far": 20.0
+      },
+      "scene_factory": {
+        "kind": "instanced_grid",
+        "instance_grid": [1, 1, 1],
+        "instance_spacing": [0.0, 0.0, 0.0],
+        "instance_scale": [1.0, 1.0, 1.0]
+      },
+      "output_label": "hero4_nested_local_composition_scene_linear_ap1",
+      "warmup_frames": 8,
+      "measured_frames": 4,
+      "content_files": [
+        {
+          "path": "hero4_nested_tetrahedra.gltf",
+          "sha256": "22cd19081bba880b339027c7bc26167666d8e0b49fafb6e6af45ee7f6e832b66"
+        },
+        {
+          "path": "hero4_nested_tetrahedra.gltf.iridium.meta",
+          "sha256": "d97895f58d87dbffff6a176313ff7bab681bc887b6ab7a521711d70d366e28c7"
+        }
+      ],
+      "expected_behavior": [
+        "The overlapping closed shells publish distinct stable work identities at Hero4 quality.",
+        "Central pixels capture Entry(outer), Entry(inner), Exit(inner), Exit(outer) at strictly increasing depths.",
+        "Deep local composition produces finite premultiplied AP1 color and accepted packets resolve once into visible scene color."
+      ],
+      "unavailable_capabilities": []
+    },
+    {
+      "id": "hero4_crossing_tetrahedra_v1",
+      "revision": 1,
+      "required": true,
+      "source_asset": "hero4_crossing_tetrahedra.gltf",
+      "environment": {
+        "kind": "procedural_constant",
+        "constant_linear_rgb": [0.08, 0.10, 0.14]
+      },
+      "camera": {
+        "id": "hero4_crossing_close_v1",
+        "position": [0.0, 0.05, 3.0],
+        "target": [0.0, 0.05, 0.18],
+        "up": [0.0, 1.0, 0.0],
+        "vertical_fov_degrees": 45.0,
+        "near": 0.05,
+        "far": 20.0
+      },
+      "scene_factory": {
+        "kind": "instanced_grid",
+        "instance_grid": [1, 1, 1],
+        "instance_spacing": [0.0, 0.0, 0.0],
+        "instance_scale": [1.0, 1.0, 1.0]
+      },
+      "output_label": "hero4_crossing_local_composition_scene_linear_ap1",
+      "warmup_frames": 8,
+      "measured_frames": 4,
+      "content_files": [
+        {
+          "path": "hero4_crossing_tetrahedra.gltf",
+          "sha256": "3f071b8ee56c8ee24039a9ac4796d5483c45bb3d50a5412357ef111321e208df"
+        },
+        {
+          "path": "hero4_crossing_tetrahedra.gltf.iridium.meta",
+          "sha256": "66bf856b3241792ea25af9af0d72b41745d25c4fbf7f2714652a9929f6cdcbce"
+        }
+      ],
+      "expected_behavior": [
+        "Two partially overlapping closed shells publish distinct stable work identities in one Hero4 optical island.",
+        "Overlap pixels capture Entry(A), Entry(B), Exit(A), Exit(B), proving stable-identity crossing pairing rather than LIFO nesting.",
+        "Crossing pixels produce finite premultiplied AP1 local color, resolve exactly twice, and never duplicate through compatibility forward."
+      ],
+      "unavailable_capabilities": []
+    },
+    {
+      "id": "cinematic8_nested_tetrahedra_v1",
+      "revision": 1,
+      "required": true,
+      "source_asset": "cinematic8_nested_tetrahedra.gltf",
+      "environment": {
+        "kind": "procedural_constant",
+        "constant_linear_rgb": [0.08, 0.10, 0.14]
+      },
+      "camera": {
+        "id": "cinematic8_nested_close_v1",
+        "position": [0.0, 0.05, 3.0],
+        "target": [0.0, 0.05, 0.18],
+        "up": [0.0, 1.0, 0.0],
+        "vertical_fov_degrees": 45.0,
+        "near": 0.05,
+        "far": 20.0
+      },
+      "scene_factory": {
+        "kind": "instanced_grid",
+        "instance_grid": [1, 1, 1],
+        "instance_spacing": [0.0, 0.0, 0.0],
+        "instance_scale": [1.0, 1.0, 1.0]
+      },
+      "output_label": "cinematic8_nested_scene_resolve_scene_linear_ap1",
+      "warmup_frames": 8,
+      "measured_frames": 4,
+      "content_files": [
+        {
+          "path": "cinematic8_nested_tetrahedra.gltf",
+          "sha256": "04fb7bebca8c8c9027f1f522de491f9212eb6c85c5b58be0e866afb36dabbe0d"
+        },
+        {
+          "path": "cinematic8_nested_tetrahedra.gltf.iridium.meta",
+          "sha256": "f570c23e91dad2e2ea009258603fb4ab4f85379f18fb0dc8e0a3bcef050edc58"
+        }
+      ],
+      "expected_behavior": [
+        "Four overlapping closed shells publish distinct stable work identities at explicit Cinematic8 quality.",
+        "Central pixels capture all eight interfaces at strictly increasing depths without gaps or unmatched entries/exits.",
+        "Accepted packets resolve once in global transparent order and do not also draw through compatibility forward."
+      ],
+    "unavailable_capabilities": []
+  },
+  {
+    "id": "cinematic8_overflow_residual_v1",
+    "revision": 1,
+    "required": true,
+    "source_asset": "cinematic8_overflow_tetrahedra.gltf",
+    "environment": {
+      "kind": "procedural_constant",
+      "constant_linear_rgb": [0.08, 0.1, 0.14]
+    },
+    "camera": {
+      "id": "cinematic8_overflow_close_v1",
+      "position": [0.0, 0.05, 3.0],
+      "target": [0.0, 0.05, 0.18],
+      "up": [0.0, 1.0, 0.0],
+      "vertical_fov_degrees": 45.0,
+      "near": 0.05,
+      "far": 20.0
+    },
+    "scene_factory": {
+      "kind": "instanced_grid",
+      "instance_grid": [1, 1, 1],
+      "instance_spacing": [0.0, 0.0, 0.0],
+      "instance_scale": [1.0, 1.0, 1.0]
+    },
+    "output_label": "cinematic8_overflow_residual_scene_linear_ap1",
+    "warmup_frames": 8,
+    "measured_frames": 4,
+    "content_files": [
+      {
+        "path": "cinematic8_overflow_tetrahedra.gltf",
+        "sha256": "810aa850432fac2ad7fe50498e1e19521a0b01d9b41e6d284db4a44aa73b5ee7"
+      },
+      {
+        "path": "cinematic8_overflow_tetrahedra.gltf.iridium.meta",
+        "sha256": "2fc61f1d6030f2bf2a82e61eeab5c3a30e2f3099d6ebb0066ca1ce0c635ec8e2"
+      }
+    ],
+    "expected_behavior": [
+      "Five overlapping closed shells request ten interfaces while Cinematic8 stores exactly eight.",
+      "The exact eight-interface prefix remains fixed and uncaptured entry surfaces contribute a non-refractive residual operator in the existing local atlas.",
+      "Residual sample queries are nonzero while scene resolve remains bounded to five draws with zero compatibility-forward duplication."
+    ],
+    "unavailable_capabilities": []
+  },
+  {
+    "id": "hero4_early_termination_tetrahedra_v1",
+    "revision": 1,
+    "required": true,
+    "source_asset": "hero4_early_termination_tetrahedra.gltf",
+    "environment": {
+      "kind": "procedural_constant",
+      "constant_linear_rgb": [0.08, 0.10, 0.14]
+    },
+    "camera": {
+      "id": "hero4_early_termination_close_v1",
+      "position": [0.0, 0.05, 3.0],
+      "target": [0.0, 0.0, 0.0],
+      "up": [0.0, 1.0, 0.0],
+      "vertical_fov_degrees": 45.0,
+      "near": 0.05,
+      "far": 20.0
+    },
+    "scene_factory": {
+      "kind": "instanced_grid",
+      "instance_grid": [1, 1, 1],
+      "instance_spacing": [0.0, 0.0, 0.0],
+      "instance_scale": [1.0, 1.0, 1.0]
+    },
+    "output_label": "hero4_early_termination_scene_linear_ap1",
+    "warmup_frames": 8,
+    "measured_frames": 4,
+    "content_files": [
+      {
+        "path": "hero4_early_termination_tetrahedra.gltf",
+        "sha256": "f2b168bcdd1aa4fafc51aa2924945e742a8c2e6071dabfba4e1673b46450193c"
+      },
+      {
+        "path": "hero4_early_termination_tetrahedra.gltf.iridium.meta",
+        "sha256": "f5bc60d01dc82725e1fbda9f9709b22b3ad927f21ef873785b2d27268f617c13"
+      }
+    ],
+    "expected_behavior": [
+      "The nearer closed shell reduces conservative remaining transmission below 1/1024 after its exit.",
+      "Occupied 16x16 tiles terminate after the closed pair and suppress the deeper shell before material or texture evaluation.",
+      "The first closed pair retains finite premultiplied AP1 local color and resolves once without compatibility-forward duplication."
+    ],
+    "unavailable_capabilities": []
+  },
+  {
+    "id": "mixed_deep_tier_tetrahedra_v1",
+      "revision": 1,
+      "required": true,
+      "source_asset": "cinematic8_nested_tetrahedra.gltf",
+      "environment": {
+        "kind": "procedural_constant",
+        "constant_linear_rgb": [0.08, 0.10, 0.14]
+      },
+      "camera": {
+        "id": "mixed_deep_nested_close_v1",
+        "position": [0.0, 0.05, 3.0],
+        "target": [0.0, 0.05, 0.18],
+        "up": [0.0, 1.0, 0.0],
+        "vertical_fov_degrees": 45.0,
+        "near": 0.05,
+        "far": 20.0
+      },
+      "scene_factory": {
+        "kind": "instanced_grid",
+        "instance_grid": [1, 1, 1],
+        "instance_spacing": [0.0, 0.0, 0.0],
+        "instance_scale": [1.0, 1.0, 1.0]
+      },
+      "output_label": "mixed_deep_tier_global_order_scene_linear_ap1",
+      "warmup_frames": 8,
+      "measured_frames": 4,
+      "content_files": [
+        {
+          "path": "cinematic8_nested_tetrahedra.gltf",
+          "sha256": "04fb7bebca8c8c9027f1f522de491f9212eb6c85c5b58be0e866afb36dabbe0d"
+        },
+        {
+          "path": "cinematic8_nested_tetrahedra.mixed-deep.iridium.meta",
+          "sha256": "720eedbd7d32286dd7e19e55495678efc069fd3705dbbf5e55bd6c275c394887"
+        }
+      ],
+      "expected_behavior": [
+        "The two outer shells execute as Hero4 while the two inner shells execute as Cinematic8.",
+        "Both tier atlases remain independent, but one scene-resolve pass consumes accepted packets in global transparent order.",
+        "Descriptor tier switches remain Vulkan-valid and accepted packets never double-render through compatibility forward."
+      ],
+      "unavailable_capabilities": []
+    }
+  ],
+  "local_diagnostics": []
+}

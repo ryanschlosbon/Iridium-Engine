@@ -206,6 +206,8 @@ namespace Iridium {
                     : "Parsing model source: " +
                         record.sourcePath);
             }
+            const auto preparationStart =
+                std::chrono::steady_clock::now();
             PreparedAssetCook prepared =
                 usedReceipt
                 ? std::move(*warmPrepared)
@@ -227,6 +229,10 @@ namespace Iridium {
             auto sharedPrepared =
                 std::make_shared<PreparedAssetCook>(
                     std::move(prepared));
+            const auto preparationMilliseconds =
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() -
+                    preparationStart).count();
             if (log_ && !usedReceipt) {
                 const size_t imageSourceCount =
                     sharedPrepared->source
@@ -242,6 +248,37 @@ namespace Iridium {
                     : "Cooking model artifact: " +
                         record.sourcePath);
             }
+            if (log_) {
+                log_->info(
+                    "Asset Cook",
+                    "Model preparation complete in " +
+                        std::to_string(preparationMilliseconds) +
+                        " ms; cook key " +
+                        sharedPrepared->cookKey + ": " +
+                        record.sourcePath);
+            }
+            const auto cookProgressStart =
+                std::chrono::steady_clock::now();
+            sharedPrepared->context.progress =
+                [log = log_, sourcePath = record.sourcePath,
+                    cookProgressStart](
+                    const AssetCookContext::Progress& progress) {
+                    if (!log) return;
+                    const auto elapsedMilliseconds =
+                        std::chrono::duration_cast<
+                            std::chrono::milliseconds>(
+                            std::chrono::steady_clock::now() -
+                            cookProgressStart).count();
+                    std::string message = "[" + progress.stage + "] ";
+                    if (progress.total != 0) {
+                        message += std::to_string(progress.completed) +
+                            "/" + std::to_string(progress.total) + " ";
+                    }
+                    message += progress.detail + " (" +
+                        std::to_string(elapsedMilliseconds) +
+                        " ms): " + sourcePath;
+                    log->info("Asset Cook", std::move(message));
+                };
             std::shared_future<DdcRequestResult>
                 cookFuture =
                     requestPreparedCook(

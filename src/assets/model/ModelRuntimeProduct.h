@@ -9,6 +9,8 @@
 namespace Iridium {
 
     struct RuntimeModelCpuData {
+        TransparencyExecutionMode transparencyExecutionMode =
+            TransparencyExecutionMode::LegacyTwoBucket;
         std::vector<Vertex> vertices;
         std::vector<uint32_t> indices;
         std::vector<SubMesh> primitives;
@@ -25,6 +27,7 @@ namespace Iridium {
 
     struct RuntimeMaterialBinding {
         AssetGuid materialGuid;
+        CompiledTransparencyPolicy transparency;
         MaterialBinding binding;
     };
 
@@ -46,6 +49,7 @@ namespace Iridium {
 
     struct RuntimeCanonicalMaterial {
         AssetGuid materialGuid;
+        CompiledTransparencyPolicy transparency;
         CanonicalMaterialAsset asset;
     };
 

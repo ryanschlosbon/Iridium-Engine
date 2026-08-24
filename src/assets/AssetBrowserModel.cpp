@@ -172,8 +172,13 @@ namespace Iridium {
 
     void AssetBrowserModel::setAssetType(
         std::optional<std::string> assetType) {
-        if (query_.assetType == assetType) return;
+        const bool includeSubassets = assetType &&
+            (*assetType == "iridium.material" ||
+                *assetType == "iridium.model-primitive");
+        if (query_.assetType == assetType &&
+            query_.includeSubassets == includeSubassets) return;
         query_.assetType = std::move(assetType);
+        query_.includeSubassets = includeSubassets;
         query_.offset = 0;
         dirty_ = true;
     }

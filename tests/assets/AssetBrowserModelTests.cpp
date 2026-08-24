@@ -231,6 +231,42 @@ namespace {
         return true;
     }
 
+    bool testTransparencyPolicyTargetsAreDiscoverable() {
+        const auto catalog = createSqliteAssetCatalog(":memory:");
+        auto source = records();
+        source.push_back({
+            .guid = guid(103, 4),
+            .parentGuid = source[0].guid,
+            .assetType = "iridium.model-primitive",
+            .assetRoot = "project",
+            .sourcePath = "vehicles/car.gltf",
+            .metadataPath = "vehicles/car.gltf.iridium.meta",
+            .sourceKey = "nodes/0/meshes/0/primitives/0",
+            .displayName = "Car : primitive 0",
+            .importerId = "iridium.gltf-model",
+            .importerVersion = 6,
+        });
+        catalog->rebuild(source);
+
+        AssetBrowserModel model(catalog.get());
+        model.setAssetType("iridium.material");
+        const AssetBrowserPage materials = model.refresh();
+        CHECK(materials.totalMatches == 1);
+        CHECK(materials.items[0].record.assetType == "iridium.material");
+        CHECK(materials.items[0].record.parentGuid == source[0].guid);
+
+        model.setAssetType("iridium.model-primitive");
+        const AssetBrowserPage primitives = model.refresh();
+        CHECK(primitives.totalMatches == 1);
+        CHECK(primitives.items[0].record.assetType ==
+            "iridium.model-primitive");
+        CHECK(primitives.items[0].record.parentGuid == source[0].guid);
+
+        model.setAssetType(std::nullopt);
+        CHECK(model.refresh().totalMatches == 2);
+        return true;
+    }
+
     bool testTypedGuidPayload() {
         const AssetDragPayload expected{
             .guid = guid(300, 7),
@@ -378,6 +414,8 @@ int main() {
         { "refresh cache invalidation",
             testRefreshCachesUntilInvalidated },
         { "paging and layout", testPagingAndLayout },
+        { "transparency policy targets are discoverable",
+            testTransparencyPolicyTargetsAreDiscoverable },
         { "typed GUID payload", testTypedGuidPayload },
         { "folders and directory filtering",
             testFoldersAndDirectoryFiltering },

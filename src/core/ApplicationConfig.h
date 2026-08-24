@@ -14,6 +14,7 @@
 #include "renderer/rhi/ReflectionProbeSettings.h"
 #include "renderer/rhi/ShadowSettings.h"
 #include "renderer/color/OutputTransformConfig.h"
+#include "material/TransparencyPolicy.h"
 
 namespace Iridium {
 
@@ -37,6 +38,13 @@ namespace Iridium {
         bool forceWireframe = false;
         bool validateTextureResidencyChurn = false;
         bool validateReflectionProbes = false;
+        bool validateOrdinary2Capture = false;
+        bool validateOrdinary2Fallback = false;
+        bool validateOrdinary2Resize = false;
+        bool validateDeepLayeredCapture = false;
+        bool validateDeepLayeredLifecycle = false;
+        TransparencyQuality deepLayeredCaptureQuality =
+            TransparencyQuality::Hero4;
         uint32_t validateTextureTableScale = 0;
         uint32_t validateMaterialTableScale = 0;
         uint32_t validateLightTableScale = 0;

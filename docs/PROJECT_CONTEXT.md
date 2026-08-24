@@ -360,7 +360,10 @@ radiance mips, and uses PDF-aware source-mip sampling to avoid bright-texel
 "bokeh" artifacts. Parallel cooking remains byte-deterministic. Existing HDRIs keep
 their authored settings until an explicit Upgrade to Ultra plus reimport, and the
 editor shows the resulting memory estimate. The general 128 MiB publication budget
-is unchanged; an HDRI-only atomic exception is bounded by a 640 MiB hard cap. One
+remains the per-tick scheduling target. HDRI publication may use one atomic upload
+under its 640 MiB per-environment cap, and M6 model publication may likewise use
+one atomic upload when a valid model exceeds the scheduling target, under a 1 GiB
+per-model hard cap. One
 matched native-4K checkpoint adds exactly 108 MiB environment residency with no
 median CPU/GPU frame regression. Debug/Release remain 69/69 and the Ultra dressed-
 car path is Vulkan-validation clean. See
@@ -380,8 +383,113 @@ owns persistent GPU-scene and visibility-buffer work; M10 owns AO, atmosphere/cl
 and GI solvers; M11 owns hybrid RT. These milestones must consume M2-M5 closure,
 identity, primitive, lighting, visibility, and product contracts rather than
 reintroduce paths, authoring-workflow material storage, or display-referred shading.
+M6.5 Ordinary2 is complete as of 2026-08-23. Five independent native-4K Release
+processes over 50,000 measured populated-fixture frames report a 0.806944 ms GPU
+frame median-of-medians and a 0.414720 ms full transparency-chain
+median-of-medians, with identical graph/memory/work counters and no atlas rejects,
+fallbacks, topology events, or profiler drops. M6.6 is complete and M6.7 WeightedOIT
+approximate workloads are the active transparency slice.
+Its backend-neutral CPU foundation now includes bounded 2/4/8 stack reduction and
+independent deterministic per-tier atlas preparation. Transitively overlapping
+same-tier work now shares one optical-island rectangle while keeping stable per-work
+identities. Hero4/Cinematic8 GPU storage is conditionally represented by independent
+4/8-interface Vulkan graph products with explicit residency, resize, and restoration.
+The indexed peel contract supports nested cross-work sequences and preserves the live
+Ordinary2 paired-entry/exit path through an explicit compatibility flag. Deep
+frame targets now materialize 4/8 capture framebuffer chains, local-color targets, and
+one previous-interface descriptor set per peel when explicitly resident. Incomplete
+chains fail rebuild and restore the prior topology. Explicitly authored Hero4 and
+Cinematic8 content now prewarms its tier and records a bounded stable draw plan through
+four/eight sequential interface captures. Deep local composition is now active: it
+rerasterizes captured entry slots deepest-to-nearest, validates identity/orientation/
+depth, pairs each entry with a later same-work exit, and evaluates the shared measured-
+chord material path into premultiplied AP1 local atlases. Hero4 and Cinematic8 scene
+resolve are active: interface-zero identity gives exactly one nearest captured work
+item ownership of each composed pixel, and accepted deep packets are suppressed from
+compatibility forward. When both tiers coexist, one graph pass consumes their packets
+in global transparent order and switches tier descriptors without merging the atlases.
+Rejected work retains compatibility fallback. Bounded overflow residual evaluation
+is now active inside the existing tier-local composition pass: semantic entries behind
+the eighth stored interface, plus exits for work left open at capacity, receive a
+finite authored-thickness non-refractive Beer-Lambert operator before the exact prefix.
+It adds no graph image, graph pass, or steady-frame allocation. The single-alpha exact
+and residual operators reduce colored transmittance to AP1 luminance. The deterministic
+deep-tier semantic GPU qualification is complete. A
+validation-enabled 1280x720 Debug run of two nested closed Hero4 shells
+published 10,922 valid paired pixels, including 3,890 pixels with all four ordered
+interfaces, and 10,922 finite premultiplied local-color pixels. Stable identity,
+orientation, depth ordering, interface continuity, pairing, and local-color checks
+reported zero errors and Vulkan validation reported zero messages. This is not
+performance evidence: the four-frame Debug run deliberately includes a one-shot atlas
+readback. End-to-end validation additionally proves two Hero4 scene-resolve draws and
+zero compatibility-forward draws. A four-shell Cinematic8 fixture additionally proves
+15,042 paired pixels, all eight ordered interfaces at 1,636 pixels, four scene-resolve
+draws, zero fallback draws, and zero Vulkan messages. Belfast Ultra final-SDR captures
+visibly retain the nested shells without duplicate-resolve silhouettes. A mixed
+Hero4/Cinematic8 run records one global-order resolve range, four resolve draws, and
+zero compatibility draws. A five-shell Cinematic8 overflow fixture requests ten
+interfaces while storing eight; validation reports 650 saturated-prefix pixels,
+1,300 estimated residual samples per measured frame versus zero in the four-shell
+control, five resolve draws, zero fallback draws, zero semantic errors, and zero Vulkan
+messages. Its Belfast capture remains finite and legible. These short Debug/readback
+runs are semantic rather than performance evidence. A separate offset-shell Hero4
+fixture now proves genuine crossing rather than LIFO nesting: 2,705 pixels capture
+`Entry(A), Entry(B), Exit(A), Exit(B)` within 14,211 valid paired/local-color pixels,
+with two resolves, zero fallback, and zero semantic/Vulkan errors. Its Belfast capture
+is finite and retains both silhouettes. Deep tiers now carry a conservative Q14
+remaining-transmission/open-volume state in the existing R32 identity records and
+reduce only useful 16x16 tile boundaries (one Hero4 dispatch, three Cinematic8).
+Later peels reject terminated tiles before material/texture evaluation. A separated
+two-shell Hero4 fixture proves 7,522 early-terminated pixels and 43 occupied terminated
+tiles after interface one, with interfaces two/three empty, finite local color, zero
+fallback, and zero semantic/Vulkan errors. The final lifecycle gate drives both
+Hero4 and Cinematic8 through two real 120-frame retirement/reactivation cycles and a
+post-recovery semantic readback. It exposed and corrected a full-resolution R32 graph
+alias/descriptor-placeholder layout conflict; both corrected Debug runs are
+Vulkan-clean. Five independent native-4K Cinematic8 Release processes cover 50,000
+measured frames at 1.680448 ms GPU-frame median-of-medians and 1.276928 ms summed
+transparency-range median-of-medians. Graph and live memory are identical across
+processes, with zero actual compatibility draws, rejects, preparation fallbacks,
+measured topology events, profiler errors, or dropped frames. M6.6 is complete.
+M6.7 is active with a backend-neutral WeightedOIT reference contract. It is
+explicit-only and nonrefractive, consumes premultiplied scene-linear AP1 radiance,
+uses bounded depth/coverage weights and a documented FP16 numerical envelope, and
+resolves weighted average through multiplicative revealage. Its exact native-4K
+logical target cost is 82,944,000 bytes per frame context with no owned depth. The
+foundation changes no visible rendering or default graph memory; Vulkan execution
+and particle/high-overdraw qualification remain open.
 The durable post-M5 lead context for M6 is
 `docs/milestones/M6-hybrid-transparency-handover-2026-08-13.md`. It records the
 current two-bucket/depth-copy glass bridge, the headlamp-alpha corrective behavior,
 M5.13 shadow-bias/filter changes, M5.12 reflection quality, resize/descriptor
 lifetime requirements, and the recommended first-slice/qualification order.
+
+The 2026-08-23 M6 high-fidelity asset check reported approximately 180 title-bar
+FPS with three dense assets active versus approximately 1,700 FPS empty on the same
+240 Hz display. This is about 5.56 versus 0.59 ms per completed frame, so the roughly
+4.97 ms delta is real scene-dependent wall work rather than a 180 Hz presentation
+ceiling. It remains unqualified CPU/GPU evidence because the title uses a coarse
+window and mailbox acquire/present waits can still contribute. Freeze and profile
+the exact three-asset scene at native 4K Release before assigning the delta to
+geometry, materials, shadows, transparency, or CPU submission.
+Current source creates and sorts one CPU draw packet per enabled opaque submesh,
+issues direct indexed draws, has no general opaque frustum/Hi-Z path, and does not
+populate the cooked LOD/meshlet section slots. Near-linear scaling with authored
+primitive, triangle, complex-forward, transparent, and shadow-caster work is
+therefore expected until M7/M8.
+
+M7 now explicitly owns static/movable/animated GPU-scene update policy,
+frustum/screen-error-LOD/Hi-Z visibility, compact indirect submission, a shared
+main/shadow/probe visible representation, progressive texture and geometry
+residency, and deterministic per-primitive child cooking/DDC reuse. Material-only
+edits must not rebuild geometry or textures; one-primitive edits rebuild only that
+primitive and dependent LOD/meshlet/RT children. Publication uses bounded frame
+budgets and semantic texture/coarser-LOD/proxy fallbacks rather than requiring one
+monolithic model upload. M8 adds per-LOD meshlet and normal-cone culling for dense
+visible geometry on top of the same scene.
+
+After the existing M0-M11 renderer program, M12 is reserved for a production
+material graph/editor compiling into the shared raster/RT closure contracts, and
+M13 for versioned animation assets, multithreaded/GPU skinning, and an animation
+graph editor integrated with M7 visibility and M9 motion history. These are durable
+roadmap commitments, not scope additions to M6.

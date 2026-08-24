@@ -13,7 +13,7 @@ namespace Iridium {
         CanonicalComplexOpaqueForward,
         CanonicalComplexForward,
     };
-    enum class RenderPassClass : uint8_t { GBuffer, Forward };
+    enum class RenderPassClass : uint8_t { GBuffer, Forward, Transparent };
     enum class PrimitiveTopology : uint8_t { TriangleList };
     enum class PolygonMode : uint8_t { Fill, Line };
     enum class CullMode : uint8_t { None, Front, Back };
@@ -29,7 +29,12 @@ namespace Iridium {
             queue == RenderQueue::ForwardOpaque;
     }
 
-    enum class BlendMode : uint8_t { Opaque, AlphaBlend, Additive };
+    enum class BlendMode : uint8_t {
+        Opaque,
+        AlphaBlend,
+        PremultipliedAlpha,
+        Additive,
+    };
     enum class DepthCompare : uint8_t { Less, LessOrEqual, Greater, Always };
 
     constexpr uint8_t ColorWriteR = 0x01;

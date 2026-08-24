@@ -32,6 +32,10 @@
 #include "VulkanFrameTargets.h"
 #include "VulkanSceneDescriptors.h"
 #include "VulkanRenderGraphExecutor.h"
+#include "VulkanTransparencyPyramid.h"
+#include "VulkanLayeredInterfaceCapturePass.h"
+#include "VulkanLayeredLocalCompositionPass.h"
+#include "VulkanLayeredSceneResolvePass.h"
 #include "VulkanOutputPass.h"
 #include "VulkanHdrEncodePass.h"
 #include "VulkanIndexedTextureTable.h"
@@ -42,6 +46,9 @@
 #include "VulkanDirectionalShadowMap.h"
 #include "VulkanSpotShadowAtlas.h"
 #include "VulkanPointShadowPools.h"
+#include "renderer/transparency/TransparencyPyramidResidency.h"
+#include "renderer/transparency/LayeredAtlas.h"
+#include "renderer/transparency/Ordinary2Atlas.h"
 
 #include "utils/DeletionQueue.h"
 
@@ -72,6 +79,7 @@ namespace Iridium {
 
     struct VulkanMaterialPayload {
         PipelineHandle pipeline;
+        PipelineHandle mirroredPipeline;
         RenderQueue renderQueue = RenderQueue::Opaque;
         PackedGpuMaterial packed{};
         uint64_t packedRevision = 0;
@@ -114,6 +122,41 @@ namespace Iridium {
             uint64_t transparentBackgroundPackets = 0;
             uint64_t transparentForegroundPackets = 0;
             uint64_t transparentNonemptyBuckets = 0;
+            uint64_t transparentSortedPackets = 0;
+            uint64_t transparencyPyramidBuilds = 0;
+            uint64_t transparencyPyramidMipDispatches = 0;
+            uint64_t transparencyPyramidTopologyRebuilds = 0;
+            uint64_t transparencyPyramidTopologyRebuildFailures = 0;
+            uint64_t transparencyPyramidFallbackFrames = 0;
+            uint64_t ordinary2ProbeFrames = 0;
+            uint64_t ordinary2CandidatePackets = 0;
+            uint64_t ordinary2ProjectedPackets = 0;
+            uint64_t ordinary2ProjectionCulledPackets = 0;
+            uint64_t ordinary2InvalidBoundsFallbackPackets = 0;
+            uint64_t ordinary2NearPlaneFallbackPackets = 0;
+            uint64_t ordinary2UnsafeProjectionFallbackPackets = 0;
+            uint64_t ordinary2RequestCapacityFallbackPackets = 0;
+            uint64_t ordinary2AtlasAcceptedPackets = 0;
+            uint64_t ordinary2AtlasAcceptedIslands = 0;
+            uint64_t ordinary2AtlasRejectedPackets = 0;
+            uint64_t ordinary2AtlasAllocatedTexels = 0;
+            uint64_t ordinary2CapturePreparedDraws = 0;
+            uint64_t ordinary2CapturePreparationFallbackPackets = 0;
+            uint64_t ordinary2CaptureEntryDraws = 0;
+            uint64_t ordinary2CaptureExitDraws = 0;
+            uint64_t ordinary2LocalCompositionDraws = 0;
+            uint64_t ordinary2SceneResolveDraws = 0;
+            uint64_t deepLayeredCandidatePackets = 0;
+            uint64_t deepLayeredProjectedPackets = 0;
+            uint64_t deepLayeredAtlasAcceptedPackets = 0;
+            uint64_t deepLayeredAtlasAcceptedIslands = 0;
+            uint64_t deepLayeredAtlasRejectedPackets = 0;
+            uint64_t deepLayeredCapturePreparedDraws = 0;
+            uint64_t deepLayeredCapturePreparationFallbackPackets = 0;
+            uint64_t deepLayeredInterfaceDraws = 0;
+            uint64_t deepLayeredResidualProbeDraws = 0;
+            uint64_t deepLayeredLocalCompositionDraws = 0;
+            uint64_t deepLayeredSceneResolveDraws = 0;
             uint64_t uiUntrackedCallbacks = 0;
             uint64_t materialUniqueOverflow = 0;
             uint64_t pipelineUniqueOverflow = 0;
@@ -140,6 +183,30 @@ namespace Iridium {
         // --- MISSING RAW IMAGE ARRAYS ---
         VulkanFrameTargets frameTargets;
         VulkanRenderGraphExecutor renderGraph_;
+        VulkanTransparencyPyramid transparencyPyramid_;
+        VulkanLayeredInterfaceCapturePass layeredInterfaceCapture_;
+        VulkanLayeredLocalCompositionPass layeredLocalComposition_;
+        VulkanLayeredSceneResolvePass layeredSceneResolve_;
+        TransparencyPyramidResidency transparencyPyramidResidency_;
+        TransparencyPyramidResidency ordinary2AtlasResidency_;
+        TransparencyPyramidResidency hero4AtlasResidency_;
+        TransparencyPyramidResidency cinematic8AtlasResidency_;
+        VkExtent2D ordinary2AtlasExtent_{};
+        VkExtent2D hero4AtlasExtent_{};
+        VkExtent2D cinematic8AtlasExtent_{};
+        Ordinary2RequestCollector ordinary2RequestCollector_;
+        Ordinary2AtlasPlan ordinary2AtlasPlan_;
+        Ordinary2CaptureDrawPlan ordinary2CaptureDrawPlan_;
+        LayeredRequestCollector deepLayeredRequestCollector_;
+        LayeredAtlasPlan deepLayeredAtlasPlan_;
+        LayeredCaptureDrawPlan deepLayeredCaptureDrawPlan_;
+        std::array<Ordinary2CaptureDraw, kOrdinary2MaximumWorkCount>
+            ordinary2ResolvedDraws_{};
+        uint32_t ordinary2ResolvedPacketCount_ = 0u;
+        std::array<LayeredCaptureDraw, kOrdinary2MaximumWorkCount>
+            deepResolvedDraws_{};
+        uint32_t deepResolvedPacketCount_ = 0u;
+        FrameTopologyPreparation frameTopologyPrewarm_{};
 
         // G-Buffer Raw Images
 
@@ -177,6 +244,7 @@ namespace Iridium {
         std::unique_ptr<GlassDepthPipeline> glassDepthPipeline;
 
         std::unique_ptr<VkForwardRenderPass> forwardPass;
+        std::unique_ptr<VkForwardRenderPass> transparentPass;
 
         VulkanOutputPass outputPass;
         VulkanHdrEncodePass hdrEncodePass;
@@ -286,6 +354,8 @@ namespace Iridium {
         CpuProfiler* cpuProfiler_ = nullptr;
         bool collectFrameCounters_ = false;
         FrameCounters frameCounters_{};
+        glm::mat4 ordinary2ViewProjection_{ 1.0f };
+        bool ordinary2ViewProjectionValid_ = false;
         std::vector<uint32_t> uniqueMaterialIds_;
         std::vector<uint64_t> uniquePipelineIds_;
         uint64_t externalSwapchainRequestedPeakBytes_ = 0;
@@ -321,6 +391,42 @@ namespace Iridium {
         std::vector<PendingFrameCapture> pendingFrameCaptures_;
         std::vector<FrameCapture> completedFrameCaptures_;
 
+        struct PendingOrdinary2CaptureValidation {
+            uint64_t validationId = 0;
+            uint32_t frameIndex = 0;
+            VkExtent2D extent{};
+            uint32_t expectedDrawCount = 0;
+            uint32_t workItemCount = 0;
+            VulkanBufferResource readback;
+        };
+        std::optional<uint64_t> ordinary2CaptureValidationRequest_;
+        std::vector<PendingOrdinary2CaptureValidation>
+            pendingOrdinary2CaptureValidations_;
+        std::vector<Ordinary2CaptureValidationResult>
+            completedOrdinary2CaptureValidations_;
+        struct PendingDeepLayeredCaptureValidation {
+            uint64_t validationId = 0;
+            uint32_t frameIndex = 0;
+            VkExtent2D extent{};
+            TransparencyQuality quality = TransparencyQuality::Hero4;
+            uint32_t interfaceCount = 0;
+            uint32_t expectedDrawCount = 0;
+            uint32_t sceneResolveDrawCount = 0;
+            uint32_t compatibilityForwardDrawCount = 0;
+            uint32_t workItemCount = 0;
+            VulkanBufferResource readback;
+        };
+        struct DeepLayeredCaptureValidationRequest {
+            uint64_t validationId = 0;
+            TransparencyQuality quality = TransparencyQuality::Hero4;
+        };
+        std::optional<DeepLayeredCaptureValidationRequest>
+            deepLayeredCaptureValidationRequest_;
+        std::vector<PendingDeepLayeredCaptureValidation>
+            pendingDeepLayeredCaptureValidations_;
+        std::vector<DeepLayeredCaptureValidationResult>
+            completedDeepLayeredCaptureValidations_;
+
         // Private helpers that Application.cpp no longer needs to worry about
         void createUniformBuffers();
         void createCanonicalMaterialBuffers(uint32_t capacity);
@@ -354,6 +460,13 @@ namespace Iridium {
         void collectClusterDiagnostics(uint32_t frameIndex) noexcept;
         void initFrameTargets();
         void rebuildRenderGraphAfterDeviceIdle();
+        void applyTransparencyPyramidTopologyChange(
+            std::optional<VkExtent2D> requestedOrdinary2AtlasExtent =
+                std::nullopt,
+            std::optional<VkExtent2D> requestedHero4AtlasExtent =
+                std::nullopt,
+            std::optional<VkExtent2D> requestedCinematic8AtlasExtent =
+                std::nullopt);
         void updateUniformBuffer(const glm::mat4& view, const glm::mat4& proj);
         void createLightingRenderPass();
         void resetFrameCounters();
@@ -362,12 +475,62 @@ namespace Iridium {
         void recordDraw(uint64_t& drawCounter, uint64_t submittedTriangles);
         void emitFrameCounters();
         void bindMaterialDescriptors(VkPipelineLayout layout);
+        void recordOrdinary2InterfaceCapture(
+            std::span<const DrawPacket> packets,
+            std::span<const Ordinary2CaptureDraw> draws,
+            bool exitCapture);
+        void recordOrdinary2Captures(
+            std::span<const DrawPacket> packets,
+            std::span<const Ordinary2CaptureDraw> draws);
+        void recordDeepLayeredInterfaceCapture(
+            std::span<const DrawPacket> packets,
+            std::span<const LayeredCaptureDraw> draws,
+            TransparencyQuality quality, uint32_t interfaceIndex);
+        void recordDeepLayeredTileTermination(
+            std::span<const LayeredCaptureDraw> draws,
+            TransparencyQuality quality, uint32_t interfaceIndex);
+        void recordDeepLayeredCaptures(
+            std::span<const DrawPacket> packets,
+            std::span<const LayeredCaptureDraw> draws,
+            TransparencyQuality quality);
+        void recordDeepLayeredLocalComposition(
+            std::span<const DrawPacket> packets,
+            std::span<const LayeredCaptureDraw> draws,
+            TransparencyQuality quality);
+        void recordDeepLayeredSceneResolve(
+            std::span<const DrawPacket> packets,
+            std::span<const LayeredCaptureDraw> draws);
+        void recordOrdinary2LocalComposition(
+            std::span<const DrawPacket> packets,
+            std::span<const Ordinary2CaptureDraw> draws);
+        void recordOrdinary2SceneResolve(
+            std::span<const DrawPacket> packets,
+            std::span<const Ordinary2CaptureDraw> draws);
+        void prepareOrdinary2ResolvedPacketIndices(
+            std::span<const Ordinary2CaptureDraw> draws);
+        [[nodiscard]] bool isOrdinary2PacketResolved(
+            uint32_t packetIndex) const noexcept;
+        void prepareDeepResolvedPacketIndices(
+            std::span<const LayeredCaptureDraw> draws);
+        [[nodiscard]] bool isDeepPacketResolved(
+            uint32_t packetIndex) const noexcept;
+        [[nodiscard]] bool isLayeredPacketResolved(
+            uint32_t packetIndex) const noexcept;
         [[nodiscard]] uint32_t acquireSampler(const SamplerDesc& desc);
         void releaseSampler(uint32_t cacheIndex) noexcept;
         void cleanupSamplerCache() noexcept;
         [[nodiscard]] uint64_t liveSamplerCount() const noexcept;
         void collectFrameCapturesForSlot(uint32_t frameIndex);
         void destroyPendingFrameCaptures() noexcept;
+        void recordOrdinary2CaptureValidationReadback(
+            std::span<const Ordinary2CaptureDraw> draws);
+        void recordDeepLayeredCaptureValidationReadback(
+            std::span<const LayeredCaptureDraw> draws,
+            TransparencyQuality quality);
+        void collectOrdinary2CaptureValidationsForSlot(uint32_t frameIndex);
+        void collectDeepLayeredCaptureValidationsForSlot(uint32_t frameIndex);
+        void destroyPendingOrdinary2CaptureValidations() noexcept;
+        void destroyPendingDeepLayeredCaptureValidations() noexcept;
         [[nodiscard]] static std::optional<FrameCapturePixelFormat>
             capturePixelFormat(VkFormat format) noexcept;
         [[nodiscard]] FrameMemoryProfile memorySnapshot();
@@ -385,6 +548,8 @@ namespace Iridium {
             RenderExtent extent, std::string& diagnostic) override;
         [[nodiscard]] RenderBackendCapabilities getCapabilities() const override;
         [[nodiscard]] RenderBackendRuntimeInfo getRuntimeInfo() const override;
+        [[nodiscard]] FrameTopologyPreparation prepareFrameTopology(
+            const FrameTopologyRequirements& requirements) override;
         void prepareLighting(uint32_t requiredCapacity) override;
         void prepareReflectionProbes(uint32_t requiredCapacity,
             std::span<const EnvironmentLightingHandles> environments) override;
@@ -398,7 +563,7 @@ namespace Iridium {
         void configureReflectionProbeCaptures(
             const ProjectReflectionProbeSettings& settings) override;
         FrameStatus beginFrame() override;
-        void updateCamera(const glm::mat4& view, const glm::mat4& proj) override;
+        void updateCamera(const ViewTransportRecord& view) override;
         void setDebugView(RenderDebugView view) override { debugView_ = view; }
         void setOutputSettings(float manualExposureEv, float paperWhiteNits,
             float peakNits) override;
@@ -440,11 +605,21 @@ namespace Iridium {
             return clusterTelemetry_;
         }
         void submitForwardQueues(std::span<const DrawPacket> opaqueForwardQueue,
-            std::span<const DrawPacket> transparentQueue) override;
+            std::span<const DrawPacket> sortedSurfaceQueue,
+            std::span<const DrawPacket> compatibilityTransparentQueue) override;
         void captureCurrentFrame(uint64_t captureId,
             FrameCapturePoint point) override;
         [[nodiscard]] std::vector<FrameCapture> collectFrameCaptures(
             bool waitForPending) override;
+        void requestOrdinary2CaptureValidation(
+            uint64_t validationId) override;
+        [[nodiscard]] std::vector<Ordinary2CaptureValidationResult>
+            collectOrdinary2CaptureValidations(bool waitForPending) override;
+        void requestDeepLayeredCaptureValidation(uint64_t validationId,
+            TransparencyQuality quality) override;
+        [[nodiscard]] std::vector<DeepLayeredCaptureValidationResult>
+            collectDeepLayeredCaptureValidations(
+                bool waitForPending) override;
         void submitOutputPass() override;
         void submitUIPass() override;
 

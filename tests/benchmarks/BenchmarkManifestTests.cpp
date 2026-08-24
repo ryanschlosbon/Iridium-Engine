@@ -54,6 +54,17 @@ namespace {
             "assets" / "benchmarks" / "m2" / "material-gpu-manifest.v1.json";
     }
 
+    std::filesystem::path m6PyramidManifestPath() {
+        return std::filesystem::path(PROJECT_ROOT_DIR) /
+            "assets" / "benchmarks" / "m6-pyramid-manifest.v1.json";
+    }
+
+    std::filesystem::path m6Ordinary2RuntimeManifestPath() {
+        return std::filesystem::path(PROJECT_ROOT_DIR) /
+            "assets" / "benchmarks" / "m6" /
+            "ordinary2-runtime-manifest.v1.json";
+    }
+
     nlohmann::json loadJson(const std::filesystem::path& path) {
         std::ifstream input(path);
         if (!input) throw std::runtime_error("Failed to open fixture: " + path.string());
@@ -146,6 +157,7 @@ namespace {
         CHECK(fixture.measuredFrames == 10000);
         CHECK(fixture.contentFiles.size() == 1);
         CHECK(fixture.sceneFactory.instanceGrid == glm::uvec3(1, 1, 1));
+        CHECK(fixture.sceneFactory.instanceScale == glm::vec3(1.0f));
         CHECK(sha256File(fixture.contentFiles[0].path) == fixture.contentFiles[0].sha256);
         CHECK(fixture.unavailableCapabilities.size() >= 6);
         const BenchmarkFixture& cpu = findBenchmarkFixture(manifest, "geometry_cpu_v1");
@@ -444,7 +456,7 @@ namespace {
             CHECK(metadata.at("importer").at("id") ==
                 "iridium.gltf-model");
             CHECK(metadata.at("importer").at("version") ==
-                3);
+                6);
             CHECK(metadata.at("settings").at("values")
                 .at("import_scale") == 1.0);
             const std::string rootGuid =
@@ -480,6 +492,181 @@ namespace {
         return false;
     }
 
+    bool testM6PyramidFixtureContract() {
+        const BenchmarkManifest manifest = loadBenchmarkManifest(
+            m6PyramidManifestPath());
+        CHECK(manifest.fixtures.size() == 1);
+        const BenchmarkFixture& fixture = findBenchmarkFixture(manifest,
+            "m6_rough_metric_refraction_v1");
+        CHECK(fixture.revision == 1);
+        CHECK(fixture.required);
+        CHECK(fixture.camera.id == "oblique_emissive_grid_v1");
+        CHECK(fixture.contentFiles.size() == 1);
+        CHECK(containsText(fixture.expectedBehavior,
+            "0.1 metre authored sheet thickness"));
+        CHECK(containsText(fixture.expectedBehavior,
+            "one frozen AP1 color pyramid"));
+
+        const nlohmann::json metadata = loadJson(
+            fixture.sourceAsset.string() + ".iridium.meta");
+        CHECK(metadata.at("settings").at("schemaVersion") == 2);
+        const nlohmann::json& values = metadata.at("settings").at("values");
+        CHECK(values.at("transparency_execution_mode") == "classified");
+        const nlohmann::json& policy = values.at("transparency_policies").at(
+            "019ffd80-0000-7004-8000-000000000005");
+        CHECK(policy.at("class") == "thin_glass");
+        CHECK(policy.at("quality") == "ordinary2");
+        CHECK(std::abs(policy.at("thin_sheet_thickness_m").get<double>() - 0.1) <
+            1.0e-9);
+        return true;
+    }
+
+    bool testM6Ordinary2RuntimeFixtureContract() {
+        const BenchmarkManifest manifest = loadBenchmarkManifest(
+            m6Ordinary2RuntimeManifestPath());
+        CHECK(manifest.fixtures.size() == 10);
+        const BenchmarkFixture& ordinary = findBenchmarkFixture(manifest,
+            "ordinary2_lit_closed_v1");
+        const BenchmarkFixture& mirrored = findBenchmarkFixture(manifest,
+            "ordinary2_lit_closed_mirrored_v1");
+        const BenchmarkFixture& populated = findBenchmarkFixture(manifest,
+            "ordinary2_lit_populated_grid_v1");
+        const BenchmarkFixture& invalid = findBenchmarkFixture(manifest,
+            "ordinary2_invalid_open_fallback_v1");
+        const BenchmarkFixture& nested = findBenchmarkFixture(manifest,
+            "hero4_nested_tetrahedra_v1");
+        const BenchmarkFixture& crossing = findBenchmarkFixture(manifest,
+            "hero4_crossing_tetrahedra_v1");
+        const BenchmarkFixture& earlyTermination = findBenchmarkFixture(
+            manifest, "hero4_early_termination_tetrahedra_v1");
+        const BenchmarkFixture& cinematic = findBenchmarkFixture(manifest,
+            "cinematic8_nested_tetrahedra_v1");
+        const BenchmarkFixture& overflow = findBenchmarkFixture(manifest,
+            "cinematic8_overflow_residual_v1");
+        const BenchmarkFixture& mixed = findBenchmarkFixture(manifest,
+            "mixed_deep_tier_tetrahedra_v1");
+        CHECK(ordinary.sceneFactory.instanceScale == glm::vec3(1.0f));
+        CHECK(mirrored.sceneFactory.instanceScale ==
+            glm::vec3(-1.0f, 1.0f, 1.0f));
+        CHECK(ordinary.sourceAsset == mirrored.sourceAsset);
+        CHECK(ordinary.contentFiles.size() == 2);
+        CHECK(mirrored.contentFiles.size() == 2);
+        CHECK(containsText(mirrored.expectedBehavior,
+            "negative runtime world-transform determinant"));
+        CHECK(populated.sourceAsset == ordinary.sourceAsset);
+        CHECK(populated.sceneFactory.instanceGrid == glm::uvec3(4, 2, 1));
+        CHECK(populated.sceneFactory.instanceSpacing ==
+            glm::vec3(0.50f, 0.50f, 0.0f));
+        CHECK(populated.measuredFrames == 8);
+        CHECK(containsText(populated.expectedBehavior,
+            "960x540, 1600x900, and restored 1280x720"));
+        CHECK(containsText(populated.expectedBehavior,
+            "without compatibility draws"));
+        CHECK(invalid.sceneFactory.instanceScale == glm::vec3(1.0f));
+        CHECK(invalid.sourceAsset != ordinary.sourceAsset);
+        CHECK(invalid.contentFiles.size() == 2);
+        CHECK(containsText(invalid.expectedBehavior,
+            "fallback-applied flag"));
+        CHECK(nested.sceneFactory.instanceScale == glm::vec3(1.0f));
+        CHECK(nested.contentFiles.size() == 2);
+        CHECK(nested.measuredFrames == 4);
+        CHECK(containsText(nested.expectedBehavior,
+            "Entry(outer), Entry(inner), Exit(inner), Exit(outer)"));
+        CHECK(containsText(nested.expectedBehavior,
+            "finite premultiplied AP1 color"));
+        const nlohmann::json nestedMetadata = loadJson(
+            nested.sourceAsset.string() + ".iridium.meta");
+        CHECK(nestedMetadata.at("settings").at("values").at(
+            "transparency_execution_mode") == "classified");
+        const auto& nestedPolicies = nestedMetadata.at("settings").at(
+            "values").at("transparency_policies");
+        CHECK(nestedPolicies.size() == 1);
+        CHECK(nestedPolicies.begin().value().at("class") ==
+            "layered_glass");
+        CHECK(nestedPolicies.begin().value().at("quality") == "hero4");
+        CHECK(crossing.contentFiles.size() == 2);
+        CHECK(crossing.measuredFrames == 4);
+        CHECK(containsText(crossing.expectedBehavior,
+            "Entry(A), Entry(B), Exit(A), Exit(B)"));
+        CHECK(containsText(crossing.expectedBehavior,
+            "stable-identity crossing pairing"));
+        const nlohmann::json crossingSource = loadJson(
+            crossing.sourceAsset);
+        CHECK(crossingSource.at("nodes").size() == 2);
+        const nlohmann::json crossingMetadata = loadJson(
+            crossing.sourceAsset.string() + ".iridium.meta");
+        const auto& crossingPolicies = crossingMetadata.at("settings").at(
+            "values").at("transparency_policies");
+        CHECK(crossingPolicies.size() == 1);
+        CHECK(crossingPolicies.begin().value().at("quality") == "hero4");
+        CHECK(earlyTermination.contentFiles.size() == 2);
+        CHECK(earlyTermination.measuredFrames == 4);
+        CHECK(containsText(earlyTermination.expectedBehavior,
+            "remaining transmission below 1/1024"));
+        CHECK(containsText(earlyTermination.expectedBehavior,
+            "suppress the deeper shell"));
+        const nlohmann::json earlyTerminationSource = loadJson(
+            earlyTermination.sourceAsset);
+        CHECK(earlyTerminationSource.at("nodes").size() == 2);
+        CHECK(earlyTerminationSource.at("materials").at(0).at(
+            "extensions").at("KHR_materials_transmission").at(
+                "transmissionFactor") == 0.0005);
+        const nlohmann::json earlyTerminationMetadata = loadJson(
+            earlyTermination.sourceAsset.string() + ".iridium.meta");
+        const auto& earlyTerminationPolicies = earlyTerminationMetadata.at(
+            "settings").at("values").at("transparency_policies");
+        CHECK(earlyTerminationPolicies.size() == 1);
+        CHECK(earlyTerminationPolicies.begin().value().at("quality") ==
+            "hero4");
+        CHECK(cinematic.contentFiles.size() == 2);
+        CHECK(cinematic.measuredFrames == 4);
+        CHECK(containsText(cinematic.expectedBehavior,
+            "all eight interfaces"));
+        const nlohmann::json cinematicMetadata = loadJson(
+            cinematic.sourceAsset.string() + ".iridium.meta");
+        const auto& cinematicPolicies = cinematicMetadata.at("settings").at(
+            "values").at("transparency_policies");
+        CHECK(cinematicPolicies.size() == 1);
+        CHECK(cinematicPolicies.begin().value().at("quality") ==
+            "cinematic8");
+        CHECK(overflow.contentFiles.size() == 2);
+        CHECK(overflow.measuredFrames == 4);
+        CHECK(containsText(overflow.expectedBehavior,
+            "stores exactly eight"));
+        CHECK(containsText(overflow.expectedBehavior,
+            "non-refractive residual operator"));
+        const nlohmann::json overflowSource = loadJson(
+            overflow.sourceAsset);
+        CHECK(overflowSource.at("nodes").size() == 5);
+        const nlohmann::json overflowMetadata = loadJson(
+            overflow.sourceAsset.string() + ".iridium.meta");
+        const auto& overflowPolicies = overflowMetadata.at("settings").at(
+            "values").at("transparency_policies");
+        CHECK(overflowPolicies.size() == 1);
+        CHECK(overflowPolicies.begin().value().at("quality") ==
+            "cinematic8");
+        CHECK(mixed.sourceAsset == cinematic.sourceAsset);
+        CHECK(mixed.contentFiles.size() == 2);
+        CHECK(containsText(mixed.expectedBehavior,
+            "global transparent order"));
+        const nlohmann::json mixedMetadata = loadJson(
+            mixed.contentFiles[1].path);
+        const auto& mixedPolicies = mixedMetadata.at("settings").at(
+            "values").at("transparency_policies");
+        CHECK(mixedPolicies.size() == 3);
+        uint32_t hero4Policies = 0u;
+        uint32_t cinematic8Policies = 0u;
+        for (const auto& [guid, policy] : mixedPolicies.items()) {
+            (void)guid;
+            if (policy.at("quality") == "hero4") ++hero4Policies;
+            if (policy.at("quality") == "cinematic8")
+                ++cinematic8Policies;
+        }
+        CHECK(hero4Policies == 2u);
+        CHECK(cinematic8Policies == 1u);
+        return true;
+    }
+
     bool testInstanceCountOverflowIsRejected() {
         CHECK(benchmarkInstanceCount(glm::uvec3(16, 8, 1)) == 128);
         CHECK(benchmarkInstanceCount(glm::uvec3(0, 1, 1)) == 0);
@@ -502,6 +689,9 @@ int main() {
         { "M2 run manifest contract", testM2RunManifestContract },
         { "M2.4 material GPU fixture contract", testM2MaterialGpuFixtureContract },
         { "tracked fixture sidecars", testTrackedFixtureSidecars },
+        { "M6 pyramid fixture contract", testM6PyramidFixtureContract },
+        { "M6 Ordinary2 runtime fixture contract",
+            testM6Ordinary2RuntimeFixtureContract },
         { "repeated loads are identical", testRepeatedLoadsAreIdentical },
         { "unknown fixture fails", testUnknownFixtureFails },
         { "instance count overflow is rejected", testInstanceCountOverflowIsRejected },

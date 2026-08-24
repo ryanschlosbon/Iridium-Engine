@@ -29,6 +29,7 @@ namespace Iridium {
     struct BenchmarkSceneFactory {
         glm::uvec3 instanceGrid{ 1, 1, 1 };
         glm::vec3 instanceSpacing{ 0.0f };
+        glm::vec3 instanceScale{ 1.0f };
         bool animateInstances = false;
         float motionAmplitude = 0.0f;
         uint64_t motionPeriodFrames = 1;

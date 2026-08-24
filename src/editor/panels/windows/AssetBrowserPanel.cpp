@@ -127,6 +127,222 @@ namespace {
         return true;
     }
 
+    void itemTooltip(const char* text) {
+        if (!ImGui::IsItemHovered()) return;
+        ImGui::BeginTooltip();
+        ImGui::PushTextWrapPos(ImGui::GetFontSize() * 34.0f);
+        ImGui::TextUnformatted(text);
+        ImGui::PopTextWrapPos();
+        ImGui::EndTooltip();
+    }
+
+    bool transparencyPolicyTarget(std::string_view assetType) noexcept {
+        return assetType == "iridium.material" ||
+            assetType == "iridium.model-primitive";
+    }
+
+    struct TransparencyLayerBudgetPresentation {
+        const char* label;
+        const char* value;
+        const char* guidance;
+        const char* tooltip;
+        uint32_t interfaceCount;
+        bool runtimeAvailable;
+    };
+
+    constexpr std::array kTransparencyLayerBudgets{
+        TransparencyLayerBudgetPresentation{
+            "Ordinary - 2 interfaces (one shell)",
+            "ordinary2",
+            "Use for normal closed glass: windows, lenses, bottles, and body panels with one entry and one exit.",
+            "Default production tier. Stores one closed shell (entry + exit), has the lowest layered-glass cost, and is the right choice unless diagnostics show more interfaces are needed.",
+            2u,
+            true,
+        },
+        TransparencyLayerBudgetPresentation{
+            "Hero - 4 interfaces (nested glass)",
+            "hero4",
+            "Use for important assets with two nested shells, such as a thick windshield assembly or glass inside glass.",
+            "Hero tier. Stores up to two closed shells and has roughly twice Ordinary2 peel storage. Its nested capture, local composition, and scene resolve are active; use it only where Ordinary2 visibly loses an interface.",
+            4u,
+            true,
+        },
+        TransparencyLayerBudgetPresentation{
+            "Cinematic - 8 interfaces (explicit)",
+            "cinematic8",
+            "Reserve for complex close-up glass where four interfaces demonstrably overflow and the shot justifies the cost.",
+            "Cinematic tier. Stores up to four closed shells and can cost roughly four times Ordinary2 peel storage. Its bounded capture, local composition, and scene resolve are active, but it is never selected automatically; use it only after a Hero4 overflow is measured.",
+            8u,
+            true,
+        },
+    };
+
+    size_t transparencyLayerBudgetIndex(
+        const nlohmann::json& policy) noexcept {
+        const std::string quality = policy.value(
+            "quality", std::string("ordinary2"));
+        for (size_t index = 0;
+            index < kTransparencyLayerBudgets.size(); ++index) {
+            if (quality == kTransparencyLayerBudgets[index].value)
+                return index;
+        }
+        return 0u;
+    }
+
+    bool drawTransparencyPolicyEditor(
+        nlohmann::json& settings,
+        const Iridium::AssetCatalogRecord& target) {
+        if (!settings.contains("transparency_policies") ||
+            !settings["transparency_policies"].is_object()) {
+            settings["transparency_policies"] = nlohmann::json::object();
+        }
+        nlohmann::json& policies = settings["transparency_policies"];
+        const std::string targetGuid = target.guid.toString();
+        bool overrideEnabled = policies.contains(targetGuid) &&
+            policies[targetGuid].is_object();
+        bool changed = false;
+
+        ImGui::SeparatorText("Transparency policy");
+        ImGui::TextWrapped("Target: %s", target.displayName.c_str());
+        ImGui::TextWrapped("Source locator: %s", target.sourceKey.c_str());
+        ImGui::TextDisabled("%s policy | stable GUID %s",
+            target.assetType == "iridium.model-primitive"
+                ? "Primitive override" : "Material",
+            targetGuid.c_str());
+        if (target.assetType == "iridium.model-primitive") {
+            ImGui::TextDisabled(
+                "Primitive policy takes precedence over its material policy.");
+            ImGui::TextWrapped(
+                "Primitive locators identify geometry, not optical material. "
+                "A Thin Glass override changes routing but cannot create missing "
+                "transmission or repair metallic source values.");
+        }
+        else {
+            ImGui::TextDisabled(
+                "Material policy applies to its primitives unless a primitive override exists.");
+        }
+
+        if (ImGui::Checkbox("Override inherited transparency policy",
+                &overrideEnabled)) {
+            if (overrideEnabled) {
+                policies[targetGuid] = {
+                    { "class", "auto" },
+                    { "priority", 0 },
+                    { "quality", "ordinary2" },
+                    { "schema_version", 1 },
+                    { "thin_sheet_thickness_m", 0.0 },
+                };
+            }
+            else {
+                policies.erase(targetGuid);
+            }
+            changed = true;
+        }
+        itemTooltip(
+            "Leave this off for the safe inherited defaults: Auto classification, Ordinary2 layered quality, priority zero, and zero fabricated thin-sheet thickness.");
+
+        nlohmann::json inheritedPolicy{
+            { "class", "auto" },
+            { "priority", 0 },
+            { "quality", "ordinary2" },
+            { "schema_version", 1 },
+            { "thin_sheet_thickness_m", 0.0 },
+        };
+        nlohmann::json& policy = overrideEnabled
+            ? policies[targetGuid] : inheritedPolicy;
+        policy["schema_version"] = 1;
+
+        static constexpr const char* classLabels[]{
+            "Auto (recommended)",
+            "Alpha Clip - binary cutout",
+            "Sorted Surface - simple blend",
+            "Thin Glass - sheet/window",
+            "Layered Glass - closed volume",
+            "Weighted OIT - dense approximate effect",
+        };
+        static constexpr const char* classValues[]{
+            "auto", "alpha_clip", "sorted_surface", "thin_glass",
+            "layered_glass", "weighted_oit",
+        };
+        ImGui::BeginDisabled(!overrideEnabled);
+        changed |= jsonStringControl("Transparency class", policy, "class",
+            classLabels, classValues);
+        itemTooltip(
+            "Auto inspects coverage, transmission, volume features, and validated mesh topology. Use explicit classes only to express intentional art direction; incompatible choices diagnose and fall back safely.");
+
+        const std::string requestedClass = policy.value(
+            "class", std::string("auto"));
+        if (requestedClass == "auto") {
+            ImGui::TextDisabled(
+                "Auto: closed volume -> Layered Glass; transmission -> Thin Glass; ordinary blend -> Sorted Surface.");
+        }
+        else if (requestedClass == "layered_glass") {
+            ImGui::TextDisabled(
+                "Requires a consistently oriented closed manifold; invalid topology falls back to Thin Glass.");
+        }
+        else if (requestedClass == "thin_glass") {
+            ImGui::TextDisabled(
+                "Thin Glass requires the linked source material to carry "
+                "transmission; this class does not synthesize an optical closure.");
+        }
+        else if (requestedClass == "weighted_oit") {
+            ImGui::TextColored(ImVec4(1.0f, 0.72f, 0.25f, 1.0f),
+                "Weighted OIT is approximate, non-refractive, and arrives in M6.7.");
+        }
+
+        size_t budgetIndex = transparencyLayerBudgetIndex(policy);
+        int selectedBudget = static_cast<int>(budgetIndex);
+        std::array<const char*, kTransparencyLayerBudgets.size()> budgetLabels{};
+        for (size_t index = 0; index < budgetLabels.size(); ++index)
+            budgetLabels[index] = kTransparencyLayerBudgets[index].label;
+        if (ImGui::Combo("Layer budget", &selectedBudget,
+                budgetLabels.data(), static_cast<int>(budgetLabels.size()))) {
+            budgetIndex = static_cast<size_t>(selectedBudget);
+            policy["quality"] = kTransparencyLayerBudgets[budgetIndex].value;
+            changed = true;
+        }
+        itemTooltip(kTransparencyLayerBudgets[budgetIndex].tooltip);
+        const TransparencyLayerBudgetPresentation& budget =
+            kTransparencyLayerBudgets[budgetIndex];
+        ImGui::TextWrapped("%s", budget.guidance);
+        ImGui::TextDisabled("Maximum stored interfaces: %u",
+            budget.interfaceCount);
+        if (!budget.runtimeAvailable) {
+            ImGui::TextColored(ImVec4(1.0f, 0.72f, 0.25f, 1.0f),
+                "This quality tier is authorable but not available in the active runtime.");
+        }
+
+        int priority = policy.value("priority", 0);
+        if (ImGui::InputInt("Layer priority", &priority)) {
+            policy["priority"] = priority;
+            changed = true;
+        }
+        itemTooltip(
+            "Higher signed priority wins when multiple layered-glass islands compete for the bounded atlas. Keep zero unless an important asset needs deterministic preference.");
+
+        float thickness = policy.value("thin_sheet_thickness_m", 0.0f);
+        if (ImGui::DragFloat("Thin-sheet thickness (m)", &thickness,
+                0.001f, 0.0f, 1.0e6f, "%.4g m",
+                ImGuiSliderFlags_Logarithmic |
+                    ImGuiSliderFlags_AlwaysClamp)) {
+            policy["thin_sheet_thickness_m"] = thickness;
+            changed = true;
+        }
+        itemTooltip(
+            "Only affects Thin Glass. Zero means an infinitesimal sheet with no fabricated absorption distance or lateral screen offset. Layered Glass measures thickness from paired geometry instead.");
+        ImGui::EndDisabled();
+
+        if (overrideEnabled) {
+            if (ImGui::Button("Reset to inherited Auto")) {
+                policies.erase(targetGuid);
+                changed = true;
+            }
+            itemTooltip(
+                "Removes this GUID override. The asset returns to Auto classification and Ordinary2 when layered glass is selected.");
+        }
+        return changed;
+    }
+
     uint32_t fullMipCount(uint32_t size) noexcept {
         uint32_t result = 0;
         do {
@@ -587,7 +803,7 @@ void AssetBrowserPanel::drawAssetDrawer(
     ImGui::TextUnformatted(
         root.record.displayName.c_str());
     ImGui::TextDisabled(
-        "Imported materials and textures");
+        "Imported materials, textures, and model primitives");
     ImGui::Separator();
     if (!detail.available) {
         ImGui::TextDisabled(
@@ -689,6 +905,17 @@ void AssetBrowserPanel::drawAssetDrawer(
     if (materialCount == 0) {
         ImGui::TextDisabled(
             "No imported materials.");
+    }
+    ImGui::SeparatorText("Model primitives");
+    size_t primitiveCount = 0;
+    for (const auto& [guid, record] : byGuid) {
+        (void)guid;
+        if (record.assetType != "iridium.model-primitive") continue;
+        ++primitiveCount;
+        drawDrawerRecord(record, assetManager);
+    }
+    if (primitiveCount == 0) {
+        ImGui::TextDisabled("No imported model primitives.");
     }
 }
 
@@ -1343,7 +1570,7 @@ void AssetBrowserPanel::drawSettingsEditor(
     bool changed = false;
     if (selected.record.parentGuid) {
         ImGui::TextDisabled(
-            "Inherited from the source asset.");
+            "Edits are stored on the source asset under this stable subasset GUID.");
     }
     if (selected.record.importerId ==
         "iridium.gltf-model") {
@@ -1388,6 +1615,25 @@ void AssetBrowserPanel::drawSettingsEditor(
         }
         ImGui::TextDisabled(
             "Uniformly bakes source units into render, bounds, and RT geometry.");
+        static constexpr const char* transparencyExecutionLabels[]{
+            "Classified hybrid (recommended)",
+            "Legacy two-bucket (comparison only)",
+        };
+        static constexpr const char* transparencyExecutionValues[]{
+            "classified", "legacy_two_bucket",
+        };
+        changed |= jsonStringControl(
+            "Transparency renderer", settingsDraft_,
+            "transparency_execution_mode",
+            transparencyExecutionLabels,
+            transparencyExecutionValues, 1u);
+        itemTooltip(
+            "Classified hybrid uses Alpha Clip, Sorted Surface, Thin Glass, Layered Glass, and future Weighted OIT according to each stable material/primitive policy. Legacy two-bucket is retained only for qualification and rollback comparisons.");
+        if (settingsDraft_.value("transparency_execution_mode",
+                std::string("legacy_two_bucket")) == "legacy_two_bucket") {
+            ImGui::TextColored(ImVec4(1.0f, 0.72f, 0.25f, 1.0f),
+                "Legacy comparison mode does not exercise the authored M6 class and layer policy.");
+        }
         bool required = true;
         ImGui::BeginDisabled();
         ImGui::Checkbox(
@@ -1399,6 +1645,17 @@ void AssetBrowserPanel::drawSettingsEditor(
         ImGui::EndDisabled();
         ImGui::TextDisabled(
             "The disabled settings are required by the M3 geometry contract.");
+        if (transparencyPolicyTarget(selected.record.assetType)) {
+            changed |= drawTransparencyPolicyEditor(
+                settingsDraft_, selected.record);
+        }
+        else {
+            ImGui::SeparatorText("Transparency policy");
+            ImGui::TextWrapped(
+                "Select a material or model-primitive subasset to edit its stable transparency class and Layered Glass budget.");
+            ImGui::TextDisabled(
+                "Material policies are inherited by primitives; primitive policies are precise overrides.");
+        }
     }
     else if (selected.record.importerId ==
         "iridium.texture.directxtex") {
@@ -1733,6 +1990,32 @@ void AssetBrowserPanel::drawDetails(
         selected->record.parentGuid
             .value_or(
                 selected->record.guid);
+    if (runtimeService_) {
+        const std::optional<Iridium::RuntimeAssetSnapshot>
+            runtime = runtimeService_->snapshot(rootGuid);
+        if (runtime) {
+            ImGui::SeparatorText("Live imported model");
+            ImGui::Text("State: %s | revision %llu",
+                runtimeStateName(runtime->state),
+                static_cast<unsigned long long>(runtime->revision));
+            if (!runtime->cookKey.empty()) {
+                ImGui::TextWrapped("Active cook: %s",
+                    runtime->cookKey.c_str());
+            }
+            if (!runtime->pendingCookKey.empty()) {
+                ImGui::TextWrapped("Pending cook: %s",
+                    runtime->pendingCookKey.c_str());
+                ImGui::TextColored(
+                    ImVec4(1.0f, 0.72f, 0.25f, 1.0f),
+                    "The viewport is still showing the previous revision.");
+            }
+            else if (runtime->state ==
+                    Iridium::RuntimeAssetState::Ready) {
+                ImGui::TextDisabled(
+                    "This cook is published in the viewport.");
+            }
+        }
+    }
     if (thumbnailService_) {
         if (detailCacheRoot_ !=
                 std::optional(rootGuid)) {
@@ -1747,6 +2030,39 @@ void AssetBrowserPanel::drawDetails(
                     ->sourceDetail(rootGuid);
         }
         if (detailCache_.available) {
+            const auto transparency =
+                std::ranges::find_if(
+                    detailCache_.transparencyDetails,
+                    [&selected](const Iridium::
+                            AssetThumbnailTransparencyDetail& detail) {
+                        return detail.assetGuid ==
+                            selected->record.guid;
+                    });
+            if (transparency !=
+                    detailCache_.transparencyDetails.end()) {
+                ImGui::SeparatorText("Cooked transparency result");
+                ImGui::Text("Requested: %s",
+                    Iridium::transparencyClassName(
+                        transparency->policy.requestedClass).data());
+                ImGui::Text("Resolved: %s | quality: %s",
+                    Iridium::transparencyClassName(
+                        transparency->policy.resolvedClass).data(),
+                    Iridium::transparencyQualityName(
+                        transparency->policy.quality).data());
+                ImGui::Text("Runtime pieces: %u",
+                    transparency->runtimePrimitiveCount);
+                if (!transparency->uniformPolicy) {
+                    ImGui::TextColored(
+                        ImVec4(1.0f, 0.72f, 0.25f, 1.0f),
+                        "Connected runtime pieces resolved differently.");
+                }
+                if ((transparency->policy.flags &
+                        Iridium::CompiledTransparencyFallbackApplied) != 0u) {
+                    ImGui::TextColored(
+                        ImVec4(1.0f, 0.72f, 0.25f, 1.0f),
+                        "Requested class was incompatible; the safe resolved class is active.");
+                }
+            }
             syncSettingsDraft(
                 rootGuid,
                 detailCache_.settingsJson);
@@ -1903,7 +2219,7 @@ void AssetBrowserPanel::OnImGuiRender(Registry& registry,
                     Iridium::AssetCatalogJobKind::
                         UpdateSettings) {
                     actionDiagnostic_ =
-                        "Import settings applied and reimported.";
+                        "Import settings applied; model recook and live publication queued.";
                     if (result.assetGuid &&
                         thumbnailService_) {
                         thumbnailService_->invalidate(
@@ -2044,12 +2360,14 @@ void AssetBrowserPanel::OnImGuiRender(Registry& registry,
         ImGui::TableSetColumnIndex(0);
         ImGui::SetNextItemWidth(-FLT_MIN);
     constexpr const char* typeNames[] = {
-        "All types", "Meshes / Models", "Materials", "Textures", "HDRI environments",
+        "All types", "Meshes / Models", "Materials", "Model primitives",
+        "Textures", "HDRI environments",
     };
     if (ImGui::Combo("##asset-type", &typeFilter_, typeNames,
         static_cast<int>(std::size(typeNames)))) {
         constexpr const char* types[] = {
-            "", "iridium.model", "iridium.material", "iridium.texture",
+            "", "iridium.model", "iridium.material",
+            "iridium.model-primitive", "iridium.texture",
             "iridium.environment",
         };
         model_.setAssetType(typeFilter_ == 0 ? std::nullopt
@@ -2134,6 +2452,8 @@ void AssetBrowserPanel::OnImGuiRender(Registry& registry,
                         drawerItem_->record.guid ||
                     record.assetType ==
                         "iridium.material" ||
+                    record.assetType ==
+                        "iridium.model-primitive" ||
                     record.assetType ==
                         "iridium.texture") {
                     demandByGuid.insert_or_assign(

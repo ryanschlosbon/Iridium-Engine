@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "milestone": "M6.0",
+  "units": {
+    "distance": "metres",
+    "angle": "degrees",
+    "radiance": "scene_linear_acescg_ap1"
+  },
+  "numerical_tolerance": {
+    "absolute": 1e-9,
+    "relative": 1e-9
+  },
+  "fresnel_dielectric": [
+    {
+      "id": "air_to_glass_normal_v1",
+      "incident_ior": 1.0,
+      "transmitted_ior": 1.5,
+      "incident_angle_degrees": 0.0,
+      "expected_reflectance": 0.04,
+      "total_internal_reflection": false
+    },
+    {
+      "id": "air_to_glass_sixty_v1",
+      "incident_ior": 1.0,
+      "transmitted_ior": 1.5,
+      "incident_angle_degrees": 60.0,
+      "expected_transmitted_angle_degrees": 35.2643896827547,
+      "expected_reflectance": 0.0891867128022127,
+      "total_internal_reflection": false
+    },
+    {
+      "id": "glass_to_air_tir_v1",
+      "incident_ior": 1.5,
+      "transmitted_ior": 1.0,
+      "incident_angle_degrees": 50.0,
+      "critical_angle_degrees": 41.8103148957786,
+      "expected_reflectance": 1.0,
+      "total_internal_reflection": true
+    }
+  ],
+  "beer_lambert": [
+    {
+      "id": "zero_path_v1",
+      "attenuation_color": [0.8, 0.5, 0.25],
+      "attenuation_distance_metres": 2.0,
+      "path_length_metres": 0.0,
+      "expected_transmittance": [1.0, 1.0, 1.0]
+    },
+    {
+      "id": "half_distance_v1",
+      "attenuation_color": [0.8, 0.5, 0.25],
+      "attenuation_distance_metres": 2.0,
+      "path_length_metres": 1.0,
+      "expected_transmittance": [0.8944271909999159, 0.7071067811865476, 0.5]
+    },
+    {
+      "id": "full_distance_v1",
+      "attenuation_color": [0.8, 0.5, 0.25],
+      "attenuation_distance_metres": 2.0,
+      "path_length_metres": 2.0,
+      "expected_transmittance": [0.8, 0.5, 0.25]
+    },
+    {
+      "id": "infinite_distance_v1",
+      "attenuation_color": [0.0, 0.0, 0.0],
+      "attenuation_distance_metres": "infinite",
+      "path_length_metres": 1000.0,
+      "expected_transmittance": [1.0, 1.0, 1.0]
+    }
+  ],
+  "thin_glass": [
+    {
+      "id": "zero_default_thickness_v1",
+      "sheet_thickness_metres": 0.0,
+      "expected_absorption_path_metres": 0.0,
+      "expected_lateral_screen_displacement": 0.0,
+      "fresnel_and_transmission_remain_active": true
+    }
+  ]
+}

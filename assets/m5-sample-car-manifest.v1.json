@@ -30,7 +30,7 @@
       "content_files": [
         {
           "path": "models/alfa_romeo/alfa_romeo.gltf",
-          "sha256": "be2981b07dc2bb440627a4bca78e71eec9792cff527ab8652cb230831e32b324"
+          "sha256": "96f80eb8b302219aaec343920431877386cebb0ea5bf1a4a6df6e97b38456816"
         }
       ],
       "expected_behavior": [

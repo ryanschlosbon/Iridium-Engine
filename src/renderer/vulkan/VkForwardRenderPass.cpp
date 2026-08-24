@@ -2,16 +2,18 @@
 #include <stdexcept>
 #include <array>
 
-VkForwardRenderPass::VkForwardRenderPass(VkContext* context, VkFormat colorFormat, VkFormat depthFormat)
+VkForwardRenderPass::VkForwardRenderPass(VkContext* context, VkFormat colorFormat,
+    VkFormat depthFormat, bool depthReadOnly)
     : context(context) {
-    createRenderPass(colorFormat, depthFormat);
+    createRenderPass(colorFormat, depthFormat, depthReadOnly);
 }
 
 VkForwardRenderPass::~VkForwardRenderPass() {
     vkDestroyRenderPass(context->getDevice(), renderPass, nullptr);
 }
 
-void VkForwardRenderPass::createRenderPass(VkFormat colorFormat, VkFormat depthFormat) {
+void VkForwardRenderPass::createRenderPass(VkFormat colorFormat,
+    VkFormat depthFormat, bool depthReadOnly) {
     // 0: LIT SCENE COLOR ATTACHMENT
     VkAttachmentDescription colorAttachment{};
     colorAttachment.format = colorFormat;
@@ -41,16 +43,21 @@ void VkForwardRenderPass::createRenderPass(VkFormat colorFormat, VkFormat depthF
     // writes; keeping the attachment writable lets opaque forward geometry
     // establish correct visibility for every later forward draw.
     depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+    // Read-only describes this subpass, not the lifetime of the attachment.
+    // Main depth is consumed again by the retained compatibility transparency
+    // passes, so discarding it here would make their subsequent LOAD undefined.
     depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     depthAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
     depthAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
 
-    depthAttachment.initialLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-    depthAttachment.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+    depthAttachment.initialLayout = depthReadOnly
+        ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL
+        : VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+    depthAttachment.finalLayout = depthAttachment.initialLayout;
 
     VkAttachmentReference depthAttachmentRef{};
     depthAttachmentRef.attachment = 1;
-    depthAttachmentRef.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+    depthAttachmentRef.layout = depthAttachment.initialLayout;
 
     // --- SUBPASS ---
     VkSubpassDescription subpass{};
@@ -72,7 +79,7 @@ void VkForwardRenderPass::createRenderPass(VkFormat colorFormat, VkFormat depthF
     dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
         VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
         VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
-        VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+        (depthReadOnly ? 0u : VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
     std::array<VkAttachmentDescription, 2> attachments = { colorAttachment, depthAttachment };
 
     VkRenderPassCreateInfo renderPassInfo{};

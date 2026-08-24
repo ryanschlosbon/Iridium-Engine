@@ -143,6 +143,9 @@ int main(int argc, char** argv) {
             { "artifactHash", artifact.artifactHash },
             { "schema",
                 artifact.artifact->artifactSchemaVersion },
+            { "transparencyExecutionMode",
+                transparencyExecutionModeName(
+                    model.data->manifest.transparencyExecutionMode) },
             { "materials", model.data->materials.size() },
             { "textureViews",
                 model.data->textureViews.size() },
@@ -171,12 +174,29 @@ int main(int argc, char** argv) {
                     "Requested source material index is absent.");
             }
             size_t primitiveCount = 0;
+            Json primitivePolicies = Json::array();
             Json textures = Json::array();
             for (const CookedModelPrimitive& primitive :
                 model.data->manifest.primitives) {
                 if (primitive.materialGuid ==
                     found->materialGuid) {
                     ++primitiveCount;
+                    primitivePolicies.push_back({
+                        { "primitiveGuid",
+                            primitive.primitiveGuid.toString() },
+                        { "requestedClass", transparencyClassName(
+                            primitive.transparency.requestedClass) },
+                        { "resolvedClass", transparencyClassName(
+                            primitive.transparency.resolvedClass) },
+                        { "quality", transparencyQualityName(
+                            primitive.transparency.quality) },
+                        { "priority",
+                            primitive.transparency.priority },
+                        { "thinSheetThicknessMeters",
+                            primitive.transparency
+                                .thinSheetThicknessMeters },
+                        { "flags", primitive.transparency.flags },
+                    });
                 }
             }
             for (size_t operationIndex = 0;
@@ -254,6 +274,20 @@ int main(int argc, char** argv) {
                 { "alphaMode",
                     alphaName(
                         found->compiled.standard.alphaMode) },
+                { "transparency", {
+                    { "requestedClass", transparencyClassName(
+                        found->compiled.transparency.requestedClass) },
+                    { "resolvedClass", transparencyClassName(
+                        found->compiled.transparency.resolvedClass) },
+                    { "quality", transparencyQualityName(
+                        found->compiled.transparency.quality) },
+                    { "priority",
+                        found->compiled.transparency.priority },
+                    { "thinSheetThicknessMeters",
+                        found->compiled.transparency
+                            .thinSheetThicknessMeters },
+                    { "flags", found->compiled.transparency.flags },
+                } },
                 { "doubleSided",
                     found->compiled.standard.doubleSided },
                 { "metallic",
@@ -261,6 +295,7 @@ int main(int argc, char** argv) {
                 { "roughness",
                     found->compiled.standard.roughnessFactor },
                 { "primitiveCount", primitiveCount },
+                { "primitivePolicies", std::move(primitivePolicies) },
                 { "textures", std::move(textures) },
             };
         }

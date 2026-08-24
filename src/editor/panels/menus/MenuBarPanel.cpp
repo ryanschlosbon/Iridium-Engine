@@ -447,6 +447,36 @@ void MenuBarPanel::OnImGuiRender(Registry& registry, Iridium::AssetManager* asse
             if (ImGui::MenuItem("Empty Entity")) {
                 if (sceneCommands_) (void)sceneCommands_->createEmpty();
             }
+            if (ImGui::BeginMenu("3D Object")) {
+                if (ImGui::MenuItem("Cube") && sceneCommands_) {
+                    (void)sceneCommands_->createPreset(
+                        Iridium::EditorEntityPreset::Cube);
+                }
+                ImGui::EndMenu();
+            }
+            if (ImGui::BeginMenu("Light")) {
+                if (ImGui::MenuItem("Directional (Sun)") && sceneCommands_) {
+                    (void)sceneCommands_->createPreset(
+                        Iridium::EditorEntityPreset::DirectionalLight);
+                }
+                if (ImGui::MenuItem("Point") && sceneCommands_) {
+                    (void)sceneCommands_->createPreset(
+                        Iridium::EditorEntityPreset::PointLight);
+                }
+                if (ImGui::MenuItem("Spot") && sceneCommands_) {
+                    (void)sceneCommands_->createPreset(
+                        Iridium::EditorEntityPreset::SpotLight);
+                }
+                ImGui::EndMenu();
+            }
+            if (ImGui::BeginMenu("Sky")) {
+                if (ImGui::MenuItem("HDRI Sky") && sceneCommands_) {
+                    (void)sceneCommands_->createPreset(
+                        Iridium::EditorEntityPreset::HdriSky);
+                }
+                ImGui::EndMenu();
+            }
+            ImGui::Separator();
             const bool hasSelectedModel =
                 uiState->selectedAsset &&
                 uiState->selectedAsset->kind ==

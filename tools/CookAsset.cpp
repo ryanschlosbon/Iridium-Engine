@@ -6,9 +6,11 @@
 #include "assets/model/GltfModelImporter.h"
 #include "assets/texture/TextureImporter.h"
 
+#include <chrono>
 #include <filesystem>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 
@@ -102,6 +104,30 @@ int main(int argc, char** argv) {
     }
 
     try {
+        const auto commandStart = std::chrono::steady_clock::now();
+        const auto progressMutex = std::make_shared<std::mutex>();
+        const auto logProgress =
+            [commandStart, progressMutex](
+                std::string_view stage,
+                uint64_t completed,
+                uint64_t total,
+                std::string_view detail) {
+                const auto elapsedMilliseconds =
+                    std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now() -
+                        commandStart).count();
+                std::lock_guard lock(*progressMutex);
+                std::cerr << "IRIDIUM_COOK_PROGRESS stage=" << stage;
+                if (total != 0) {
+                    std::cerr << " completed=" << completed
+                        << " total=" << total;
+                }
+                std::cerr << " elapsed_ms=" << elapsedMilliseconds
+                    << " detail=\"" << detail << "\"\n";
+                std::cerr.flush();
+            };
+        logProgress("metadata", 0, 1,
+            "Reading asset metadata");
         const AssetMetadataReadResult metadata =
             readAssetMetadata(options->metadata);
         if (!metadata.metadata) {
@@ -132,6 +158,8 @@ int main(int argc, char** argv) {
         registry.registerImporter(std::make_shared<EnvironmentImporter>());
         registry.registerImporter(std::make_shared<GltfModelImporter>());
         LocalDerivedDataCache cache(options->ddc);
+        logProgress("prepare", 0, 1,
+            "Resolving receipt or parsing source and dependencies");
         std::vector<CookDiagnostic> receiptDiagnostics;
         std::optional<PreparedAssetCook> receipt =
             tryPrepareAssetCookFromReceipt(
@@ -155,8 +183,24 @@ int main(int argc, char** argv) {
             return 2;
         }
 
+        logProgress("prepare", 1, 1,
+            std::string(usedReceipt
+                ? "Warm preparation receipt loaded; cook key "
+                : "Source preparation complete; cook key ") +
+                prepared->cookKey);
+        prepared->context.progress =
+            [logProgress](const AssetCookContext::Progress& progress) {
+                logProgress(progress.stage, progress.completed,
+                    progress.total, progress.detail);
+            };
+
+        logProgress("ddc", 0, 1,
+            "Requesting parent artifact from derived-data cache");
         DdcRequestResult result =
             requestPreparedCook(cache, prepared).get();
+        logProgress("ddc", 1, 1,
+            std::string("Parent artifact request finished: ") +
+                statusName(result.status));
         if (result.status == DdcRequestStatus::Built ||
             result.status == DdcRequestStatus::CacheHit) {
             std::vector<CookDiagnostic> receiptStore =

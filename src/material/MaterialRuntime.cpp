@@ -318,10 +318,11 @@ namespace Iridium {
 
     uint32_t packedTextureReconstructNormalZMask(
         const PackedGpuMaterial& material) noexcept {
-        uint32_t mask = 0;
-        std::memcpy(&mask, material.reserved.data(),
-            sizeof(mask));
-        return mask;
+        return (material.featureFlags &
+            MaterialFeaturePackedNormalReconstructZ) != 0
+            ? 1u << static_cast<uint32_t>(
+                SourceTextureSemantic::Normal)
+            : 0u;
     }
 
     bool consumeMaterialUploadRevision(uint64_t revision,
@@ -341,6 +342,12 @@ namespace Iridium {
         packed.closureClass = static_cast<uint32_t>(compiled.closureClass);
         packed.workflow = static_cast<uint32_t>(compiled.workflow);
         packed.featureFlags = compiled.featureFlags;
+        packed.transparencyPolicy = packTransparencyPolicyWord(
+            compiled.transparency);
+        packed.transparencyPriority =
+            compiled.transparency.priority;
+        packed.thinSheetThicknessMeters =
+            compiled.transparency.thinSheetThicknessMeters;
         packed.textureMask = values.textureMask;
         packed.alphaMode = static_cast<uint32_t>(values.alphaMode);
         packed.doubleSided = values.doubleSided ? 1u : 0u;
@@ -397,9 +404,10 @@ namespace Iridium {
             packHalf(operation.transform.rotation.value, use.rotation, result, "texture rotation");
             packHalf(operation.scalar.value, use.scalar, result, "texture scalar");
         }
-        std::memcpy(packed.reserved.data(),
-            &reconstructNormalZMask,
-            sizeof(reconstructNormalZMask));
+        if (reconstructNormalZMask != 0) {
+            packed.featureFlags |=
+                MaterialFeaturePackedNormalReconstructZ;
+        }
 
         if (compiled.complexLobes.size() > PackedGpuMaterial::MaxComplexLobes) {
             packError(result, MaterialPackError::TooManyComplexLobes,
@@ -465,6 +473,10 @@ namespace Iridium {
         result.closureClass = static_cast<MaterialClosureClass>(material.closureClass);
         result.workflow = static_cast<MaterialWorkflow>(material.workflow);
         result.featureFlags = material.featureFlags;
+        result.transparency = unpackTransparencyPolicyWord(
+            material.transparencyPolicy,
+            material.transparencyPriority,
+            material.thinSheetThicknessMeters);
         result.values.textureMask = material.textureMask;
         result.values.alphaMode = static_cast<SourceAlphaMode>(material.alphaMode);
         result.values.doubleSided = material.doubleSided != 0;
@@ -582,7 +594,7 @@ namespace Iridium {
         const SourceMaterial& source, const MaterialCompileResult& compileResult,
         const MaterialInstance& instance, const MaterialPackResult& packResult) {
         Json root;
-        root["schema_version"] = 1;
+        root["schema_version"] = 2;
         root["source"] = {
             { "material_index", source.localIndex },
             { "name", source.name },
@@ -606,6 +618,16 @@ namespace Iridium {
             { "alpha_cutoff_origin", sourceValueOriginName(source.alphaCutoff.origin) },
             { "double_sided", source.doubleSided.value },
             { "double_sided_origin", sourceValueOriginName(source.doubleSided.origin) },
+            { "transparency_policy", {
+                { "schema_version", TransparencyPolicyV1::SchemaVersion },
+                { "requested_class", transparencyClassName(
+                    source.transparencyPolicy.requestedClass) },
+                { "quality", transparencyQualityName(
+                    source.transparencyPolicy.quality) },
+                { "priority", source.transparencyPolicy.priority },
+                { "thin_sheet_thickness_m",
+                    source.transparencyPolicy.thinSheetThicknessMeters },
+            } },
         };
         root["source"]["textures"] = Json::array();
         for (const SourceTextureUse& texture : source.textures) {
@@ -670,6 +692,18 @@ namespace Iridium {
                 { "alpha_cutoff", compiled.standard.alphaCutoff },
                 { "double_sided", compiled.standard.doubleSided },
                 { "texture_mask", compiled.standard.textureMask },
+                { "transparency", {
+                    { "requested_class", transparencyClassName(
+                        compiled.transparency.requestedClass) },
+                    { "resolved_class", transparencyClassName(
+                        compiled.transparency.resolvedClass) },
+                    { "quality", transparencyQualityName(
+                        compiled.transparency.quality) },
+                    { "flags", compiled.transparency.flags },
+                    { "priority", compiled.transparency.priority },
+                    { "thin_sheet_thickness_m",
+                        compiled.transparency.thinSheetThicknessMeters },
+                } },
             };
             root["compiled"]["complex_lobes"] = Json::array();
             for (const ComplexLobeRecord& lobe : compiled.complexLobes)
@@ -758,6 +792,10 @@ namespace Iridium {
                 { "emissive_strength", packed.emissiveFactorStrength },
                 { "surface_parameters", packed.surfaceParameters },
                 { "texture_indices", packed.textureIndices },
+                { "transparency_policy", packed.transparencyPolicy },
+                { "transparency_priority", packed.transparencyPriority },
+                { "thin_sheet_thickness_m",
+                    packed.thinSheetThicknessMeters },
             };
             root["packed"]["complex_lobes"] = Json::array();
             for (uint32_t index = 0; index < packed.complexLobeCount; ++index)

@@ -212,6 +212,138 @@ namespace Iridium {
             appendU32(bytes, mask);
         }
 
+        void resolveTransparencyPolicy(CompiledMaterial& material,
+            TransparencyPolicyV1 policy, TransparencyTopology topology,
+            MaterialCompileResult& result) {
+            CompiledTransparencyPolicy resolved;
+            if (!isAuthoredTransparencyClass(policy.requestedClass)) {
+                policy.requestedClass = TransparencyClass::Auto;
+                resolved.flags |= CompiledTransparencyPolicySanitized;
+                addDiagnostic(result, MaterialCompileSeverity::Warning,
+                    "MATERIAL_TRANSPARENCY_CLASS_UNKNOWN",
+                    "unknown transparency class was normalized to Auto");
+            }
+            if (!isTransparencyQuality(policy.quality)) {
+                policy.quality = TransparencyQuality::Ordinary2;
+                resolved.flags |= CompiledTransparencyPolicySanitized;
+                addDiagnostic(result, MaterialCompileSeverity::Warning,
+                    "MATERIAL_TRANSPARENCY_QUALITY_UNKNOWN",
+                    "unknown transparency quality was normalized to Ordinary2");
+            }
+            if (!std::isfinite(policy.thinSheetThicknessMeters) ||
+                policy.thinSheetThicknessMeters < 0.0f ||
+                policy.thinSheetThicknessMeters > 1.0e6f) {
+                policy.thinSheetThicknessMeters = 0.0f;
+                resolved.flags |= CompiledTransparencyPolicySanitized;
+                addDiagnostic(result, MaterialCompileSeverity::Warning,
+                    "MATERIAL_TRANSPARENCY_THICKNESS_INVALID",
+                    "thin-sheet thickness must be finite and in [0, 1000000] metres; zero was selected");
+            }
+
+            resolved.requestedClass = policy.requestedClass;
+            resolved.quality = policy.quality;
+            resolved.priority = policy.priority;
+            resolved.thinSheetThicknessMeters =
+                policy.thinSheetThicknessMeters;
+            if (policy.requestedClass != TransparencyClass::Auto) {
+                resolved.flags |= CompiledTransparencyExplicitClass;
+            }
+
+            const bool transmission =
+                (material.featureFlags & (MaterialFeatureTransmission |
+                    MaterialFeatureDiffuseTransmission)) != 0;
+            const bool volume =
+                (material.featureFlags & MaterialFeatureVolume) != 0;
+            const bool dispersion =
+                (material.featureFlags & MaterialFeatureDispersion) != 0;
+            const auto autoClass = [&]() {
+                if (volume) {
+                    if (topology == TransparencyTopology::ValidClosed) {
+                        return TransparencyClass::LayeredGlass;
+                    }
+                    resolved.flags |= CompiledTransparencyTopologyRequired;
+                    if (topology == TransparencyTopology::Invalid) {
+                        resolved.flags |= CompiledTransparencyFallbackApplied;
+                    }
+                    return TransparencyClass::ThinGlass;
+                }
+                if (transmission) return TransparencyClass::ThinGlass;
+                if (material.standard.alphaMode == SourceAlphaMode::Mask) {
+                    return TransparencyClass::AlphaClip;
+                }
+                if (material.standard.alphaMode == SourceAlphaMode::Blend) {
+                    return TransparencyClass::SortedSurface;
+                }
+                return TransparencyClass::None;
+            };
+            const auto fallback = [&](TransparencyClass value,
+                std::string code, std::string message) {
+                resolved.flags |= CompiledTransparencyFallbackApplied;
+                addDiagnostic(result, MaterialCompileSeverity::Warning,
+                    std::move(code), std::move(message));
+                return value;
+            };
+
+            switch (policy.requestedClass) {
+            case TransparencyClass::Auto:
+                resolved.resolvedClass = autoClass();
+                break;
+            case TransparencyClass::None:
+                resolved.requestedClass = TransparencyClass::Auto;
+                resolved.flags |= CompiledTransparencyPolicySanitized;
+                resolved.resolvedClass = autoClass();
+                break;
+            case TransparencyClass::AlphaClip:
+                if (transmission || material.standard.alphaMode !=
+                        SourceAlphaMode::Mask) {
+                    resolved.resolvedClass = fallback(autoClass(),
+                        "MATERIAL_TRANSPARENCY_ALPHA_CLIP_INCOMPATIBLE",
+                        "AlphaClip requires non-transmissive mask coverage; the safe Auto class was selected");
+                } else {
+                    resolved.resolvedClass = TransparencyClass::AlphaClip;
+                }
+                break;
+            case TransparencyClass::SortedSurface:
+                if (transmission || volume || dispersion) {
+                    resolved.resolvedClass = fallback(
+                        TransparencyClass::ThinGlass,
+                        "MATERIAL_TRANSPARENCY_SORTED_INCOMPATIBLE",
+                        "SortedSurface cannot carry transmissive or volume transport; ThinGlass was selected");
+                } else {
+                    resolved.resolvedClass =
+                        TransparencyClass::SortedSurface;
+                }
+                break;
+            case TransparencyClass::ThinGlass:
+                resolved.resolvedClass = TransparencyClass::ThinGlass;
+                break;
+            case TransparencyClass::LayeredGlass:
+                if (!volume || topology !=
+                        TransparencyTopology::ValidClosed) {
+                    resolved.flags |= CompiledTransparencyTopologyRequired;
+                    resolved.resolvedClass = fallback(
+                        TransparencyClass::ThinGlass,
+                        "MATERIAL_TRANSPARENCY_LAYERED_FALLBACK",
+                        "LayeredGlass requires validated closed volume topology; ThinGlass was selected");
+                } else {
+                    resolved.resolvedClass =
+                        TransparencyClass::LayeredGlass;
+                }
+                break;
+            case TransparencyClass::WeightedOit:
+                if (transmission || volume || dispersion) {
+                    resolved.resolvedClass = fallback(
+                        TransparencyClass::SortedSurface,
+                        "MATERIAL_TRANSPARENCY_OIT_INCOMPATIBLE",
+                        "WeightedOIT forbids refractive, volume, and dispersive transport; SortedSurface was selected");
+                } else {
+                    resolved.resolvedClass = TransparencyClass::WeightedOit;
+                }
+                break;
+            }
+            material.transparency = resolved;
+        }
+
         std::string compiledHash(const CompiledMaterial& material) {
             std::vector<std::byte> bytes;
             bytes.reserve(256 + material.complexLobes.size() * 64);
@@ -219,6 +351,12 @@ namespace Iridium {
             appendU32(bytes, static_cast<uint32_t>(material.workflow));
             appendU32(bytes, static_cast<uint32_t>(material.closureClass));
             appendU32(bytes, material.featureFlags);
+            appendU32(bytes, packTransparencyPolicyWord(
+                material.transparency));
+            appendU32(bytes, static_cast<uint32_t>(
+                material.transparency.priority));
+            appendFloat(bytes,
+                material.transparency.thinSheetThicknessMeters);
             const StandardClosureRecipe& recipe = material.standard;
             for (float value : { recipe.baseColorFactor.r, recipe.baseColorFactor.g,
                 recipe.baseColorFactor.b, recipe.baseColorFactor.a, recipe.metallicFactor,
@@ -627,6 +765,8 @@ namespace Iridium {
 
         if (!validateRecipe(recipe, result) || !validateComplexLobes(compiled, result))
             compiled.closureClass = MaterialClosureClass::Invalid;
+        resolveTransparencyPolicy(compiled, source.transparencyPolicy,
+            TransparencyTopology::Unknown, result);
         const bool errors = std::any_of(result.diagnostics.begin(), result.diagnostics.end(),
             [](const MaterialCompileDiagnostic& diagnostic) {
                 return diagnostic.severity == MaterialCompileSeverity::Error;
@@ -659,6 +799,26 @@ namespace Iridium {
                     diagnostics.push_back(diagnostic);
             result.materials.push_back(compileSourceMaterial(source, policy, diagnostics));
         }
+        return result;
+    }
+
+    MaterialCompileResult applyCompiledTransparencyPolicy(
+        const CompiledMaterial& material,
+        const TransparencyPolicyV1& policy,
+        TransparencyTopology topology) {
+        MaterialCompileResult result;
+        if (material.schemaVersion != CompiledMaterial::SchemaVersion ||
+            material.closureClass == MaterialClosureClass::Invalid) {
+            addDiagnostic(result, MaterialCompileSeverity::Error,
+                "MATERIAL_TRANSPARENCY_BASE_INVALID",
+                "transparency policy cannot be applied to an invalid compiled material");
+            return result;
+        }
+        CompiledMaterial updated = material;
+        resolveTransparencyPolicy(updated, policy, topology, result);
+        updated.contentHash = calculateCompiledMaterialHash(updated);
+        result.material = std::make_shared<const CompiledMaterial>(
+            std::move(updated));
         return result;
     }
 

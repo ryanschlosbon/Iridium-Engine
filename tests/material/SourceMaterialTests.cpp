@@ -85,6 +85,7 @@ namespace {
         CHECK(defaults.metallicRoughness.baseColorFactor.origin == SourceValueOrigin::FormatDefault);
         CHECK(defaults.metallicRoughness.metallicFactor.value == 1.0f);
         CHECK(defaults.alphaMode.value == SourceAlphaMode::Opaque);
+        CHECK(defaults.transparencyPolicy == TransparencyPolicyV1{});
         CHECK(defaults.alphaCutoff.value == 0.5f);
         CHECK(!defaults.doubleSided.value);
         const SourceMaterial& explicitMaterial = document.materials()[1];
@@ -273,8 +274,8 @@ namespace {
             nonzeroEmissive += glm::any(glm::notEqual(material.emissiveFactor.value,
                 glm::vec3(0.0f))) ? 1 : 0;
         }
-        CHECK(defaultMetallic == 25);
-        CHECK(explicitZeroMetallic == 61);
+        CHECK(defaultMetallic == 23);
+        CHECK(explicitZeroMetallic == 63);
         CHECK(blend == 5);
         CHECK(normalTextures == 72);
         CHECK(metallicRoughnessTextures == 2);

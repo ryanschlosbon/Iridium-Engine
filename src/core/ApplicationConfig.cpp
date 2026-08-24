@@ -110,6 +110,39 @@ namespace Iridium {
             else if (argument == "--validate-reflection-probes") {
                 config.validateReflectionProbes = true;
             }
+            else if (argument == "--validate-ordinary2-capture") {
+                config.validateOrdinary2Capture = true;
+            }
+            else if (argument == "--validate-ordinary2-fallback") {
+                config.validateOrdinary2Fallback = true;
+            }
+            else if (argument == "--validate-ordinary2-resize") {
+                config.validateOrdinary2Resize = true;
+            }
+            else if (argument == "--validate-deep-layered-capture") {
+                config.validateDeepLayeredCapture = true;
+            }
+            else if (argument == "--validate-deep-layered-lifecycle") {
+                config.validateDeepLayeredLifecycle = true;
+            }
+            else if (argument == "--deep-layered-validation-quality") {
+                if (++index >= arguments.size()) {
+                    throw std::invalid_argument(
+                        "--deep-layered-validation-quality requires hero4 or cinematic8");
+                }
+                if (arguments[index] == "hero4") {
+                    config.deepLayeredCaptureQuality =
+                        TransparencyQuality::Hero4;
+                }
+                else if (arguments[index] == "cinematic8") {
+                    config.deepLayeredCaptureQuality =
+                        TransparencyQuality::Cinematic8;
+                }
+                else {
+                    throw std::invalid_argument(
+                        "--deep-layered-validation-quality requires hero4 or cinematic8");
+                }
+            }
             else if (argument ==
                 "--validate-texture-table-scale") {
                 if (++index >= arguments.size()) {
@@ -533,6 +566,12 @@ namespace Iridium {
             "  --profile-transparent-overdraw Collect optional transparent fragment workload\n"
             "  --validate-texture-residency-churn Exercise fallback and fence-delayed index reuse\n"
             "  --validate-reflection-probes   Generate a resident local-probe GPU fixture\n"
+            "  --validate-ordinary2-capture  Read back and verify the first measured Ordinary2 interfaces and local color\n"
+            "  --validate-ordinary2-fallback Verify invalid topology stays ThinGlass with no Ordinary2 atlas\n"
+            "  --validate-ordinary2-resize   Resize populated Ordinary2 targets and verify post-restore GPU pairing\n"
+            "  --validate-deep-layered-capture Read back the selected deep tier and verify resolve/fallback handoff\n"
+            "  --validate-deep-layered-lifecycle Retire/reactivate the selected deep tier twice, then verify GPU output\n"
+            "  --deep-layered-validation-quality QUALITY Select hero4 (default) or cinematic8 validation\n"
             "  --validate-texture-table-scale COUNT Grow and populate indexed view/sampler tables\n"
             "  --validate-material-table-scale COUNT Grow and populate the indexed GPU material table\n"
             "  --validate-light-table-scale COUNT Grow and populate the GPU light record table\n"

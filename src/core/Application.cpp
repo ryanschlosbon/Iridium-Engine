@@ -95,6 +95,12 @@ namespace Iridium {
         constexpr uint64_t
             EditorRuntimeUploadBudgetBytes =
                 128ull * 1024ull * 1024ull;
+        // Model publication is still atomic today, but the per-frame admission
+        // budget is not a product-size limit. Permit one oversized model when
+        // the queue is otherwise idle while retaining a high-end-editor safety
+        // cap until progressive geometry/texture residency lands.
+        constexpr uint64_t EditorModelPublicationLimitBytes =
+            1024ull * 1024ull * 1024ull;
         // One atomic Cinematic 2048/2048 environment is about 512 MiB. Keep a
         // bounded margin for product metadata without silently allowing
         // arbitrary oversized model/texture publications.
@@ -104,6 +110,54 @@ namespace Iridium {
             "urn:ampas:aces:transformId:v2.0:Output.Academy.Rec709-D65_100nit_in_Rec709-D65_sRGB-Piecewise.a2.v1";
         constexpr std::string_view Aces2HdrTransformId =
             "urn:ampas:aces:transformId:v2.0:Output.Academy.P3-D65_1000nit_in_Rec2100-D65_ST2084.a2.v1";
+
+        struct Ordinary2FallbackModelStats {
+            uint32_t transparentSubmeshes = 0;
+            uint32_t requestedLayeredCandidates = 0;
+            uint32_t fallbackThinGlassSubmeshes = 0;
+            uint32_t fallbackFlaggedSubmeshes = 0;
+            uint32_t topologyRequiredSubmeshes = 0;
+            uint32_t layeredGlassSubmeshes = 0;
+        };
+
+        Ordinary2FallbackModelStats ordinary2FallbackModelStats(
+            const ModelAsset& model) noexcept {
+            Ordinary2FallbackModelStats result{};
+            for (const SubMesh& subMesh : model.subMeshes) {
+                if (subMesh.materialIndex < 0 ||
+                    static_cast<size_t>(subMesh.materialIndex) >=
+                        model.materials.size() ||
+                    model.materials[static_cast<size_t>(
+                        subMesh.materialIndex)].renderQueue !=
+                        RenderQueue::Transparent) {
+                    continue;
+                }
+                ++result.transparentSubmeshes;
+                if (subMesh.transparency.requestedClass ==
+                        TransparencyClass::Auto ||
+                    subMesh.transparency.requestedClass ==
+                        TransparencyClass::LayeredGlass) {
+                    ++result.requestedLayeredCandidates;
+                }
+                if (subMesh.transparency.resolvedClass ==
+                        TransparencyClass::ThinGlass) {
+                    ++result.fallbackThinGlassSubmeshes;
+                }
+                if ((subMesh.transparency.flags &
+                        CompiledTransparencyFallbackApplied) != 0u) {
+                    ++result.fallbackFlaggedSubmeshes;
+                }
+                if ((subMesh.transparency.flags &
+                        CompiledTransparencyTopologyRequired) != 0u) {
+                    ++result.topologyRequiredSubmeshes;
+                }
+                if (subMesh.transparency.resolvedClass ==
+                        TransparencyClass::LayeredGlass) {
+                    ++result.layeredGlassSubmeshes;
+                }
+            }
+            return result;
+        }
 
         std::string_view outputOperatorName(OutputTransformOperator value) {
             switch (value) {
@@ -310,7 +364,295 @@ namespace Iridium {
                 }
                 completedCapture_ = std::move(captures.front());
             }
+            if (config_.validateOrdinary2Capture ||
+                config_.validateOrdinary2Resize) {
+                const std::vector<Ordinary2CaptureValidationResult> validations =
+                    renderBackend->collectOrdinary2CaptureValidations(true);
+                if (validations.size() != 1u ||
+                    validations.front().validationId != 0u) {
+                    throw std::runtime_error(
+                        "The requested Ordinary2 validation did not produce exactly one GPU readback result.");
+                }
+                const Ordinary2CaptureValidationResult& validation =
+                    validations.front();
+                std::cout
+                    << "IRIDIUM_ORDINARY2_CAPTURE_VALIDATION {\"validation_id\":"
+                    << validation.validationId
+                    << ",\"atlas_extent\":[" << validation.atlasWidth << ','
+                    << validation.atlasHeight << ']'
+                    << ",\"expected_draws\":" << validation.expectedDrawCount
+                    << ",\"work_items\":" << validation.workItemCount
+                    << ",\"inspected_pixels\":" << validation.inspectedPixelCount
+                    << ",\"entry_pixels\":" << validation.entryPixelCount
+                    << ",\"exit_pixels\":" << validation.exitPixelCount
+                    << ",\"paired_pixels\":" << validation.pairedPixelCount
+                    << ",\"entry_only_pixels\":" << validation.entryOnlyPixelCount
+                    << ",\"invalid_work_index_pixels\":"
+                    << validation.invalidWorkIndexPixelCount
+                    << ",\"invalid_orientation_pixels\":"
+                    << validation.invalidOrientationPixelCount
+                    << ",\"unpaired_exit_pixels\":"
+                    << validation.unpairedExitPixelCount
+                    << ",\"work_mismatch_pixels\":"
+                    << validation.workMismatchPixelCount
+                    << ",\"invalid_depth_pixels\":"
+                    << validation.invalidDepthPixelCount
+                    << ",\"non_increasing_depth_pixels\":"
+                    << validation.nonIncreasingDepthPixelCount
+                    << ",\"minimum_paired_depth_delta\":"
+                    << validation.minimumPairedDepthDelta
+                    << ",\"maximum_paired_depth_delta\":"
+                    << validation.maximumPairedDepthDelta
+                    << ",\"local_color_pixels\":"
+                    << validation.localColorPixelCount
+                    << ",\"local_color_invalid_pixels\":"
+                    << validation.localColorInvalidPixelCount
+                    << ",\"minimum_local_alpha\":"
+                    << validation.minimumLocalAlpha
+                    << ",\"maximum_local_alpha\":"
+                    << validation.maximumLocalAlpha
+                    << ",\"passed\":"
+                    << (validation.passed() ? "true" : "false")
+                    << "}\n" << std::flush;
+                if (!validation.passed()) {
+                    throw std::runtime_error(
+                        "Ordinary2 GPU capture/local-color validation failed.");
+                }
+            }
+            if (config_.validateDeepLayeredCapture ||
+                config_.validateDeepLayeredLifecycle) {
+                const std::vector<DeepLayeredCaptureValidationResult>
+                    validations = renderBackend->
+                        collectDeepLayeredCaptureValidations(true);
+                if (validations.size() != 1u ||
+                    validations.front().validationId != 0u) {
+                    throw std::runtime_error(
+                        "The requested deep layered validation did not produce exactly one GPU readback result.");
+                }
+                const DeepLayeredCaptureValidationResult& validation =
+                    validations.front();
+                std::cout
+                    << "IRIDIUM_DEEP_LAYERED_CAPTURE_VALIDATION {\"validation_id\":"
+                    << validation.validationId
+                    << ",\"quality\":\""
+                    << transparencyQualityName(validation.quality) << '\"'
+                    << ",\"atlas_extent\":[" << validation.atlasWidth << ','
+                    << validation.atlasHeight << ']'
+                    << ",\"interface_count\":" << validation.interfaceCount
+                    << ",\"expected_draws\":" << validation.expectedDrawCount
+                    << ",\"scene_resolve_draws\":"
+                    << validation.sceneResolveDrawCount
+                    << ",\"compatibility_forward_draws\":"
+                    << validation.compatibilityForwardDrawCount
+                    << ",\"work_items\":" << validation.workItemCount
+                    << ",\"inspected_pixels\":" << validation.inspectedPixelCount
+                    << ",\"maximum_observed_interfaces\":"
+                    << validation.maximumObservedInterfaceCount
+                    << ",\"interface_pixels\":[";
+                for (uint32_t interfaceIndex = 0u;
+                    interfaceIndex < validation.interfaceCount;
+                    ++interfaceIndex) {
+                    if (interfaceIndex != 0u) std::cout << ',';
+                    std::cout << validation.interfacePixelCounts[
+                        interfaceIndex];
+                }
+                std::cout
+                    << "]"
+                    << ",\"paired_pixels\":" << validation.pairedPixelCount
+                    << ",\"nested_four_interface_pixels\":"
+                    << validation.nestedFourInterfacePixelCount
+                    << ",\"crossing_pair_pixels\":"
+                    << validation.crossingPairPixelCount
+                    << ",\"early_terminated_pixels\":"
+                    << validation.earlyTerminatedPixelCount
+                    << ",\"terminated_occupied_tiles\":"
+                    << validation.terminatedOccupiedTileCount
+                    << ",\"terminated_occupied_tiles_by_interface\":[";
+                for (uint32_t interfaceIndex = 0u;
+                    interfaceIndex < validation.interfaceCount;
+                    ++interfaceIndex) {
+                    if (interfaceIndex != 0u) std::cout << ',';
+                    std::cout << validation.terminatedOccupiedTileCounts[
+                        interfaceIndex];
+                }
+                std::cout
+                    << "]"
+                    << ",\"invalid_work_index_pixels\":"
+                    << validation.invalidWorkIndexPixelCount
+                    << ",\"invalid_orientation_pixels\":"
+                    << validation.invalidOrientationPixelCount
+                    << ",\"invalid_depth_pixels\":"
+                    << validation.invalidDepthPixelCount
+                    << ",\"non_increasing_depth_pixels\":"
+                    << validation.nonIncreasingDepthPixelCount
+                    << ",\"interface_gap_pixels\":"
+                    << validation.interfaceGapPixelCount
+                    << ",\"duplicate_entry_pixels\":"
+                    << validation.duplicateEntryPixelCount
+                    << ",\"unmatched_exit_pixels\":"
+                    << validation.unmatchedExitPixelCount
+                    << ",\"unclosed_entry_pixels\":"
+                    << validation.unclosedEntryPixelCount
+                    << ",\"saturated_residual_pixels\":"
+                    << validation.saturatedResidualPixelCount
+                    << ",\"minimum_depth_delta\":"
+                    << validation.minimumDepthDelta
+                    << ",\"maximum_depth_delta\":"
+                    << validation.maximumDepthDelta
+                    << ",\"local_color_pixels\":"
+                    << validation.localColorPixelCount
+                    << ",\"local_color_invalid_pixels\":"
+                    << validation.localColorInvalidPixelCount
+                    << ",\"minimum_local_alpha\":"
+                    << validation.minimumLocalAlpha
+                    << ",\"maximum_local_alpha\":"
+                    << validation.maximumLocalAlpha
+                    << ",\"passed\":"
+                    << (validation.passed() ? "true" : "false")
+                    << "}\n" << std::flush;
+                if (!validation.passed()) {
+                    throw std::runtime_error(
+                        "Deep layered GPU capture/local-color validation failed.");
+                }
+            }
             renderRuntimeInfo_ = renderBackend->getRuntimeInfo();
+            if (config_.validateDeepLayeredLifecycle) {
+                const bool selectedTierResident =
+                    config_.deepLayeredCaptureQuality ==
+                            TransparencyQuality::Hero4
+                        ? renderRuntimeInfo_.hero4AtlasResident &&
+                            renderRuntimeInfo_.hero4AtlasWidth != 0u &&
+                            renderRuntimeInfo_.hero4AtlasHeight != 0u
+                        : renderRuntimeInfo_.cinematic8AtlasResident &&
+                            renderRuntimeInfo_.cinematic8AtlasWidth != 0u &&
+                            renderRuntimeInfo_.cinematic8AtlasHeight != 0u;
+                const bool passed =
+                    deepLayeredLifecycleValidation_.phase ==
+                        DeepLayeredLifecycleValidationState::Phase::Complete &&
+                    deepLayeredLifecycleValidation_.retirements == 2u &&
+                    deepLayeredLifecycleValidation_.reactivations == 2u &&
+                    deepLayeredLifecycleValidation_.visibilityChanges == 4u &&
+                    selectedTierResident &&
+                    renderRuntimeInfo_.refractionPyramidsResident;
+                std::cout
+                    << "IRIDIUM_DEEP_LAYERED_LIFECYCLE_VALIDATION {\"quality\":\""
+                    << transparencyQualityName(
+                        config_.deepLayeredCaptureQuality)
+                    << "\",\"retirements\":"
+                    << deepLayeredLifecycleValidation_.retirements
+                    << ",\"reactivations\":"
+                    << deepLayeredLifecycleValidation_.reactivations
+                    << ",\"visibility_changes\":"
+                    << deepLayeredLifecycleValidation_.visibilityChanges
+                    << ",\"completion_measured_frame\":"
+                    << deepLayeredLifecycleValidation_.completionMeasuredFrame
+                    << ",\"tier_resident\":"
+                    << (selectedTierResident ? "true" : "false")
+                    << ",\"refraction_pyramids_resident\":"
+                    << (renderRuntimeInfo_.refractionPyramidsResident
+                        ? "true" : "false")
+                    << ",\"passed\":" << (passed ? "true" : "false")
+                    << "}\n" << std::flush;
+                if (!passed) {
+                    throw std::runtime_error(
+                        "Deep layered tier lifecycle validation failed.");
+                }
+            }
+            if (config_.validateOrdinary2Resize) {
+                const uint64_t rebuildDelta =
+                    renderRuntimeInfo_.renderGraphRebuildCount >=
+                        ordinary2ResizeValidation_.initialRenderGraphRebuildCount
+                    ? renderRuntimeInfo_.renderGraphRebuildCount -
+                        ordinary2ResizeValidation_.initialRenderGraphRebuildCount
+                    : 0u;
+                const bool extentRestored =
+                    renderExtent_.width ==
+                        ordinary2ResizeValidation_.originalExtent.width &&
+                    renderExtent_.height ==
+                        ordinary2ResizeValidation_.originalExtent.height;
+                const bool passed =
+                    ordinary2ResizeValidation_.requests == 3u &&
+                    ordinary2ResizeValidation_.successes == 3u &&
+                    ordinary2ResizeValidation_.failures == 0u &&
+                    extentRestored && rebuildDelta >= 3u &&
+                    renderRuntimeInfo_.ordinary2AtlasResident &&
+                    renderRuntimeInfo_.ordinary2AtlasWidth > 0u &&
+                    renderRuntimeInfo_.ordinary2AtlasHeight > 0u &&
+                    renderRuntimeInfo_.refractionPyramidsResident;
+                std::cout
+                    << "IRIDIUM_ORDINARY2_RESIZE_VALIDATION {\"sequence\":[[960,540],[1600,900],[1280,720]]"
+                    << ",\"requests\":"
+                    << ordinary2ResizeValidation_.requests
+                    << ",\"successes\":"
+                    << ordinary2ResizeValidation_.successes
+                    << ",\"failures\":"
+                    << ordinary2ResizeValidation_.failures
+                    << ",\"render_graph_rebuild_delta\":" << rebuildDelta
+                    << ",\"final_render_extent\":[" << renderExtent_.width
+                    << ',' << renderExtent_.height << ']'
+                    << ",\"ordinary2_atlas_resident\":"
+                    << (renderRuntimeInfo_.ordinary2AtlasResident
+                        ? "true" : "false")
+                    << ",\"ordinary2_atlas_extent\":["
+                    << renderRuntimeInfo_.ordinary2AtlasWidth << ','
+                    << renderRuntimeInfo_.ordinary2AtlasHeight << ']'
+                    << ",\"refraction_pyramids_resident\":"
+                    << (renderRuntimeInfo_.refractionPyramidsResident
+                        ? "true" : "false")
+                    << ",\"passed\":" << (passed ? "true" : "false")
+                    << "}\n" << std::flush;
+                if (!passed) {
+                    throw std::runtime_error(
+                        "Populated Ordinary2 resize/lifecycle validation failed: " +
+                        ordinary2ResizeValidation_.lastDiagnostic);
+                }
+            }
+            if (config_.validateOrdinary2Fallback) {
+                const Ordinary2FallbackModelStats stats =
+                    ordinary2FallbackModelStats(*mainModel);
+                const bool passed = stats.transparentSubmeshes > 0u &&
+                    stats.requestedLayeredCandidates ==
+                        stats.transparentSubmeshes &&
+                    stats.fallbackThinGlassSubmeshes ==
+                        stats.transparentSubmeshes &&
+                    stats.fallbackFlaggedSubmeshes ==
+                        stats.transparentSubmeshes &&
+                    stats.topologyRequiredSubmeshes ==
+                        stats.transparentSubmeshes &&
+                    stats.layeredGlassSubmeshes == 0u &&
+                    !renderRuntimeInfo_.ordinary2AtlasResident &&
+                    renderRuntimeInfo_.ordinary2AtlasWidth == 0u &&
+                    renderRuntimeInfo_.ordinary2AtlasHeight == 0u &&
+                    renderRuntimeInfo_.refractionPyramidsResident;
+                std::cout
+                    << "IRIDIUM_ORDINARY2_FALLBACK_VALIDATION {\"transparent_submeshes\":"
+                    << stats.transparentSubmeshes
+                    << ",\"requested_layered_candidates\":"
+                    << stats.requestedLayeredCandidates
+                    << ",\"fallback_thin_glass_submeshes\":"
+                    << stats.fallbackThinGlassSubmeshes
+                    << ",\"fallback_flagged_submeshes\":"
+                    << stats.fallbackFlaggedSubmeshes
+                    << ",\"topology_required_submeshes\":"
+                    << stats.topologyRequiredSubmeshes
+                    << ",\"layered_glass_submeshes\":"
+                    << stats.layeredGlassSubmeshes
+                    << ",\"ordinary2_atlas_resident\":"
+                    << (renderRuntimeInfo_.ordinary2AtlasResident
+                        ? "true" : "false")
+                    << ",\"ordinary2_atlas_extent\":["
+                    << renderRuntimeInfo_.ordinary2AtlasWidth << ','
+                    << renderRuntimeInfo_.ordinary2AtlasHeight << ']'
+                    << ",\"refraction_pyramids_resident\":"
+                    << (renderRuntimeInfo_.refractionPyramidsResident
+                        ? "true" : "false")
+                    << ",\"passed\":" << (passed ? "true" : "false")
+                    << "}\n" << std::flush;
+                if (!passed) {
+                    throw std::runtime_error(
+                        "Invalid-topology Ordinary2 fallback validation failed.");
+                }
+            }
         }
         catch (...) {
             cleanup();
@@ -619,6 +961,12 @@ namespace Iridium {
                 renderRuntimeInfo_.renderGraphRebuildCount;
             metadata.renderGraphCacheMissCount =
                 renderRuntimeInfo_.renderGraphCacheMissCount;
+            metadata.ordinary2AtlasResident =
+                renderRuntimeInfo_.ordinary2AtlasResident;
+            metadata.ordinary2AtlasWidth =
+                renderRuntimeInfo_.ordinary2AtlasWidth;
+            metadata.ordinary2AtlasHeight =
+                renderRuntimeInfo_.ordinary2AtlasHeight;
             metadata.gpuLightRecordsAvailable =
                 renderCapabilities_.gpuLightRecords;
             metadata.maxGpuLightRecords =
@@ -645,6 +993,14 @@ namespace Iridium {
                 startupProfile_.environmentCreationNanoseconds;
             metadata.sceneConstructionNanoseconds =
                 startupProfile_.sceneConstructionNanoseconds;
+            metadata.frameTopologyPrewarmNanoseconds =
+                startupProfile_.frameTopologyPrewarmNanoseconds;
+            metadata.frameTopologyPrewarmRequested =
+                renderRuntimeInfo_.frameTopologyPrewarmRequested;
+            metadata.frameTopologyPrewarmChanged =
+                renderRuntimeInfo_.frameTopologyPrewarmChanged;
+            metadata.refractionPyramidsResident =
+                renderRuntimeInfo_.refractionPyramidsResident;
             metadata.modelLoadMode =
                 config_.cookedModelArtifact.empty()
                 ? "source-import"
@@ -1127,30 +1483,15 @@ namespace Iridium {
             }
         }
         else {
-            // Preserve the existing local diagnostic scene outside benchmark mode.
+            // Interactive startup is asset-independent. An explicit cooked model
+            // still overrides the built-in primitive for diagnostics and captures,
+            // while the cached cube remains available to editor create commands.
             const auto importStart = std::chrono::steady_clock::now();
+            const std::shared_ptr<ModelAsset> builtInCube =
+                assetManager->loadBuiltInCubeModel();
             if (config_.cookedModelArtifact.empty()) {
-                const AssetCatalogQueryPage models =
-                    assetCatalog_->query({
-                        .assetType =
-                            std::string("iridium.model"),
-                        .includeSubassets = false,
-                        .limit = 10000,
-                    });
-                const auto defaultModel =
-                    std::ranges::find_if(
-                        models.records,
-                        [](const AssetCatalogRecord& record) {
-                            return record.sourcePath ==
-                                "models/alfa_romeo/alfa_romeo.gltf";
-                        });
-                if (defaultModel ==
-                    models.records.end()) {
-                    throw std::runtime_error(
-                        "Default editor model is not registered in the project asset catalog.");
-                }
-                startupModelGuid =
-                    defaultModel->guid;
+                mainModel = builtInCube;
+                startupModelGuid = mainModel->assetGuid;
             } else {
                 const std::filesystem::path artifactPath =
                     config_.cookedModelArtifact.is_absolute()
@@ -1210,6 +1551,124 @@ namespace Iridium {
                     "--capture-frame must be lower than the measured frame limit.");
             }
         }
+        const uint32_t layeredValidationModeCount =
+            (config_.validateOrdinary2Capture ? 1u : 0u) +
+            (config_.validateOrdinary2Fallback ? 1u : 0u) +
+            (config_.validateOrdinary2Resize ? 1u : 0u) +
+            (config_.validateDeepLayeredCapture ? 1u : 0u) +
+            (config_.validateDeepLayeredLifecycle ? 1u : 0u);
+        if (layeredValidationModeCount > 1u) {
+            throw std::invalid_argument(
+                "Layered capture, fallback, resize, and deep validations are mutually exclusive.");
+        }
+        if (config_.validateOrdinary2Capture) {
+            if (config_.frameLimit == 0u) {
+                throw std::invalid_argument(
+                    "--validate-ordinary2-capture requires a bounded measured frame limit.");
+            }
+            if (!mainModel ||
+                !modelRequiresOrdinary2LayeredInterfaces(*mainModel)) {
+                throw std::invalid_argument(
+                    "--validate-ordinary2-capture requires a startup model with Ordinary2 layered interfaces.");
+            }
+        }
+        if (config_.validateOrdinary2Fallback) {
+            if (config_.frameLimit == 0u) {
+                throw std::invalid_argument(
+                    "--validate-ordinary2-fallback requires a bounded measured frame limit.");
+            }
+            if (!mainModel) {
+                throw std::invalid_argument(
+                    "--validate-ordinary2-fallback requires a startup model.");
+            }
+            const Ordinary2FallbackModelStats stats =
+                ordinary2FallbackModelStats(*mainModel);
+            if (stats.transparentSubmeshes == 0u ||
+                stats.requestedLayeredCandidates !=
+                    stats.transparentSubmeshes ||
+                stats.fallbackThinGlassSubmeshes !=
+                    stats.transparentSubmeshes ||
+                stats.fallbackFlaggedSubmeshes !=
+                    stats.transparentSubmeshes ||
+                stats.topologyRequiredSubmeshes !=
+                    stats.transparentSubmeshes ||
+                stats.layeredGlassSubmeshes != 0u ||
+                modelRequiresOrdinary2LayeredInterfaces(*mainModel) ||
+                !modelRequiresRefractionPyramids(*mainModel)) {
+                throw std::invalid_argument(
+                    "--validate-ordinary2-fallback requires only topology-rejected LayeredGlass candidates resolved to ThinGlass.");
+            }
+        }
+        if (config_.validateOrdinary2Resize) {
+            if (config_.frameLimit < 6u) {
+                throw std::invalid_argument(
+                    "--validate-ordinary2-resize requires at least six measured frames.");
+            }
+            if (!activeBenchmark_ || !mainModel ||
+                !modelRequiresOrdinary2LayeredInterfaces(*mainModel)) {
+                throw std::invalid_argument(
+                    "--validate-ordinary2-resize requires a benchmark startup model with Ordinary2 layered interfaces.");
+            }
+            if (renderExtent_.width != 1280u ||
+                renderExtent_.height != 720u) {
+                throw std::invalid_argument(
+                    "--validate-ordinary2-resize requires the deterministic 1280x720 base extent.");
+            }
+            ordinary2ResizeValidation_.originalExtent = renderExtent_;
+        }
+        if (config_.validateDeepLayeredCapture) {
+            if (config_.frameLimit == 0u) {
+                throw std::invalid_argument(
+                    "--validate-deep-layered-capture requires a bounded measured frame limit.");
+            }
+            const bool hasRequestedTier = mainModel &&
+                (config_.deepLayeredCaptureQuality ==
+                        TransparencyQuality::Hero4
+                    ? modelRequiresHero4LayeredInterfaces(*mainModel)
+                    : modelRequiresCinematic8LayeredInterfaces(*mainModel));
+            if (!activeBenchmark_ || !hasRequestedTier) {
+                throw std::invalid_argument(
+                    "--validate-deep-layered-capture requires a benchmark startup model with the selected deep layered quality.");
+            }
+        }
+        if (config_.validateDeepLayeredLifecycle) {
+            if (config_.frameLimit < 250u) {
+                throw std::invalid_argument(
+                    "--validate-deep-layered-lifecycle requires at least 250 measured frames.");
+            }
+            const bool hasRequestedTier = mainModel &&
+                (config_.deepLayeredCaptureQuality ==
+                        TransparencyQuality::Hero4
+                    ? modelRequiresHero4LayeredInterfaces(*mainModel)
+                    : modelRequiresCinematic8LayeredInterfaces(*mainModel));
+            if (!activeBenchmark_ || !hasRequestedTier) {
+                throw std::invalid_argument(
+                    "--validate-deep-layered-lifecycle requires a benchmark startup model with the selected deep layered quality.");
+            }
+        }
+        const FrameTopologyPreparation topologyPreparation =
+            renderBackend->prepareFrameTopology({
+                .refractionPyramids = mainModel &&
+                    modelRequiresRefractionPyramids(*mainModel),
+                .ordinary2LayeredInterfaces = mainModel &&
+                    modelRequiresOrdinary2LayeredInterfaces(*mainModel),
+                .hero4LayeredInterfaces = mainModel &&
+                    modelRequiresHero4LayeredInterfaces(*mainModel),
+                .cinematic8LayeredInterfaces = mainModel &&
+                    modelRequiresCinematic8LayeredInterfaces(*mainModel),
+            });
+        startupProfile_.frameTopologyPrewarmNanoseconds =
+            topologyPreparation.durationNanoseconds;
+        std::cout << "IRIDIUM_FRAME_TOPOLOGY_PREWARM {\"requested\":"
+            << (topologyPreparation.requested ? "true" : "false")
+            << ",\"changed\":"
+            << (topologyPreparation.changed ? "true" : "false")
+            << ",\"duration_ns\":"
+            << topologyPreparation.durationNanoseconds << "}\n" << std::flush;
+        if (config_.validateOrdinary2Resize) {
+            ordinary2ResizeValidation_.initialRenderGraphRebuildCount =
+                renderBackend->getRuntimeInfo().renderGraphRebuildCount;
+        }
         const auto sceneStart = std::chrono::steady_clock::now();
         if (environmentLighting_.isValid())
             renderBackend->setEnvironmentLighting(environmentLighting_);
@@ -1227,15 +1686,19 @@ namespace Iridium {
                 for (uint32_t x = 0; x < grid.x; ++x) {
                     const glm::vec3 position = activeBenchmark_
                         ? (glm::vec3(x, y, z) - gridCenter) * spacing
-                        : glm::vec3(0.0f, -1.0f, 0.0f);
+                        : glm::vec3(0.0f);
                     const Entity entity = createModelEditorEntity(
                         registry, startupModelGuid,
-                        activeBenchmark_ ? "Benchmark Model" : "Alfa Romeo",
+                        activeBenchmark_ ? "Benchmark Model" :
+                            config_.cookedModelArtifact.empty()
+                                ? "Cube" : "Model",
                         position);
                     if (firstEntity == NULL_ENTITY) firstEntity = entity;
                     auto& transform = registry.getComponent<TransformComponent>(entity);
                     transform.rotation = glm::vec3(0.0f);
-                    transform.scale = glm::vec3(1.0f);
+                    transform.scale = activeBenchmark_
+                        ? activeBenchmark_->sceneFactory.instanceScale
+                        : glm::vec3(1.0f);
                     transform.worldMatrix = glm::mat4(1.0f);
                     transform.isDirty = true;
 
@@ -1380,8 +1843,8 @@ namespace Iridium {
                     transform.rotation.y = 0.0f;
                 }
                 light.colorLinearRec709 = { 1.0f, 0.5f, 0.25f };
-                if (directionalShadowFixture || spotShadowContactFixture ||
-                    pointShadowContactFixture) {
+                if (sampleCarLightingFixture || directionalShadowFixture ||
+                    spotShadowContactFixture || pointShadowContactFixture) {
                     light.shadowQuality = LightShadowQuality::Ultra;
                 }
                 light.illuminanceLux = 100'000.0f;
@@ -1426,26 +1889,16 @@ namespace Iridium {
             }
         }
         if (!activeBenchmark_) {
-            const Entity skyEntity = sceneWorld_.createEntity(
-                SceneEntityUuid::fromUuidV7Fields(
-                    1'775'000'400'000ull,
-                    std::array<uint8_t, 10>{ 0x49, 0x52, 0x49, 0x44, 0x49,
-                        0x55, 0x4d, 0x53, 0x4b, 0x59 }));
-            registry.addComponent<NameComponent>(skyEntity, "Sky");
-            registry.addComponent<RelationshipComponent>(skyEntity)
-                .siblingOrder = static_cast<int32_t>(generatedLightCount + 1u);
-            auto& sky = registry.addComponent<SkyComponent>(skyEntity);
-            sky.mode = SkyMode::Hdri;
-            const auto defaultEnvironment = AssetGuid::parse(
-                "019c5d3a-1234-7abc-8def-1029384756aa");
+            (void)createEditorEntityPreset(
+                registry, EditorEntityPreset::DirectionalLight);
+            const Entity skyEntity = createEditorEntityPreset(
+                registry, EditorEntityPreset::HdriSky);
+            auto& sky = registry.getComponent<SkyComponent>(skyEntity);
             if (!activeEnvironmentAssetGuid_.isNil()) {
                 sky.hdri.environmentAssetGuid = activeEnvironmentAssetGuid_;
                 sky.resolvedEnvironmentAssetGuid =
                     activeEnvironmentAssetGuid_;
-            }
-            else if (defaultEnvironment) {
-                sky.hdri.environmentAssetGuid = *defaultEnvironment;
-                sky.requestedEnvironmentAssetGuid = *defaultEnvironment;
+                sky.requestedEnvironmentAssetGuid = {};
             }
         }
         if (config_.validateReflectionProbes) {
@@ -1744,13 +2197,32 @@ namespace Iridium {
                     changedTransformsThisFrame_ = transformSystem.update(registry);
                 }
 
+                if (isMeasuredFrame && config_.validateOrdinary2Resize) {
+                    updateOrdinary2ResizeValidation(measuredFrameCount_);
+                }
+                const bool validateDeepLayeredLifecycle = isMeasuredFrame &&
+                    config_.validateDeepLayeredLifecycle &&
+                    updateDeepLayeredLifecycleValidation(
+                        measuredFrameCount_);
+
                 // 4. The frame acquisition must precede UI construction so the
                 // viewport texture IDs correspond to the image acquired this frame.
                 const std::optional<uint64_t> captureFrameIndex =
                     isMeasuredFrame && config_.captureFrameIndex == measuredFrameCount_
                     ? config_.captureFrameIndex
                     : std::nullopt;
-                drawFrame(captureFrameIndex, applicationFrameCount);
+                const bool validateOrdinary2Capture = isMeasuredFrame &&
+                    ((config_.validateOrdinary2Capture &&
+                        measuredFrameCount_ == 0u) ||
+                    (config_.validateOrdinary2Resize &&
+                        measuredFrameCount_ == 5u));
+                const bool validateDeepLayeredCapture = isMeasuredFrame &&
+                    ((config_.validateDeepLayeredCapture &&
+                        measuredFrameCount_ == 0u) ||
+                    validateDeepLayeredLifecycle);
+                drawFrame(captureFrameIndex, applicationFrameCount,
+                    validateOrdinary2Capture,
+                    validateDeepLayeredCapture);
             }
             if (profileFrame) {
                 const CpuAllocationFrameSample allocationSample =
@@ -1789,6 +2261,153 @@ namespace Iridium {
                 << ",\"cpu_profiling\":" << (cpuProfiler_.isEnabled() ? "true" : "false")
                 << "}\n";
         }
+    }
+
+    void Application::updateOrdinary2ResizeValidation(
+        uint64_t measuredFrameIndex) {
+        if (measuredFrameIndex >= 3u) {
+            cpuProfiler_.recordCounter(
+                "ordinary2.lifecycle.resize.requests", 0u);
+            cpuProfiler_.recordCounter(
+                "ordinary2.lifecycle.resize.successes", 0u);
+            cpuProfiler_.recordCounter(
+                "ordinary2.lifecycle.resize.failures", 0u);
+            return;
+        }
+
+        const std::array<RenderExtent, 3> sequence{{
+            { 960u, 540u },
+            { 1600u, 900u },
+            ordinary2ResizeValidation_.originalExtent,
+        }};
+        const RenderExtent requested = sequence[measuredFrameIndex];
+        ++ordinary2ResizeValidation_.requests;
+
+        std::string diagnostic;
+        bool resized = false;
+        {
+            CpuScope resizeScope(
+                cpuProfiler_, "cpu.ordinary2.lifecycle.resize");
+            resized = renderBackend->resizeSceneRenderExtent(
+                requested, diagnostic);
+        }
+        if (resized) {
+            ++ordinary2ResizeValidation_.successes;
+            renderExtent_ = renderBackend->getRenderExtent();
+            ordinary2ResizeValidation_.lastDiagnostic.clear();
+        }
+        else {
+            ++ordinary2ResizeValidation_.failures;
+            ordinary2ResizeValidation_.lastDiagnostic = diagnostic.empty()
+                ? "scene target resize failed without a diagnostic"
+                : std::move(diagnostic);
+        }
+        cpuProfiler_.recordCounter(
+            "ordinary2.lifecycle.resize.requests", 1u);
+        cpuProfiler_.recordCounter(
+            "ordinary2.lifecycle.resize.successes", resized ? 1u : 0u);
+        cpuProfiler_.recordCounter(
+            "ordinary2.lifecycle.resize.failures", resized ? 0u : 1u);
+        std::cout << "IRIDIUM_ORDINARY2_RESIZE_EVENT {\"measured_frame\":"
+            << measuredFrameIndex << ",\"requested\":["
+            << requested.width << ',' << requested.height
+            << "],\"effective\":[" << renderExtent_.width << ','
+            << renderExtent_.height << "],\"success\":"
+            << (resized ? "true" : "false") << "}\n" << std::flush;
+    }
+
+    bool Application::updateDeepLayeredLifecycleValidation(
+        uint64_t measuredFrameIndex) {
+        using State = DeepLayeredLifecycleValidationState;
+        const RenderBackendRuntimeInfo runtimeInfo =
+            renderBackend->getRuntimeInfo();
+        const bool selectedTierResident =
+            config_.deepLayeredCaptureQuality == TransparencyQuality::Hero4
+                ? runtimeInfo.hero4AtlasResident
+                : runtimeInfo.cinematic8AtlasResident;
+        const bool topologyResident = selectedTierResident &&
+            runtimeInfo.refractionPyramidsResident;
+
+        const auto setBenchmarkModelEnabled = [&](bool enabled) {
+            auto* meshes = registry.getPool<MeshComponent>();
+            uint32_t changed = 0u;
+            if (meshes != nullptr) {
+                for (const BenchmarkInstanceState& instance :
+                        benchmarkInstances_) {
+                    if (!meshes->has(instance.entity)) continue;
+                    MeshComponent& mesh = meshes->get(instance.entity);
+                    if (!mesh.model || mesh.model != mainModel ||
+                        mesh.enabled == enabled) {
+                        continue;
+                    }
+                    mesh.enabled = enabled;
+                    ++changed;
+                }
+            }
+            if (changed == 0u) {
+                throw std::runtime_error(
+                    "Deep layered lifecycle validation could not change the benchmark model visibility.");
+            }
+            ++deepLayeredLifecycleValidation_.visibilityChanges;
+        };
+        const auto logEvent = [&](std::string_view event) {
+            std::cout
+                << "IRIDIUM_DEEP_LAYERED_LIFECYCLE_EVENT {\"measured_frame\":"
+                << measuredFrameIndex << ",\"event\":\"" << event
+                << "\",\"quality\":\""
+                << transparencyQualityName(
+                    config_.deepLayeredCaptureQuality)
+                << "\",\"tier_resident\":"
+                << (selectedTierResident ? "true" : "false")
+                << ",\"refraction_pyramids_resident\":"
+                << (runtimeInfo.refractionPyramidsResident
+                    ? "true" : "false")
+                << "}\n" << std::flush;
+        };
+
+        switch (deepLayeredLifecycleValidation_.phase) {
+        case State::Phase::Initial:
+            if (!topologyResident) {
+                throw std::runtime_error(
+                    "Deep layered lifecycle validation did not start with a resident selected tier.");
+            }
+            deepLayeredLifecycleValidation_.firstMeasuredFrame =
+                measuredFrameIndex;
+            setBenchmarkModelEnabled(false);
+            deepLayeredLifecycleValidation_.phase =
+                State::Phase::WaitingForRetirement;
+            logEvent("hide_for_retirement");
+            return false;
+        case State::Phase::WaitingForRetirement:
+            if (selectedTierResident ||
+                runtimeInfo.refractionPyramidsResident) {
+                return false;
+            }
+            ++deepLayeredLifecycleValidation_.retirements;
+            setBenchmarkModelEnabled(true);
+            deepLayeredLifecycleValidation_.phase =
+                State::Phase::WaitingForReactivation;
+            logEvent("retired_reveal_for_reactivation");
+            return false;
+        case State::Phase::WaitingForReactivation:
+            if (!topologyResident) return false;
+            ++deepLayeredLifecycleValidation_.reactivations;
+            if (deepLayeredLifecycleValidation_.reactivations < 2u) {
+                setBenchmarkModelEnabled(false);
+                deepLayeredLifecycleValidation_.phase =
+                    State::Phase::WaitingForRetirement;
+                logEvent("reactivated_hide_for_retirement");
+                return false;
+            }
+            deepLayeredLifecycleValidation_.completionMeasuredFrame =
+                measuredFrameIndex;
+            deepLayeredLifecycleValidation_.phase = State::Phase::Complete;
+            logEvent("reactivated_complete");
+            return true;
+        case State::Phase::Complete:
+            return false;
+        }
+        return false;
     }
 
     std::string Application::persistBakedReflectionProbe(
@@ -1976,7 +2595,9 @@ namespace Iridium {
     }
 
     void Application::drawFrame(std::optional<uint64_t> captureFrameIndex,
-        uint64_t applicationFrameIndex) {
+        uint64_t applicationFrameIndex,
+        bool validateOrdinary2Capture,
+        bool validateDeepLayeredCapture) {
         for (const ReflectionProbeCaptureCompletion& completion :
                 renderBackend->finalizeReflectionProbeCaptures()) {
             reflectionProbeCaptureScheduler_.markPublished(
@@ -2077,6 +2698,7 @@ namespace Iridium {
         opaqueQueue.clear();
         forwardOpaqueQueue.clear();
         transparentQueue.clear();
+        sortedSurfaceQueue.clear();
         selectionQueue.clear();
         shadowCasterQueue.clear();
 
@@ -2090,6 +2712,9 @@ namespace Iridium {
 
         // --- 2. GET CAMERA DATA ---
         glm::vec3 renderCameraPosition = cameraPos;
+        float renderCameraNearPlane = cameraNearPlane_;
+        float renderCameraFarPlane = cameraFarPlane_;
+        float renderVerticalFovDegrees = verticalFovDegrees_;
         glm::mat4 viewMatrix = glm::lookAt(
             cameraPos, cameraPos + cameraFront, cameraUp);
         const float aspect = renderExtent_.height != 0
@@ -2106,6 +2731,10 @@ namespace Iridium {
                 renderCameraPosition = camera->position();
                 viewMatrix = camera->viewMatrix();
                 projMatrix = camera->projectionMatrix(aspect);
+                const EditorOrbitCameraState& state = camera->state();
+                renderCameraNearPlane = state.nearPlane;
+                renderCameraFarPlane = state.farPlane;
+                renderVerticalFovDegrees = state.verticalFovDegrees;
             }
         }
 
@@ -2171,6 +2800,10 @@ namespace Iridium {
                         renderCameraPosition = camera->position();
                         viewMatrix = camera->viewMatrix();
                         projMatrix = camera->projectionMatrix(aspect);
+                        const EditorOrbitCameraState& state = camera->state();
+                        renderCameraNearPlane = state.nearPlane;
+                        renderCameraFarPlane = state.farPlane;
+                        renderVerticalFovDegrees = state.verticalFovDegrees;
                     }
                 }
                 else {
@@ -2196,19 +2829,24 @@ namespace Iridium {
             }
         }
 
-        renderBackend->updateCamera(viewMatrix, projMatrix);
+        const ViewTransportRecord viewTransport = makeViewTransportRecord(
+            viewMatrix, projMatrix, renderCameraPosition,
+            renderCameraNearPlane, renderCameraFarPlane,
+            { renderExtent_.width, renderExtent_.height });
+        renderBackend->updateCamera(viewTransport);
         const RenderDebugView debugView = editor.getDebugView();
         renderBackend->setDebugView(debugView);
 
         // --- 3. THE EXTRACTION PHASE (Data-Oriented Design) ---
         uint64_t requestedInstances = 0;
         uint64_t requestedSubmeshes = 0;
+        uint64_t transparentCulled = 0;
         {
             CpuScope extractionScope(cpuProfiler_, "cpu.render.extract");
             const auto appendModel = [&](const ModelAsset& model,
                     const glm::mat4& worldTransform,
                     const MeshComponent* meshComponent,
-                    const MaterialBinding* forcedMaterial,
+                    const CookedMaterialRuntimeBinding* forcedMaterial,
                     bool selected, SceneEntityUuid owner) {
                 if (!model.geometry.isValid()) return;
                 ++requestedInstances;
@@ -2222,8 +2860,21 @@ namespace Iridium {
                         continue;
                     }
                     const MaterialBinding* binding = forcedMaterial
-                        ? forcedMaterial : &model.materials[materialIndex];
-                    std::optional<MaterialBinding> overrideBinding;
+                        ? &forcedMaterial->binding
+                        : &model.materials[materialIndex];
+                    std::optional<CookedMaterialRuntimeBinding>
+                        overrideBinding;
+                    AssetGuid effectiveMaterialGuid = subMesh.materialGuid;
+                    CompiledTransparencyPolicy effectiveTransparency =
+                        subMesh.transparency;
+                    TransparencyExecutionMode effectiveExecutionMode =
+                        model.transparencyExecutionMode;
+                    if (forcedMaterial) {
+                        effectiveMaterialGuid = forcedMaterial->materialGuid;
+                        effectiveTransparency = forcedMaterial->transparency;
+                        effectiveExecutionMode =
+                            forcedMaterial->transparencyExecutionMode;
+                    }
                     if (!forcedMaterial && meshComponent) {
                         const auto materialOverride = std::ranges::find_if(
                             meshComponent->materialOverrides,
@@ -2233,9 +2884,18 @@ namespace Iridium {
                             });
                         if (materialOverride !=
                             meshComponent->materialOverrides.end()) {
-                            overrideBinding = assetManager->findCookedMaterial(
-                                materialOverride->materialGuid);
-                            if (overrideBinding) binding = &*overrideBinding;
+                            overrideBinding =
+                                assetManager->findCookedMaterialRuntime(
+                                    materialOverride->materialGuid);
+                            if (overrideBinding) {
+                                effectiveMaterialGuid =
+                                    materialOverride->materialGuid;
+                                binding = &overrideBinding->binding;
+                                effectiveTransparency =
+                                    overrideBinding->transparency;
+                                effectiveExecutionMode = overrideBinding
+                                    ->transparencyExecutionMode;
+                            }
                         }
                     }
                     if (!binding->material.isValid() ||
@@ -2253,6 +2913,14 @@ namespace Iridium {
                     packet.distanceToCamera = distanceToCamera;
                     packet.isSelected = selected ? 1 : 0;
                     packet.owner = owner;
+                    packet.sourcePrimitiveGuid =
+                        subMesh.sourcePrimitiveGuid;
+                    packet.primitiveGuid = subMesh.primitiveGuid;
+                    packet.materialGuid = effectiveMaterialGuid;
+                    packet.transparency = effectiveTransparency;
+                    packet.transparencyExecutionMode =
+                        effectiveExecutionMode;
+                    packet.coverage = subMesh.coverage;
                     const ShadowCasterSphere shadowBounds =
                         transformShadowCasterSphere(
                             subMesh.boundsSphereCenter,
@@ -2260,7 +2928,24 @@ namespace Iridium {
                     packet.boundsSphereCenterWorld = shadowBounds.center;
                     packet.boundsSphereRadiusWorld = shadowBounds.radius;
                     if (binding->renderQueue == RenderQueue::Transparent) {
-                        transparentQueue.push_back(packet);
+                        const bool visible = prepareTransparentWorkInterval(
+                            packet, subMesh.boundsMin, subMesh.boundsMax,
+                            viewMatrix, renderCameraNearPlane,
+                            renderCameraFarPlane);
+                        if (!visible && effectiveExecutionMode ==
+                                TransparencyExecutionMode::Classified) {
+                            ++transparentCulled;
+                            continue;
+                        }
+                        if (effectiveExecutionMode ==
+                                TransparencyExecutionMode::Classified &&
+                            packet.transparency.resolvedClass ==
+                                TransparencyClass::SortedSurface) {
+                            sortedSurfaceQueue.push_back(packet);
+                        }
+                        else {
+                            transparentQueue.push_back(packet);
+                        }
                     }
                     else if (binding->renderQueue == RenderQueue::ForwardOpaque) {
                         forwardOpaqueQueue.push_back(packet);
@@ -2274,11 +2959,13 @@ namespace Iridium {
 
             if (assetPreviewActive) {
                 if (previewModel) {
-                    std::optional<MaterialBinding> previewMaterial;
+                    std::optional<CookedMaterialRuntimeBinding>
+                        previewMaterial;
                     if (previewDocument &&
                         previewDocument->kind == EditorAssetViewerKind::Material) {
-                        previewMaterial = assetManager->findCookedMaterial(
-                            previewDocument->assetGuid);
+                        previewMaterial =
+                            assetManager->findCookedMaterialRuntime(
+                                previewDocument->assetGuid);
                     }
                     appendModel(*previewModel, glm::mat4(1.0f), nullptr,
                         previewMaterial ? &*previewMaterial : nullptr, false,
@@ -2310,11 +2997,53 @@ namespace Iridium {
         cpuProfiler_.recordCounter("draw.requested.opaque", opaqueQueue.size());
         cpuProfiler_.recordCounter("draw.requested.forward_opaque",
             forwardOpaqueQueue.size());
-        cpuProfiler_.recordCounter("draw.requested.transparent", transparentQueue.size());
+        const uint64_t requestedTransparent =
+            transparentQueue.size() + sortedSurfaceQueue.size();
+        cpuProfiler_.recordCounter("draw.requested.transparent",
+            requestedTransparent);
         cpuProfiler_.recordCounter("draw.requested.selection", selectionQueue.size());
         cpuProfiler_.recordCounter("instance.requested", requestedInstances);
         cpuProfiler_.recordCounter("submesh.requested", requestedSubmeshes);
-        cpuProfiler_.recordCounter("transparent.primitive.requested", transparentQueue.size());
+        cpuProfiler_.recordCounter("transparent.primitive.requested",
+            requestedTransparent);
+        cpuProfiler_.recordCounter("transparent.class.sorted_surface",
+            sortedSurfaceQueue.size());
+        cpuProfiler_.recordCounter("transparent.class.compatibility_fallback",
+            transparentQueue.size());
+        uint64_t thinGlassPackets = 0;
+        uint64_t layeredGlassPackets = 0;
+        uint64_t zeroThicknessPackets = 0;
+        uint64_t metricThicknessPackets = 0;
+        const auto countTransportPackets = [&](const auto& queue) {
+            for (const DrawPacket& packet : queue) {
+                if (packet.transparency.resolvedClass ==
+                        TransparencyClass::ThinGlass) {
+                    ++thinGlassPackets;
+                }
+                else if (packet.transparency.resolvedClass ==
+                        TransparencyClass::LayeredGlass) {
+                    ++layeredGlassPackets;
+                }
+                else {
+                    continue;
+                }
+                if (packet.transparency.thinSheetThicknessMeters > 0.0f)
+                    ++metricThicknessPackets;
+                else
+                    ++zeroThicknessPackets;
+            }
+        };
+        countTransportPackets(transparentQueue);
+        countTransportPackets(sortedSurfaceQueue);
+        cpuProfiler_.recordCounter("transparent.class.thin_glass",
+            thinGlassPackets);
+        cpuProfiler_.recordCounter("transparent.class.layered_glass",
+            layeredGlassPackets);
+        cpuProfiler_.recordCounter("transparent.transport.zero_sheet_thickness",
+            zeroThicknessPackets);
+        cpuProfiler_.recordCounter("transparent.transport.metric_sheet_thickness",
+            metricThicknessPackets);
+        cpuProfiler_.recordCounter("transparent.work.culled", transparentCulled);
         cpuProfiler_.recordCounter("light.scene",
             lightingFrame.stats.sceneLightCount);
         cpuProfiler_.recordCounter("light.active",
@@ -2368,13 +3097,32 @@ namespace Iridium {
         // Sort transparent objects Back-to-Front to ensure perfect alpha blending and refraction
         {
             CpuScope sortScope(cpuProfiler_, "cpu.render.sort.transparent");
-            std::sort(transparentQueue.begin(), transparentQueue.end(), [](const DrawPacket& a, const DrawPacket& b) {
-                if (a.distanceToCamera != b.distanceToCamera) return a.distanceToCamera > b.distanceToCamera;
-                if (a.pipeline != b.pipeline) return a.pipeline < b.pipeline;
-                if (a.material != b.material) return a.material < b.material;
-                return a.geometry < b.geometry;
-                });
+            std::sort(transparentQueue.begin(), transparentQueue.end(),
+                transparentCompatibilityLess);
+            std::sort(sortedSurfaceQueue.begin(), sortedSurfaceQueue.end(),
+                transparentWorkLess);
         }
+        cpuProfiler_.recordCounter("transparent.work.invalid_bounds",
+            std::ranges::count_if(sortedSurfaceQueue,
+                [](const DrawPacket& packet) {
+                    return (packet.transparentWorkFlags &
+                        TransparentWorkInvalidBoundsFallback) != 0;
+                }));
+        cpuProfiler_.recordCounter("transparent.work.near_clipped",
+            std::ranges::count_if(sortedSurfaceQueue,
+                [](const DrawPacket& packet) {
+                    return (packet.transparentWorkFlags &
+                        TransparentWorkNearClipped) != 0;
+                }));
+        transparentIntervalEndpointScratch.resize(sortedSurfaceQueue.size());
+        transparentIntervalNearScratch.resize(sortedSurfaceQueue.size());
+        transparentIntervalFenwickScratch.resize(
+            sortedSurfaceQueue.size() + 1u);
+        cpuProfiler_.recordCounter("transparent.sort.ambiguous_intervals",
+            sweepAmbiguousTransparentIntervals(sortedSurfaceQueue,
+                transparentIntervalEndpointScratch,
+                transparentIntervalNearScratch,
+                transparentIntervalFenwickScratch));
 
         // --- 5. THE SUBMISSION PHASE (The Black Box) ---
 
@@ -2388,10 +3136,11 @@ namespace Iridium {
             shadowCamera.position = renderCameraPosition;
             shadowCamera.forward = glm::normalize(-glm::vec3(inverseView[2]));
             shadowCamera.up = glm::normalize(glm::vec3(inverseView[1]));
-            shadowCamera.verticalFovRadians = glm::radians(verticalFovDegrees_);
+            shadowCamera.verticalFovRadians = glm::radians(
+                renderVerticalFovDegrees);
             shadowCamera.aspectRatio = aspect;
-            shadowCamera.nearPlane = cameraNearPlane_;
-            shadowCamera.farPlane = cameraFarPlane_;
+            shadowCamera.nearPlane = renderCameraNearPlane;
+            shadowCamera.farPlane = renderCameraFarPlane;
             DirectionalShadowConfig shadowConfig{
                 .resolution = config_.shadowSettings.directionalResolution,
                 .splitLambda = config_.shadowSettings.directionalSplitLambda,
@@ -2775,7 +3524,7 @@ namespace Iridium {
         // Pass 2: Deferred Lighting 
         renderBackend->submitLightingPass(
             renderCameraPosition, viewMatrix, projMatrix,
-            cameraNearPlane_, cameraFarPlane_, lightingFrame,
+            renderCameraNearPlane, renderCameraFarPlane, lightingFrame,
             publishedProbes);
         const LightingUploadTelemetry lightUpload =
             renderBackend->getLightingUploadTelemetry();
@@ -2818,9 +3567,18 @@ namespace Iridium {
             clusters.available ? ProfileCounterStatus::Exact : ProfileCounterStatus::Unavailable);
 
         // Pass 3: The AAA Translucency Pipeline (includes per-layer glass depth)
+        if (validateOrdinary2Capture) {
+            renderBackend->requestOrdinary2CaptureValidation(0u);
+        }
+        if (validateDeepLayeredCapture) {
+            renderBackend->requestDeepLayeredCaptureValidation(
+                0u, config_.deepLayeredCaptureQuality);
+        }
         renderBackend->submitForwardQueues(
             std::span<const DrawPacket>(
                 forwardOpaqueQueue.data(), forwardOpaqueQueue.size()),
+            std::span<const DrawPacket>(
+                sortedSurfaceQueue.data(), sortedSurfaceQueue.size()),
             std::span<const DrawPacket>(
                 transparentQueue.data(), transparentQueue.size()));
 
@@ -3092,13 +3850,13 @@ namespace Iridium {
                 const uint64_t gpuBytes =
                     result.gpuResidentBytes;
                 if (gpuBytes >
-                    EditorRuntimeUploadBudgetBytes) {
+                    EditorModelPublicationLimitBytes) {
                     const std::string diagnostic =
                         "Prepared model requires " +
                         std::to_string(
                             gpuBytes / (1024ull *
                                 1024ull)) +
-                        " MiB of GPU upload data, exceeding the editor's 128 MiB single-publication budget.";
+                        " MiB of GPU upload data, exceeding the editor's 1 GiB atomic model-publication safety cap.";
                     assetRuntimeService_->
                         reportFailure(
                             assetGuid,
@@ -3107,6 +3865,12 @@ namespace Iridium {
                         "Asset Runtime",
                         diagnostic);
                     continue;
+                }
+                if (gpuBytes > EditorRuntimeUploadBudgetBytes) {
+                    engineLog_.warning("Asset Runtime",
+                        "Prepared model requires " + std::to_string(
+                            gpuBytes / (1024ull * 1024ull)) +
+                        " MiB of GPU upload data. It will publish atomically as the only asset upload this frame; the 128 MiB value is a scheduling budget, not a model-size limit.");
                 }
                 std::shared_ptr<CookedArtifact> artifact =
                     std::move(result.artifact);
@@ -3117,6 +3881,8 @@ namespace Iridium {
                     PreparedRuntimeAsset{
                         .cookKey = artifact->cookKey,
                         .estimatedUploadBytes = gpuBytes,
+                        .allowSingleOversizedUpload =
+                            gpuBytes > EditorRuntimeUploadBudgetBytes,
                         .publish =
                             [this,
                                 artifact = std::move(artifact),
@@ -3857,6 +4623,10 @@ namespace Iridium {
             baselineGpuBytes] =
                 residentBytes(
                     *baselineModel.data);
+        if (baselineGpuBytes > EditorModelPublicationLimitBytes) {
+            throw std::runtime_error(
+                "Cooked model hot-reload baseline exceeds the 1 GiB atomic model-publication safety cap.");
+        }
         const AssetGuid expectedGuid =
             mainModel->assetGuid;
         const std::filesystem::path artifactPath =
@@ -4021,6 +4791,34 @@ namespace Iridium {
                                     prepared
                                         ->diagnostics));
                         }
+                        const auto cookProgressStart =
+                            std::chrono::steady_clock::now();
+                        prepared->context.progress =
+                            [this,
+                                sourcePath = sourceContext
+                                    ->sourceRelativePath
+                                    .generic_string(),
+                                cookProgressStart](
+                                const AssetCookContext::Progress&
+                                    progress) {
+                                const auto elapsedMilliseconds =
+                                    std::chrono::duration_cast<
+                                        std::chrono::milliseconds>(
+                                        std::chrono::steady_clock::now() -
+                                        cookProgressStart).count();
+                                std::string message = "[" +
+                                    progress.stage + "] ";
+                                if (progress.total != 0) {
+                                    message += std::to_string(
+                                        progress.completed) + "/" +
+                                        std::to_string(progress.total) + " ";
+                                }
+                                message += progress.detail + " (" +
+                                    std::to_string(elapsedMilliseconds) +
+                                    " ms): " + sourcePath;
+                                engineLog_.info(
+                                    "Asset Cook", std::move(message));
+                            };
                         DdcRequestResult cooked =
                             requestPreparedCook(
                                 *sourceContext
@@ -4073,6 +4871,10 @@ namespace Iridium {
                     }
                     const auto [cpuBytes, gpuBytes] =
                         residentBytes(*model.data);
+                    if (gpuBytes > EditorModelPublicationLimitBytes) {
+                        throw std::runtime_error(
+                            "Cooked model replacement exceeds the 1 GiB atomic model-publication safety cap.");
+                    }
                     const std::string cookKey =
                         decoded.artifact->cookKey;
                     CookedArtifact artifact =
@@ -4083,6 +4885,8 @@ namespace Iridium {
                         .cookKey = cookKey,
                         .estimatedUploadBytes =
                             gpuBytes,
+                        .allowSingleOversizedUpload =
+                            gpuBytes > EditorRuntimeUploadBudgetBytes,
                         .publish =
                             [this,
                                 artifact =

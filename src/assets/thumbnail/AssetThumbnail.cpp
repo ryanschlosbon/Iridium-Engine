@@ -256,6 +256,8 @@ namespace Iridium {
                 if (record.assetType ==
                         "iridium.model-primitive" &&
                     primitive.primitiveGuid !=
+                        record.guid &&
+                    primitive.sourcePrimitiveGuid !=
                         record.guid) {
                     continue;
                 }

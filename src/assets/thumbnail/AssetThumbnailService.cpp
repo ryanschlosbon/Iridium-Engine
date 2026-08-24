@@ -667,6 +667,45 @@ namespace Iridium {
                         return lhs.childGuid <
                             rhs.childGuid;
                     });
+                result.transparencyDetails.reserve(
+                    product.data->materials.size() +
+                    product.data->manifest.primitives.size());
+                for (const CookedModelMaterial& material :
+                        product.data->materials) {
+                    result.transparencyDetails.push_back({
+                        .assetGuid = material.materialGuid,
+                        .policy = material.compiled.transparency,
+                        .runtimePrimitiveCount = static_cast<uint32_t>(
+                            std::ranges::count_if(
+                                product.data->manifest.primitives,
+                                [&material](const CookedModelPrimitive& primitive) {
+                                    return primitive.materialGuid ==
+                                        material.materialGuid;
+                                })),
+                    });
+                }
+                std::map<AssetGuid, size_t> sourcePrimitiveDetails;
+                for (const CookedModelPrimitive& primitive :
+                        product.data->manifest.primitives) {
+                    const auto [found, inserted] =
+                        sourcePrimitiveDetails.emplace(
+                            primitive.sourcePrimitiveGuid,
+                            result.transparencyDetails.size());
+                    if (inserted) {
+                        result.transparencyDetails.push_back({
+                            .assetGuid = primitive.sourcePrimitiveGuid,
+                            .policy = primitive.transparency,
+                            .runtimePrimitiveCount = 1,
+                        });
+                    }
+                    else {
+                        AssetThumbnailTransparencyDetail& detail =
+                            result.transparencyDetails[found->second];
+                        ++detail.runtimePrimitiveCount;
+                        detail.uniformPolicy = detail.uniformPolicy &&
+                            detail.policy == primitive.transparency;
+                    }
+                }
                 for (const AssetCatalogRecord& record :
                     job.records) {
                     if (stopToken.stop_requested()) {
@@ -964,6 +1003,8 @@ namespace Iridium {
                         result.dependencies,
                     .associations =
                         result.associations,
+                    .transparencyDetails =
+                        result.transparencyDetails,
                     .diagnostic =
                         !result.diagnostic.empty()
                         ? result.diagnostic

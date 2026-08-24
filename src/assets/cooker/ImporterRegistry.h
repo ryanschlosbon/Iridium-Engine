@@ -4,6 +4,7 @@
 #include "assets/cooker/CanonicalSettings.h"
 
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <span>
@@ -15,6 +16,8 @@
 #include <nlohmann/json.hpp>
 
 namespace Iridium {
+
+    class DerivedDataCache;
 
     enum class ImportProbeResult : uint8_t {
         Unsupported,
@@ -66,8 +69,22 @@ namespace Iridium {
     };
 
     struct AssetCookContext {
+        struct Progress {
+            std::string stage;
+            uint64_t completed = 0;
+            uint64_t total = 0;
+            std::string detail;
+        };
+
         AssetGuid assetGuid;
         std::vector<SubassetMetadata> subassets;
+        // Optional cooker-owned cache for deterministic derived subproducts.
+        // Importers may use it to reuse expensive immutable work, but product
+        // correctness and bytes must never depend on cache availability.
+        DerivedDataCache* derivedDataCache = nullptr;
+        // Optional thread-safe observer for coarse cook stages and bounded
+        // sub-work progress. Importers may call this from worker threads.
+        std::function<void(const Progress&)> progress;
     };
 
     class AssetImporter {

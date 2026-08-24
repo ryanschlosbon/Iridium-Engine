@@ -1,0 +1,76 @@
+{
+  "asset": {
+    "version": "2.0",
+    "generator": "Iridium Engine M6.4 rough metric refraction fixture"
+  },
+  "extensionsUsed": [
+    "KHR_materials_emissive_strength",
+    "KHR_materials_ior",
+    "KHR_materials_transmission",
+    "KHR_materials_volume"
+  ],
+  "buffers": [{
+    "uri": "data:application/octet-stream;base64,AABAvwAAQL8AAAAAAABAPwAAQL8AAAAAAAAAAAAAQD8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAD8AAIA/AAACAAEA",
+    "byteLength": 102
+  }],
+  "bufferViews": [
+    { "buffer": 0, "byteOffset": 0, "byteLength": 36, "target": 34962 },
+    { "buffer": 0, "byteOffset": 36, "byteLength": 36, "target": 34962 },
+    { "buffer": 0, "byteOffset": 72, "byteLength": 24, "target": 34962 },
+    { "buffer": 0, "byteOffset": 96, "byteLength": 6, "target": 34963 }
+  ],
+  "accessors": [
+    { "bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3", "min": [-0.75, -0.75, 0.0], "max": [0.75, 0.75, 0.0] },
+    { "bufferView": 1, "componentType": 5126, "count": 3, "type": "VEC3" },
+    { "bufferView": 2, "componentType": 5126, "count": 3, "type": "VEC2" },
+    { "bufferView": 3, "componentType": 5123, "count": 3, "type": "SCALAR" }
+  ],
+  "materials": [
+    {
+      "name": "Red emissive backdrop",
+      "pbrMetallicRoughness": { "baseColorFactor": [0.0, 0.0, 0.0, 1.0], "metallicFactor": 0.0, "roughnessFactor": 1.0 },
+      "emissiveFactor": [1.0, 0.02, 0.02],
+      "doubleSided": true,
+      "extensions": { "KHR_materials_emissive_strength": { "emissiveStrength": 4.0 } }
+    },
+    {
+      "name": "Green emissive backdrop",
+      "pbrMetallicRoughness": { "baseColorFactor": [0.0, 0.0, 0.0, 1.0], "metallicFactor": 0.0, "roughnessFactor": 1.0 },
+      "emissiveFactor": [0.02, 1.0, 0.02],
+      "doubleSided": true,
+      "extensions": { "KHR_materials_emissive_strength": { "emissiveStrength": 4.0 } }
+    },
+    {
+      "name": "Blue emissive backdrop",
+      "pbrMetallicRoughness": { "baseColorFactor": [0.0, 0.0, 0.0, 1.0], "metallicFactor": 0.0, "roughnessFactor": 1.0 },
+      "emissiveFactor": [0.02, 0.02, 1.0],
+      "doubleSided": true,
+      "extensions": { "KHR_materials_emissive_strength": { "emissiveStrength": 4.0 } }
+    },
+    {
+      "name": "Rough absorbing thin glass",
+      "pbrMetallicRoughness": { "baseColorFactor": [1.0, 1.0, 1.0, 1.0], "metallicFactor": 0.0, "roughnessFactor": 0.35 },
+      "alphaMode": "BLEND",
+      "doubleSided": true,
+      "extensions": {
+        "KHR_materials_ior": { "ior": 1.5 },
+        "KHR_materials_transmission": { "transmissionFactor": 1.0 },
+        "KHR_materials_volume": { "thicknessFactor": 0.0, "attenuationDistance": 0.5, "attenuationColor": [0.45, 0.85, 1.0] }
+      }
+    }
+  ],
+  "meshes": [
+    { "primitives": [{ "attributes": { "POSITION": 0, "NORMAL": 1, "TEXCOORD_0": 2 }, "indices": 3, "material": 0 }] },
+    { "primitives": [{ "attributes": { "POSITION": 0, "NORMAL": 1, "TEXCOORD_0": 2 }, "indices": 3, "material": 1 }] },
+    { "primitives": [{ "attributes": { "POSITION": 0, "NORMAL": 1, "TEXCOORD_0": 2 }, "indices": 3, "material": 2 }] },
+    { "primitives": [{ "attributes": { "POSITION": 0, "NORMAL": 1, "TEXCOORD_0": 2 }, "indices": 3, "material": 3 }] }
+  ],
+  "nodes": [
+    { "name": "red_backdrop", "mesh": 0, "translation": [-1.1, 0.0, -0.35], "scale": [1.2, 2.2, 1.0] },
+    { "name": "green_backdrop", "mesh": 1, "translation": [0.0, 0.0, -0.35], "scale": [1.2, 2.2, 1.0] },
+    { "name": "blue_backdrop", "mesh": 2, "translation": [1.1, 0.0, -0.35], "scale": [1.2, 2.2, 1.0] },
+    { "name": "rough_glass", "mesh": 3, "translation": [0.0, 0.0, 0.0], "scale": [3.2, 2.5, 1.0] }
+  ],
+  "scenes": [{ "name": "m6_rough_metric_refraction", "nodes": [0, 1, 2, 3] }],
+  "scene": 0
+}

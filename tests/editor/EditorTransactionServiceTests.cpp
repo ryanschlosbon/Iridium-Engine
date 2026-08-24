@@ -5,6 +5,7 @@
 #include "editor/EditorPropertyTransaction.h"
 #include "editor/EditorSelectionState.h"
 #include "editor/EditorSceneActions.h"
+#include "assets/BuiltInAssets.h"
 #include "assets/AssetMetadata.h"
 #include "renderer/rhi/Mesh.h"
 #include "scene/SceneWorld.h"
@@ -812,6 +813,54 @@ namespace {
         return true;
     }
 
+    bool defaultEntityPresetsCreateRuntimeComponents() {
+        Iridium::SceneWorld world;
+        Iridium::EditorSceneDocumentService document(world);
+        Iridium::EditorTransactionService history(document);
+        Iridium::EditorSelectionState selection;
+        Iridium::EditorSceneCommandService commands(
+            document, history, selection);
+
+        const Entity cube = commands.createPreset(
+            Iridium::EditorEntityPreset::Cube);
+        const Entity sun = commands.createPreset(
+            Iridium::EditorEntityPreset::DirectionalLight);
+        const Entity point = commands.createPreset(
+            Iridium::EditorEntityPreset::PointLight);
+        const Entity spot = commands.createPreset(
+            Iridium::EditorEntityPreset::SpotLight);
+        const Entity sky = commands.createPreset(
+            Iridium::EditorEntityPreset::HdriSky);
+        CHECK(cube != NULL_ENTITY && sun != NULL_ENTITY &&
+            point != NULL_ENTITY && spot != NULL_ENTITY &&
+            sky != NULL_ENTITY);
+
+        const auto& mesh = world.registry().getComponent<MeshComponent>(cube);
+        CHECK(mesh.assetGuid == Iridium::kBuiltInCubeAssetGuid);
+        CHECK(mesh.requestedAssetGuid == Iridium::kBuiltInCubeAssetGuid);
+        CHECK(world.registry().getComponent<LightComponent>(sun).type ==
+            LightType::Directional);
+        CHECK(world.registry().getComponent<TransformComponent>(sun).rotation ==
+            glm::vec3(45.0f, -30.0f, 0.0f));
+        CHECK(world.registry().getComponent<LightComponent>(point).type ==
+            LightType::Point);
+        CHECK(world.registry().getComponent<LightComponent>(spot).type ==
+            LightType::Spot);
+        const auto& skyComponent =
+            world.registry().getComponent<Iridium::SkyComponent>(sky);
+        CHECK(skyComponent.mode == Iridium::SkyMode::Hdri);
+        CHECK(skyComponent.hdri.environmentAssetGuid ==
+            Iridium::kDefaultEditorEnvironmentAssetGuid);
+        CHECK(skyComponent.requestedEnvironmentAssetGuid ==
+            Iridium::kDefaultEditorEnvironmentAssetGuid);
+        CHECK(Iridium::rebuildEditorSceneHierarchy(world.registry()));
+
+        CHECK(history.undo());
+        CHECK(!world.registry().isAlive(sky));
+        CHECK(history.redo());
+        return true;
+    }
+
     bool structuralSiblingOrderAndCyclesAreValidated() {
         auto generator = std::make_unique<SequenceUuidGenerator>(
             std::vector<Iridium::SceneEntityUuid>{
@@ -1085,6 +1134,8 @@ int main() {
             structuralCreateDeleteSubtreeUsesStableIdentity },
         { "startup model create drag and delete commands",
             startupModelSupportsCreateDragAndDeleteCommands },
+        { "default entity preset runtime components",
+            defaultEntityPresetsCreateRuntimeComponents },
         { "structural sibling order and cycle validation",
             structuralSiblingOrderAndCyclesAreValidated },
         { "structural deep hierarchy iterative traversal",

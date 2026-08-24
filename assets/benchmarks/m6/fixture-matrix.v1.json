@@ -1,0 +1,362 @@
+{
+  "schema_version": 1,
+  "milestone": "M6.0",
+  "color_domain": "scene_linear_acescg_ap1",
+  "world_units": "metres",
+  "production_resolution": [3840, 2160],
+  "capture_domains": ["scene-linear", "final-sdr", "scrgb", "hdr10"],
+  "identity_policy": {
+    "seed": 5570761548380975969,
+    "entity_order": "ascending_uuid",
+    "connected_component_order": "lowest_source_triangle_index",
+    "work_identity": [
+      "scene_entity_uuid",
+      "primitive_guid",
+      "connected_subprimitive_id",
+      "effective_material_guid"
+    ]
+  },
+  "quality_policy": {
+    "directional_resolution": 4096,
+    "directional_light_capacity": 2,
+    "spot_atlas_resolution": 8192,
+    "project_shadow_quality": "Ultra",
+    "fixture_light_shadow_quality": "Ultra",
+    "pcss_blocker_samples": 24,
+    "pcss_filter_samples": 48,
+    "layer_interface_tiers": [2, 4, 8],
+    "ordinary_transparency_budget_ms": 1.0
+  },
+  "cameras": [
+    {
+      "id": "m6_car_three_point_v1",
+      "position": [0.0, 0.75, 4.3],
+      "target": [0.0, 0.65, 0.0],
+      "up": [0.0, 1.0, 0.0],
+      "vertical_fov_degrees": 38.0,
+      "near_metres": 0.1,
+      "far_metres": 100.0
+    },
+    {
+      "id": "m6_transparency_lab_front_v1",
+      "position": [0.0, 1.5, 6.0],
+      "target": [0.0, 1.0, 0.0],
+      "up": [0.0, 1.0, 0.0],
+      "vertical_fov_degrees": 45.0,
+      "near_metres": 0.05,
+      "far_metres": 200.0
+    },
+    {
+      "id": "m6_sort_oblique_v1",
+      "position": [4.0, 2.0, 7.0],
+      "target": [0.0, 0.5, 0.0],
+      "up": [0.0, 1.0, 0.0],
+      "vertical_fov_degrees": 50.0,
+      "near_metres": 0.05,
+      "far_metres": 250.0
+    },
+    {
+      "id": "m6_edge_pan_v1",
+      "position": [-2.5, 1.25, 5.0],
+      "target": [0.0, 1.0, 0.0],
+      "up": [0.0, 1.0, 0.0],
+      "vertical_fov_degrees": 42.0,
+      "near_metres": 0.05,
+      "far_metres": 200.0
+    }
+  ],
+  "required_axes": [
+    "alfa_windows",
+    "etched_headlamp",
+    "strong_side_light",
+    "global_hdri",
+    "sphere_probe",
+    "box_probe",
+    "normal_sweep",
+    "roughness_sweep",
+    "ior_sweep",
+    "metric_thickness",
+    "colored_absorption",
+    "disconnected_primitives",
+    "identical_depth_ties",
+    "intersections",
+    "cyclic_order",
+    "valid_closed_mesh",
+    "invalid_closed_mesh",
+    "nested_shells",
+    "hero_layers",
+    "overflow_fallback",
+    "weighted_oit_particles",
+    "high_overdraw",
+    "offscreen_refraction",
+    "screen_edge",
+    "depth_discontinuity",
+    "camera_motion",
+    "camera_cut",
+    "frame_entry_exit",
+    "directional_shadow_receive",
+    "spot_shadow_receive",
+    "point_shadow_receive",
+    "colored_shadow_unsupported",
+    "caustics_unsupported",
+    "selection_overlay",
+    "debug_views",
+    "resize_lifecycle",
+    "output_transports"
+  ],
+  "cases": [
+    {
+      "id": "alfa_windows_headlamps_v1",
+      "fixture_guid": "019ff600-0000-7000-8000-000000000001",
+      "availability": "optional_local_existing_runtime",
+      "active_from": "M6.0",
+      "camera": "m6_car_three_point_v1",
+      "classes": ["ThinGlass"],
+      "axes": [
+        "alfa_windows", "etched_headlamp", "strong_side_light", "global_hdri",
+        "normal_sweep", "roughness_sweep", "directional_shadow_receive",
+        "spot_shadow_receive", "point_shadow_receive"
+      ],
+      "source_contract": "assets/m5-sample-car-manifest.v1.json:sample_car_lighting_local_v1",
+      "expected_behavior": [
+        "Etched normal detail and Fresnel ridges remain visible.",
+        "Windows remain transmissive without black, white, flat, or invisible regressions.",
+        "The deterministic three-light rig uses explicit per-light Ultra shadow quality."
+      ]
+    },
+    {
+      "id": "transparency_material_sweeps_v1",
+      "fixture_guid": "019ff600-0000-7000-8000-000000000002",
+      "availability": "contract_frozen_fixture_pending",
+      "active_from": "M6.3",
+      "camera": "m6_transparency_lab_front_v1",
+      "classes": ["AlphaClip", "SortedSurface", "ThinGlass", "LayeredGlass"],
+      "axes": [
+        "normal_sweep", "roughness_sweep", "ior_sweep", "metric_thickness",
+        "colored_absorption", "strong_side_light", "global_hdri", "sphere_probe",
+        "box_probe"
+      ],
+      "recipe": {
+        "roughness": [0.0, 0.125, 0.25, 0.5, 0.75, 1.0],
+        "ior": [1.0, 1.1, 1.33, 1.5, 1.8, 2.4],
+        "thickness_metres": [0.0, 0.001, 0.005, 0.02, 0.1, 1.0],
+        "attenuation_distance_metres": [0.1, 1.0, 10.0, "infinite"]
+      },
+      "expected_behavior": [
+        "Every sweep is monotonic where the analytic transport contract requires it.",
+        "Global and local-probe reflections use the same shared scene-specular contract."
+      ]
+    },
+    {
+      "id": "sorted_disconnected_and_ties_v1",
+      "fixture_guid": "019ff600-0000-7000-8000-000000000003",
+      "availability": "contract_frozen_fixture_pending",
+      "active_from": "M6.2",
+      "camera": "m6_sort_oblique_v1",
+      "classes": ["SortedSurface"],
+      "axes": ["disconnected_primitives", "identical_depth_ties"],
+      "recipe": {
+        "input_permutations": 64,
+        "author_priorities": [-2, 0, 0, 2],
+        "stable_work": [
+          {
+            "entity_uuid": "019ff601-0000-7000-8000-000000000001",
+            "primitive_guid": "019ff602-0000-7000-8000-000000000001",
+            "material_guid": "019ff603-0000-7000-8000-000000000001",
+            "connected_subprimitive_seed": 0
+          },
+          {
+            "entity_uuid": "019ff601-0000-7000-8000-000000000002",
+            "primitive_guid": "019ff602-0000-7000-8000-000000000002",
+            "material_guid": "019ff603-0000-7000-8000-000000000001",
+            "connected_subprimitive_seed": 7
+          }
+        ]
+      },
+      "expected_behavior": [
+        "All process and input permutations produce one stable order.",
+        "Disconnected components retain independent bounds and work identities."
+      ]
+    },
+    {
+      "id": "sorted_intersection_cycle_v1",
+      "fixture_guid": "019ff600-0000-7000-8000-000000000004",
+      "availability": "contract_frozen_fixture_pending",
+      "active_from": "M6.2",
+      "camera": "m6_sort_oblique_v1",
+      "classes": ["SortedSurface", "LayeredGlass"],
+      "axes": ["intersections", "cyclic_order"],
+      "recipe": {
+        "intersecting_quads": 3,
+        "overlapping_depth_intervals": 3,
+        "input_permutations": 64
+      },
+      "expected_behavior": [
+        "SortedSurface remains deterministic and reports ambiguity without claiming per-pixel correctness.",
+        "The classified LayeredGlass comparison resolves the bounded interface order."
+      ]
+    },
+    {
+      "id": "thin_and_closed_topology_v1",
+      "fixture_guid": "019ff600-0000-7000-8000-000000000005",
+      "availability": "contract_frozen_fixture_pending",
+      "active_from": "M6.3",
+      "camera": "m6_transparency_lab_front_v1",
+      "classes": ["ThinGlass", "LayeredGlass"],
+      "axes": ["valid_closed_mesh", "invalid_closed_mesh", "metric_thickness"],
+      "recipe": {
+        "thin_open_sheet": 1,
+        "closed_orientable_shell": 1,
+        "open_volume": 1,
+        "nonmanifold_volume": 1,
+        "mirrored_instances": 2
+      },
+      "expected_behavior": [
+        "Only valid orientable closed components enter LayeredGlass.",
+        "Invalid volume topology falls back to ThinGlass with a stable diagnostic."
+      ]
+    },
+    {
+      "id": "nested_shells_v1",
+      "fixture_guid": "019ff600-0000-7000-8000-000000000006",
+      "availability": "contract_frozen_fixture_pending",
+      "active_from": "M6.5",
+      "camera": "m6_transparency_lab_front_v1",
+      "classes": ["LayeredGlass"],
+      "axes": ["nested_shells", "metric_thickness", "colored_absorption"],
+      "recipe": {
+        "shells": 2,
+        "required_interfaces": 4,
+        "outer_ior": 1.5,
+        "inner_ior": 1.33
+      },
+      "expected_behavior": [
+        "Ordinary2 reports overflow while Hero4 stores both closed shells.",
+        "Entry and exit identities form a deterministic bounded medium stack."
+      ]
+    },
+    {
+      "id": "hero_layer_overflow_v1",
+      "fixture_guid": "019ff600-0000-7000-8000-000000000007",
+      "availability": "contract_frozen_fixture_pending",
+      "active_from": "M6.6",
+      "camera": "m6_transparency_lab_front_v1",
+      "classes": ["LayeredGlass"],
+      "axes": ["hero_layers", "overflow_fallback"],
+      "recipe": {
+        "requested_interfaces": [2, 4, 8, 12],
+        "quality_caps": [2, 4, 8],
+        "projected_coverage_fraction": [0.05, 0.25, 0.5, 1.0]
+      },
+      "expected_behavior": [
+        "The exact prefix and bounded residual remain deterministic at every cap.",
+        "No request increases storage beyond the declared project tier."
+      ]
+    },
+    {
+      "id": "weighted_oit_particles_v1",
+      "fixture_guid": "019ff600-0000-7000-8000-000000000008",
+      "availability": "contract_frozen_fixture_pending",
+      "active_from": "M6.7",
+      "camera": "m6_transparency_lab_front_v1",
+      "classes": ["WeightedOIT"],
+      "axes": ["weighted_oit_particles", "high_overdraw"],
+      "recipe": {
+        "particle_counts": [256, 4096, 65536],
+        "overdraw_targets": [1, 4, 16, 64],
+        "draw_order_permutations": 64,
+        "hdr_emissive_values": [0.0, 1.0, 16.0, 256.0]
+      },
+      "expected_behavior": [
+        "Draw-order permutations stay within the frozen reference error threshold.",
+        "Refractive and volume features never route to WeightedOIT."
+      ]
+    },
+    {
+      "id": "refraction_edges_and_discontinuities_v1",
+      "fixture_guid": "019ff600-0000-7000-8000-000000000009",
+      "availability": "contract_frozen_fixture_pending",
+      "active_from": "M6.4",
+      "camera": "m6_edge_pan_v1",
+      "classes": ["ThinGlass", "LayeredGlass"],
+      "axes": ["offscreen_refraction", "screen_edge", "depth_discontinuity"],
+      "recipe": {
+        "edge_offsets_pixels": [-64, -8, -1, 0, 1, 8, 64],
+        "opaque_depth_steps_metres": [0.01, 0.1, 1.0, 10.0],
+        "roughness": [0.0, 0.25, 0.5, 1.0]
+      },
+      "expected_behavior": [
+        "Invalid screen samples use diagnosed probe/environment fallback without stretched edge texels.",
+        "Conservative depth rejection avoids foreground color leaks."
+      ]
+    },
+    {
+      "id": "transparency_motion_and_frame_bounds_v1",
+      "fixture_guid": "019ff600-0000-7000-8000-00000000000a",
+      "availability": "contract_frozen_fixture_pending",
+      "active_from": "M6.2",
+      "camera": "m6_edge_pan_v1",
+      "classes": ["SortedSurface", "ThinGlass", "LayeredGlass"],
+      "axes": ["camera_motion", "camera_cut", "frame_entry_exit"],
+      "recipe": {
+        "motion_period_frames": 240,
+        "camera_cut_frame": 120,
+        "near_plane_crossing_frames": [60, 180]
+      },
+      "expected_behavior": [
+        "Sort and fallback decisions remain deterministic across cuts and near-plane crossings.",
+        "No history or stale graph view survives a cut or extent change."
+      ]
+    },
+    {
+      "id": "transparent_shadow_contract_v1",
+      "fixture_guid": "019ff600-0000-7000-8000-00000000000b",
+      "availability": "contract_frozen_fixture_pending",
+      "active_from": "M6.3",
+      "camera": "m6_transparency_lab_front_v1",
+      "classes": ["SortedSurface", "ThinGlass", "LayeredGlass", "WeightedOIT"],
+      "axes": [
+        "directional_shadow_receive", "spot_shadow_receive", "point_shadow_receive",
+        "colored_shadow_unsupported", "caustics_unsupported"
+      ],
+      "recipe": {
+        "lights": ["directional", "spot", "point"],
+        "scalar_visibility": true,
+        "colored_transmission_storage": false,
+        "caustics": false
+      },
+      "expected_behavior": [
+        "Every light retains independent scalar visibility on transparent receivers.",
+        "Colored-shadow and caustic requests produce explicit unsupported diagnostics."
+      ]
+    },
+    {
+      "id": "transparency_output_lifecycle_v1",
+      "fixture_guid": "019ff600-0000-7000-8000-00000000000c",
+      "availability": "contract_frozen_fixture_pending",
+      "active_from": "M6.4",
+      "camera": "m6_transparency_lab_front_v1",
+      "classes": ["AlphaClip", "SortedSurface", "ThinGlass", "LayeredGlass", "WeightedOIT"],
+      "axes": ["selection_overlay", "debug_views", "resize_lifecycle", "output_transports"],
+      "recipe": {
+        "output_transports": ["sdr", "scrgb", "hdr10"],
+        "extent_sequence": [[3840, 2160], [1600, 900], [0, 0], [2560, 1440], [3840, 2160]],
+        "quality_sequence": [2, 4, 8, 2],
+        "capture_insertions": 4
+      },
+      "expected_behavior": [
+        "Zero extent performs no allocation or submission.",
+        "All graph views and descriptors retire with their owning frame context.",
+        "Selection and UI remain outside the scene-linear transparency composition."
+      ]
+    }
+  ],
+  "reference_artifacts": {
+    "transport_math": "reference-transport.v1.json",
+    "reference_images": {
+      "status": "generated_by_owning_renderer_slices",
+      "required_domains": ["scene-linear", "final-sdr"],
+      "required_comparisons": ["cpu_oracle", "controlled_offline", "previous_slice"]
+    }
+  }
+}

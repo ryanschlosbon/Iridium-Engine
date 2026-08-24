@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "assetGuid": "01a02bda-b36a-720e-9e43-59af9be8c6cb",
+  "assetType": "iridium.model",
+  "importer": {
+    "id": "iridium.gltf-model",
+    "version": 6
+  },
+  "settings": {
+    "schemaVersion": 2,
+    "values": {
+      "bake_node_transforms": true,
+      "generate_missing_tangents": true,
+      "import_scale": 1.0,
+      "preserve_rt_geometry": true,
+      "recalculate_normals": false,
+      "recalculate_tangents": false,
+      "reverse_winding": false,
+      "transparency_execution_mode": "classified",
+      "transparency_policies": {}
+    }
+  },
+  "subassets": [
+    {
+      "guid": "01a02bda-b36b-7d0a-afc2-1857c9dfc255",
+      "assetType": "iridium.material",
+      "sourceKey": "materials/0",
+      "structuralFingerprint": "97150d2476ad114f0c0f87f904e768c1747d74d916d7d61b813cf6e1c4d1c11e"
+    },
+    {
+      "guid": "01a02bda-b36b-7d90-a983-c773c7a8a4a4",
+      "assetType": "iridium.model-primitive",
+      "sourceKey": "nodes/0/meshes/0/primitives/0",
+      "structuralFingerprint": "814440272a55e7f9419118045e071a4c30988f2e39e310a0716a278fe91766e8"
+    }
+  ],
+  "tags": [
+    "m6.5-fixture",
+    "invalid-topology",
+    "tracked"
+  ]
+}

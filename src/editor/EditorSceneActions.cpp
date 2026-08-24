@@ -1,5 +1,6 @@
 #include "editor/EditorSceneActions.h"
 
+#include "assets/BuiltInAssets.h"
 #include "ecs/Registry.h"
 #include "scene/Components.h"
 
@@ -89,6 +90,62 @@ namespace Iridium {
         mesh.assetGuid = modelGuid;
         mesh.requestedAssetGuid =
             modelGuid;
+        return entity;
+    }
+
+    std::string_view editorEntityPresetName(
+        EditorEntityPreset preset) noexcept {
+        switch (preset) {
+        case EditorEntityPreset::Empty: return "Entity";
+        case EditorEntityPreset::Cube: return "Cube";
+        case EditorEntityPreset::DirectionalLight: return "Sun";
+        case EditorEntityPreset::PointLight: return "Point Light";
+        case EditorEntityPreset::SpotLight: return "Spot Light";
+        case EditorEntityPreset::HdriSky: return "HDRI Sky";
+        }
+        return "Entity";
+    }
+
+    Entity createEditorEntityPreset(
+        Registry& registry,
+        EditorEntityPreset preset,
+        glm::vec3 position) {
+        const Entity entity = createEmptyEditorEntity(
+            registry, editorEntityPresetName(preset), position);
+        switch (preset) {
+        case EditorEntityPreset::Empty:
+            break;
+        case EditorEntityPreset::Cube: {
+            auto& mesh = registry.addComponent<MeshComponent>(entity);
+            mesh.assetGuid = kBuiltInCubeAssetGuid;
+            mesh.requestedAssetGuid = kBuiltInCubeAssetGuid;
+            break;
+        }
+        case EditorEntityPreset::DirectionalLight:
+        case EditorEntityPreset::PointLight:
+        case EditorEntityPreset::SpotLight: {
+            auto& light = registry.addComponent<LightComponent>(entity);
+            light.type = preset == EditorEntityPreset::DirectionalLight
+                ? LightType::Directional
+                : preset == EditorEntityPreset::PointLight
+                    ? LightType::Point : LightType::Spot;
+            if (light.type == LightType::Directional) {
+                auto& transform = registry.getComponent<TransformComponent>(entity);
+                transform.rotation = { 45.0f, -30.0f, 0.0f };
+                transform.isDirty = true;
+            }
+            break;
+        }
+        case EditorEntityPreset::HdriSky: {
+            auto& sky = registry.addComponent<SkyComponent>(entity);
+            sky.mode = SkyMode::Hdri;
+            sky.hdri.environmentAssetGuid =
+                kDefaultEditorEnvironmentAssetGuid;
+            sky.requestedEnvironmentAssetGuid =
+                kDefaultEditorEnvironmentAssetGuid;
+            break;
+        }
+        }
         return entity;
     }
 

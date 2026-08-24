@@ -6,6 +6,7 @@
 #include <array>
 #include <bit>
 #include <cctype>
+#include <cmath>
 #include <cstring>
 #include <limits>
 #include <stdexcept>
@@ -21,7 +22,8 @@ namespace Iridium {
             std::byte{ 'M' }, std::byte{ 'A' }, std::byte{ 'T' },
             std::byte{ '0' }, std::byte{ '1' },
         };
-        constexpr uint32_t kContainerVersion = 1;
+        constexpr uint32_t kContainerVersion =
+            kCompiledMaterialProductSchemaVersion;
         constexpr size_t kChecksumSize = 64;
         constexpr size_t kHeaderSize =
             kMagic.size() + sizeof(uint32_t) + sizeof(uint64_t) +
@@ -455,6 +457,11 @@ namespace Iridium {
             writer.integer(static_cast<uint8_t>(material.workflow));
             writer.integer(static_cast<uint8_t>(material.closureClass));
             writer.integer(material.featureFlags);
+            writer.integer(packTransparencyPolicyWord(
+                material.transparency));
+            writer.integer(material.transparency.priority);
+            writer.floating(
+                material.transparency.thinSheetThicknessMeters);
 
             const StandardClosureRecipe& recipe = material.standard;
             writeVec4(writer, recipe.baseColorFactor);
@@ -501,6 +508,9 @@ namespace Iridium {
             uint8_t closure = 0;
             uint8_t alphaMode = 0;
             uint8_t doubleSided = 0;
+            uint32_t transparencyWord = 0;
+            int32_t transparencyPriority = 0;
+            float thinSheetThicknessMeters = 0.0f;
             if (!reader.integer(material.schemaVersion) ||
                 material.schemaVersion != CompiledMaterial::SchemaVersion ||
                 !reader.integer(material.sourceMaterialIndex) ||
@@ -511,6 +521,9 @@ namespace Iridium {
                 closure > static_cast<uint8_t>(
                     MaterialClosureClass::Invalid) ||
                 !reader.integer(material.featureFlags) ||
+                !reader.integer(transparencyWord) ||
+                !reader.integer(transparencyPriority) ||
+                !reader.floating(thinSheetThicknessMeters) ||
                 !readVec4(reader, material.standard.baseColorFactor) ||
                 !reader.floating(material.standard.metallicFactor) ||
                 !reader.floating(material.standard.roughnessFactor) ||
@@ -541,6 +554,24 @@ namespace Iridium {
             material.standard.alphaMode =
                 static_cast<SourceAlphaMode>(alphaMode);
             material.standard.doubleSided = doubleSided != 0;
+            material.transparency = unpackTransparencyPolicyWord(
+                transparencyWord, transparencyPriority,
+                thinSheetThicknessMeters);
+            if (!isAuthoredTransparencyClass(
+                    material.transparency.requestedClass) ||
+                material.transparency.resolvedClass <
+                    TransparencyClass::None ||
+                material.transparency.resolvedClass >
+                    TransparencyClass::WeightedOit ||
+                !isTransparencyQuality(
+                    material.transparency.quality) ||
+                (material.transparency.flags & 0xf0u) != 0 ||
+                !std::isfinite(
+                    material.transparency.thinSheetThicknessMeters) ||
+                material.transparency.thinSheetThicknessMeters < 0.0f ||
+                material.transparency.thinSheetThicknessMeters > 1.0e6f) {
+                return false;
+            }
 
             uint32_t textureCount = 0;
             if (!reader.integer(textureCount) ||

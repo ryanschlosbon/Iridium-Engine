@@ -30,8 +30,8 @@ namespace Iridium {
             std::byte{ 'E' }, std::byte{ 'X' }, std::byte{ '0' }, std::byte{ '1' },
         };
         constexpr uint32_t kManifestHeaderSize = 72;
-        constexpr uint32_t kPrimitiveRecordSize = 184;
-        constexpr uint32_t kMaterialSectionSchemaVersion = 2;
+        constexpr uint32_t kPrimitiveRecordSize = 208;
+        constexpr uint32_t kMaterialSectionSchemaVersion = 3;
         constexpr uint32_t kTextureViewSectionSchemaVersion = 1;
 
         template <typename Integer>
@@ -128,6 +128,18 @@ namespace Iridium {
             return value <= static_cast<uint8_t>(ModelPrimitiveTopology::Points);
         }
 
+        bool validTransparencyPolicy(
+            const CompiledTransparencyPolicy& policy) {
+            return isAuthoredTransparencyClass(policy.requestedClass) &&
+                policy.resolvedClass >= TransparencyClass::None &&
+                policy.resolvedClass <= TransparencyClass::WeightedOit &&
+                isTransparencyQuality(policy.quality) &&
+                (policy.flags & 0xf0u) == 0 &&
+                std::isfinite(policy.thinSheetThicknessMeters) &&
+                policy.thinSheetThicknessMeters >= 0.0f &&
+                policy.thinSheetThicknessMeters <= 1.0e6f;
+        }
+
         bool validEnumValues(const CookedModelPrimitive& primitive) {
             return static_cast<uint8_t>(primitive.topology) <=
                     static_cast<uint8_t>(ModelPrimitiveTopology::Points) &&
@@ -136,7 +148,8 @@ namespace Iridium {
                 static_cast<uint8_t>(primitive.coverage) <=
                     static_cast<uint8_t>(ModelCoverage::Transparent) &&
                 static_cast<uint8_t>(primitive.indexFormat) <=
-                    static_cast<uint8_t>(ModelIndexFormat::UInt32);
+                    static_cast<uint8_t>(ModelIndexFormat::UInt32) &&
+                validTransparencyPolicy(primitive.transparency);
         }
 
         bool validRange(uint64_t first, uint64_t count, uint64_t size) {
@@ -224,7 +237,9 @@ namespace Iridium {
         writeInteger<uint64_t>(output, 40, manifest.rtPositionCount);
         writeInteger<uint64_t>(output, 48, manifest.rtIndexCount);
         writeInteger<uint32_t>(output, 56, manifest.vertexStride);
-        writeInteger<uint32_t>(output, 60, 0);
+        writeInteger<uint32_t>(output, 60,
+            static_cast<uint32_t>(
+                manifest.transparencyExecutionMode));
         writeInteger<uint64_t>(output, 64, stringTableOffset);
 
         for (size_t index = 0; index < manifest.primitives.size(); ++index) {
@@ -281,7 +296,15 @@ namespace Iridium {
                     primitive.bounds.sphereCenter[axis]);
             }
             writeFloat(output, record + 176, primitive.bounds.sphereRadius);
-            writeInteger<uint32_t>(output, record + 180, 0);
+            writeInteger<uint32_t>(output, record + 180,
+                packTransparencyPolicyWord(
+                    primitive.transparency));
+            writeInteger<int32_t>(output, record + 184,
+                primitive.transparency.priority);
+            writeFloat(output, record + 188,
+                primitive.transparency.thinSheetThicknessMeters);
+            writeGuid(output, record + 192,
+                primitive.sourcePrimitiveGuid);
             output.insert(output.end(),
                 reinterpret_cast<const std::byte*>(primitive.sourceKey.data()),
                 reinterpret_cast<const std::byte*>(
@@ -305,6 +328,7 @@ namespace Iridium {
         uint32_t headerSize = 0;
         uint32_t recordSize = 0;
         uint32_t primitiveCount = 0;
+        uint32_t transparencyExecutionMode = 0;
         uint64_t stringTableOffset = 0;
         CookedModelManifest result;
         if (!readInteger(bytes, 8, schema) ||
@@ -316,15 +340,21 @@ namespace Iridium {
             !readInteger(bytes, 40, result.rtPositionCount) ||
             !readInteger(bytes, 48, result.rtIndexCount) ||
             !readInteger(bytes, 56, result.vertexStride) ||
+            !readInteger(bytes, 60, transparencyExecutionMode) ||
             !readInteger(bytes, 64, stringTableOffset) ||
             schema != kCookedModelSchemaVersion ||
             headerSize != kManifestHeaderSize ||
-            recordSize != kPrimitiveRecordSize) {
+            recordSize != kPrimitiveRecordSize ||
+            transparencyExecutionMode > static_cast<uint32_t>(
+                TransparencyExecutionMode::Classified)) {
             addError(diagnostics, "MODEL_MANIFEST_SCHEMA", "/schema",
                 "Cooked model manifest schema or record layout is unsupported.");
             return std::nullopt;
         }
         result.schemaVersion = schema;
+        result.transparencyExecutionMode =
+            static_cast<TransparencyExecutionMode>(
+                transparencyExecutionMode);
 
         const uint64_t expectedStringTableOffset =
             static_cast<uint64_t>(headerSize) +
@@ -344,12 +374,16 @@ namespace Iridium {
             CookedModelPrimitive primitive;
             primitive.primitiveGuid = readGuid(bytes, record);
             primitive.materialGuid = readGuid(bytes, record + 16);
+            primitive.sourcePrimitiveGuid = readGuid(bytes, record + 192);
             uint8_t topology = 0;
             uint8_t winding = 0;
             uint8_t coverage = 0;
             uint8_t indexFormat = 0;
             uint32_t sourceKeyOffset = 0;
             uint32_t sourceKeyLength = 0;
+            uint32_t transparencyWord = 0;
+            int32_t transparencyPriority = 0;
+            float thinSheetThicknessMeters = 0.0f;
             bool readable =
                 readInteger(bytes, record + 32, primitive.sourceNode) &&
                 readInteger(bytes, record + 36, primitive.sourceMesh) &&
@@ -372,7 +406,13 @@ namespace Iridium {
                 readInteger(bytes, record + 124, primitive.lodSection) &&
                 readInteger(bytes, record + 128, primitive.meshletSection) &&
                 readInteger(bytes, record + 132, sourceKeyOffset) &&
-                readInteger(bytes, record + 136, sourceKeyLength);
+                readInteger(bytes, record + 136, sourceKeyLength) &&
+                readInteger(bytes, record + 180,
+                    transparencyWord) &&
+                readInteger(bytes, record + 184,
+                    transparencyPriority) &&
+                readFloat(bytes, record + 188,
+                    thinSheetThicknessMeters);
             for (uint32_t axis = 0; axis < 3 && readable; ++axis) {
                 readable =
                     readFloat(bytes, record + 140 + axis * 4,
@@ -384,11 +424,15 @@ namespace Iridium {
             }
             readable = readable &&
                 readFloat(bytes, record + 176, primitive.bounds.sphereRadius);
+            primitive.transparency = unpackTransparencyPolicyWord(
+                transparencyWord, transparencyPriority,
+                thinSheetThicknessMeters);
             const uint64_t keyStart = stringTableOffset + sourceKeyOffset;
             if (!readable || !validTopology(topology) ||
                 winding > static_cast<uint8_t>(ModelWinding::Clockwise) ||
                 coverage > static_cast<uint8_t>(ModelCoverage::Transparent) ||
                 indexFormat > static_cast<uint8_t>(ModelIndexFormat::UInt32) ||
+                !validTransparencyPolicy(primitive.transparency) ||
                 keyStart > bytes.size() ||
                 sourceKeyLength > bytes.size() - keyStart) {
                 addError(diagnostics, "MODEL_PRIMITIVE_RECORD",
@@ -904,7 +948,9 @@ namespace Iridium {
         std::vector<CookDiagnostic> diagnostics;
         const CookedModelManifest& manifest = data.manifest;
         if (manifest.schemaVersion != kCookedModelSchemaVersion ||
-            manifest.vertexStride != kCookedModelVertexStride) {
+            manifest.vertexStride != kCookedModelVertexStride ||
+            manifest.transparencyExecutionMode >
+                TransparencyExecutionMode::Classified) {
             addError(diagnostics, "MODEL_SCHEMA", "/schema",
                 "Cooked model schema or canonical vertex stride is unsupported.");
         }
@@ -984,6 +1030,8 @@ namespace Iridium {
                     CompiledMaterial::SchemaVersion ||
                 material.compiled.closureClass ==
                     MaterialClosureClass::Invalid ||
+                !validTransparencyPolicy(
+                    material.compiled.transparency) ||
                 material.compiled.contentHash !=
                     calculateCompiledMaterialHash(
                         material.compiled)) {
@@ -1090,6 +1138,11 @@ namespace Iridium {
                 addError(diagnostics, "MODEL_PRIMITIVE_GUID",
                     field + "/primitive_guid",
                     "Primitive GUID must be non-nil and unique.");
+            }
+            if (primitive.sourcePrimitiveGuid.isNil()) {
+                addError(diagnostics, "MODEL_SOURCE_PRIMITIVE_GUID",
+                    field + "/source_primitive_guid",
+                    "Source primitive GUID must be non-nil.");
             }
             if (primitive.materialGuid.isNil()) {
                 addError(diagnostics, "MODEL_MATERIAL_GUID",

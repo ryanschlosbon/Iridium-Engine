@@ -1,6 +1,8 @@
 #include "assets/model/GltfModelImporter.h"
 
 #include "assets/AssetSourceValidation.h"
+#include "assets/cooker/CookKey.h"
+#include "assets/cooker/LocalDerivedDataCache.h"
 #include "assets/model/ModelProduct.h"
 #include "assets/texture/TextureImporter.h"
 #include "assets/texture/TextureProduct.h"
@@ -15,11 +17,13 @@
 #include <glm/gtc/type_ptr.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <array>
 #include <cctype>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -31,6 +35,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 namespace Iridium {
@@ -173,6 +178,33 @@ namespace Iridium {
                     nibble(text[index * 2 + 1]));
             }
             return result;
+        }
+
+        AssetGuid connectedPrimitiveGuid(const AssetGuid& sourcePrimitiveGuid,
+            uint32_t sourceTriangleSeed) {
+            std::array<std::byte, 20> identity{};
+            std::memcpy(identity.data(), sourcePrimitiveGuid.bytes().data(), 16);
+            for (uint32_t byte = 0; byte < 4; ++byte) {
+                identity[16 + byte] = static_cast<std::byte>(
+                    (sourceTriangleSeed >> (byte * 8)) & 0xffu);
+            }
+            const std::vector<std::byte> digest = hexDecode(sha256(identity));
+            AssetGuid::Bytes bytes = sourcePrimitiveGuid.bytes();
+            for (size_t index = 6; index < bytes.size(); ++index) {
+                bytes[index] = std::to_integer<uint8_t>(digest[index - 6]);
+            }
+            bytes[6] = static_cast<uint8_t>((bytes[6] & 0x0fu) | 0x70u);
+            bytes[8] = static_cast<uint8_t>((bytes[8] & 0x3fu) | 0x80u);
+            return AssetGuid(bytes);
+        }
+
+        bool transparentConnectedWork(ModelCoverage coverage,
+            TransparencyClass resolvedClass) {
+            return coverage == ModelCoverage::Transparent ||
+                resolvedClass == TransparencyClass::SortedSurface ||
+                resolvedClass == TransparencyClass::ThinGlass ||
+                resolvedClass == TransparencyClass::LayeredGlass ||
+                resolvedClass == TransparencyClass::WeightedOit;
         }
 
         nlohmann::json sourceJson(
@@ -802,6 +834,64 @@ namespace Iridium {
                 ? std::nullopt : std::optional(found->guid);
         }
 
+        std::optional<TransparencyClass> transparencyClassSetting(
+            std::string_view value) {
+            if (value == "auto") return TransparencyClass::Auto;
+            if (value == "alpha_clip") return TransparencyClass::AlphaClip;
+            if (value == "sorted_surface") return TransparencyClass::SortedSurface;
+            if (value == "thin_glass") return TransparencyClass::ThinGlass;
+            if (value == "layered_glass") return TransparencyClass::LayeredGlass;
+            if (value == "weighted_oit") return TransparencyClass::WeightedOit;
+            return std::nullopt;
+        }
+
+        std::optional<TransparencyQuality> transparencyQualitySetting(
+            std::string_view value) {
+            if (value == "ordinary2") return TransparencyQuality::Ordinary2;
+            if (value == "hero4") return TransparencyQuality::Hero4;
+            if (value == "cinematic8") return TransparencyQuality::Cinematic8;
+            return std::nullopt;
+        }
+
+        const char* transparencyClassSettingName(
+            TransparencyClass value) {
+            switch (value) {
+            case TransparencyClass::Auto: return "auto";
+            case TransparencyClass::AlphaClip: return "alpha_clip";
+            case TransparencyClass::SortedSurface: return "sorted_surface";
+            case TransparencyClass::ThinGlass: return "thin_glass";
+            case TransparencyClass::LayeredGlass: return "layered_glass";
+            case TransparencyClass::WeightedOit: return "weighted_oit";
+            case TransparencyClass::None: break;
+            }
+            return "auto";
+        }
+
+        TransparencyPolicyV1 normalizedTransparencyPolicy(
+            const Json& value) {
+            TransparencyPolicyV1 result;
+            result.requestedClass = transparencyClassSetting(
+                value.at("class").get<std::string>()).value_or(
+                    TransparencyClass::Auto);
+            result.quality = transparencyQualitySetting(
+                value.at("quality").get<std::string>()).value_or(
+                    TransparencyQuality::Ordinary2);
+            result.priority = value.at("priority").get<int32_t>();
+            result.thinSheetThicknessMeters =
+                value.at("thin_sheet_thickness_m").get<float>();
+            return result;
+        }
+
+        std::optional<TransparencyPolicyV1> transparencyPolicyFor(
+            const NormalizedImportSettings& settings,
+            const AssetGuid& guid) {
+            const Json& policies =
+                settings.values.at("transparency_policies");
+            const auto found = policies.find(guid.toString());
+            if (found == policies.end()) return std::nullopt;
+            return normalizedTransparencyPolicy(*found);
+        }
+
         ModelCoverage coverageFromInteger(uint32_t value) {
             if (value > static_cast<uint32_t>(ModelCoverage::Transparent)) {
                 throw std::runtime_error("Parsed material coverage is invalid.");
@@ -887,13 +977,517 @@ namespace Iridium {
                 ? nullptr : &*found;
         }
 
+        const CookSection* findSection(
+            const CookedArtifact& artifact, uint32_t id) {
+            const auto found = std::ranges::find_if(
+                artifact.sections,
+                [id](const CookSection& section) {
+                    return section.id == id;
+                });
+            return found == artifact.sections.end()
+                ? nullptr : &*found;
+        }
+
+        std::vector<AssetDependency> embeddedTextureDependencies() {
+            return {{
+                .type = AssetDependencyType::Tool,
+                .location = kDirectXTexCodecId,
+                .contentHash = kDirectXTexCodecContentHash,
+            }};
+        }
+
+        std::string embeddedTextureCookKey(
+            const TextureImporter& importer,
+            const AssetGuid& textureGuid,
+            const ParsedSourceAsset::SubassetPayload& imagePayload,
+            const NormalizedImportSettings& settings,
+            const CookTarget& target) {
+            const std::span<const std::byte> sourceBytes =
+                !imagePayload.bytes.empty()
+                ? std::span<const std::byte>(imagePayload.bytes)
+                : std::span<const std::byte>(imagePayload.parsedBytes);
+            return calculateCookKey({
+                .assetGuid = textureGuid,
+                .importerId = importer.descriptor().id,
+                .importerImplementationVersion =
+                    importer.descriptor().implementationVersion,
+                .settingsSchemaVersion = settings.schemaVersion,
+                .canonicalSettings = settings.canonicalBytes,
+                .sourceContentHash = sha256(sourceBytes),
+                .dependencies = embeddedTextureDependencies(),
+                .target = target,
+                .cookerFeatureVersion =
+                    "gltf-embedded-texture-view-v1",
+            });
+        }
+
+        std::optional<CookedModelTextureView> readEmbeddedTextureView(
+            DerivedDataCache* cache,
+            std::string_view cookKey,
+            const AssetGuid& textureGuid,
+            uint32_t sourceImageIndex) {
+            if (!cache) return std::nullopt;
+            DdcReadResult cached = cache->read(cookKey);
+            if (cached.status != DdcLookupStatus::Hit ||
+                !cached.blob) {
+                return std::nullopt;
+            }
+            const CookedArtifactReadResult artifact =
+                readCookedArtifact(cached.blob->bytes,
+                    cached.blob->artifactHash);
+            if (!artifact.valid() ||
+                artifact.artifact->assetGuid != textureGuid ||
+                artifact.artifact->artifactType != "iridium.texture" ||
+                artifact.artifact->artifactSchemaVersion !=
+                    kCookedTextureSchemaVersion ||
+                artifact.artifact->cookKey != cookKey) {
+                return std::nullopt;
+            }
+            const CookSection* manifestSection = findSection(
+                *artifact.artifact, kCookedTextureManifestSection);
+            const CookSection* payloadSection = findSection(
+                *artifact.artifact, kCookedTexturePayloadSection);
+            if (!manifestSection || !payloadSection) {
+                return std::nullopt;
+            }
+            std::vector<CookDiagnostic> diagnostics;
+            const auto manifest = readTextureManifest(
+                manifestSection->bytes, diagnostics);
+            if (!manifest || hasCookErrors(diagnostics) ||
+                hasCookErrors(validateTextureProduct(
+                    *manifest, payloadSection->bytes.size()))) {
+                return std::nullopt;
+            }
+            CookedModelTextureView view{
+                .textureGuid = textureGuid,
+                .sourceImageIndex = sourceImageIndex,
+                .manifest = *manifest,
+                .payload = payloadSection->bytes,
+            };
+            view.viewKey = calculateModelTextureViewKey(view);
+            return view;
+        }
+
+        void storeEmbeddedTextureView(
+            DerivedDataCache* cache,
+            std::string_view cookKey,
+            const AssetGuid& textureGuid,
+            const CookTarget& target,
+            const CookProduct& product) {
+            if (!cache) return;
+            const CookedArtifactBlob blob = serializeCookedArtifact({
+                .assetGuid = textureGuid,
+                .artifactType = product.artifactType,
+                .artifactSchemaVersion = product.artifactSchemaVersion,
+                .target = target,
+                .cookKey = std::string(cookKey),
+                .dependencies = embeddedTextureDependencies(),
+                .sections = product.sections,
+            });
+            // Reuse is optional. Failure to publish an optimization must not
+            // invalidate the deterministic parent model product.
+            (void)cache->storeAtomic(cookKey, blob);
+        }
+
+        void reportCookProgress(
+            const AssetCookContext& context,
+            std::string stage,
+            uint64_t completed,
+            uint64_t total,
+            std::string detail) noexcept {
+            if (!context.progress) return;
+            try {
+                context.progress({
+                    .stage = std::move(stage),
+                    .completed = completed,
+                    .total = total,
+                    .detail = std::move(detail),
+                });
+            }
+            catch (...) {
+                // Diagnostics must never alter deterministic cook behavior.
+            }
+        }
+
+        bool progressCheckpoint(
+            uint64_t completed,
+            uint64_t total,
+            uint64_t checkpointCount) noexcept {
+            if (completed == 0 || completed >= total || total == 0) {
+                return true;
+            }
+            const uint64_t interval = (std::max)(
+                uint64_t{ 1 }, total / checkpointCount);
+            return completed == 1 || completed % interval == 0;
+        }
+
+        struct EmbeddedTextureViewJob {
+            uint32_t outputIndex = 0;
+            AssetGuid textureGuid;
+            uint32_t sourceImageIndex = 0;
+            const ParsedSourceAsset::SubassetPayload* imagePayload = nullptr;
+            NormalizedImportSettings settings;
+            std::string derivedCookKey;
+            std::string imageKey;
+        };
+
+        struct EmbeddedTextureViewResult {
+            std::optional<CookedModelTextureView> view;
+            std::string error;
+            bool cacheHit = false;
+        };
+
+        EmbeddedTextureViewResult cookEmbeddedTextureView(
+            const EmbeddedTextureViewJob& job,
+            const CookTarget& target,
+            DerivedDataCache* cache,
+            std::stop_token stopToken) {
+            try {
+                if (stopToken.stop_requested()) {
+                    return { .error = "Texture view cook was cancelled." };
+                }
+                if (std::optional<CookedModelTextureView> reused =
+                        readEmbeddedTextureView(
+                            cache, job.derivedCookKey,
+                            job.textureGuid,
+                            job.sourceImageIndex)) {
+                    return {
+                        .view = std::move(reused),
+                        .cacheHit = true,
+                    };
+                }
+
+                TextureImporter textureImporter;
+                ParsedSourceAsset parsedTexture;
+                if (!job.imagePayload->parsedBytes.empty()) {
+                    parsedTexture.documentBytes =
+                        job.imagePayload->parsedBytes;
+                }
+                else {
+                    parsedTexture = textureImporter.parse({
+                        .relativePath = job.imagePayload->suggestedPath,
+                        .resolvedPath = {},
+                        .bytes = job.imagePayload->bytes,
+                        .stopToken = stopToken,
+                    }, job.settings);
+                    if (hasCookErrors(parsedTexture.diagnostics)) {
+                        std::string detail;
+                        for (const CookDiagnostic& diagnostic :
+                                parsedTexture.diagnostics) {
+                            if (diagnostic.severity ==
+                                    CookDiagnosticSeverity::Error) {
+                                detail = diagnostic.code + ": " +
+                                    diagnostic.message;
+                                break;
+                            }
+                        }
+                        return {
+                            .error = "Image subasset failed deterministic source decoding" +
+                                (detail.empty() ? std::string(".")
+                                    : ": " + detail),
+                        };
+                    }
+                }
+
+                const CookProduct textureProduct = textureImporter.cook(
+                    parsedTexture, job.settings, target, {
+                        .assetGuid = job.textureGuid,
+                    }, stopToken);
+                if (hasCookErrors(textureProduct.diagnostics)) {
+                    return {
+                        .error = "Image subasset failed deterministic texture cooking.",
+                    };
+                }
+                const CookSection* manifestSection = findSection(
+                    textureProduct, kCookedTextureManifestSection);
+                const CookSection* payloadSection = findSection(
+                    textureProduct, kCookedTexturePayloadSection);
+                if (!manifestSection || !payloadSection) {
+                    return {
+                        .error = "Texture importer omitted a required product section.",
+                    };
+                }
+                std::vector<CookDiagnostic> textureDiagnostics;
+                const auto textureManifest = readTextureManifest(
+                    manifestSection->bytes, textureDiagnostics);
+                if (!textureManifest ||
+                    hasCookErrors(textureDiagnostics)) {
+                    return {
+                        .error = "Texture importer emitted an invalid manifest.",
+                    };
+                }
+                storeEmbeddedTextureView(
+                    cache, job.derivedCookKey,
+                    job.textureGuid, target,
+                    textureProduct);
+                CookedModelTextureView view{
+                    .textureGuid = job.textureGuid,
+                    .sourceImageIndex = job.sourceImageIndex,
+                    .manifest = *textureManifest,
+                    .payload = payloadSection->bytes,
+                };
+                view.viewKey = calculateModelTextureViewKey(view);
+                return { .view = std::move(view) };
+            }
+            catch (const std::exception& exception) {
+                return { .error = exception.what() };
+            }
+        }
+
+        void cookEmbeddedTextureViews(
+            CookedModelProductData& data,
+            std::span<const EmbeddedTextureViewJob> jobs,
+            const CookTarget& target,
+            const AssetCookContext& context,
+            std::stop_token stopToken,
+            std::vector<CookDiagnostic>& diagnostics) {
+            if (jobs.empty()) {
+                reportCookProgress(context, "textures", 0, 0,
+                    "No embedded texture views required");
+                return;
+            }
+            const size_t hardware = (std::max)(
+                1u, std::thread::hardware_concurrency());
+            const size_t workerCount = (std::min)(
+                jobs.size(), (std::min)(size_t{ 16 },
+                    (std::max)(size_t{ 1 }, hardware / 2)));
+            reportCookProgress(context, "textures", 0, jobs.size(),
+                "Cooking unique embedded texture views on " +
+                    std::to_string(workerCount) + " workers");
+
+            std::vector<EmbeddedTextureViewResult> results(jobs.size());
+            std::atomic_size_t nextJob{ 0 };
+            std::atomic_uint64_t completed{ 0 };
+            std::atomic_uint64_t cacheHits{ 0 };
+            std::atomic_uint64_t built{ 0 };
+            {
+                std::vector<std::jthread> workers;
+                workers.reserve(workerCount);
+                for (size_t worker = 0; worker < workerCount; ++worker) {
+                    workers.emplace_back([&](std::stop_token) {
+                        while (!stopToken.stop_requested()) {
+                            const size_t jobIndex =
+                                nextJob.fetch_add(1,
+                                    std::memory_order_relaxed);
+                            if (jobIndex >= jobs.size()) break;
+                            results[jobIndex] = cookEmbeddedTextureView(
+                                jobs[jobIndex], target,
+                                context.derivedDataCache,
+                                stopToken);
+                            const bool hit = results[jobIndex].cacheHit;
+                            if (hit) {
+                                cacheHits.fetch_add(1,
+                                    std::memory_order_relaxed);
+                            }
+                            else if (results[jobIndex].view) {
+                                built.fetch_add(1,
+                                    std::memory_order_relaxed);
+                            }
+                            const uint64_t count = completed.fetch_add(
+                                1, std::memory_order_relaxed) + 1;
+                            const char* outcome = hit
+                                ? "cache hit: "
+                                : results[jobIndex].view
+                                    ? "cooked: " : "failed: ";
+                            reportCookProgress(context, "textures",
+                                count, jobs.size(),
+                                std::string(outcome) +
+                                    jobs[jobIndex].imageKey);
+                        }
+                    });
+                }
+            }
+
+            if (stopToken.stop_requested()) {
+                throw std::runtime_error(
+                    "glTF embedded texture cooking was cancelled.");
+            }
+            for (size_t index = 0; index < jobs.size(); ++index) {
+                const EmbeddedTextureViewJob& job = jobs[index];
+                EmbeddedTextureViewResult& result = results[index];
+                if (!result.view) {
+                    addError(diagnostics, "GLTF_TEXTURE_COOK",
+                        job.imageKey,
+                        result.error.empty()
+                            ? "Image subasset texture view did not complete."
+                            : std::move(result.error));
+                    continue;
+                }
+                data.textureViews[job.outputIndex] =
+                    std::move(*result.view);
+            }
+            reportCookProgress(context, "textures", jobs.size(), jobs.size(),
+                "Embedded texture views complete (" +
+                    std::to_string(built.load()) + " built, " +
+                    std::to_string(cacheHits.load()) + " cache hits)");
+        }
+
     } // namespace
+
+    std::vector<TriangleConnectedComponent>
+        findTriangleConnectedComponents(
+            std::span<const uint32_t> triangleIndices) {
+        if (triangleIndices.size() % 3 != 0) {
+            throw std::invalid_argument(
+                "Triangle component input must contain complete triangles.");
+        }
+        const uint32_t triangleCount = static_cast<uint32_t>(
+            triangleIndices.size() / 3);
+        std::vector<uint32_t> parents(triangleCount);
+        std::iota(parents.begin(), parents.end(), 0u);
+        const auto root = [&parents](uint32_t value) {
+            while (parents[value] != value) {
+                parents[value] = parents[parents[value]];
+                value = parents[value];
+            }
+            return value;
+        };
+        const auto unite = [&parents, &root](uint32_t lhs, uint32_t rhs) {
+            lhs = root(lhs);
+            rhs = root(rhs);
+            if (lhs == rhs) return;
+            if (lhs > rhs) std::swap(lhs, rhs);
+            parents[rhs] = lhs;
+        };
+        std::map<std::pair<uint32_t, uint32_t>, uint32_t> edgeOwners;
+        for (uint32_t triangle = 0; triangle < triangleCount; ++triangle) {
+            const std::array vertices{
+                triangleIndices[triangle * 3],
+                triangleIndices[triangle * 3 + 1],
+                triangleIndices[triangle * 3 + 2],
+            };
+            for (uint32_t edge = 0; edge < 3; ++edge) {
+                uint32_t first = vertices[edge];
+                uint32_t second = vertices[(edge + 1) % 3];
+                if (first == second) continue;
+                if (first > second) std::swap(first, second);
+                const auto [found, inserted] = edgeOwners.emplace(
+                    std::pair{ first, second }, triangle);
+                if (!inserted) unite(triangle, found->second);
+            }
+        }
+
+        std::map<uint32_t, TriangleConnectedComponent> grouped;
+        for (uint32_t triangle = 0; triangle < triangleCount; ++triangle) {
+            const uint32_t componentRoot = root(triangle);
+            auto [found, inserted] = grouped.try_emplace(componentRoot);
+            if (inserted) found->second.sourceTriangleSeed = triangle;
+            found->second.sourceTriangleIndices.push_back(triangle);
+        }
+        std::vector<TriangleConnectedComponent> result;
+        result.reserve(grouped.size());
+        for (auto& [ignored, component] : grouped) {
+            (void)ignored;
+            result.push_back(std::move(component));
+        }
+        std::ranges::sort(result, {},
+            &TriangleConnectedComponent::sourceTriangleSeed);
+        return result;
+    }
+
+    ClosedTriangleTopologyAnalysis analyzeClosedTriangleTopology(
+        std::span<const glm::vec3> positions,
+        std::span<const uint32_t> triangleIndices,
+        std::span<const uint32_t> sourceTriangleIndices) {
+        if (triangleIndices.size() % 3 != 0) {
+            throw std::invalid_argument(
+                "Closed-topology input must contain complete triangles.");
+        }
+        ClosedTriangleTopologyAnalysis result;
+        result.triangleCount = static_cast<uint32_t>(
+            sourceTriangleIndices.size());
+        if (sourceTriangleIndices.empty()) return result;
+
+        glm::dvec3 boundsMin(std::numeric_limits<double>::max());
+        glm::dvec3 boundsMax(std::numeric_limits<double>::lowest());
+        for (uint32_t sourceTriangle : sourceTriangleIndices) {
+            if (sourceTriangle >= triangleIndices.size() / 3) {
+                throw std::invalid_argument(
+                    "Closed-topology triangle index is outside the source span.");
+            }
+            for (uint32_t corner = 0; corner < 3; ++corner) {
+                const uint32_t vertex = triangleIndices[
+                    sourceTriangle * 3 + corner];
+                if (vertex >= positions.size()) {
+                    throw std::invalid_argument(
+                        "Closed-topology vertex index is outside the position span.");
+                }
+                const glm::vec3 position = positions[vertex];
+                if (!std::isfinite(position.x) ||
+                    !std::isfinite(position.y) ||
+                    !std::isfinite(position.z)) {
+                    throw std::invalid_argument(
+                        "Closed-topology positions must be finite.");
+                }
+                const glm::dvec3 point(position);
+                boundsMin = glm::min(boundsMin, point);
+                boundsMax = glm::max(boundsMax, point);
+            }
+        }
+        const glm::dvec3 origin = (boundsMin + boundsMax) * 0.5;
+        const double diagonal = glm::length(boundsMax - boundsMin);
+        const double scale = (std::max)(diagonal, 1.0e-9);
+        const double areaSquaredEpsilon = scale * scale * scale * scale *
+            1.0e-20;
+        const double volumeEpsilon = scale * scale * scale * 1.0e-12;
+
+        struct EdgeUse {
+            uint32_t count = 0;
+            int32_t orientationBalance = 0;
+        };
+        std::map<std::pair<uint32_t, uint32_t>, EdgeUse> edges;
+        double signedVolume = 0.0;
+        for (uint32_t sourceTriangle : sourceTriangleIndices) {
+            const std::array<uint32_t, 3> vertices{
+                triangleIndices[sourceTriangle * 3],
+                triangleIndices[sourceTriangle * 3 + 1],
+                triangleIndices[sourceTriangle * 3 + 2],
+            };
+            if (vertices[0] == vertices[1] ||
+                vertices[1] == vertices[2] ||
+                vertices[2] == vertices[0]) {
+                ++result.degenerateTriangleCount;
+                continue;
+            }
+            const glm::dvec3 a = glm::dvec3(positions[vertices[0]]) - origin;
+            const glm::dvec3 b = glm::dvec3(positions[vertices[1]]) - origin;
+            const glm::dvec3 c = glm::dvec3(positions[vertices[2]]) - origin;
+            const glm::dvec3 cross = glm::cross(b - a, c - a);
+            if (glm::dot(cross, cross) <= areaSquaredEpsilon)
+                ++result.degenerateTriangleCount;
+            signedVolume += glm::dot(a, glm::cross(b, c)) / 6.0;
+
+            for (uint32_t edge = 0; edge < 3; ++edge) {
+                const uint32_t from = vertices[edge];
+                const uint32_t to = vertices[(edge + 1) % 3];
+                const auto key = (std::minmax)(from, to);
+                EdgeUse& use = edges[{ key.first, key.second }];
+                ++use.count;
+                use.orientationBalance += from < to ? 1 : -1;
+            }
+        }
+        for (const auto& [edge, use] : edges) {
+            (void)edge;
+            if (use.count == 1) {
+                ++result.boundaryEdgeCount;
+            }
+            else if (use.count > 2) {
+                ++result.nonManifoldEdgeCount;
+            }
+            else if (use.orientationBalance != 0) {
+                ++result.inconsistentOrientationEdgeCount;
+            }
+        }
+        result.signedVolume = std::abs(signedVolume) > volumeEpsilon
+            ? signedVolume : 0.0;
+        return result;
+    }
 
     const ImporterDescriptor& GltfModelImporter::descriptor() const noexcept {
         static const ImporterDescriptor descriptor{
             .id = "iridium.gltf-model",
             .implementationVersion = kGltfModelImporterVersion,
-            .currentSettingsSchemaVersion = 1,
+            .currentSettingsSchemaVersion = 2,
             .assetTypes = { "iridium.model" },
             .extensions = { ".gltf", ".glb" },
         };
@@ -927,9 +1521,10 @@ namespace Iridium {
         bool strict) const {
         NormalizedImportSettings result;
         result.schemaVersion = descriptor().currentSettingsSchemaVersion;
-        if (sourceSchemaVersion != 1 || !settings.is_object()) {
+        if ((sourceSchemaVersion != 1 && sourceSchemaVersion != 2) ||
+            !settings.is_object()) {
             addError(result.diagnostics, "GLTF_SETTINGS_SCHEMA", "/",
-                "glTF model settings must use object schema 1.");
+                "glTF model settings must use object schema 1 or 2.");
             return result;
         }
         result.values = {
@@ -940,6 +1535,8 @@ namespace Iridium {
             { "recalculate_normals", false },
             { "recalculate_tangents", false },
             { "reverse_winding", false },
+            { "transparency_execution_mode", "legacy_two_bucket" },
+            { "transparency_policies", Json::object() },
         };
         const std::set<std::string> known{
             "bake_node_transforms",
@@ -949,6 +1546,8 @@ namespace Iridium {
             "recalculate_normals",
             "recalculate_tangents",
             "reverse_winding",
+            "transparency_execution_mode",
+            "transparency_policies",
         };
         for (const auto& [key, value] : settings.items()) {
             if (!known.contains(key)) {
@@ -981,6 +1580,180 @@ namespace Iridium {
                     continue;
                 }
                 result.values[key] = scale;
+                continue;
+            }
+            if (key == "transparency_execution_mode") {
+                if (!value.is_string()) {
+                    addDiagnostic(result.diagnostics,
+                        CookDiagnosticSeverity::Warning,
+                        "GLTF_TRANSPARENCY_EXECUTION_UNKNOWN",
+                        "/" + key,
+                        "Unknown transparency execution mode was normalized to legacy_two_bucket.");
+                    continue;
+                }
+                const std::string mode = value.get<std::string>();
+                if (mode != "legacy_two_bucket" && mode != "classified") {
+                    addDiagnostic(result.diagnostics,
+                        CookDiagnosticSeverity::Warning,
+                        "GLTF_TRANSPARENCY_EXECUTION_UNKNOWN",
+                        "/" + key,
+                        "Unknown transparency execution mode was normalized to legacy_two_bucket.");
+                    continue;
+                }
+                result.values[key] = mode;
+                continue;
+            }
+            if (key == "transparency_policies") {
+                if (!value.is_object()) {
+                    addDiagnostic(result.diagnostics,
+                        CookDiagnosticSeverity::Warning,
+                        "GLTF_TRANSPARENCY_POLICIES_TYPE",
+                        "/" + key,
+                        "Transparency policies must be an object; an empty policy map was selected.");
+                    continue;
+                }
+                Json normalized = Json::object();
+                for (const auto& [guidText, rawPolicy] : value.items()) {
+                    const std::string field = "/" + key + "/" + guidText;
+                    const std::optional<AssetGuid> guid =
+                        AssetGuid::parse(guidText);
+                    if (!guid || guid->isNil()) {
+                        addDiagnostic(result.diagnostics,
+                            CookDiagnosticSeverity::Warning,
+                            "GLTF_TRANSPARENCY_TARGET_GUID",
+                            field,
+                            "Transparency policy target is not a non-nil stable GUID and was ignored.");
+                        continue;
+                    }
+                    TransparencyPolicyV1 policy;
+                    const auto policySchema = rawPolicy.is_object()
+                        ? rawPolicy.find("schema_version")
+                        : rawPolicy.end();
+                    const bool currentPolicySchema =
+                        rawPolicy.is_object() &&
+                        policySchema != rawPolicy.end() &&
+                        policySchema->is_number_integer() &&
+                        policySchema->get<int64_t>() ==
+                            TransparencyPolicyV1::SchemaVersion;
+                    if (!currentPolicySchema) {
+                        addDiagnostic(result.diagnostics,
+                            CookDiagnosticSeverity::Warning,
+                            "GLTF_TRANSPARENCY_POLICY_SCHEMA",
+                            field,
+                            "Unknown transparency policy schema was normalized to Auto defaults.");
+                    } else {
+                        if (const auto found = rawPolicy.find("class");
+                            found != rawPolicy.end()) {
+                            if (found->is_string()) {
+                                const auto parsed = transparencyClassSetting(
+                                    found->get<std::string>());
+                                if (parsed) policy.requestedClass = *parsed;
+                                else addDiagnostic(result.diagnostics,
+                                    CookDiagnosticSeverity::Warning,
+                                    "GLTF_TRANSPARENCY_CLASS_UNKNOWN",
+                                    field + "/class",
+                                    "Unknown transparency class was normalized to Auto.");
+                            } else addDiagnostic(result.diagnostics,
+                                CookDiagnosticSeverity::Warning,
+                                "GLTF_TRANSPARENCY_CLASS_UNKNOWN",
+                                field + "/class",
+                                "Unknown transparency class was normalized to Auto.");
+                        }
+                        if (const auto found = rawPolicy.find("quality");
+                            found != rawPolicy.end()) {
+                            if (found->is_string()) {
+                                const auto parsed = transparencyQualitySetting(
+                                    found->get<std::string>());
+                                if (parsed) policy.quality = *parsed;
+                                else addDiagnostic(result.diagnostics,
+                                    CookDiagnosticSeverity::Warning,
+                                    "GLTF_TRANSPARENCY_QUALITY_UNKNOWN",
+                                    field + "/quality",
+                                    "Unknown transparency quality was normalized to Ordinary2.");
+                            } else addDiagnostic(result.diagnostics,
+                                CookDiagnosticSeverity::Warning,
+                                "GLTF_TRANSPARENCY_QUALITY_UNKNOWN",
+                                field + "/quality",
+                                "Unknown transparency quality was normalized to Ordinary2.");
+                        }
+                        if (const auto found = rawPolicy.find("priority");
+                            found != rawPolicy.end()) {
+                            if (found->is_number_integer()) {
+                                const int64_t priority = found->get<int64_t>();
+                                policy.priority = static_cast<int32_t>(
+                                    std::clamp(priority,
+                                        static_cast<int64_t>(
+                                            std::numeric_limits<int32_t>::min()),
+                                        static_cast<int64_t>(
+                                            std::numeric_limits<int32_t>::max())));
+                                if (priority != policy.priority) {
+                                    addDiagnostic(result.diagnostics,
+                                        CookDiagnosticSeverity::Warning,
+                                        "GLTF_TRANSPARENCY_PRIORITY_RANGE",
+                                        field + "/priority",
+                                        "Transparency priority was clamped to the signed 32-bit range.");
+                                }
+                            } else {
+                                addDiagnostic(result.diagnostics,
+                                    CookDiagnosticSeverity::Warning,
+                                    "GLTF_TRANSPARENCY_PRIORITY_RANGE",
+                                    field + "/priority",
+                                    "Invalid transparency priority was normalized to zero.");
+                            }
+                        }
+                        if (const auto found = rawPolicy.find(
+                                "thin_sheet_thickness_m");
+                            found != rawPolicy.end()) {
+                            if (found->is_number()) {
+                                const double thickness = found->get<double>();
+                                if (std::isfinite(thickness) && thickness >= 0.0 &&
+                                    thickness <= 1.0e6) {
+                                    policy.thinSheetThicknessMeters =
+                                        static_cast<float>(thickness);
+                                } else {
+                                    addDiagnostic(result.diagnostics,
+                                        CookDiagnosticSeverity::Warning,
+                                        "GLTF_TRANSPARENCY_THICKNESS_RANGE",
+                                        field + "/thin_sheet_thickness_m",
+                                        "Invalid thin-sheet thickness was normalized to zero metres.");
+                                }
+                            } else {
+                                addDiagnostic(result.diagnostics,
+                                    CookDiagnosticSeverity::Warning,
+                                    "GLTF_TRANSPARENCY_THICKNESS_RANGE",
+                                    field + "/thin_sheet_thickness_m",
+                                    "Invalid thin-sheet thickness was normalized to zero metres.");
+                            }
+                        }
+                        const std::set<std::string> policyFields{
+                            "class", "priority", "quality",
+                            "schema_version", "thin_sheet_thickness_m",
+                        };
+                        for (const auto& [policyKey, ignored] :
+                            rawPolicy.items()) {
+                            (void)ignored;
+                            if (!policyFields.contains(policyKey)) {
+                                addDiagnostic(result.diagnostics,
+                                    CookDiagnosticSeverity::Warning,
+                                    "GLTF_TRANSPARENCY_POLICY_FIELD_UNKNOWN",
+                                    field + "/" + policyKey,
+                                    "Unknown transparency policy field was ignored.");
+                            }
+                        }
+                    }
+                    normalized[guid->toString()] = {
+                        { "class", transparencyClassSettingName(
+                            policy.requestedClass) },
+                        { "priority", policy.priority },
+                        { "quality", std::string(
+                            transparencyQualityName(policy.quality)) },
+                        { "schema_version",
+                            TransparencyPolicyV1::SchemaVersion },
+                        { "thin_sheet_thickness_m",
+                            policy.thinSheetThicknessMeters },
+                    };
+                }
+                result.values[key] = std::move(normalized);
                 continue;
             }
             if (!value.is_boolean()) {
@@ -1546,9 +2319,18 @@ namespace Iridium {
             }
             const Json& materials = parsed.at("materials");
             CookedModelProductData data;
+            const std::string requestedExecutionMode =
+                settings.values.at("transparency_execution_mode")
+                    .get<std::string>();
+            data.manifest.transparencyExecutionMode =
+                requestedExecutionMode == "classified"
+                    ? TransparencyExecutionMode::Classified
+                    : TransparencyExecutionMode::LegacyTwoBucket;
             TextureImporter textureImporter;
             std::map<std::string, uint32_t>
                 textureViewIndices;
+            std::vector<EmbeddedTextureViewJob>
+                textureViewJobs;
 
             std::set<int64_t> usedMaterialIndices;
             for (const Json& primitive :
@@ -1558,12 +2340,22 @@ namespace Iridium {
                     primitive.at("material_index")
                         .get<int64_t>());
             }
+            uint64_t completedMaterials = 0;
+            reportCookProgress(context, "materials", 0, materials.size(),
+                "Compiling model materials and texture recipes");
             for (const Json& raw : materials) {
                 cancelled();
+                ++completedMaterials;
                 const int64_t sourceIndex =
                     raw.at("source_index").get<int64_t>();
                 if (sourceIndex < 0 &&
                     !usedMaterialIndices.contains(sourceIndex)) {
+                    if (progressCheckpoint(completedMaterials,
+                            materials.size(), 4)) {
+                        reportCookProgress(context, "materials",
+                            completedMaterials, materials.size(),
+                            "Skipped unused default material");
+                    }
                     continue;
                 }
                 const std::string materialKey = sourceIndex < 0
@@ -1592,10 +2384,43 @@ namespace Iridium {
                     continue;
                 }
 
+                CompiledMaterial compiledMaterial =
+                    *compiled.material;
+                if (const auto policy = transparencyPolicyFor(
+                        settings, *materialGuid)) {
+                    MaterialCompileResult applied =
+                        applyCompiledTransparencyPolicy(
+                            compiledMaterial, *policy,
+                            TransparencyTopology::Unknown);
+                    for (const MaterialCompileDiagnostic& diagnostic :
+                        applied.diagnostics) {
+                        addDiagnostic(failed.diagnostics,
+                            diagnostic.severity ==
+                                    MaterialCompileSeverity::Error
+                                ? CookDiagnosticSeverity::Error
+                                : diagnostic.severity ==
+                                    MaterialCompileSeverity::Warning
+                                    ? CookDiagnosticSeverity::Warning
+                                    : CookDiagnosticSeverity::Info,
+                            "M6_" + diagnostic.code,
+                            "/transparency_policies/" +
+                                materialGuid->toString(),
+                            diagnostic.message);
+                    }
+                    if (!applied.succeeded()) {
+                        addError(failed.diagnostics,
+                            "GLTF_TRANSPARENCY_POLICY_COMPILE",
+                            materialKey,
+                            "Material transparency policy could not be compiled.");
+                        continue;
+                    }
+                    compiledMaterial = *applied.material;
+                }
+
                 CookedModelMaterial material{
                     .materialGuid = *materialGuid,
                     .sourceKey = materialKey,
-                    .compiled = *compiled.material,
+                    .compiled = std::move(compiledMaterial),
                 };
                 for (size_t operationIndex = 0;
                     operationIndex <
@@ -1706,113 +2531,24 @@ namespace Iridium {
                         textureViewIndex =
                             existing->second;
                     } else {
-                        ParsedSourceAsset parsedTexture;
-                        if (!imagePayload->
-                                parsedBytes.empty()) {
-                            parsedTexture.documentBytes =
-                                imagePayload->
-                                    parsedBytes;
-                        }
-                        else {
-                            parsedTexture =
-                                textureImporter.parse({
-                                    .relativePath =
-                                        imagePayload->
-                                            suggestedPath,
-                                    .resolvedPath = {},
-                                    .bytes =
-                                        imagePayload->
-                                            bytes,
-                                    .stopToken =
-                                        stopToken,
-                                }, normalized);
-                            if (hasCookErrors(
-                                    parsedTexture
-                                        .diagnostics)) {
-                                std::string detail;
-                                for (const CookDiagnostic&
-                                    diagnostic :
-                                    parsedTexture
-                                        .diagnostics) {
-                                    if (diagnostic
-                                            .severity ==
-                                        CookDiagnosticSeverity::
-                                            Error) {
-                                        detail =
-                                            diagnostic.code +
-                                            ": " +
-                                            diagnostic
-                                                .message;
-                                        break;
-                                    }
-                                }
-                                addError(
-                                    failed.diagnostics,
-                                    "GLTF_TEXTURE_PARSE",
-                                    imageKey,
-                                    "Image subasset failed deterministic source decoding" +
-                                        (detail.empty()
-                                            ? std::string(
-                                                ".")
-                                            : ": " +
-                                                detail));
-                                continue;
-                            }
-                        }
-                        const CookProduct textureProduct =
-                            textureImporter.cook(
-                                parsedTexture, normalized,
-                                target, {
-                                    .assetGuid =
-                                        *textureGuid,
-                                }, stopToken);
-                        if (hasCookErrors(
-                            textureProduct.diagnostics)) {
-                            addError(failed.diagnostics,
-                                "GLTF_TEXTURE_COOK",
-                                imageKey,
-                                "Image subasset failed deterministic texture cooking.");
-                            continue;
-                        }
-                        const CookSection* manifestSection =
-                            findSection(textureProduct,
-                                kCookedTextureManifestSection);
-                        const CookSection* payloadSection =
-                            findSection(textureProduct,
-                                kCookedTexturePayloadSection);
-                        if (!manifestSection ||
-                            !payloadSection) {
-                            throw std::runtime_error(
-                                "Texture importer omitted a required product section.");
-                        }
-                        std::vector<CookDiagnostic>
-                            textureDiagnostics;
-                        const auto textureManifest =
-                            readTextureManifest(
-                                manifestSection->bytes,
-                                textureDiagnostics);
-                        if (!textureManifest ||
-                            hasCookErrors(
-                                textureDiagnostics)) {
-                            throw std::runtime_error(
-                                "Texture importer emitted an invalid manifest.");
-                        }
-                        CookedModelTextureView view{
+                        const std::string derivedCookKey =
+                            embeddedTextureCookKey(
+                                textureImporter, *textureGuid,
+                                *imagePayload, normalized,
+                                target);
+                        textureViewIndex = static_cast<uint32_t>(
+                            data.textureViews.size());
+                        data.textureViews.emplace_back();
+                        textureViewJobs.push_back({
+                            .outputIndex = textureViewIndex,
                             .textureGuid = *textureGuid,
                             .sourceImageIndex =
                                 *operation.sourceImageIndex,
-                            .manifest = *textureManifest,
-                            .payload =
-                                payloadSection->bytes,
-                        };
-                        view.viewKey =
-                            calculateModelTextureViewKey(
-                                view);
-                        textureViewIndex =
-                            static_cast<uint32_t>(
-                                data.textureViews.size());
-                        data.textureViews.push_back(
-                            std::move(view));
+                            .imagePayload = &*imagePayload,
+                            .settings = normalized,
+                            .derivedCookKey = derivedCookKey,
+                            .imageKey = imageKey,
+                        });
                         textureViewIndices.emplace(
                             recipeKey, textureViewIndex);
                     }
@@ -1828,10 +2564,24 @@ namespace Iridium {
                     });
                 }
                 data.materials.push_back(std::move(material));
+                if (progressCheckpoint(completedMaterials,
+                        materials.size(), 4)) {
+                    reportCookProgress(context, "materials",
+                        completedMaterials, materials.size(),
+                        materialKey);
+                }
             }
+            cookEmbeddedTextureViews(data, textureViewJobs,
+                target, context, stopToken,
+                failed.diagnostics);
             if (hasCookErrors(failed.diagnostics)) return failed;
 
-            for (const Json& raw : parsed.at("primitives")) {
+            const Json& primitives = parsed.at("primitives");
+            uint64_t completedPrimitives = 0;
+            reportCookProgress(context, "geometry", 0,
+                primitives.size(),
+                "Converting model geometry");
+            for (const Json& raw : primitives) {
                 cancelled();
                 const uint32_t sourceNode = raw.at("source_node").get<uint32_t>();
                 const uint32_t sourceMesh = raw.at("source_mesh").get<uint32_t>();
@@ -1880,6 +2630,58 @@ namespace Iridium {
                     material->at("coverage").get<uint32_t>());
                 const bool doubleSided =
                     material->at("double_sided").get<bool>();
+                const auto cookedMaterial = std::ranges::find_if(
+                    data.materials,
+                    [&materialGuid](
+                        const CookedModelMaterial& candidate) {
+                        return candidate.materialGuid ==
+                            *materialGuid;
+                    });
+                if (cookedMaterial == data.materials.end()) {
+                    throw std::runtime_error(
+                        "Parsed primitive compiled material is missing.");
+                }
+                CompiledTransparencyPolicy primitiveTransparency =
+                    cookedMaterial->compiled.transparency;
+                TransparencyPolicyV1 effectiveTransparencyPolicy{
+                    .requestedClass = primitiveTransparency.requestedClass,
+                    .quality = primitiveTransparency.quality,
+                    .priority = primitiveTransparency.priority,
+                    .thinSheetThicknessMeters =
+                        primitiveTransparency.thinSheetThicknessMeters,
+                };
+                if (const auto policy = transparencyPolicyFor(
+                        settings, *primitiveGuid)) {
+                    effectiveTransparencyPolicy = *policy;
+                    const MaterialCompileResult applied =
+                        applyCompiledTransparencyPolicy(
+                            cookedMaterial->compiled, *policy,
+                            TransparencyTopology::Unknown);
+                    for (const MaterialCompileDiagnostic& diagnostic :
+                        applied.diagnostics) {
+                        addDiagnostic(failed.diagnostics,
+                            diagnostic.severity ==
+                                    MaterialCompileSeverity::Error
+                                ? CookDiagnosticSeverity::Error
+                                : diagnostic.severity ==
+                                    MaterialCompileSeverity::Warning
+                                    ? CookDiagnosticSeverity::Warning
+                                    : CookDiagnosticSeverity::Info,
+                            "M6_" + diagnostic.code,
+                            "/transparency_policies/" +
+                                primitiveGuid->toString(),
+                            diagnostic.message);
+                    }
+                    if (!applied.succeeded()) {
+                        addError(failed.diagnostics,
+                            "GLTF_TRANSPARENCY_PRIMITIVE_POLICY_COMPILE",
+                            primitiveKey,
+                            "Primitive transparency policy could not be compiled.");
+                        continue;
+                    }
+                    primitiveTransparency =
+                        applied.material->transparency;
+                }
 
                 const Json& transformValues = raw.at("transform");
                 if (!transformValues.is_array() ||
@@ -2044,12 +2846,6 @@ namespace Iridium {
                         "Missing or degenerate vertex tangents were regenerated deterministically.");
                 }
 
-                const uint64_t firstVertex = data.vertices.size();
-                const uint64_t firstIndex = data.indices.size();
-                const uint64_t rtFirstPosition = data.rtPositions.size();
-                const uint64_t rtFirstIndex = data.rtIndices.size();
-                glm::vec3 boundsMin(std::numeric_limits<float>::max());
-                glm::vec3 boundsMax(std::numeric_limits<float>::lowest());
                 for (WorkingVertex& vertex : vertices) {
                     if ((static_cast<size_t>(
                             &vertex -
@@ -2077,28 +2873,11 @@ namespace Iridium {
                         throw std::runtime_error(
                             "Cooked primitive contains non-finite vertex data.");
                     }
-                    boundsMin = glm::min(boundsMin, vertex.pos);
-                    boundsMax = glm::max(boundsMax, vertex.pos);
-                    data.vertices.push_back({
-                        .position = { vertex.pos.x, vertex.pos.y, vertex.pos.z },
-                        .color = {
-                            vertex.color.x, vertex.color.y,
-                            vertex.color.z, vertex.color.w,
-                        },
-                        .normal = {
-                            vertex.normal.x, vertex.normal.y, vertex.normal.z,
-                        },
-                        .texCoord0 = { vertex.uv0.x, vertex.uv0.y },
-                        .tangent = {
-                            vertex.tangent.x, vertex.tangent.y,
-                            vertex.tangent.z, vertex.tangent.w,
-                        },
-                        .texCoord1 = { vertex.uv1.x, vertex.uv1.y },
-                    });
-                    data.rtPositions.push_back({
-                        vertex.pos.x, vertex.pos.y, vertex.pos.z,
-                    });
                 }
+                std::vector<glm::vec3> topologyPositions;
+                topologyPositions.reserve(vertices.size());
+                for (const WorkingVertex& vertex : vertices)
+                    topologyPositions.push_back(vertex.pos);
                 // Vulkan production pipelines use one clockwise front-face
                 // convention. glTF defines counter-clockwise source faces; baked
                 // mirrored transforms and the explicit repair override may change
@@ -2116,65 +2895,235 @@ namespace Iridium {
                             runtimeIndices[triangle + 2]);
                     }
                 }
-                for (uint32_t index : runtimeIndices) {
-                    if ((data.indices.size() &
-                            0xfffu) == 0) {
-                        cancelled();
-                    }
-                    data.indices.push_back(
-                        static_cast<uint32_t>(firstVertex + index));
-                    data.rtIndices.push_back(index);
+                std::vector<TriangleConnectedComponent> components;
+                const bool splitTransparent = transparentConnectedWork(
+                    coverage, primitiveTransparency.resolvedClass);
+                if (splitTransparent) {
+                    components = findTriangleConnectedComponents(runtimeIndices);
+                }
+                else {
+                    TriangleConnectedComponent component;
+                    component.sourceTriangleIndices.resize(
+                        runtimeIndices.size() / 3);
+                    std::iota(component.sourceTriangleIndices.begin(),
+                        component.sourceTriangleIndices.end(), 0u);
+                    components.push_back(std::move(component));
+                }
+                if (splitTransparent && components.size() > 1) {
+                    addDiagnostic(failed.diagnostics,
+                        CookDiagnosticSeverity::Info,
+                        "GLTF_TRANSPARENT_COMPONENT_SPLIT", primitiveKey,
+                        "Disconnected transparent triangles were split into stable work items.");
                 }
 
-                const glm::vec3 center = (boundsMin + boundsMax) * 0.5f;
-                const float radius = glm::length(boundsMax - center);
-                data.manifest.primitives.push_back({
-                    .primitiveGuid = *primitiveGuid,
-                    .materialGuid = *materialGuid,
-                    .sourceKey = primitiveKey,
-                    .sourceNode = sourceNode,
-                    .sourceMesh = sourceMesh,
-                    .sourcePrimitive = sourcePrimitive,
-                    .attributeMask = attributeMask,
-                    .firstVertex = firstVertex,
-                    .vertexCount = vertices.size(),
-                    .firstIndex = firstIndex,
-                    .indexCount = runtimeIndices.size(),
-                    .rtFirstPosition = rtFirstPosition,
-                    .rtPositionCount = vertices.size(),
-                    .rtFirstIndex = rtFirstIndex,
-                    .rtIndexCount = runtimeIndices.size(),
-                    .topology = ModelPrimitiveTopology::Triangles,
-                    .winding = ModelWinding::Clockwise,
-                    .coverage = coverage,
-                    .indexFormat = ModelIndexFormat::UInt32,
-                    .flags = primitiveFlags,
-                    .rtFlags = ModelRtBuildInput |
-                        (coverage == ModelCoverage::Opaque
-                            ? ModelRtOpaque : ModelRtAllowAnyHit),
-                    .bounds = {
-                        .aabbMin = {
-                            boundsMin.x, boundsMin.y, boundsMin.z,
+                for (const TriangleConnectedComponent& component : components) {
+                    cancelled();
+                    const std::string connectedKey = splitTransparent
+                        ? primitiveKey + "/components/" +
+                            std::to_string(component.sourceTriangleSeed)
+                        : primitiveKey;
+                    const bool volumeMaterial =
+                        (cookedMaterial->compiled.featureFlags &
+                            MaterialFeatureVolume) != 0;
+                    const bool layeredCandidate = volumeMaterial &&
+                        (effectiveTransparencyPolicy.requestedClass ==
+                                TransparencyClass::Auto ||
+                            effectiveTransparencyPolicy.requestedClass ==
+                                TransparencyClass::LayeredGlass);
+                    ClosedTriangleTopologyAnalysis topologyAnalysis;
+                    TransparencyTopology topology =
+                        TransparencyTopology::Unknown;
+                    if (layeredCandidate) {
+                        topologyAnalysis = analyzeClosedTriangleTopology(
+                            topologyPositions, runtimeIndices,
+                            component.sourceTriangleIndices);
+                        topology = topologyAnalysis.validClosed()
+                            ? TransparencyTopology::ValidClosed
+                            : TransparencyTopology::Invalid;
+                    }
+                    else if (effectiveTransparencyPolicy.requestedClass ==
+                            TransparencyClass::LayeredGlass) {
+                        topology = TransparencyTopology::Invalid;
+                    }
+                    const MaterialCompileResult topologyApplied =
+                        applyCompiledTransparencyPolicy(
+                            cookedMaterial->compiled,
+                            effectiveTransparencyPolicy, topology);
+                    for (const MaterialCompileDiagnostic& diagnostic :
+                            topologyApplied.diagnostics) {
+                        addDiagnostic(failed.diagnostics,
+                            diagnostic.severity ==
+                                    MaterialCompileSeverity::Error
+                                ? CookDiagnosticSeverity::Error
+                                : diagnostic.severity ==
+                                    MaterialCompileSeverity::Warning
+                                    ? CookDiagnosticSeverity::Warning
+                                    : CookDiagnosticSeverity::Info,
+                            "M6_" + diagnostic.code, connectedKey,
+                            diagnostic.message);
+                    }
+                    if (!topologyApplied.succeeded()) {
+                        addError(failed.diagnostics,
+                            "GLTF_TRANSPARENCY_TOPOLOGY_POLICY_COMPILE",
+                            connectedKey,
+                            "Connected primitive transparency policy could not be resolved after topology validation.");
+                        continue;
+                    }
+                    const CompiledTransparencyPolicy componentTransparency =
+                        topologyApplied.material->transparency;
+                    if (layeredCandidate) {
+                        if (topologyAnalysis.validClosed()) {
+                            addDiagnostic(failed.diagnostics,
+                                CookDiagnosticSeverity::Info,
+                                "GLTF_TRANSPARENCY_CLOSED_TOPOLOGY",
+                                connectedKey,
+                                "Connected primitive is a consistently oriented closed manifold and resolved to LayeredGlass.");
+                        }
+                        else {
+                            addDiagnostic(failed.diagnostics,
+                                CookDiagnosticSeverity::Warning,
+                                "GLTF_TRANSPARENCY_LAYERED_TOPOLOGY_INVALID",
+                                connectedKey,
+                                "LayeredGlass topology proof failed (boundary=" +
+                                    std::to_string(topologyAnalysis.boundaryEdgeCount) +
+                                    ", nonmanifold=" +
+                                    std::to_string(topologyAnalysis.nonManifoldEdgeCount) +
+                                    ", orientation=" +
+                                    std::to_string(topologyAnalysis.inconsistentOrientationEdgeCount) +
+                                    ", degenerate=" +
+                                    std::to_string(topologyAnalysis.degenerateTriangleCount) +
+                                    "); ThinGlass remains the safe execution class.");
+                        }
+                    }
+                    const uint64_t firstVertex = data.vertices.size();
+                    const uint64_t firstIndex = data.indices.size();
+                    const uint64_t rtFirstPosition = data.rtPositions.size();
+                    const uint64_t rtFirstIndex = data.rtIndices.size();
+                    std::vector<uint32_t> remap(vertices.size(),
+                        std::numeric_limits<uint32_t>::max());
+                    glm::vec3 boundsMin(std::numeric_limits<float>::max());
+                    glm::vec3 boundsMax(std::numeric_limits<float>::lowest());
+
+                    std::vector<bool> referenced(vertices.size(), false);
+                    for (uint32_t sourceTriangle :
+                            component.sourceTriangleIndices) {
+                        for (uint32_t corner = 0; corner < 3; ++corner)
+                            referenced[runtimeIndices[
+                                sourceTriangle * 3 + corner]] = true;
+                    }
+                    for (uint32_t sourceIndex = 0;
+                        sourceIndex < referenced.size(); ++sourceIndex) {
+                        if (!referenced[sourceIndex]) continue;
+                        if (data.vertices.size() - firstVertex >=
+                            std::numeric_limits<uint32_t>::max()) {
+                            throw std::runtime_error(
+                                "Connected primitive exceeds 32-bit vertex limits.");
+                        }
+                        remap[sourceIndex] = static_cast<uint32_t>(
+                            data.vertices.size() - firstVertex);
+                        const WorkingVertex& vertex = vertices[sourceIndex];
+                        boundsMin = glm::min(boundsMin, vertex.pos);
+                        boundsMax = glm::max(boundsMax, vertex.pos);
+                        data.vertices.push_back({
+                            .position = { vertex.pos.x, vertex.pos.y,
+                                vertex.pos.z },
+                            .color = { vertex.color.x, vertex.color.y,
+                                vertex.color.z, vertex.color.w },
+                            .normal = { vertex.normal.x, vertex.normal.y,
+                                vertex.normal.z },
+                            .texCoord0 = { vertex.uv0.x, vertex.uv0.y },
+                            .tangent = { vertex.tangent.x,
+                                vertex.tangent.y, vertex.tangent.z,
+                                vertex.tangent.w },
+                            .texCoord1 = { vertex.uv1.x, vertex.uv1.y },
+                        });
+                        data.rtPositions.push_back({ vertex.pos.x,
+                            vertex.pos.y, vertex.pos.z });
+                    }
+                    for (uint32_t sourceTriangle :
+                            component.sourceTriangleIndices) {
+                        for (uint32_t corner = 0; corner < 3; ++corner) {
+                            const uint32_t sourceIndex =
+                                runtimeIndices[sourceTriangle * 3 + corner];
+                            const uint32_t localIndex = remap[sourceIndex];
+                            if (firstVertex + localIndex >
+                                std::numeric_limits<uint32_t>::max()) {
+                                throw std::runtime_error(
+                                    "Cooked model exceeds 32-bit production index limits.");
+                            }
+                            data.indices.push_back(static_cast<uint32_t>(
+                                firstVertex + localIndex));
+                            data.rtIndices.push_back(localIndex);
+                        }
+                    }
+
+                    const glm::vec3 center =
+                        (boundsMin + boundsMax) * 0.5f;
+                    const float radius = glm::length(boundsMax - center);
+                    const AssetGuid connectedGuid = splitTransparent
+                        ? connectedPrimitiveGuid(*primitiveGuid,
+                            component.sourceTriangleSeed)
+                        : *primitiveGuid;
+                    data.manifest.primitives.push_back({
+                        .sourcePrimitiveGuid = *primitiveGuid,
+                        .primitiveGuid = connectedGuid,
+                        .materialGuid = *materialGuid,
+                        .sourceKey = connectedKey,
+                        .sourceNode = sourceNode,
+                        .sourceMesh = sourceMesh,
+                        .sourcePrimitive = sourcePrimitive,
+                        .attributeMask = attributeMask,
+                        .firstVertex = firstVertex,
+                        .vertexCount = data.vertices.size() - firstVertex,
+                        .firstIndex = firstIndex,
+                        .indexCount = data.indices.size() - firstIndex,
+                        .rtFirstPosition = rtFirstPosition,
+                        .rtPositionCount = data.rtPositions.size() -
+                            rtFirstPosition,
+                        .rtFirstIndex = rtFirstIndex,
+                        .rtIndexCount = data.rtIndices.size() - rtFirstIndex,
+                        .topology = ModelPrimitiveTopology::Triangles,
+                        .winding = ModelWinding::Clockwise,
+                        .coverage = coverage,
+                        .indexFormat = ModelIndexFormat::UInt32,
+                        .flags = primitiveFlags,
+                        .rtFlags = ModelRtBuildInput |
+                            (coverage == ModelCoverage::Opaque
+                                ? ModelRtOpaque : ModelRtAllowAnyHit),
+                        .transparency = componentTransparency,
+                        .bounds = {
+                            .aabbMin = { boundsMin.x, boundsMin.y,
+                                boundsMin.z },
+                            .aabbMax = { boundsMax.x, boundsMax.y,
+                                boundsMax.z },
+                            .sphereCenter = { center.x, center.y, center.z },
+                            .sphereRadius = radius,
                         },
-                        .aabbMax = {
-                            boundsMax.x, boundsMax.y, boundsMax.z,
-                        },
-                        .sphereCenter = { center.x, center.y, center.z },
-                        .sphereRadius = radius,
-                    },
-                });
+                    });
+                }
+                ++completedPrimitives;
+                if (progressCheckpoint(completedPrimitives,
+                        primitives.size(), 10)) {
+                    reportCookProgress(context, "geometry",
+                        completedPrimitives, primitives.size(),
+                        primitiveKey);
+                }
             }
             if (hasCookErrors(failed.diagnostics)) return failed;
             data.manifest.vertexCount = data.vertices.size();
             data.manifest.indexCount = data.indices.size();
             data.manifest.rtPositionCount = data.rtPositions.size();
             data.manifest.rtIndexCount = data.rtIndices.size();
+            reportCookProgress(context, "model-product", 0, 1,
+                "Serializing model sections");
             CookProduct product =
                 makeCookedModelProduct(data);
             product.diagnostics.insert(
                 product.diagnostics.end(),
                 failed.diagnostics.begin(),
                 failed.diagnostics.end());
+            reportCookProgress(context, "model-product", 1, 1,
+                "Model sections serialized");
             return product;
         } catch (const std::exception& exception) {
             addError(failed.diagnostics, "GLTF_CPU_COOK", "/",

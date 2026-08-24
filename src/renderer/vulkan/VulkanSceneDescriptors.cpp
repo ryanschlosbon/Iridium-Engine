@@ -84,17 +84,35 @@ namespace Iridium {
                     target.f0Roughness.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
                 const VkDescriptorImageInfo materialFlags{ frameTargets.integerSampler(),
                     target.materialFlags.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
-                const VkDescriptorImageInfo opaqueCopy{ frameTargets.sampler(), target.opaqueCopy.view,
+                const bool hasRefractionPyramids =
+                    target.refractionColorPyramid.view != VK_NULL_HANDLE &&
+                    target.refractionDepthPyramid.view != VK_NULL_HANDLE;
+                // Vulkan descriptors must remain valid even while the optional
+                // graph products are absent. The normal cache is already in a
+                // sampled-read layout throughout forward transparency; using it
+                // for both unreachable bindings avoids extra fallback images and
+                // avoids aliasing attachments that are writable in this pass.
+                const VkDescriptorImageInfo refractionColor{
+                    hasRefractionPyramids ? frameTargets.pyramidSampler()
+                        : frameTargets.sampler(),
+                    hasRefractionPyramids
+                        ? target.refractionColorPyramid.view
+                        : target.normal.view,
                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
-                const VkDescriptorImageInfo glassDepth{ frameTargets.sampler(), target.glassDepth.view,
-                    VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL };
+                const VkDescriptorImageInfo refractionDepth{
+                    hasRefractionPyramids ? frameTargets.depthPyramidSampler()
+                        : frameTargets.sampler(),
+                    hasRefractionPyramids
+                        ? target.refractionDepthPyramid.view
+                        : target.normal.view,
+                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
 
                 std::array<VkWriteDescriptorSet, 33> writes{};
                 writes[0] = imageWrite(sets_.back(), 0, depth);
                 writes[1] = imageWrite(sets_.back(), 1, normal);
                 writes[2] = imageWrite(sets_.back(), 2, albedo);
-                writes[3] = imageWrite(sets_.back(), 4, opaqueCopy);
-                writes[4] = imageWrite(sets_.back(), 5, glassDepth);
+                writes[3] = imageWrite(sets_.back(), 4, refractionColor);
+                writes[4] = imageWrite(sets_.back(), 5, refractionDepth);
                 writes[5] = imageWrite(sets_.back(), 6, emissive);
                 uint32_t writeCount = 6;
                 if (target.f0Roughness.view != VK_NULL_HANDLE &&

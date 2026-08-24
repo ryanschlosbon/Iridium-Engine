@@ -72,6 +72,12 @@ namespace {
         source.doubleSided = {
             true, SourceValueOrigin::Authored,
         };
+        source.transparencyPolicy = {
+            .requestedClass = TransparencyClass::ThinGlass,
+            .quality = TransparencyQuality::Hero4,
+            .priority = 17,
+            .thinSheetThicknessMeters = 0.0125f,
+        };
 
         SourceTextureUse texture;
         texture.semantic = SourceTextureSemantic::BaseColor;
@@ -178,6 +184,15 @@ namespace {
         CHECK(decoded.material->standard.baseColorFactor ==
             material->standard.baseColorFactor);
         CHECK(decoded.material->standard.doubleSided);
+        CHECK(decoded.material->transparency.requestedClass ==
+            TransparencyClass::ThinGlass);
+        CHECK(decoded.material->transparency.resolvedClass ==
+            TransparencyClass::ThinGlass);
+        CHECK(decoded.material->transparency.quality ==
+            TransparencyQuality::Hero4);
+        CHECK(decoded.material->transparency.priority == 17);
+        CHECK(decoded.material->transparency.thinSheetThicknessMeters ==
+            0.0125f);
         CHECK(decoded.material->textureOperations.size() == 1);
         const auto& texture = decoded.material->textureOperations.front();
         CHECK(texture.semantic == SourceTextureSemantic::BaseColor);

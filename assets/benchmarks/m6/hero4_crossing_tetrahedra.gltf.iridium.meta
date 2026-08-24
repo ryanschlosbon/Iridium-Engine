@@ -1,0 +1,55 @@
+{
+  "schemaVersion": 1,
+  "assetGuid": "01a03446-3ed6-72f9-9e56-bde597cb7931",
+  "assetType": "iridium.model",
+  "importer": {
+    "id": "iridium.gltf-model",
+    "version": 6
+  },
+  "settings": {
+    "schemaVersion": 2,
+    "values": {
+      "bake_node_transforms": true,
+      "generate_missing_tangents": true,
+      "import_scale": 1.0,
+      "preserve_rt_geometry": true,
+      "recalculate_normals": false,
+      "recalculate_tangents": false,
+      "reverse_winding": false,
+      "transparency_execution_mode": "classified",
+      "transparency_policies": {
+        "01a03446-3ed6-7ff5-a906-9f89d96caaac": {
+          "schema_version": 1,
+          "class": "layered_glass",
+          "quality": "hero4",
+          "priority": 110,
+          "thin_sheet_thickness_m": 0.0
+        }
+      }
+    }
+  },
+  "subassets": [
+    {
+      "guid": "01a03446-3ed6-7ff5-a906-9f89d96caaac",
+      "assetType": "iridium.material",
+      "sourceKey": "materials/0",
+      "structuralFingerprint": "e7781ad89960032e57f38cf7544407dde72bad409edce77a81eb1fa432c72e20"
+    },
+    {
+      "guid": "01a03446-3ed6-7101-bd8f-467d39efd507",
+      "assetType": "iridium.model-primitive",
+      "sourceKey": "nodes/0/meshes/0/primitives/0",
+      "structuralFingerprint": "023f10460480b65858cde20480cbd541bf7d60414cc263d6ebed2771981fa434"
+    },
+    {
+      "guid": "01a03446-3ed6-7df6-ac74-d8f4e4c14c18",
+      "assetType": "iridium.model-primitive",
+      "sourceKey": "nodes/1/meshes/0/primitives/0",
+      "structuralFingerprint": "661498ab77216a11c176c369e7e7fc735ecbb87401f01dcfdc0b579aafff43a8"
+    }
+  ],
+  "tags": [
+    "m6.6-fixture",
+    "tracked"
+  ]
+}

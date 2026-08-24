@@ -216,5 +216,47 @@
       "assets/shaders/complex_opaque_material_indexed_frag.spv": "60fe9b73a91629034aadab2ffaf75e046f22ccc339f99ffa44ba4e049955a209",
       "assets/shaders/reflection_probe_capture_frag.spv": "7e7caf114f5fa6b21deb615936a5b6cd686aa53e61b25b0dbdae420906198a7c"
     }
+  },
+  "m6_1Supersession": {
+    "status": "M6.1 advances the fixed 832-byte packed-material ABI to schema 3 by replacing its reserved tail with versioned transparency policy fields and moving packed-normal Z reconstruction to a feature bit. M5 acceptance and corrective hashes remain historical; only the three consumers of packed_material.glsl are superseded here, with LegacyTwoBucket captures verified pixel-identical.",
+    "current_contract_hashes": {
+      "assets/shaders/complex_material_indexed_frag.spv": "1dc89dc164aa17919f82b29d552be3987b39b26b67db9e54e9f857e6d7548aac",
+      "assets/shaders/complex_opaque_material_indexed_frag.spv": "2533ecde7c1ab0c9a91fc114c38274b9593a1a80f3a189b0a097439a3a195981",
+      "assets/shaders/reflection_probe_capture_frag.spv": "28168c8439bc5de15bcf1317e22a5934786b217a61b5d5f16654661a3d26554d"
+    }
+  },
+  "m6_2Supersession": {
+    "status": "M6.2 adds classified SortedSurface execution with premultiplied output in a dedicated depth-read-only forward pass. M5 acceptance, corrective, and M6.1 hashes remain historical; only the two complex material programs are superseded here.",
+    "current_contract_hashes": {
+      "assets/shaders/complex_material_indexed_frag.spv": "224a7381f32558d2eb97e76e1bf111e66598c8b4a857d04cbb8282937db07c3a",
+      "assets/shaders/complex_opaque_material_indexed_frag.spv": "5f34f7685623bf792638d4b74465f5306693596682a67a423c17473e1ccd0edc"
+    }
+  },
+  "m6_3Supersession": {
+    "status": "M6.3 replaces empirical glass camera/thickness constants with the active per-view transport record, exact dielectric Fresnel/TIR, metric ThinGlass paths, and bounded Beer-Lambert absorption. Earlier accepted hashes remain historical; only the two complex material programs are superseded here.",
+    "current_contract_hashes": {
+      "assets/shaders/complex_material_indexed_frag.spv": "2d2628ed649c5e3f44c40d7bcf8fb9209ebbe08f9929a6e42418018866ef418f",
+      "assets/shaders/complex_opaque_material_indexed_frag.spv": "6d1ec9d5d3be2e2a325163976bc9fc14824dffa9831cfc75a6d409c8f2944e59"
+    }
+  },
+  "m6_4Supersession": {
+    "status": "M6.4 replaces the repeated single-level compatibility scene copies with one pre-transparency AP1 color pyramid, conservative metric-depth pyramid, projection-aware rough refraction, and probe/sky edge fallback. Earlier accepted hashes remain historical; only the transparent complex-material program is superseded here.",
+    "current_contract_hashes": {
+      "assets/shaders/complex_material_indexed_frag.spv": "117862421c2fa87da09b4c89b4d5aeecb54e172ce52663176ad42a63a9efab07"
+    }
+  },
+  "m6_5Supersession": {
+    "status": "M6.5 corrects the current local Alfa headlamp dielectric input and zero-thickness classified-glass composition. Earlier accepted benchmark hashes remain historical; the current sample-car manifest source and transparent complex-material program hashes are superseded here.",
+    "current_contract_hashes": {
+        "assets/m5-sample-car-manifest.v1.json": "8df702eec08679d191db7cbd699e7984cffadff147c8651024cd94392c8067ff",
+      "assets/shaders/complex_material_indexed_frag.spv": "73aa949c96c1fcb3d2944f3d68910ab17e58728e9b9a505b21293165e18ce0a8"
+    }
+  },
+  "m6_6Supersession": {
+    "status": "M6.6 shares the indexed complex-material body with exact and bounded-residual deep-tier local composition. Earlier accepted benchmark hashes remain historical; the current opaque and transparent complex-material programs are superseded here.",
+    "current_contract_hashes": {
+      "assets/shaders/complex_material_indexed_frag.spv": "9fc16199c60d8a27583f842157e092da48ad017c71b16be3415ca77befac828a",
+      "assets/shaders/complex_opaque_material_indexed_frag.spv": "a8e053ade7e843f90b75d07b49f309e881ccfd3f034775ca8acf88ed043067fd"
+    }
   }
 }

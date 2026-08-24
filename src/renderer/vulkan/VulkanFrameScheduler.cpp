@@ -28,6 +28,11 @@ namespace Iridium {
                     frame.transparentPipelineStatisticsQueryPool, nullptr);
                 frame.transparentPipelineStatisticsQueryPool = VK_NULL_HANDLE;
             }
+            if (frame.layeredResidualOcclusionQueryPool != VK_NULL_HANDLE) {
+                vkDestroyQueryPool(device,
+                    frame.layeredResidualOcclusionQueryPool, nullptr);
+                frame.layeredResidualOcclusionQueryPool = VK_NULL_HANDLE;
+            }
             if (frame.inFlight != VK_NULL_HANDLE) {
                 vkDestroyFence(device, frame.inFlight, nullptr);
                 frame.inFlight = VK_NULL_HANDLE;
@@ -174,6 +179,18 @@ namespace Iridium {
                             "vkCreateQueryPool(transparent pipeline statistics)",
                             result);
                     }
+                    queryPoolInfo = {
+                        VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO };
+                    queryPoolInfo.queryType = VK_QUERY_TYPE_OCCLUSION;
+                    queryPoolInfo.queryCount = static_cast<uint32_t>(
+                        LayeredResidualQuerySlotCount);
+                    result = vkCreateQueryPool(device_, &queryPoolInfo,
+                        nullptr, &frame.layeredResidualOcclusionQueryPool);
+                    if (result != VK_SUCCESS) {
+                        throwVkError(
+                            "vkCreateQueryPool(layered residual occlusion)",
+                            result);
+                    }
                 }
             }
             renderFinishedPerImage_ = createPresentSemaphores(device_, swapchainImageCount);
@@ -278,6 +295,9 @@ namespace Iridium {
         frame.transparentPipelineStatisticsActive = false;
         frame.transparentPipelineStatisticsRecorded = false;
         frame.transparentPipelineStatisticsResultsPending = false;
+        frame.layeredResidualQueryActive.fill(false);
+        frame.layeredResidualQueryRecorded.fill(false);
+        frame.layeredResidualQueryResultsPending.fill(false);
         frameGpuRange_ = {};
         if ((gpuProfilingEnabled_ || transparentPipelineStatisticsEnabled_) &&
             cpuProfiler_ != nullptr && cpuProfiler_->isFrameOpen()) {
@@ -290,6 +310,9 @@ namespace Iridium {
             if (transparentPipelineStatisticsEnabled_) {
                 vkCmdResetQueryPool(frame.commandBuffer,
                     frame.transparentPipelineStatisticsQueryPool, 0, 1);
+                vkCmdResetQueryPool(frame.commandBuffer,
+                    frame.layeredResidualOcclusionQueryPool, 0,
+                    static_cast<uint32_t>(LayeredResidualQuerySlotCount));
             }
         }
 
@@ -310,6 +333,10 @@ namespace Iridium {
 
         VulkanFrameContext& frame = frames_[currentFrame_];
         endTransparentPipelineStatistics();
+        for (uint32_t slot = 0u;
+            slot < LayeredResidualQuerySlotCount; ++slot) {
+            endLayeredResidualQuery(slot);
+        }
         endGpuRange(frameGpuRange_);
         const VkSemaphore renderFinished = renderFinishedPerImage_[imageIndex];
         VkResult result = VK_SUCCESS;
@@ -345,6 +372,12 @@ namespace Iridium {
             frame.transparentPipelineStatisticsResultsPending =
                 frame.profileFrameId != 0 &&
                 frame.transparentPipelineStatisticsRecorded;
+            for (uint32_t slot = 0u;
+                slot < LayeredResidualQuerySlotCount; ++slot) {
+                frame.layeredResidualQueryResultsPending[slot] =
+                    frame.profileFrameId != 0 &&
+                    frame.layeredResidualQueryRecorded[slot];
+            }
         }
 
         VkPresentInfoKHR presentInfo{ VK_STRUCTURE_TYPE_PRESENT_INFO_KHR };
@@ -514,6 +547,40 @@ namespace Iridium {
         frame.transparentPipelineStatisticsRecorded = true;
     }
 
+    bool VulkanFrameScheduler::beginLayeredResidualQuery(
+        uint32_t slot) noexcept {
+        if (!transparentPipelineStatisticsEnabled_ ||
+            device_ == VK_NULL_HANDLE ||
+            slot >= LayeredResidualQuerySlotCount) {
+            return false;
+        }
+        VulkanFrameContext& frame = frames_[currentFrame_];
+        if (frame.profileFrameId == 0 ||
+            frame.layeredResidualQueryActive[slot] ||
+            frame.layeredResidualQueryRecorded[slot]) {
+            return false;
+        }
+        vkCmdBeginQuery(frame.commandBuffer,
+            frame.layeredResidualOcclusionQueryPool, slot, 0u);
+        frame.layeredResidualQueryActive[slot] = true;
+        return true;
+    }
+
+    void VulkanFrameScheduler::endLayeredResidualQuery(
+        uint32_t slot) noexcept {
+        if (!transparentPipelineStatisticsEnabled_ ||
+            device_ == VK_NULL_HANDLE ||
+            slot >= LayeredResidualQuerySlotCount) {
+            return;
+        }
+        VulkanFrameContext& frame = frames_[currentFrame_];
+        if (!frame.layeredResidualQueryActive[slot]) return;
+        vkCmdEndQuery(frame.commandBuffer,
+            frame.layeredResidualOcclusionQueryPool, slot);
+        frame.layeredResidualQueryActive[slot] = false;
+        frame.layeredResidualQueryRecorded[slot] = true;
+    }
+
     void VulkanFrameScheduler::collectGpuResults(VulkanFrameContext& frame) {
         if (frame.profileFrameId == 0) {
             return;
@@ -555,6 +622,35 @@ namespace Iridium {
                 fullscreenEquivalentMillionths, status,
                 ProfileCounterUnit::Millionths);
             frame.transparentPipelineStatisticsResultsPending = false;
+        }
+
+        if (transparentPipelineStatisticsEnabled_) {
+            constexpr std::array<const char*, LayeredResidualQuerySlotCount>
+                CounterNames{
+                    "transparent.layered.hero4.residual_samples",
+                    "transparent.layered.cinematic8.residual_samples",
+                };
+            for (uint32_t slot = 0u;
+                slot < LayeredResidualQuerySlotCount; ++slot) {
+                if (!frame.layeredResidualQueryResultsPending[slot]) continue;
+                struct OcclusionResult {
+                    uint64_t samples = 0;
+                    uint64_t available = 0;
+                } result;
+                const VkResult queryResult = vkGetQueryPoolResults(device_,
+                    frame.layeredResidualOcclusionQueryPool, slot, 1u,
+                    sizeof(result), &result, sizeof(result),
+                    VK_QUERY_RESULT_64_BIT |
+                        VK_QUERY_RESULT_WITH_AVAILABILITY_BIT);
+                const bool available = queryResult == VK_SUCCESS &&
+                    result.available != 0u;
+                (void)cpuProfiler_->attachCounter(frame.profileFrameId,
+                    CounterNames[slot], available ? result.samples : 0u,
+                    available ? ProfileCounterStatus::Estimated
+                              : ProfileCounterStatus::Unavailable,
+                    ProfileCounterUnit::Count);
+                frame.layeredResidualQueryResultsPending[slot] = false;
+            }
         }
 
         if (!gpuProfilingEnabled_ || !frame.gpuResultsPending ||

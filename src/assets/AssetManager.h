@@ -32,6 +32,14 @@ namespace Iridium {
         std::vector<std::byte> brdfLut;
     };
 
+    struct CookedMaterialRuntimeBinding {
+        AssetGuid materialGuid;
+        CompiledTransparencyPolicy transparency;
+        TransparencyExecutionMode transparencyExecutionMode =
+            TransparencyExecutionMode::LegacyTwoBucket;
+        MaterialBinding binding;
+    };
+
     class AssetManager {
     public:
         // The AssetManager now only takes a pointer to the abstract interface.
@@ -53,6 +61,8 @@ namespace Iridium {
         std::shared_ptr<ModelAsset>
             loadSelfContainedModelFromCookedArtifactFile(
                 const std::filesystem::path& path);
+        [[nodiscard]] std::shared_ptr<ModelAsset>
+            loadBuiltInCubeModel();
         std::shared_ptr<ModelAsset>
             replaceSelfContainedModelFromCookedArtifact(
                 const CookedArtifact& artifact);
@@ -74,6 +84,9 @@ namespace Iridium {
             findCookedModel(AssetGuid assetGuid) const;
         [[nodiscard]] std::optional<MaterialBinding>
             findCookedMaterial(
+                AssetGuid materialGuid) const;
+        [[nodiscard]] std::optional<CookedMaterialRuntimeBinding>
+            findCookedMaterialRuntime(
                 AssetGuid materialGuid) const;
 
         // Instead of returning a Vulkan-tied 'Texture' struct, we return the lightweight ticket.

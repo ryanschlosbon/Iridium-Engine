@@ -26,7 +26,8 @@ namespace Iridium {
         }
 
         PipelineStateDesc pipelineFor(
-            const CompiledMaterial& material) {
+            const CompiledMaterial& material,
+            TransparencyExecutionMode executionMode) {
             const bool deferred = material.closureClass ==
                 MaterialClosureClass::StandardDeferred;
             const bool transmitted = std::ranges::any_of(
@@ -43,30 +44,48 @@ namespace Iridium {
                 material.standard.alphaMode ==
                     SourceAlphaMode::Blend ||
                 transmitted;
+            const bool classifiedSorted =
+                executionMode == TransparencyExecutionMode::Classified &&
+                material.transparency.resolvedClass ==
+                    TransparencyClass::SortedSurface;
+            const bool classifiedTransparent =
+                executionMode == TransparencyExecutionMode::Classified &&
+                blended;
+            const bool usesGBuffer = deferred && !classifiedSorted;
+            const bool transparentBlend = blended || classifiedSorted;
             PipelineStateDesc pipeline;
-            pipeline.shaderProgram = deferred
+            pipeline.shaderProgram = usesGBuffer
                 ? ShaderProgram::CanonicalPbrGBuffer
-                : blended
+                : classifiedSorted
+                    // SortedSurface is deliberately non-transmissive. Reuse the
+                    // non-transmission forward program so its SPIR-V does not
+                    // statically access the compatibility scene-copy/glass-depth
+                    // descriptors before those resources are produced.
+                    ? ShaderProgram::CanonicalComplexOpaqueForward
+                : transparentBlend
                     ? ShaderProgram::CanonicalComplexForward
                     : ShaderProgram::
                         CanonicalComplexOpaqueForward;
-            pipeline.renderPass = deferred
+            pipeline.renderPass = usesGBuffer
                 ? RenderPassClass::GBuffer
-                : RenderPassClass::Forward;
+                : classifiedSorted
+                    ? RenderPassClass::Transparent
+                    : RenderPassClass::Forward;
             pipeline.topology =
                 PrimitiveTopology::TriangleList;
             pipeline.polygonMode = PolygonMode::Fill;
             pipeline.cullMode = material.standard.doubleSided
                 ? CullMode::None : CullMode::Back;
             pipeline.frontFace = FrontFace::Clockwise;
-            pipeline.blendMode = blended
-                ? BlendMode::AlphaBlend : BlendMode::Opaque;
+            pipeline.blendMode = classifiedSorted || classifiedTransparent
+                ? BlendMode::PremultipliedAlpha
+                : blended ? BlendMode::AlphaBlend : BlendMode::Opaque;
             pipeline.depthTest = true;
-            pipeline.depthCompare = deferred
+            pipeline.depthCompare = usesGBuffer
                 ? DepthCompare::Less
                 : DepthCompare::LessOrEqual;
             pipeline.colorWriteMask = ColorWriteAll;
-            pipeline.depthWrite = !blended;
+            pipeline.depthWrite = !transparentBlend;
             return pipeline;
         }
 
@@ -89,6 +108,8 @@ namespace Iridium {
         }
 
         RuntimeModelCpuData runtime;
+        runtime.transparencyExecutionMode =
+            product.manifest.transparencyExecutionMode;
         runtime.vertices.reserve(product.vertices.size());
         runtime.indices = product.indices;
         runtime.primitives.reserve(product.manifest.primitives.size());
@@ -127,6 +148,7 @@ namespace Iridium {
                 .indexStart = static_cast<uint32_t>(source.firstIndex),
                 .indexCount = static_cast<uint32_t>(source.indexCount),
                 .materialIndex = -1,
+                .sourcePrimitiveGuid = source.sourcePrimitiveGuid,
                 .primitiveGuid = source.primitiveGuid,
                 .materialGuid = source.materialGuid,
                 .sourceNode = source.sourceNode,
@@ -135,6 +157,7 @@ namespace Iridium {
                 .attributeMask = source.attributeMask,
                 .flags = source.flags,
                 .coverage = static_cast<uint8_t>(source.coverage),
+                .transparency = source.transparency,
                 .boundsMin = {
                     source.bounds.aabbMin[0], source.bounds.aabbMin[1],
                     source.bounds.aabbMin[2],
@@ -208,7 +231,7 @@ namespace Iridium {
         if (hasCookErrors(result.diagnostics)) return result;
 
         std::set<ViewKey> consumedViews;
-        result.materials.reserve(product.materials.size());
+        result.materials.reserve(product.manifest.primitives.size());
         for (size_t materialIndex = 0;
             materialIndex < product.materials.size();
             ++materialIndex) {
@@ -325,34 +348,74 @@ namespace Iridium {
                     binding.sampler.getIndex()] =
                     binding.sampler.getGeneration();
             }
-            const auto compiled =
-                std::make_shared<const CompiledMaterial>(
-                    source.compiled);
-            const MaterialInstance instance(
-                compiled, bindings);
-            const MaterialPackResult packed =
-                packMaterialInstance(instance, {
-                    textureGenerations,
-                    samplerGenerations,
-                });
-            if (!packed.succeeded()) {
-                for (const MaterialPackDiagnostic& diagnostic :
-                    packed.diagnostics) {
-                    error(result.diagnostics,
-                        "MODEL_RUNTIME_" + diagnostic.code,
-                        "/materials/" +
-                            std::to_string(materialIndex),
-                        diagnostic.message);
+            std::vector<CompiledTransparencyPolicy> policies;
+            if (product.manifest.transparencyExecutionMode ==
+                    TransparencyExecutionMode::Classified) {
+                for (const CookedModelPrimitive& primitive :
+                        product.manifest.primitives) {
+                    if (primitive.materialGuid == source.materialGuid &&
+                        std::ranges::find(policies,
+                            primitive.transparency) == policies.end()) {
+                        policies.push_back(primitive.transparency);
+                    }
                 }
-                continue;
             }
-            canonical.packed = *packed.material;
-            canonical.pipelineState =
-                pipelineFor(source.compiled);
-            result.materials.push_back({
-                .materialGuid = source.materialGuid,
-                .asset = std::move(canonical),
-            });
+            if (policies.empty())
+                policies.push_back(source.compiled.transparency);
+            std::ranges::sort(policies,
+                [](const CompiledTransparencyPolicy& lhs,
+                    const CompiledTransparencyPolicy& rhs) {
+                    const uint32_t lhsWord = packTransparencyPolicyWord(lhs);
+                    const uint32_t rhsWord = packTransparencyPolicyWord(rhs);
+                    if (lhsWord != rhsWord) return lhsWord < rhsWord;
+                    if (lhs.priority != rhs.priority)
+                        return lhs.priority < rhs.priority;
+                    return lhs.thinSheetThicknessMeters <
+                        rhs.thinSheetThicknessMeters;
+                });
+
+            for (const CompiledTransparencyPolicy& policy : policies) {
+                CompiledMaterial runtimeCompiled = source.compiled;
+                runtimeCompiled.transparency = policy;
+                const auto compiled =
+                    std::make_shared<const CompiledMaterial>(
+                        std::move(runtimeCompiled));
+                const MaterialInstance instance(compiled, bindings);
+                const MaterialPackResult packed =
+                    packMaterialInstance(instance, {
+                        textureGenerations,
+                        samplerGenerations,
+                    });
+                if (!packed.succeeded()) {
+                    for (const MaterialPackDiagnostic& diagnostic :
+                        packed.diagnostics) {
+                        error(result.diagnostics,
+                            "MODEL_RUNTIME_" + diagnostic.code,
+                            "/materials/" +
+                                std::to_string(materialIndex),
+                            diagnostic.message);
+                    }
+                    continue;
+                }
+                CanonicalMaterialAsset variant = canonical;
+                variant.packed = *packed.material;
+                if (product.manifest.transparencyExecutionMode ==
+                        TransparencyExecutionMode::Classified &&
+                    policy.resolvedClass >=
+                        TransparencyClass::SortedSurface &&
+                    policy.resolvedClass <=
+                        TransparencyClass::WeightedOit) {
+                    variant.packed.featureFlags |=
+                        MaterialFeatureClassifiedTransparencyExecution;
+                }
+                variant.pipelineState = pipelineFor(*compiled,
+                    product.manifest.transparencyExecutionMode);
+                result.materials.push_back({
+                    .materialGuid = source.materialGuid,
+                    .transparency = policy,
+                    .asset = std::move(variant),
+                });
+            }
         }
 
         if (consumedViews.size() != textureViews.size()) {
@@ -371,14 +434,22 @@ namespace Iridium {
         RuntimeModelCpuData geometry,
         std::span<const RuntimeMaterialBinding> bindings) {
         ResolvedRuntimeModelCpuResult result;
-        std::map<AssetGuid, MaterialBinding> available;
-        for (const RuntimeMaterialBinding& binding : bindings) {
-            if (binding.materialGuid.isNil() ||
-                !available.emplace(
-                    binding.materialGuid, binding.binding).second) {
+        const bool classified = geometry.transparencyExecutionMode ==
+            TransparencyExecutionMode::Classified;
+        for (size_t index = 0; index < bindings.size(); ++index) {
+            const RuntimeMaterialBinding& binding = bindings[index];
+            const bool duplicate = std::ranges::any_of(
+                bindings.first(index), [&](const RuntimeMaterialBinding& prior) {
+                    return prior.materialGuid == binding.materialGuid &&
+                        (!classified || prior.transparency ==
+                            binding.transparency);
+                });
+            if (binding.materialGuid.isNil() || duplicate) {
                 error(result.diagnostics,
                     "MODEL_RUNTIME_MATERIAL_BINDING", "/materials",
-                    "Runtime material bindings require unique non-nil GUIDs.");
+                    classified
+                        ? "Classified runtime material bindings require unique non-nil GUID/policy identities."
+                        : "Runtime material bindings require unique non-nil GUIDs.");
             }
         }
         if (hasCookErrors(result.diagnostics)) return result;
@@ -386,19 +457,32 @@ namespace Iridium {
         ResolvedRuntimeModelCpuData resolved{
             .geometry = std::move(geometry),
         };
-        std::map<AssetGuid, int> runtimeIndices;
+        struct RuntimeIndex {
+            AssetGuid materialGuid;
+            CompiledTransparencyPolicy transparency;
+            int index = -1;
+        };
+        std::vector<RuntimeIndex> runtimeIndices;
         for (size_t index = 0;
             index < resolved.geometry.primitives.size(); ++index) {
             SubMesh& primitive = resolved.geometry.primitives[index];
-            auto runtime = runtimeIndices.find(primitive.materialGuid);
+            const auto matchesPolicy = [&](const auto& candidate) {
+                return candidate.materialGuid == primitive.materialGuid &&
+                    (!classified || candidate.transparency ==
+                        primitive.transparency);
+            };
+            auto runtime = std::ranges::find_if(runtimeIndices, matchesPolicy);
             if (runtime == runtimeIndices.end()) {
-                const auto material = available.find(primitive.materialGuid);
-                if (material == available.end()) {
+                const auto material = std::ranges::find_if(
+                    bindings, matchesPolicy);
+                if (material == bindings.end()) {
                     error(result.diagnostics,
                         "MODEL_RUNTIME_MATERIAL_MISSING",
                         "/primitives/" + std::to_string(index) +
                             "/material_guid",
-                        "Cooked model references an unresolved material GUID.");
+                        classified
+                            ? "Cooked model references an unresolved material GUID/policy variant."
+                            : "Cooked model references an unresolved material GUID.");
                     continue;
                 }
                 if (resolved.materials.size() >
@@ -410,11 +494,15 @@ namespace Iridium {
                 }
                 const int materialIndex =
                     static_cast<int>(resolved.materials.size());
-                resolved.materials.push_back(material->second);
-                runtime = runtimeIndices.emplace(
-                    primitive.materialGuid, materialIndex).first;
+                resolved.materials.push_back(material->binding);
+                runtimeIndices.push_back({
+                    .materialGuid = primitive.materialGuid,
+                    .transparency = primitive.transparency,
+                    .index = materialIndex,
+                });
+                runtime = std::prev(runtimeIndices.end());
             }
-            primitive.materialIndex = runtime->second;
+            primitive.materialIndex = runtime->index;
         }
         if (!hasCookErrors(result.diagnostics)) {
             result.data = std::move(resolved);

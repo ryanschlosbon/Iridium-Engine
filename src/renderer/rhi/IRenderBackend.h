@@ -6,7 +6,9 @@
 #include "RenderBackendConfig.h"
 #include "RenderDebugView.h"
 #include "FrameCapture.h"
+#include "Ordinary2CaptureValidation.h"
 #include "LightingTypes.h"
+#include "Mesh.h"
 #include "ReflectionProbeTypes.h"
 #include "ReflectionProbeSettings.h"
 #include "renderer/lighting/ReflectionProbeCapture.h"
@@ -48,6 +50,23 @@ namespace Iridium {
         bool affectsLighting = true;
     };
 
+    // Describes optional, content-dependent graph products that may be made
+    // resident before the first frame. The contract is backend neutral: a
+    // backend may satisfy a request by changing topology, reserving resources,
+    // or doing nothing when those products are already available.
+    struct FrameTopologyRequirements {
+        bool refractionPyramids = false;
+        bool ordinary2LayeredInterfaces = false;
+        bool hero4LayeredInterfaces = false;
+        bool cinematic8LayeredInterfaces = false;
+    };
+
+    struct FrameTopologyPreparation {
+        bool requested = false;
+        bool changed = false;
+        uint64_t durationNanoseconds = 0;
+    };
+
     class IRenderBackend {
     public:
         // A virtual destructor is MANDATORY for C++ interfaces to ensure child classes 
@@ -67,6 +86,11 @@ namespace Iridium {
             RenderExtent extent, std::string& diagnostic) = 0;
         [[nodiscard]] virtual RenderBackendCapabilities getCapabilities() const = 0;
         [[nodiscard]] virtual RenderBackendRuntimeInfo getRuntimeInfo() const = 0;
+        // May only be called between frames. Startup callers use this to move
+        // predictable content-driven topology work out of the first interactive
+        // frame without forcing optional products into every empty scene.
+        [[nodiscard]] virtual FrameTopologyPreparation prepareFrameTopology(
+            const FrameTopologyRequirements& requirements) = 0;
 
         // ==============================================================================
         // 2. THE FRAME PIPELINE
@@ -92,7 +116,7 @@ namespace Iridium {
         // Prepares swapchains, acquires the next image, and resets command buffers
         virtual FrameStatus beginFrame() = 0;
 
-        virtual void updateCamera(const glm::mat4& view, const glm::mat4& proj) = 0;
+        virtual void updateCamera(const ViewTransportRecord& view) = 0;
         virtual void setDebugView(RenderDebugView view) = 0;
         virtual void setOutputSettings(float manualExposureEv,
             float paperWhiteNits, float peakNits) = 0;
@@ -135,11 +159,13 @@ namespace Iridium {
         [[nodiscard]] virtual ClusteredLightingTelemetry
             getClusteredLightingTelemetry() const noexcept = 0;
 
-        // Pass 3: Draws opaque complex closures with depth writes, then coverage-
-        // transparent closures back-to-front over the lit scene.
+        // Pass 3: Draws opaque complex closures with depth writes, classified
+        // sorted surfaces with read-only depth and premultiplied blending, then
+        // retained compatibility transparency through the bounded glass path.
         virtual void submitForwardQueues(
             std::span<const DrawPacket> opaqueForwardQueue,
-            std::span<const DrawPacket> transparentQueue) = 0;
+            std::span<const DrawPacket> sortedSurfaceQueue,
+            std::span<const DrawPacket> compatibilityTransparentQueue) = 0;
 
         // Records an asynchronous readback of the post-transparency scene image.
         // The call itself does not wait for GPU completion. Completed captures may
@@ -148,6 +174,18 @@ namespace Iridium {
             FrameCapturePoint point) = 0;
         [[nodiscard]] virtual std::vector<FrameCapture> collectFrameCaptures(
             bool waitForPending) = 0;
+
+        // Explicit diagnostic only. The request is consumed by the next live
+        // Ordinary2 capture/local composition with at least one prepared draw;
+        // normal frames do not allocate a readback buffer or record transfers.
+        virtual void requestOrdinary2CaptureValidation(
+            uint64_t validationId) = 0;
+        [[nodiscard]] virtual std::vector<Ordinary2CaptureValidationResult>
+            collectOrdinary2CaptureValidations(bool waitForPending) = 0;
+        virtual void requestDeepLayeredCaptureValidation(
+            uint64_t validationId, TransparencyQuality quality) = 0;
+        [[nodiscard]] virtual std::vector<DeepLayeredCaptureValidationResult>
+            collectDeepLayeredCaptureValidations(bool waitForPending) = 0;
 
         // Pass 4: Maps scene-linear color into the selected display output.
         virtual void submitOutputPass() = 0;

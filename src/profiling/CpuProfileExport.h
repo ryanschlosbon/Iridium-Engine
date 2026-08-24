@@ -90,6 +90,9 @@ namespace Iridium {
         uint64_t renderGraphCommittedBytes = 0;
         uint64_t renderGraphRebuildCount = 0;
         uint64_t renderGraphCacheMissCount = 0;
+        bool ordinary2AtlasResident = false;
+        uint32_t ordinary2AtlasWidth = 0;
+        uint32_t ordinary2AtlasHeight = 0;
         bool gpuLightRecordsAvailable = false;
         uint32_t maxGpuLightRecords = 0;
         uint32_t gpuLightCapacity = 0;
@@ -107,6 +110,10 @@ namespace Iridium {
         uint64_t modelLoadNanoseconds = 0;
         uint64_t environmentCreationNanoseconds = 0;
         uint64_t sceneConstructionNanoseconds = 0;
+        uint64_t frameTopologyPrewarmNanoseconds = 0;
+        bool frameTopologyPrewarmRequested = false;
+        bool frameTopologyPrewarmChanged = false;
+        bool refractionPyramidsResident = false;
         std::string modelLoadMode;
         std::string modelLocation;
         std::string modelAssetGuid;

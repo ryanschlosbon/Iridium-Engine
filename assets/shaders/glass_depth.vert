@@ -11,6 +11,12 @@ layout(set = 0, binding = 0) uniform UniformBufferObject {
     mat4 model; // Usually unused since we use push constants
     mat4 view;
     mat4 proj;
+    mat4 inverseView;
+    mat4 inverseProjection;
+    vec4 cameraPosition;
+    vec4 depthRange;
+    uvec4 renderInfo;
+    vec4 worldUnits;
 } ubo;
 
 // PUSH CONSTANTS: Mesh Transform

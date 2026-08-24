@@ -1,7 +1,7 @@
 #ifndef IRIDIUM_PACKED_MATERIAL_GLSL
 #define IRIDIUM_PACKED_MATERIAL_GLSL
 
-const uint MATERIAL_SCHEMA_VERSION = 2u;
+const uint MATERIAL_SCHEMA_VERSION = 3u;
 const uint MATERIAL_TEXTURE_BASE_COLOR = 0u;
 const uint MATERIAL_TEXTURE_METALLIC_ROUGHNESS = 1u;
 const uint MATERIAL_TEXTURE_NORMAL = 2u;
@@ -33,7 +33,9 @@ struct PackedMaterial {
     PackedComplexLobe complexLobes[8];
     uvec4 textureUses[21];
     uint textureIndices[21];
-    uint reserved[3];
+    uint transparencyPolicy;
+    int transparencyPriority;
+    float thinSheetThicknessMeters;
 };
 
 vec2 packedMaterialUv(PackedMaterial material, uint semantic,
@@ -64,8 +66,8 @@ bool packedMaterialHasTexture(PackedMaterial material, uint semantic) {
 
 bool packedMaterialReconstructNormalZ(
     PackedMaterial material, uint semantic) {
-    return (material.reserved[0] &
-        (1u << semantic)) != 0u;
+    return semantic == MATERIAL_TEXTURE_NORMAL &&
+        (material.featureFlags & (1u << 18u)) != 0u;
 }
 
 #endif

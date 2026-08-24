@@ -19,6 +19,87 @@ This is an engineering contract, not a promise that every pathological authoring
 - Do not compare results captured with different content, camera paths, shader-cache state, or output modes without labeling the difference.
 - Treat image quality, temporal stability, memory, and latency as first-class results alongside average frame time.
 
+## M6 high-fidelity multi-asset observation and M7 scaling gate
+
+On 2026-08-23 the owner reported approximately 180 FPS with three newly acquired
+high-fidelity assets active in the editor, versus approximately 1,700 FPS with an
+empty scene on the same 240 Hz display. Those title values correspond to about
+5.56 ms and 0.59 ms per completed frame, or roughly 4.97 ms of scene-dependent wall
+time. The multi-asset result is already inside the 10.0 ms / greater-than-100-FPS
+product target, but it is not yet a renderer qualification result: resolution,
+camera, asset revisions, triangle/draw/material counts, shadow updates, and CPU/GPU
+pass timings were not captured with the observation.
+
+The title-bar value measures completed wall-clock frames in a coarse approximately
+one-second window. Iridium currently prefers `VK_PRESENT_MODE_MAILBOX_KHR`, and
+accepted M6 evidence has shown swapchain image acquisition dominating some CPU
+totals while the GPU completed earlier. However, the observed counter exceeding the
+240 Hz refresh rate and reaching roughly 1,700 FPS in the empty scene rules out a
+180-FPS refresh ceiling in this case. The approximately 4.97 ms delta is a credible
+scene-scaling signal; performance diagnosis still compares GPU-frame time,
+non-waiting CPU work, and `cpu.renderer.acquire`/`cpu.renderer.present` to determine
+which work owns it.
+
+Current-source inspection nevertheless predicts near-linear scaling for dense
+visible models until M7. Every enabled opaque submesh is extracted into a CPU
+`DrawPacket`, sorted, and submitted through an individual `vkCmdDrawIndexed` call.
+There is no general opaque main-view frustum or Hi-Z occlusion culling, and cooked
+LOD/meshlet section fields are currently unpopulated. Classified transparent bounds
+perform limited CPU rejection, and local shadow passes have view-specific sphere
+culling, but the main opaque path, forward-complex work, and eligible shadow/capture
+views still receive the full authored primitive detail. Three dense assets can
+therefore increase CPU extraction/sort/record cost, vertex/triangle work, material
+state changes, transparent pixels, and shadow casters roughly with their visible
+content. Which term dominates this particular scene remains unknown until profiled.
+
+Before M7 implementation, freeze a native-4K Release benchmark containing those
+three asset revisions and fixed cameras for these cases: all visible; one and two
+off-frustum; large occluder; near/mid/far LOD ranges; static transforms; one moving
+asset; shadow-only caster; and representative transparency. Use at least five fresh
+processes with the standard warmup/measured-frame protocol. Record:
+
+- GPU median/p95/p99 for frame, GBuffer/visibility, cluster assignment, deferred,
+  forward opaque, transparency, every shadow/capture pass, output, and UI;
+- CPU extraction, culling, sorting, recording, asset/streaming work, frame-context
+  waits, swapchain acquire/present waits, allocations, and worker utilization;
+- requested versus visible instances/primitives/meshlets/triangles, LOD choices,
+  indirect commands, draw/dispatch calls, material/pipeline binds, and occlusion
+  rejection reasons;
+- upload/residency bytes and peaks, plus image/capture comparisons at LOD and
+  occlusion transitions.
+
+M7 must demonstrate that off-screen and conservatively occluded content stops
+generating main-view geometry work, unchanged static content produces no instance
+upload, distant content selects bounded-error LODs without visible popping, and CPU
+submission scales with compacted visible batches instead of source submesh count.
+M8 then measures meshlet/normal-cone rejection for dense visible assets. Neither
+milestone may trade away silhouettes, material response, correct transparent order,
+or shadow/probe visibility to improve the counter.
+
+## Import, cooking, and publication performance contract
+
+Cook performance reports separate preparation/receipt, parse, material compile,
+texture decode/mip/compression, geometry decode/optimization, LOD, meshlet, RT data,
+parent serialization, DDC read/write, thumbnail, and GPU publication. Record wall
+time, aggregate CPU time, worker occupancy, cache hits/misses, cancellation latency,
+peak CPU memory, derived bytes, and upload bytes. A faster cook that oversubscribes
+the machine, makes the editor unresponsive, or loses byte determinism is a failure.
+
+M7 fine-grained cooking must prove these edit cases independently:
+
+- material/policy-only: no texture recompression and no geometry/LOD/meshlet rebuild;
+- one source primitive: only that primitive and its dependent children rebuild;
+- one texture: only dependent semantic views/material parents rebuild;
+- unchanged source: preparation receipt plus complete parent/child DDC hits;
+- superseded edit: bounded cancellation and newest-revision-only publication.
+
+Independent child products may run in a bounded job graph, with texture compression
+and geometry/LOD/meshlet work parallelized only where profiles show useful CPU work.
+Progressive GPU residency keeps the last complete revision or a semantic
+texture/coarser-LOD/proxy fallback visible while child products upload within a
+per-frame byte/time budget. The current one-shot atomic model path remains a
+compatibility fallback, not the intended steady solution for very large assets.
+
 ## Initial 10 ms GPU budget
 
 This table is a starting hypothesis for M0/M1, not a permanent allocation. Overlap means the row totals are not a scheduling model.
@@ -396,6 +477,9 @@ Release process adds exactly 108 MiB of persistent environment residency:
 versus 5.879 ms, so the larger product has no measured median frame-time charge in
 this checkpoint. Environment creation rises from 0.483 to 2.855 seconds. These are
 single-process stabilization measurements, not a replacement for the five-process
-M5 gate. The general editor upload budget remains 128 MiB; only an explicit atomic
-HDRI publication may exceed it, under a 640 MiB per-environment cap. See
+M5 gate. The general editor upload budget remains a 128 MiB per-tick scheduling
+target. An explicit atomic HDRI publication may exceed it under a 640 MiB
+per-environment cap; since M6, a single valid model may also publish atomically
+under a 1 GiB per-model hard cap rather than being rejected solely for exceeding
+128 MiB. See
 `docs/performance/M5.12-reflection-resolution-stabilization-2026-08-13.md`.

@@ -1,4 +1,5 @@
 #include "assets/model/ModelProduct.h"
+#include "assets/model/ModelRuntimeProduct.h"
 
 #include <algorithm>
 #include <cstdlib>
@@ -116,6 +117,8 @@ namespace {
             .rtIndexCount = data.rtIndices.size(),
             .primitives = {
                 {
+                    .sourcePrimitiveGuid =
+                        guid("0198fe3d-8840-7c23-9801-001122334466"),
                     .primitiveGuid =
                         guid("0198fe3d-8840-7c23-9801-001122334466"),
                     .materialGuid = opaqueMaterial,
@@ -142,6 +145,8 @@ namespace {
                     },
                 },
                 {
+                    .sourcePrimitiveGuid =
+                        guid("0198fe3d-8840-7c23-9801-001122334477"),
                     .primitiveGuid =
                         guid("0198fe3d-8840-7c23-9801-001122334477"),
                     .materialGuid = transparentMaterial,
@@ -321,6 +326,138 @@ namespace {
         return true;
     }
 
+    bool testClassifiedSortedSurfaceRuntimePipeline() {
+        CookedModelProductData data = fixture();
+        data.manifest.transparencyExecutionMode =
+            TransparencyExecutionMode::Classified;
+        data.manifest.primitives[1].transparency =
+            data.materials[1].compiled.transparency;
+
+        const RuntimeMaterialFallbacks fallbacks{
+            .white = {
+                TextureHandle::fromParts(1, 1),
+                SamplerHandle::fromParts(1, 1),
+            },
+            .normal = {
+                TextureHandle::fromParts(2, 1),
+                SamplerHandle::fromParts(2, 1),
+            },
+            .linearData = {
+                TextureHandle::fromParts(3, 1),
+                SamplerHandle::fromParts(3, 1),
+            },
+        };
+        const RuntimeCanonicalMaterialResult materials =
+            makeRuntimeCanonicalMaterials(data, {}, fallbacks);
+        CHECK(materials.valid());
+        CHECK(materials.materials.size() == 2);
+        const CanonicalMaterialAsset& sorted = materials.materials[1].asset;
+        CHECK(sorted.pipelineState.shaderProgram ==
+            ShaderProgram::CanonicalComplexOpaqueForward);
+        CHECK(sorted.pipelineState.renderPass ==
+            RenderPassClass::Transparent);
+        CHECK(sorted.pipelineState.blendMode ==
+            BlendMode::PremultipliedAlpha);
+        CHECK(sorted.pipelineState.depthTest);
+        CHECK(!sorted.pipelineState.depthWrite);
+        CHECK((sorted.packed.featureFlags &
+            MaterialFeatureClassifiedTransparencyExecution) != 0);
+
+        const RuntimeModelCpuResult runtime =
+            makeRuntimeModelCpuData(data);
+        CHECK(runtime.valid());
+        CHECK(runtime.data->transparencyExecutionMode ==
+            TransparencyExecutionMode::Classified);
+        CHECK(runtime.data->primitives[1].sourcePrimitiveGuid ==
+            data.manifest.primitives[1].sourcePrimitiveGuid);
+        CHECK(runtime.data->primitives[1].transparency.resolvedClass ==
+            TransparencyClass::SortedSurface);
+        return true;
+    }
+
+    bool testClassifiedPrimitivePolicyMaterialVariants() {
+        CookedModelProductData data = fixture();
+        data.manifest.transparencyExecutionMode =
+            TransparencyExecutionMode::Classified;
+        const AssetGuid sharedMaterial = data.materials[1].materialGuid;
+        CompiledTransparencyPolicy thin =
+            data.materials[1].compiled.transparency;
+        thin.requestedClass = TransparencyClass::ThinGlass;
+        thin.resolvedClass = TransparencyClass::ThinGlass;
+        thin.flags = CompiledTransparencyExplicitClass;
+        data.manifest.primitives[0].materialGuid = sharedMaterial;
+        data.manifest.primitives[0].coverage =
+            ModelCoverage::Transparent;
+        data.manifest.primitives[0].flags =
+            ModelPrimitiveDoubleSided;
+        data.manifest.primitives[0].rtFlags =
+            ModelRtBuildInput | ModelRtAllowAnyHit;
+        data.manifest.primitives[0].transparency = thin;
+        data.manifest.primitives[1].transparency =
+            data.materials[1].compiled.transparency;
+        CHECK(validateModelProduct(data).empty());
+
+        const RuntimeMaterialFallbacks fallbacks{
+            .white = {
+                TextureHandle::fromParts(1, 1),
+                SamplerHandle::fromParts(1, 1),
+            },
+            .normal = {
+                TextureHandle::fromParts(2, 1),
+                SamplerHandle::fromParts(2, 1),
+            },
+            .linearData = {
+                TextureHandle::fromParts(3, 1),
+                SamplerHandle::fromParts(3, 1),
+            },
+        };
+        const RuntimeCanonicalMaterialResult canonical =
+            makeRuntimeCanonicalMaterials(data, {}, fallbacks);
+        CHECK(canonical.valid());
+        CHECK(std::ranges::count_if(canonical.materials,
+            [&](const RuntimeCanonicalMaterial& material) {
+                return material.materialGuid == sharedMaterial;
+            }) == 2);
+        const auto thinMaterial = std::ranges::find_if(
+            canonical.materials,
+            [](const RuntimeCanonicalMaterial& material) {
+                return material.transparency.resolvedClass ==
+                    TransparencyClass::ThinGlass;
+            });
+        CHECK(thinMaterial != canonical.materials.end());
+        CHECK(thinMaterial->asset.pipelineState.blendMode ==
+            BlendMode::PremultipliedAlpha);
+        CHECK((thinMaterial->asset.packed.featureFlags &
+            MaterialFeatureClassifiedTransparencyExecution) != 0);
+
+        std::vector<RuntimeMaterialBinding> bindings;
+        for (size_t index = 0; index < canonical.materials.size(); ++index) {
+            const RuntimeCanonicalMaterial& material =
+                canonical.materials[index];
+            bindings.push_back({
+                .materialGuid = material.materialGuid,
+                .transparency = material.transparency,
+                .binding = {
+                    .material = MaterialHandle::fromParts(
+                        static_cast<uint32_t>(index + 1), 1),
+                    .pipeline = PipelineHandle::fromParts(
+                        static_cast<uint32_t>(index + 1), 1),
+                    .renderQueue = RenderQueue::Transparent,
+                },
+            });
+        }
+        RuntimeModelCpuResult geometry = makeRuntimeModelCpuData(data);
+        CHECK(geometry.valid());
+        ResolvedRuntimeModelCpuResult resolved =
+            resolveRuntimeModelMaterials(
+                std::move(*geometry.data), bindings);
+        CHECK(resolved.valid());
+        CHECK(resolved.data->geometry.primitives[0].materialIndex !=
+            resolved.data->geometry.primitives[1].materialIndex);
+        CHECK(resolved.data->materials.size() == 2);
+        return true;
+    }
+
 } // namespace
 
 int main() {
@@ -334,6 +471,10 @@ int main() {
         { "RT reconstruction", testRtGeometryReconstructsCanonicalTriangles },
         { "semantic validation", testValidationRejectsSemanticLossAndBadRanges },
         { "manifest corruption", testManifestRejectsCorruption },
+        { "classified SortedSurface runtime pipeline",
+            testClassifiedSortedSurfaceRuntimePipeline },
+        { "classified primitive policy material variants",
+            testClassifiedPrimitivePolicyMaterialVariants },
     };
 
     for (const TestCase& test : tests) {

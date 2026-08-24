@@ -181,33 +181,69 @@ namespace Iridium {
         return result;
     }
 
+    namespace {
+
+        CookedArtifactBlob buildPreparedArtifactWithCache(
+            const PreparedAssetCook& prepared,
+            DerivedDataCache* derivedDataCache,
+            std::stop_token stopToken) {
+            if (!prepared.valid()) {
+                throw std::invalid_argument("Cannot build an invalid prepared cook.");
+            }
+            AssetCookContext context = prepared.context;
+            context.derivedDataCache = derivedDataCache;
+            if (context.progress) {
+                context.progress({
+                    .stage = "importer",
+                    .detail = "Building deterministic importer product",
+                });
+            }
+            CookProduct product = prepared.importer->cook(
+                prepared.source, prepared.settings, prepared.target,
+                context, stopToken);
+            if (hasCookErrors(product.diagnostics)) {
+                std::string message = "Importer cook failed";
+                for (const CookDiagnostic& diagnostic : product.diagnostics) {
+                    if (diagnostic.severity == CookDiagnosticSeverity::Error) {
+                        message += ": " + diagnostic.code + " " + diagnostic.message;
+                    }
+                }
+                throw std::runtime_error(message);
+            }
+            if (context.progress) {
+                context.progress({
+                    .stage = "artifact",
+                    .total = 1,
+                    .detail = "Serializing parent cooked artifact",
+                });
+            }
+            CookedArtifactBlob result = serializeCookedArtifact({
+                .assetGuid = prepared.assetGuid,
+                .artifactType = std::move(product.artifactType),
+                .artifactSchemaVersion = product.artifactSchemaVersion,
+                .target = prepared.target,
+                .cookKey = prepared.cookKey,
+                .dependencies = prepared.resolvedDependencies,
+                .sections = std::move(product.sections),
+            });
+            if (context.progress) {
+                context.progress({
+                    .stage = "artifact",
+                    .completed = 1,
+                    .total = 1,
+                    .detail = "Parent cooked artifact serialized",
+                });
+            }
+            return result;
+        }
+
+    } // namespace
+
     CookedArtifactBlob buildPreparedArtifact(
         const PreparedAssetCook& prepared,
         std::stop_token stopToken) {
-        if (!prepared.valid()) {
-            throw std::invalid_argument("Cannot build an invalid prepared cook.");
-        }
-        CookProduct product = prepared.importer->cook(
-            prepared.source, prepared.settings, prepared.target,
-            prepared.context, stopToken);
-        if (hasCookErrors(product.diagnostics)) {
-            std::string message = "Importer cook failed";
-            for (const CookDiagnostic& diagnostic : product.diagnostics) {
-                if (diagnostic.severity == CookDiagnosticSeverity::Error) {
-                    message += ": " + diagnostic.code + " " + diagnostic.message;
-                }
-            }
-            throw std::runtime_error(message);
-        }
-        return serializeCookedArtifact({
-            .assetGuid = prepared.assetGuid,
-            .artifactType = std::move(product.artifactType),
-            .artifactSchemaVersion = product.artifactSchemaVersion,
-            .target = prepared.target,
-            .cookKey = prepared.cookKey,
-            .dependencies = prepared.resolvedDependencies,
-            .sections = std::move(product.sections),
-        });
+        return buildPreparedArtifactWithCache(
+            prepared, nullptr, stopToken);
     }
 
     std::shared_future<DdcRequestResult> requestPreparedCook(
@@ -237,11 +273,11 @@ namespace Iridium {
         }
         const std::string cookKey = prepared->cookKey;
         return cache.request(cookKey, stopToken,
-            [prepared = std::move(prepared)](
+            [prepared = std::move(prepared), &cache](
                 std::stop_token token) {
                 if (token.stop_requested()) return CookedArtifactBlob{};
-                return buildPreparedArtifact(
-                    *prepared, token);
+                return buildPreparedArtifactWithCache(
+                    *prepared, &cache, token);
             });
     }
 

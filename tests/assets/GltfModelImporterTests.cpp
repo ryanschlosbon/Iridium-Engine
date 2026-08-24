@@ -15,6 +15,7 @@
 #include <fstream>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <span>
 #include <string>
 #include <stop_token>
@@ -298,6 +299,8 @@ namespace {
             *typed.data, wrongViews, fallbacks).valid());
         CHECK(runtime.data->primitives[0].primitiveGuid ==
             typed.data->manifest.primitives[0].primitiveGuid);
+        CHECK(runtime.data->primitives[0].transparency ==
+            typed.data->manifest.primitives[0].transparency);
         CHECK(runtime.data->primitives[0].materialGuid ==
             typed.data->manifest.primitives[0].materialGuid);
         CHECK(runtime.data->primitives[0].materialIndex == -1);
@@ -349,6 +352,97 @@ namespace {
             readCookedModelProduct(missingSection);
         CHECK(!rejected.valid());
         CHECK(hasCookErrors(rejected.diagnostics));
+        return true;
+    }
+
+    bool testPolicyRecookReusesEmbeddedTextureProducts() {
+        const AssetMetadataReadResult metadataRead = readAssetMetadata(
+            fixtureRoot() / "gltf_model_cooker_fixture.gltf.iridium.meta");
+        CHECK(metadataRead.metadata.has_value());
+        ImporterRegistry registry;
+        registry.registerImporter(std::make_shared<GltfModelImporter>());
+        const CookTarget target{
+            .platform = "windows-x64",
+            .profile = "release",
+            .qualityPolicy = "reference",
+        };
+        PreparedAssetCook first = prepareAssetCook(
+            registry, fixtureRoot(), "gltf_model_cooker_fixture.gltf",
+            *metadataRead.metadata, target, "m3.4-model-v1");
+        CHECK(first.valid());
+        std::mutex progressMutex;
+        std::vector<AssetCookContext::Progress> progressEvents;
+        first.context.progress =
+            [&](const AssetCookContext::Progress& progress) {
+                std::lock_guard lock(progressMutex);
+                progressEvents.push_back(progress);
+            };
+
+        TemporaryDirectory temporary;
+        LocalDerivedDataCache cache(temporary.path / "ddc");
+        const DdcRequestResult firstResult =
+            requestPreparedCook(cache, first).get();
+        CHECK(firstResult.status == DdcRequestStatus::Built);
+        CHECK(firstResult.blob.has_value());
+        const auto completedStage =
+            [&](std::string_view stage) {
+                std::lock_guard lock(progressMutex);
+                return std::ranges::any_of(progressEvents,
+                    [stage](const AssetCookContext::Progress& progress) {
+                        return progress.stage == stage &&
+                            progress.total != 0 &&
+                            progress.completed == progress.total;
+                    });
+            };
+        CHECK(completedStage("materials"));
+        CHECK(completedStage("textures"));
+        CHECK(completedStage("geometry"));
+        CHECK(completedStage("model-product"));
+        CHECK(completedStage("artifact"));
+
+        AssetMetadata changed = *metadataRead.metadata;
+        const std::string initialMode = changed.settings.value(
+            "transparency_execution_mode", std::string("legacy_two_bucket"));
+        changed.settings["transparency_execution_mode"] =
+            initialMode == "classified" ? "legacy_two_bucket" : "classified";
+        PreparedAssetCook second = prepareAssetCook(
+            registry, fixtureRoot(), "gltf_model_cooker_fixture.gltf",
+            changed, target, "m3.4-model-v1");
+        CHECK(second.valid());
+        CHECK(first.cookKey != second.cookKey);
+        const DdcRequestResult secondResult =
+            requestPreparedCook(cache, second).get();
+        CHECK(secondResult.status == DdcRequestStatus::Built);
+        CHECK(secondResult.blob.has_value());
+
+        size_t modelArtifacts = 0;
+        size_t textureArtifacts = 0;
+        for (const auto& entry : std::filesystem::recursive_directory_iterator(
+                temporary.path / "ddc")) {
+            if (!entry.is_regular_file() ||
+                entry.path().extension() != ".irartifact") {
+                continue;
+            }
+            const CookedArtifactBlob blob =
+                readCookedArtifactBlobFile(entry.path());
+            const CookedArtifactReadResult artifact =
+                readCookedArtifact(blob.bytes, blob.artifactHash);
+            CHECK(artifact.valid());
+            if (artifact.artifact->artifactType == "iridium.model") {
+                ++modelArtifacts;
+            }
+            else if (artifact.artifact->artifactType == "iridium.texture") {
+                ++textureArtifacts;
+            }
+        }
+        CHECK(modelArtifacts == 2);
+        CHECK(textureArtifacts == 1);
+
+        const CookedArtifactBlob uncachedSecond =
+            buildPreparedArtifact(second);
+        CHECK(uncachedSecond.bytes == secondResult.blob->bytes);
+        CHECK(uncachedSecond.artifactHash ==
+            secondResult.blob->artifactHash);
         return true;
     }
 
@@ -915,6 +1009,505 @@ namespace {
         return true;
     }
 
+    bool testTriangleConnectedComponentContract() {
+        const std::array<uint32_t, 12> indices{
+            0, 1, 2,
+            2, 1, 3,
+            4, 5, 6,
+            6, 5, 7,
+        };
+        const auto components = findTriangleConnectedComponents(indices);
+        CHECK(components.size() == 2);
+        CHECK(components[0].sourceTriangleSeed == 0);
+        CHECK(components[0].sourceTriangleIndices ==
+            std::vector<uint32_t>({ 0, 1 }));
+        CHECK(components[1].sourceTriangleSeed == 2);
+        CHECK(components[1].sourceTriangleIndices ==
+            std::vector<uint32_t>({ 2, 3 }));
+
+        const std::array<uint32_t, 6> pointTouch{
+            0, 1, 2,
+            2, 3, 4,
+        };
+        CHECK(findTriangleConnectedComponents(pointTouch).size() == 2);
+        bool rejected = false;
+        try {
+            (void)findTriangleConnectedComponents(
+                std::span<const uint32_t>(indices).first(11));
+        }
+        catch (const std::invalid_argument&) {
+            rejected = true;
+        }
+        CHECK(rejected);
+        return true;
+    }
+
+    bool testClosedTriangleTopologyContract() {
+        const std::array<glm::vec3, 4> tetrahedron{
+            glm::vec3{ 0.0f, 0.0f, 0.0f },
+            glm::vec3{ 1.0f, 0.0f, 0.0f },
+            glm::vec3{ 0.0f, 1.0f, 0.0f },
+            glm::vec3{ 0.0f, 0.0f, 1.0f },
+        };
+        const std::array<uint32_t, 12> closed{
+            0, 2, 1,
+            0, 1, 3,
+            1, 2, 3,
+            0, 3, 2,
+        };
+        constexpr std::array<uint32_t, 4> allFaces{ 0, 1, 2, 3 };
+        const ClosedTriangleTopologyAnalysis valid =
+            analyzeClosedTriangleTopology(tetrahedron, closed, allFaces);
+        CHECK(valid.validClosed());
+        CHECK(valid.triangleCount == 4);
+        CHECK(valid.boundaryEdgeCount == 0);
+        CHECK(valid.nonManifoldEdgeCount == 0);
+        CHECK(valid.inconsistentOrientationEdgeCount == 0);
+        CHECK(valid.degenerateTriangleCount == 0);
+        CHECK(valid.signedVolume > 0.0);
+
+        constexpr std::array<uint32_t, 3> openFaces{ 0, 1, 2 };
+        const ClosedTriangleTopologyAnalysis open =
+            analyzeClosedTriangleTopology(tetrahedron, closed, openFaces);
+        CHECK(!open.validClosed());
+        CHECK(open.boundaryEdgeCount == 3);
+
+        std::array<uint32_t, 12> inconsistent = closed;
+        std::swap(inconsistent[1], inconsistent[2]);
+        const ClosedTriangleTopologyAnalysis orientation =
+            analyzeClosedTriangleTopology(
+                tetrahedron, inconsistent, allFaces);
+        CHECK(!orientation.validClosed());
+        CHECK(orientation.inconsistentOrientationEdgeCount > 0);
+
+        const std::array<glm::vec3, 4> flat{
+            glm::vec3{ 0.0f, 0.0f, 0.0f },
+            glm::vec3{ 1.0f, 0.0f, 0.0f },
+            glm::vec3{ 0.0f, 1.0f, 0.0f },
+            glm::vec3{ 1.0f, 1.0f, 0.0f },
+        };
+        const ClosedTriangleTopologyAnalysis zeroVolume =
+            analyzeClosedTriangleTopology(flat, closed, allFaces);
+        CHECK(!zeroVolume.validClosed());
+        CHECK(zeroVolume.signedVolume == 0.0);
+
+        bool rejected = false;
+        try {
+            constexpr std::array<uint32_t, 1> invalidFace{ 4 };
+            (void)analyzeClosedTriangleTopology(
+                tetrahedron, closed, invalidFace);
+        }
+        catch (const std::invalid_argument&) {
+            rejected = true;
+        }
+        CHECK(rejected);
+        return true;
+    }
+
+    bool testLayeredTopologyCookResolution() {
+        const auto prepared = preparedFixture();
+        CHECK(prepared && prepared->valid());
+        std::vector<std::byte> gltfBytes = readFile(
+            fixtureRoot() / "gltf_model_cooker_fixture.gltf");
+        CHECK(!gltfBytes.empty());
+        nlohmann::ordered_json gltf = nlohmann::ordered_json::parse(
+            reinterpret_cast<const char*>(gltfBytes.data()),
+            reinterpret_cast<const char*>(gltfBytes.data() +
+                gltfBytes.size()));
+        gltf["extensionsUsed"] = {
+            "KHR_materials_transmission",
+            "KHR_materials_volume",
+        };
+        gltf["materials"][1]["extensions"] = {
+            { "KHR_materials_transmission", {
+                { "transmissionFactor", 1.0f },
+            } },
+            { "KHR_materials_volume", {
+                { "thicknessFactor", 0.75f },
+                { "attenuationDistance", 2.0f },
+                { "attenuationColor", { 0.8f, 0.9f, 1.0f } },
+            } },
+        };
+        const std::string encodedGltf = gltf.dump();
+        gltfBytes.assign(
+            reinterpret_cast<const std::byte*>(encodedGltf.data()),
+            reinterpret_cast<const std::byte*>(encodedGltf.data() +
+                encodedGltf.size()));
+        TemporaryDirectory temporary;
+        const std::filesystem::path modifiedPath =
+            temporary.path / "gltf_model_cooker_fixture.gltf";
+        {
+            std::ofstream output(modifiedPath, std::ios::binary);
+            output.write(encodedGltf.data(),
+                static_cast<std::streamsize>(encodedGltf.size()));
+        }
+
+        GltfModelImporter importer;
+        nlohmann::ordered_json settingsValues = prepared->settings.values;
+        settingsValues["transparency_execution_mode"] = "classified";
+        const NormalizedImportSettings settings =
+            importer.normalizeSettings(2, settingsValues, true);
+        CHECK(settings.valid());
+        ParsedSourceAsset parsed = importer.parse({
+            .relativePath = "gltf_model_cooker_fixture.gltf",
+            .resolvedPath = modifiedPath,
+            .bytes = gltfBytes,
+        }, settings);
+        CHECK(!hasCookErrors(parsed.diagnostics));
+
+        nlohmann::ordered_json intermediate =
+            nlohmann::ordered_json::parse(
+                reinterpret_cast<const char*>(parsed.documentBytes.data()),
+                reinterpret_cast<const char*>(parsed.documentBytes.data() +
+                    parsed.documentBytes.size()));
+        const std::array<std::array<float, 3>, 4> positions{
+            std::array<float, 3>{ 0.0f, 0.0f, 0.0f },
+            std::array<float, 3>{ 1.0f, 0.0f, 0.0f },
+            std::array<float, 3>{ 0.0f, 1.0f, 0.0f },
+            std::array<float, 3>{ 0.0f, 0.0f, 1.0f },
+        };
+        const std::array<uint32_t, 12> closed{
+            0, 2, 1,
+            0, 1, 3,
+            1, 2, 3,
+            0, 3, 2,
+        };
+        for (nlohmann::ordered_json& primitive :
+                intermediate.at("primitives")) {
+            if (primitive.at("material_index").get<int64_t>() != 1)
+                continue;
+            nlohmann::ordered_json vertices =
+                nlohmann::ordered_json::array();
+            for (const auto& position : positions) {
+                nlohmann::ordered_json vertex =
+                    primitive.at("vertices").front();
+                vertex["position"] = position;
+                vertices.push_back(std::move(vertex));
+            }
+            primitive["vertices"] = std::move(vertices);
+            primitive["indices"] = closed;
+        }
+        const auto cookIntermediate = [&](nlohmann::ordered_json document) {
+            const std::string encoded = document.dump();
+            ParsedSourceAsset source = parsed;
+            source.documentBytes.assign(
+                reinterpret_cast<const std::byte*>(encoded.data()),
+                reinterpret_cast<const std::byte*>(encoded.data() +
+                    encoded.size()));
+            return importer.cook(source, settings, prepared->target,
+                prepared->context);
+        };
+
+        const CookProduct valid = cookIntermediate(intermediate);
+        CHECK(!hasCookErrors(valid.diagnostics));
+        const CookSection* validManifestSection = nullptr;
+        for (const CookSection& section : valid.sections) {
+            if (section.id == kCookedModelManifestSection)
+                validManifestSection = &section;
+        }
+        CHECK(validManifestSection);
+        std::vector<CookDiagnostic> diagnostics;
+        const auto validManifest = readModelManifest(
+            validManifestSection->bytes, diagnostics);
+        CHECK(validManifest && diagnostics.empty());
+        uint32_t layeredCount = 0;
+        for (const CookedModelPrimitive& primitive :
+                validManifest->primitives) {
+            if (primitive.transparency.resolvedClass ==
+                    TransparencyClass::LayeredGlass) {
+                ++layeredCount;
+                CHECK((primitive.transparency.flags &
+                    CompiledTransparencyFallbackApplied) == 0);
+            }
+        }
+        CHECK(layeredCount == 2);
+        CHECK(std::ranges::count_if(valid.diagnostics,
+            [](const CookDiagnostic& diagnostic) {
+                return diagnostic.code ==
+                    "GLTF_TRANSPARENCY_CLOSED_TOPOLOGY";
+            }) == 2);
+
+        for (nlohmann::ordered_json& primitive :
+                intermediate.at("primitives")) {
+            if (primitive.at("material_index").get<int64_t>() == 1)
+                primitive["indices"] = std::vector<uint32_t>(
+                    closed.begin(), closed.begin() + 9);
+        }
+        const CookProduct invalid = cookIntermediate(intermediate);
+        CHECK(!hasCookErrors(invalid.diagnostics));
+        const CookSection* invalidManifestSection = nullptr;
+        for (const CookSection& section : invalid.sections) {
+            if (section.id == kCookedModelManifestSection)
+                invalidManifestSection = &section;
+        }
+        CHECK(invalidManifestSection);
+        diagnostics.clear();
+        const auto invalidManifest = readModelManifest(
+            invalidManifestSection->bytes, diagnostics);
+        CHECK(invalidManifest && diagnostics.empty());
+        uint32_t fallbackCount = 0;
+        for (const CookedModelPrimitive& primitive :
+                invalidManifest->primitives) {
+            if (primitive.transparency.requestedClass ==
+                    TransparencyClass::Auto &&
+                primitive.transparency.resolvedClass ==
+                    TransparencyClass::ThinGlass &&
+                (primitive.transparency.flags &
+                    CompiledTransparencyFallbackApplied) != 0) {
+                ++fallbackCount;
+            }
+        }
+        CHECK(fallbackCount == 2);
+        CHECK(std::ranges::count_if(invalid.diagnostics,
+            [](const CookDiagnostic& diagnostic) {
+                return diagnostic.code ==
+                    "GLTF_TRANSPARENCY_LAYERED_TOPOLOGY_INVALID";
+            }) == 2);
+        return true;
+    }
+
+    bool testDisconnectedTransparentPrimitiveCookSplit() {
+        auto prepared = preparedFixture();
+        CHECK(prepared && prepared->valid());
+        nlohmann::ordered_json parsed = nlohmann::ordered_json::parse(
+            reinterpret_cast<const char*>(prepared->source.documentBytes.data()),
+            reinterpret_cast<const char*>(prepared->source.documentBytes.data() +
+                prepared->source.documentBytes.size()));
+        const auto transparentMaterial = std::ranges::find_if(
+            parsed.at("materials"), [](const nlohmann::ordered_json& material) {
+                return material.at("coverage").get<uint32_t>() ==
+                    static_cast<uint32_t>(ModelCoverage::Transparent);
+            });
+        CHECK(transparentMaterial != parsed.at("materials").end());
+        const int64_t transparentMaterialIndex =
+            transparentMaterial->at("source_index").get<int64_t>();
+        auto transparentPrimitive = std::ranges::find_if(
+            parsed.at("primitives"), [&](const nlohmann::ordered_json& primitive) {
+                return primitive.at("material_index").get<int64_t>() ==
+                    transparentMaterialIndex;
+            });
+        CHECK(transparentPrimitive != parsed.at("primitives").end());
+        auto& vertices = transparentPrimitive->at("vertices");
+        auto& indices = transparentPrimitive->at("indices");
+        CHECK(indices.size() >= 3);
+        const uint32_t firstNewVertex = static_cast<uint32_t>(vertices.size());
+        for (size_t corner = 0; corner < 3; ++corner) {
+            nlohmann::ordered_json vertex = vertices.at(
+                indices.at(corner).get<uint32_t>());
+            vertex.at("position").at(0) =
+                vertex.at("position").at(0).get<float>() + 100.0f;
+            vertices.push_back(std::move(vertex));
+            indices.push_back(firstNewVertex + static_cast<uint32_t>(corner));
+        }
+        const uint32_t sourceTriangleSeed =
+            static_cast<uint32_t>(indices.size() / 3 - 1);
+        const uint32_t sourceNode =
+            transparentPrimitive->at("source_node").get<uint32_t>();
+        const uint32_t sourceMesh =
+            transparentPrimitive->at("source_mesh").get<uint32_t>();
+        const uint32_t sourcePrimitive =
+            transparentPrimitive->at("source_primitive").get<uint32_t>();
+        const std::string sourceKey = "nodes/" + std::to_string(sourceNode) +
+            "/meshes/" + std::to_string(sourceMesh) + "/primitives/" +
+            std::to_string(sourcePrimitive);
+        const auto metadata = std::ranges::find_if(prepared->context.subassets,
+            [&](const SubassetMetadata& subasset) {
+                return subasset.sourceKey == sourceKey;
+            });
+        CHECK(metadata != prepared->context.subassets.end());
+
+        const std::string encoded = parsed.dump();
+        prepared->source.documentBytes.assign(
+            reinterpret_cast<const std::byte*>(encoded.data()),
+            reinterpret_cast<const std::byte*>(encoded.data() + encoded.size()));
+        const CookProduct first = prepared->importer->cook(prepared->source,
+            prepared->settings, prepared->target, prepared->context);
+        const CookProduct second = prepared->importer->cook(prepared->source,
+            prepared->settings, prepared->target, prepared->context);
+        CHECK(!hasCookErrors(first.diagnostics));
+        CHECK(first.sections == second.sections);
+        const CookSection* manifestSection = nullptr;
+        for (const CookSection& section : first.sections) {
+            if (section.id == kCookedModelManifestSection)
+                manifestSection = &section;
+        }
+        CHECK(manifestSection);
+        std::vector<CookDiagnostic> diagnostics;
+        const auto manifest = readModelManifest(manifestSection->bytes,
+            diagnostics);
+        CHECK(manifest && diagnostics.empty());
+        std::vector<const CookedModelPrimitive*> connected;
+        for (const CookedModelPrimitive& primitive : manifest->primitives) {
+            if (primitive.sourcePrimitiveGuid == metadata->guid)
+                connected.push_back(&primitive);
+        }
+        CHECK(connected.size() == 2);
+        CHECK(connected[0]->primitiveGuid != connected[1]->primitiveGuid);
+        CHECK(connected[0]->sourceKey == sourceKey + "/components/0");
+        CHECK(connected[1]->sourceKey == sourceKey + "/components/" +
+            std::to_string(sourceTriangleSeed));
+        CHECK(connected[0]->firstIndex + connected[0]->indexCount ==
+            connected[1]->firstIndex);
+        CHECK(connected[0]->bounds.aabbMax[0] <
+            connected[1]->bounds.aabbMin[0]);
+        CHECK(std::ranges::any_of(first.diagnostics,
+            [](const CookDiagnostic& diagnostic) {
+                return diagnostic.code ==
+                    "GLTF_TRANSPARENT_COMPONENT_SPLIT";
+            }));
+        return true;
+    }
+
+    bool testTransparencyPolicySettingsCookAndRuntimeRoundTrip() {
+        GltfModelImporter importer;
+        const NormalizedImportSettings migrated =
+            importer.normalizeSettings(1, {
+                { "bake_node_transforms", true },
+                { "generate_missing_tangents", true },
+                { "preserve_rt_geometry", true },
+            }, true);
+        CHECK(migrated.valid());
+        CHECK(migrated.schemaVersion == 2);
+        CHECK(migrated.values.at("transparency_execution_mode") ==
+            "legacy_two_bucket");
+        CHECK(migrated.values.at("transparency_policies").empty());
+
+        const std::string materialGuid =
+            "019f9bce-85b8-7102-8405-060708090a0b";
+        const std::string primitiveGuid =
+            "019f9bce-85b8-7111-8607-08090a0b0c0d";
+        const NormalizedImportSettings authored =
+            importer.normalizeSettings(2, {
+                { "bake_node_transforms", true },
+                { "generate_missing_tangents", true },
+                { "preserve_rt_geometry", true },
+                { "transparency_execution_mode", "classified" },
+                { "transparency_policies", {
+                    { materialGuid, {
+                        { "schema_version", 1 },
+                        { "class", "weighted_oit" },
+                        { "quality", "hero4" },
+                        { "priority", 12 },
+                        { "thin_sheet_thickness_m", 0.25 },
+                    } },
+                    { primitiveGuid, {
+                        { "schema_version", 1 },
+                        { "class", "thin_glass" },
+                        { "quality", "cinematic8" },
+                        { "priority", 31 },
+                        { "thin_sheet_thickness_m", 0.5 },
+                    } },
+                } },
+            }, true);
+        CHECK(authored.valid());
+        CHECK(authored.schemaVersion == 2);
+        CHECK(authored.canonicalBytes != migrated.canonicalBytes);
+
+        const NormalizedImportSettings unknown =
+            importer.normalizeSettings(2, {
+                { "transparency_policies", {
+                    { materialGuid, {
+                        { "schema_version", 1 },
+                        { "class", "future_class" },
+                        { "quality", "future_quality" },
+                        { "thin_sheet_thickness_m", -1.0 },
+                        { "future_field", true },
+                    } },
+                } },
+            }, true);
+        CHECK(unknown.valid());
+        CHECK(unknown.values.at("transparency_policies")
+            .at(materialGuid).at("class") == "auto");
+        CHECK(unknown.values.at("transparency_policies")
+            .at(materialGuid).at("quality") == "ordinary2");
+        CHECK(unknown.values.at("transparency_policies")
+            .at(materialGuid).at("thin_sheet_thickness_m") == 0.0f);
+        CHECK(unknown.diagnostics.size() >= 4);
+
+        const NormalizedImportSettings malformed =
+            importer.normalizeSettings(2, {
+                { "transparency_policies", {
+                    { materialGuid, {
+                        { "schema_version", "one" },
+                        { "class", 7 },
+                        { "quality", false },
+                        { "priority", "high" },
+                        { "thin_sheet_thickness_m",
+                            nlohmann::json::array() },
+                    } },
+                } },
+            }, true);
+        CHECK(malformed.valid());
+        const nlohmann::json& safePolicy = malformed.values.at(
+            "transparency_policies").at(materialGuid);
+        CHECK(safePolicy.at("class") == "auto");
+        CHECK(safePolicy.at("quality") == "ordinary2");
+        CHECK(safePolicy.at("priority") == 0);
+        CHECK(safePolicy.at("thin_sheet_thickness_m") == 0.0f);
+        CHECK(!malformed.diagnostics.empty());
+
+        auto prepared = preparedFixture();
+        CHECK(prepared && prepared->valid());
+        const CookProduct product = prepared->importer->cook(
+            prepared->source, authored, prepared->target,
+            prepared->context);
+        CHECK(!hasCookErrors(product.diagnostics));
+        CHECK(std::ranges::none_of(product.diagnostics,
+            [](const CookDiagnostic& diagnostic) {
+                return diagnostic.code ==
+                    "GLTF_TRANSPARENCY_CLASSIFIED_DEFERRED";
+            }));
+        const CookSection* manifestSection = nullptr;
+        const CookSection* materialSection = nullptr;
+        for (const CookSection& section : product.sections) {
+            if (section.id == kCookedModelManifestSection) {
+                manifestSection = &section;
+            } else if (section.id == kCookedModelMaterialSection) {
+                materialSection = &section;
+            }
+        }
+        CHECK(manifestSection && materialSection);
+        std::vector<CookDiagnostic> diagnostics;
+        const auto manifest = readModelManifest(
+            manifestSection->bytes, diagnostics);
+        const auto materials = readModelMaterials(
+            materialSection->bytes, diagnostics);
+        CHECK(manifest && materials && diagnostics.empty());
+        CHECK(manifest->transparencyExecutionMode ==
+            TransparencyExecutionMode::Classified);
+        const AssetGuid materialId = AssetGuid::parse(materialGuid).value();
+        const auto material = std::ranges::find_if(*materials,
+            [&materialId](const CookedModelMaterial& candidate) {
+                return candidate.materialGuid == materialId;
+            });
+        CHECK(material != materials->end());
+        CHECK(material->compiled.transparency.requestedClass ==
+            TransparencyClass::WeightedOit);
+        CHECK(material->compiled.transparency.resolvedClass ==
+            TransparencyClass::WeightedOit);
+        CHECK(material->compiled.transparency.quality ==
+            TransparencyQuality::Hero4);
+        CHECK(material->compiled.transparency.priority == 12);
+        CHECK(material->compiled.transparency.thinSheetThicknessMeters ==
+            0.25f);
+
+        const AssetGuid primitiveId = AssetGuid::parse(primitiveGuid).value();
+        const auto primitive = std::ranges::find_if(manifest->primitives,
+            [&primitiveId](const CookedModelPrimitive& candidate) {
+                return candidate.sourcePrimitiveGuid == primitiveId;
+            });
+        CHECK(primitive != manifest->primitives.end());
+        CHECK(primitive->transparency.requestedClass ==
+            TransparencyClass::ThinGlass);
+        CHECK(primitive->transparency.resolvedClass ==
+            TransparencyClass::ThinGlass);
+        CHECK(primitive->transparency.quality ==
+            TransparencyQuality::Cinematic8);
+        CHECK(primitive->transparency.priority == 31);
+        CHECK(primitive->transparency.thinSheetThicknessMeters == 0.5f);
+        return true;
+    }
+
 } // namespace
 
 int main() {
@@ -924,6 +1517,8 @@ int main() {
     };
     const std::vector<TestCase> tests{
         { "deterministic artifact", testDeterministicCookAndArtifactRoundTrip },
+        { "policy recook reuses embedded texture products",
+            testPolicyRecookReusesEmbeddedTextureProducts },
         { "primitive material bounds RT parity",
             testPrimitiveMaterialCoverageBoundsAndRtParity },
         { "orientation repair settings and canonical winding",
@@ -939,6 +1534,16 @@ int main() {
         { "degenerate authored tangent regeneration",
             testDegenerateAuthoredTangentsAreRegenerated },
         { "warm receipt", testWarmReceiptAvoidsSourceParse },
+        { "triangle connected-component contract",
+            testTriangleConnectedComponentContract },
+        { "closed triangle topology contract",
+            testClosedTriangleTopologyContract },
+        { "LayeredGlass topology cook resolution",
+            testLayeredTopologyCookResolution },
+        { "disconnected transparent primitive cook split",
+            testDisconnectedTransparentPrimitiveCookSplit },
+        { "transparency policy settings/cook/runtime round trip",
+            testTransparencyPolicySettingsCookAndRuntimeRoundTrip },
     };
     for (const TestCase& test : tests) {
         if (!test.function()) {

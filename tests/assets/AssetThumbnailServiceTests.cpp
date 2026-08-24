@@ -213,6 +213,16 @@ namespace {
                 });
         CHECK(materialToTexture !=
             detail.associations.end());
+        const auto materialTransparency =
+            std::ranges::find_if(
+                detail.transparencyDetails,
+                [&](const AssetThumbnailTransparencyDetail& item) {
+                    return item.assetGuid == material.guid;
+                });
+        CHECK(materialTransparency !=
+            detail.transparencyDetails.end());
+        CHECK(materialTransparency->runtimePrimitiveCount > 0);
+        CHECK(materialTransparency->uniformPolicy);
         service.setDemand(visible);
         std::this_thread::sleep_for(
             std::chrono::milliseconds(10));
@@ -511,7 +521,9 @@ namespace {
                 ++artifacts;
             }
         }
-        CHECK(artifacts == 1);
+        // One parent model plus its independently reusable embedded texture.
+        // Thumbnail demand must reuse the parent instead of publishing another.
+        CHECK(artifacts == 2);
         return true;
     }
 

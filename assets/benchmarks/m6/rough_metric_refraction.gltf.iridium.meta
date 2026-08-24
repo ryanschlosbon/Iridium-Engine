@@ -1,0 +1,79 @@
+{
+  "schemaVersion": 1,
+  "assetGuid": "019ffd80-0000-7000-8000-000000000001",
+  "assetType": "iridium.model",
+  "importer": {
+    "id": "iridium.gltf-model",
+    "version": 6
+  },
+  "settings": {
+    "schemaVersion": 2,
+    "values": {
+      "bake_node_transforms": true,
+      "generate_missing_tangents": true,
+      "import_scale": 1.0,
+      "preserve_rt_geometry": true,
+      "transparency_execution_mode": "classified",
+      "transparency_policies": {
+        "019ffd80-0000-7004-8000-000000000005": {
+          "schema_version": 1,
+          "class": "thin_glass",
+          "quality": "ordinary2",
+          "priority": 0,
+          "thin_sheet_thickness_m": 0.1
+        }
+      }
+    }
+  },
+  "subassets": [
+    {
+      "guid": "019ffd80-0000-7001-8000-000000000002",
+      "assetType": "iridium.material",
+      "sourceKey": "materials/0",
+      "structuralFingerprint": "5188aaeea2cadfdfd6be5b8df3c4daf8937918e31a1fd45e6ebb2c533c4d818d"
+    },
+    {
+      "guid": "019ffd80-0000-7002-8000-000000000003",
+      "assetType": "iridium.material",
+      "sourceKey": "materials/1",
+      "structuralFingerprint": "ae3ca9fb83d6f58392f562a6c8387b781c8f3cbdfdde697dc38974f38b576caf"
+    },
+    {
+      "guid": "019ffd80-0000-7003-8000-000000000004",
+      "assetType": "iridium.material",
+      "sourceKey": "materials/2",
+      "structuralFingerprint": "a1237cf32b917ac16ab5f37e618f23e6c100b9082d68b53e7d1fee123ae28375"
+    },
+    {
+      "guid": "019ffd80-0000-7004-8000-000000000005",
+      "assetType": "iridium.material",
+      "sourceKey": "materials/3",
+      "structuralFingerprint": "373f858e83132d6eb4e6557de49798b8886bae9ae60d48f1d46e263d2f75cf1e"
+    },
+    {
+      "guid": "019ffd80-0000-7010-8000-000000000010",
+      "assetType": "iridium.model-primitive",
+      "sourceKey": "nodes/0/meshes/0/primitives/0",
+      "structuralFingerprint": "621f48f68c887e935f5b839470dd1b6b314fbc80c44bc075d905ff5832840489"
+    },
+    {
+      "guid": "019ffd80-0000-7011-8000-000000000011",
+      "assetType": "iridium.model-primitive",
+      "sourceKey": "nodes/1/meshes/1/primitives/0",
+      "structuralFingerprint": "25f5a7b5fb0384f3e23e933c4121308c55a2b38dd9e311b057c548fd9692521d"
+    },
+    {
+      "guid": "019ffd80-0000-7012-8000-000000000012",
+      "assetType": "iridium.model-primitive",
+      "sourceKey": "nodes/2/meshes/2/primitives/0",
+      "structuralFingerprint": "66355cfa5a4c2d1159d18b6540cde1f5d60d8c54461ab9e7618b2cb9023b09a3"
+    },
+    {
+      "guid": "019ffd80-0000-7013-8000-000000000013",
+      "assetType": "iridium.model-primitive",
+      "sourceKey": "nodes/3/meshes/3/primitives/0",
+      "structuralFingerprint": "ce67ee6d5f97e8a8f7865adb01befa18562ab0085d4b6b967399c5f19f8dbce8"
+    }
+  ],
+  "tags": ["m6.4-fixture", "tracked"]
+}

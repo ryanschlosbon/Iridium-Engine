@@ -2,6 +2,7 @@
 #include "renderer/vulkan/VulkanRenderGraphExecutor.h"
 #include "renderer/lighting/ClusteredLighting.h"
 #include "renderer/rhi/ShadowTypes.h"
+#include "renderer/transparency/TransparencyPyramidResidency.h"
 
 #include <cstdint>
 #include <array>
@@ -101,6 +102,7 @@ namespace {
             RenderGraph::Format::Bgra8Srgb,
             RenderGraph::Format::Rgb10A2Unorm,
             RenderGraph::Format::Rgba16Float,
+            RenderGraph::Format::R32Uint,
             RenderGraph::Format::R32Float,
             RenderGraph::Format::D32Float,
         };
@@ -114,8 +116,7 @@ namespace {
         const RenderGraph::CompiledGraph graph = buildVulkanProductionRenderGraph(
             { 3840, 2160 }, VK_FORMAT_B8G8R8A8_SRGB);
         CHECK(graph.passes().size() == 22);
-        CHECK(graph.resources().size() == 26);
-        CHECK(graph.physicalSlots().size() == 18);
+        CHECK(graph.resources().size() == 27);
         CHECK(!graph.transitions().empty());
         CHECK(graph.passes().front().name == "shadow.directional");
         CHECK(graph.passes().back().name == "ui-present");
@@ -126,8 +127,37 @@ namespace {
         CHECK(graph.passes()[8].name == "lighting.cluster.finalize");
         CHECK(graph.passes()[9].name == "lighting.cluster.readback");
         CHECK(graph.passes()[11].name == "forward-opaque");
-        CHECK(graph.passes()[12].name == "transparent.background.copy");
-        CHECK(graph.passes()[15].name == "transparent.foreground.copy");
+        CHECK(graph.passes()[12].name == "transparent.refraction-pyramids");
+        CHECK(graph.passes()[12].queue == RenderGraph::QueueClass::Compute);
+        CHECK(graph.passes()[13].name == "transparent.sorted.forward");
+        CHECK(graph.passes()[14].name == "transparent.background.depth");
+        CHECK(graph.passes()[16].name == "transparent.foreground.depth");
+        bool sortedReadsDepth = false;
+        bool sortedLoadsSceneColor = false;
+        const RenderGraph::CompiledPass& sortedPass = graph.passes()[13];
+        for (uint32_t usageIndex = sortedPass.firstUsage;
+            usageIndex < sortedPass.firstUsage + sortedPass.usageCount;
+            ++usageIndex) {
+            const RenderGraph::CompiledUsage& usage =
+                graph.usages()[usageIndex];
+            const std::string& resourceName =
+                graph.resources()[usage.logicalResourceIndex].name;
+            if (resourceName == "depth.opaque") {
+                CHECK(!usage.write);
+                CHECK(usage.access ==
+                    RenderGraph::Access::DepthAttachmentRead);
+                sortedReadsDepth = true;
+            }
+            if (resourceName == "scene.color") {
+                CHECK(usage.write);
+                CHECK(usage.access ==
+                    RenderGraph::Access::ColorAttachment);
+                CHECK(usage.loadOp == RenderGraph::LoadOp::Load);
+                sortedLoadsSceneColor = true;
+            }
+        }
+        CHECK(sortedReadsDepth);
+        CHECK(sortedLoadsSceneColor);
         for (size_t passIndex = 4; passIndex <= 8; ++passIndex) {
             CHECK(graph.passes()[passIndex].queue ==
                 RenderGraph::QueueClass::Compute);
@@ -211,21 +241,26 @@ namespace {
         CHECK(swapchain.physicalSlot == RenderGraph::InvalidIndex);
         CHECK(swapchain.exported);
         CHECK(swapchain.finalAccess == RenderGraph::Access::Present);
-        uint32_t opaqueCopySlot = RenderGraph::InvalidIndex;
-        bool reusesExpiredGBufferSlot = false;
-        for (const RenderGraph::CompiledResource& resource : graph.resources()) {
-            if (resource.name == "scene.opaque-copy") {
-                opaqueCopySlot = resource.physicalSlot;
-            }
-        }
-        for (const RenderGraph::CompiledResource& resource : graph.resources()) {
-            if (resource.name.starts_with("gbuffer.") &&
-                resource.physicalSlot == opaqueCopySlot) {
-                reusesExpiredGBufferSlot = true;
-            }
-        }
-        CHECK(opaqueCopySlot != RenderGraph::InvalidIndex);
-        CHECK(reusesExpiredGBufferSlot);
+        const auto colorPyramid = findResource(
+            "scene.refraction-color-pyramid");
+        const auto depthPyramid = findResource(
+            "depth.refraction-nearest-pyramid");
+        CHECK(colorPyramid != graph.resources().end());
+        CHECK(depthPyramid != graph.resources().end());
+        CHECK(colorPyramid->desc.image.format ==
+            RenderGraph::Format::Rgba16Float);
+        CHECK(depthPyramid->desc.image.format ==
+            RenderGraph::Format::R32Float);
+        CHECK(colorPyramid->desc.image.mipLevels == 12u);
+        CHECK(depthPyramid->desc.image.mipLevels == 12u);
+        CHECK((colorPyramid->usages & RenderGraph::usageBit(
+            RenderGraph::Access::StorageReadWrite)) != 0);
+        CHECK((colorPyramid->usages & RenderGraph::usageBit(
+            RenderGraph::Access::SampledRead)) != 0);
+        CHECK((depthPyramid->usages & RenderGraph::usageBit(
+            RenderGraph::Access::StorageReadWrite)) != 0);
+        CHECK((depthPyramid->usages & RenderGraph::usageBit(
+            RenderGraph::Access::SampledRead)) != 0);
         const auto output = std::find_if(graph.resources().begin(),
             graph.resources().end(), [](const RenderGraph::CompiledResource& resource) {
                 return resource.name == "output.display";
@@ -242,7 +277,7 @@ namespace {
             { 3840, 2160 }, VK_FORMAT_A2B10G10R10_UNORM_PACK32,
             VK_FORMAT_R16G16B16A16_SFLOAT, true);
         CHECK(graph.passes().size() == 23);
-        CHECK(graph.resources().size() == 27);
+        CHECK(graph.resources().size() == 28);
         CHECK(graph.passes()[21].name == "ui-compose");
         CHECK(graph.passes().back().name == "hdr10-encode-present");
         const auto composition = std::find_if(graph.resources().begin(),
@@ -281,8 +316,10 @@ namespace {
         for (const std::string_view name : {
                  "gbuffer.albedo", "gbuffer.normal", "gbuffer.emissive",
                  "gbuffer.f0-roughness", "gbuffer.material-flags",
-                 "depth.opaque", "scene.color", "scene.opaque-copy",
-                 "depth.glass", "output.display" }) {
+                 "depth.opaque", "scene.color",
+                 "scene.refraction-color-pyramid",
+                 "depth.refraction-nearest-pyramid", "depth.glass",
+                 "output.display" }) {
             const auto resource = findResource(sdr, name);
             CHECK(resource != sdr.resources().end());
             CHECK(hasExtent(*resource, sceneExtent));
@@ -304,6 +341,376 @@ namespace {
         CHECK(hasExtent(*hdrOutput, sceneExtent));
         CHECK(hasExtent(*hdrComposition, presentationExtent));
         CHECK(hasExtent(*hdrSwapchain, presentationExtent));
+        return true;
+    }
+
+    bool testConditionalTransparencyPyramidTopology() {
+        const RenderGraph::CompiledGraph enabled =
+            buildVulkanProductionRenderGraph({ 1920, 1080 },
+                VK_FORMAT_B8G8R8A8_SRGB);
+        const RenderGraph::CompiledGraph disabled =
+            buildVulkanProductionRenderGraph({ 1920, 1080 },
+                VK_FORMAT_B8G8R8A8_SRGB,
+                VK_FORMAT_B8G8R8A8_SRGB, false,
+                GBufferLayout::CanonicalReference, {}, 4096, 8192, false);
+        const auto hasResource = [](const RenderGraph::CompiledGraph& graph,
+                std::string_view name) {
+            return std::any_of(graph.resources().begin(), graph.resources().end(),
+                [name](const RenderGraph::CompiledResource& resource) {
+                    return resource.name == name;
+                });
+        };
+        const auto hasPass = [](const RenderGraph::CompiledGraph& graph,
+                std::string_view name) {
+            return std::any_of(graph.passes().begin(), graph.passes().end(),
+                [name](const RenderGraph::CompiledPass& pass) {
+                    return pass.name == name;
+                });
+        };
+        CHECK(hasPass(enabled, "transparent.refraction-pyramids"));
+        CHECK(hasResource(enabled, "scene.refraction-color-pyramid"));
+        CHECK(hasResource(enabled, "depth.refraction-nearest-pyramid"));
+        CHECK(!hasPass(disabled, "transparent.refraction-pyramids"));
+        CHECK(!hasResource(disabled, "scene.refraction-color-pyramid"));
+        CHECK(!hasResource(disabled, "depth.refraction-nearest-pyramid"));
+        CHECK(!hasPass(enabled, "transparent.background.copy"));
+        CHECK(!hasPass(enabled, "transparent.foreground.copy"));
+        CHECK(enabled.topologyHash() != disabled.topologyHash());
+        CHECK(enabled.resources().size() == disabled.resources().size() + 2u);
+        CHECK(enabled.passes().size() == disabled.passes().size() + 1u);
+        return true;
+    }
+
+    bool testConditionalOrdinary2Topology() {
+        constexpr VkExtent2D sceneExtent{ 1920, 1080 };
+        constexpr VkExtent2D atlasExtent{ 960, 528 };
+        const RenderGraph::CompiledGraph disabled =
+            buildVulkanProductionRenderGraph(sceneExtent,
+                VK_FORMAT_B8G8R8A8_SRGB);
+        const RenderGraph::CompiledGraph enabled =
+            buildVulkanProductionRenderGraph(sceneExtent,
+                VK_FORMAT_B8G8R8A8_SRGB,
+                VK_FORMAT_B8G8R8A8_SRGB, false,
+                GBufferLayout::CanonicalReference, {}, 4096, 8192, true,
+                VulkanOrdinary2GraphConfig{ atlasExtent });
+        const auto findResource = [](const RenderGraph::CompiledGraph& graph,
+                std::string_view name) {
+            return std::find_if(graph.resources().begin(), graph.resources().end(),
+                [name](const RenderGraph::CompiledResource& resource) {
+                    return resource.name == name;
+                });
+        };
+        const auto findPass = [](const RenderGraph::CompiledGraph& graph,
+                std::string_view name) {
+            return std::find_if(graph.passes().begin(), graph.passes().end(),
+                [name](const RenderGraph::CompiledPass& pass) {
+                    return pass.name == name;
+                });
+        };
+        for (const std::string_view name : {
+                 "depth.layered.entry", "identity.layered.entry",
+                 "depth.layered.exit", "identity.layered.exit" }) {
+            CHECK(findResource(disabled, name) == disabled.resources().end());
+            const auto resource = findResource(enabled, name);
+            CHECK(resource != enabled.resources().end());
+            CHECK(resource->desc.image.extent.width == atlasExtent.width);
+            CHECK(resource->desc.image.extent.height == atlasExtent.height);
+            CHECK((resource->usages & RenderGraph::usageBit(
+                RenderGraph::Access::SampledRead)) != 0u);
+            CHECK((resource->usages & RenderGraph::usageBit(
+                RenderGraph::Access::TransferSource)) != 0u);
+            if (name.starts_with("depth.")) {
+                CHECK(resource->desc.image.format ==
+                    RenderGraph::Format::D32Float);
+                CHECK((resource->usages & RenderGraph::usageBit(
+                    RenderGraph::Access::DepthAttachmentWrite)) != 0u);
+            }
+            else {
+                CHECK(resource->desc.image.format ==
+                    RenderGraph::Format::R32Uint);
+                CHECK((resource->usages & RenderGraph::usageBit(
+                    RenderGraph::Access::ColorAttachment)) != 0u);
+            }
+        }
+        const auto localColor = findResource(enabled,
+            "scene.layered.local-color");
+        CHECK(findResource(disabled, "scene.layered.local-color") ==
+            disabled.resources().end());
+        CHECK(localColor != enabled.resources().end());
+        CHECK(localColor->desc.image.extent.width == atlasExtent.width);
+        CHECK(localColor->desc.image.extent.height == atlasExtent.height);
+        CHECK(localColor->desc.image.format ==
+            RenderGraph::Format::Rgba16Float);
+        CHECK((localColor->usages & RenderGraph::usageBit(
+            RenderGraph::Access::ColorAttachment)) != 0u);
+        CHECK((localColor->usages & RenderGraph::usageBit(
+            RenderGraph::Access::SampledRead)) != 0u);
+        CHECK((localColor->usages & RenderGraph::usageBit(
+            RenderGraph::Access::TransferSource)) != 0u);
+        for (const std::string_view name : {
+                 "transparent.layered.entry.capture",
+                 "transparent.layered.exit.capture",
+                 "transparent.layered.validation-readback-hook",
+                 "transparent.layered.local-compose",
+                 "transparent.layered.compose-hook" }) {
+            CHECK(findPass(disabled, name) == disabled.passes().end());
+            CHECK(findPass(enabled, name) != enabled.passes().end());
+        }
+        CHECK(enabled.resources().size() == disabled.resources().size() + 5u);
+        CHECK(enabled.passes().size() == disabled.passes().size() + 5u);
+        CHECK(enabled.topologyHash() != disabled.topologyHash());
+
+        const auto rejects = [](VulkanOrdinary2GraphConfig config,
+                bool pyramids = true) {
+            try {
+                (void)buildVulkanProductionRenderGraph({ 1920, 1080 },
+                    VK_FORMAT_B8G8R8A8_SRGB,
+                    VK_FORMAT_B8G8R8A8_SRGB, false,
+                    GBufferLayout::CanonicalReference, {}, 4096, 8192,
+                    pyramids, config);
+                return false;
+            }
+            catch (const std::invalid_argument&) {
+                return true;
+            }
+        };
+        CHECK(rejects(VulkanOrdinary2GraphConfig{ { 960, 544 } }));
+        CHECK(rejects(VulkanOrdinary2GraphConfig{ { 959, 528 } }));
+        CHECK(rejects(VulkanOrdinary2GraphConfig{ { 960, 528 } }, false));
+        CHECK(rejects(VulkanOrdinary2GraphConfig{ { 960, 0 } }));
+        return true;
+    }
+
+    bool testConditionalDeepLayeredTopology() {
+        constexpr VkExtent2D sceneExtent{ 1920, 1080 };
+        constexpr VkExtent2D heroExtent{ 1920, 528 };
+        constexpr VkExtent2D cinematicExtent{ 1920, 1072 };
+        const RenderGraph::CompiledGraph disabled =
+            buildVulkanProductionRenderGraph(sceneExtent,
+                VK_FORMAT_B8G8R8A8_SRGB);
+        const RenderGraph::CompiledGraph hero =
+            buildVulkanProductionRenderGraph(sceneExtent,
+                VK_FORMAT_B8G8R8A8_SRGB,
+                VK_FORMAT_B8G8R8A8_SRGB, false,
+                GBufferLayout::CanonicalReference, {}, 4096, 8192, true,
+                VulkanLayeredGraphConfig{ {}, heroExtent, {} });
+        const RenderGraph::CompiledGraph cinematic =
+            buildVulkanProductionRenderGraph(sceneExtent,
+                VK_FORMAT_B8G8R8A8_SRGB,
+                VK_FORMAT_B8G8R8A8_SRGB, false,
+                GBufferLayout::CanonicalReference, {}, 4096, 8192, true,
+                VulkanLayeredGraphConfig{ {}, {}, cinematicExtent });
+        const RenderGraph::CompiledGraph combined =
+            buildVulkanProductionRenderGraph(sceneExtent,
+                VK_FORMAT_B8G8R8A8_SRGB,
+                VK_FORMAT_B8G8R8A8_SRGB, false,
+                GBufferLayout::CanonicalReference, {}, 4096, 8192, true,
+                VulkanLayeredGraphConfig{
+                    {}, heroExtent, cinematicExtent });
+
+        const auto findResource = [](const RenderGraph::CompiledGraph& graph,
+                std::string_view name) {
+            return std::find_if(graph.resources().begin(), graph.resources().end(),
+                [name](const RenderGraph::CompiledResource& resource) {
+                    return resource.name == name;
+                });
+        };
+        const auto hasPass = [](const RenderGraph::CompiledGraph& graph,
+                std::string_view name) {
+            return std::any_of(graph.passes().begin(), graph.passes().end(),
+                [name](const RenderGraph::CompiledPass& pass) {
+                    return pass.name == name;
+                });
+        };
+        const auto validateTier = [&](const RenderGraph::CompiledGraph& graph,
+                std::string_view tierName, VkExtent2D extent,
+                uint32_t interfaceCount) {
+            for (uint32_t interfaceIndex = 0u;
+                interfaceIndex < interfaceCount; ++interfaceIndex) {
+                const std::string suffix = std::string(tierName) +
+                    ".interface." + std::to_string(interfaceIndex);
+                const auto depth = findResource(graph,
+                    "depth.layered." + suffix);
+                const auto identity = findResource(graph,
+                    "identity.layered." + suffix);
+                CHECK(depth != graph.resources().end());
+                CHECK(identity != graph.resources().end());
+                CHECK(depth->desc.image.extent.width == extent.width);
+                CHECK(depth->desc.image.extent.height == extent.height);
+                CHECK(depth->desc.image.format ==
+                    RenderGraph::Format::D32Float);
+                CHECK(identity->desc.image.format ==
+                    RenderGraph::Format::R32Uint);
+                CHECK((depth->usages & RenderGraph::usageBit(
+                    RenderGraph::Access::DepthAttachmentWrite)) != 0u);
+                CHECK((depth->usages & RenderGraph::usageBit(
+                    RenderGraph::Access::SampledRead)) != 0u);
+                CHECK((depth->usages & RenderGraph::usageBit(
+                    RenderGraph::Access::TransferSource)) != 0u);
+                CHECK((identity->usages & RenderGraph::usageBit(
+                    RenderGraph::Access::ColorAttachment)) != 0u);
+                CHECK((identity->usages & RenderGraph::usageBit(
+                    RenderGraph::Access::SampledRead)) != 0u);
+                CHECK((identity->usages & RenderGraph::usageBit(
+                    RenderGraph::Access::TransferSource)) != 0u);
+                CHECK(hasPass(graph, "transparent.layered." + suffix +
+                    ".capture"));
+                const auto termination = findResource(graph,
+                    "termination.layered." + suffix);
+                const bool reduces = deepLayeredTerminationInterface(
+                    interfaceIndex, interfaceCount);
+                CHECK((termination != graph.resources().end()) == reduces);
+                CHECK(hasPass(graph, "transparent.layered." + suffix +
+                    ".terminate-tiles") == reduces);
+                if (reduces) {
+                    CHECK(termination->desc.image.extent.width ==
+                        (extent.width + 15u) / 16u);
+                    CHECK(termination->desc.image.extent.height ==
+                        (extent.height + 15u) / 16u);
+                    CHECK(termination->desc.image.format ==
+                        RenderGraph::Format::R32Uint);
+                    CHECK((termination->usages & RenderGraph::usageBit(
+                        RenderGraph::Access::StorageWrite)) != 0u);
+                    CHECK((termination->usages & RenderGraph::usageBit(
+                        RenderGraph::Access::SampledRead)) != 0u);
+                }
+            }
+            const std::string localName = "scene.layered." +
+                std::string(tierName) + ".local-color";
+            const auto local = findResource(graph, localName);
+            CHECK(local != graph.resources().end());
+            CHECK(local->desc.image.extent.width == extent.width);
+            CHECK(local->desc.image.extent.height == extent.height);
+            CHECK(local->desc.image.format ==
+                RenderGraph::Format::Rgba16Float);
+            CHECK((local->usages & RenderGraph::usageBit(
+                RenderGraph::Access::ColorAttachment)) != 0u);
+            CHECK((local->usages & RenderGraph::usageBit(
+                RenderGraph::Access::SampledRead)) != 0u);
+            CHECK((local->usages & RenderGraph::usageBit(
+                RenderGraph::Access::TransferSource)) != 0u);
+            CHECK(hasPass(graph, "transparent.layered." +
+                std::string(tierName) + ".local-compose"));
+            CHECK(hasPass(graph, "transparent.layered." +
+                std::string(tierName) + ".validation-readback-hook"));
+            return true;
+        };
+
+        CHECK(validateTier(hero, "hero4", heroExtent, 4u));
+        CHECK(validateTier(cinematic, "cinematic8", cinematicExtent, 8u));
+        CHECK(validateTier(combined, "hero4", heroExtent, 4u));
+        CHECK(validateTier(combined, "cinematic8", cinematicExtent, 8u));
+        CHECK(hasPass(hero,
+            "transparent.layered.hero4.compose-hook"));
+        CHECK(hasPass(cinematic,
+            "transparent.layered.cinematic8.compose-hook"));
+        CHECK(hasPass(combined,
+            "transparent.layered.deep.compose-hook"));
+        CHECK(!hasPass(combined,
+            "transparent.layered.hero4.compose-hook"));
+        CHECK(!hasPass(combined,
+            "transparent.layered.cinematic8.compose-hook"));
+        CHECK(findResource(disabled,
+            "depth.layered.hero4.interface.0") ==
+            disabled.resources().end());
+        CHECK(findResource(hero,
+            "depth.layered.cinematic8.interface.0") ==
+            hero.resources().end());
+        CHECK(findResource(hero,
+            "depth.layered.hero4.interface.4") == hero.resources().end());
+        CHECK(findResource(cinematic,
+            "depth.layered.cinematic8.interface.8") ==
+            cinematic.resources().end());
+        CHECK(hero.resources().size() == disabled.resources().size() + 10u);
+        CHECK(hero.passes().size() == disabled.passes().size() + 8u);
+        CHECK(cinematic.resources().size() ==
+            disabled.resources().size() + 20u);
+        CHECK(cinematic.passes().size() == disabled.passes().size() + 14u);
+        CHECK(combined.resources().size() ==
+            disabled.resources().size() + 30u);
+        CHECK(combined.passes().size() ==
+            disabled.passes().size() + 21u);
+        CHECK(hero.topologyHash() != disabled.topologyHash());
+        CHECK(cinematic.topologyHash() != hero.topologyHash());
+        CHECK(combined.topologyHash() != cinematic.topologyHash());
+
+        constexpr VulkanLayeredGraphConfig config{
+            { 960, 528 }, heroExtent, cinematicExtent };
+        CHECK(config.anyEnabled());
+        CHECK(config.enabled(TransparencyQuality::Ordinary2));
+        CHECK(config.enabled(TransparencyQuality::Hero4));
+        CHECK(config.enabled(TransparencyQuality::Cinematic8));
+        CHECK(config.atlasExtent(TransparencyQuality::Hero4).height == 528u);
+        CHECK(layeredTierLogicalStorageBytes({ 3840, 528 },
+            TransparencyQuality::Ordinary2) == 48'660'480u);
+        CHECK(layeredTierLogicalStorageBytes({ 3840, 1072 },
+            TransparencyQuality::Hero4) == 164'723'520u);
+        CHECK(layeredTierLogicalStorageBytes({ 3840, 2160 },
+            TransparencyQuality::Cinematic8) == 597'585'600u);
+        CHECK(layeredTierLogicalStorageBytes({},
+            TransparencyQuality::Hero4) == 0u);
+
+        const auto rejects = [](VulkanLayeredGraphConfig candidate,
+                bool pyramids = true) {
+            try {
+                (void)buildVulkanProductionRenderGraph({ 1920, 1080 },
+                    VK_FORMAT_B8G8R8A8_SRGB,
+                    VK_FORMAT_B8G8R8A8_SRGB, false,
+                    GBufferLayout::CanonicalReference, {}, 4096, 8192,
+                    pyramids, candidate);
+                return false;
+            }
+            catch (const std::invalid_argument&) {
+                return true;
+            }
+        };
+        CHECK(rejects(VulkanLayeredGraphConfig{
+            {}, { 1920, 544 }, {} }));
+        CHECK(rejects(VulkanLayeredGraphConfig{
+            {}, { 1919, 528 }, {} }));
+        CHECK(rejects(VulkanLayeredGraphConfig{
+            {}, { 1920, 0 }, {} }));
+        CHECK(rejects(VulkanLayeredGraphConfig{
+            {}, {}, { 1920, 1088 } }));
+        CHECK(rejects(VulkanLayeredGraphConfig{
+            {}, heroExtent, {} }, false));
+        return true;
+    }
+
+    bool testTransparencyPyramidResidencyPolicy() {
+        TransparencyPyramidResidency residency(3);
+        CHECK(!residency.enabled());
+        CHECK(!residency.changePending());
+
+        residency.observe(true);
+        CHECK(residency.changePending());
+        CHECK(residency.requestedEnabled());
+        CHECK(residency.requiresFallback(true));
+        residency.publishRequested();
+        CHECK(residency.enabled());
+        CHECK(!residency.requiresFallback(true));
+
+        residency.observe(false);
+        residency.observe(false);
+        CHECK(residency.enabled());
+        CHECK(!residency.changePending());
+        CHECK(residency.inactiveFrames() == 2u);
+        residency.observe(true);
+        CHECK(residency.inactiveFrames() == 0u);
+
+        residency.observe(false);
+        residency.observe(false);
+        residency.observe(false);
+        CHECK(residency.enabled());
+        CHECK(residency.changePending());
+        CHECK(!residency.requestedEnabled());
+        residency.publishRequested();
+        CHECK(!residency.enabled());
+
+        residency.observe(true);
+        residency.rejectRequested();
+        CHECK(!residency.enabled());
+        CHECK(!residency.changePending());
         return true;
     }
 
@@ -406,8 +813,8 @@ namespace {
         const VulkanGraphStats stats = executor.stats();
         CHECK(stats.enabled);
         CHECK(stats.passCount == 22);
-        CHECK(stats.logicalResourceCount == 26);
-        CHECK(stats.physicalSlotCount == 18);
+        CHECK(stats.logicalResourceCount == 27);
+        CHECK(stats.physicalSlotCount == 20);
         CHECK(stats.barrierCount == transitionCount);
         CHECK(stats.frameCount == 2);
         CHECK(stats.rebuildCount == 1);
@@ -440,10 +847,10 @@ namespace {
             "lighting.cluster.readback",
             "lighting",
             "forward-opaque",
-            "transparent.background.copy",
+            "transparent.refraction-pyramids",
+            "transparent.sorted.forward",
             "transparent.background.depth",
             "transparent.background.forward",
-            "transparent.foreground.copy",
             "transparent.foreground.depth",
             "transparent.foreground.forward",
             "bloom-hook",
@@ -521,6 +928,14 @@ int main() {
         { "HDR10 topology contract", testHdr10TopologyContract },
         { "scene and presentation extent separation",
             testSceneAndPresentationExtentSeparation },
+        { "conditional transparency pyramid topology",
+            testConditionalTransparencyPyramidTopology },
+        { "conditional Ordinary2 topology",
+            testConditionalOrdinary2Topology },
+        { "conditional deep layered topology",
+            testConditionalDeepLayeredTopology },
+        { "transparency pyramid residency policy",
+            testTransparencyPyramidResidencyPolicy },
         { "fence-scoped retirement and cleanup", testFenceScopedRetirementAndCleanup },
         { "allocation failure preserves active set", testAllocationFailurePreservesActiveSet },
         { "resize and bounds", testResizeAndBounds },
