@@ -939,9 +939,9 @@ fallback.
 
 ### M7R - Architecture consolidation
 
-Status: `Ready` (owner-approved 2026-10-02; lead prompt
-`docs/milestones/M7R-task-lead-prompt.md`; execution plan to be written by the lead
-as `docs/milestones/M7R-architecture-consolidation.md`)
+Status: `In Progress` (execution plan
+`docs/milestones/M7R-architecture-consolidation.md` approved 2026-10-02; R0 baseline
+freeze active; lead prompt `docs/milestones/M7R-task-lead-prompt.md`)
 
 Dependencies: accepted M0-M7.7 and the committed M7.8 checkpoint.
 
