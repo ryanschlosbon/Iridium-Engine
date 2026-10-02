@@ -86,11 +86,9 @@ if(TARGET iridium_qualification)
             SOURCES core/ApplicationConfigTests.cpp
             LIBS iridium_qualification)
 
-    # R2.4 CLI parity: the registry parser against a frozen copy of the 6b000ad
-    # parser (FrozenApplicationConfigParser.cpp, test-only). Remove at M7R R2.10.
+    # R2.4 CLI contract: per-flag table written from the 6b000ad parser.
     iridium_add_test(ApplicationCliParityTests
             SOURCES core/ApplicationCliParityTests.cpp
-                    core/FrozenApplicationConfigParser.cpp
             LIBS iridium_qualification)
 endif()
 

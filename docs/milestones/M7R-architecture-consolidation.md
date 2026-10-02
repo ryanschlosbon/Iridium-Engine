@@ -3,7 +3,7 @@
 ## Header
 
 - **Milestone:** M7R — Architecture consolidation
-- **Status:** In Progress — plan approved by owner 2026-10-02; R0 and R1 accepted 2026-10-02; R2 active
+- **Status:** In Progress — plan approved by owner 2026-10-02; R0, R1 and R2 accepted 2026-10-02; R3 active
 - **Lead:** M7R milestone-lead session (Claude Code); integration owner for all slices
 - **Branch / PR:** `m7r-consolidation` off `Render-Refactor-for-Modularity`; one PR
   for the milestone
@@ -253,7 +253,7 @@ Deviations from the plan text:
 - **Shader output:** stays in `assets/shaders/`; depfiles were added.
 - **Implicit layers:** `vulkan`-labelled tests run with `VK_LOADER_LAYERS_DISABLE=~implicit~`. The owner's ReShade implicit layer fails to load (error 1114) and was counted as a validation error.
 
-### R2 — Qualification harness and CLI (`In Progress`)
+### R2 — Qualification harness and CLI (`Accepted` 2026-10-02)
 
 The implementation design, with the file inventory, interfaces, test disposition and
 ordered sub-steps R2.0–R2.10, is in `docs/milestones/M7R-R2-qualification-harness-design.md`.
@@ -298,7 +298,18 @@ decision log):
 **Completion:** no qualification capability is lost, which is checked by rerunning
 the R0 tooling plus every validator flag once.
 
-### R3 — Graph-driven execution and backend decomposition (`Proposed`)
+**As implemented (R2, `aad3048`…`8e2fae7` + R2.10):**
+- **Harness:** `iridium_qualification` (`src/qualification`) holds the harness (`harness/`), the Vulkan extension, indirect/VSM oracle and readback analyzers (`vulkan/`), `QualificationOptions` (36 flags), `QualificationResults.h` and the neutral `IQualificationBackend`.
+- **App side:** the app talks to it only through `IFrameObserver` (`src/app/FrameObserver.h`). Routing that changes production behavior (direct reference routes, OIT order seed, resident LOD floor) reaches the app through `AppRunPolicy::routing`.
+- **Backend:** extensions attach through `RenderBackendCreateInfo`. `IRenderBackend` goes from 67 to 59 methods; `RenderBackendConfig` loses six oracle/validator fields.
+- **CLI:** the `CliOptionRegistry` keeps per-owner registration. `main.cpp` holds the only `#if IRIDIUM_QUALIFICATION`.
+- **Libraries:** build provenance lives in a generated `core/BuildInfo.cpp`. `renderer/transparency` is now its own `iridium_transparency` library.
+- **Shipping preset:** `x64-release-shipping` builds with `IRIDIUM_QUALIFICATION=OFF` and contains no qualification strings.
+- **Legacy and readbacks:** legacy transparency is removed (ADR-0012 amended). Cluster readback and the VSM depth transfer source are declared only for their consumers. The oracles are no longer implied by `--validation`.
+- **Tests:** source-text tests are replaced by behavioral tests (see `M7R-R2-assertion-disposition.md`).
+- **Sizes:** `Application.cpp` 6,703 → 4,544 lines; `VulkanVertexBackend.cpp` 13,286 → 11,554.
+
+### R3 — Graph-driven execution and backend decomposition (`In Progress`)
 
 The implementation design, with the current-state inventory, culler interface, executor/sync2/history model, owner
 migration order and ordered sub-steps R3.0–R3c.12, is in `docs/milestones/M7R-R3-graph-execution-design.md`.
@@ -638,6 +649,43 @@ Rerun (`timing/r1-rerun`, A,B,B,A; the machine was still in use):
 - GPU on F7 is +0.5%, inside the band.
 - Allocations 0 and drains 0 on both routes.
 - Timing pairs need an idle machine; later slices note the machine state.
+
+### R2 result (2026-10-02, through `8e2fae7` + frozen-parser retirement)
+
+**Frozen set:**
+- `captures/r2-10` and `captures/r2-10-validation` against `r0`: every capture is byte-identical or within its R0 envelope (F3/F7-lod one depth-tie pixel; F4-woit order).
+- Zero validation messages on all 24 captures.
+- F6-probecap is byte-identical.
+
+**Qualification sweep:**
+- `r2-10-sweep` passes 36/36 and shows 0 changed entries against `r2-9-sweep`.
+- Over R2, every difference from `r2-head-7b89df9` is explained:
+  - R2.5 oracle-off metadata;
+  - lane B's allocation removals (the occlusion oracle's 2 calls / 13,006 B per frame, and 46 shadow-oracle calls per frame).
+
+**Tests:**
+- Release and Debug pass 92/92, including the ABI, depfile, graph-contract, headless-pipeline and GPU-parity tests, the harness and observer tests, and the oracle process tests.
+- The shipping preset passes 86/86.
+
+**Shipping build (`x64-release-shipping`):**
+- A hidden 120-frame run with `--validation` exits 0 with 0 messages.
+- `--benchmark` is rejected as an unknown option.
+- `IRIDIUM_ORDINARY2_CAPTURE_VALIDATION`, `qualification-oracle`, `--benchmark` and `IRIDIUM_CAPTURE` are absent from the binary.
+- The exe is 5.91 MB, against 6.30 MB for the qualification build.
+
+**Timing pair** (`timing/r2`, A = R0 worktree, B = R2, A,B,B,A; the owner's League client was running, about 16% CPU)
+
+| Route | Non-wait CPU median A / B (mean of 2) | GPU median A / B |
+|---|---|---|
+| T-F1-all | 0.658 / 0.680 ms | 1.372 / 1.215 ms |
+| T-F7-stack | 6.407 / 5.689 ms | 2.293 / 2.239 ms |
+
+- The noise is large. A's first F1 run had a 24 ms p95 spike from outside load, and B's F7 runs were 5.03 and 6.35 ms.
+- No route regresses in both orders: F1 B run 3 equals A, and F7 B run 2 is better.
+- Allocations are 0 and drains 0 on every run.
+- R2 removes work (oracles, readbacks) from the frame and adds none, so a real regression is implausible.
+
+**R2.10 cleanup:** the frozen 6b000ad parser copy and the parity corpus are retired. The per-flag table keeps every flag's config, implication and exact-message contract.
 
 ## Completion report
 

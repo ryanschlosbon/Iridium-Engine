@@ -1,20 +1,18 @@
-// M7R R2.4 parity for the registry-driven IridiumEngine command line.
+// M7R R2.4 contract for the registry-driven IridiumEngine command line.
 //
-// 1. A per-flag table, written from the 6b000ad else-if parser (the spec): every
-//    flag is accepted with a valid value and changes exactly the expected fields
-//    (including implied flags); missing and invalid values fail with the exact
-//    original messages; each flag has the expected owner.
-// 2. A generated corpus compared against the frozen copy of the 6b000ad parser
-//    (FrozenApplicationConfigParser.cpp): identical configs or identical
-//    exception messages. The frozen copy and this corpus go away at R2.10.
-// 3. Usage text: every original help line survives (whitespace-normalised).
+// 1. A per-flag table, written from the original 6b000ad else-if parser (the
+//    spec): every flag is accepted with a valid value and changes exactly the
+//    expected fields (including implied flags); missing and invalid values fail
+//    with the exact original messages; each flag has the expected owner.
+// 2. Aliases and removed flags.
+// 3. Usage text groups and layout.
 // 4. Without the qualification registrations the qualification flags are
 //    unknown options.
 //
-// Since M7R R2.9 the engine's parse result is ApplicationConfig plus the
-// qualification library's QualificationOptions; the tests compare their union
-// (CombinedConfig) with the frozen parser's single struct.
-#include "FrozenApplicationConfigParser.h"
+// During R2 a frozen copy of the 6b000ad parser and a 15,821-vector parity
+// corpus proved the refactor exact; they were retired at M7R R2.10 (plan log).
+// Since R2.9 the parse result is ApplicationConfig plus the qualification
+// library's QualificationOptions (CombinedConfig).
 
 #include "app/ApplicationConfig.h"
 #include "app/cli/ApplicationCliOptions.h"
@@ -68,12 +66,11 @@ namespace {
         return static_cast<int>(value);
     }
 
-    // The registry parser writes two structs since M7R R2.9; the union has the
-    // frozen parser's single-struct shape (same field names, no overlap).
+    // The registry parser writes two structs since M7R R2.9 (no field overlap).
     struct CombinedConfig : ApplicationConfig, QualificationOptions {};
 
     // Every field, exactly (floats round-trip via to_chars). Instantiated for
-    // CombinedConfig and FrozenR2Reference::ApplicationConfig.
+    // CombinedConfig.
     template <typename Config>
     std::string describe(const Config& c) {
         std::ostringstream s;
@@ -228,9 +225,6 @@ namespace {
     }
 
     std::string newOutcome(const Args& args) { return outcome(&parseEngineConfig, args); }
-    std::string frozenOutcome(const Args& args) {
-        return outcome(&FrozenR2Reference::parseApplicationConfig, args);
-    }
     std::string error(std::string_view message) {
         return "ERR:invalid_argument:" + std::string(message);
     }
@@ -591,7 +585,6 @@ namespace {
             const Args args = acceptedArgs(row);
             const std::string actual = newOutcome(args);
             CHECK_MSG(actual == "OK:" + describe(expected), joined(args) << "\n    " << actual);
-            CHECK_MSG(frozenOutcome(args) == actual, joined(args));
             // A switch must not be a no-op on the default config (except the
             // validation switch that matches the build default).
             if (row.name != "--validation" && row.name != "--no-validation") {
@@ -602,7 +595,6 @@ namespace {
                 const Args missing{ row.name };
                 CHECK_MSG(newOutcome(missing) == error(row.missingMessage),
                     row.name << ": " << newOutcome(missing));
-                CHECK_MSG(frozenOutcome(missing) == error(row.missingMessage), row.name);
                 CHECK_MSG(option->missingValueMessage == row.missingMessage, row.name);
             }
             for (const InvalidValue& invalid : row.invalid) {
@@ -610,7 +602,6 @@ namespace {
                 bad.insert(bad.end(), row.context.begin(), row.context.end());
                 CHECK_MSG(newOutcome(bad) == error(invalid.message),
                     joined(bad) << ": " << newOutcome(bad));
-                CHECK_MSG(frozenOutcome(bad) == error(invalid.message), joined(bad));
             }
         }
         for (const Cli::CliOption& option : registry.options()) {
@@ -627,7 +618,7 @@ namespace {
     }
 
     bool testAliasesAndRemovedFlags() {
-        CHECK(newOutcome({ "-h" }) == frozenOutcome({ "-h" }));
+        CHECK(newOutcome({ "-h" }) == newOutcome({ "--help" }));
         CHECK(parseApplicationConfig(Args{ "-h" }).showHelp);
         for (const std::string_view removed : {
                  std::string_view("--developer-legacy-transparency"),
@@ -638,151 +629,8 @@ namespace {
             const Args args{ removed };
             CHECK_MSG(newOutcome(args) == error("Unknown option: " + std::string(removed)),
                 removed);
-            CHECK(frozenOutcome(args) == newOutcome(args));
         }
         CHECK(engineUsage().find("--developer-legacy-transparency") == std::string::npos);
-        return true;
-    }
-
-    // Cross-owner post-parse checks, one trigger fragment each, in every
-    // combination: identical first failure (or success) to the frozen parser.
-    bool testValidatorCombinations(size_t& corpus) {
-        const std::vector<Args> fragments{
-            { "--capture-frame", "0" },
-            { "--capture-directory", "out/cap" },
-            { "--require-capture-signal" },
-            { "--output-transport", "scrgb" },
-            { "--output-operator", "legacy" },
-            { "--paper-white-nits", "500", "--peak-nits", "400" },
-            { "--capture-point", "final-sdr" },
-            { "--wireframe" },
-            { "--debug-view", "depth" },
-            { "--validate-light-table-scale", "4" },
-            { "--cluster-stress-lights", "4" },
-            { "--output-transport", "sdr" },
-        };
-        std::set<std::string> distinctErrors;
-        for (uint32_t mask = 0; mask < (1u << fragments.size()); ++mask) {
-            Args args;
-            for (size_t bit = 0; bit < fragments.size(); ++bit) {
-                if (mask & (1u << bit)) {
-                    args.insert(args.end(), fragments[bit].begin(), fragments[bit].end());
-                }
-            }
-            const std::string actual = newOutcome(args);
-            CHECK_MSG(actual == frozenOutcome(args), joined(args) << "\n    new: " << actual
-                << "\n    old: " << frozenOutcome(args));
-            if (actual.starts_with("ERR:")) distinctErrors.insert(actual);
-            ++corpus;
-        }
-        // All seven post-parse messages are reached.
-        CHECK(distinctErrors.size() == 7);
-        return true;
-    }
-
-    bool testGeneratedCorpus(size_t& corpus) {
-        const std::vector<FlagCase> table = flagTable();
-        const std::vector<std::string_view> values{
-            "", "0", "1", "2", "3", "7", "15", "16", "24", "32", "512", "1024", "2048",
-            "4096", "8192", "65535", "65536", "65537", "4294967296",
-            "18446744073709551615", "18446744073709551616", "-0", "-1", "+1", " 1", "1 ",
-            "0x10", "1e3", "0.009", "0.01", "0.5", "0.51", "1.5", "5", "5.0000001", "8",
-            "64", "64.0001", "79.9", "80", "100", "203", "1000", "1000.5", "10000",
-            "10001", "100000", "100001", "-16", "16.0", "-16.5", "nan", "inf", "-inf",
-            "abc", "3840x2160", "3840X2160", "1x1", "0x1", "x", "2147483647x1",
-            "2147483648x1", "10x", "hero4", "cinematic8", "fixed", "pcss", "aces2",
-            "legacy", "identity", "auto", "sdr", "scrgb", "hdr10", "scene", "final-sdr",
-            "final-output", "reference", "quality", "compact", "r", "q", "c", "final",
-            "depth", "albedo", "shadows", "transparency-mip", "warm-steady-state",
-            "fresh-process-os-driver-cache-uncontrolled", "manually-cold-os-driver-cache",
-            kGuid, kNilGuid, "--help", "-h", "--unknown", "path/to/x"
-        };
-        for (const FlagCase& row : table) {
-            const Args single{ row.name };
-            CHECK_MSG(newOutcome(single) == frozenOutcome(single), row.name);
-            ++corpus;
-            const Args accepted = acceptedArgs(row);
-            Args twice = accepted;
-            twice.insert(twice.end(), accepted.begin(), accepted.end());
-            CHECK_MSG(newOutcome(twice) == frozenOutcome(twice), joined(twice));
-            ++corpus;
-            Args trailingUnknown = accepted;
-            trailingUnknown.push_back("--unknown");
-            CHECK_MSG(newOutcome(trailingUnknown) == frozenOutcome(trailingUnknown),
-                joined(trailingUnknown));
-            ++corpus;
-            if (row.missingMessage.empty()) {
-                const Args withStray{ row.name, "stray" };
-                CHECK_MSG(newOutcome(withStray) == frozenOutcome(withStray), joined(withStray));
-                ++corpus;
-                continue;
-            }
-            for (const std::string_view value : values) {
-                for (const bool context : { false, true }) {
-                    if (context && row.context.empty()) continue;
-                    Args args{ row.name, value };
-                    if (context) {
-                        args.insert(args.end(), row.context.begin(), row.context.end());
-                    }
-                    CHECK_MSG(newOutcome(args) == frozenOutcome(args), joined(args)
-                        << "\n    new: " << newOutcome(args)
-                        << "\n    old: " << frozenOutcome(args));
-                    ++corpus;
-                }
-            }
-            // Last value wins for a repeated option, including after a bad one.
-            for (const std::string_view value : { std::string_view("2"),
-                     std::string_view("final-output"), std::string_view("") }) {
-                Args args = accepted;
-                args.push_back(row.name);
-                args.push_back(value);
-                CHECK_MSG(newOutcome(args) == frozenOutcome(args), joined(args));
-                ++corpus;
-            }
-        }
-        // Every ordered pair of accepted flags (implications, overrides,
-        // cross-owner validators).
-        for (const FlagCase& first : table) {
-            for (const FlagCase& second : table) {
-                Args args = acceptedArgs(first);
-                const Args tail = acceptedArgs(second);
-                args.insert(args.end(), tail.begin(), tail.end());
-                CHECK_MSG(newOutcome(args) == frozenOutcome(args), joined(args)
-                    << "\n    new: " << newOutcome(args)
-                    << "\n    old: " << frozenOutcome(args));
-                ++corpus;
-            }
-        }
-        const std::vector<Args> edges{
-            {}, { "" }, { "-" }, { "--" }, { "--HELP" }, { "-H" }, { "--help=1" },
-            { "--validation=true" }, { " --validation" }, { "--unknown", "--frame-limit" },
-            { "--frame-limit", "x", "--unknown" }, { "--unknown", "--frame-limit", "x" },
-            { "--help", "--unknown" }, { "--frame-limit", "--help" },
-            { "--benchmark", "--help" }, { "--validation", "--no-validation" },
-            { "--no-validation", "--validation" }, { "--borderless-window", "--hidden-window" },
-            { "--hidden-window", "--borderless-window" },
-            { "--experimental-depth-occlusion-rejection", "--experimental-depth-occlusion-query" },
-            { "--profile-cpu-output", "a", "--profile-cpu-output", "b" },
-            { "--output-transport", "scrgb", "--output-transport", "sdr", "--output-operator",
-              "legacy" },
-            { "--capture-frame", "1", "--capture-directory", "d", "--capture-point",
-              "final-sdr", "--output-transport", "hdr10" },
-            { "--developer-legacy-transparency", "--frame-limit", "x" },
-        };
-        for (const Args& args : edges) {
-            CHECK_MSG(newOutcome(args) == frozenOutcome(args), joined(args)
-                << "\n    new: " << newOutcome(args) << "\n    old: " << frozenOutcome(args));
-            ++corpus;
-        }
-        return true;
-    }
-
-    bool testParityCorpus() {
-        size_t corpus = 0;
-        CHECK(testValidatorCombinations(corpus));
-        CHECK(testGeneratedCorpus(corpus));
-        std::cout << "  parity corpus: " << corpus << " argument vectors identical\n";
-        CHECK(corpus > 10'000);
         return true;
     }
 
@@ -813,15 +661,7 @@ namespace {
     bool testUsageParity() {
         const std::string usage = engineUsage();
         CHECK(usage.starts_with("Usage: IridiumEngine [options]\n"));
-        const std::vector<std::string> oldLines =
-            optionLines(FrozenR2Reference::applicationUsage());
-        const std::vector<std::string> newLines = optionLines(usage);
-        CHECK(oldLines.size() == 82);
-        CHECK(newLines.size() == 82);
-        const std::set<std::string> newSet(newLines.begin(), newLines.end());
-        for (const std::string& line : oldLines) {
-            CHECK_MSG(newSet.contains(line), line);
-        }
+        CHECK(optionLines(usage).size() == 82);
         // Groups appear in owner order: runtime, editor, renderer, qualification.
         const size_t runtime = usage.find("runtime options:");
         const size_t editor = usage.find("editor options:");
@@ -898,7 +738,6 @@ int main() {
     constexpr TestCase tests[] = {
         { "Per-flag table (82 flags)", testFlagTable },
         { "Aliases and removed flags", testAliasesAndRemovedFlags },
-        { "Parity corpus vs frozen 6b000ad parser", testParityCorpus },
         { "Usage parity", testUsageParity },
         { "Registry without qualification", testRegistryWithoutQualification },
     };
