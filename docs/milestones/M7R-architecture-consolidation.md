@@ -243,6 +243,9 @@ Exactly one slice is `In Progress`. Every slice ends with:
 
 ### R2 — Qualification harness and CLI (`Proposed`)
 
+The implementation design, with the file inventory, interfaces, test disposition and
+ordered sub-steps R2.0–R2.10, is in `docs/milestones/M7R-R2-qualification-harness-design.md`.
+
 **Harness library:**
 - `iridium-qualification` holds oracles, readbacks, capture validation, the `IRIDIUM_*` reporting, resize and lifecycle validators, benchmark scene construction and run-report export.
 - Application side: an `IFrameObserver` with startup, frame-begin, before-submit, frame-end and shutdown hooks.
@@ -447,6 +450,9 @@ updated.
 | 2026-10-02 | Allocation invariant: steady frames are already allocation-free on both timing routes at R0, so the invariant is "zero on the timing routes". The audit's nonzero counts came from older or dirty-tree runs. | R0 timing pair. |
 | 2026-10-02 | Captures at HEAD are not fully deterministic, and the frozen set is adjusted to match (details below). | Repeated R0 captures; `tools/m7r/Diff-Images.py`. |
 | 2026-10-02 | Historical M7 hashes are not comparable with R0 and stay as historical record. They used different cooked artifacts, resolutions or EV and older code; for example, `ordinary2` final-SDR was `25d690aa…` historically and is `5620cf98…` at R0. | R0 captures. |
+| 2026-10-02 | R1 layering, step 1 (`7781b03`). Moves to `src/core/types`: identity, handle and texture/capture value types, plus the reflection-probe authoring enums. `Application` moves to `src/app`, `TransformSystem` to `scene/systems`, `ReflectionProbeCapture` to `renderer/rhi`, and the factory implementation to the Vulkan backend. Rationale: these were the only edges creating module cycles. rhi↔transparency remain one library until R2 removes the capture-validation hook that couples them. | Include-graph scan; Release/Debug 78/78. |
+| 2026-10-02 | The M5 fixture-contract test no longer pins hashes of engine code (C++, CMake, shader source, SPIR-V); fixture and evidence content stays pinned. Rationale: code hashes break under any refactor, and provenance is preserved in the historical manifests. | Test failure caused by R1 moves. |
+| 2026-10-02 | SPIR-V output stays in `assets/shaders/` for R1, because the runtime loads that relative path. Moving it into the build tree is deferred to R4a or later, together with any runtime path change. | R1 scope. |
 | 2026-10-02 | Async compute and `/W4` are out of scope. The editor and importer files over 2,500 lines are deferred exceptions. | Scope control. |
 | 2026-10-02 | ADR-0016 will record the actual executor model, because ADR-0002's claims about queue, history and imported resources are unimplemented. | Graph audit. |
 | 2026-10-02 | Owner approved removing `--developer-legacy-transparency` in R2. It is a post-M6 diagnostic A/B, never an automatic fallback (ADR-0012). It costs 3 graph passes, extra frame targets and 11 backend references, and complicates the R3 transparency owner. Serialized `LegacyTwoBucket` stays readable. | ADR-0012:94–113 |
