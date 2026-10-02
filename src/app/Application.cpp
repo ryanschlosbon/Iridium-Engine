@@ -20,7 +20,6 @@
 #include <utility>
 #include <bit>
 
-#include "profiling/CpuProfileExport.h"
 #include "profiling/CpuAllocationProfile.h"
 #include "renderer/rhi/RenderBackendFactory.h"
 #include "scene/components/MeshComponent.h"
@@ -35,8 +34,6 @@
 #include "renderer/transparency/WeightedOit.h"
 #include "imgui.h"
 #include "utils/Sha256.h"
-#include "capture/CaptureArtifact.h"
-#include "platform/SystemProfile.h"
 #include "renderer/color/AcesOutputLut.h"
 #include "assets/AssetDiscovery.h"
 #include "assets/SqliteAssetCatalog.h"
@@ -75,26 +72,6 @@
 #define IRIDIUM_SOURCE_COMMIT "unknown"
 #endif
 
-#ifndef IRIDIUM_SOURCE_BRANCH
-#define IRIDIUM_SOURCE_BRANCH "unknown"
-#endif
-
-#ifndef IRIDIUM_SOURCE_DIRTY_AT_CONFIGURE
-#define IRIDIUM_SOURCE_DIRTY_AT_CONFIGURE 0
-#endif
-
-#ifndef IRIDIUM_COMPILER
-#define IRIDIUM_COMPILER "unavailable"
-#endif
-
-#ifndef IRIDIUM_SHADER_COMPILER
-#define IRIDIUM_SHADER_COMPILER "unavailable"
-#endif
-
-#ifndef IRIDIUM_VULKAN_SDK
-#define IRIDIUM_VULKAN_SDK "unavailable"
-#endif
-
 namespace Iridium {
 
     namespace {
@@ -112,91 +89,6 @@ namespace Iridium {
         // arbitrary oversized model/texture publications.
         constexpr uint64_t EditorEnvironmentPublicationLimitBytes =
             640ull * 1024ull * 1024ull;
-        constexpr std::string_view Aces2TransformId =
-            "urn:ampas:aces:transformId:v2.0:Output.Academy.Rec709-D65_100nit_in_Rec709-D65_sRGB-Piecewise.a2.v1";
-        constexpr std::string_view Aces2HdrTransformId =
-            "urn:ampas:aces:transformId:v2.0:Output.Academy.P3-D65_1000nit_in_Rec2100-D65_ST2084.a2.v1";
-
-        struct Ordinary2FallbackModelStats {
-            uint32_t transparentSubmeshes = 0;
-            uint32_t requestedLayeredCandidates = 0;
-            uint32_t fallbackThinGlassSubmeshes = 0;
-            uint32_t fallbackFlaggedSubmeshes = 0;
-            uint32_t topologyRequiredSubmeshes = 0;
-            uint32_t layeredGlassSubmeshes = 0;
-        };
-
-        Ordinary2FallbackModelStats ordinary2FallbackModelStats(
-            const ModelAsset& model) noexcept {
-            Ordinary2FallbackModelStats result{};
-            for (const SubMesh& subMesh : model.subMeshes) {
-                if (subMesh.materialIndex < 0 ||
-                    static_cast<size_t>(subMesh.materialIndex) >=
-                        model.materials.size() ||
-                    model.materials[static_cast<size_t>(
-                        subMesh.materialIndex)].renderQueue !=
-                        RenderQueue::Transparent) {
-                    continue;
-                }
-                ++result.transparentSubmeshes;
-                if (subMesh.transparency.requestedClass ==
-                        TransparencyClass::Auto ||
-                    subMesh.transparency.requestedClass ==
-                        TransparencyClass::LayeredGlass) {
-                    ++result.requestedLayeredCandidates;
-                }
-                if (subMesh.transparency.resolvedClass ==
-                        TransparencyClass::ThinGlass) {
-                    ++result.fallbackThinGlassSubmeshes;
-                }
-                if ((subMesh.transparency.flags &
-                        CompiledTransparencyFallbackApplied) != 0u) {
-                    ++result.fallbackFlaggedSubmeshes;
-                }
-                if ((subMesh.transparency.flags &
-                        CompiledTransparencyTopologyRequired) != 0u) {
-                    ++result.topologyRequiredSubmeshes;
-                }
-                if (subMesh.transparency.resolvedClass ==
-                        TransparencyClass::LayeredGlass) {
-                    ++result.layeredGlassSubmeshes;
-                }
-            }
-            return result;
-        }
-
-        std::string_view outputOperatorName(OutputTransformOperator value) {
-            switch (value) {
-            case OutputTransformOperator::Aces2: return "aces2";
-            case OutputTransformOperator::AcesFittedLegacy:
-                return "aces_fitted_legacy";
-            case OutputTransformOperator::IdentityClampDiagnostic:
-                return "identity_clamp_diagnostic";
-            }
-            return "unknown";
-        }
-
-        std::string_view gamutMappingName(OutputTransformOperator value) {
-            switch (value) {
-            case OutputTransformOperator::Aces2:
-                return "aces2_jmh_chroma_and_gamut_compression_lut128_tetrahedral";
-            case OutputTransformOperator::AcesFittedLegacy:
-                return "ap1_to_rec709_matrix_then_clip_negative";
-            case OutputTransformOperator::IdentityClampDiagnostic:
-                return "ap1_to_rec709_matrix_then_clamp_diagnostic";
-            }
-            return "unknown";
-        }
-
-        std::string_view transformId(OutputTransformOperator value,
-            Color::OutputTransport transport) {
-            return value == OutputTransformOperator::Aces2
-                ? (transport == Color::OutputTransport::SdrSrgb
-                    ? Aces2TransformId : Aces2HdrTransformId)
-                : (value == OutputTransformOperator::AcesFittedLegacy
-                    ? "legacy_fitted_compatibility" : "identity_clamp_diagnostic");
-        }
-
         struct ModelSourceReimportContext {
             std::filesystem::path assetRoot;
             std::filesystem::path sourceRelativePath;
@@ -311,9 +203,11 @@ namespace Iridium {
         }
     }
 
-    Application::Application(ApplicationConfig config)
+    Application::Application(ApplicationConfig config,
+        IFrameObserver* observer)
         : config_(std::move(config)),
           cpuProfiler_(config_.enableCpuProfiling),
+          observer_(observer),
           reflectionProbeCaptureScheduler_({
               .maximumRenderedTexels = config_.reflectionProbeSettings.
                   maximumRenderedTexelsPerFrame,
@@ -347,7 +241,7 @@ namespace Iridium {
           registry(sceneWorld_.registry()) {}
 
     void Application::run() {
-        std::optional<CaptureArtifactPaths> captureArtifact;
+        policy_ = observer_ ? observer_->runPolicy() : AppRunPolicy{};
         try {
             const auto startupStart = std::chrono::steady_clock::now();
             const auto windowStart = std::chrono::steady_clock::now();
@@ -360,945 +254,56 @@ namespace Iridium {
                 std::chrono::duration_cast<std::chrono::nanoseconds>(
                     std::chrono::steady_clock::now() - startupStart).count());
             mainLoop();
-            if (config_.captureFrameIndex) {
-                std::vector<FrameCapture> captures =
-                    renderBackend->collectFrameCaptures(true);
-                if (captures.size() != 1 ||
-                    captures.front().captureId != *config_.captureFrameIndex) {
-                    throw std::runtime_error(
-                        "The requested measured frame did not produce exactly one capture.");
-                }
-                completedCapture_ = std::move(captures.front());
-            }
-            if (config_.validateDepthPyramidCapture) {
-                const auto validations =
-                    renderBackend->collectDepthPyramidCaptureValidations(true);
-                if (validations.size() != 1u ||
-                    validations.front().validationId != 0u) {
-                    throw std::runtime_error(
-                        "The requested depth-pyramid validation did not produce exactly one GPU readback result.");
-                }
-                const DepthPyramidCaptureValidationResult& validation =
-                    validations.front();
-                std::cout
-                    << "IRIDIUM_DEPTH_PYRAMID_CAPTURE_VALIDATION {\"validation_id\":"
-                    << validation.validationId
-                    << ",\"extent\":[" << validation.extent.width << ','
-                    << validation.extent.height << ']'
-                    << ",\"mip_count\":" << validation.mipCount
-                    << ",\"source_texels\":" << validation.sourceTexelCount
-                    << ",\"pyramid_texels\":" << validation.pyramidTexelCount
-                    << ",\"invalid_source_texels\":"
-                    << validation.invalidSourceTexelCount
-                    << ",\"mismatch_texels\":" << validation.mismatchTexelCount
-                    << ",\"history_mismatch_texels\":"
-                    << validation.historyMismatchTexelCount
-                    << ",\"first_mismatch_mip\":" << validation.firstMismatchMip
-                    << ",\"first_mismatch_texel\":"
-                    << validation.firstMismatchTexel
-                    << ",\"maximum_absolute_error\":"
-                    << validation.maximumAbsoluteError
-                    << ",\"passed\":" << (validation.passed() ? "true" : "false")
-                    << "}\n" << std::flush;
-                if (!validation.passed()) {
-                    throw std::runtime_error(
-                        "Live scene-depth pyramid readback did not match the CPU oracle.");
-                }
-            }
-            if (config_.validateOrdinary2Capture ||
-                config_.validateOrdinary2Resize) {
-                const std::vector<Ordinary2CaptureValidationResult> validations =
-                    renderBackend->collectOrdinary2CaptureValidations(true);
-                if (validations.size() != 1u ||
-                    validations.front().validationId != 0u) {
-                    throw std::runtime_error(
-                        "The requested Ordinary2 validation did not produce exactly one GPU readback result.");
-                }
-                const Ordinary2CaptureValidationResult& validation =
-                    validations.front();
-                std::cout
-                    << "IRIDIUM_ORDINARY2_CAPTURE_VALIDATION {\"validation_id\":"
-                    << validation.validationId
-                    << ",\"atlas_extent\":[" << validation.atlasWidth << ','
-                    << validation.atlasHeight << ']'
-                    << ",\"expected_draws\":" << validation.expectedDrawCount
-                    << ",\"work_items\":" << validation.workItemCount
-                    << ",\"inspected_pixels\":" << validation.inspectedPixelCount
-                    << ",\"entry_pixels\":" << validation.entryPixelCount
-                    << ",\"exit_pixels\":" << validation.exitPixelCount
-                    << ",\"paired_pixels\":" << validation.pairedPixelCount
-                    << ",\"entry_only_pixels\":" << validation.entryOnlyPixelCount
-                    << ",\"invalid_work_index_pixels\":"
-                    << validation.invalidWorkIndexPixelCount
-                    << ",\"invalid_orientation_pixels\":"
-                    << validation.invalidOrientationPixelCount
-                    << ",\"unpaired_exit_pixels\":"
-                    << validation.unpairedExitPixelCount
-                    << ",\"work_mismatch_pixels\":"
-                    << validation.workMismatchPixelCount
-                    << ",\"invalid_depth_pixels\":"
-                    << validation.invalidDepthPixelCount
-                    << ",\"non_increasing_depth_pixels\":"
-                    << validation.nonIncreasingDepthPixelCount
-                    << ",\"minimum_paired_depth_delta\":"
-                    << validation.minimumPairedDepthDelta
-                    << ",\"maximum_paired_depth_delta\":"
-                    << validation.maximumPairedDepthDelta
-                    << ",\"local_color_pixels\":"
-                    << validation.localColorPixelCount
-                    << ",\"local_color_invalid_pixels\":"
-                    << validation.localColorInvalidPixelCount
-                    << ",\"minimum_local_alpha\":"
-                    << validation.minimumLocalAlpha
-                    << ",\"maximum_local_alpha\":"
-                    << validation.maximumLocalAlpha
-                    << ",\"passed\":"
-                    << (validation.passed() ? "true" : "false")
-                    << "}\n" << std::flush;
-                if (!validation.passed()) {
-                    throw std::runtime_error(
-                        "Ordinary2 GPU capture/local-color validation failed.");
-                }
-            }
-            if (config_.validateDeepLayeredCapture ||
-                config_.validateDeepLayeredLifecycle) {
-                const std::vector<DeepLayeredCaptureValidationResult>
-                    validations = renderBackend->
-                        collectDeepLayeredCaptureValidations(true);
-                if (validations.size() != 1u ||
-                    validations.front().validationId != 0u) {
-                    throw std::runtime_error(
-                        "The requested deep layered validation did not produce exactly one GPU readback result.");
-                }
-                const DeepLayeredCaptureValidationResult& validation =
-                    validations.front();
-                std::cout
-                    << "IRIDIUM_DEEP_LAYERED_CAPTURE_VALIDATION {\"validation_id\":"
-                    << validation.validationId
-                    << ",\"quality\":\""
-                    << transparencyQualityName(validation.quality) << '\"'
-                    << ",\"atlas_extent\":[" << validation.atlasWidth << ','
-                    << validation.atlasHeight << ']'
-                    << ",\"interface_count\":" << validation.interfaceCount
-                    << ",\"expected_draws\":" << validation.expectedDrawCount
-                    << ",\"scene_resolve_draws\":"
-                    << validation.sceneResolveDrawCount
-                    << ",\"compatibility_forward_draws\":"
-                    << validation.compatibilityForwardDrawCount
-                    << ",\"work_items\":" << validation.workItemCount
-                    << ",\"inspected_pixels\":" << validation.inspectedPixelCount
-                    << ",\"maximum_observed_interfaces\":"
-                    << validation.maximumObservedInterfaceCount
-                    << ",\"interface_pixels\":[";
-                for (uint32_t interfaceIndex = 0u;
-                    interfaceIndex < validation.interfaceCount;
-                    ++interfaceIndex) {
-                    if (interfaceIndex != 0u) std::cout << ',';
-                    std::cout << validation.interfacePixelCounts[
-                        interfaceIndex];
-                }
-                std::cout
-                    << "]"
-                    << ",\"paired_pixels\":" << validation.pairedPixelCount
-                    << ",\"nested_four_interface_pixels\":"
-                    << validation.nestedFourInterfacePixelCount
-                    << ",\"crossing_pair_pixels\":"
-                    << validation.crossingPairPixelCount
-                    << ",\"early_terminated_pixels\":"
-                    << validation.earlyTerminatedPixelCount
-                    << ",\"terminated_occupied_tiles\":"
-                    << validation.terminatedOccupiedTileCount
-                    << ",\"terminated_occupied_tiles_by_interface\":[";
-                for (uint32_t interfaceIndex = 0u;
-                    interfaceIndex < validation.interfaceCount;
-                    ++interfaceIndex) {
-                    if (interfaceIndex != 0u) std::cout << ',';
-                    std::cout << validation.terminatedOccupiedTileCounts[
-                        interfaceIndex];
-                }
-                std::cout
-                    << "]"
-                    << ",\"invalid_work_index_pixels\":"
-                    << validation.invalidWorkIndexPixelCount
-                    << ",\"invalid_orientation_pixels\":"
-                    << validation.invalidOrientationPixelCount
-                    << ",\"invalid_depth_pixels\":"
-                    << validation.invalidDepthPixelCount
-                    << ",\"non_increasing_depth_pixels\":"
-                    << validation.nonIncreasingDepthPixelCount
-                    << ",\"interface_gap_pixels\":"
-                    << validation.interfaceGapPixelCount
-                    << ",\"duplicate_entry_pixels\":"
-                    << validation.duplicateEntryPixelCount
-                    << ",\"unmatched_exit_pixels\":"
-                    << validation.unmatchedExitPixelCount
-                    << ",\"unclosed_entry_pixels\":"
-                    << validation.unclosedEntryPixelCount
-                    << ",\"saturated_residual_pixels\":"
-                    << validation.saturatedResidualPixelCount
-                    << ",\"minimum_depth_delta\":"
-                    << validation.minimumDepthDelta
-                    << ",\"maximum_depth_delta\":"
-                    << validation.maximumDepthDelta
-                    << ",\"local_color_pixels\":"
-                    << validation.localColorPixelCount
-                    << ",\"local_color_invalid_pixels\":"
-                    << validation.localColorInvalidPixelCount
-                    << ",\"minimum_local_alpha\":"
-                    << validation.minimumLocalAlpha
-                    << ",\"maximum_local_alpha\":"
-                    << validation.maximumLocalAlpha
-                    << ",\"passed\":"
-                    << (validation.passed() ? "true" : "false")
-                    << "}\n" << std::flush;
-                if (!validation.passed()) {
-                    throw std::runtime_error(
-                        "Deep layered GPU capture/local-color validation failed.");
-                }
-            }
-            renderRuntimeInfo_ = renderBackend->getRuntimeInfo();
-            if (config_.validateDeepLayeredLifecycle) {
-                const bool selectedTierResident =
-                    config_.deepLayeredCaptureQuality ==
-                            TransparencyQuality::Hero4
-                        ? renderRuntimeInfo_.hero4AtlasResident &&
-                            renderRuntimeInfo_.hero4AtlasWidth != 0u &&
-                            renderRuntimeInfo_.hero4AtlasHeight != 0u
-                        : renderRuntimeInfo_.cinematic8AtlasResident &&
-                            renderRuntimeInfo_.cinematic8AtlasWidth != 0u &&
-                            renderRuntimeInfo_.cinematic8AtlasHeight != 0u;
-                const bool passed =
-                    deepLayeredLifecycleValidation_.phase ==
-                        DeepLayeredLifecycleValidationState::Phase::Complete &&
-                    deepLayeredLifecycleValidation_.retirements == 2u &&
-                    deepLayeredLifecycleValidation_.reactivations == 2u &&
-                    deepLayeredLifecycleValidation_.visibilityChanges == 4u &&
-                    selectedTierResident &&
-                    renderRuntimeInfo_.refractionPyramidsResident;
-                std::cout
-                    << "IRIDIUM_DEEP_LAYERED_LIFECYCLE_VALIDATION {\"quality\":\""
-                    << transparencyQualityName(
-                        config_.deepLayeredCaptureQuality)
-                    << "\",\"retirements\":"
-                    << deepLayeredLifecycleValidation_.retirements
-                    << ",\"reactivations\":"
-                    << deepLayeredLifecycleValidation_.reactivations
-                    << ",\"visibility_changes\":"
-                    << deepLayeredLifecycleValidation_.visibilityChanges
-                    << ",\"completion_measured_frame\":"
-                    << deepLayeredLifecycleValidation_.completionMeasuredFrame
-                    << ",\"tier_resident\":"
-                    << (selectedTierResident ? "true" : "false")
-                    << ",\"refraction_pyramids_resident\":"
-                    << (renderRuntimeInfo_.refractionPyramidsResident
-                        ? "true" : "false")
-                    << ",\"passed\":" << (passed ? "true" : "false")
-                    << "}\n" << std::flush;
-                if (!passed) {
-                    throw std::runtime_error(
-                        "Deep layered tier lifecycle validation failed.");
-                }
-            }
-            if (config_.validateOrdinary2Resize) {
-                const uint64_t rebuildDelta =
-                    renderRuntimeInfo_.renderGraphRebuildCount >=
-                        ordinary2ResizeValidation_.initialRenderGraphRebuildCount
-                    ? renderRuntimeInfo_.renderGraphRebuildCount -
-                        ordinary2ResizeValidation_.initialRenderGraphRebuildCount
-                    : 0u;
-                const bool extentRestored =
-                    renderExtent_.width ==
-                        ordinary2ResizeValidation_.originalExtent.width &&
-                    renderExtent_.height ==
-                        ordinary2ResizeValidation_.originalExtent.height;
-                const bool passed =
-                    ordinary2ResizeValidation_.requests == 3u &&
-                    ordinary2ResizeValidation_.successes == 3u &&
-                    ordinary2ResizeValidation_.failures == 0u &&
-                    extentRestored && rebuildDelta >= 3u &&
-                    renderRuntimeInfo_.ordinary2AtlasResident &&
-                    renderRuntimeInfo_.ordinary2AtlasWidth > 0u &&
-                    renderRuntimeInfo_.ordinary2AtlasHeight > 0u &&
-                    renderRuntimeInfo_.refractionPyramidsResident;
-                std::cout
-                    << "IRIDIUM_ORDINARY2_RESIZE_VALIDATION {\"sequence\":[[960,540],[1600,900],[1280,720]]"
-                    << ",\"requests\":"
-                    << ordinary2ResizeValidation_.requests
-                    << ",\"successes\":"
-                    << ordinary2ResizeValidation_.successes
-                    << ",\"failures\":"
-                    << ordinary2ResizeValidation_.failures
-                    << ",\"render_graph_rebuild_delta\":" << rebuildDelta
-                    << ",\"final_render_extent\":[" << renderExtent_.width
-                    << ',' << renderExtent_.height << ']'
-                    << ",\"ordinary2_atlas_resident\":"
-                    << (renderRuntimeInfo_.ordinary2AtlasResident
-                        ? "true" : "false")
-                    << ",\"ordinary2_atlas_extent\":["
-                    << renderRuntimeInfo_.ordinary2AtlasWidth << ','
-                    << renderRuntimeInfo_.ordinary2AtlasHeight << ']'
-                    << ",\"refraction_pyramids_resident\":"
-                    << (renderRuntimeInfo_.refractionPyramidsResident
-                        ? "true" : "false")
-                    << ",\"passed\":" << (passed ? "true" : "false")
-                    << "}\n" << std::flush;
-                if (!passed) {
-                    throw std::runtime_error(
-                        "Populated Ordinary2 resize/lifecycle validation failed: " +
-                        ordinary2ResizeValidation_.lastDiagnostic);
-                }
-            }
-            if (config_.validateWeightedOitResize) {
-                const uint64_t rebuildDelta =
-                    renderRuntimeInfo_.renderGraphRebuildCount >=
-                        weightedOitResizeValidation_.initialRenderGraphRebuildCount
-                    ? renderRuntimeInfo_.renderGraphRebuildCount -
-                        weightedOitResizeValidation_.initialRenderGraphRebuildCount
-                    : 0u;
-                const bool extentRestored = renderExtent_.width ==
-                        weightedOitResizeValidation_.originalExtent.width &&
-                    renderExtent_.height ==
-                        weightedOitResizeValidation_.originalExtent.height;
-                const bool passed =
-                    weightedOitResizeValidation_.requests == 3u &&
-                    weightedOitResizeValidation_.successes == 3u &&
-                    weightedOitResizeValidation_.failures == 0u &&
-                    extentRestored && rebuildDelta >= 3u &&
-                    renderRuntimeInfo_.weightedOitResident &&
-                    !renderRuntimeInfo_.refractionPyramidsResident;
-                std::cout
-                    << "IRIDIUM_WEIGHTED_OIT_RESIZE_VALIDATION {\"sequence\":[[960,540],[1600,900],[1280,720]]"
-                    << ",\"requests\":" << weightedOitResizeValidation_.requests
-                    << ",\"successes\":" << weightedOitResizeValidation_.successes
-                    << ",\"failures\":" << weightedOitResizeValidation_.failures
-                    << ",\"render_graph_rebuild_delta\":" << rebuildDelta
-                    << ",\"final_render_extent\":[" << renderExtent_.width
-                    << ',' << renderExtent_.height << ']'
-                    << ",\"weighted_oit_resident\":"
-                    << (renderRuntimeInfo_.weightedOitResident
-                        ? "true" : "false")
-                    << ",\"refraction_pyramids_resident\":"
-                    << (renderRuntimeInfo_.refractionPyramidsResident
-                        ? "true" : "false")
-                    << ",\"passed\":" << (passed ? "true" : "false")
-                    << "}\n" << std::flush;
-                if (!passed) {
-                    throw std::runtime_error(
-                        "Populated WeightedOIT resize validation failed: " +
-                        weightedOitResizeValidation_.lastDiagnostic);
-                }
-            }
-            if (config_.validateDepthPyramidResize) {
-                renderRuntimeInfo_ = renderBackend->getRuntimeInfo();
-                const uint64_t rebuildDelta =
-                    renderRuntimeInfo_.renderGraphRebuildCount >=
-                        depthPyramidResizeValidation_.initialRenderGraphRebuildCount
-                    ? renderRuntimeInfo_.renderGraphRebuildCount -
-                        depthPyramidResizeValidation_.initialRenderGraphRebuildCount
-                    : 0u;
-                const bool extentRestored = renderExtent_.width ==
-                        depthPyramidResizeValidation_.originalExtent.width &&
-                    renderExtent_.height ==
-                        depthPyramidResizeValidation_.originalExtent.height;
-                const bool passed =
-                    depthPyramidResizeValidation_.requests == 3u &&
-                    depthPyramidResizeValidation_.successes == 3u &&
-                    depthPyramidResizeValidation_.failures == 0u &&
-                    extentRestored && rebuildDelta >= 3u;
-                std::cout
-                    << "IRIDIUM_DEPTH_PYRAMID_RESIZE_VALIDATION {\"sequence\":[[960,540],[1600,900],[1280,720]]"
-                    << ",\"requests\":"
-                    << depthPyramidResizeValidation_.requests
-                    << ",\"successes\":"
-                    << depthPyramidResizeValidation_.successes
-                    << ",\"failures\":"
-                    << depthPyramidResizeValidation_.failures
-                    << ",\"render_graph_rebuild_delta\":" << rebuildDelta
-                    << ",\"final_render_extent\":[" << renderExtent_.width
-                    << ',' << renderExtent_.height << ']'
-                    << ",\"passed\":" << (passed ? "true" : "false")
-                    << "}\n" << std::flush;
-                if (!passed) {
-                    throw std::runtime_error(
-                        "Depth-pyramid resize/lifecycle validation failed: " +
-                        depthPyramidResizeValidation_.lastDiagnostic);
-                }
-            }
-            if (config_.validateOrdinary2Fallback) {
-                const Ordinary2FallbackModelStats stats =
-                    ordinary2FallbackModelStats(*mainModel);
-                const bool passed = stats.transparentSubmeshes > 0u &&
-                    stats.requestedLayeredCandidates ==
-                        stats.transparentSubmeshes &&
-                    stats.fallbackThinGlassSubmeshes ==
-                        stats.transparentSubmeshes &&
-                    stats.fallbackFlaggedSubmeshes ==
-                        stats.transparentSubmeshes &&
-                    stats.topologyRequiredSubmeshes ==
-                        stats.transparentSubmeshes &&
-                    stats.layeredGlassSubmeshes == 0u &&
-                    !renderRuntimeInfo_.ordinary2AtlasResident &&
-                    renderRuntimeInfo_.ordinary2AtlasWidth == 0u &&
-                    renderRuntimeInfo_.ordinary2AtlasHeight == 0u &&
-                    renderRuntimeInfo_.refractionPyramidsResident;
-                std::cout
-                    << "IRIDIUM_ORDINARY2_FALLBACK_VALIDATION {\"transparent_submeshes\":"
-                    << stats.transparentSubmeshes
-                    << ",\"requested_layered_candidates\":"
-                    << stats.requestedLayeredCandidates
-                    << ",\"fallback_thin_glass_submeshes\":"
-                    << stats.fallbackThinGlassSubmeshes
-                    << ",\"fallback_flagged_submeshes\":"
-                    << stats.fallbackFlaggedSubmeshes
-                    << ",\"topology_required_submeshes\":"
-                    << stats.topologyRequiredSubmeshes
-                    << ",\"layered_glass_submeshes\":"
-                    << stats.layeredGlassSubmeshes
-                    << ",\"ordinary2_atlas_resident\":"
-                    << (renderRuntimeInfo_.ordinary2AtlasResident
-                        ? "true" : "false")
-                    << ",\"ordinary2_atlas_extent\":["
-                    << renderRuntimeInfo_.ordinary2AtlasWidth << ','
-                    << renderRuntimeInfo_.ordinary2AtlasHeight << ']'
-                    << ",\"refraction_pyramids_resident\":"
-                    << (renderRuntimeInfo_.refractionPyramidsResident
-                        ? "true" : "false")
-                    << ",\"passed\":" << (passed ? "true" : "false")
-                    << "}\n" << std::flush;
-                if (!passed) {
-                    throw std::runtime_error(
-                        "Invalid-topology Ordinary2 fallback validation failed.");
-                }
-            }
+            notifyShutdown(ShutdownPhase::RunComplete, true);
         }
         catch (...) {
-            cleanup();
+            cleanup(false);
             throw;
         }
-        cleanup();
+        cleanup(true);
+        notifyShutdown(ShutdownPhase::Finalize, true);
+    }
 
-        const SystemProfile systemProfile = querySystemProfile();
+    AppRunSnapshot Application::makeRunSnapshot() const {
+        return AppRunSnapshot{
+            .measurementStarted = measurementStarted_,
+            .measuredFrameCount = measuredFrameCount_,
+            .measurementWallNanoseconds = measurementWallNanoseconds_,
+            .renderExtent = renderExtent_,
+            .mainModel = mainModel.get(),
+            .environment = {
+                .cookedArtifact = activeCookedEnvironmentArtifact_,
+                .assetGuid = activeEnvironmentAssetGuid_,
+                .sourceGuid = activeEnvironmentSourceGuid_,
+                .cookKey = activeEnvironmentCookKey_,
+                .sourcePrimaries = activeEnvironmentSourcePrimaries_,
+                .radianceScale = activeEnvironmentRadianceScale_,
+            },
+            .directionalShadowSelection = activeDirectionalShadowSelection_,
+            .directionalShadowSampleableMask =
+                activeDirectionalShadowSampleableMask_,
+            .directionalShadowOwnerCount = activeDirectionalShadowOwnerCount_,
+            .startup = startupProfile_,
+            .debugView = editor.getDebugView(),
+        };
+    }
 
-        if (completedCapture_) {
-            CaptureArtifactMetadata captureMetadata{};
-            captureMetadata.requireSpatialSignal = config_.requireCaptureSignal;
-            captureMetadata.buildConfiguration = IRIDIUM_BUILD_CONFIGURATION;
-            captureMetadata.sourceCommit = IRIDIUM_SOURCE_COMMIT;
-            captureMetadata.sourceBranch = IRIDIUM_SOURCE_BRANCH;
-            captureMetadata.sourceDirtyAtConfigure =
-                IRIDIUM_SOURCE_DIRTY_AT_CONFIGURE != 0;
-            captureMetadata.validationEnabled = config_.enableValidation;
-            captureMetadata.cpuProfilingEnabled = cpuProfiler_.isEnabled();
-            captureMetadata.gpuProfilingRequested = config_.enableGpuProfiling;
-            captureMetadata.gpuProfilingAvailable = config_.enableGpuProfiling &&
-                renderCapabilities_.gpuTimestampProfiling;
-            captureMetadata.windowVisible = config_.windowVisible;
-            captureMetadata.windowDecorated = config_.windowDecorated;
-            captureMetadata.compiler = IRIDIUM_COMPILER;
-            captureMetadata.shaderCompiler = IRIDIUM_SHADER_COMPILER;
-            captureMetadata.operatingSystem = systemProfile.operatingSystem;
-            captureMetadata.cpuName = systemProfile.cpuName;
-            captureMetadata.systemMemoryBytes = systemProfile.physicalMemoryBytes;
-            captureMetadata.gpuName = renderRuntimeInfo_.gpuName;
-            captureMetadata.gpuUuid = renderRuntimeInfo_.gpuUuid;
-            captureMetadata.gpuDriver = renderRuntimeInfo_.driverName + " " +
-                renderRuntimeInfo_.driverVersion;
-            captureMetadata.vulkanDeviceApiVersion =
-                renderRuntimeInfo_.vulkanDeviceApiVersion;
-            captureMetadata.vulkanLoaderApiVersion =
-                renderRuntimeInfo_.vulkanLoaderApiVersion;
-            captureMetadata.vulkanSdkVersion = IRIDIUM_VULKAN_SDK;
-            captureMetadata.applicationEnabledLayers =
-                renderRuntimeInfo_.applicationEnabledLayers;
-            captureMetadata.activeTools = renderRuntimeInfo_.activeTools;
-            captureMetadata.swapchainFormat = renderRuntimeInfo_.swapchainFormat;
-            captureMetadata.swapchainColorSpace =
-                renderRuntimeInfo_.swapchainColorSpace;
-            captureMetadata.presentMode = renderRuntimeInfo_.presentMode;
-            captureMetadata.outputMode = renderRuntimeInfo_.outputMode;
-            captureMetadata.reconstructionMode =
-                renderRuntimeInfo_.reconstructionMode;
-            captureMetadata.qualitySettings =
-                "m5_directional_shadow_" + std::to_string(
-                    config_.shadowSettings.directionalResolution) +
-                "_d32_4c_" + std::to_string(
-                    config_.shadowSettings.maximumDirectionalLights) +
-                "l_5x5_tent";
-            captureMetadata.qualitySettings += config_.forceDirectGBufferReference
-                ? "_gbuffer_direct_unculled_reference" : "_gbuffer_automatic";
-            captureMetadata.qualitySettings +=
-                (config_.forceDirectGBufferReference ||
-                    config_.forceDirectShadowReference)
-                ? "_shadow_direct_reference" : "_shadow_automatic";
-            captureMetadata.qualitySettings +=
-                (config_.forceDirectGBufferReference ||
-                    config_.forceDirectProbeCaptureReference)
-                ? "_probe_capture_direct_reference"
-                : "_probe_capture_automatic";
-            captureMetadata.qualitySettings += "_shadow_indirect_oracle_" +
-                std::to_string(config_.shadowIndirectQualificationOracle);
-            captureMetadata.qualitySettings += "_shadow_lod_texels_" +
-                std::to_string(config_.experimentalShadowLodErrorTexels) +
-                "_max_" + std::to_string(config_.shadowLodMaximumLevel);
-            captureMetadata.qualitySettings += "_experimental_lod_px_" +
-                std::to_string(config_.experimentalGpuLodErrorPixels) + "_max_" +
-                std::to_string(config_.gpuLodMaximumLevel) + "_hysteresis_" +
-                std::to_string(config_.gpuLodHysteresisFraction) + "_oracle_" +
-                std::to_string(config_.gpuLodQualificationOracle) + "_resident_floor_" +
-                std::to_string(config_.gpuLodMinimumResidentLevel);
-            captureMetadata.qualitySettings += "_probe_lod_px_" +
-                std::to_string(config_.experimentalProbeLodErrorPixels) +
-                "_max_" + std::to_string(config_.probeLodMaximumLevel) +
-                "_oracle_" + std::to_string(config_.probeLodQualificationOracle);
-            captureMetadata.qualitySettings += "_depth_pyramid_" +
-                std::to_string(config_.experimentalDepthPyramid) +
-                "_occlusion_query_" +
-                std::to_string(config_.experimentalDepthOcclusionQuery) +
-                "_occlusion_rejection_" +
-                std::to_string(config_.experimentalDepthOcclusionRejection);
-            captureMetadata.qualitySettings += "_occlusion_oracle_" +
-                std::to_string(config_.depthOcclusionQualificationOracle);
-            captureMetadata.qualitySettings += "_fixture_lights_" +
-                std::to_string(activeBenchmark_
-                    ? activeBenchmark_->lights.size() : 0u);
-            captureMetadata.cacheState = config_.cacheState;
-            captureMetadata.outputOperator = outputOperatorName(config_.outputOperator);
-            captureMetadata.manualExposureEv = config_.manualExposureEv;
-            captureMetadata.gamutMapping = gamutMappingName(config_.outputOperator);
-            const Color::OutputTransport effectiveOutputTransport =
-                renderRuntimeInfo_.effectiveOutputTransportMode;
-            if (effectiveOutputTransport == Color::OutputTransport::SdrSrgb) {
-                captureMetadata.displayProfile = "windows_sdr_rec709_srgb";
-                captureMetadata.outputTransfer = "iec_61966_2_1_srgb";
-                captureMetadata.paperWhiteNits = 100.0;
-                captureMetadata.peakNits = 100.0;
-            }
-            else {
-                captureMetadata.displayProfile = effectiveOutputTransport ==
-                    Color::OutputTransport::ScRgb
-                    ? "windows_scrgb_extended_srgb_linear"
-                    : "windows_hdr10_rec2100_pq";
-                captureMetadata.outputTransfer = effectiveOutputTransport ==
-                    Color::OutputTransport::ScRgb ? "linear" : "st2084_pq";
-                captureMetadata.paperWhiteNits = config_.paperWhiteNits;
-                captureMetadata.peakNits = config_.peakNits;
-            }
-            captureMetadata.acesPackageVersion = "v2.0.0+2025.04.04";
-            captureMetadata.acesTransformId = transformId(config_.outputOperator,
-                effectiveOutputTransport);
-            captureMetadata.measuredFrameIndex = *config_.captureFrameIndex;
-            captureMetadata.applicationFrameIndex =
-                capturedApplicationFrameIndex_.value_or(0);
-            captureMetadata.benchmarkStateFrameIndex =
-                captureMetadata.applicationFrameIndex;
-            captureMetadata.warmupFrameCount = config_.warmupFrameCount;
-            captureMetadata.debugView = config_.forceWireframe
-                ? "wireframe"
-                : std::string(renderDebugViewName(config_.debugView));
-            captureMetadata.debugViewSemantics = config_.forceWireframe
-                ? "editor opaque geometry in wireframe with normal forward composition"
-                : std::string(renderDebugViewDescription(config_.debugView));
-            if (activeBenchmark_) {
-                captureMetadata.fixtureId = activeBenchmark_->id;
-                captureMetadata.fixtureRevision = activeBenchmark_->revision;
-                captureMetadata.cameraId = activeBenchmark_->camera.id;
-                captureMetadata.manifestPath = benchmarkManifestPath_;
-                captureMetadata.manifestSha256 = benchmarkManifestSha256_;
-                for (const BenchmarkContentFile& file :
-                    activeBenchmark_->contentFiles) {
-                    captureMetadata.contentHashes.emplace_back(
-                        file.relativePath.generic_string(), file.sha256);
-                }
-            }
-            captureMetadata.modelLoadMode =
-                config_.cookedModelArtifact.empty()
-                ? "source-import"
-                : "self-contained-cooked-artifact";
-            if (mainModel) {
-                captureMetadata.modelLocation =
-                    mainModel->filePath;
-                captureMetadata.modelAssetGuid =
-                    mainModel->assetGuid.isNil()
-                    ? "" : mainModel->assetGuid.toString();
-                captureMetadata.modelArtifactCookKey =
-                    mainModel->artifactCookKey;
-            }
-            captureMetadata.environmentLoadMode =
-                activeCookedEnvironmentArtifact_.empty()
-                // Metadata is emitted after cleanup retires GPU handles; use
-                // retained publication identity, not the cleared lighting handle.
-                ? (activeBenchmark_ && !activeEnvironmentAssetGuid_.isNil()
-                    ? "benchmark-procedural-constant" : "neutral-black-fallback")
-                : "self-contained-cooked-artifact";
-            captureMetadata.environmentLocation =
-                activeCookedEnvironmentArtifact_.generic_string();
-            captureMetadata.environmentAssetGuid =
-                activeEnvironmentAssetGuid_.isNil()
-                ? "" : activeEnvironmentAssetGuid_.toString();
-            captureMetadata.environmentArtifactCookKey =
-                activeEnvironmentCookKey_;
-            captureMetadata.environmentSourceTextureGuid =
-                activeEnvironmentSourceGuid_.isNil()
-                ? "" : activeEnvironmentSourceGuid_.toString();
-            captureMetadata.environmentSourcePrimaries =
-                activeEnvironmentSourcePrimaries_;
-            captureMetadata.environmentRadianceScale =
-                activeEnvironmentRadianceScale_;
-            captureMetadata.directionalShadowActive =
-                activeDirectionalShadowSelection_.has_value() &&
-                activeDirectionalShadowSampleableMask_ != 0;
-            captureMetadata.directionalShadowOwnerCount =
-                activeDirectionalShadowOwnerCount_;
-            if (activeDirectionalShadowSelection_) {
-                captureMetadata.directionalShadowOwner =
-                    activeDirectionalShadowSelection_->owner.toString();
-                captureMetadata.directionalShadowLightSlot =
-                    activeDirectionalShadowSelection_->lightSlot;
-                captureMetadata.omittedShadowDirectionalLights =
-                    activeDirectionalShadowSelection_->
-                        omittedShadowDirectionalLights;
-            }
-            captureMetadata.directionalShadowResolution =
-                config_.shadowSettings.directionalResolution;
-            captureMetadata.directionalShadowCascadeCount =
-                kDirectionalShadowCascadeCount;
-            captureMetadata.directionalShadowSampleableMask =
-                activeDirectionalShadowSampleableMask_;
-            captureMetadata.directionalShadowFormat = "D32_SFLOAT";
-            const uint32_t selectedShadowQuality =
-                activeDirectionalShadowSelection_
-                ? activeDirectionalShadowSelection_->quality
-                : static_cast<uint32_t>(ShadowQualityProfile::Ultra);
-            const ShadowFilterProfile captureShadowFilter =
-                effectiveShadowFilterProfile(config_.shadowSettings,
-                    selectedShadowQuality);
-            captureMetadata.directionalShadowFilter =
-                captureShadowFilter.contactHardening
-                ? "bounded_spatial_pcss" : "fixed_5x5_pcf";
-            captureMetadata.directionalShadowSourceAngularDiameterDegrees =
-                config_.shadowSettings.directionalSourceAngularDiameterDegrees;
-            captureMetadata.directionalShadowMaximumPenumbraTexels =
-                captureShadowFilter.maximumPenumbraTexels;
-            captureMetadata.directionalShadowReceiverDepthBiasTexels =
-                config_.shadowSettings.directionalReceiverDepthBiasTexels;
-            captureMetadata.directionalShadowReceiverPlaneClampTexels =
-                config_.shadowSettings.directionalReceiverPlaneClampTexels;
-            captureMetadata.directionalShadowNormalOffsetTexels =
-                config_.shadowSettings.directionalNormalOffsetTexels;
-            captureMetadata.directionalShadowBlockerSearchSamples =
-                captureShadowFilter.blockerSearchSamples;
-            captureMetadata.directionalShadowFilterSamples =
-                captureShadowFilter.filterSamples;
-            captureMetadata.unavailableFields = {};
-            captureArtifact = writeCaptureArtifact(
-                config_.captureDirectory, *completedCapture_, captureMetadata);
-            std::cout << "IRIDIUM_CAPTURE {\"image\":\""
-                << captureArtifact->image.generic_string() << "\",\"metadata\":\""
-                << captureArtifact->metadata.generic_string() << "\",\"sha256\":\""
-                << captureArtifact->imageSha256 << "\"}\n";
-        }
+    void Application::notifyStartup(StartupPhase phase,
+        AppStartupContext& context) {
+        if (observer_) observer_->onStartup(phase, context);
+    }
 
-        if (!config_.cpuProfileOutput.empty()) {
-            CpuProfileRunMetadata metadata{};
-            metadata.runId = "cpu-" + std::to_string(
-                std::chrono::duration_cast<std::chrono::milliseconds>(
-                    std::chrono::system_clock::now().time_since_epoch()).count());
-            metadata.buildConfiguration = IRIDIUM_BUILD_CONFIGURATION;
-            metadata.sourceCommit = IRIDIUM_SOURCE_COMMIT;
-            metadata.sourceBranch = IRIDIUM_SOURCE_BRANCH;
-            metadata.compiler = IRIDIUM_COMPILER;
-            metadata.shaderCompiler = IRIDIUM_SHADER_COMPILER;
-            metadata.vulkanSdkVersion = IRIDIUM_VULKAN_SDK;
-            metadata.operatingSystem = systemProfile.operatingSystem;
-            metadata.cpuName = systemProfile.cpuName;
-            metadata.systemMemoryBytes = systemProfile.physicalMemoryBytes;
-            metadata.gpuName = renderRuntimeInfo_.gpuName;
-            metadata.gpuUuid = renderRuntimeInfo_.gpuUuid;
-            metadata.gpuVendorId = renderRuntimeInfo_.gpuVendorId;
-            metadata.gpuDeviceId = renderRuntimeInfo_.gpuDeviceId;
-            metadata.gpuDriverName = renderRuntimeInfo_.driverName;
-            metadata.gpuDriverVersion = renderRuntimeInfo_.driverVersion;
-            metadata.gpuDriverInfo = renderRuntimeInfo_.driverInfo;
-            metadata.vulkanDeviceApiVersion =
-                renderRuntimeInfo_.vulkanDeviceApiVersion;
-            metadata.vulkanLoaderApiVersion =
-                renderRuntimeInfo_.vulkanLoaderApiVersion;
-            metadata.applicationEnabledLayers =
-                renderRuntimeInfo_.applicationEnabledLayers;
-            metadata.activeVulkanTools = renderRuntimeInfo_.activeTools;
-            metadata.sourceDirtyAtConfigure = IRIDIUM_SOURCE_DIRTY_AT_CONFIGURE != 0;
-            metadata.validationEnabled = config_.enableValidation;
-            metadata.windowVisible = config_.windowVisible;
-            metadata.windowDecorated = config_.windowDecorated;
-            metadata.requestedWindowWidth = config_.windowWidth;
-            metadata.requestedWindowHeight = config_.windowHeight;
-            metadata.renderWidth = renderExtent_.width;
-            metadata.renderHeight = renderExtent_.height;
-            metadata.warmupFrameCount = config_.warmupFrameCount;
-            metadata.frameLimit = config_.frameLimit;
-            metadata.measuredFrameCount = measuredFrameCount_;
-            metadata.measurementWallNanoseconds = measurementWallNanoseconds_;
-            metadata.cpuProfilingEnabled = cpuProfiler_.isEnabled();
-            metadata.gpuProfilingRequested = config_.enableGpuProfiling;
-            metadata.gpuProfilingAvailable = config_.enableGpuProfiling &&
-                renderCapabilities_.gpuTimestampProfiling;
-            metadata.gpuTimestampPeriodNanoseconds =
-                renderCapabilities_.gpuTimestampPeriodNanoseconds;
-            metadata.gpuTimestampValidBits =
-                renderCapabilities_.gpuTimestampValidBits;
-            metadata.engineAllocationTrackingAvailable =
-                renderCapabilities_.engineAllocationTracking;
-            metadata.driverMemoryBudgetAvailable =
-                renderCapabilities_.driverMemoryBudget;
-            metadata.cppAllocationTrackingAvailable = true;
-            metadata.transparentPipelineStatisticsRequested =
-                config_.enableTransparentPipelineStatistics;
-            metadata.transparentPipelineStatisticsAvailable =
-                config_.enableTransparentPipelineStatistics &&
-                renderCapabilities_.transparentPipelineStatistics;
-            metadata.swapchainFormat = renderRuntimeInfo_.swapchainFormat;
-            metadata.swapchainColorSpace = renderRuntimeInfo_.swapchainColorSpace;
-            metadata.presentMode = renderRuntimeInfo_.presentMode;
-            metadata.swapchainImageCount = renderRuntimeInfo_.swapchainImageCount;
-			metadata.supportedOutputTransports =
-				renderRuntimeInfo_.supportedOutputTransports;
-			metadata.requestedOutputTransport =
-				renderRuntimeInfo_.requestedOutputTransport;
-			metadata.effectiveOutputTransport =
-				renderRuntimeInfo_.effectiveOutputTransport;
-			metadata.outputTransportDiagnostic =
-				renderRuntimeInfo_.outputTransportDiagnostic;
-			metadata.swapchainColorspaceExtensionEnabled =
-				renderRuntimeInfo_.swapchainColorspaceExtensionEnabled;
-			metadata.hdrMetadataExtensionEnabled =
-				renderRuntimeInfo_.hdrMetadataExtensionEnabled;
-            const bool effectiveSdr = renderRuntimeInfo_.effectiveOutputTransport ==
-                "sdr_srgb";
-            const bool effectiveScRgb =
-                renderRuntimeInfo_.effectiveOutputTransport == "scrgb_linear";
-            metadata.hdrMetadataApplied =
-                renderRuntimeInfo_.hdrMetadataExtensionEnabled &&
-                renderRuntimeInfo_.effectiveOutputTransport == "hdr10_pq";
-            metadata.displayProfile = effectiveSdr
-                ? "windows_sdr_rec709_srgb"
-                : (effectiveScRgb ? "windows_scrgb_extended_srgb_linear"
-                    : "windows_hdr10_rec2100_pq");
-            metadata.outputTransfer = effectiveSdr ? "iec_61966_2_1_srgb"
-                : (effectiveScRgb ? "linear" : "st2084_pq");
-            metadata.paperWhiteNits = effectiveSdr ? 100.0 :
-                config_.paperWhiteNits;
-            metadata.peakNits = effectiveSdr ? 100.0 : config_.peakNits;
-            metadata.baseWidth = renderRuntimeInfo_.baseWidth;
-            metadata.baseHeight = renderRuntimeInfo_.baseHeight;
-            metadata.reconstructionMode = renderRuntimeInfo_.reconstructionMode;
-            metadata.outputMode = renderRuntimeInfo_.outputMode;
-            metadata.qualitySettings = "m5_cluster_" +
-                std::to_string(config_.clusterTileSize) + "x" +
-                std::to_string(config_.clusterTileSize) + "x" +
-                std::to_string(config_.clusterDepthSlices) +
-                "_scene_linear_fixed_quality";
-            metadata.qualitySettings += config_.forceDirectGBufferReference
-                ? "_gbuffer_direct_unculled_reference" : "_gbuffer_automatic";
-            metadata.qualitySettings +=
-                (config_.forceDirectGBufferReference ||
-                    config_.forceDirectShadowReference)
-                ? "_shadow_direct_reference" : "_shadow_automatic";
-            metadata.qualitySettings +=
-                (config_.forceDirectGBufferReference ||
-                    config_.forceDirectProbeCaptureReference)
-                ? "_probe_capture_direct_reference"
-                : "_probe_capture_automatic";
-            metadata.qualitySettings += "_shadow_indirect_oracle_" +
-                std::to_string(config_.shadowIndirectQualificationOracle);
-            metadata.qualitySettings += "_shadow_lod_texels_" +
-                std::to_string(config_.experimentalShadowLodErrorTexels) +
-                "_max_" + std::to_string(config_.shadowLodMaximumLevel);
-            metadata.qualitySettings += "_experimental_lod_px_" +
-                std::to_string(config_.experimentalGpuLodErrorPixels) + "_max_" +
-                std::to_string(config_.gpuLodMaximumLevel) + "_hysteresis_" +
-                std::to_string(config_.gpuLodHysteresisFraction) + "_oracle_" +
-                std::to_string(config_.gpuLodQualificationOracle) + "_resident_floor_" +
-                std::to_string(config_.gpuLodMinimumResidentLevel);
-            metadata.qualitySettings += "_probe_lod_px_" +
-                std::to_string(config_.experimentalProbeLodErrorPixels) +
-                "_max_" + std::to_string(config_.probeLodMaximumLevel) +
-                "_oracle_" + std::to_string(config_.probeLodQualificationOracle);
-            metadata.qualitySettings += "_depth_pyramid_" +
-                std::to_string(config_.experimentalDepthPyramid) +
-                "_occlusion_query_" +
-                std::to_string(config_.experimentalDepthOcclusionQuery) +
-                "_occlusion_rejection_" +
-                std::to_string(config_.experimentalDepthOcclusionRejection);
-            metadata.qualitySettings += "_occlusion_oracle_" +
-                std::to_string(config_.depthOcclusionQualificationOracle);
-            metadata.qualitySettings += "_fixture_lights_" +
-                std::to_string(activeBenchmark_
-                    ? activeBenchmark_->lights.size() : 0u);
-            metadata.renderMode = "graph_deferred_plus_forward_scene_linear_canonical_" +
-                std::string(gBufferLayoutName(config_.gBufferLayout)) +
-                "_" + renderRuntimeInfo_.textureBindingMode +
-                (config_.forceWireframe ? "_opaque_wireframe" : "");
-            metadata.cacheState = config_.cacheState;
-            metadata.outputOperator = std::string(outputOperatorName(
-                config_.outputOperator)) + "_final_output";
-            metadata.exposureState = "manual_ev_" +
-                std::to_string(config_.manualExposureEv) +
-                "_applied_in_final_output; cooked_ap1_environment_scale_in_manifest";
-            metadata.colorDomain = "scene_linear_acescg_ap1_pre_output";
-            metadata.renderGraphEnabled = renderRuntimeInfo_.renderGraphEnabled;
-            metadata.renderGraphTopologyHash =
-                renderRuntimeInfo_.renderGraphTopologyHash;
-            metadata.renderGraphPassCount = renderRuntimeInfo_.renderGraphPassCount;
-            metadata.renderGraphLogicalResourceCount =
-                renderRuntimeInfo_.renderGraphLogicalResourceCount;
-            metadata.renderGraphPhysicalSlotCount =
-                renderRuntimeInfo_.renderGraphPhysicalSlotCount;
-            metadata.renderGraphBarrierCount =
-                renderRuntimeInfo_.renderGraphBarrierCount;
-            metadata.renderGraphFrameCount = renderRuntimeInfo_.renderGraphFrameCount;
-            metadata.renderGraphRequestedBytes =
-                renderRuntimeInfo_.renderGraphRequestedBytes;
-            metadata.renderGraphCommittedBytes =
-                renderRuntimeInfo_.renderGraphCommittedBytes;
-            metadata.renderGraphRebuildCount =
-                renderRuntimeInfo_.renderGraphRebuildCount;
-            metadata.renderGraphCacheMissCount =
-                renderRuntimeInfo_.renderGraphCacheMissCount;
-            metadata.ordinary2AtlasResident =
-                renderRuntimeInfo_.ordinary2AtlasResident;
-            metadata.ordinary2AtlasWidth =
-                renderRuntimeInfo_.ordinary2AtlasWidth;
-            metadata.ordinary2AtlasHeight =
-                renderRuntimeInfo_.ordinary2AtlasHeight;
-            metadata.gpuLightRecordsAvailable =
-                renderCapabilities_.gpuLightRecords;
-            metadata.maxGpuLightRecords =
-                renderCapabilities_.maxGpuLightRecords;
-            metadata.multiDrawIndirectAvailable =
-                renderCapabilities_.multiDrawIndirect;
-            metadata.drawIndirectFirstInstanceAvailable =
-                renderCapabilities_.drawIndirectFirstInstance;
-            metadata.drawIndirectCountAvailable =
-                renderCapabilities_.drawIndirectCount;
-            metadata.maxDrawIndirectCount =
-                renderCapabilities_.maxDrawIndirectCount;
-            metadata.gpuLightCapacity = renderRuntimeInfo_.gpuLightCapacity;
-            metadata.gpuLightActiveCount =
-                renderRuntimeInfo_.gpuLightActiveCount;
-            metadata.gpuLightUploadBytes =
-                renderRuntimeInfo_.gpuLightUploadBytes;
-            metadata.gpuLightUploadRanges =
-                renderRuntimeInfo_.gpuLightUploadRanges;
-            metadata.startupTotalNanoseconds = startupProfile_.totalNanoseconds;
-            metadata.windowInitNanoseconds = startupProfile_.windowNanoseconds;
-            metadata.backendInitNanoseconds = startupProfile_.backendNanoseconds;
-            metadata.editorInitNanoseconds = startupProfile_.editorNanoseconds;
-            metadata.manifestVerificationNanoseconds =
-                startupProfile_.manifestVerificationNanoseconds;
-            // Source import is no longer a production startup path. Preserve the
-            // legacy field as zero for profile-schema compatibility and report the
-            // cooked artifact load separately.
-            metadata.sourceImportNanoseconds = 0;
-            metadata.modelLoadNanoseconds = startupProfile_.modelLoadNanoseconds;
-            metadata.environmentCreationNanoseconds =
-                startupProfile_.environmentCreationNanoseconds;
-            metadata.sceneConstructionNanoseconds =
-                startupProfile_.sceneConstructionNanoseconds;
-            metadata.frameTopologyPrewarmNanoseconds =
-                startupProfile_.frameTopologyPrewarmNanoseconds;
-            metadata.frameTopologyPrewarmRequested =
-                renderRuntimeInfo_.frameTopologyPrewarmRequested;
-            metadata.frameTopologyPrewarmChanged =
-                renderRuntimeInfo_.frameTopologyPrewarmChanged;
-            metadata.refractionPyramidsResident =
-                renderRuntimeInfo_.refractionPyramidsResident;
-            metadata.modelLoadMode =
-                config_.cookedModelArtifact.empty()
-                ? "source-import"
-                : "self-contained-cooked-artifact";
-            if (mainModel) {
-                metadata.modelLocation = mainModel->filePath;
-                metadata.modelAssetGuid =
-                    mainModel->assetGuid.isNil()
-                    ? "" : mainModel->assetGuid.toString();
-                metadata.modelArtifactCookKey =
-                    mainModel->artifactCookKey;
-            }
-            metadata.environmentLoadMode =
-                activeCookedEnvironmentArtifact_.empty()
-                ? (activeBenchmark_ && !activeEnvironmentAssetGuid_.isNil()
-                    ? "benchmark-procedural-constant" : "neutral-black-fallback")
-                : "self-contained-cooked-artifact";
-            metadata.environmentLocation =
-                activeCookedEnvironmentArtifact_.generic_string();
-            metadata.environmentAssetGuid =
-                activeEnvironmentAssetGuid_.isNil()
-                ? "" : activeEnvironmentAssetGuid_.toString();
-            metadata.environmentArtifactCookKey =
-                activeEnvironmentCookKey_;
-            metadata.environmentSourceTextureGuid =
-                activeEnvironmentSourceGuid_.isNil()
-                ? "" : activeEnvironmentSourceGuid_.toString();
-            metadata.environmentSourcePrimaries =
-                activeEnvironmentSourcePrimaries_;
-            metadata.environmentRadianceScale =
-                activeEnvironmentRadianceScale_;
-            metadata.uploadSubmittedBytes =
-                renderRuntimeInfo_.uploads.submittedBytes;
-            metadata.uploadSubmittedBatches =
-                renderRuntimeInfo_.uploads.submittedBatches;
-            metadata.uploadSubmitAndWaitNanoseconds =
-                renderRuntimeInfo_.uploads.submitAndWaitNanoseconds;
-            metadata.renderDebugView = config_.forceWireframe
-                ? "wireframe"
-                : std::string(renderDebugViewName(editor.getDebugView()));
-            metadata.renderDebugViewSemantics = config_.forceWireframe
-                ? "editor opaque geometry in wireframe with normal forward composition"
-                : std::string(renderDebugViewDescription(editor.getDebugView()));
-            if (activeBenchmark_) {
-                metadata.benchmarkFixtureId = activeBenchmark_->id;
-                metadata.benchmarkFixtureRevision = activeBenchmark_->revision;
-                metadata.benchmarkCameraId = activeBenchmark_->camera.id;
-                metadata.benchmarkManifestPath = benchmarkManifestPath_;
-                metadata.benchmarkManifestSha256 = benchmarkManifestSha256_;
-                for (const BenchmarkContentFile& file : activeBenchmark_->contentFiles) {
-                    metadata.benchmarkContentHashes.emplace_back(
-                        file.relativePath.generic_string(), file.sha256);
-                }
-            }
-            metadata.unavailableFields = {
-                "gpu_clocks_power_behavior"
-            };
-            if (captureArtifact) {
-                metadata.captureOutputs.emplace_back(
-                    captureArtifact->image.generic_string(),
-                    captureArtifact->imageSha256);
-            }
-            else {
-                metadata.unavailableFields.push_back("capture_outputs");
-            }
-            if (!activeBenchmark_) {
-                metadata.unavailableFields.push_back("benchmark_fixture");
-                metadata.unavailableFields.push_back("benchmark_camera");
-            }
-            if (!metadata.gpuProfilingAvailable) {
-                metadata.unavailableFields.push_back("gpu_ranges");
-            }
-            if (!metadata.engineAllocationTrackingAvailable) {
-                metadata.unavailableFields.push_back("allocation_totals");
-            }
-            if (!metadata.driverMemoryBudgetAvailable) {
-                metadata.unavailableFields.push_back("driver_heap");
-            }
-            if (metadata.transparentPipelineStatisticsRequested &&
-                !metadata.transparentPipelineStatisticsAvailable) {
-                metadata.unavailableFields.push_back(
-                    "transparent.fragment_invocations");
-                metadata.unavailableFields.push_back(
-                    "transparent.fullscreen_equivalents");
-            }
-            writeCpuProfileJsonLines(config_.cpuProfileOutput, cpuProfiler_, metadata);
-        }
+    void Application::notifyShutdown(ShutdownPhase phase, bool completed) {
+        if (!observer_) return;
+        const AppRunSnapshot snapshot = makeRunSnapshot();
+        AppShutdownContext context{
+            .config = config_,
+            .profiler = cpuProfiler_,
+            .backend = renderBackend.get(),
+            .completed = completed,
+            .run = snapshot,
+        };
+        observer_->onShutdown(phase, context);
     }
 
     void Application::initWindow() {
@@ -1323,6 +328,15 @@ namespace Iridium {
     }
 
     void Application::initRenderer() {
+        AppStartupContext startup{
+            .config = config_,
+            .profiler = cpuProfiler_,
+            .control = *this,
+            .scene = sceneWorld_,
+            .camera = camera_,
+            .timings = startupProfile_,
+        };
+        notifyStartup(StartupPhase::Configure, startup);
         // 1. Instantiate the RHI (The Strategy Pattern in action)
         const auto backendStart = std::chrono::steady_clock::now();
         renderBackend = createRenderBackend(RenderBackendApi::Vulkan);
@@ -1401,125 +415,30 @@ namespace Iridium {
         assetManager = std::make_unique<AssetManager>(renderBackend.get(),
             runtimeTransparencyExecutionMode,
             config_.gpuLodMinimumResidentLevel);
-        std::cout << "IRIDIUM_TRANSPARENCY_EXECUTION {\"mode\":\""
-            << transparencyExecutionModeName(
-                runtimeTransparencyExecutionMode)
-            << "\",\"developer_override\":false}\n";
-        if (config_.validateTextureTableScale != 0) {
-            constexpr std::array<std::byte, 4>
-                texturePixel{
-                    std::byte{ 0x3f },
-                    std::byte{ 0x7f },
-                    std::byte{ 0xbf },
-                    std::byte{ 0xff },
-                };
-            const TextureDesc probe{
-                .width = 1,
-                .height = 1,
-                .format = TextureFormat::RGBA8_UNorm,
-            };
-            textureScaleProbeTextures_.reserve(
-                config_.validateTextureTableScale);
-            for (uint32_t index = 0;
-                index <
-                    config_.validateTextureTableScale;
-                ++index) {
-                textureScaleProbeTextures_.push_back(
-                    renderBackend->allocateTexture(
-                        probe, texturePixel));
-            }
-            std::cout
-                << "IRIDIUM_TEXTURE_TABLE_SCALE "
-                << "{\"resident_views\":"
-                << textureScaleProbeTextures_.size()
-                << ",\"resident_samplers\":"
-                << textureScaleProbeTextures_.size()
-                << ",\"indexed\":true}\n";
-        }
-        if (config_.validateMaterialTableScale != 0) {
-            constexpr std::array<std::byte, 4>
-                whitePixel{
-                    std::byte{ 0xff },
-                    std::byte{ 0xff },
-                    std::byte{ 0xff },
-                    std::byte{ 0xff },
-                };
-            materialScaleProbeTexture_ =
-                renderBackend->allocateTexture(
-                    TextureDesc{
-                        .width = 1,
-                        .height = 1,
-                        .format =
-                            TextureFormat::RGBA8_UNorm,
-                    },
-                    whitePixel);
-            CanonicalMaterialAsset probe{};
-            probe.name =
-                "m3.7-material-scale-probe";
-            probe.packed.closureClass =
-                static_cast<uint32_t>(
-                    MaterialClosureClass::
-                        StandardDeferred);
-            probe.packed.baseColorFactor = {
-                1.0f, 1.0f, 1.0f, 1.0f };
-            probe.packed
-                .metallicRoughnessIorSpecular = {
-                    0.0f, 1.0f, 1.5f, 1.0f };
-            probe.packed
-                .specularColorNormalScale = {
-                    1.0f, 1.0f, 1.0f, 1.0f };
-            probe.packed.diffuseFactor = {
-                1.0f, 1.0f, 1.0f, 1.0f };
-            probe.packed
-                .specularGlossinessFactorGloss = {
-                    1.0f, 1.0f, 1.0f, 1.0f };
-            probe.packed
-                .emissiveFactorStrength = {
-                    0.0f, 0.0f, 0.0f, 1.0f };
-            probe.packed.surfaceParameters = {
-                1.0f, 0.5f, 0.0f, 0.0f };
-            probe.textures.fill(
-                materialScaleProbeTexture_);
-            probe.packed.textureIndices.fill(
-                materialScaleProbeTexture_
-                    .getIndex());
-            materialScaleProbeMaterials_.reserve(
-                config_.validateMaterialTableScale);
-            for (uint32_t index = 0;
-                index <
-                    config_
-                        .validateMaterialTableScale;
-                ++index) {
-                materialScaleProbeMaterials_
-                    .push_back(
-                        renderBackend->
-                            allocateCanonicalMaterial(
-                                probe)
-                            .material);
-            }
-            std::cout
-                << "IRIDIUM_MATERIAL_TABLE_SCALE "
-                << "{\"resident_records\":"
-                << materialScaleProbeMaterials_
-                       .size()
-                << ",\"indexed\":true}\n";
-        }
+        // Qualification probe allocations made here shift texture and material
+        // indices, so they precede every asset service.
+        startup.backend = renderBackend.get();
+        startup.assets = assetManager.get();
+        startup.capabilities = renderCapabilities_;
+        startup.transparencyExecutionMode = runtimeTransparencyExecutionMode;
+        startup.renderExtent = renderExtent_;
+        notifyStartup(StartupPhase::BackendReady, startup);
         assetRuntimeService_ =
             std::make_unique<AssetRuntimeService>(
                 AssetRuntimeServiceConfig{
                     .uploadBudgetBytes =
                         EditorRuntimeUploadBudgetBytes,
                     .startSourceWorkers =
-                        config_.benchmarkId.empty(),
+                        !policy_.deterministicContent,
                 });
         const std::filesystem::path assetRoot =
             std::filesystem::path(PROJECT_ROOT_DIR) / "assets";
         assetCatalog_ = createSqliteAssetCatalog(
-            config_.benchmarkId.empty()
+            !policy_.deterministicContent
                 ? std::filesystem::path(PROJECT_ROOT_DIR) / "out" /
                     "editor" / "asset-catalog.sqlite"
                 : std::filesystem::path(":memory:"));
-        if (config_.benchmarkId.empty()) {
+        if (!policy_.deterministicContent) {
             const AssetDiscoveryResult discovery =
                 discoverAssetRoots(std::array{
                     AssetRoot{ "project", assetRoot },
@@ -1635,7 +554,7 @@ namespace Iridium {
             }
         }
         AssetGuid startupModelGuid;
-        if (!config_.benchmarkId.empty()) {
+        if (policy_.deterministicContent) {
             ImGui::GetIO().IniFilename = nullptr;
         }
         startupProfile_.editorNanoseconds = static_cast<uint64_t>(
@@ -1645,112 +564,9 @@ namespace Iridium {
         replaceOutputTransformLut(
             renderRuntimeInfo_.effectiveOutputTransportMode);
 
-        if (!config_.benchmarkId.empty()) {
-            const auto manifestStart = std::chrono::steady_clock::now();
-            const std::filesystem::path manifestPath = config_.benchmarkManifest.empty()
-                ? std::filesystem::path(PROJECT_ROOT_DIR) /
-                    "assets" / "benchmarks" / "m0" / "manifest.v1.json"
-                : config_.benchmarkManifest;
-            const BenchmarkManifest manifest = loadBenchmarkManifest(manifestPath);
-            const std::filesystem::path projectRoot =
-                std::filesystem::weakly_canonical(PROJECT_ROOT_DIR);
-            benchmarkManifestPath_ = std::filesystem::relative(
-                manifest.sourcePath, projectRoot).generic_string();
-            benchmarkManifestSha256_ = sha256File(manifest.sourcePath);
-            activeBenchmark_ = findBenchmarkFixture(manifest, config_.benchmarkId);
-            startupProfile_.manifestVerificationNanoseconds = static_cast<uint64_t>(
-                std::chrono::duration_cast<std::chrono::nanoseconds>(
-                    std::chrono::steady_clock::now() - manifestStart).count());
-            const auto importStart = std::chrono::steady_clock::now();
-            if (config_.cookedModelArtifact.empty()) {
-                throw std::invalid_argument(
-                    "Benchmark runtime requires --cooked-model-artifact after the M3 production cutover.");
-            }
-            const std::filesystem::path artifactPath =
-                config_.cookedModelArtifact.is_absolute()
-                ? config_.cookedModelArtifact
-                : std::filesystem::path(PROJECT_ROOT_DIR) /
-                    config_.cookedModelArtifact;
-            activeCookedModelArtifact_ =
-                artifactPath.lexically_normal();
-            mainModel =
-                assetManager->
-                    loadSelfContainedModelFromCookedArtifactFile(
-                        artifactPath);
-            startupModelGuid = mainModel->assetGuid;
-            startupProfile_.modelLoadNanoseconds = static_cast<uint64_t>(
-                std::chrono::duration_cast<std::chrono::nanoseconds>(
-                    std::chrono::steady_clock::now() - importStart).count());
-            const auto environmentStart = std::chrono::steady_clock::now();
-            if (!config_.cookedEnvironmentArtifact.empty()) {
-                const std::filesystem::path environmentPath =
-                    config_.cookedEnvironmentArtifact.is_absolute()
-                    ? config_.cookedEnvironmentArtifact
-                    : std::filesystem::path(PROJECT_ROOT_DIR) /
-                        config_.cookedEnvironmentArtifact;
-                activeCookedEnvironmentArtifact_ =
-                    environmentPath.lexically_normal();
-                LoadedEnvironmentAsset environment = assetManager->
-                    loadEnvironmentFromCookedArtifactFile(environmentPath);
-                environmentLighting_ = environment.lighting;
-                activeEnvironmentAssetGuid_ = environment.assetGuid;
-                activeEnvironmentSourceGuid_ =
-                    environment.manifest.sourceTextureGuid;
-                activeEnvironmentCookKey_ = environment.cookKey;
-                activeEnvironmentSourcePrimaries_ =
-                    environment.manifest.sourcePrimaries;
-                activeEnvironmentRadianceScale_ =
-                    environment.manifest.sourceRadianceScale;
-                loadedEnvironments_.insert_or_assign(
-                    environment.assetGuid, std::move(environment));
-            }
-            else {
-                // Honor the frozen fixture's declared illumination. Leaving the
-                // backend's neutral black fallback here made no-light fixtures
-                // produce identical all-black captures despite drawing geometry.
-                const AssetGuid fixtureEnvironmentGuid = *AssetGuid::parse(
-                    "019fc681-2110-7000-8000-000000000001");
-                const glm::vec3 color = activeBenchmark_->constantEnvironmentLinear;
-                const CookProduct product = makeConstantEnvironmentProduct(
-                    fixtureEnvironmentGuid, color);
-                if (hasCookErrors(product.diagnostics))
-                    throw std::runtime_error("Constant benchmark environment is invalid.");
-                const std::string recipe = "iridium.benchmark.constant_environment.v1/" +
-                    std::to_string(std::bit_cast<uint32_t>(color.x)) + "/" +
-                    std::to_string(std::bit_cast<uint32_t>(color.y)) + "/" +
-                    std::to_string(std::bit_cast<uint32_t>(color.z));
-                LoadedEnvironmentAsset environment = assetManager->
-                    loadEnvironmentFromCookedArtifact({
-                        .assetGuid = fixtureEnvironmentGuid,
-                        .artifactType = product.artifactType,
-                        .artifactSchemaVersion = product.artifactSchemaVersion,
-                        .cookKey = sha256(std::as_bytes(std::span(recipe))),
-                        .sections = product.sections,
-                    });
-                environmentLighting_ = environment.lighting;
-                activeEnvironmentAssetGuid_ = environment.assetGuid;
-                activeEnvironmentSourceGuid_ = environment.manifest.sourceTextureGuid;
-                activeEnvironmentCookKey_ = environment.cookKey;
-                activeEnvironmentSourcePrimaries_ = environment.manifest.sourcePrimaries;
-                activeEnvironmentRadianceScale_ = environment.manifest.sourceRadianceScale;
-                loadedEnvironments_.insert_or_assign(
-                    environment.assetGuid, std::move(environment));
-            }
-            startupProfile_.environmentCreationNanoseconds = static_cast<uint64_t>(
-                std::chrono::duration_cast<std::chrono::nanoseconds>(
-                    std::chrono::steady_clock::now() - environmentStart).count());
-            cameraPos = activeBenchmark_->camera.position;
-            cameraFront = glm::normalize(activeBenchmark_->camera.target - cameraPos);
-            cameraUp = glm::normalize(activeBenchmark_->camera.up);
-            verticalFovDegrees_ = activeBenchmark_->camera.verticalFovDegrees;
-            cameraNearPlane_ = activeBenchmark_->camera.nearPlane;
-            cameraFarPlane_ = activeBenchmark_->camera.farPlane;
-            if (!config_.warmupFrameCountSpecified) {
-                config_.warmupFrameCount = activeBenchmark_->warmupFrames;
-            }
-            if (!config_.frameLimitSpecified) {
-                config_.frameLimit = activeBenchmark_->measuredFrames;
-            }
+        if (policy_.ownsStartupContent) {
+            notifyStartup(StartupPhase::ContentLoad, startup);
+            if (mainModel) startupModelGuid = mainModel->assetGuid;
         }
         else {
             // Interactive startup is asset-independent. An explicit cooked model
@@ -1763,19 +579,8 @@ namespace Iridium {
                 mainModel = builtInCube;
                 startupModelGuid = mainModel->assetGuid;
             } else {
-                const std::filesystem::path artifactPath =
-                    config_.cookedModelArtifact.is_absolute()
-                    ? config_.cookedModelArtifact
-                    : std::filesystem::path(PROJECT_ROOT_DIR) /
-                        config_.cookedModelArtifact;
-                activeCookedModelArtifact_ =
-                    artifactPath.lexically_normal();
-                mainModel =
-                    assetManager->
-                        loadSelfContainedModelFromCookedArtifactFile(
-                            artifactPath);
                 startupModelGuid =
-                    mainModel->assetGuid;
+                    loadCookedStartupModel()->assetGuid;
             }
             startupProfile_.modelLoadNanoseconds = static_cast<uint64_t>(
                 std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -1783,176 +588,16 @@ namespace Iridium {
             configureCookedModelHotReload();
             const auto environmentStart = std::chrono::steady_clock::now();
             if (!config_.cookedEnvironmentArtifact.empty()) {
-                const std::filesystem::path environmentPath =
-                    config_.cookedEnvironmentArtifact.is_absolute()
-                    ? config_.cookedEnvironmentArtifact
-                    : std::filesystem::path(PROJECT_ROOT_DIR) /
-                        config_.cookedEnvironmentArtifact;
-                activeCookedEnvironmentArtifact_ =
-                    environmentPath.lexically_normal();
-                LoadedEnvironmentAsset environment = assetManager->
-                    loadEnvironmentFromCookedArtifactFile(environmentPath);
-                environmentLighting_ = environment.lighting;
-                activeEnvironmentAssetGuid_ = environment.assetGuid;
-                activeEnvironmentSourceGuid_ =
-                    environment.manifest.sourceTextureGuid;
-                activeEnvironmentCookKey_ = environment.cookKey;
-                activeEnvironmentSourcePrimaries_ =
-                    environment.manifest.sourcePrimaries;
-                activeEnvironmentRadianceScale_ =
-                    environment.manifest.sourceRadianceScale;
-                loadedEnvironments_.insert_or_assign(
-                    environment.assetGuid, std::move(environment));
+                loadCookedStartupEnvironment();
             }
             startupProfile_.environmentCreationNanoseconds = static_cast<uint64_t>(
                 std::chrono::duration_cast<std::chrono::nanoseconds>(
                     std::chrono::steady_clock::now() - environmentStart).count());
             configureCookedEnvironmentHotReload();
         }
-        if (config_.captureFrameIndex) {
-            if (!activeBenchmark_ && !config_.editorAssetViewerGuid) {
-                throw std::invalid_argument(
-                    "Deterministic frame capture requires --benchmark or "
-                    "--open-asset-viewer.");
-            }
-            if (config_.frameLimit != 0 &&
-                *config_.captureFrameIndex >= config_.frameLimit) {
-                throw std::invalid_argument(
-                    "--capture-frame must be lower than the measured frame limit.");
-            }
-        }
-        if (config_.validateDepthPyramidCapture && config_.frameLimit == 0u) {
-            throw std::invalid_argument(
-                "--validate-depth-pyramid-capture requires a bounded measured frame limit.");
-        }
-        if (config_.validateDepthPyramidResize) {
-            if (config_.frameLimit < 10u) {
-                throw std::invalid_argument(
-                    "--validate-depth-pyramid-resize requires at least ten measured frames.");
-            }
-            if (!activeBenchmark_) {
-                throw std::invalid_argument(
-                    "--validate-depth-pyramid-resize requires a benchmark fixture.");
-            }
-            if (renderExtent_.width != 1280u || renderExtent_.height != 720u) {
-                throw std::invalid_argument(
-                    "--validate-depth-pyramid-resize requires the deterministic 1280x720 base extent.");
-            }
-            depthPyramidResizeValidation_.originalExtent = renderExtent_;
-        }
-        const uint32_t layeredValidationModeCount =
-            (config_.validateOrdinary2Capture ? 1u : 0u) +
-            (config_.validateOrdinary2Fallback ? 1u : 0u) +
-            (config_.validateOrdinary2Resize ? 1u : 0u) +
-            (config_.validateWeightedOitResize ? 1u : 0u) +
-            (config_.validateDeepLayeredCapture ? 1u : 0u) +
-            (config_.validateDeepLayeredLifecycle ? 1u : 0u);
-        if (layeredValidationModeCount > 1u) {
-            throw std::invalid_argument(
-                "Transparency capture, fallback, resize, and deep validations are mutually exclusive.");
-        }
-        if (config_.validateOrdinary2Capture) {
-            if (config_.frameLimit == 0u) {
-                throw std::invalid_argument(
-                    "--validate-ordinary2-capture requires a bounded measured frame limit.");
-            }
-            if (!mainModel ||
-                !modelRequiresOrdinary2LayeredInterfaces(*mainModel)) {
-                throw std::invalid_argument(
-                    "--validate-ordinary2-capture requires a startup model with Ordinary2 layered interfaces.");
-            }
-        }
-        if (config_.validateOrdinary2Fallback) {
-            if (config_.frameLimit == 0u) {
-                throw std::invalid_argument(
-                    "--validate-ordinary2-fallback requires a bounded measured frame limit.");
-            }
-            if (!mainModel) {
-                throw std::invalid_argument(
-                    "--validate-ordinary2-fallback requires a startup model.");
-            }
-            const Ordinary2FallbackModelStats stats =
-                ordinary2FallbackModelStats(*mainModel);
-            if (stats.transparentSubmeshes == 0u ||
-                stats.requestedLayeredCandidates !=
-                    stats.transparentSubmeshes ||
-                stats.fallbackThinGlassSubmeshes !=
-                    stats.transparentSubmeshes ||
-                stats.fallbackFlaggedSubmeshes !=
-                    stats.transparentSubmeshes ||
-                stats.topologyRequiredSubmeshes !=
-                    stats.transparentSubmeshes ||
-                stats.layeredGlassSubmeshes != 0u ||
-                modelRequiresOrdinary2LayeredInterfaces(*mainModel) ||
-                !modelRequiresRefractionPyramids(*mainModel)) {
-                throw std::invalid_argument(
-                    "--validate-ordinary2-fallback requires only topology-rejected LayeredGlass candidates resolved to ThinGlass.");
-            }
-        }
-        if (config_.validateOrdinary2Resize) {
-            if (config_.frameLimit < 6u) {
-                throw std::invalid_argument(
-                    "--validate-ordinary2-resize requires at least six measured frames.");
-            }
-            if (!activeBenchmark_ || !mainModel ||
-                !modelRequiresOrdinary2LayeredInterfaces(*mainModel)) {
-                throw std::invalid_argument(
-                    "--validate-ordinary2-resize requires a benchmark startup model with Ordinary2 layered interfaces.");
-            }
-            if (renderExtent_.width != 1280u ||
-                renderExtent_.height != 720u) {
-                throw std::invalid_argument(
-                    "--validate-ordinary2-resize requires the deterministic 1280x720 base extent.");
-            }
-            ordinary2ResizeValidation_.originalExtent = renderExtent_;
-        }
-        if (config_.validateWeightedOitResize) {
-            if (config_.frameLimit < 6u) {
-                throw std::invalid_argument(
-                    "--validate-weighted-oit-resize requires at least six measured frames.");
-            }
-            if (!activeBenchmark_ || !mainModel ||
-                !modelRequiresWeightedOit(*mainModel)) {
-                throw std::invalid_argument(
-                    "--validate-weighted-oit-resize requires a benchmark startup model with WeightedOIT work.");
-            }
-            if (renderExtent_.width != 1280u ||
-                renderExtent_.height != 720u) {
-                throw std::invalid_argument(
-                    "--validate-weighted-oit-resize requires the deterministic 1280x720 base extent.");
-            }
-            weightedOitResizeValidation_.originalExtent = renderExtent_;
-        }
-        if (config_.validateDeepLayeredCapture) {
-            if (config_.frameLimit == 0u) {
-                throw std::invalid_argument(
-                    "--validate-deep-layered-capture requires a bounded measured frame limit.");
-            }
-            const bool hasRequestedTier = mainModel &&
-                (config_.deepLayeredCaptureQuality ==
-                        TransparencyQuality::Hero4
-                    ? modelRequiresHero4LayeredInterfaces(*mainModel)
-                    : modelRequiresCinematic8LayeredInterfaces(*mainModel));
-            if (!activeBenchmark_ || !hasRequestedTier) {
-                throw std::invalid_argument(
-                    "--validate-deep-layered-capture requires a benchmark startup model with the selected deep layered quality.");
-            }
-        }
-        if (config_.validateDeepLayeredLifecycle) {
-            if (config_.frameLimit < 250u) {
-                throw std::invalid_argument(
-                    "--validate-deep-layered-lifecycle requires at least 250 measured frames.");
-            }
-            const bool hasRequestedTier = mainModel &&
-                (config_.deepLayeredCaptureQuality ==
-                        TransparencyQuality::Hero4
-                    ? modelRequiresHero4LayeredInterfaces(*mainModel)
-                    : modelRequiresCinematic8LayeredInterfaces(*mainModel));
-            if (!activeBenchmark_ || !hasRequestedTier) {
-                throw std::invalid_argument(
-                    "--validate-deep-layered-lifecycle requires a benchmark startup model with the selected deep layered quality.");
-            }
-        }
+        startup.mainModel = mainModel;
+        startup.renderExtent = renderExtent_;
+        notifyStartup(StartupPhase::ScenePrerequisites, startup);
         const FrameTopologyPreparation topologyPreparation =
             renderBackend->prepareFrameTopology({
                 .refractionPyramids = mainModel &&
@@ -1968,380 +613,41 @@ namespace Iridium {
             });
         startupProfile_.frameTopologyPrewarmNanoseconds =
             topologyPreparation.durationNanoseconds;
-        std::cout << "IRIDIUM_FRAME_TOPOLOGY_PREWARM {\"requested\":"
-            << (topologyPreparation.requested ? "true" : "false")
-            << ",\"changed\":"
-            << (topologyPreparation.changed ? "true" : "false")
-            << ",\"duration_ns\":"
-            << topologyPreparation.durationNanoseconds << "}\n" << std::flush;
-        if (config_.validateOrdinary2Resize) {
-            ordinary2ResizeValidation_.initialRenderGraphRebuildCount =
-                renderBackend->getRuntimeInfo().renderGraphRebuildCount;
-        }
-        if (config_.validateWeightedOitResize) {
-            weightedOitResizeValidation_.initialRenderGraphRebuildCount =
-                renderBackend->getRuntimeInfo().renderGraphRebuildCount;
-        }
-        if (config_.validateDepthPyramidResize) {
-            depthPyramidResizeValidation_.initialRenderGraphRebuildCount =
-                renderBackend->getRuntimeInfo().renderGraphRebuildCount;
-        }
+        startup.topology = topologyPreparation;
+        notifyStartup(StartupPhase::TopologyReady, startup);
         const auto sceneStart = std::chrono::steady_clock::now();
         if (environmentLighting_.isValid())
             renderBackend->setEnvironmentLighting(environmentLighting_);
 
-        const glm::uvec3 grid = activeBenchmark_
-            ? activeBenchmark_->sceneFactory.instanceGrid
-            : glm::uvec3(1, 1, 1);
-        const glm::vec3 spacing = activeBenchmark_
-            ? activeBenchmark_->sceneFactory.instanceSpacing
-            : glm::vec3(0.0f);
-        const glm::vec3 gridCenter = (glm::vec3(grid) - glm::vec3(1.0f)) * 0.5f;
-        const uint64_t gridInstanceCount = benchmarkInstanceCount(grid);
-        const bool renderInstanceBatch = activeBenchmark_ &&
-            activeBenchmark_->sceneFactory.renderInstanceBatch;
-        const glm::uvec3 constructionGrid = renderInstanceBatch
-            ? glm::uvec3(1u) : grid;
-        if (activeBenchmark_) {
-            benchmarkInstances_.reserve(benchmarkInstances_.size() +
-                static_cast<size_t>(renderInstanceBatch
-                    ? 1u : gridInstanceCount));
-        }
-        Entity firstEntity = NULL_ENTITY;
-        uint32_t benchmarkInstanceOrdinal = 0u;
-        for (uint32_t z = 0; z < constructionGrid.z; ++z) {
-            for (uint32_t y = 0; y < constructionGrid.y; ++y) {
-                for (uint32_t x = 0; x < constructionGrid.x; ++x) {
-                    const glm::vec3 position = activeBenchmark_ &&
-                            !renderInstanceBatch
-                        ? (glm::vec3(x, y, z) - gridCenter) * spacing
-                        : glm::vec3(0.0f);
-                    Entity entity = NULL_ENTITY;
-                    if (activeBenchmark_) {
-                        // The ordinary editor helper deliberately scans existing
-                        // names and sibling order. A deterministic benchmark grid
-                        // already owns both values, so repeating those scans would
-                        // turn fixture construction into O(n^2) editor-only work.
-                        entity = registry.createEntity();
-                        auto& name = registry.addComponent<NameComponent>(entity);
-                        name.name = benchmarkInstanceOrdinal == 0u
-                            ? "Benchmark Model"
-                            : "Benchmark Model (" +
-                                std::to_string(benchmarkInstanceOrdinal + 1u) + ")";
-                        auto& transform =
-                            registry.addComponent<TransformComponent>(entity);
-                        transform.position = position;
-                        transform.isDirty = true;
-                        auto& relationship =
-                            registry.addComponent<RelationshipComponent>(entity);
-                        relationship.siblingOrder = static_cast<int32_t>(
-                            benchmarkInstanceOrdinal);
-                        auto& mesh = registry.addComponent<MeshComponent>(entity);
-                        mesh.assetGuid = startupModelGuid;
-                        mesh.requestedAssetGuid = startupModelGuid;
-                    }
-                    else {
-                        entity = createModelEditorEntity(registry, startupModelGuid,
-                            config_.cookedModelArtifact.empty() ? "Cube" : "Model",
-                            position);
-                    }
-                    if (firstEntity == NULL_ENTITY) firstEntity = entity;
-                    auto& transform = registry.getComponent<TransformComponent>(entity);
-                    transform.rotation = glm::vec3(0.0f);
-                    transform.scale = glm::vec3(1.0f);
-                    if (activeBenchmark_ && !renderInstanceBatch) {
-                        const BenchmarkSceneFactory& factory =
-                            activeBenchmark_->sceneFactory;
-                        transform.scale =
-                            factory.instanceScaleOverrideEnabled &&
-                                factory.instanceScaleOverrideIndex ==
-                                    benchmarkInstanceOrdinal
-                            ? factory.instanceScaleOverride
-                            : factory.instanceScale;
-                    }
-                    transform.worldMatrix = glm::mat4(1.0f);
-                    transform.isDirty = true;
+        startup.startupModelGuid = startupModelGuid;
+        if (!policy_.ownsStartupContent) {
+            // Interactive startup scene: one model entity, then (after any
+            // observer content) the editor's default sun and HDRI sky.
+            const Entity entity = createModelEditorEntity(registry,
+                startupModelGuid,
+                config_.cookedModelArtifact.empty() ? "Cube" : "Model",
+                glm::vec3(0.0f));
+            auto& transform = registry.getComponent<TransformComponent>(entity);
+            transform.rotation = glm::vec3(0.0f);
+            transform.scale = glm::vec3(1.0f);
+            transform.worldMatrix = glm::mat4(1.0f);
+            transform.isDirty = true;
 
-                    auto& meshComp = registry.getComponent<MeshComponent>(entity);
-                    meshComp.model = mainModel;
-                    meshComp.assetGuid =
-                        startupModelGuid;
-                    if (!mainModel) {
-                        meshComp.requestedAssetGuid =
-                            startupModelGuid;
-                    }
-                    meshComp.enabled = true;
-                    if (activeBenchmark_) {
-                        benchmarkInstances_.push_back({ entity, transform.position });
-                    }
-                    ++benchmarkInstanceOrdinal;
-                }
+            auto& meshComp = registry.getComponent<MeshComponent>(entity);
+            meshComp.model = mainModel;
+            meshComp.assetGuid = startupModelGuid;
+            if (!mainModel) {
+                meshComp.requestedAssetGuid = startupModelGuid;
             }
+            meshComp.enabled = true;
+            editor.setSelectedEntity(entity);
+            startup.firstEntity = entity;
         }
-        if (renderInstanceBatch) {
-            if (firstEntity == NULL_ENTITY || !mainModel) {
-                throw std::logic_error(
-                    "Render-batch benchmark requires a loaded model entity");
-            }
-            auto& batch = registry.addComponent<
-                RenderInstanceBatchComponent>(firstEntity);
-            batch.localTransforms.reserve(static_cast<size_t>(
-                gridInstanceCount));
-            for (uint32_t z = 0; z < grid.z; ++z) {
-                for (uint32_t y = 0; y < grid.y; ++y) {
-                    for (uint32_t x = 0; x < grid.x; ++x) {
-                        const glm::vec3 position =
-                            (glm::vec3(x, y, z) - gridCenter) * spacing;
-                        glm::mat4 local = glm::translate(
-                            glm::mat4(1.0f), position);
-                        local = glm::scale(local,
-                            activeBenchmark_->sceneFactory.instanceScale);
-                        batch.localTransforms.push_back(local);
-                    }
-                }
-            }
-            batch.subMeshBounds.resize(mainModel->subMeshes.size());
-            for (size_t subMeshIndex = 0u;
-                subMeshIndex < mainModel->subMeshes.size(); ++subMeshIndex) {
-                const SubMesh& subMesh = mainModel->subMeshes[subMeshIndex];
-                glm::vec3 minimum((std::numeric_limits<float>::max)());
-                glm::vec3 maximum((std::numeric_limits<float>::lowest)());
-                for (const glm::mat4& local : batch.localTransforms) {
-                    for (uint32_t corner = 0u; corner < 8u; ++corner) {
-                        const glm::vec3 point{
-                            (corner & 1u) != 0u ? subMesh.boundsMax.x :
-                                subMesh.boundsMin.x,
-                            (corner & 2u) != 0u ? subMesh.boundsMax.y :
-                                subMesh.boundsMin.y,
-                            (corner & 4u) != 0u ? subMesh.boundsMax.z :
-                                subMesh.boundsMin.z,
-                        };
-                        const glm::vec4 transformed = local *
-                            glm::vec4(point, 1.0f);
-                        minimum = glm::min(minimum,
-                            glm::vec3(transformed));
-                        maximum = glm::max(maximum,
-                            glm::vec3(transformed));
-                    }
-                }
-                batch.subMeshBounds[subMeshIndex] = {
-                    .minimum = minimum,
-                    .maximum = maximum,
-                    .valid = !batch.localTransforms.empty(),
-                };
-            }
+        notifyStartup(StartupPhase::SceneConstruction, startup);
+        if (startup.initialSelection) {
+            editor.setSelectedEntity(*startup.initialSelection);
         }
-        editor.setSelectedEntity(activeBenchmark_ && !config_.selectBenchmarkEntity
-            ? NULL_ENTITY : firstEntity);
-        const bool sampleCarLightingFixture = activeBenchmark_ &&
-            activeBenchmark_->id == "sample_car_lighting_local_v1";
-        const bool spotShadowContactFixture = activeBenchmark_ &&
-            (activeBenchmark_->id == "spot_shadow_contact_v1" ||
-                activeBenchmark_->id == "spot_shadow_contact_forward_v1");
-        const bool pointShadowContactFixture = activeBenchmark_ &&
-            (activeBenchmark_->id == "point_shadow_contact_v1" ||
-                activeBenchmark_->id == "point_shadow_contact_forward_v1");
-        const bool directionalShadowFixture = activeBenchmark_ &&
-            (activeBenchmark_->id == "directional_shadow_contact_v1" ||
-                activeBenchmark_->id == "directional_shadow_motion_v1");
-        const bool explicitFixtureLights = activeBenchmark_ &&
-            !activeBenchmark_->lights.empty() &&
-            config_.clusterStressLightCount == 0 &&
-            config_.validateLightTableScale == 0;
-        const uint32_t fixtureLightCount = explicitFixtureLights
-            ? static_cast<uint32_t>(activeBenchmark_->lights.size())
-            : directionalShadowFixture
-            ? 1u : (spotShadowContactFixture || pointShadowContactFixture)
-            ? 2u : sampleCarLightingFixture ? 3u : 0u;
-        const uint32_t generatedLightCount = config_.clusterStressLightCount != 0
-            ? config_.clusterStressLightCount
-            : config_.validateLightTableScale != 0
-                ? config_.validateLightTableScale
-                : fixtureLightCount;
-        if (generatedLightCount != 0) {
-            for (uint32_t index = 0;
-                index < generatedLightCount; ++index) {
-                std::array<uint8_t, 10> random{};
-                const uint64_t value = static_cast<uint64_t>(index) + 1;
-                for (size_t byte = 0; byte < sizeof(value); ++byte) {
-                    random[byte] = static_cast<uint8_t>(value >> (byte * 8u));
-                }
-                const Entity lightEntity = sceneWorld_.createEntity(
-                    SceneEntityUuid::fromUuidV7Fields(
-                        1'775'000'300'000ull + index, random));
-                auto& transform = registry.addComponent<TransformComponent>(
-                    lightEntity);
-                const BenchmarkLight* fixtureLight = explicitFixtureLights
-                    ? &activeBenchmark_->lights[index] : nullptr;
-                if (fixtureLight) {
-                    transform.position = fixtureLight->position;
-                    transform.rotation = fixtureLight->rotationDegrees;
-                }
-                else if (sampleCarLightingFixture) {
-                    constexpr std::array<glm::vec3, 3> kRigPositions{
-                        glm::vec3(-3.0f, 4.0f, 3.0f),
-                        glm::vec3(3.0f, 2.25f, 1.5f),
-                        glm::vec3(0.0f, 5.0f, -2.0f),
-                    };
-                    transform.position = kRigPositions[index];
-                    if (index != 1u) {
-                        const glm::vec3 emissionDirection = glm::normalize(
-                            glm::vec3(0.0f, 1.0f, 0.0f) - transform.position);
-                        transform.rotation.x = -glm::degrees(
-                            std::asin(emissionDirection.y));
-                        transform.rotation.y = glm::degrees(std::atan2(
-                            emissionDirection.x, emissionDirection.z));
-                    }
-                }
-                else if (spotShadowContactFixture || pointShadowContactFixture) {
-                    const float lightHeight = spotShadowContactFixture
-                        ? 4.0f : 3.0f;
-                    transform.position = index % 2u == 0u
-                        ? glm::vec3(-3.0f, lightHeight, 3.0f)
-                        : glm::vec3(3.0f, lightHeight, 3.0f);
-                    if (spotShadowContactFixture) {
-                        const glm::vec3 emissionDirection = glm::normalize(
-                            -transform.position);
-                        transform.rotation.x = -glm::degrees(
-                            std::asin(emissionDirection.y));
-                        transform.rotation.y = glm::degrees(std::atan2(
-                            emissionDirection.x, emissionDirection.z));
-                    }
-                }
-                else if (config_.clusterStressLightCount != 0) {
-                    transform.position = {
-                        (static_cast<float>(index % 32u) - 15.5f) * 2.0f,
-                        (static_cast<float>((index / 32u) % 16u) - 7.5f) * 2.0f,
-                        -10.0f - static_cast<float>(index % 16u) * 4.0f,
-                    };
-                }
-                else {
-                    transform.position = {
-                        static_cast<float>(index % 64u) - 31.5f,
-                        static_cast<float>((index / 64u) % 64u) - 31.5f,
-                        static_cast<float>(index / 4'096u),
-                    };
-                }
-                if (config_.clusterStressLightCount != 0 && index < 4u) {
-                    // Spread global stress lights across opposing azimuths so
-                    // multi-owner shadow composition is exercised, not merely
-                    // duplicate projections from coincident directions.
-                    transform.rotation.y = 135.0f +
-                        static_cast<float>(index) * 90.0f;
-                }
-                else if (!fixtureLight && activeBenchmark_ &&
-                    (activeBenchmark_->id == "directional_shadow_contact_v1" ||
-                        activeBenchmark_->id == "directional_shadow_motion_v1") &&
-                    index == 0u) {
-                    // Preserve the fixture's incoming-light direction after +Z
-                    // became the authored emission axis.
-                    transform.rotation.y = 210.0f;
-                }
-                registry.addComponent<RelationshipComponent>(lightEntity)
-                    .siblingOrder = static_cast<int32_t>(index);
-                auto& light = registry.addComponent<LightComponent>(lightEntity);
-                if (fixtureLight) {
-                    switch (fixtureLight->type) {
-                    case BenchmarkLightType::Directional:
-                        light.type = LightType::Directional;
-                        break;
-                    case BenchmarkLightType::Point:
-                        light.type = LightType::Point;
-                        break;
-                    case BenchmarkLightType::Spot:
-                        light.type = LightType::Spot;
-                        break;
-                    }
-                    light.colorLinearRec709 = fixtureLight->colorLinearRec709;
-                    light.illuminanceLux = fixtureLight->illuminanceLux;
-                    light.luminousIntensityCandela =
-                        fixtureLight->luminousIntensityCandela;
-                    light.rangeMeters = fixtureLight->rangeMeters;
-                    light.sourceRadiusMeters = fixtureLight->sourceRadiusMeters;
-                    light.innerConeDegrees = fixtureLight->innerConeDegrees;
-                    light.outerConeDegrees = fixtureLight->outerConeDegrees;
-                    light.castsShadows = fixtureLight->castsShadows &&
-                        !config_.disableBenchmarkLocalShadows;
-                    light.shadowQuality = static_cast<LightShadowQuality>(
-                        fixtureLight->shadowQuality);
-                    light.priority = fixtureLight->priority;
-                    continue;
-                }
-                light.type = sampleCarLightingFixture
-                    ? (index == 0u ? LightType::Spot :
-                        index == 1u ? LightType::Point : LightType::Directional)
-                    : directionalShadowFixture
-                    ? LightType::Directional
-                    : spotShadowContactFixture
-                    ? LightType::Spot
-                    : pointShadowContactFixture ? LightType::Point
-                    : config_.clusterStressLightCount == 0
-                    ? static_cast<LightType>(index % 3u)
-                    : (index < 4u ? LightType::Directional :
-                        (index % 2u == 0u ? LightType::Point : LightType::Spot));
-                if (directionalShadowFixture || spotShadowContactFixture ||
-                    pointShadowContactFixture) {
-                    light.castsShadows =
-                        !config_.disableBenchmarkLocalShadows;
-                }
-                else if (sampleCarLightingFixture) {
-                    light.castsShadows = true;
-                }
-                if (!spotShadowContactFixture && !pointShadowContactFixture &&
-                    config_.clusterStressLightCount != 0 &&
-                    light.type == LightType::Spot) {
-                    // The stress volume is centered in front of these negative-Z
-                    // lights, so the authored +Z emission axis already aims back
-                    // through the volume.
-                    transform.rotation.y = 0.0f;
-                }
-                light.colorLinearRec709 = { 1.0f, 0.5f, 0.25f };
-                if (sampleCarLightingFixture || directionalShadowFixture ||
-                    spotShadowContactFixture || pointShadowContactFixture) {
-                    light.shadowQuality = LightShadowQuality::Ultra;
-                }
-                light.illuminanceLux = 100'000.0f;
-                light.luminousIntensityCandela = 1'250.0f;
-                light.rangeMeters = config_.clusterStressLightCount == 0
-                    ? 25.0f : 4.0f;
-                if (sampleCarLightingFixture) {
-                    constexpr std::array<glm::vec3, 3> kRigColors{
-                        glm::vec3(1.0f, 0.82f, 0.64f),
-                        glm::vec3(0.32f, 0.5f, 1.0f),
-                        glm::vec3(1.0f, 0.96f, 0.9f),
-                    };
-                    light.colorLinearRec709 = kRigColors[index];
-                    light.luminousIntensityCandela = index == 0u
-                        ? 45'000.0f : 18'000.0f;
-                    light.illuminanceLux = 35'000.0f;
-                    light.rangeMeters = 12.0f;
-                    light.innerConeDegrees = 22.0f;
-                    light.outerConeDegrees = 38.0f;
-                    light.priority = static_cast<int32_t>(3u - index);
-                }
-                else if (spotShadowContactFixture) {
-                    light.colorLinearRec709 = index % 2u == 0u
-                        ? glm::vec3(1.0f, 0.35f, 0.12f)
-                        : glm::vec3(0.12f, 0.35f, 1.0f);
-                    light.luminousIntensityCandela = 1'000'000.0f;
-                    light.rangeMeters = 15.0f;
-                    light.innerConeDegrees = 20.0f;
-                    light.outerConeDegrees = 35.0f;
-                    light.priority = static_cast<int32_t>(
-                        generatedLightCount - index);
-                }
-                else if (pointShadowContactFixture) {
-                    light.colorLinearRec709 = index % 2u == 0u
-                        ? glm::vec3(1.0f, 0.3f, 0.08f)
-                        : glm::vec3(0.08f, 0.3f, 1.0f);
-                    light.luminousIntensityCandela = 500'000.0f;
-                    light.rangeMeters = 15.0f;
-                    light.priority = static_cast<int32_t>(
-                        generatedLightCount - index);
-                }
-            }
-        }
-        if (!activeBenchmark_) {
+        if (!policy_.ownsStartupContent) {
             (void)createEditorEntityPreset(
                 registry, EditorEntityPreset::DirectionalLight);
             const Entity skyEntity = createEditorEntityPreset(
@@ -2354,109 +660,13 @@ namespace Iridium {
                 sky.requestedEnvironmentAssetGuid = {};
             }
         }
-        if (config_.validateReflectionProbes) {
-            if (activeEnvironmentAssetGuid_.isNil())
-                throw std::invalid_argument(
-                    "--validate-reflection-probes requires --cooked-environment-artifact");
-            const Entity probeEntity = sceneWorld_.createEntity(
-                SceneEntityUuid::fromUuidV7Fields(
-                    1'775'000'410'000ull,
-                    std::array<uint8_t, 10>{ 0x49, 0x52, 0x49, 0x44, 0x49,
-                        0x55, 0x4d, 0x50, 0x52, 0x42 }));
-            registry.addComponent<NameComponent>(probeEntity,
-                "Reflection Probe Validation");
-            registry.addComponent<TransformComponent>(probeEntity);
-            registry.addComponent<RelationshipComponent>(probeEntity)
-                .siblingOrder = static_cast<int32_t>(
-                    generatedLightCount + 2u);
-            auto& probe = registry.addComponent<ReflectionProbeComponent>(
-                probeEntity);
-            probe.shape = ReflectionProbeShape::Sphere;
-            probe.sphereRadiusMeters = 1'000.0f;
-            probe.blendDistanceMeters = 0.0f;
-            probe.parallaxMode = ReflectionProbeParallaxMode::None;
-            probe.environmentAssetGuid = activeEnvironmentAssetGuid_;
-            probe.resolvedEnvironmentAssetGuid = activeEnvironmentAssetGuid_;
-
-            const BenchmarkReflectionProbeCapture* fixtureCapture =
-                activeBenchmark_ && activeBenchmark_->reflectionProbeCapture
-                ? &*activeBenchmark_->reflectionProbeCapture : nullptr;
-
-            // The default route keeps the self-capture exclusion proof. An
-            // explicit benchmark capture instead owns no renderable geometry,
-            // so every fixture primitive contributes to all six faces and the
-            // published cubemap can be judged in visible surface reflections.
-            Entity captureProbeEntity = fixtureCapture
-                ? NULL_ENTITY : firstEntity;
-            if (captureProbeEntity == NULL_ENTITY) {
-                captureProbeEntity = sceneWorld_.createEntity(
-                    SceneEntityUuid::fromUuidV7Fields(
-                        1'775'000'410'001ull,
-                        std::array<uint8_t, 10>{ 0x49, 0x52, 0x49, 0x44,
-                            0x49, 0x55, 0x4d, 0x43, 0x41, 0x50 }));
-                registry.addComponent<NameComponent>(captureProbeEntity,
-                    "Runtime Reflection Capture Validation");
-                auto& captureTransform =
-                    registry.addComponent<TransformComponent>(
-                        captureProbeEntity);
-                if (fixtureCapture)
-                    captureTransform.position = fixtureCapture->position;
-                registry.addComponent<RelationshipComponent>(captureProbeEntity)
-                    .siblingOrder = static_cast<int32_t>(
-                        generatedLightCount + 3u);
-            }
-            auto& captureProbe =
-                registry.addComponent<ReflectionProbeComponent>(
-                    captureProbeEntity);
-            captureProbe.shape = ReflectionProbeShape::Sphere;
-            captureProbe.sphereRadiusMeters = 1'000.0f;
-            captureProbe.blendDistanceMeters = 0.0f;
-            captureProbe.parallaxMode = ReflectionProbeParallaxMode::None;
-            captureProbe.priority = fixtureCapture
-                ? fixtureCapture->priority : 1;
-            if (fixtureCapture) {
-                captureProbe.sphereRadiusMeters =
-                    fixtureCapture->influenceRadiusMeters;
-                captureProbe.updateMode = fixtureCapture->updateMode ==
-                        BenchmarkReflectionProbeUpdateMode::Realtime
-                    ? ReflectionProbeUpdateMode::Realtime
-                    : ReflectionProbeUpdateMode::OnDemand;
-                captureProbe.captureResolution = static_cast<int32_t>(
-                    fixtureCapture->resolution);
-                captureProbe.captureNearMeters = fixtureCapture->nearPlane;
-                captureProbe.captureFarMeters = fixtureCapture->farPlane;
-                captureProbe.captureSky = fixtureCapture->captureSky;
-            }
-        }
+        startup.environmentAssetGuid = activeEnvironmentAssetGuid_;
+        notifyStartup(StartupPhase::SceneComplete, startup);
         startupProfile_.sceneConstructionNanoseconds = static_cast<uint64_t>(
             std::chrono::duration_cast<std::chrono::nanoseconds>(
                 std::chrono::steady_clock::now() - sceneStart).count());
 
-        if (config_.validateTextureResidencyChurn) {
-            if (config_.frameLimit != 0 &&
-                config_.warmupFrameCount + config_.frameLimit < 3) {
-                throw std::invalid_argument(
-                    "Texture residency churn validation requires at least three frames");
-            }
-            const TextureDesc probeDesc{
-                .width = 512,
-                .height = 512,
-                .format = TextureFormat::RGBA8_UNorm,
-                .usageClass = TextureUsageClass::Sampled2D,
-            };
-            constexpr size_t ProbeUploadBudgetBytes =
-                1u * 1024u * 1024u;
-            residencyProbePixels_.resize(ProbeUploadBudgetBytes);
-            for (size_t offset = 0; offset < ProbeUploadBudgetBytes;
-                offset += 4) {
-                residencyProbePixels_[offset] = std::byte{ 0x3f };
-                residencyProbePixels_[offset + 1] = std::byte{ 0x7f };
-                residencyProbePixels_[offset + 2] = std::byte{ 0xbf };
-                residencyProbePixels_[offset + 3] = std::byte{ 0xff };
-            }
-            residencyProbeTexture_ = renderBackend->allocateTexture(
-                probeDesc, residencyProbePixels_);
-        }
+        notifyStartup(StartupPhase::Ready, startup);
 
         // The command-line viewer path is used for deterministic captures and
         // profiling. Interactive opens stay fully asynchronous, but a bounded
@@ -2493,54 +703,6 @@ namespace Iridium {
         }
     }
 
-    void Application::updateTextureResidencyChurn(uint64_t frameIndex) {
-        if (!config_.validateTextureResidencyChurn) return;
-
-        const TextureDesc probeDesc{
-            .width = 512,
-            .height = 512,
-            .format = TextureFormat::RGBA8_UNorm,
-            .usageClass = TextureUsageClass::Sampled2D,
-        };
-
-        if (frameIndex == 0) {
-            if (!residencyProbeTexture_.isValid()) {
-                throw std::runtime_error(
-                    "Texture residency churn probe was not initialized");
-            }
-            residencyRetiredIndex_ = residencyProbeTexture_.getIndex();
-            renderBackend->freeTexture(residencyProbeTexture_);
-            residencyProbeTexture_ = {};
-            residencyReplacementTexture_ = renderBackend->allocateTexture(
-                probeDesc, residencyProbePixels_);
-            if (residencyReplacementTexture_.getIndex() ==
-                residencyRetiredIndex_) {
-                throw std::runtime_error(
-                    "Texture descriptor index was reused before fence retirement");
-            }
-        }
-        else if (frameIndex == 2) {
-            TextureHandle collected = renderBackend->allocateTexture(
-                probeDesc, residencyProbePixels_);
-            if (collected.getIndex() != residencyRetiredIndex_) {
-                renderBackend->freeTexture(collected);
-                throw std::runtime_error(
-                    "Retired texture descriptor index was not reclaimed");
-            }
-            if (residencyReplacementTexture_.isValid()) {
-                renderBackend->freeTexture(residencyReplacementTexture_);
-                residencyReplacementTexture_ = {};
-            }
-            renderBackend->freeTexture(collected);
-            std::cout << "IRIDIUM_TEXTURE_RESIDENCY_CHURN "
-                "{\"fallback_before_destroy\":true,"
-                "\"immediate_reuse\":false,"
-                "\"reuse_after_fence\":true,"
-                "\"retired_index\":" << residencyRetiredIndex_ << "}\n";
-            residencyRetiredIndex_ = UINT32_MAX;
-        }
-    }
-
     void Application::mainLoop() {
         float lastFrameTime = 0.0f;
         uint64_t applicationFrameCount = 0;
@@ -2551,11 +713,23 @@ namespace Iridium {
         int frameCount = 0;
         float timeAccumulator = 0.0f;
 
+        AppFrameContext frame{
+            .config = config_,
+            .backend = *renderBackend,
+            .profiler = cpuProfiler_,
+            .scene = sceneWorld_,
+            .camera = camera_,
+            .control = *this,
+            .requests = frameRequests_,
+            .mainModel = mainModel,
+        };
+
         while (!glfwWindowShouldClose(window)) {
             const bool isMeasuredFrame = applicationFrameCount >= config_.warmupFrameCount;
             if (isMeasuredFrame && !measurementStarted) {
                 measurementStart = std::chrono::steady_clock::now();
                 measurementStarted = true;
+                measurementStarted_ = true;
             }
             const bool profileFrame = isMeasuredFrame &&
                 cpuProfiler_.beginFrame(applicationFrameCount + 1);
@@ -2593,11 +767,20 @@ namespace Iridium {
                     timeAccumulator -= 1.0f;
                 }
 
-                if (!activeBenchmark_) {
+                if (!policy_.deterministicContent) {
                     processInput(window);
                 }
 
-                updateBenchmarkState(applicationFrameCount);
+                frameRequests_ = {};
+                frame.applicationFrameIndex = applicationFrameCount;
+                frame.measuredFrameIndex = isMeasuredFrame
+                    ? std::optional<uint64_t>(measuredFrameCount_)
+                    : std::nullopt;
+                frame.outputTransportPending = false;
+                if (observer_) {
+                    observer_->onFrameBegin(
+                        FrameBeginPhase::PreSceneUpdate, frame);
+                }
 
                 // 2. Process delayed ECS events (like swapping meshes on the main thread)
                 ProcessMeshSwaps();
@@ -2686,42 +869,15 @@ namespace Iridium {
                         registry, &changedTransformEntities_);
                 }
 
-                if (isMeasuredFrame && config_.validateOrdinary2Resize) {
-                    updateOrdinary2ResizeValidation(measuredFrameCount_);
+                // Observer scene-extent resizes happen here, between frames.
+                if (observer_) {
+                    observer_->onFrameBegin(
+                        FrameBeginPhase::PostSceneUpdate, frame);
                 }
-                if (isMeasuredFrame && config_.validateWeightedOitResize) {
-                    updateWeightedOitResizeValidation(measuredFrameCount_);
-                }
-                if (isMeasuredFrame && config_.validateDepthPyramidResize) {
-                    updateDepthPyramidResizeValidation(measuredFrameCount_);
-                }
-                const bool validateDeepLayeredLifecycle = isMeasuredFrame &&
-                    config_.validateDeepLayeredLifecycle &&
-                    updateDeepLayeredLifecycleValidation(
-                        measuredFrameCount_);
 
                 // 4. The frame acquisition must precede UI construction so the
                 // viewport texture IDs correspond to the image acquired this frame.
-                const std::optional<uint64_t> captureFrameIndex =
-                    isMeasuredFrame && config_.captureFrameIndex == measuredFrameCount_
-                    ? config_.captureFrameIndex
-                    : std::nullopt;
-                const bool validateOrdinary2Capture = isMeasuredFrame &&
-                    ((config_.validateOrdinary2Capture &&
-                        measuredFrameCount_ == 0u) ||
-                    (config_.validateOrdinary2Resize &&
-                        measuredFrameCount_ == 5u));
-                const bool validateDeepLayeredCapture = isMeasuredFrame &&
-                    ((config_.validateDeepLayeredCapture &&
-                        measuredFrameCount_ == 0u) ||
-                    validateDeepLayeredLifecycle);
-                const bool validateDepthPyramidCapture = isMeasuredFrame &&
-                    config_.validateDepthPyramidCapture &&
-                    measuredFrameCount_ == 0u;
-                drawFrame(captureFrameIndex, applicationFrameCount,
-                    validateOrdinary2Capture,
-                    validateDeepLayeredCapture,
-                    validateDepthPyramidCapture);
+                drawFrame(frame);
             }
             if (profileFrame) {
                 const CpuAllocationFrameSample allocationSample =
@@ -2746,273 +902,7 @@ namespace Iridium {
             measurementWallNanoseconds_ = static_cast<uint64_t>(
                 std::chrono::duration_cast<std::chrono::nanoseconds>(
                     std::chrono::steady_clock::now() - measurementStart).count());
-            const uint64_t averageNanoseconds = measuredFrameCount_ != 0
-                ? measurementWallNanoseconds_ / measuredFrameCount_
-                : 0;
-            std::cout << "IRIDIUM_RUN_METRICS {\"measured_frames\":"
-                << measuredFrameCount_ << ",\"wall_ns\":" << measurementWallNanoseconds_
-                << ",\"average_ns\":" << averageNanoseconds
-                << ",\"render_width\":" << renderExtent_.width
-                << ",\"render_height\":" << renderExtent_.height
-                << ",\"window_visible\":" << (config_.windowVisible ? "true" : "false")
-                << ",\"window_decorated\":" << (config_.windowDecorated ? "true" : "false")
-                << ",\"validation\":" << (config_.enableValidation ? "true" : "false")
-                << ",\"cpu_profiling\":" << (cpuProfiler_.isEnabled() ? "true" : "false")
-                << "}\n";
         }
-    }
-
-    void Application::updateOrdinary2ResizeValidation(
-        uint64_t measuredFrameIndex) {
-        if (measuredFrameIndex >= 3u) {
-            cpuProfiler_.recordCounter(
-                "ordinary2.lifecycle.resize.requests", 0u);
-            cpuProfiler_.recordCounter(
-                "ordinary2.lifecycle.resize.successes", 0u);
-            cpuProfiler_.recordCounter(
-                "ordinary2.lifecycle.resize.failures", 0u);
-            return;
-        }
-
-        const std::array<RenderExtent, 3> sequence{{
-            { 960u, 540u },
-            { 1600u, 900u },
-            ordinary2ResizeValidation_.originalExtent,
-        }};
-        const RenderExtent requested = sequence[measuredFrameIndex];
-        ++ordinary2ResizeValidation_.requests;
-
-        std::string diagnostic;
-        bool resized = false;
-        {
-            CpuScope resizeScope(
-                cpuProfiler_, "cpu.ordinary2.lifecycle.resize");
-            resized = renderBackend->resizeSceneRenderExtent(
-                requested, diagnostic);
-        }
-        if (resized) {
-            ++ordinary2ResizeValidation_.successes;
-            renderExtent_ = renderBackend->getRenderExtent();
-            ordinary2ResizeValidation_.lastDiagnostic.clear();
-        }
-        else {
-            ++ordinary2ResizeValidation_.failures;
-            ordinary2ResizeValidation_.lastDiagnostic = diagnostic.empty()
-                ? "scene target resize failed without a diagnostic"
-                : std::move(diagnostic);
-        }
-        cpuProfiler_.recordCounter(
-            "ordinary2.lifecycle.resize.requests", 1u);
-        cpuProfiler_.recordCounter(
-            "ordinary2.lifecycle.resize.successes", resized ? 1u : 0u);
-        cpuProfiler_.recordCounter(
-            "ordinary2.lifecycle.resize.failures", resized ? 0u : 1u);
-        std::cout << "IRIDIUM_ORDINARY2_RESIZE_EVENT {\"measured_frame\":"
-            << measuredFrameIndex << ",\"requested\":["
-            << requested.width << ',' << requested.height
-            << "],\"effective\":[" << renderExtent_.width << ','
-            << renderExtent_.height << "],\"success\":"
-            << (resized ? "true" : "false") << "}\n" << std::flush;
-    }
-
-    void Application::updateWeightedOitResizeValidation(
-        uint64_t measuredFrameIndex) {
-        if (measuredFrameIndex >= 3u) {
-            cpuProfiler_.recordCounter(
-                "weighted_oit.lifecycle.resize.requests", 0u);
-            cpuProfiler_.recordCounter(
-                "weighted_oit.lifecycle.resize.successes", 0u);
-            cpuProfiler_.recordCounter(
-                "weighted_oit.lifecycle.resize.failures", 0u);
-            return;
-        }
-
-        const std::array<RenderExtent, 3> sequence{{
-            { 960u, 540u },
-            { 1600u, 900u },
-            weightedOitResizeValidation_.originalExtent,
-        }};
-        const RenderExtent requested = sequence[measuredFrameIndex];
-        ++weightedOitResizeValidation_.requests;
-
-        std::string diagnostic;
-        bool resized = false;
-        {
-            CpuScope resizeScope(
-                cpuProfiler_, "cpu.weighted_oit.lifecycle.resize");
-            resized = renderBackend->resizeSceneRenderExtent(
-                requested, diagnostic);
-        }
-        if (resized) {
-            ++weightedOitResizeValidation_.successes;
-            renderExtent_ = renderBackend->getRenderExtent();
-            weightedOitResizeValidation_.lastDiagnostic.clear();
-        }
-        else {
-            ++weightedOitResizeValidation_.failures;
-            weightedOitResizeValidation_.lastDiagnostic = diagnostic.empty()
-                ? "scene target resize failed without a diagnostic"
-                : std::move(diagnostic);
-        }
-        cpuProfiler_.recordCounter(
-            "weighted_oit.lifecycle.resize.requests", 1u);
-        cpuProfiler_.recordCounter(
-            "weighted_oit.lifecycle.resize.successes", resized ? 1u : 0u);
-        cpuProfiler_.recordCounter(
-            "weighted_oit.lifecycle.resize.failures", resized ? 0u : 1u);
-        std::cout << "IRIDIUM_WEIGHTED_OIT_RESIZE_EVENT {\"measured_frame\":"
-            << measuredFrameIndex << ",\"requested\":["
-            << requested.width << ',' << requested.height
-            << "],\"effective\":[" << renderExtent_.width << ','
-            << renderExtent_.height << "],\"success\":"
-            << (resized ? "true" : "false") << "}\n" << std::flush;
-    }
-
-    void Application::updateDepthPyramidResizeValidation(
-        uint64_t measuredFrameIndex) {
-        std::optional<RenderExtent> requested;
-        if (measuredFrameIndex == 0u) requested = RenderExtent{ 960u, 540u };
-        else if (measuredFrameIndex == 3u)
-            requested = RenderExtent{ 1600u, 900u };
-        else if (measuredFrameIndex == 6u)
-            requested = depthPyramidResizeValidation_.originalExtent;
-
-        if (!requested) {
-            cpuProfiler_.recordCounter(
-                "depth.occlusion.lifecycle.resize.requests", 0u);
-            cpuProfiler_.recordCounter(
-                "depth.occlusion.lifecycle.resize.successes", 0u);
-            cpuProfiler_.recordCounter(
-                "depth.occlusion.lifecycle.resize.failures", 0u);
-            return;
-        }
-
-        ++depthPyramidResizeValidation_.requests;
-        std::string diagnostic;
-        bool resized = false;
-        {
-            CpuScope resizeScope(
-                cpuProfiler_, "cpu.depth.occlusion.lifecycle.resize");
-            resized = renderBackend->resizeSceneRenderExtent(
-                *requested, diagnostic);
-        }
-        if (resized) {
-            ++depthPyramidResizeValidation_.successes;
-            renderExtent_ = renderBackend->getRenderExtent();
-            depthPyramidResizeValidation_.lastDiagnostic.clear();
-        }
-        else {
-            ++depthPyramidResizeValidation_.failures;
-            depthPyramidResizeValidation_.lastDiagnostic = diagnostic.empty()
-                ? "scene target resize failed without a diagnostic"
-                : std::move(diagnostic);
-        }
-        cpuProfiler_.recordCounter(
-            "depth.occlusion.lifecycle.resize.requests", 1u);
-        cpuProfiler_.recordCounter(
-            "depth.occlusion.lifecycle.resize.successes", resized ? 1u : 0u);
-        cpuProfiler_.recordCounter(
-            "depth.occlusion.lifecycle.resize.failures", resized ? 0u : 1u);
-        std::cout << "IRIDIUM_DEPTH_PYRAMID_RESIZE_EVENT {\"measured_frame\":"
-            << measuredFrameIndex << ",\"requested\":["
-            << requested->width << ',' << requested->height
-            << "],\"effective\":[" << renderExtent_.width << ','
-            << renderExtent_.height << "],\"success\":"
-            << (resized ? "true" : "false") << "}\n" << std::flush;
-    }
-
-    bool Application::updateDeepLayeredLifecycleValidation(
-        uint64_t measuredFrameIndex) {
-        using State = DeepLayeredLifecycleValidationState;
-        const RenderBackendRuntimeInfo runtimeInfo =
-            renderBackend->getRuntimeInfo();
-        const bool selectedTierResident =
-            config_.deepLayeredCaptureQuality == TransparencyQuality::Hero4
-                ? runtimeInfo.hero4AtlasResident
-                : runtimeInfo.cinematic8AtlasResident;
-        const bool topologyResident = selectedTierResident &&
-            runtimeInfo.refractionPyramidsResident;
-
-        const auto setBenchmarkModelEnabled = [&](bool enabled) {
-            auto* meshes = registry.getPool<MeshComponent>();
-            uint32_t changed = 0u;
-            if (meshes != nullptr) {
-                for (const BenchmarkInstanceState& instance :
-                        benchmarkInstances_) {
-                    if (!meshes->has(instance.entity)) continue;
-                    MeshComponent& mesh = meshes->get(instance.entity);
-                    if (!mesh.model || mesh.model != mainModel ||
-                        mesh.enabled == enabled) {
-                        continue;
-                    }
-                    mesh.enabled = enabled;
-                    ++changed;
-                }
-            }
-            if (changed == 0u) {
-                throw std::runtime_error(
-                    "Deep layered lifecycle validation could not change the benchmark model visibility.");
-            }
-            ++deepLayeredLifecycleValidation_.visibilityChanges;
-        };
-        const auto logEvent = [&](std::string_view event) {
-            std::cout
-                << "IRIDIUM_DEEP_LAYERED_LIFECYCLE_EVENT {\"measured_frame\":"
-                << measuredFrameIndex << ",\"event\":\"" << event
-                << "\",\"quality\":\""
-                << transparencyQualityName(
-                    config_.deepLayeredCaptureQuality)
-                << "\",\"tier_resident\":"
-                << (selectedTierResident ? "true" : "false")
-                << ",\"refraction_pyramids_resident\":"
-                << (runtimeInfo.refractionPyramidsResident
-                    ? "true" : "false")
-                << "}\n" << std::flush;
-        };
-
-        switch (deepLayeredLifecycleValidation_.phase) {
-        case State::Phase::Initial:
-            if (!topologyResident) {
-                throw std::runtime_error(
-                    "Deep layered lifecycle validation did not start with a resident selected tier.");
-            }
-            deepLayeredLifecycleValidation_.firstMeasuredFrame =
-                measuredFrameIndex;
-            setBenchmarkModelEnabled(false);
-            deepLayeredLifecycleValidation_.phase =
-                State::Phase::WaitingForRetirement;
-            logEvent("hide_for_retirement");
-            return false;
-        case State::Phase::WaitingForRetirement:
-            if (selectedTierResident ||
-                runtimeInfo.refractionPyramidsResident) {
-                return false;
-            }
-            ++deepLayeredLifecycleValidation_.retirements;
-            setBenchmarkModelEnabled(true);
-            deepLayeredLifecycleValidation_.phase =
-                State::Phase::WaitingForReactivation;
-            logEvent("retired_reveal_for_reactivation");
-            return false;
-        case State::Phase::WaitingForReactivation:
-            if (!topologyResident) return false;
-            ++deepLayeredLifecycleValidation_.reactivations;
-            if (deepLayeredLifecycleValidation_.reactivations < 2u) {
-                setBenchmarkModelEnabled(false);
-                deepLayeredLifecycleValidation_.phase =
-                    State::Phase::WaitingForRetirement;
-                logEvent("reactivated_hide_for_retirement");
-                return false;
-            }
-            deepLayeredLifecycleValidation_.completionMeasuredFrame =
-                measuredFrameIndex;
-            deepLayeredLifecycleValidation_.phase = State::Phase::Complete;
-            logEvent("reactivated_complete");
-            return true;
-        case State::Phase::Complete:
-            return false;
-        }
-        return false;
     }
 
     std::string Application::persistBakedReflectionProbe(
@@ -3490,12 +1380,10 @@ namespace Iridium {
             gpuSceneDirectFallbackCount_ + stats.capacityFallbackInstances);
     }
 
-    void Application::drawFrame(std::optional<uint64_t> captureFrameIndex,
-        uint64_t applicationFrameIndex,
-        bool validateOrdinary2Capture,
-        bool validateDeepLayeredCapture,
-        bool validateDepthPyramidCapture) {
-        const bool dualViews = !activeBenchmark_ && editor.assetDocuments().active();
+    void Application::drawFrame(AppFrameContext& frame) {
+        const uint64_t applicationFrameIndex = frame.applicationFrameIndex;
+        const bool dualViews = !policy_.fullscreenScenePresentation &&
+            editor.assetDocuments().active();
         const auto cadenceNow = EditorViewCadence::Clock::now();
         uint32_t renderView = 0;
         if (dualViews) {
@@ -3660,7 +1548,9 @@ namespace Iridium {
             gpuSceneUpload.bytes);
         cpuProfiler_.recordCounter("gpu_scene.upload.ranges",
             gpuSceneUpload.ranges);
-        updateTextureResidencyChurn(applicationFrameIndex);
+        if (observer_) {
+            observer_->onFrameBegin(FrameBeginPhase::BackendFrameOpened, frame);
+        }
 
         // --- 1. CLEAR THE QUEUES ---
         opaqueQueue.clear();
@@ -3693,19 +1583,19 @@ namespace Iridium {
             ? NULL_ENTITY : editor.getSelectedEntity();
 
         // --- 2. GET CAMERA DATA ---
-        glm::vec3 renderCameraPosition = cameraPos;
-        float renderCameraNearPlane = cameraNearPlane_;
-        float renderCameraFarPlane = cameraFarPlane_;
-        float renderVerticalFovDegrees = verticalFovDegrees_;
+        glm::vec3 renderCameraPosition = camera_.position;
+        float renderCameraNearPlane = camera_.nearPlane;
+        float renderCameraFarPlane = camera_.farPlane;
+        float renderVerticalFovDegrees = camera_.verticalFovDegrees;
         glm::mat4 viewMatrix = glm::lookAt(
-            cameraPos, cameraPos + cameraFront, cameraUp);
+            camera_.position, camera_.position + camera_.front, camera_.up);
         const float aspect = renderExtent_.height != 0
             ? static_cast<float>(renderExtent_.width) /
                 static_cast<float>(renderExtent_.height)
             : 16.0f / 9.0f;
         glm::mat4 projMatrix = glm::perspective(
-            glm::radians(verticalFovDegrees_), aspect,
-            cameraNearPlane_, cameraFarPlane_);
+            glm::radians(camera_.verticalFovDegrees), aspect,
+            camera_.nearPlane, camera_.farPlane);
         projMatrix[1][1] *= -1.0f; // Vulkan inverted Y
         if (assetPreviewActive) {
             if (const EditorOrbitCamera* camera =
@@ -3726,10 +1616,10 @@ namespace Iridium {
         {
             CpuScope editorScope(cpuProfiler_, "cpu.editor.build");
             renderBackend->beginUI();
-            if (!activeBenchmark_) {
-                glm::mat4 sceneProjection = glm::perspective(glm::radians(verticalFovDegrees_), aspect, cameraNearPlane_, cameraFarPlane_);
+            if (!policy_.fullscreenScenePresentation) {
+                glm::mat4 sceneProjection = glm::perspective(glm::radians(camera_.verticalFovDegrees), aspect, camera_.nearPlane, camera_.farPlane);
                 sceneProjection[1][1] *= -1.0f;
-                editor.update(registry, assetManager.get(), glm::lookAt(cameraPos, cameraPos + cameraFront, cameraUp), sceneProjection,
+                editor.update(registry, assetManager.get(), glm::lookAt(camera_.position, camera_.position + camera_.front, camera_.up), sceneProjection,
                     renderBackend->getLitSceneTextureID(),
                     renderBackend->getGlassDepthTextureID(),
                     aspect);
@@ -3812,7 +1702,7 @@ namespace Iridium {
                     renderBackend->getLitSceneTextureID()), ImGui::GetContentRegionAvail());
                 ImGui::End();
                 ImGui::PopStyleVar();
-                if (activeBenchmark_->id == "color_volume_transparency_v1") {
+                if (policy_.colorValidationOverlay) {
                     editor.drawColorValidationOverlay();
                 }
             }
@@ -3841,11 +1731,10 @@ namespace Iridium {
         renderBackend->updateCamera(viewTransport, {
             .identity = assetPreviewActive ? previewDocument->sessionSerial + 2u : 1u,
             .resetRevision = assetPreviewActive ? previewDocument->framingRevision :
-                activeBenchmark_ && activeBenchmark_->sceneFactory.cameraCutEnabled &&
-                applicationFrameIndex >= activeBenchmark_->sceneFactory.cameraCutFrame ? 1u : 0u,
+                frameRequests_.viewHistoryResetRevision.value_or(0u),
         });
         ViewportGridOverlay gridOverlay{};
-        if (!activeBenchmark_ && !assetPreviewActive && !captureFrameIndex) {
+        if (!frameRequests_.suppressGridOverlay && !assetPreviewActive) {
             gridOverlay = editor.viewportGridOverlay(viewMatrix, projMatrix);
         }
         renderBackend->setViewportGridOverlay(gridOverlay);
@@ -4027,7 +1916,7 @@ namespace Iridium {
                         subMesh.sourcePrimitiveGuid;
                     packet.primitiveGuid = subMesh.primitiveGuid;
                     packet.materialGuid = effectiveMaterialGuid;
-                    packet.transparency = activeBenchmark_ ? effectiveTransparency :
+                    packet.transparency = policy_.deterministicContent ? effectiveTransparency :
                         withLayeredInterfaceBudget(effectiveTransparency,
                             static_cast<unsigned>(editor.layeredInterfaceOverride()));
                     packet.transparencyExecutionMode =
@@ -5042,16 +2931,6 @@ namespace Iridium {
             clusters.available ? ProfileCounterStatus::Exact : ProfileCounterStatus::Unavailable);
 
         // Pass 3: The AAA Translucency Pipeline (includes per-layer glass depth)
-        if (validateOrdinary2Capture) {
-            renderBackend->requestOrdinary2CaptureValidation(0u);
-        }
-        if (validateDeepLayeredCapture) {
-            renderBackend->requestDeepLayeredCaptureValidation(
-                0u, config_.deepLayeredCaptureQuality);
-        }
-        if (validateDepthPyramidCapture) {
-            renderBackend->requestDepthPyramidCaptureValidation(0u);
-        }
         renderBackend->submitForwardQueues(
             std::span<const DrawPacket>(
                 forwardOpaqueQueue.data(), forwardOpaqueQueue.size()),
@@ -5062,22 +2941,17 @@ namespace Iridium {
             std::span<const glm::mat4>(forwardInstanceTransforms_.data(),
                 forwardInstanceTransforms_.size()));
 
-        if (captureFrameIndex &&
-            config_.capturePoint == FrameCapturePoint::SceneLinear) {
-            renderBackend->captureCurrentFrame(*captureFrameIndex,
-                config_.capturePoint);
-            capturedApplicationFrameIndex_ = applicationFrameIndex;
+        // Scene-linear captures read the lit scene here.
+        if (observer_) {
+            observer_->onFrameSubmit(FrameSubmitPoint::SceneLinearReady, frame);
         }
 
         // Pass 4: Final output mapping.
         renderBackend->submitOutputPass();
 
-        if (captureFrameIndex &&
-            (config_.capturePoint == FrameCapturePoint::FinalSdr ||
-                config_.capturePoint == FrameCapturePoint::FinalOutput)) {
-            renderBackend->captureCurrentFrame(*captureFrameIndex,
-                config_.capturePoint);
-            capturedApplicationFrameIndex_ = applicationFrameIndex;
+        // Final-output captures read the output target before the UI pass.
+        if (observer_) {
+            observer_->onFrameSubmit(FrameSubmitPoint::OutputReady, frame);
         }
 
         // Pass 5: ImGui/Editor UI.
@@ -5089,40 +2963,19 @@ namespace Iridium {
             return;
         }
         if (dualViews) editorViewScheduler_.rendered(renderView, EditorViewCadence::Clock::now());
-        if (config_.validateOutputTransportSwitch &&
-            outputTransportValidationStep_ < 3u &&
-            !pendingOutputTransport_) {
-            constexpr std::array sequence{
-                Color::OutputTransport::ScRgb,
-                Color::OutputTransport::Hdr10Pq,
-                Color::OutputTransport::SdrSrgb,
-            };
-            pendingOutputTransport_ = sequence[outputTransportValidationStep_++];
-            config_.outputTransport = *pendingOutputTransport_;
+        if (observer_) {
+            const uint64_t switchesBefore = outputTransportSwitchCount_;
+            frame.outputTransportPending = pendingOutputTransport_.has_value();
+            observer_->onFrameEnd(frame);
+            if (outputTransportSwitchCount_ != switchesBefore) return;
         }
         if (pendingOutputTransport_) {
             const Color::OutputTransport requested = *pendingOutputTransport_;
             pendingOutputTransport_.reset();
-            const auto switchStart = std::chrono::steady_clock::now();
-            renderBackend->setOutputTransport(window, requested);
-            renderRuntimeInfo_ = renderBackend->getRuntimeInfo();
-            replaceOutputTransformLut(
-                renderRuntimeInfo_.effectiveOutputTransportMode);
-            publishOutputTransportStatus();
-            const uint64_t switchNanoseconds = static_cast<uint64_t>(
-                std::chrono::duration_cast<std::chrono::nanoseconds>(
-                    std::chrono::steady_clock::now() - switchStart).count());
-            std::cout << "IRIDIUM_OUTPUT_TRANSPORT_SWITCH {\"requested\":\""
-                << renderRuntimeInfo_.requestedOutputTransport
-                << "\",\"effective\":\""
-                << renderRuntimeInfo_.effectiveOutputTransport
-                << "\",\"diagnostic\":\""
-                << renderRuntimeInfo_.outputTransportDiagnostic
-                << "\",\"duration_ns\":" << switchNanoseconds
-                << "}\n" << std::flush;
+            (void)switchOutputTransport(requested);
             return;
         }
-        if (!activeBenchmark_ && config_.windowVisible) {
+        if (!policy_.fullscreenScenePresentation && config_.windowVisible) {
             const RenderExtent requested =
                 editor.requestedRenderExtent();
             if (requested.width == 0 || requested.height == 0 ||
@@ -5174,36 +3027,8 @@ namespace Iridium {
         }
     }
 
-    void Application::cleanup() {
-        if (renderBackend) {
-            for (TextureHandle texture :
-                textureScaleProbeTextures_) {
-                renderBackend->freeTexture(
-                    texture);
-            }
-            textureScaleProbeTextures_.clear();
-            for (MaterialHandle material :
-                materialScaleProbeMaterials_) {
-                renderBackend->freeMaterial(
-                    material);
-            }
-            materialScaleProbeMaterials_.clear();
-            if (materialScaleProbeTexture_
-                    .isValid()) {
-                renderBackend->freeTexture(
-                    materialScaleProbeTexture_);
-                materialScaleProbeTexture_ = {};
-            }
-        }
-        if (renderBackend && residencyProbeTexture_.isValid()) {
-            renderBackend->freeTexture(residencyProbeTexture_);
-            residencyProbeTexture_ = {};
-        }
-        if (renderBackend && residencyReplacementTexture_.isValid()) {
-            renderBackend->freeTexture(residencyReplacementTexture_);
-            residencyReplacementTexture_ = {};
-        }
-        residencyProbePixels_.clear();
+    void Application::cleanup(bool completed) {
+        notifyShutdown(ShutdownPhase::ReleaseResources, completed);
         editor.cleanup();
         assetThumbnailService_.reset();
         pendingThumbnailUploads_.clear();
@@ -5282,7 +3107,7 @@ namespace Iridium {
             front.x = cos(glm::radians(app->yaw)) * cos(glm::radians(app->pitch));
             front.y = sin(glm::radians(app->pitch));
             front.z = sin(glm::radians(app->yaw)) * cos(glm::radians(app->pitch));
-            app->cameraFront = glm::normalize(front);
+            app->camera_.front = glm::normalize(front);
         }
     }
 
@@ -5325,13 +3150,13 @@ namespace Iridium {
             glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS) {
             float velocity = cameraSpeed * deltaTime;
             if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS)
-                cameraPos += cameraFront * velocity;
+                camera_.position += camera_.front * velocity;
             if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS)
-                cameraPos -= cameraFront * velocity;
+                camera_.position -= camera_.front * velocity;
             if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS)
-                cameraPos -= glm::normalize(glm::cross(cameraFront, cameraUp)) * velocity;
+                camera_.position -= glm::normalize(glm::cross(camera_.front, camera_.up)) * velocity;
             if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS)
-                cameraPos += glm::normalize(glm::cross(cameraFront, cameraUp)) * velocity;
+                camera_.position += glm::normalize(glm::cross(camera_.front, camera_.up)) * velocity;
         }
     }
 
@@ -6641,47 +4466,87 @@ namespace Iridium {
             renderRuntimeInfo_.outputTransportDiagnostic);
     }
 
-    void Application::updateBenchmarkState(uint64_t frameIndex) {
-        if (!activeBenchmark_) return;
-        const BenchmarkSceneFactory& factory = activeBenchmark_->sceneFactory;
-        if (factory.animateInstances || factory.objectStepEnabled) {
-            auto* transforms = registry.getPool<TransformComponent>();
-            if (transforms != nullptr) {
-                for (size_t index = 0; index < benchmarkInstances_.size(); ++index) {
-                    BenchmarkInstanceState& instance = benchmarkInstances_[index];
-                    if (!transforms->has(instance.entity)) continue;
-                    TransformComponent& transform = transforms->get(instance.entity);
-                    const glm::vec3 position = instance.basePosition +
-                        evaluateBenchmarkInstanceOffset(factory, frameIndex,
-                            index);
-                    if (transform.position.x != position.x ||
-                        transform.position.y != position.y ||
-                        transform.position.z != position.z) {
-                        transform.position = position;
-                        transform.isDirty = true;
-                    }
-                }
-            }
-        }
-        if (factory.objectVisibilityStepEnabled) {
-            auto* meshes = registry.getPool<MeshComponent>();
-            const size_t index = factory.objectVisibilityStepInstanceIndex;
-            if (meshes != nullptr && index < benchmarkInstances_.size()) {
-                const Entity entity = benchmarkInstances_[index].entity;
-                if (meshes->has(entity)) {
-                    MeshComponent& mesh = meshes->get(entity);
-                    const bool enabled = frameIndex >=
-                            factory.objectVisibilityStepFrame
-                        ? factory.objectVisibilityAfterStep
-                        : !factory.objectVisibilityAfterStep;
-                    mesh.enabled = enabled;
-                }
-            }
-        }
+    OutputTransportSwitchResult Application::switchOutputTransport(
+        Color::OutputTransport requested) {
+        const auto switchStart = std::chrono::steady_clock::now();
+        renderBackend->setOutputTransport(window, requested);
+        renderRuntimeInfo_ = renderBackend->getRuntimeInfo();
+        replaceOutputTransformLut(
+            renderRuntimeInfo_.effectiveOutputTransportMode);
+        publishOutputTransportStatus();
+        const uint64_t switchNanoseconds = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - switchStart).count());
+        ++outputTransportSwitchCount_;
+        std::cout << "IRIDIUM_OUTPUT_TRANSPORT_SWITCH {\"requested\":\""
+            << renderRuntimeInfo_.requestedOutputTransport
+            << "\",\"effective\":\""
+            << renderRuntimeInfo_.effectiveOutputTransport
+            << "\",\"diagnostic\":\""
+            << renderRuntimeInfo_.outputTransportDiagnostic
+            << "\",\"duration_ns\":" << switchNanoseconds
+            << "}\n" << std::flush;
+        return OutputTransportSwitchResult{
+            .requested = renderRuntimeInfo_.requestedOutputTransport,
+            .effective = renderRuntimeInfo_.effectiveOutputTransport,
+            .diagnostic = renderRuntimeInfo_.outputTransportDiagnostic,
+            .durationNanoseconds = switchNanoseconds,
+        };
+    }
 
-        const BenchmarkCameraPose camera = evaluateBenchmarkCamera(
-            *activeBenchmark_, frameIndex);
-        cameraPos = camera.position;
-        cameraFront = glm::normalize(camera.target - camera.position);
+    OutputTransportSwitchResult Application::applyOutputTransport(
+        Color::OutputTransport transport) {
+        config_.outputTransport = transport;
+        return switchOutputTransport(transport);
+    }
+
+    bool Application::resizeSceneExtent(RenderExtent requested,
+        std::string& diagnostic) {
+        const bool resized = renderBackend->resizeSceneRenderExtent(
+            requested, diagnostic);
+        if (resized) renderExtent_ = renderBackend->getRenderExtent();
+        return resized;
+    }
+
+    std::shared_ptr<ModelAsset> Application::loadCookedStartupModel() {
+        const std::filesystem::path artifactPath =
+            config_.cookedModelArtifact.is_absolute()
+            ? config_.cookedModelArtifact
+            : std::filesystem::path(PROJECT_ROOT_DIR) /
+                config_.cookedModelArtifact;
+        activeCookedModelArtifact_ =
+            artifactPath.lexically_normal();
+        mainModel =
+            assetManager->
+                loadSelfContainedModelFromCookedArtifactFile(
+                    artifactPath);
+        return mainModel;
+    }
+
+    void Application::loadCookedStartupEnvironment() {
+        const std::filesystem::path environmentPath =
+            config_.cookedEnvironmentArtifact.is_absolute()
+            ? config_.cookedEnvironmentArtifact
+            : std::filesystem::path(PROJECT_ROOT_DIR) /
+                config_.cookedEnvironmentArtifact;
+        activeCookedEnvironmentArtifact_ =
+            environmentPath.lexically_normal();
+        publishStartupEnvironment(assetManager->
+            loadEnvironmentFromCookedArtifactFile(environmentPath));
+    }
+
+    void Application::publishStartupEnvironment(
+        LoadedEnvironmentAsset environment) {
+        environmentLighting_ = environment.lighting;
+        activeEnvironmentAssetGuid_ = environment.assetGuid;
+        activeEnvironmentSourceGuid_ =
+            environment.manifest.sourceTextureGuid;
+        activeEnvironmentCookKey_ = environment.cookKey;
+        activeEnvironmentSourcePrimaries_ =
+            environment.manifest.sourcePrimaries;
+        activeEnvironmentRadianceScale_ =
+            environment.manifest.sourceRadianceScale;
+        loadedEnvironments_.insert_or_assign(
+            environment.assetGuid, std::move(environment));
     }
 } // namespace Iridium

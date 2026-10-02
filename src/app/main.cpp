@@ -1,7 +1,10 @@
 #include "app/Application.h"
 #include "app/ApplicationConfig.h"
+#include "core/BuildFeatures.h"
+#include "qualification/harness/QualificationHarness.h"
 #include <cstdlib>
 #include <iostream>
+#include <memory>
 #include <stdexcept>
 #include <string_view>
 #include <utility>
@@ -20,7 +23,14 @@ int main(int argc, char** argv) {
             return EXIT_SUCCESS;
         }
 
-        Iridium::Application app(std::move(config));
+        // Qualification builds attach the harness to every run. Without
+        // qualification flags it only prints the IRIDIUM_* startup and run-metric
+        // lines; production code never depends on it (M7R R2.6).
+        std::unique_ptr<Iridium::IFrameObserver> observer;
+        if constexpr (Iridium::kQualificationBuild) {
+            observer = Iridium::createQualificationHarness(config);
+        }
+        Iridium::Application app(std::move(config), observer.get());
         app.run();
     }
     catch (const std::exception& e) {

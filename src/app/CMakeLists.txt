@@ -33,16 +33,12 @@ target_link_libraries(iridium_app PUBLIC
 # so this target's PCH must not contain GLM.
 iridium_target_pch(iridium_app ENGINE NO_GLM)
 
-# Build/source provenance printed into capture and run metadata. Only
-# Application.cpp reads these, so only it recompiles when they change.
+# Build provenance recorded in baked reflection-probe products. Only
+# Application.cpp reads these, so only it recompiles when they change. (Capture
+# and run metadata provenance lives in the qualification harness.)
 set_property(SOURCE Application.cpp APPEND PROPERTY COMPILE_DEFINITIONS
         IRIDIUM_BUILD_CONFIGURATION="${CMAKE_BUILD_TYPE}"
-        IRIDIUM_SOURCE_COMMIT="${IRIDIUM_SOURCE_COMMIT}"
-        IRIDIUM_SOURCE_BRANCH="${IRIDIUM_SOURCE_BRANCH}"
-        IRIDIUM_SOURCE_DIRTY_AT_CONFIGURE=${IRIDIUM_SOURCE_DIRTY_AT_CONFIGURE}
-        IRIDIUM_COMPILER="${IRIDIUM_COMPILER_ID}"
-        IRIDIUM_SHADER_COMPILER="${IRIDIUM_SHADER_COMPILER}"
-        IRIDIUM_VULKAN_SDK="${IRIDIUM_VULKAN_SDK_VERSION}")
+        IRIDIUM_SOURCE_COMMIT="${IRIDIUM_SOURCE_COMMIT}")
 
 add_executable(IridiumEngine
         main.cpp

@@ -13,6 +13,7 @@
 
 // --- ENGINE SUBSYSTEMS ---
 #include "app/ApplicationConfig.h"
+#include "app/FrameObserver.h"
 #include "core/EngineLog.h"
 #include "profiling/CpuProfiler.h"
 #include "assets/AssetManager.h"  
@@ -33,8 +34,6 @@
 // --- THE NEW RENDERING ARCHITECTURE ---
 #include "renderer/rhi/IRenderBackend.h"
 #include "renderer/rhi/DrawPacket.h"
-#include "benchmarks/BenchmarkManifest.h"
-#include "core/types/FrameCapture.h"
 #include "renderer/rhi/RenderBackendRuntimeInfo.h"
 #include "renderer/lighting/LightExtractor.h"
 #include "editor/EditorViewCadence.h"
@@ -47,9 +46,13 @@
 
 namespace Iridium {
 
-    class Application {
+    class Application final : private IAppControl {
     public:
-        explicit Application(ApplicationConfig config = {});
+        // The observer (the qualification harness in IRIDIUM_QUALIFICATION
+        // builds) is optional and must outlive run(); without one the
+        // Application runs the interactive editor.
+        explicit Application(ApplicationConfig config = {},
+            IFrameObserver* observer = nullptr);
         void run();
 
         // GLFW Callbacks must be static
@@ -73,6 +76,9 @@ namespace Iridium {
         GLFWwindow* window = nullptr;
         bool glfwInitialized_ = false;
         bool framebufferResized = false;
+        IFrameObserver* observer_ = nullptr;
+        AppRunPolicy policy_{};
+        AppFrameRequests frameRequests_{};
 
         // --- THE GRAPHICS ABSTRACTION ---
         // This single pointer replaces 40+ Vulkan variables!
@@ -177,24 +183,13 @@ namespace Iridium {
         Color::OutputTransport outputTransformLutTransport_ =
             Color::OutputTransport::SdrSrgb;
         std::optional<Color::OutputTransport> pendingOutputTransport_;
-        uint32_t outputTransportValidationStep_ = 0;
-        TextureHandle residencyProbeTexture_{};
-        TextureHandle residencyReplacementTexture_{};
-        uint32_t residencyRetiredIndex_ = UINT32_MAX;
-        std::vector<std::byte> residencyProbePixels_;
-        std::vector<TextureHandle>
-            textureScaleProbeTextures_;
-        TextureHandle materialScaleProbeTexture_{};
-        std::vector<MaterialHandle>
-            materialScaleProbeMaterials_;
+        uint64_t outputTransportSwitchCount_ = 0;
 
         // --- CAMERA STATE ---
         float yaw = -90.0f;
         float pitch = 0.0f;
         float mouseSensitivity = 0.1f;
-        glm::vec3 cameraPos = glm::vec3(0.0f, 0.0f, 3.0f);
-        glm::vec3 cameraFront = glm::vec3(0.0f, 0.0f, -1.0f);
-        glm::vec3 cameraUp = glm::vec3(0.0f, 1.0f, 0.0f);
+        AppCamera camera_{};
         float cameraSpeed = 2.5f;
         float deltaTime = 0.0f;
         uint64_t measuredFrameCount_ = 0;
@@ -205,68 +200,8 @@ namespace Iridium {
         std::string viewportExtentDiagnostic_;
         RenderBackendCapabilities renderCapabilities_{};
         RenderBackendRuntimeInfo renderRuntimeInfo_{};
-        struct Ordinary2ResizeValidationState {
-            RenderExtent originalExtent{};
-            uint64_t initialRenderGraphRebuildCount = 0;
-            uint32_t requests = 0;
-            uint32_t successes = 0;
-            uint32_t failures = 0;
-            std::string lastDiagnostic;
-        } ordinary2ResizeValidation_;
-        struct WeightedOitResizeValidationState {
-            RenderExtent originalExtent{};
-            uint64_t initialRenderGraphRebuildCount = 0;
-            uint32_t requests = 0;
-            uint32_t successes = 0;
-            uint32_t failures = 0;
-            std::string lastDiagnostic;
-        } weightedOitResizeValidation_;
-        struct DepthPyramidResizeValidationState {
-            RenderExtent originalExtent{};
-            uint64_t initialRenderGraphRebuildCount = 0;
-            uint32_t requests = 0;
-            uint32_t successes = 0;
-            uint32_t failures = 0;
-            std::string lastDiagnostic;
-        } depthPyramidResizeValidation_;
-        struct DeepLayeredLifecycleValidationState {
-            enum class Phase : uint8_t {
-                Initial,
-                WaitingForRetirement,
-                WaitingForReactivation,
-                Complete,
-            };
-            Phase phase = Phase::Initial;
-            uint32_t retirements = 0;
-            uint32_t reactivations = 0;
-            uint32_t visibilityChanges = 0;
-            uint64_t firstMeasuredFrame = 0;
-            uint64_t completionMeasuredFrame = 0;
-        } deepLayeredLifecycleValidation_;
-        struct StartupProfile {
-            uint64_t totalNanoseconds = 0;
-            uint64_t windowNanoseconds = 0;
-            uint64_t backendNanoseconds = 0;
-            uint64_t editorNanoseconds = 0;
-            uint64_t manifestVerificationNanoseconds = 0;
-            uint64_t modelLoadNanoseconds = 0;
-            uint64_t environmentCreationNanoseconds = 0;
-            uint64_t sceneConstructionNanoseconds = 0;
-            uint64_t frameTopologyPrewarmNanoseconds = 0;
-        } startupProfile_;
-        std::optional<BenchmarkFixture> activeBenchmark_;
-        std::string benchmarkManifestPath_;
-        std::string benchmarkManifestSha256_;
-        std::optional<FrameCapture> completedCapture_;
-        std::optional<uint64_t> capturedApplicationFrameIndex_;
-        struct BenchmarkInstanceState {
-            Entity entity = NULL_ENTITY;
-            glm::vec3 basePosition{ 0.0f };
-        };
-        std::vector<BenchmarkInstanceState> benchmarkInstances_;
-        float verticalFovDegrees_ = 45.0f;
-        float cameraNearPlane_ = 0.1f;
-        float cameraFarPlane_ = 100.0f;
+        AppStartupTimings startupProfile_;
+        bool measurementStarted_ = false;
         AssetGuid framedPreviewDocumentGuid_;
         std::string framedPreviewCookKey_;
         uint64_t framedPreviewRevision_ = 0;
@@ -283,13 +218,9 @@ namespace Iridium {
         void initWindow();
         void initRenderer(); // Formerly initVulkan()
         void mainLoop();
-        void cleanup();
+        void cleanup(bool completed);
 
-        void drawFrame(std::optional<uint64_t> captureFrameIndex,
-            uint64_t applicationFrameIndex,
-            bool validateOrdinary2Capture,
-            bool validateDeepLayeredCapture,
-            bool validateDepthPyramidCapture);
+        void drawFrame(AppFrameContext& frame);
         void prepareGpuScenePublication(Entity selectedEntity);
 
         void processInput(GLFWwindow* window);
@@ -302,13 +233,24 @@ namespace Iridium {
         void recreateSwapchain();
         void replaceOutputTransformLut(Color::OutputTransport effectiveTransport);
         void publishOutputTransportStatus();
-        void updateBenchmarkState(uint64_t frameIndex);
-        void updateOrdinary2ResizeValidation(uint64_t measuredFrameIndex);
-        void updateWeightedOitResizeValidation(uint64_t measuredFrameIndex);
-        void updateDepthPyramidResizeValidation(uint64_t measuredFrameIndex);
-        [[nodiscard]] bool updateDeepLayeredLifecycleValidation(
-            uint64_t measuredFrameIndex);
-        void updateTextureResidencyChurn(uint64_t frameIndex);
+        OutputTransportSwitchResult switchOutputTransport(
+            Color::OutputTransport requested);
+        [[nodiscard]] AppRunSnapshot makeRunSnapshot() const;
+        void notifyStartup(StartupPhase phase, AppStartupContext& context);
+        void notifyShutdown(ShutdownPhase phase, bool completed);
+
+        // IAppControl
+        OutputTransportSwitchResult applyOutputTransport(
+            Color::OutputTransport transport) override;
+        [[nodiscard]] bool resizeSceneExtent(RenderExtent requested,
+            std::string& diagnostic) override;
+        [[nodiscard]] RenderExtent renderExtent() const override {
+            return renderExtent_;
+        }
+        std::shared_ptr<ModelAsset> loadCookedStartupModel() override;
+        void loadCookedStartupEnvironment() override;
+        void publishStartupEnvironment(
+            LoadedEnvironmentAsset environment) override;
     };
 
 } // namespace Iridium
