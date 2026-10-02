@@ -3,7 +3,7 @@
 ## Header
 
 - **Milestone:** M7R — Architecture consolidation
-- **Status:** In Progress — plan approved by owner 2026-10-02; R0 accepted 2026-10-02; R1 active
+- **Status:** In Progress — plan approved by owner 2026-10-02; R0 and R1 accepted 2026-10-02; R2 active
 - **Lead:** M7R milestone-lead session (Claude Code); integration owner for all slices
 - **Branch / PR:** `m7r-consolidation` off `Render-Refactor-for-Modularity`; one PR
   for the milestone
@@ -205,7 +205,7 @@ Exactly one slice is `In Progress`. Every slice ends with:
 - the hash table is valid for this machine only, because the local-only fixtures (F1–F3, F6) cannot be committed;
 - the historical M7 hashes stay as historical record and are not overwritten.
 
-### R1 — Build system and module DAG (`In Progress`)
+### R1 — Build system and module DAG (`Accepted` 2026-10-02)
 
 **Layering:**
 - Break the include cycles by moving identity and handle PODs to `core/types`.
@@ -241,7 +241,19 @@ Exactly one slice is `In Progress`. Every slice ends with:
 
 **Rollback:** each module move is its own commit-sized step within the slice.
 
-### R2 — Qualification harness and CLI (`Proposed`)
+**As implemented (R1):**
+- *Step 1 (`7781b03`):* include-cycle moves (see the decision log).
+- *Step 2 (`6fcd762`):* a 40-line root `CMakeLists.txt` with helper files in `cmake/`, one CMakeLists per module, and the libraries listed in `src/CMakeLists.txt`.
+- *Follow-up:* `iridium_scene` is split from `iridium_scene_authoring`, restoring the M4 JSON-free runtime boundary at link time.
+
+Deviations from the plan text:
+- **Release PCH:** engine-module PCH is Debug-only (option `IRIDIUM_ENGINE_PCH_IN_RELEASE`, default OFF). A PCH changes MSVC inlining in 176/191 Release objects, which would break byte identity. Tests and tools use the PCH in both configurations.
+- **GLM and PCH:** GLM is excluded from the PCH of TUs that define `GLM_FORCE_DEPTH_ZERO_TO_ONE`.
+- **Unity builds:** not used; there is no benefit for single-TU tests, and vendor codegen would change.
+- **Shader output:** stays in `assets/shaders/`; depfiles were added.
+- **Implicit layers:** `vulkan`-labelled tests run with `VK_LOADER_LAYERS_DISABLE=~implicit~`. The owner's ReShade implicit layer fails to load (error 1114) and was counted as a validation error.
+
+### R2 — Qualification harness and CLI (`In Progress`)
 
 The implementation design, with the file inventory, interfaces, test disposition and
 ordered sub-steps R2.0–R2.10, is in `docs/milestones/M7R-R2-qualification-harness-design.md`.
@@ -555,10 +567,59 @@ A regression must exceed this band in both orders.
 | Touch `cluster_count.comp` (1 step) | 0.3 s | 0.3 s |
 
 Notes:
-- Debug is faster than Release only because the Debug preset currently compiles without `/Od /Zi /RTC1` (fixed in R1). R1 will report the deltas with a corrected Debug baseline.
+- *Correction (R1):* the R0 worktree was configured cleanly with `/Zi /Ob0 /Od /RTC1`, so these are true Debug numbers. The empty Debug flags were a stale cache in the main checkout only, caused by a configure outside the MSVC environment. R1 adds a guard that restores the defaults.
 - Shader include fan-out (all 69 shaders) is cheap in wall time, but R1 still adds depfiles.
 
 **Tests.** Debug 78/78 and Release 78/78 pass at `2c50b36`.
+
+### R1 result (2026-10-02, commits `7781b03`, `6fcd762`, follow-up)
+
+**Code generation**
+- Release objects: 191/191 have identical disassembly (`dumpbin`, normalized), across 234,743 functions. The only exception is the configure-time commit-hash strings in `Application.cpp`.
+- SPIR-V: all 69 `.spv` files are byte-identical.
+- Effective defines: no difference for any production TU.
+
+**Compilations**
+- 191 production sources and 191 compilations, down from 339. No source compiles twice.
+
+**Frozen set** (`captures/r1` against `captures/r0`)
+- 16/22 captures are byte-identical.
+- F3, F7-lod (1 pixel each) and F4-woit are within their R0 envelopes.
+- Zero validation messages.
+
+**Tests**
+- Debug and Release both pass 80/80: the 78 previous tests plus `VulkanDepthPyramidTests` and `VulkanVirtualShadowMarkingTests`, now registered.
+
+**Build times** (clean worktree, 14900K)
+
+| Step | R0 Release | R1 Release | R0 Debug | R1 Debug |
+|---|---:|---:|---:|---:|
+| Configure (clean) | 53.7 s | 32.2 s | 53.3 s | 32.7 s |
+| Clean build | 109.5 s | **61.3 s** | 90.8 s | **48.1 s** |
+| Touch `Application.cpp` | 10.9 s | 8.7 s | 8.6 s | 8.4 s |
+| Touch `rhi/Mesh.h` | 36.6 s | **16.2 s** | 20.7 s | 13.7 s |
+| Touch `shadow_filter.glsl` | 0.9 s (69 shaders) | 0.4 s (10 steps) | 1.1 s | 0.4 s |
+| Touch `cluster_count.comp` | 0.3 s | 0.3 s | 0.3 s | 0.3 s |
+
+**Timing pair** (`timing/r1`, A = R0 worktree, B = R1)
+- The owner was using the machine during the run (League client, OP.GG, OneDrive sync; about 32% CPU load).
+- Both sides were noisy. The unchanged baseline's F1 GPU median ranged from 1.25 to 1.48 ms, against 1.17 ms at R0.
+- Steady-frame allocations were 0 and drains 0 on both routes.
+- Because Release codegen is proven identical, the code-identity proof is the primary R1 performance evidence. A rerun is recorded below.
+
+Rerun (`timing/r1-rerun`, A,B,B,A; the machine was still in use):
+
+| Route | Side | Non-wait CPU median | GPU median |
+|---|---|---:|---:|
+| T-F1-all | A | 0.644 ms | 1.505 ms |
+| T-F1-all | B | 0.622 ms | 1.331 ms |
+| T-F7-stack | A | 6.346 ms | 2.219 ms |
+| T-F7-stack | B | 6.275 ms | 2.231 ms |
+
+- No regression beyond noise; B is equal or better on non-wait CPU.
+- GPU on F7 is +0.5%, inside the band.
+- Allocations 0 and drains 0 on both routes.
+- Timing pairs need an idle machine; later slices note the machine state.
 
 ## Completion report
 

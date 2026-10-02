@@ -163,4 +163,11 @@ function(iridium_add_test name)
         set(ARG_LABELS unit)
     endif()
     set_tests_properties(${name} PROPERTIES LABELS "${ARG_LABELS}")
+    if("vulkan" IN_LIST ARG_LABELS)
+        # Device tests run hermetically: implicit layers installed by other software
+        # (overlays, injectors) can fail to load and report loader errors that the
+        # tests count as validation failures. Explicit layers (validation) still load.
+        set_tests_properties(${name} PROPERTIES ENVIRONMENT
+            "VK_LOADER_LAYERS_DISABLE=~implicit~")
+    endif()
 endfunction()

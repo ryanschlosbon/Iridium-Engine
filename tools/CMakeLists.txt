@@ -23,7 +23,7 @@ endforeach()
 
 iridium_add_executable(IridiumCookScene
         SOURCES CookScene.cpp
-        LIBS iridium_scene iridium_assets)
+        LIBS iridium_scene_authoring iridium_assets)
 
 iridium_add_executable(IridiumImageCompare
         SOURCES ImageCompare.cpp
@@ -32,13 +32,13 @@ iridium_add_executable(IridiumImageCompare
 # --- Benchmarks ------------------------------------------------------------------------
 iridium_add_executable(IridiumSourceSceneBenchmark
         SOURCES SourceSceneBenchmark.cpp
-        LIBS iridium_scene ${_iridium_psapi}
+        LIBS iridium_scene_authoring ${_iridium_psapi}
         ALLOCATION_PROFILE
         BENCHMARK_INFO)
 
 iridium_add_executable(IridiumCookedSceneBenchmark
         SOURCES CookedSceneBenchmark.cpp
-        LIBS iridium_scene iridium_assets ${_iridium_psapi}
+        LIBS iridium_scene_authoring iridium_assets ${_iridium_psapi}
         ALLOCATION_PROFILE
         BENCHMARK_SOURCE_INFO)
 
@@ -65,7 +65,7 @@ if(BUILD_TESTING)
 
     iridium_add_executable(LightComponentV2Benchmark
             SOURCES LightComponentV2Benchmark.cpp
-            LIBS iridium_scene iridium_assets
+            LIBS iridium_scene_authoring iridium_assets
             ALLOCATION_PROFILE
             BENCHMARK_INFO)
 

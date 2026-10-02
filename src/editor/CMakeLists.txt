@@ -32,7 +32,7 @@ add_library(iridium_editor STATIC
         panels/windows/ProjectSettingsPanel.cpp
 )
 target_link_libraries(iridium_editor PUBLIC
-        iridium_scene
+        iridium_scene_authoring
         iridium_assets
         iridium_rhi
         iridium_material

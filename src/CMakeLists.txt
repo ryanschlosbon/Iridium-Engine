@@ -13,7 +13,8 @@
 #   iridium_rhi           renderer/rhi + renderer/transparency + renderer/scene
 #                                                                          -> material, color, graph, core
 #   iridium_assets        assets/**                                        -> rhi, material, color, core, vendor
-#   iridium_scene         scene/**                                         -> ecs, assets, rhi, core
+#   iridium_scene         scene/** except authoring (JSON-free runtime)     -> ecs, assets, rhi, core
+#   iridium_scene_authoring scene/authoring (JSON source scenes)            -> scene, nlohmann_json
 #   iridium_lighting      renderer/lighting                                -> scene, rhi
 #   iridium_vulkan        renderer/vulkan                                  -> lighting, rhi, graph, profiling, color, Vulkan, glfw, imgui
 #   iridium_editor        editor/**                                        -> scene, assets, rhi, platform, profiling, imgui

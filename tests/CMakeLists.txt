@@ -214,7 +214,7 @@ iridium_add_test(AssetCookerTests
 
 iridium_add_test(SceneAssetReferenceTests
         SOURCES assets/SceneAssetReferenceTests.cpp
-        LIBS iridium_scene iridium_assets)
+        LIBS iridium_scene_authoring iridium_assets)
 
 # --- scene ---------------------------------------------------------------------------
 foreach(_scene_test IN ITEMS
@@ -225,14 +225,22 @@ foreach(_scene_test IN ITEMS
         LightComponentV2Tests
         M4ProductionCutoverTests
         M5FixtureContractTests
-        RuntimeComponentRegistryTests
-        SceneRuntimeBoundaryTests
         SourceComponentRegistryTests
         SourceJsonParserTests
         SourceSceneCaptureTests
         SourceSceneDocumentTests
         SourceSceneEnvelopeMigratorTests
         SourceSceneLoadTransactionTests)
+    iridium_add_test(${_scene_test}
+            SOURCES scene/${_scene_test}.cpp
+            LIBS iridium_scene_authoring)
+endforeach()
+
+# Runtime-only tests link the JSON-free scene library, so the boundary is enforced
+# at link time.
+foreach(_scene_test IN ITEMS
+        RuntimeComponentRegistryTests
+        SceneRuntimeBoundaryTests)
     iridium_add_test(${_scene_test}
             SOURCES scene/${_scene_test}.cpp
             LIBS iridium_scene)
