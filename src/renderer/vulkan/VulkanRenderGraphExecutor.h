@@ -133,15 +133,42 @@ namespace Iridium {
 
     [[nodiscard]] VulkanBarrierSink& vulkanCommandBarrierSink() noexcept;
 
+    // How a pass's batched dependencies are recorded. Synchronization2 issues
+    // one vkCmdPipelineBarrier2 per pass; Synchronization1 is the fallback for
+    // devices without the feature and records the same dependencies as one
+    // vkCmdPipelineBarrier per barrier, exactly as before R3b.2.
+    enum class VulkanBarrierApi : uint8_t {
+        Synchronization1,
+        Synchronization2,
+    };
+
+    // VkContext and HeadlessVulkanDevice enable synchronization2 exactly when
+    // the physical device reports it for Vulkan 1.3, so support implies enabled.
+    [[nodiscard]] bool vulkanDeviceSupportsSynchronization2(
+        VkPhysicalDevice physicalDevice) noexcept;
+
+    // The sync1 -> sync2 equivalence mapping (R3b.2): stage and access bits are
+    // identical; a TOP_OF_PIPE source scope is NONE. Exposed for tests.
+    [[nodiscard]] VkPipelineStageFlags2 toVulkanSourceStages2(
+        VkPipelineStageFlags stages) noexcept;
+    [[nodiscard]] VkPipelineStageFlags2 toVulkanDestinationStages2(
+        VkPipelineStageFlags stages) noexcept;
+
     class VulkanRenderGraphExecutor final {
     public:
         VulkanRenderGraphExecutor() = default;
         VulkanRenderGraphExecutor(const VulkanRenderGraphExecutor&) = delete;
         VulkanRenderGraphExecutor& operator=(const VulkanRenderGraphExecutor&) = delete;
 
+        // The allocator form selects Synchronization2 when the allocator's
+        // device supports it; the factory form starts on Synchronization1.
         void init(VulkanResourceAllocator& allocator, uint32_t frameCount,
             ProfileMemoryCategory category = ProfileMemoryCategory::RenderGraphTransient);
         void init(VulkanGraphResourceFactory& factory, uint32_t frameCount);
+        // Overrides the recording API; only valid outside frame execution.
+        // Pass VkContext::hasSynchronization2() when the context is at hand.
+        void setBarrierApi(VulkanBarrierApi api);
+        [[nodiscard]] VulkanBarrierApi barrierApi() const noexcept { return barrierApi_; }
         void rebuild(RenderGraph::CompiledGraph graph);
         void onFrameFenceCompleted(uint32_t frameIndex);
         [[nodiscard]] bool validateFrame(uint32_t frameIndex) noexcept;
@@ -242,12 +269,27 @@ namespace Iridium {
         NameMap passNames_;
         NameMap resourceNames_;
         VulkanBarrierSink* sink_ = &vulkanCommandBarrierSink();
+        VulkanBarrierApi barrierApi_ = VulkanBarrierApi::Synchronization1;
+        // One pass's dependency, sized at rebuild to the largest pass so steady
+        // frames never allocate. batchOrder_ keeps usage order across both
+        // arrays (high bit = image) for the sync1 fallback.
+        static constexpr uint32_t BatchImageBit = 0x8000'0000u;
+        std::vector<VkImageMemoryBarrier2> imageBatch_;
+        std::vector<VkBufferMemoryBarrier2> bufferBatch_;
+        std::vector<uint32_t> batchOrder_;
+        uint32_t imageBatchCount_ = 0;
+        uint32_t bufferBatchCount_ = 0;
+        uint32_t batchOrderCount_ = 0;
 
         [[nodiscard]] const RenderGraph::CompiledGraph& executingGraph() const;
         [[nodiscard]] const RenderGraph::CompiledGraph& boundGraph() const;
         void beginPassAt(VkCommandBuffer commandBuffer, uint32_t passOrder);
-        void transitionPhysicalResource(VkCommandBuffer commandBuffer,
-            uint32_t physicalSlot, RenderGraph::Access access);
+        void queuePhysicalTransition(uint32_t physicalSlot, RenderGraph::Access access);
+        void queueImageBarrier(const VulkanImageResource& image,
+            const VulkanGraphAccessInfo& before, const VulkanGraphAccessInfo& after);
+        void queueBufferBarrier(VkBuffer buffer, VkDeviceSize size,
+            const VulkanGraphAccessInfo& before, const VulkanGraphAccessInfo& after);
+        void flushBarriers(VkCommandBuffer commandBuffer);
     };
 
 } // namespace Iridium

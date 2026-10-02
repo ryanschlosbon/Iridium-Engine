@@ -49,6 +49,7 @@ namespace Iridium::Test {
             return properties_;
         }
         [[nodiscard]] bool hasMemoryBudget() const noexcept { return memoryBudget_; }
+        [[nodiscard]] bool hasSynchronization2() const noexcept { return synchronization2_; }
         [[nodiscard]] uint32_t maxUpdateAfterBindDescriptors() const noexcept {
             return maxUpdateAfterBindDescriptors_;
         }
@@ -88,6 +89,7 @@ namespace Iridium::Test {
         VkPhysicalDeviceProperties properties_{};
         VkPhysicalDeviceMemoryProperties memory_{};
         bool memoryBudget_ = false;
+        bool synchronization2_ = false;
         uint32_t maxUpdateAfterBindDescriptors_ = 0;
         std::atomic<uint32_t> errors_ = 0;
         std::vector<std::string> messages_;

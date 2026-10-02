@@ -81,6 +81,9 @@ namespace Iridium {
         void reclassify(VulkanImageResource& resource,
             ProfileMemoryCategory category) noexcept;
         [[nodiscard]] FrameMemoryProfile memorySnapshot() const noexcept;
+        [[nodiscard]] VkPhysicalDevice physicalDevice() const noexcept {
+            return physicalDevice_;
+        }
 
     private:
         [[nodiscard]] uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties) const;

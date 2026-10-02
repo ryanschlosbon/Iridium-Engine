@@ -317,6 +317,13 @@ if(TARGET iridium_shaders)
             LIBS iridium_test_vulkan_support iridium_vulkan
             LABELS vulkan)
 
+    # M7R R3b: graph-executor barriers (sync2 batched and sync1 fallback) on a
+    # real device under validation with synchronization validation.
+    iridium_add_test(VulkanRenderGraphDeviceTests
+            SOURCES renderer/VulkanRenderGraphDeviceTests.cpp
+            LIBS iridium_test_vulkan_support iridium_vulkan
+            LABELS vulkan)
+
     iridium_add_test(VulkanShaderParityTests
             SOURCES renderer/VulkanShaderParityTests.cpp
             LIBS iridium_test_vulkan_support iridium_vulkan iridium_lighting

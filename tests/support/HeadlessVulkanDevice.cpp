@@ -107,8 +107,11 @@ HeadlessVulkanDevice::HeadlessVulkanDevice(const Options& options) {
     features.multiDrawIndirect = supported.multiDrawIndirect;
     features.drawIndirectFirstInstance = supported.drawIndirectFirstInstance;
 
+    VkPhysicalDeviceVulkan13Features supported13{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES };
     VkPhysicalDeviceVulkan12Features supported12{
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES };
+    supported12.pNext = &supported13;
     VkPhysicalDeviceFeatures2 supported2{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2 };
     supported2.pNext = &supported12;
     vkGetPhysicalDeviceFeatures2(physical_, &supported2);
@@ -126,6 +129,13 @@ HeadlessVulkanDevice::HeadlessVulkanDevice(const Options& options) {
     enabled12.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
     enabled12.descriptorBindingVariableDescriptorCount = VK_TRUE;
     enabled12.drawIndirectCount = supported12.drawIndirectCount;
+    // M7R R3: synchronization2 is enabled exactly when supported, as VkContext
+    // does, so the graph executor's vkCmdPipelineBarrier2 path is validated.
+    synchronization2_ = supported13.synchronization2 == VK_TRUE;
+    VkPhysicalDeviceVulkan13Features enabled13{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES };
+    enabled13.synchronization2 = supported13.synchronization2;
+    enabled12.pNext = &enabled13;
 
     VkPhysicalDeviceDescriptorIndexingProperties indexing{
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_PROPERTIES };

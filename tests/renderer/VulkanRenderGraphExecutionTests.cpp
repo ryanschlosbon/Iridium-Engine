@@ -450,6 +450,387 @@ namespace {
         return true;
     }
 
+    // ---- R3b.2: batched synchronization2 equivalence ---------------------------
+
+    struct NamedTopology {
+        std::string name;
+        RenderGraph::CompiledGraph graph;
+    };
+
+    // Every production topology the backend can build.
+    std::vector<NamedTopology> productionTopologies() {
+        constexpr VkExtent2D Scene{ 1920, 1080 };
+        constexpr VkExtent2D Ordinary2{ 960, 528 };
+        constexpr VkExtent2D Hero4{ 1920, 528 };
+        constexpr VkExtent2D Cinematic8{ 1920, 1072 };
+        const auto build = [&](bool hdr10, VulkanLayeredGraphConfig layered,
+            VulkanProductionGraphFeatures features, bool pyramids = true) {
+            return buildVulkanProductionRenderGraph(Scene, Scene,
+                hdr10 ? VK_FORMAT_A2B10G10R10_UNORM_PACK32 : VK_FORMAT_B8G8R8A8_SRGB,
+                hdr10 ? VK_FORMAT_R16G16B16A16_SFLOAT : VK_FORMAT_B8G8R8A8_SRGB,
+                hdr10, GBufferLayout::CanonicalReference, {}, 4096, 8192, pyramids,
+                layered, features);
+        };
+        std::vector<NamedTopology> result;
+        result.push_back({ "base SDR", build(false, {}, {}) });
+        result.push_back({ "base SDR, no pyramids, no telemetry",
+            build(false, {}, { .clusterTelemetryReadback = false }, false) });
+        result.push_back({ "HDR10", build(true, {}, {}) });
+        result.push_back({ "VSM", build(false, {}, { .virtualShadowWorkingSetBytes = 8'192 }) });
+        result.push_back({ "Hi-Z", build(false, {}, { .depthPyramid = true }) });
+        result.push_back({ "Ordinary2", build(false, { Ordinary2, {}, {} }, {}) });
+        result.push_back({ "Hero4", build(false, { {}, Hero4, {} }, {}) });
+        result.push_back({ "Cinematic8", build(false, { {}, {}, Cinematic8 }, {}) });
+        result.push_back({ "OIT", build(false, { {}, {}, {}, true }, {}) });
+        result.push_back({ "all features", build(true,
+            { Ordinary2, Hero4, Cinematic8, true },
+            { .depthPyramid = true, .virtualShadowWorkingSetBytes = 8'192 }) });
+        result.push_back({ "all features, no hooks", build(false,
+            { Ordinary2, Hero4, Cinematic8, true },
+            { .depthPyramid = true, .virtualShadowWorkingSetBytes = 8'192,
+              .hooks = VulkanGraphHooks::none() }) });
+        return result;
+    }
+
+    // Passes the backend always records when their feature is declared; all
+    // others have a skipPass path somewhere (shadows, transparency tiers,
+    // hooks, readbacks, refraction pyramids, ...).
+    bool alwaysRecorded(std::string_view name) {
+        return name == "gbuffer" || name == "lighting" || name == "forward-opaque" ||
+            name == "output-transform" || name == "ui-present" || name == "ui-compose" ||
+            name == "hdr10-encode-present" ||
+            (name.starts_with("lighting.cluster.") && name != "lighting.cluster.readback") ||
+            name.starts_with("shadow.virtual.");
+    }
+
+    // Four frames over two frame slots: everything, skip every optional pass,
+    // then two alternating patterns, so slot state carries over skipped work.
+    bool scriptRuns(const RenderGraph::CompiledGraph& graph, uint32_t frame, uint32_t pass) {
+        if (alwaysRecorded(graph.passes()[pass].name)) return true;
+        switch (frame) {
+        case 0: return true;
+        case 1: return false;
+        case 2: return pass % 2 == 0;
+        default: return pass % 3 != 1;
+        }
+    }
+
+    // Reference: the pre-R3b.2 emission, one sync1 barrier per resource state
+    // change, kept here only to prove the batched recording equivalent.
+    class LegacyEmissionReference {
+    public:
+        LegacyEmissionReference(const VulkanRenderGraphExecutor& executor,
+            uint32_t frameCount)
+            : executor_(executor), graph_(*executor.compiledGraph()),
+              slotAccess_(frameCount, std::vector<Access>(
+                  graph_.physicalSlots().size(), Access::Undefined)),
+              external_(frameCount, std::vector<External>(graph_.resources().size())) {}
+
+        void bindExternalBuffer(uint32_t frame, uint32_t logical, VkBuffer buffer,
+            Access access) {
+            external_[frame][logical] = { buffer, access, true };
+        }
+
+        // Ordered barriers the legacy executor records for one pass.
+        std::vector<RecordedBarrier> beginPass(uint32_t frame, uint32_t order) {
+            std::vector<RecordedBarrier> result;
+            const RenderGraph::CompiledPass& pass = graph_.passes()[order];
+            for (uint32_t index = 0; index < pass.usageCount; ++index) {
+                const RenderGraph::CompiledUsage& usage =
+                    graph_.usages()[pass.firstUsage + index];
+                const RenderGraph::CompiledResource& resource =
+                    graph_.resources()[usage.logicalResourceIndex];
+                if (resource.physicalSlot == RenderGraph::InvalidIndex) {
+                    External& binding = external_[frame][usage.logicalResourceIndex];
+                    if (!binding.tracked) continue;
+                    const auto before = getVulkanGraphAccessInfo(binding.access,
+                        RenderGraph::ResourceType::Buffer);
+                    const auto after = getVulkanGraphAccessInfo(usage.access,
+                        RenderGraph::ResourceType::Buffer);
+                    const VkAccessFlags writes = VK_ACCESS_SHADER_WRITE_BIT |
+                        VK_ACCESS_TRANSFER_WRITE_BIT;
+                    if (binding.access != usage.access || (before.access & writes)) {
+                        RecordedBarrier barrier{};
+                        barrier.handle = reinterpret_cast<uint64_t>(binding.buffer);
+                        barrier.srcStages = normalizedSource(before.stages);
+                        barrier.srcAccess = before.access;
+                        barrier.dstStages = after.stages;
+                        barrier.dstAccess = after.access;
+                        barrier.size = resource.desc.buffer.size;
+                        result.push_back(barrier);
+                    }
+                    binding.access = usage.access;
+                    continue;
+                }
+                Access& current = slotAccess_[frame][resource.physicalSlot];
+                if (current == usage.access && usage.access != Access::StorageWrite &&
+                    usage.access != Access::StorageReadWrite) {
+                    continue;
+                }
+                const RenderGraph::GraphResourceId id{ usage.logicalResourceIndex };
+                RecordedBarrier barrier{};
+                if (resource.desc.type == RenderGraph::ResourceType::Image) {
+                    const VulkanImageResource& image = executor_.image(frame, id);
+                    const auto before = legacyImageInfo(current, image.aspect);
+                    const auto after = legacyImageInfo(usage.access, image.aspect);
+                    barrier.image = true;
+                    barrier.handle = reinterpret_cast<uint64_t>(image.image);
+                    barrier.srcStages = normalizedSource(before.stages);
+                    barrier.srcAccess = before.access;
+                    barrier.dstStages = after.stages;
+                    barrier.dstAccess = after.access;
+                    barrier.oldLayout = before.layout;
+                    barrier.newLayout = after.layout;
+                    barrier.range = { image.aspect, 0, image.mipLevels, 0, image.arrayLayers };
+                }
+                else {
+                    const VulkanBufferResource& buffer = executor_.buffer(frame, id);
+                    const auto before = getVulkanGraphAccessInfo(current,
+                        RenderGraph::ResourceType::Buffer);
+                    const auto after = getVulkanGraphAccessInfo(usage.access,
+                        RenderGraph::ResourceType::Buffer);
+                    barrier.handle = reinterpret_cast<uint64_t>(buffer.buffer);
+                    barrier.srcStages = normalizedSource(before.stages);
+                    barrier.srcAccess = before.access;
+                    barrier.dstStages = after.stages;
+                    barrier.dstAccess = after.access;
+                    barrier.size = buffer.size;
+                }
+                result.push_back(barrier);
+                current = usage.access;
+            }
+            return result;
+        }
+
+    private:
+        struct External {
+            VkBuffer buffer = VK_NULL_HANDLE;
+            Access access = Access::Undefined;
+            bool tracked = false;
+        };
+
+        static VulkanGraphAccessInfo legacyImageInfo(Access access,
+            VkImageAspectFlags aspect) {
+            VulkanGraphAccessInfo info = getVulkanGraphAccessInfo(access,
+                RenderGraph::ResourceType::Image);
+            if (access == Access::SampledRead &&
+                (aspect & (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT)) != 0)
+                info.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+            return info;
+        }
+
+        const VulkanRenderGraphExecutor& executor_;
+        const RenderGraph::CompiledGraph& graph_;
+        std::vector<std::vector<Access>> slotAccess_;
+        std::vector<std::vector<External>> external_;
+    };
+
+    // Same barriers per pass as an ordered set: images in usage order and
+    // buffers in usage order (sync2 records the two arrays separately).
+    bool samePassBarriers(std::span<const RecordedBarrier> expected,
+        std::span<const RecordedBarrier> actual) {
+        if (expected.size() != actual.size()) return false;
+        for (const bool image : { true, false }) {
+            std::vector<const RecordedBarrier*> lhs;
+            std::vector<const RecordedBarrier*> rhs;
+            for (const auto& value : expected) if (value.image == image) lhs.push_back(&value);
+            for (const auto& value : actual) if (value.image == image) rhs.push_back(&value);
+            if (lhs.size() != rhs.size()) return false;
+            for (size_t index = 0; index < lhs.size(); ++index)
+                if (!lhs[index]->sameDependency(*rhs[index])) return false;
+        }
+        return true;
+    }
+
+    struct EquivalenceTotals {
+        size_t barriers = 0;
+        size_t passesWithBarriers = 0;
+        size_t sync2Calls = 0;
+        size_t legacyCalls = 0;
+    };
+
+    bool runEquivalence(const NamedTopology& topology, VulkanBarrierApi api,
+        EquivalenceTotals& totals) {
+        constexpr uint32_t FrameSlots = 2;
+        FakeResourceFactory factory;
+        RecordingBarrierSink sink;
+        VulkanRenderGraphExecutor executor;
+        executor.setBarrierSink(&sink);
+        executor.init(factory, FrameSlots);
+        executor.setBarrierApi(api);
+        executor.rebuild(topology.graph);
+        LegacyEmissionReference reference(executor, FrameSlots);
+        const RenderGraph::CompiledGraph& graph = *executor.compiledGraph();
+        const auto vsm = executor.findResource("shadow.virtual.working-set");
+        if (vsm.isValid()) {
+            for (uint32_t frame = 0; frame < FrameSlots; ++frame) {
+                const auto buffer = reinterpret_cast<VkBuffer>(uintptr_t{ 0x900 + frame });
+                executor.bindExternalBuffer(frame, vsm, buffer, 8'192);
+                reference.bindExternalBuffer(frame, vsm.logical, buffer, Access::Undefined);
+            }
+        }
+        for (uint32_t frame = 0; frame < 4; ++frame) {
+            const uint32_t slot = frame % FrameSlots;
+            executor.onFrameFenceCompleted(slot);
+            executor.beginFrameExecution(slot);
+            for (uint32_t pass = 0; pass < graph.passes().size(); ++pass) {
+                if (!scriptRuns(graph, frame, pass)) {
+                    executor.skipPass(RenderGraph::PassId{ pass });
+                    continue;
+                }
+                sink.clear();
+                executor.beginPass(FakeCommandBuffer, RenderGraph::PassId{ pass });
+                const std::vector<RecordedBarrier> expected = reference.beginPass(slot, pass);
+                const auto actual = sink.recorded();
+                const bool same = api == VulkanBarrierApi::Synchronization2
+                    ? samePassBarriers(expected, actual) &&
+                        sink.sync1Calls == 0 && sink.sync2Calls == (expected.empty() ? 0u : 1u)
+                    : actual.size() == expected.size() && sink.sync2Calls == 0 &&
+                        sink.sync1Calls == expected.size() &&
+                        std::equal(expected.begin(), expected.end(), actual.begin(),
+                            [](const auto& lhs, const auto& rhs) { return lhs.sameDependency(rhs); });
+                if (!same) {
+                    std::cerr << "  " << topology.name << ": frame " << frame << " pass '"
+                        << graph.passes()[pass].name << "' expected " << expected.size()
+                        << " barriers, recorded " << actual.size() << " in "
+                        << sink.sync1Calls << "+" << sink.sync2Calls << " calls\n";
+                    return false;
+                }
+                totals.barriers += expected.size();
+                totals.passesWithBarriers += expected.empty() ? 0 : 1;
+                totals.sync2Calls += sink.sync2Calls;
+                totals.legacyCalls += expected.size();
+            }
+            executor.finishFrameExecution();
+        }
+        if (sink.wrongCommandBuffer != 0 || sink.unexpectedDependencyContent != 0 ||
+            sink.overflow != 0) return false;
+        executor.cleanupAfterDeviceIdle();
+        return true;
+    }
+
+    bool testBatchedSynchronization2MatchesLegacyEmission() {
+        EquivalenceTotals sync2{};
+        EquivalenceTotals sync1{};
+        for (const NamedTopology& topology : productionTopologies()) {
+            CHECK(runEquivalence(topology, VulkanBarrierApi::Synchronization2, sync2));
+            CHECK(runEquivalence(topology, VulkanBarrierApi::Synchronization1, sync1));
+        }
+        CHECK(sync2.barriers == sync1.barriers);
+        CHECK(sync2.barriers > 0);
+        CHECK(sync2.sync2Calls == sync2.passesWithBarriers);
+        std::cout << "  " << productionTopologies().size() << " topologies x 4 frames: "
+            << sync2.barriers << " barriers, " << sync2.legacyCalls
+            << " legacy sync1 calls -> " << sync2.sync2Calls << " vkCmdPipelineBarrier2\n";
+        return true;
+    }
+
+    // Collapse rule contract: no production pass uses one physical resource
+    // twice, so batching never merges barriers in current topologies.
+    bool testProductionPassesNeverCollapse() {
+        for (const NamedTopology& topology : productionTopologies()) {
+            const RenderGraph::CompiledGraph& graph = topology.graph;
+            for (const RenderGraph::CompiledPass& pass : graph.passes()) {
+                std::vector<uint64_t> keys;
+                for (uint32_t index = 0; index < pass.usageCount; ++index) {
+                    const auto& usage = graph.usages()[pass.firstUsage + index];
+                    const auto& resource = graph.resources()[usage.logicalResourceIndex];
+                    keys.push_back(resource.physicalSlot != RenderGraph::InvalidIndex
+                        ? resource.physicalSlot
+                        : (uint64_t{ 1 } << 32) | usage.logicalResourceIndex);
+                }
+                std::sort(keys.begin(), keys.end());
+                if (std::adjacent_find(keys.begin(), keys.end()) != keys.end()) {
+                    std::cerr << "  " << topology.name << ": pass '" << pass.name
+                        << "' uses one physical resource twice\n";
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    // Two usages of one resource in a pass become one barrier from the first
+    // "before" state to the last "after" state.
+    bool testCollapseRule() {
+        RenderGraph::RenderGraphBuilder builder;
+        auto data = builder.createResource("data", bufferDesc());
+        auto color = builder.createResource("color", imageDesc());
+        const auto produce = builder.addPass("produce");
+        const auto both = builder.addPass("both");
+        data = builder.write(produce, data, Access::TransferDestination);
+        color = builder.write(produce, color, Access::ColorAttachment, RenderGraph::LoadOp::Clear);
+        builder.read(both, data, Access::StorageRead);
+        data = builder.write(both, data, Access::StorageReadWrite);
+        builder.read(both, color, Access::SampledRead);
+        color = builder.write(both, color, Access::StorageWrite);
+        builder.exportResource(data, Access::StorageReadWrite);
+        builder.exportResource(color, Access::StorageWrite);
+        const auto compiled = builder.compile();
+        CHECK(compiled.succeeded());
+        for (const VulkanBarrierApi api : { VulkanBarrierApi::Synchronization2,
+                 VulkanBarrierApi::Synchronization1 }) {
+            FakeResourceFactory factory;
+            RecordingBarrierSink sink;
+            VulkanRenderGraphExecutor executor;
+            executor.setBarrierSink(&sink);
+            executor.init(factory, 1);
+            executor.setBarrierApi(api);
+            executor.rebuild(*compiled.graph);
+            executor.beginFrameExecution(0);
+            executor.beginPass(FakeCommandBuffer, executor.passId("produce"));
+            sink.clear();
+            executor.beginPass(FakeCommandBuffer, executor.passId("both"));
+            executor.finishFrameExecution();
+            const auto recorded = sink.recorded();
+            CHECK(recorded.size() == 2);
+            CHECK(sink.calls == (api == VulkanBarrierApi::Synchronization2 ? 1u : 2u));
+            const RecordedBarrier& buffer = recorded[recorded[0].image ? 1 : 0];
+            const RecordedBarrier& image = recorded[recorded[0].image ? 0 : 1];
+            CHECK(buffer.srcAccess == VK_ACCESS_2_TRANSFER_WRITE_BIT);
+            CHECK(buffer.srcStages == VK_PIPELINE_STAGE_2_TRANSFER_BIT);
+            CHECK(buffer.dstAccess == (VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT));
+            CHECK(image.oldLayout == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+            CHECK(image.newLayout == VK_IMAGE_LAYOUT_GENERAL);
+            CHECK(image.dstAccess == VK_ACCESS_2_SHADER_WRITE_BIT);
+            executor.cleanupAfterDeviceIdle();
+        }
+        return true;
+    }
+
+    bool testSynchronization2Mapping() {
+        CHECK(toVulkanSourceStages2(VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT) ==
+            VK_PIPELINE_STAGE_2_NONE);
+        CHECK(toVulkanSourceStages2(VK_PIPELINE_STAGE_TRANSFER_BIT) ==
+            VK_PIPELINE_STAGE_2_TRANSFER_BIT);
+        CHECK(toVulkanDestinationStages2(VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT) ==
+            VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT);
+        for (uint8_t value = 0; value <= static_cast<uint8_t>(Access::Present); ++value) {
+            for (const auto type : { RenderGraph::ResourceType::Image,
+                     RenderGraph::ResourceType::Buffer }) {
+                const auto info = getVulkanGraphAccessInfo(static_cast<Access>(value), type);
+                // Every stage/access bit the graph uses is a legacy 32-bit bit.
+                CHECK(static_cast<VkPipelineStageFlags2>(info.stages) ==
+                    toVulkanDestinationStages2(info.stages));
+                CHECK((info.stages & VK_PIPELINE_STAGE_ALL_COMMANDS_BIT) == 0);
+            }
+        }
+        FakeResourceFactory factory;
+        VulkanRenderGraphExecutor executor;
+        executor.init(factory, 1);
+        CHECK(executor.barrierApi() == VulkanBarrierApi::Synchronization1);
+        CHECK(!vulkanDeviceSupportsSynchronization2(VK_NULL_HANDLE));
+        executor.rebuild(smallGraph());
+        executor.beginFrameExecution(0);
+        CHECK(throws([&] { executor.setBarrierApi(VulkanBarrierApi::Synchronization2); }));
+        for (uint32_t pass = 0; pass < 3; ++pass) executor.skipPass(RenderGraph::PassId{ pass });
+        executor.finishFrameExecution();
+        executor.setBarrierApi(VulkanBarrierApi::Synchronization2);
+        CHECK(executor.barrierApi() == VulkanBarrierApi::Synchronization2);
+        executor.cleanupAfterDeviceIdle();
+        return true;
+    }
+
 } // namespace
 
 int main() {
@@ -462,6 +843,11 @@ int main() {
         { "id and string order checks", testIdAndStringOrderChecks },
         { "barrier sink records graph barriers", testBarrierSinkRecordsGraphBarriers },
         { "external buffer binding by id", testExternalBufferBindingById },
+        { "synchronization2 mapping", testSynchronization2Mapping },
+        { "collapse rule", testCollapseRule },
+        { "production passes never collapse", testProductionPassesNeverCollapse },
+        { "batched synchronization2 matches legacy emission",
+            testBatchedSynchronization2MatchesLegacyEmission },
     };
 
     size_t passed = 0;

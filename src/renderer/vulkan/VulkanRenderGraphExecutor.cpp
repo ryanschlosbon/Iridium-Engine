@@ -112,11 +112,73 @@ namespace {
         }
     };
 
+    // R3b.2 equivalence-first mapping: every sync1 stage and access bit the
+    // graph uses has the same value in the *2 enums, so a cast preserves the
+    // dependency. Add an assert here before using any new bit.
+    static_assert(VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT == VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT);
+    static_assert(VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT == VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT);
+    static_assert(VK_PIPELINE_STAGE_2_VERTEX_INPUT_BIT == VK_PIPELINE_STAGE_VERTEX_INPUT_BIT);
+    static_assert(VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT == VK_PIPELINE_STAGE_VERTEX_SHADER_BIT);
+    static_assert(VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT == VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+    static_assert(VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT ==
+        VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT);
+    static_assert(VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT ==
+        VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT);
+    static_assert(VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT ==
+        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+    static_assert(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT == VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+    static_assert(VK_PIPELINE_STAGE_2_TRANSFER_BIT == VK_PIPELINE_STAGE_TRANSFER_BIT);
+    static_assert(VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT == VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+    static_assert(VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT == VK_ACCESS_INDIRECT_COMMAND_READ_BIT);
+    static_assert(VK_ACCESS_2_INDEX_READ_BIT == VK_ACCESS_INDEX_READ_BIT);
+    static_assert(VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT == VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT);
+    static_assert(VK_ACCESS_2_SHADER_READ_BIT == VK_ACCESS_SHADER_READ_BIT);
+    static_assert(VK_ACCESS_2_SHADER_WRITE_BIT == VK_ACCESS_SHADER_WRITE_BIT);
+    static_assert(VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT == VK_ACCESS_COLOR_ATTACHMENT_READ_BIT);
+    static_assert(VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT == VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
+    static_assert(VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT ==
+        VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT);
+    static_assert(VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT ==
+        VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
+    static_assert(VK_ACCESS_2_TRANSFER_READ_BIT == VK_ACCESS_TRANSFER_READ_BIT);
+    static_assert(VK_ACCESS_2_TRANSFER_WRITE_BIT == VK_ACCESS_TRANSFER_WRITE_BIT);
+
+    // The sync1 fallback's inverse: a NONE source scope is TOP_OF_PIPE.
+    VkPipelineStageFlags toSourceStages1(VkPipelineStageFlags2 stages) noexcept {
+        return stages == VK_PIPELINE_STAGE_2_NONE
+            ? VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT
+            : static_cast<VkPipelineStageFlags>(stages);
+    }
+
 } // namespace
 
 VulkanBarrierSink& vulkanCommandBarrierSink() noexcept {
     static VulkanCommandBarrierSink sink;
     return sink;
+}
+
+bool vulkanDeviceSupportsSynchronization2(VkPhysicalDevice physicalDevice) noexcept {
+    if (physicalDevice == VK_NULL_HANDLE) return false;
+    VkPhysicalDeviceProperties properties{};
+    vkGetPhysicalDeviceProperties(physicalDevice, &properties);
+    if (properties.apiVersion < VK_API_VERSION_1_3) return false;
+    VkPhysicalDeviceVulkan13Features vulkan13{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES };
+    VkPhysicalDeviceFeatures2 features{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2 };
+    features.pNext = &vulkan13;
+    vkGetPhysicalDeviceFeatures2(physicalDevice, &features);
+    return vulkan13.synchronization2 == VK_TRUE;
+}
+
+VkPipelineStageFlags2 toVulkanSourceStages2(VkPipelineStageFlags stages) noexcept {
+    // A TOP_OF_PIPE source scope waits on nothing: sync2 spells that NONE.
+    return stages == VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT
+        ? VK_PIPELINE_STAGE_2_NONE
+        : static_cast<VkPipelineStageFlags2>(stages);
+}
+
+VkPipelineStageFlags2 toVulkanDestinationStages2(VkPipelineStageFlags stages) noexcept {
+    return static_cast<VkPipelineStageFlags2>(stages);
 }
 
 VulkanGraphAccessInfo getVulkanGraphAccessInfo(RenderGraph::Access access,
@@ -418,6 +480,9 @@ void VulkanRenderGraphExecutor::init(VulkanResourceAllocator& allocator,
         allocatorFactory_.reset();
         throw;
     }
+    barrierApi_ = vulkanDeviceSupportsSynchronization2(allocator.physicalDevice())
+        ? VulkanBarrierApi::Synchronization2
+        : VulkanBarrierApi::Synchronization1;
 }
 
 void VulkanRenderGraphExecutor::init(VulkanGraphResourceFactory& factory,
@@ -426,6 +491,13 @@ void VulkanRenderGraphExecutor::init(VulkanGraphResourceFactory& factory,
         throw std::logic_error("Vulkan graph executor initialized incorrectly");
     }
     resources_.init(factory, frameCount);
+    barrierApi_ = VulkanBarrierApi::Synchronization1;
+}
+
+void VulkanRenderGraphExecutor::setBarrierApi(VulkanBarrierApi api) {
+    if (executingFrame_ != RenderGraph::InvalidIndex)
+        throw std::logic_error("Barrier API cannot change during frame execution");
+    barrierApi_ = api;
 }
 
 void VulkanRenderGraphExecutor::rebuild(RenderGraph::CompiledGraph graph) {
@@ -477,6 +549,16 @@ void VulkanRenderGraphExecutor::rebuild(RenderGraph::CompiledGraph graph) {
         passNames_.try_emplace(graph_->passes()[index].name, index);
     for (uint32_t index = 0; index < graph_->resources().size(); ++index)
         resourceNames_.try_emplace(graph_->resources()[index].name, index);
+
+    // A pass emits at most one barrier per usage (fewer after collapsing);
+    // the out-of-plan transitionImage needs one.
+    uint32_t batchCapacity = 1;
+    for (const RenderGraph::CompiledPass& pass : graph_->passes())
+        batchCapacity = std::max(batchCapacity, pass.usageCount);
+    imageBatch_.assign(batchCapacity, VkImageMemoryBarrier2{});
+    bufferBatch_.assign(batchCapacity, VkBufferMemoryBarrier2{});
+    batchOrder_.assign(batchCapacity, 0u);
+    imageBatchCount_ = bufferBatchCount_ = batchOrderCount_ = 0;
 }
 
 void VulkanRenderGraphExecutor::onFrameFenceCompleted(uint32_t frameIndex) {
@@ -594,57 +676,138 @@ void VulkanRenderGraphExecutor::setBarrierSink(VulkanBarrierSink* sink) noexcept
     sink_ = sink != nullptr ? sink : &vulkanCommandBarrierSink();
 }
 
-void VulkanRenderGraphExecutor::transitionPhysicalResource(
-    VkCommandBuffer commandBuffer, uint32_t physicalSlot,
+void VulkanRenderGraphExecutor::queueImageBarrier(const VulkanImageResource& image,
+    const VulkanGraphAccessInfo& before, const VulkanGraphAccessInfo& after) {
+    // Collapse rule: a second usage of the same image in one pass extends the
+    // first barrier to the last "after" state instead of adding a barrier.
+    for (uint32_t index = 0; index < imageBatchCount_; ++index) {
+        VkImageMemoryBarrier2& existing = imageBatch_[index];
+        if (existing.image == image.image) {
+            existing.dstStageMask = toVulkanDestinationStages2(after.stages);
+            existing.dstAccessMask = after.access;
+            existing.newLayout = after.layout;
+            return;
+        }
+    }
+    if (imageBatchCount_ >= imageBatch_.size() || batchOrderCount_ >= batchOrder_.size())
+        throw std::logic_error("Render-graph barrier batch capacity exceeded");
+    VkImageMemoryBarrier2& barrier = imageBatch_[imageBatchCount_];
+    barrier = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2 };
+    barrier.srcStageMask = toVulkanSourceStages2(before.stages);
+    barrier.srcAccessMask = before.access;
+    barrier.dstStageMask = toVulkanDestinationStages2(after.stages);
+    barrier.dstAccessMask = after.access;
+    barrier.oldLayout = before.layout;
+    barrier.newLayout = after.layout;
+    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.image = image.image;
+    barrier.subresourceRange.aspectMask = image.aspect;
+    barrier.subresourceRange.baseMipLevel = 0;
+    barrier.subresourceRange.levelCount = image.mipLevels;
+    barrier.subresourceRange.baseArrayLayer = 0;
+    barrier.subresourceRange.layerCount = image.arrayLayers;
+    batchOrder_[batchOrderCount_++] = imageBatchCount_++ | BatchImageBit;
+}
+
+void VulkanRenderGraphExecutor::queueBufferBarrier(VkBuffer buffer, VkDeviceSize size,
+    const VulkanGraphAccessInfo& before, const VulkanGraphAccessInfo& after) {
+    for (uint32_t index = 0; index < bufferBatchCount_; ++index) {
+        VkBufferMemoryBarrier2& existing = bufferBatch_[index];
+        if (existing.buffer == buffer) {
+            existing.dstStageMask = toVulkanDestinationStages2(after.stages);
+            existing.dstAccessMask = after.access;
+            return;
+        }
+    }
+    if (bufferBatchCount_ >= bufferBatch_.size() || batchOrderCount_ >= batchOrder_.size())
+        throw std::logic_error("Render-graph barrier batch capacity exceeded");
+    VkBufferMemoryBarrier2& barrier = bufferBatch_[bufferBatchCount_];
+    barrier = { VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2 };
+    barrier.srcStageMask = toVulkanSourceStages2(before.stages);
+    barrier.srcAccessMask = before.access;
+    barrier.dstStageMask = toVulkanDestinationStages2(after.stages);
+    barrier.dstAccessMask = after.access;
+    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.buffer = buffer;
+    barrier.offset = 0;
+    barrier.size = size;
+    batchOrder_[batchOrderCount_++] = bufferBatchCount_++;
+}
+
+void VulkanRenderGraphExecutor::flushBarriers(VkCommandBuffer commandBuffer) {
+    if (batchOrderCount_ == 0) return;
+    if (barrierApi_ == VulkanBarrierApi::Synchronization2) {
+        // One dependency per pass. Every barrier carries its own scopes, so
+        // batching barriers on different resources changes no dependency.
+        VkDependencyInfo dependency{ VK_STRUCTURE_TYPE_DEPENDENCY_INFO };
+        dependency.bufferMemoryBarrierCount = bufferBatchCount_;
+        dependency.pBufferMemoryBarriers = bufferBatchCount_ != 0 ? bufferBatch_.data() : nullptr;
+        dependency.imageMemoryBarrierCount = imageBatchCount_;
+        dependency.pImageMemoryBarriers = imageBatchCount_ != 0 ? imageBatch_.data() : nullptr;
+        sink_->pipelineBarrier2(commandBuffer, dependency);
+    }
+    else {
+        // Fallback: the pre-R3b.2 recording, one call per barrier in usage order.
+        for (uint32_t order = 0; order < batchOrderCount_; ++order) {
+            const uint32_t entry = batchOrder_[order];
+            if ((entry & BatchImageBit) != 0) {
+                const VkImageMemoryBarrier2& source = imageBatch_[entry & ~BatchImageBit];
+                VkImageMemoryBarrier barrier{ VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
+                barrier.srcAccessMask = static_cast<VkAccessFlags>(source.srcAccessMask);
+                barrier.dstAccessMask = static_cast<VkAccessFlags>(source.dstAccessMask);
+                barrier.oldLayout = source.oldLayout;
+                barrier.newLayout = source.newLayout;
+                barrier.srcQueueFamilyIndex = source.srcQueueFamilyIndex;
+                barrier.dstQueueFamilyIndex = source.dstQueueFamilyIndex;
+                barrier.image = source.image;
+                barrier.subresourceRange = source.subresourceRange;
+                sink_->pipelineBarrier(commandBuffer, toSourceStages1(source.srcStageMask),
+                    static_cast<VkPipelineStageFlags>(source.dstStageMask),
+                    {}, std::span(&barrier, 1));
+            }
+            else {
+                const VkBufferMemoryBarrier2& source = bufferBatch_[entry];
+                VkBufferMemoryBarrier barrier{ VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER };
+                barrier.srcAccessMask = static_cast<VkAccessFlags>(source.srcAccessMask);
+                barrier.dstAccessMask = static_cast<VkAccessFlags>(source.dstAccessMask);
+                barrier.srcQueueFamilyIndex = source.srcQueueFamilyIndex;
+                barrier.dstQueueFamilyIndex = source.dstQueueFamilyIndex;
+                barrier.buffer = source.buffer;
+                barrier.offset = source.offset;
+                barrier.size = source.size;
+                sink_->pipelineBarrier(commandBuffer, toSourceStages1(source.srcStageMask),
+                    static_cast<VkPipelineStageFlags>(source.dstStageMask),
+                    std::span(&barrier, 1), {});
+            }
+        }
+    }
+    imageBatchCount_ = bufferBatchCount_ = batchOrderCount_ = 0;
+}
+
+void VulkanRenderGraphExecutor::queuePhysicalTransition(uint32_t physicalSlot,
     RenderGraph::Access access) {
-    if (commandBuffer == VK_NULL_HANDLE || executingFrame_ >= frameAccess_.size() ||
+    if (executingFrame_ >= frameAccess_.size() ||
         physicalSlot >= frameAccess_[executingFrame_].size()) {
         throw std::out_of_range("Render-graph resource transition is out of range");
     }
     RenderGraph::Access& current = frameAccess_[executingFrame_][physicalSlot];
+    // Same-access rule (unchanged): skip unless the access writes storage.
     if (current == access && access != RenderGraph::Access::StorageWrite &&
         access != RenderGraph::Access::StorageReadWrite) {
         return;
     }
     const VulkanGraphPhysicalResource& physical = resources_.resource(
         executingFrame_, physicalSlot);
-    const VulkanGraphAccessInfo before = accessInfoForAspect(
-        current, physical.type,
-        physical.type == RenderGraph::ResourceType::Image
-            ? physical.image.aspect : 0);
-    const VulkanGraphAccessInfo after = accessInfoForAspect(
-        access, physical.type,
-        physical.type == RenderGraph::ResourceType::Image
-            ? physical.image.aspect : 0);
-    if (physical.type == RenderGraph::ResourceType::Image) {
-        VkImageMemoryBarrier barrier{ VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
-        barrier.srcAccessMask = before.access;
-        barrier.dstAccessMask = after.access;
-        barrier.oldLayout = before.layout;
-        barrier.newLayout = after.layout;
-        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        barrier.image = physical.image.image;
-        barrier.subresourceRange.aspectMask = physical.image.aspect;
-        barrier.subresourceRange.baseMipLevel = 0;
-        barrier.subresourceRange.levelCount = physical.image.mipLevels;
-        barrier.subresourceRange.baseArrayLayer = 0;
-        barrier.subresourceRange.layerCount = physical.image.arrayLayers;
-        sink_->pipelineBarrier(commandBuffer, before.stages, after.stages,
-            {}, std::span(&barrier, 1));
-    }
-    else {
-        VkBufferMemoryBarrier barrier{ VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER };
-        barrier.srcAccessMask = before.access;
-        barrier.dstAccessMask = after.access;
-        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        barrier.buffer = physical.buffer.buffer;
-        barrier.offset = 0;
-        barrier.size = physical.buffer.size;
-        sink_->pipelineBarrier(commandBuffer, before.stages, after.stages,
-            std::span(&barrier, 1), {});
-    }
+    const VkImageAspectFlags aspect = physical.type == RenderGraph::ResourceType::Image
+        ? physical.image.aspect : 0;
+    const VulkanGraphAccessInfo before = accessInfoForAspect(current, physical.type, aspect);
+    const VulkanGraphAccessInfo after = accessInfoForAspect(access, physical.type, aspect);
+    if (physical.type == RenderGraph::ResourceType::Image)
+        queueImageBarrier(physical.image, before, after);
+    else
+        queueBufferBarrier(physical.buffer.buffer, physical.buffer.size, before, after);
     current = access;
 }
 
@@ -664,21 +827,15 @@ void VulkanRenderGraphExecutor::beginPassAt(VkCommandBuffer commandBuffer,
                 const auto after = getVulkanGraphAccessInfo(usage.access, RenderGraph::ResourceType::Buffer);
                 // Same-access writes still need ordering. State survives slot reuse.
                 const VkAccessFlags writes = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
-                if (binding.access != usage.access || (before.access & writes)) {
-                    VkBufferMemoryBarrier barrier{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
-                    barrier.srcAccessMask = before.access; barrier.dstAccessMask = after.access;
-                    barrier.srcQueueFamilyIndex = barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                    barrier.buffer = binding.buffer; barrier.size = resource.desc.buffer.size;
-                    sink_->pipelineBarrier(commandBuffer, before.stages, after.stages,
-                        std::span(&barrier, 1), {});
-                }
+                if (binding.access != usage.access || (before.access & writes))
+                    queueBufferBarrier(binding.buffer, resource.desc.buffer.size, before, after);
                 binding.access = usage.access;
             }
             continue;
         }
-        transitionPhysicalResource(commandBuffer, resource.physicalSlot,
-            usage.access);
+        queuePhysicalTransition(resource.physicalSlot, usage.access);
     }
+    flushBarriers(commandBuffer);
     ++nextPass_;
 }
 
@@ -751,7 +908,10 @@ void VulkanRenderGraphExecutor::transitionImage(VkCommandBuffer commandBuffer,
     if (found.desc.type != RenderGraph::ResourceType::Image) {
         throw std::logic_error("Named image transition expected an image resource");
     }
-    transitionPhysicalResource(commandBuffer, found.physicalSlot, access);
+    if (commandBuffer == VK_NULL_HANDLE)
+        throw std::out_of_range("Render-graph resource transition is out of range");
+    queuePhysicalTransition(found.physicalSlot, access);
+    flushBarriers(commandBuffer);
 }
 
 void VulkanRenderGraphExecutor::cleanupAfterDeviceIdle() noexcept {
@@ -760,6 +920,10 @@ void VulkanRenderGraphExecutor::cleanupAfterDeviceIdle() noexcept {
     graph_ = nullptr;
     passNames_.clear();
     resourceNames_.clear();
+    imageBatch_.clear();
+    bufferBatch_.clear();
+    batchOrder_.clear();
+    imageBatchCount_ = bufferBatchCount_ = batchOrderCount_ = 0;
     barriers_.clear();
     frameAccess_.clear();
     externalBuffers_.clear(); externalBufferTracked_.clear(); frameRetired_.clear();
