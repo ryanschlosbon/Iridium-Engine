@@ -13,6 +13,8 @@ $M7RModels = [ordered]@{
     'ordinary2' = @{ Source = 'benchmarks/m6/ordinary2_closed_tetrahedron.gltf' }
     'cine8'     = @{ Source = 'benchmarks/m6/cinematic8_nested_tetrahedra.gltf' }
     'woit'      = @{ Source = 'benchmarks/m6/weighted_oit_particles.gltf' }
+    # Cooked environment (IBL) for the probe-capture fixture; local-only third-party HDRI.
+    'belfast-env' = @{ Source = 'hdri/belfast_sunset_puresky_4k.hdr' }
 }
 $alfa = 'alfa'
 $contact = 'contact'
@@ -29,6 +31,9 @@ $M7RFrozenSet = @(
     @{ Key = 'F5-hetero'; Id = 'm7_heterogeneous_shadow_warm_motion_v1'; Manifest = 'assets/m7-heterogeneous-shadow-admission-manifest.v1.json'; Model = $contact; Args = @() }
     @{ Key = 'F5-point';  Id = 'point_shadow_contact_v1';                Manifest = 'assets/m7-local-shadow-device-manifest.v1.json'; Model = $contact; Args = @() }
     @{ Key = 'F6-probe';  Id = 'm7_probe_lod_reflection_motion_v1';      Manifest = 'assets/m7-probe-lod-admission-manifest.v1.json'; Model = $alfa; Args = @() }
+    # F6 alone does not instantiate its probe (that needs --validate-reflection-probes and an
+    # environment artifact); F6-probecap covers live reflection-probe capture (added in R2).
+    @{ Key = 'F6-probecap'; Id = 'm7_probe_lod_reflection_motion_v1'; Manifest = 'assets/m7-probe-lod-admission-manifest.v1.json'; Model = $alfa; Environment = 'belfast-env'; Args = @('--validate-reflection-probes') }
     @{ Key = 'F7-hiz';    Id = 'm7_occlusion_dense_depth_stack_v1';      Manifest = 'assets/m7-occlusion-performance-manifest.v1.json'; Model = $alfa; Args = @('--experimental-depth-pyramid', '--experimental-depth-occlusion-rejection') }
     @{ Key = 'F7-lod';    Id = 'm7_many_instance_stress_v1';             Manifest = $threeDense; Model = 'alfa-lod'; Args = @('--experimental-gpu-lod-error-pixels', '2', '--gpu-lod-max-level', '15'); Tolerance = 'depth-tie' }
 )

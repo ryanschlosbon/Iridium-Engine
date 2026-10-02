@@ -45,6 +45,9 @@ try {
                 '--capture-point', $point, '--require-capture-signal',
                 $(if ($Validation) { '--validation' } else { '--no-validation' })
             ) + $fixture.Args + $ExtraArgs
+            if ($fixture.Environment) {
+                $arguments += @('--cooked-environment-artifact', (Join-Path $root (Get-M7RModelArtifact $root $fixture.Environment)))
+            }
             $started = Get-Date
             $exit = Invoke-M7REngine $exePath $arguments $log
             $seconds = ((Get-Date) - $started).TotalSeconds
