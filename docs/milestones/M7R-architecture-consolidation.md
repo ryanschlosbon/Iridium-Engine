@@ -300,6 +300,9 @@ the R0 tooling plus every validator flag once.
 
 ### R3 — Graph-driven execution and backend decomposition (`Proposed`)
 
+The implementation design, with the current-state inventory, culler interface, executor/sync2/history model, owner
+migration order and ordered sub-steps R3.0–R3c.12, is in `docs/milestones/M7R-R3-graph-execution-design.md`.
+
 **R3a — Shared indirect view culler.**
 - `VulkanIndirectViewCuller` is configured per view kind:
   - set-0 layout;
