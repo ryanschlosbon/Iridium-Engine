@@ -1,0 +1,57 @@
+# iridium_vulkan: the Vulkan backend (device, frame lifecycle, passes, graph
+# executor) and RenderBackendFactory, which implements the rhi-declared factory.
+add_library(iridium_vulkan STATIC
+        DescriptorAllocator.cpp
+        GlassDepthPipeline.cpp
+        GlassDepthRenderPass.cpp
+        RenderBackendFactory.cpp
+        VkContext.cpp
+        VkForwardRenderPass.cpp
+        VkGraphicsPipeline.cpp
+        VkLightingPipeline.cpp
+        VkRenderPass.cpp
+        VkSwapchain.cpp
+        VkUIRenderPass.cpp
+        VulkanClusteredLightingPipeline.cpp
+        VulkanDepthPyramid.cpp
+        VulkanDirectionalShadowMap.cpp
+        VulkanFrameScheduler.cpp
+        VulkanFrameTargets.cpp
+        VulkanHdrEncodePass.cpp
+        VulkanIndexedTextureTable.cpp
+        VulkanLayeredInterfaceCapturePass.cpp
+        VulkanLayeredLocalCompositionPass.cpp
+        VulkanLayeredSceneResolvePass.cpp
+        VulkanMeshLayouts.cpp
+        VulkanOutputPass.cpp
+        VulkanOutputTransport.cpp
+        VulkanPipelineLibrary.cpp
+        VulkanPointShadowPools.cpp
+        VulkanProductionRenderGraph.cpp
+        VulkanReflectionProbeCapturePass.cpp
+        VulkanReflectionProbeCaptureTargets.cpp
+        VulkanReflectionProbePipeline.cpp
+        VulkanRenderGraphExecutor.cpp
+        VulkanResourceAllocator.cpp
+        VulkanResourceState.cpp
+        VulkanSceneDescriptors.cpp
+        VulkanSpotShadowAtlas.cpp
+        VulkanTransparencyPyramid.cpp
+        VulkanUploadContext.cpp
+        VulkanVertexBackend.cpp
+        VulkanVirtualShadowDepthReceiverPass.cpp
+        VulkanVirtualShadowFullViewPass.cpp
+        VulkanVirtualShadowMarkingPass.cpp
+        VulkanVirtualShadowResources.cpp
+        VulkanWeightedOitPass.cpp
+)
+target_link_libraries(iridium_vulkan PUBLIC
+        iridium_lighting
+        iridium_rhi
+        iridium_graph
+        iridium_profiling
+        iridium_color
+        iridium_vendor_imgui
+        Vulkan::Vulkan
+        glfw)
+iridium_target_pch(iridium_vulkan ENGINE VULKAN)
