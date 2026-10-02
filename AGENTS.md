@@ -2,7 +2,13 @@
 
 ## Project direction
 
-Iridium is a high-end, future-facing C++20/Vulkan engine. The reference system is an RTX 4090, Core i9-14900K, 64 GB DDR5-6000, a fast NVMe SSD, and a 4K HDR display. The renderer should target native or temporally reconstructed 4K gameplay above 100 FPS on high-end hardware while preserving excellent image quality. Planned capabilities include wide-gamut HDR, GPU-driven rendering, mesh shaders, DLSS-class temporal reconstruction, and hybrid ray tracing.
+Iridium is a high-end, future-facing C++20/Vulkan engine. The reference system is an RTX 4090, Core i9-14900K, 64 GB DDR5-6000, a fast NVMe SSD, and a 4K HDR display. Visual fidelity is the primary goal, at the level of Unreal Engine 5, Frostbite, Anvil, and Northlight. Performance targets (owner decision, 2026-10-02):
+
+- **Raster (no ray tracing): 144 FPS at native 3840x2160** in fully dressed gameplay scenes, a 6.94 ms base-render budget. Native temporal AA is expected; sub-native reconstruction is not the raster answer.
+- **With hybrid ray tracing:** temporal reconstruction (DLSS-class or native TAAU) may render below output resolution; the displayed target stays 144 FPS.
+- Frame generation never counts toward these targets.
+
+Planned capabilities include wide-gamut HDR, GPU-driven rendering, mesh shaders, temporal reconstruction, and hybrid ray tracing. Architecture must leave headroom for heavy techniques; efficiency work exists to buy fidelity.
 
 Do not optimize primarily for low-end hardware. Do not use the high-end target as justification for waste that produces no measurable fidelity or engineering benefit.
 
@@ -14,15 +20,20 @@ Read these before roadmap work:
 - `ROADMAP.md`
 - `PLANS.md`
 - relevant records under `docs/architecture/`
-- `docs/performance/FRAME_BUDGET.md`
+- `docs/performance/FRAME_BUDGET.md` (budget table and evidence tiers)
+- the active milestone's execution plan and lead prompt under `docs/milestones/`
 
 Accepted architecture records are authoritative. If evidence requires changing one, propose a new superseding ADR instead of silently contradicting it.
 
 ## Working rules
 
 - Reinspect the current source before acting; documentation describes direction and may lag implementation.
-- Preserve unrelated and pre-existing worktree changes. The repository may be dirty.
-- Keep the engine buildable after each implementation slice.
+- Preserve unrelated and pre-existing worktree changes. Never run `git reset --hard`, `git clean`, or bulk checkouts over others' work.
+- Keep the engine buildable after each implementation slice, and commit each accepted slice (with the owner's standing approval) with a message naming the milestone/slice. Do not let accepted work accumulate uncommitted.
+- **Never commit or push third-party content** (models, textures, HDRIs, scenes, fonts, audio) unless the owner explicitly approves a specific asset and license. Such content is local-test only. `assets/` is allowlisted in `.gitignore`; keep it that way and check `git status` before every commit.
+- Third-party code libraries are allowed, but before adopting one, explain to the owner what it does, how it works, its license, and why it benefits the project. Record the decision in the milestone plan.
+- Use the evidence tier in `docs/performance/FRAME_BUDGET.md`: behavior-preserving refactors need byte-identical captures plus one matched timing pair; feature admission needs the full five-process protocol.
+- Keep qualification/oracle/test scaffolding out of production code paths where practical (harness, observer, or separate target); do not add new test hooks to core runtime interfaces.
 - Use the RHI boundary for backend-neutral contracts. Keep Vulkan details in the Vulkan backend unless a capability genuinely belongs in the RHI.
 - Keep scene lighting and transparency in linear scene-referred HDR until the final output transform.
 - Share BSDF functions between deferred, forward, and future ray-tracing paths.

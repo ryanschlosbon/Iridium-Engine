@@ -4,7 +4,8 @@
 
 This document defines how M7 optimization decisions are measured and accepted. It
 supplements `docs/performance/FRAME_BUDGET.md`; that document remains authoritative
-for the engine-wide 10 ms native-4K base-render target and reporting rules.
+for the engine-wide native-4K base-render target (6.94 ms / 144 FPS without RT since
+2026-10-02; 10 ms before) and reporting rules.
 
 M7 targets the reference RTX 4090, Core i9-14900K, 64 GB DDR5-6000 system and other
 high-end PCs. It should use the available hardware aggressively, but additional
@@ -155,7 +156,7 @@ M7 is not complete unless all of these are true:
   capture, resize, and live display transport retain their accepted behavior;
 - the representative steady paths have zero C++ allocation or a documented,
   measured exception approved by the lead;
-- the complete base-render path remains inside the 10 ms native-4K target with
+- the complete base-render path remains inside the 6.94 ms native-4K raster target with
   sufficient margin for later gameplay, M9 reconstruction, M10 GI, and M11 RT.
 
 ## Optimization admission gates
@@ -222,7 +223,7 @@ Promote it for a workload/quality profile only when matched 4K evidence shows a
 Pareto improvement over the hardened conventional path:
 
 - lower cost at matched quality; or
-- materially higher, more stable detail at comparable cost and within the 1.5 ms
+- materially higher, more stable detail at comparable cost and within the 1.0 ms
   shadow budget; and
 - bounded memory and p95/p99 invalidation behavior.
 

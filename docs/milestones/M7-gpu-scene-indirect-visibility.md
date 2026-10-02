@@ -15,11 +15,12 @@ remain open fidelity cases, not solved by quality or atlas priority. See
 validation evidence, and the required mixed-class composition regression slice.
 
 - **Milestone:** M7 — GPU Scene and Indirect Visibility
-- **Status:** In Progress — M7.8 active; M7.0-M7.7 accepted; LOD and Hi-Z
-  workload-selectable
+- **Status:** In Progress — **paused 2026-10-02 at the M7.8 checkpoint** for M7R
+  consolidation and the M9 pull-forward; M7.0-M7.7 accepted; LOD and Hi-Z
+  workload-selectable; M7.8 resumes after M8, M7.9-M7.12 after M9
 - **Lead:** fresh M7 milestone-lead task; one integration owner for GPU-scene,
   visibility, geometry, residency, and shadow-path coherence
-- **Last updated:** 2026-09-29
+- **Last updated:** 2026-10-02
 - **Reference system:** RTX 4090, Core i9-14900K, 64 GB DDR5-6000, fast NVMe,
   native or temporally reconstructed 4K HDR
 - **Target:** more than 100 FPS in fully dressed active gameplay scenes while
@@ -1393,6 +1394,16 @@ alternatives, evidence, selected production/workload policy, fallback, and ADR i
   projection, query, readback, writes, and full-capacity buffers are separated
   from the deployable route. Accept M7.6 as workload-selectable, retain the global
   default-off policy, and advance M7.7. No ADR change.
+
+- **2026-10-02 — Program pause and reschedule (owner decision):** after the
+  takeover audit, pause M7 at the committed M7.8 checkpoint (GPU residency reference
+  rejected; scalable residency, page raster, and sampling not started). The raster
+  target becomes 144 FPS at native 4K (6.94 ms); the shadow row drops to 1.0 ms.
+  Order: M7R architecture consolidation, M9 temporal AA/motion vectors/bloom/auto-
+  exposure, then M7.9-M7.12, M8, and M7.8 Virtual Shadow Maps resumed on meshlet
+  caster submission (the plan's own "VSM costs more before M8" risk). All M7.8 code
+  stays default-off and must keep compiling; conventional shadows remain production.
+  No ADR is superseded; ADR-0010's VSM direction stands with revised timing.
 
 ## Completion report requirements
 

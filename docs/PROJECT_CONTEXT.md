@@ -1,12 +1,23 @@
 # Iridium Engine Project Context
 
+## Current direction (2026-10-02, read first)
+
+Claude Code took over from Codex on 2026-10-02. All prior work is committed on
+`Render-Refactor-for-Modularity` (PR #6). M7 is paused at the M7.8 checkpoint. The
+active milestone is **M7R architecture consolidation**
+(`docs/milestones/M7R-task-lead-prompt.md`), followed by M9 native temporal AA,
+motion vectors, bloom, and auto-exposure; then M7.9-M7.12, M8, resumed M7.8 Virtual
+Shadow Maps, M10, and M11. Evidence tiers and the 6.94 ms budget are in
+`docs/performance/FRAME_BUDGET.md`. Third-party content is never committed. The
+history below is a dated record; prefer ROADMAP.md and the active plan for status.
+
 ## Why this document exists
 
 This is the compact handoff for new lead tasks. It records facts found during the post-RHI-refactor architecture review, accepted direction, and unresolved choices. It is not a substitute for reading current source, the roadmap, milestone plans, and ADRs.
 
 ## Product intent
 
-Iridium is intended to be a visually ambitious, high-end engine rather than a lowest-common-denominator renderer. The reference PC is an RTX 4090, Core i9-14900K, 64 GB DDR5-6000, a 2 TB Samsung 990 Pro, and a 4K HDR display. The target is more than 100 FPS in fully dressed active gameplay scenes, with native rendering or high-quality temporal reconstruction chosen intentionally.
+Iridium is intended to be a visually ambitious, high-end engine rather than a lowest-common-denominator renderer. The reference PC is an RTX 4090, Core i9-14900K, 64 GB DDR5-6000, a 2 TB Samsung 990 Pro, and a 4K HDR display. Since 2026-10-02 the raster target is 144 FPS at native 4K without ray tracing (6.94 ms base render, native temporal AA); with hybrid ray tracing, temporal reconstruction may be used while holding 144 FPS displayed. Visual fidelity comparable to UE5/Frostbite/Anvil/Northlight is the primary bar.
 
 The engine should eventually support wide-gamut HDR, GPU-driven submission, mesh shaders, DLSS-class reconstruction, hybrid ray tracing, and a reference path tracer. Before those become dependencies, it needs a complete raster foundation: lights, shadow maps, image-based lighting, probes/cubemaps, baking, and credible non-RT GI.
 

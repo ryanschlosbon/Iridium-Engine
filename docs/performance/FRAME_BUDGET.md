@@ -4,11 +4,20 @@
 
 - Hardware: RTX 4090, Core i9-14900K, 64 GB DDR5-6000, fast NVMe SSD.
 - Display workload: 3840x2160, HDR where supported.
-- Goal: more than 100 FPS in fully dressed, active gameplay scenes.
-- Base-render frame budget at 100 FPS: 10.0 ms.
-- Frame generation, if used, is reported separately and does not satisfy the 10.0 ms simulation/base-render target.
+- **Raster goal (owner decision, 2026-10-02): 144 FPS at native 3840x2160 without
+  ray tracing, in fully dressed, active gameplay scenes.** Base-render frame budget:
+  **6.94 ms**. Native means the scene is shaded at output resolution; native
+  temporal anti-aliasing (TAA/DLAA-class at 1:1) is allowed and expected.
+- **Ray-traced goal:** when hybrid ray tracing (M11) is enabled, temporal
+  reconstruction (DLSS/FSR/XeSS-class or native TAAU) may render below output
+  resolution. The displayed target remains 144 FPS; reports state internal
+  resolution, reconstruction mode, and displayed versus base-render frame time.
+- Frame generation, if used, is reported separately and never satisfies the
+  6.94 ms simulation/base-render target.
+- The earlier ">100 FPS / 10.0 ms" contract governed M0-M7.8 evidence. Historical
+  reports remain valid against the budget in force when they were written.
 
-This is an engineering contract, not a promise that every pathological authoring case runs at 100 FPS. Quality tiers and explicit hero-material budgets should keep normal production content predictable.
+This is an engineering contract, not a promise that every pathological authoring case runs at 144 FPS. Quality tiers and explicit hero-material budgets should keep normal production content predictable.
 
 ## Measurement rules
 
@@ -146,23 +155,47 @@ texture/coarser-LOD/proxy fallback visible while child products upload within a
 per-frame byte/time budget. The current one-shot atomic model path remains a
 compatibility fallback, not the intended steady solution for very large assets.
 
-## Initial 10 ms GPU budget
+## 6.94 ms native-4K raster GPU budget (2026-10-02)
 
-This table is a starting hypothesis for M0/M1, not a permanent allocation. Overlap means the row totals are not a scheduling model.
+This table replaces the M0 10 ms hypothesis. It is a planning allocation, not a
+scheduling model; rows may overlap if asynchronous compute is later admitted.
+Measured context at adoption: the M5 dressed car measured 4.238 ms GPU median and
+the M6 Alfa scene 5.821 ms, both **before** any AA, AO, GI, bloom, auto-exposure, or
+motion-vector work existed. The raster path therefore needs real efficiency gains,
+not only feature additions, to reach this target in dressed scenes.
 
-| Area | Initial budget | Notes |
+| Area | Budget | Notes |
 |---|---:|---|
-| Visibility, depth, and surface data | 1.8 ms | Includes geometry plus conventional GBuffer or visibility/material resolve; should improve with M7/M8. |
-| Shadows | 1.5 ms | Requires caching and content-aware update policy. |
-| Direct lighting and IBL | 1.4 ms | Deferred plus complex-forward contribution. |
-| Transparency and refraction | 1.0 ms | Ordinary scene target; separately budget marked hero glass. |
-| Non-RT GI, probes, and reflections | 1.5 ms | Technique mix will evolve in M5/M10. |
-| Temporal reconstruction and AA | 0.9 ms | Native reference and external upscalers measured independently. |
-| Post-processing, bloom, exposure, output | 0.8 ms | Includes HDR output transform, excludes UI if separately timed. |
-| UI, particles, and miscellaneous | 0.5 ms | Content dependent. |
-| Scheduling margin | 0.6 ms | Protects against spikes and features not represented above. |
+| Visibility, depth, and surface data | 1.20 ms | Geometry plus GBuffer or visibility/material resolve; M7/M8 culling, LOD, and meshlets must earn this. |
+| Shadows | 1.00 ms | Conventional cached maps by default; virtual shadows only where they win. |
+| Direct lighting and IBL | 0.90 ms | Deferred plus complex-forward; includes clustered assignment. |
+| Transparency and refraction | 0.70 ms | Ordinary scenes; marked hero glass is budgeted separately and reported. |
+| Non-RT GI, AO, probes, and reflections | 1.20 ms | M10 technique mix (GTAO-class AO, probes/volumes, screen-space). |
+| Native temporal AA | 0.40 ms | 1:1 TAA/DLAA-class; reconstruction below native is an RT-tier tool. |
+| Post-processing, bloom, exposure, output | 0.50 ms | Includes HDR output transform; excludes separately timed UI. |
+| UI, particles, and miscellaneous | 0.40 ms | Content dependent. |
+| Scheduling margin | 0.64 ms | Spikes, p95/p99 headroom, and unrepresented features. |
+| **Total** | **6.94 ms** | 144 FPS at native 3840x2160. |
 
-CPU work should remain comfortably below the GPU target in representative scenes, with a provisional target of less than 4 ms for simulation plus render preparation on the reference CPU and low submission overhead. M0 establishes useful percentiles and thread-level budgets.
+The RT tier is budgeted at internal (reconstructed) resolution plus a separately
+reported reconstruction cost; it defines its own table when M11 begins.
+
+CPU work must not limit the 144 FPS target. Provisional targets on the reference
+CPU: no more than 3.0 ms of serial main-thread simulation plus render preparation
+and submission per frame, with additional work parallelized across worker threads;
+every steady per-frame stage reports its critical-path and aggregate worker time.
+Presentation/acquire waits are reported separately and never counted as CPU work.
+
+## Evidence tiers (owner decision, 2026-10-02)
+
+| Change type | Required evidence |
+|---|---|
+| **Refactor / behavior-preserving** (build, code motion, API reshaping, allocator or synchronization changes that must not alter output) | Debug and Release builds and tests; Vulkan validation clean on representative fixtures; byte-identical scene-linear and final-output captures on the frozen fixture set; one matched native-4K Release timing pair (before/after, reversed order) showing no CPU/GPU median or p99 regression beyond noise. |
+| **Feature admission / optimization promotion** (new visible feature, new default, technique replacing another) | The full protocol: five fresh native-4K Release processes per route, median/p95/p99, matched captures with per-fixture thresholds, memory and counters, as defined below and in the milestone contract. |
+
+A refactor that cannot remain byte-identical (for example, floating-point
+reassociation from reordered work) must state why and use the feature-admission
+image thresholds for the affected fixtures.
 
 ## Required counters
 
@@ -212,10 +245,11 @@ Therefore:
 
 ## High-fidelity visibility and atmosphere guardrails
 
-ADR-0010 adds quality tiers; it does not increase the 10.0 ms base-render budget.
-On the RTX 4090 reference, the ordinary dressed-scene target remains 1.5 ms for all
-shadow rendering/filtering and 1.5 ms for the complete non-RT GI/AO/probe/reflection
-mix. Cinematic/hero overrides may exceed an individual row only when spatially
+ADR-0010 adds quality tiers; it does not increase the 6.94 ms native-4K raster
+budget. On the RTX 4090 reference, the ordinary dressed-scene target is 1.0 ms for
+all shadow rendering/filtering and 1.2 ms for the complete non-RT
+GI/AO/probe/reflection mix (these were 1.5 ms each under the former 10 ms
+contract, and M7-era reports that cite 1.5 ms were judged against that value). Cinematic/hero overrides may exceed an individual row only when spatially
 bounded and when the total frame, tail latency, and memory remain reported. RTX 5090
 results are useful additional evidence but never replace the fixed 4090 comparison.
 

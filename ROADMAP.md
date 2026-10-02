@@ -9,7 +9,9 @@ Status values: `Proposed`, `Ready`, `In Progress`, `Blocked`, `Accepted`.
 ## Product and performance goals
 
 - High-fidelity, future-facing Vulkan renderer for high-end PCs.
-- 4K HDR gameplay at more than 100 FPS on the reference system, using native rendering, DLAA, or high-quality temporal reconstruction as appropriate.
+- Raster (no ray tracing): 144 FPS at native 3840x2160 HDR on the reference system in fully dressed gameplay scenes (6.94 ms base-render budget), with native temporal AA. Owner decision 2026-10-02; previously >100 FPS / 10 ms.
+- With hybrid ray tracing: 144 FPS displayed, using temporal reconstruction (DLSS-class or native TAAU) where appropriate.
+- Visual fidelity comparable to Unreal Engine 5, Frostbite, Anvil, and Northlight is the primary quality bar.
 - Linear scene-referred HDR lighting and transparency with SDR, scRGB, HDR10, and useful wide-gamut output paths.
 - A complete high-quality raster path before ray tracing becomes required for baseline lighting.
 - Scalable CPU/GPU architecture: GPU scene, indirect visibility, mesh shaders, and later ray tracing.
@@ -496,7 +498,11 @@ Acceptance gate: the sample car windows and headlights render predictably, norma
 
 ### M7 - GPU scene and indirect visibility
 
-Status: `In Progress` — M7.8 active; M7.0-M7.7 accepted after repaired lit
+Status: `In Progress` — **paused 2026-10-02 at the M7.8 checkpoint** for M7R
+architecture consolidation and the M9 temporal/post pull-forward (see Program
+schedule). M7.0-M7.7 accepted; M7.8 Virtual Shadow Map work is retained default-off
+and resumes after M8 meshlets. M7.9-M7.12 resume after M9. Historical status:
+M7.8 active; M7.0-M7.7 accepted after repaired lit
 qualification. LOD cooking, opt-in device selection, and bounded generation-safe
 main-view hysteresis are accepted as a workload-selectable route; default remains
 LOD0. A
@@ -931,6 +937,50 @@ resolves correct surface/motion data and demonstrates a representative-scene ben
 before becoming production; classic indexed packed-deferred remains available as a
 fallback.
 
+### M7R - Architecture consolidation
+
+Status: `Ready` (owner-approved 2026-10-02; lead prompt
+`docs/milestones/M7R-task-lead-prompt.md`; execution plan to be written by the lead
+as `docs/milestones/M7R-architecture-consolidation.md`)
+
+Dependencies: accepted M0-M7.7 and the committed M7.8 checkpoint.
+
+The takeover audit of 2026-10-02 found that feature work had outpaced structure:
+`VulkanVertexBackend.cpp` is 13.3k lines with about 385 members, `Application.cpp`
+6.7k lines, qualification/oracle code is interleaved with production paths (about
+20-30% of both), render-graph passes are declared but executed through imperative
+string-matched calls, Vulkan 1.3 features (synchronization2, dynamic rendering,
+timeline semaphores) are unused, memory is one `vkAllocateMemory` per resource with no
+transient aliasing or pipeline cache, structural changes drain the GPU, the frame
+loop is single-threaded, and the build has no module libraries or precompiled
+headers. M7R fixes these without changing rendered output so M9-M11 can add heavy
+techniques inside the 6.94 ms raster budget.
+
+Deliverables:
+
+- Per-module CMake libraries, tests linking libraries rather than recompiling
+  sources, precompiled headers, and measured build-time improvement.
+- Qualification harness separated from production (backend, application, and
+  `IRenderBackend` test hooks), data-driven CLI registration, and behavioral tests
+  replacing source-text assertions.
+- Render-graph-driven execution: passes register execute callbacks, resources and
+  passes are index-addressed, barriers are batched with synchronization2, and
+  rendering uses dynamic rendering.
+- Backend decomposition into pass/feature owners, including one shared indirect
+  view culler for main/shadow/probe consumers.
+- Vulkan memory modernization: suballocation (VMA), aliased transient graph memory,
+  fence-keyed deferred deletion instead of all-frame waits, a persisted pipeline
+  cache, and asynchronous uploads on a transfer queue with timeline semaphores.
+- Application decomposition (frame orchestration, render extraction, editor host,
+  asset integration), an engine task system replacing per-service threads,
+  parallel/change-driven extraction, and retirement of the M7.2 parity packet path.
+
+Acceptance gate: behavior-preserving evidence tier throughout (byte-identical
+captures on the frozen fixture set, validation clean, Debug/Release tests, one matched
+native-4K timing pair per slice with no median/p99 regression); measured build-time,
+CPU-frame, and hitch improvements; no source file above an agreed size guideline
+without justification; and a written M7R-to-M9 handoff.
+
 ### M8 - Meshlet cooker and mesh-shader path
 
 Status: `Proposed`
@@ -957,12 +1007,19 @@ Acceptance gate: mesh shaders produce matching images and visibility identities 
 
 Status: `Proposed`
 
-Dependencies: M1, M2, current/previous data from M7.
+Dependencies: M1, M2, M7R, and the current/previous transform data already provided
+by the accepted M7.1/M7.2 GPU scene. Scheduled immediately after M7R (2026-10-02).
+As the raster target is native 4K, M9's first production deliverable is native-
+resolution temporal AA plus motion vectors; sub-native reconstruction serves the RT
+tier.
 
 Deliverables:
 
 - Stable jitter, current/previous matrices, skinned motion, depth, exposure, reactive data, and history invalidation.
 - Native TAA/DLAA-quality reference path.
+- Core HDR post-processing pulled forward with M9: physically based bloom on the
+  existing disabled graph hook and automatic exposure/eye adaptation (deferred to
+  M9 by ADR-0002), both scene-linear before the single output transform.
 - Vendor-neutral super-resolution interface and Vulkan SDK/plugin requirement negotiation.
 - DLSS integration first, with room for FSR/XeSS providers.
 - Dynamic-resolution policy and objective ghosting/disocclusion tests.
@@ -1092,7 +1149,11 @@ requested/visible geometry, draws, transparency, shadow work, and residency. M7/
 optimization is accepted from those counters and matched imagery, not title FPS
 alone.
 
-Scheduling order remains M6 through M11. M12 material authoring and M13 animation
+Program schedule (owner decision 2026-10-02): **M7R architecture consolidation ->
+M9 temporal AA, motion vectors, bloom, and auto-exposure -> M7.9-M7.12 -> M8 ->
+M7.8 Virtual Shadow Maps resumed on meshlet caster submission -> M10 -> M11.** The
+material editor follow-ups and the Porsche mixed-class glass ordering defect are
+deferred until after M7R/M9. Previously the order was M6 through M11. M12 material authoring and M13 animation
 graph work are intentionally placed afterward and must not expand active renderer
 milestones.
 
