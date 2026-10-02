@@ -285,3 +285,30 @@ iridium_add_test(ViewportLayoutTests
         SOURCES editor/ViewportLayoutTests.cpp
         LIBS iridium_editor iridium_vendor_imgui
         NO_PCH)
+
+# --- explicit qualification oracles (M7R R2.5) --------------------------------------
+# --validation no longer implies the CPU oracles; these runs keep device/CPU parity
+# exercised on tracked engine-authored fixtures.
+foreach(_oracle_case IN ITEMS
+        "point_shadow_contact_v1|assets/m7-local-shadow-device-manifest.v1.json"
+        "m7_heterogeneous_shadow_warm_motion_v1|assets/m7-heterogeneous-shadow-admission-manifest.v1.json")
+    string(REPLACE "|" ";" _oracle_parts "${_oracle_case}")
+    list(GET _oracle_parts 0 _oracle_fixture)
+    list(GET _oracle_parts 1 _oracle_manifest)
+    set(_oracle_name "EngineOracle.shadow_indirect.${_oracle_fixture}")
+    add_test(NAME ${_oracle_name}
+            COMMAND ${CMAKE_COMMAND}
+                -DENGINE=$<TARGET_FILE:IridiumEngine>
+                -DCOOK=$<TARGET_FILE:IridiumCookAsset>
+                -DSOURCE_ROOT=${PROJECT_SOURCE_DIR}
+                -DWORK_DIR=${CMAKE_BINARY_DIR}/oracle-tests/${_oracle_fixture}
+                -DMODEL=benchmarks/m5/directional-shadow-contact.gltf
+                -DBENCHMARK=${_oracle_fixture}
+                -DMANIFEST=${_oracle_manifest}
+                -DORACLE_ARGS=--shadow-indirect-qualification-oracle
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/renderer/EngineOracleProcessTest.cmake
+            WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+    set_tests_properties(${_oracle_name} PROPERTIES
+            LABELS "vulkan;process"
+            ENVIRONMENT "VK_LOADER_LAYERS_DISABLE=~implicit~")
+endforeach()

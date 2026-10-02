@@ -836,8 +836,7 @@ namespace Iridium {
                 ? "_probe_capture_direct_reference"
                 : "_probe_capture_automatic";
             captureMetadata.qualitySettings += "_shadow_indirect_oracle_" +
-                std::to_string(config_.enableValidation ||
-                    config_.shadowIndirectQualificationOracle);
+                std::to_string(config_.shadowIndirectQualificationOracle);
             captureMetadata.qualitySettings += "_shadow_lod_texels_" +
                 std::to_string(config_.experimentalShadowLodErrorTexels) +
                 "_max_" + std::to_string(config_.shadowLodMaximumLevel);
@@ -845,14 +844,12 @@ namespace Iridium {
                 std::to_string(config_.experimentalGpuLodErrorPixels) + "_max_" +
                 std::to_string(config_.gpuLodMaximumLevel) + "_hysteresis_" +
                 std::to_string(config_.gpuLodHysteresisFraction) + "_oracle_" +
-                std::to_string(config_.enableValidation ||
-                    config_.gpuLodQualificationOracle) + "_resident_floor_" +
+                std::to_string(config_.gpuLodQualificationOracle) + "_resident_floor_" +
                 std::to_string(config_.gpuLodMinimumResidentLevel);
             captureMetadata.qualitySettings += "_probe_lod_px_" +
                 std::to_string(config_.experimentalProbeLodErrorPixels) +
                 "_max_" + std::to_string(config_.probeLodMaximumLevel) +
-                "_oracle_" + std::to_string(config_.enableValidation ||
-                    config_.probeLodQualificationOracle);
+                "_oracle_" + std::to_string(config_.probeLodQualificationOracle);
             captureMetadata.qualitySettings += "_depth_pyramid_" +
                 std::to_string(config_.experimentalDepthPyramid) +
                 "_occlusion_query_" +
@@ -860,8 +857,7 @@ namespace Iridium {
                 "_occlusion_rejection_" +
                 std::to_string(config_.experimentalDepthOcclusionRejection);
             captureMetadata.qualitySettings += "_occlusion_oracle_" +
-                std::to_string(config_.enableValidation ||
-                    config_.depthOcclusionQualificationOracle);
+                std::to_string(config_.depthOcclusionQualificationOracle);
             captureMetadata.qualitySettings += "_fixture_lights_" +
                 std::to_string(activeBenchmark_
                     ? activeBenchmark_->lights.size() : 0u);
@@ -1113,8 +1109,7 @@ namespace Iridium {
                 ? "_probe_capture_direct_reference"
                 : "_probe_capture_automatic";
             metadata.qualitySettings += "_shadow_indirect_oracle_" +
-                std::to_string(config_.enableValidation ||
-                    config_.shadowIndirectQualificationOracle);
+                std::to_string(config_.shadowIndirectQualificationOracle);
             metadata.qualitySettings += "_shadow_lod_texels_" +
                 std::to_string(config_.experimentalShadowLodErrorTexels) +
                 "_max_" + std::to_string(config_.shadowLodMaximumLevel);
@@ -1122,14 +1117,12 @@ namespace Iridium {
                 std::to_string(config_.experimentalGpuLodErrorPixels) + "_max_" +
                 std::to_string(config_.gpuLodMaximumLevel) + "_hysteresis_" +
                 std::to_string(config_.gpuLodHysteresisFraction) + "_oracle_" +
-                std::to_string(config_.enableValidation ||
-                    config_.gpuLodQualificationOracle) + "_resident_floor_" +
+                std::to_string(config_.gpuLodQualificationOracle) + "_resident_floor_" +
                 std::to_string(config_.gpuLodMinimumResidentLevel);
             metadata.qualitySettings += "_probe_lod_px_" +
                 std::to_string(config_.experimentalProbeLodErrorPixels) +
                 "_max_" + std::to_string(config_.probeLodMaximumLevel) +
-                "_oracle_" + std::to_string(config_.enableValidation ||
-                    config_.probeLodQualificationOracle);
+                "_oracle_" + std::to_string(config_.probeLodQualificationOracle);
             metadata.qualitySettings += "_depth_pyramid_" +
                 std::to_string(config_.experimentalDepthPyramid) +
                 "_occlusion_query_" +
@@ -1137,8 +1130,7 @@ namespace Iridium {
                 "_occlusion_rejection_" +
                 std::to_string(config_.experimentalDepthOcclusionRejection);
             metadata.qualitySettings += "_occlusion_oracle_" +
-                std::to_string(config_.enableValidation ||
-                    config_.depthOcclusionQualificationOracle);
+                std::to_string(config_.depthOcclusionQualificationOracle);
             metadata.qualitySettings += "_fixture_lights_" +
                 std::to_string(activeBenchmark_
                     ? activeBenchmark_->lights.size() : 0u);
@@ -1346,7 +1338,6 @@ namespace Iridium {
             .experimentalDepthOcclusionRejection =
                 config_.experimentalDepthOcclusionRejection,
             .enableDepthOcclusionQualificationOracle =
-                config_.enableValidation ||
                 config_.depthOcclusionQualificationOracle,
             .cpuProfiler = &cpuProfiler_,
             .enableGpuProfiling = config_.enableGpuProfiling,
@@ -1357,7 +1348,6 @@ namespace Iridium {
             .forceDirectGBufferReference = config_.forceDirectGBufferReference,
             .forceDirectShadowReference = config_.forceDirectShadowReference,
             .enableShadowIndirectQualificationOracle =
-                config_.enableValidation ||
                 config_.shadowIndirectQualificationOracle,
             .experimentalShadowLodErrorTexels =
                 config_.experimentalShadowLodErrorTexels,
@@ -1365,13 +1355,11 @@ namespace Iridium {
             .experimentalGpuLodErrorPixels = config_.experimentalGpuLodErrorPixels,
             .gpuLodMaximumLevel = config_.gpuLodMaximumLevel,
             .gpuLodHysteresisFraction = config_.gpuLodHysteresisFraction,
-            .enableGpuLodQualificationOracle = config_.enableValidation ||
-                config_.gpuLodQualificationOracle,
+            .enableGpuLodQualificationOracle = config_.gpuLodQualificationOracle,
             .experimentalProbeLodErrorPixels =
                 config_.experimentalProbeLodErrorPixels,
             .probeLodMaximumLevel = config_.probeLodMaximumLevel,
-            .enableProbeLodQualificationOracle = config_.enableValidation ||
-                config_.probeLodQualificationOracle,
+            .enableProbeLodQualificationOracle = config_.probeLodQualificationOracle,
             .weightedOitOrderSeed = config_.weightedOitOrderSeed,
             .gBufferLayout = config_.gBufferLayout,
             .clusterTileSize = config_.clusterTileSize,
