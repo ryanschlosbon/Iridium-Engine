@@ -25,7 +25,6 @@ namespace Iridium {
         VkRenderPass lighting = VK_NULL_HANDLE;
         VkRenderPass forward = VK_NULL_HANDLE;
         VkRenderPass transparent = VK_NULL_HANDLE;
-        VkRenderPass glassDepth = VK_NULL_HANDLE;
         VkRenderPass layeredInterfaceCapture = VK_NULL_HANDLE;
         VkRenderPass layeredLocalComposition = VK_NULL_HANDLE;
         VkRenderPass weightedOitAccumulation = VK_NULL_HANDLE;
@@ -44,7 +43,6 @@ namespace Iridium {
         VulkanImageResource litScene;
         VulkanImageResource refractionColorPyramid;
         VulkanImageResource refractionDepthPyramid;
-        VulkanImageResource glassDepth;
         VulkanImageResource layeredEntryDepth;
         VulkanImageResource layeredEntryIdentity;
         VulkanImageResource layeredExitDepth;
@@ -60,7 +58,6 @@ namespace Iridium {
         VkFramebuffer lightingFramebuffer = VK_NULL_HANDLE;
         VkFramebuffer forwardFramebuffer = VK_NULL_HANDLE;
         VkFramebuffer transparentFramebuffer = VK_NULL_HANDLE;
-        VkFramebuffer glassDepthFramebuffer = VK_NULL_HANDLE;
         VkFramebuffer layeredEntryFramebuffer = VK_NULL_HANDLE;
         VkFramebuffer layeredExitFramebuffer = VK_NULL_HANDLE;
         VkFramebuffer layeredLocalCompositionFramebuffer = VK_NULL_HANDLE;
@@ -113,7 +110,6 @@ namespace Iridium {
             VkExtent2D sceneExtent,
             VulkanTargetRenderPasses renderPasses, uint32_t frameContextCount,
             bool hdr10Composition, bool transparencyPyramids,
-            bool legacyTransparency,
             const VulkanLayeredGraphConfig& layered,
             const VulkanRenderGraphExecutor& graphResources);
         void cleanup();

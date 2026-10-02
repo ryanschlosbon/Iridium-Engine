@@ -96,7 +96,6 @@ namespace {
             2.0f);
         CHECK(defaultConfig.shadowSettings.directionalNormalOffsetTexels ==
             0.5f);
-        CHECK(!defaultConfig.developerLegacyTransparency);
         CHECK(rejects(std::array{ std::string_view("--render-graph") }));
         CHECK(rejects(std::array{ std::string_view("--render-graph-shadow") }));
         CHECK(rejects(std::array{ std::string_view("--canonical-materials") }));
@@ -154,7 +153,6 @@ namespace {
             std::string_view("--shadow-spot-atlas-resolution"),
             std::string_view("8192"),
             std::string_view("--benchmark-disable-local-shadows"),
-            std::string_view("--developer-legacy-transparency"),
             std::string_view("--debug-view"),
             std::string_view("cluster-occupancy"),
             std::string_view("--benchmark"),
@@ -215,7 +213,6 @@ namespace {
         CHECK(config.shadowSettings.filterMode == ShadowFilterMode::FixedPcf);
         CHECK(config.shadowSettings.spotAtlasResolution == 8192);
         CHECK(config.disableBenchmarkLocalShadows);
-        CHECK(config.developerLegacyTransparency);
         CHECK(config.debugView == RenderDebugView::ClusterOccupancy);
         CHECK(config.benchmarkId == "material_lab_v1");
         CHECK(config.benchmarkManifest.generic_string() ==
@@ -376,7 +373,7 @@ namespace {
         CHECK(applicationUsage().find("--select-benchmark-entity") != std::string::npos);
         CHECK(applicationUsage().find("--benchmark-disable-local-shadows") !=
             std::string::npos);
-        CHECK(applicationUsage().find("--developer-legacy-transparency") !=
+        CHECK(applicationUsage().find("--developer-legacy-transparency") ==
             std::string::npos);
         CHECK(applicationUsage().find("--wireframe") != std::string::npos);
         CHECK(applicationUsage().find("--gbuffer-layout") != std::string::npos);

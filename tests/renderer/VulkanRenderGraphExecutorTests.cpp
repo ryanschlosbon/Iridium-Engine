@@ -72,7 +72,7 @@ namespace {
             return buildVulkanProductionRenderGraph(extent,
                 VK_FORMAT_B8G8R8A8_SRGB, VK_FORMAT_B8G8R8A8_SRGB, false,
                 GBufferLayout::CanonicalReference, {}, 4096, 8192, false,
-                {}, false, enabled);
+                {}, { .depthPyramid = enabled });
         };
         const auto disabled = makeGraph({127, 73}, false);
         CHECK(std::ranges::none_of(disabled.resources(), [](const auto& resource) {
@@ -313,26 +313,21 @@ namespace {
         CHECK((output->usages & RenderGraph::usageBit(
             RenderGraph::Access::TransferSource)) != 0);
 
-        const RenderGraph::CompiledGraph legacy =
-            buildVulkanProductionRenderGraph({ 3840, 2160 },
-                VK_FORMAT_B8G8R8A8_SRGB,
-                VK_FORMAT_B8G8R8A8_SRGB, false,
-                GBufferLayout::CanonicalReference, {}, 4096, 8192, true,
-                {}, true);
-        CHECK(legacy.passes().size() == 22);
-        CHECK(legacy.resources().size() == 27);
-        CHECK(std::ranges::any_of(legacy.resources(),
+        // M7R R2: the retired two-bucket topology no longer exists in any
+        // configuration; classified transparency keeps one compatibility pass.
+        CHECK(std::ranges::none_of(graph.resources(),
             [](const RenderGraph::CompiledResource& resource) {
                 return resource.name == "depth.glass";
             }));
-        CHECK(std::ranges::any_of(legacy.passes(),
+        CHECK(std::ranges::none_of(graph.passes(),
             [](const RenderGraph::CompiledPass& pass) {
-                return pass.name == "transparent.background.depth";
+                return pass.name.starts_with("transparent.background.") ||
+                    pass.name.starts_with("transparent.foreground.");
             }));
-        CHECK(std::ranges::none_of(legacy.passes(),
+        CHECK(std::ranges::count_if(graph.passes(),
             [](const RenderGraph::CompiledPass& pass) {
                 return pass.name == "transparent.compatibility.forward";
-            }));
+            }) == 1);
         return true;
     }
 
@@ -1068,7 +1063,7 @@ namespace {
         const auto normal = buildVulkanProductionRenderGraph({127, 73}, VK_FORMAT_B8G8R8A8_SRGB);
         const auto upload = buildVulkanProductionRenderGraph({127, 73}, VK_FORMAT_B8G8R8A8_SRGB,
             VK_FORMAT_B8G8R8A8_SRGB, false, GBufferLayout::CanonicalReference, {},
-            4096, 8192, true, {}, false, false, 8'192);
+            4096, 8192, true, {}, { .virtualShadowWorkingSetBytes = 8'192 });
         CHECK(upload.passes().size() == normal.passes().size() + 3);
         CHECK(upload.resources().size() == normal.resources().size() + 1);
         CHECK(upload.physicalSlots().size() == normal.physicalSlots().size());

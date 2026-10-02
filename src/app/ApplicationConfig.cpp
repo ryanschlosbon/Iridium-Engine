@@ -347,9 +347,6 @@ namespace Iridium {
             else if (argument == "--benchmark-disable-local-shadows") {
                 config.disableBenchmarkLocalShadows = true;
             }
-            else if (argument == "--developer-legacy-transparency") {
-                config.developerLegacyTransparency = true;
-            }
             else if (argument == "--gbuffer-layout") {
                 if (++index >= arguments.size()) {
                     throw std::invalid_argument(
@@ -757,7 +754,6 @@ namespace Iridium {
             "  --shadow-filter NAME           fixed or pcss (default)\n"
             "  --shadow-spot-atlas-resolution SIZE Persistent spot atlas size: 2048, 4096, or 8192\n"
             "  --benchmark-disable-local-shadows Disable castsShadows on generated spot/point benchmark lights\n"
-            "  --developer-legacy-transparency Force the retired two-bucket renderer for explicit developer A/B comparison\n"
             "  --gbuffer-layout NAME         reference (production) or quality/compact experiments\n"
             "  --profile-cpu-output PATH     Collect and write JSON Lines telemetry\n"
             "  --cache-state NAME            warm-steady-state, fresh-process-os-driver-cache-uncontrolled, or manually-cold-os-driver-cache\n"

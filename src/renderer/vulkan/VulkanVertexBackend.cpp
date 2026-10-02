@@ -127,7 +127,7 @@ namespace Iridium {
             SelectionMask = FixedPipelineIdentityMask | 2,
             DeferredLighting = FixedPipelineIdentityMask | 3,
             SelectionOutline = FixedPipelineIdentityMask | 4,
-            GlassDepth = FixedPipelineIdentityMask | 5,
+            RetiredGlassDepth = FixedPipelineIdentityMask | 5, // reserved; never reuse
             ImGui = FixedPipelineIdentityMask | 6,
             OutputTransform = FixedPipelineIdentityMask | 7,
             LayeredInterfaceCapture = FixedPipelineIdentityMask | 8,
@@ -277,7 +277,6 @@ namespace Iridium {
 
         cpuProfiler_ = config.cpuProfiler;
         gBufferLayout_ = config.gBufferLayout;
-        legacyTransparency_ = config.enableLegacyTransparency;
         depthPyramidEnabled_ = config.experimentalDepthPyramid ||
             config.experimentalDepthOcclusionQuery ||
             config.experimentalDepthOcclusionRejection;
@@ -528,19 +527,6 @@ namespace Iridium {
         gBufferPipeline = std::make_unique<VkGraphicsPipeline>(vkContext.get(), vkSwapchain.get(), gBufferPass.get(),
             meshLayouts.getGBufferPipelineLayout(), gBufferLayout_);
 
-        // Retired two-bucket objects exist only for the explicit developer A/B.
-        if (legacyTransparency_) {
-            glassDepthPass = std::make_unique<GlassDepthRenderPass>();
-            glassDepthPass->init(vkContext->getDevice(),
-                VK_FORMAT_D32_SFLOAT);
-            glassDepthPipeline = std::make_unique<GlassDepthPipeline>();
-            glassDepthPipeline->init(vkContext->getDevice(),
-                glassDepthPass->getRenderPass(),
-                meshLayouts.getGBufferPipelineLayout(),
-                std::string(PROJECT_ROOT_DIR) +
-                    "assets/shaders/glass_depth_vert.spv");
-        }
-
         pipelineLibrary.init(vkContext->getDevice(),
             { gBufferPass->getRenderPass(), meshLayouts.getGBufferPipelineLayout(),
                 vulkanGBufferFormats(gBufferLayout_).colorAttachmentCount },
@@ -753,8 +739,7 @@ namespace Iridium {
             const VulkanFrameContextTargets& targets = frameTargets.get(i);
             uiSceneTextures[i] = ImGui_ImplVulkan_AddTexture(frameTargets.sampler(),
                 targets.output.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-            const VkImageView editorDepthView = legacyTransparency_
-                ? targets.glassDepth.view : targets.depth.view;
+            const VkImageView editorDepthView = targets.depth.view;
             uiDepthTextures[i] = ImGui_ImplVulkan_AddTexture(frameTargets.sampler(),
                 editorDepthView,
                 VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
@@ -1212,14 +1197,6 @@ namespace Iridium {
                 reflectionProbeClusterIndexBuffers_)
             resourceAllocator.destroy(buffer);
 
-        if (glassDepthPipeline) {
-            glassDepthPipeline->cleanup();
-            glassDepthPipeline.reset();
-        }
-        if (glassDepthPass) {
-            glassDepthPass->cleanup();
-            glassDepthPass.reset();
-        }
 
         forwardPass.reset();
         transparentPass.reset();
@@ -1810,6 +1787,15 @@ namespace Iridium {
             }));
     }
 
+    VulkanProductionGraphFeatures
+        VulkanVertexBackend::productionGraphFeatures() const noexcept {
+        return {
+            .depthPyramid = depthPyramidEnabled_,
+            .virtualShadowWorkingSetBytes = virtualShadowResources_.initialized()
+                ? virtualShadowResources_.info().workingSetLayout.totalBytes : 0,
+        };
+    }
+
     void VulkanVertexBackend::rebuildRenderGraphAfterDeviceIdle() {
         renderGraph_.cleanupAfterDeviceIdle();
         renderGraph_.init(resourceAllocator,
@@ -1825,8 +1811,7 @@ namespace Iridium {
             transparencyPyramidResidency_.enabled(),
             VulkanLayeredGraphConfig{ ordinary2AtlasExtent_,
                 hero4AtlasExtent_, cinematic8AtlasExtent_,
-                weightedOitResidency_.enabled() }, legacyTransparency_, depthPyramidEnabled_,
-                virtualShadowResources_.initialized() ? virtualShadowResources_.info().workingSetLayout.totalBytes : 0));
+                weightedOitResidency_.enabled() }, productionGraphFeatures()));
         if (virtualShadowResources_.initialized()) {
             for (uint32_t frame = 0; frame < VulkanFrameScheduler::FramesInFlight; ++frame) {
                 const auto& buffer = virtualShadowResources_.workingSet(frame);
@@ -1993,8 +1978,7 @@ namespace Iridium {
                 uiSceneTextures[index] = ImGui_ImplVulkan_AddTexture(
                     frameTargets.sampler(), targets.output.view,
                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-                const VkImageView editorDepthView = legacyTransparency_
-                    ? targets.glassDepth.view : targets.depth.view;
+                const VkImageView editorDepthView = targets.depth.view;
                 uiDepthTextures[index] = ImGui_ImplVulkan_AddTexture(
                     frameTargets.sampler(), editorDepthView,
                     VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
@@ -2096,8 +2080,7 @@ namespace Iridium {
             transparencyPyramidResidency_.enabled(),
             VulkanLayeredGraphConfig{ ordinary2AtlasExtent_,
                 hero4AtlasExtent_, cinematic8AtlasExtent_,
-                weightedOitResidency_.enabled() }, legacyTransparency_, depthPyramidEnabled_,
-                virtualShadowResources_.initialized() ? virtualShadowResources_.info().workingSetLayout.totalBytes : 0);
+                weightedOitResidency_.enabled() }, productionGraphFeatures());
 
         // Resize is the one accepted global stall, after candidate validation.
         vkDeviceWaitIdle(vkContext->getDevice());
@@ -2207,8 +2190,7 @@ namespace Iridium {
             const VulkanFrameContextTargets& targets = frameTargets.get(i);
             uiSceneTextures[i] = ImGui_ImplVulkan_AddTexture(frameTargets.sampler(),
                 targets.output.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-            const VkImageView editorDepthView = legacyTransparency_
-                ? targets.glassDepth.view : targets.depth.view;
+            const VkImageView editorDepthView = targets.depth.view;
             uiDepthTextures[i] = ImGui_ImplVulkan_AddTexture(frameTargets.sampler(),
                 editorDepthView,
                 VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
@@ -2287,8 +2269,7 @@ namespace Iridium {
                 VulkanLayeredGraphConfig{ requestedOrdinary2AtlasExtent,
                     requestedHero4AtlasExtent,
                     requestedCinematic8AtlasExtent,
-                    weightedOitResidency_.enabled() }, legacyTransparency_, depthPyramidEnabled_,
-                virtualShadowResources_.initialized() ? virtualShadowResources_.info().workingSetLayout.totalBytes : 0);
+                    weightedOitResidency_.enabled() }, productionGraphFeatures());
         }
         catch (const std::exception& exception) {
             diagnostic = exception.what();
@@ -2364,8 +2345,7 @@ namespace Iridium {
                 uiSceneTextures[index] = ImGui_ImplVulkan_AddTexture(
                     frameTargets.sampler(), targets.output.view,
                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-                const VkImageView editorDepthView = legacyTransparency_
-                    ? targets.glassDepth.view : targets.depth.view;
+                const VkImageView editorDepthView = targets.depth.view;
                 uiDepthTextures[index] = ImGui_ImplVulkan_AddTexture(
                     frameTargets.sampler(), editorDepthView,
                     VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
@@ -3161,8 +3141,6 @@ namespace Iridium {
         frameTargets.init(vkContext->getDevice(), *vkSwapchain, sceneExtent_,
             { gBufferPass->getRenderPass(), lightingRenderPass,
                 forwardPass->getRenderPass(), transparentPass->getRenderPass(),
-                glassDepthPass
-                    ? glassDepthPass->getRenderPass() : VK_NULL_HANDLE,
                 layeredInterfaceCapture_.renderPass(),
                 layeredLocalComposition_.renderPass(),
                 weightedOit_.accumulationRenderPass(),
@@ -3171,7 +3149,6 @@ namespace Iridium {
             VulkanFrameScheduler::FramesInFlight,
             outputTransport_ == Color::OutputTransport::Hdr10Pq,
             transparencyPyramidResidency_.enabled(),
-            legacyTransparency_,
             VulkanLayeredGraphConfig{ ordinary2AtlasExtent_,
                 hero4AtlasExtent_, cinematic8AtlasExtent_,
                 weightedOitResidency_.enabled() },
@@ -11652,163 +11629,16 @@ const VkDeviceSize offset = geometry->vertexOffset;
                 deepCaptureDraws);
         }
 
-        if (!legacyTransparency_) {
-            if (collectFrameCounters_) {
-                frameCounters_.transparentBackgroundPackets = 0u;
-                frameCounters_.transparentForegroundPackets = 0u;
-                frameCounters_.transparentNonemptyBuckets = 0u;
-            }
-            recordForwardPass(compatibilityTransparentQueue,
-                "transparent.compatibility.forward",
-                "gpu.transparency.compatibility.forward",
-                forwardPass->getRenderPass(), targets.forwardFramebuffer,
-                RenderPassClass::Forward, true, false);
-        }
-        else {
-        // Bucketize the genuinely transparent queue into the retained bounded
-        // M2 background/foreground layers. This exists only under the explicit
-        // developer legacy override. The queue is sorted Back-to-Front.
-        std::optional<size_t> foregroundPacketIndex;
-        uint64_t fallbackPacketCount = 0u;
-        std::array<uint32_t, kLayeredQualityTierCount>
-            deepCompatibilityForwardDrawCounts{};
-        for (size_t packetIndex = 0u;
-            packetIndex < compatibilityTransparentQueue.size(); ++packetIndex) {
-            if (!isLayeredPacketResolved(
-                    static_cast<uint32_t>(packetIndex))) {
-                foregroundPacketIndex = packetIndex;
-                ++fallbackPacketCount;
-                const DrawPacket& packet =
-                    compatibilityTransparentQueue[packetIndex];
-                if (isLayeredGlassPacket(packet,
-                        TransparencyQuality::Hero4) ||
-                    isLayeredGlassPacket(packet,
-                        TransparencyQuality::Cinematic8)) {
-                    ++deepCompatibilityForwardDrawCounts[
-                        layeredQualityTierIndex(
-                            packet.transparency.quality)];
-                }
-            }
-        }
-        const uint32_t frameIndex = scheduler.currentFrameIndex();
-        for (PendingDeepLayeredCaptureValidation& pending :
-            pendingDeepLayeredCaptureValidations_) {
-            if (pending.frameIndex == frameIndex) {
-                pending.compatibilityForwardDrawCount =
-                    deepCompatibilityForwardDrawCounts[
-                        layeredQualityTierIndex(pending.quality)];
-            }
-        }
-        const std::span<const DrawPacket> foregroundBucket =
-            foregroundPacketIndex
-            ? compatibilityTransparentQueue.subspan(*foregroundPacketIndex, 1u)
-            : std::span<const DrawPacket>{};
-        const std::span<const DrawPacket> backgroundBucket =
-            foregroundPacketIndex && *foregroundPacketIndex != 0u
-            ? compatibilityTransparentQueue.first(*foregroundPacketIndex)
-            : std::span<const DrawPacket>{};
-        const uint64_t backgroundFallbackPacketCount =
-            fallbackPacketCount - static_cast<uint64_t>(
-                foregroundPacketIndex.has_value());
         if (collectFrameCounters_) {
-            frameCounters_.transparentBackgroundPackets =
-                backgroundFallbackPacketCount;
-            frameCounters_.transparentForegroundPackets =
-                static_cast<uint64_t>(foregroundPacketIndex.has_value());
-            frameCounters_.transparentNonemptyBuckets =
-                static_cast<uint64_t>(backgroundFallbackPacketCount != 0u) +
-                static_cast<uint64_t>(foregroundPacketIndex.has_value());
+            frameCounters_.transparentBackgroundPackets = 0u;
+            frameCounters_.transparentForegroundPackets = 0u;
+            frameCounters_.transparentNonemptyBuckets = 0u;
         }
-
-        // 2. THE REUSABLE RENDER LAMBDA
-        auto executeGlassLayer = [&](std::span<const DrawPacket> glassBucket,
-            uint64_t renderedPacketCount, bool foreground) {
-            const std::string_view depthPassName = foreground
-                ? "transparent.foreground.depth"
-                : "transparent.background.depth";
-            const std::string_view forwardPassName = foreground
-                ? "transparent.foreground.forward"
-                : "transparent.background.forward";
-            if (renderedPacketCount == 0u) {
-                renderGraph_.skipPass(depthPassName);
-                renderGraph_.skipPass(forwardPassName);
-                return;
-            }
-
-            VulkanFrameContextTargets& targets = frameTargets.get(
-                scheduler.currentFrameIndex());
-            // --- A. GLASS DEPTH PASS ---
-            VulkanGpuRangeToken depthGpuRange = scheduler.beginGpuRange(foreground
-                ? "gpu.transparency.foreground.depth"
-                : "gpu.transparency.background.depth");
-            renderGraph_.beginPass(currentCmd, depthPassName);
-            VkRenderPassBeginInfo glassDepthPassInfo{ VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
-            glassDepthPassInfo.renderPass = glassDepthPass->getRenderPass();
-            glassDepthPassInfo.framebuffer = frameTargets.get(
-                scheduler.currentFrameIndex()).glassDepthFramebuffer;
-            glassDepthPassInfo.renderArea.extent = frameTargets.extent();
-
-            VkClearValue depthClearValue{};
-            depthClearValue.depthStencil = { 1.0f, 0 };
-            glassDepthPassInfo.clearValueCount = 1;
-            glassDepthPassInfo.pClearValues = &depthClearValue;
-
-            vkCmdBeginRenderPass(currentCmd, &glassDepthPassInfo, VK_SUBPASS_CONTENTS_INLINE);
-
-            VkPipelineLayout gLayout = meshLayouts.getGBufferPipelineLayout();
-            vkCmdBindPipeline(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS, glassDepthPipeline->getPipeline());
-            recordPipelineBind(pipelineIdentity(FixedPipelineIdentity::GlassDepth));
-
-            VkViewport viewport{};
-            viewport.x = 0.0f;
-            viewport.y = 0.0f;            // Start at the bottom
-            viewport.width = (float)frameTargets.extent().width;
-            viewport.height = (float)frameTargets.extent().height;       // Draw upwards!
-            viewport.minDepth = 0.0f;
-            viewport.maxDepth = 1.0f;
-
-            vkCmdSetViewport(currentCmd, 0, 1, &viewport);
-            VkRect2D scissor{ {0, 0}, frameTargets.extent() };
-            vkCmdSetScissor(currentCmd, 0, 1, &scissor);
-
-            vkCmdBindDescriptorSets(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS, gLayout, 0, 1, &globalDescriptorSets[scheduler.currentFrameIndex()], 0, nullptr);
-
-            for (const auto& packet : glassBucket) {
-                const uint32_t packetIndex = static_cast<uint32_t>(
-                    &packet - compatibilityTransparentQueue.data());
-                if (isLayeredPacketResolved(packetIndex))
-                    continue;
-                auto* geometry = geometryVault.get(packet.geometry);
-                if (!geometry) continue;
-
-                VkDeviceSize offset = geometry->vertexOffset;
-                vkCmdBindVertexBuffers(currentCmd, 0, 1, &geometry->vertexBuffer.buffer, &offset);
-                vkCmdBindIndexBuffer(currentCmd, geometry->indexBuffer.buffer, 0,
-                    toVkIndexType(geometry->indexFormat));
-
-                CanonicalMeshPushConstants push{};
-                push.renderMatrix = packet.worldTransform;
-                vkCmdPushConstants(currentCmd, gLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), &push);
-                vkCmdDrawIndexed(currentCmd, packet.indexCount, 1, packet.firstIndex, 0, 0);
-                recordDraw(frameCounters_.drawTransparentDepth, packet.indexCount / 3);
-            }
-            vkCmdEndRenderPass(currentCmd);
-            scheduler.endGpuRange(depthGpuRange);
-
-            recordForwardPass(glassBucket, forwardPassName,
-                foreground ? "gpu.transparency.foreground.forward"
-                    : "gpu.transparency.background.forward",
-                forwardPass->getRenderPass(),
-                targets.forwardFramebuffer, RenderPassClass::Forward, true,
-                false);
-            };
-
-        // 3. EXECUTE THE PASSES
-        executeGlassLayer(backgroundBucket, backgroundFallbackPacketCount,
-            false);
-        executeGlassLayer(foregroundBucket,
-            static_cast<uint64_t>(foregroundPacketIndex.has_value()), true);
-        }
+        recordForwardPass(compatibilityTransparentQueue,
+            "transparent.compatibility.forward",
+            "gpu.transparency.compatibility.forward",
+            forwardPass->getRenderPass(), targets.forwardFramebuffer,
+            RenderPassClass::Forward, true, false);
 
         if (weightedOitResidency_.enabled() &&
             (!weightedOitExecutionEnabled || weightedOitPacketCount == 0u)) {

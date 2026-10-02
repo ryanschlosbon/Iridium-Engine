@@ -78,7 +78,6 @@ namespace Iridium {
         uint32_t frameContextCount,
         bool hdr10Composition,
         bool transparencyPyramids,
-        bool legacyTransparency,
         const VulkanLayeredGraphConfig& layered,
         const VulkanRenderGraphExecutor& graphResources) {
         if (device == VK_NULL_HANDLE || swapchain.getSwapchain() == VK_NULL_HANDLE ||
@@ -96,11 +95,6 @@ namespace Iridium {
             renderPasses.transparent == VK_NULL_HANDLE ||
             renderPasses.output == VK_NULL_HANDLE || renderPasses.ui == VK_NULL_HANDLE) {
             throw std::invalid_argument("VulkanFrameTargets requires all render passes.");
-        }
-        if (legacyTransparency &&
-            renderPasses.glassDepth == VK_NULL_HANDLE) {
-            throw std::invalid_argument(
-                "VulkanFrameTargets requires the legacy glass-depth render pass when enabled.");
         }
         const VkExtent2D ordinary2AtlasExtent = layered.atlasExtent(
             TransparencyQuality::Ordinary2);
@@ -161,10 +155,6 @@ namespace Iridium {
                         frameIndex, "scene.refraction-color-pyramid");
                     target.refractionDepthPyramid = graphResources.imageResource(
                         frameIndex, "depth.refraction-nearest-pyramid");
-                }
-                if (legacyTransparency) {
-                    target.glassDepth = graphResources.imageResource(
-                        frameIndex, "depth.glass");
                 }
                 if (ordinary2) {
                     target.layeredEntryDepth = graphResources.imageResource(
@@ -338,13 +328,6 @@ namespace Iridium {
                     target.transparentFramebuffer,
                     "vkCreateFramebuffer(transparent)");
 
-                if (legacyTransparency) {
-                    const std::array<VkImageView, 1> glassDepthAttachments = {
-                        target.glassDepth.view };
-                    createFramebuffer(renderPasses.glassDepth,
-                        glassDepthAttachments, target.glassDepthFramebuffer,
-                        "vkCreateFramebuffer(glassDepth)");
-                }
 
                 if (layered.weightedOit) {
                     const std::array<VkImageView, 3> accumulationAttachments{
@@ -599,10 +582,6 @@ namespace Iridium {
             if (target.uiCompositionFramebuffer != VK_NULL_HANDLE) {
                 vkDestroyFramebuffer(device_, target.uiCompositionFramebuffer, nullptr);
                 target.uiCompositionFramebuffer = VK_NULL_HANDLE;
-            }
-            if (target.glassDepthFramebuffer != VK_NULL_HANDLE) {
-                vkDestroyFramebuffer(device_, target.glassDepthFramebuffer, nullptr);
-                target.glassDepthFramebuffer = VK_NULL_HANDLE;
             }
             if (target.outputFramebuffer != VK_NULL_HANDLE) {
                 vkDestroyFramebuffer(device_, target.outputFramebuffer, nullptr);

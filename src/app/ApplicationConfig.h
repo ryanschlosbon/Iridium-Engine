@@ -35,7 +35,6 @@ namespace Iridium {
         bool showMaterialDiagnostics = false;
         bool selectBenchmarkEntity = false;
         bool disableBenchmarkLocalShadows = false;
-        bool developerLegacyTransparency = false;
         bool forceDirectGBufferReference = false;
         bool forceDirectShadowReference = false;
         bool forceDirectProbeCaptureReference = false;

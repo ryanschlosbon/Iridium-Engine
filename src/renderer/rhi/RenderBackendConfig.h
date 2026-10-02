@@ -32,7 +32,6 @@ namespace Iridium {
         bool enableGpuProfiling = false;
         bool enableTransparentPipelineStatistics = false;
         bool validateReflectionProbeCaptureTargets = false;
-        bool enableLegacyTransparency = false;
         // Legacy qualification umbrella: direct GBuffer draws with no main-view
         // frustum rejection, plus conventional shadows and probe capture.
         bool forceDirectGBufferReference = false;

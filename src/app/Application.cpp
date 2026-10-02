@@ -1354,8 +1354,6 @@ namespace Iridium {
                 config_.enableTransparentPipelineStatistics,
             .validateReflectionProbeCaptureTargets =
                 config_.validateReflectionProbes,
-            .enableLegacyTransparency =
-                config_.developerLegacyTransparency,
             .forceDirectGBufferReference = config_.forceDirectGBufferReference,
             .forceDirectShadowReference = config_.forceDirectShadowReference,
             .enableShadowIndirectQualificationOracle =
@@ -1408,19 +1406,17 @@ namespace Iridium {
             std::chrono::duration_cast<std::chrono::nanoseconds>(
                 std::chrono::steady_clock::now() - backendStart).count());
 
+        // Production runtime always executes classified transparency (ADR-0012);
+        // serialized LegacyTwoBucket values remain readable but never select it.
         const TransparencyExecutionMode runtimeTransparencyExecutionMode =
-            config_.developerLegacyTransparency
-            ? TransparencyExecutionMode::LegacyTwoBucket
-            : TransparencyExecutionMode::Classified;
+            TransparencyExecutionMode::Classified;
         assetManager = std::make_unique<AssetManager>(renderBackend.get(),
             runtimeTransparencyExecutionMode,
             config_.gpuLodMinimumResidentLevel);
         std::cout << "IRIDIUM_TRANSPARENCY_EXECUTION {\"mode\":\""
             << transparencyExecutionModeName(
                 runtimeTransparencyExecutionMode)
-            << "\",\"developer_override\":"
-            << (config_.developerLegacyTransparency ? "true" : "false")
-            << "}\n";
+            << "\",\"developer_override\":false}\n";
         if (config_.validateTextureTableScale != 0) {
             constexpr std::array<std::byte, 4>
                 texturePixel{

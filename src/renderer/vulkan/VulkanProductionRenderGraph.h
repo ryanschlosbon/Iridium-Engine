@@ -89,6 +89,14 @@ namespace Iridium {
         return interfaceBytes + tileBytes;
     }
 
+    // Optional production-graph features. Defaults reproduce the default graph.
+    struct VulkanProductionGraphFeatures {
+        // M7.6 scene-depth pyramid (Hi-Z history/occlusion).
+        bool depthPyramid = false;
+        // M7.8 virtual-shadow working-set bytes; zero omits the VSM passes.
+        uint64_t virtualShadowWorkingSetBytes = 0;
+    };
+
     [[nodiscard]] RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
         VkExtent2D extent, VkFormat swapchainFormat,
         VkFormat outputFormat = VK_FORMAT_B8G8R8A8_SRGB,
@@ -99,8 +107,7 @@ namespace Iridium {
         uint32_t spotShadowAtlasResolution = 8192,
         bool transparencyPyramids = true,
         VulkanLayeredGraphConfig layered = {},
-        bool legacyTransparency = false, bool depthPyramid = false,
-        uint64_t virtualShadowWorkingSetBytes = 0);
+        VulkanProductionGraphFeatures features = {});
     [[nodiscard]] RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
         VkExtent2D sceneExtent, VkExtent2D presentationExtent,
         VkFormat swapchainFormat,
@@ -112,7 +119,6 @@ namespace Iridium {
         uint32_t spotShadowAtlasResolution = 8192,
         bool transparencyPyramids = true,
         VulkanLayeredGraphConfig layered = {},
-        bool legacyTransparency = false, bool depthPyramid = false,
-        uint64_t virtualShadowWorkingSetBytes = 0);
+        VulkanProductionGraphFeatures features = {});
 
 } // namespace Iridium

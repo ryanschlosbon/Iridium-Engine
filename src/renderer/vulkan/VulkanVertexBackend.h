@@ -21,10 +21,8 @@
 // Pipelines & Passes
 #include "VkGraphicsPipeline.h"
 #include "VkLightingPipeline.h"
-#include "GlassDepthPipeline.h"
 #include "VkRenderPass.h"
 #include "VkForwardRenderPass.h"
-#include "GlassDepthRenderPass.h"
 #include "VkUIRenderPass.h"
 #include "VulkanPipelineLibrary.h"
 #include "VulkanMeshLayouts.h"
@@ -34,6 +32,7 @@
 #include "VulkanFrameScheduler.h"
 #include "VulkanFrameTargets.h"
 #include "VulkanSceneDescriptors.h"
+#include "VulkanProductionRenderGraph.h"
 #include "VulkanRenderGraphExecutor.h"
 #include "VulkanTransparencyPyramid.h"
 #include "VulkanDepthPyramid.h"
@@ -302,8 +301,6 @@ namespace Iridium {
         std::unique_ptr<VkLightingPipeline> lightingPipeline;
 
         // Translucency Passes
-        std::unique_ptr<GlassDepthRenderPass> glassDepthPass;
-        std::unique_ptr<GlassDepthPipeline> glassDepthPipeline;
 
         std::unique_ptr<VkForwardRenderPass> forwardPass;
         std::unique_ptr<VkForwardRenderPass> transparentPass;
@@ -687,7 +684,6 @@ namespace Iridium {
         CpuProfiler* cpuProfiler_ = nullptr;
         bool collectFrameCounters_ = false;
         FrameCounters frameCounters_{};
-        bool legacyTransparency_ = false;
         uint64_t weightedOitOrderSeed_ = 0;
         bool forceDirectGBufferReference_ = false;
         bool forceDirectShadowReference_ = false;
@@ -865,6 +861,8 @@ namespace Iridium {
         void collectClusterDiagnostics(uint32_t frameIndex) noexcept;
         void initFrameTargets();
         void rebuildRenderGraphAfterDeviceIdle();
+        [[nodiscard]] VulkanProductionGraphFeatures
+            productionGraphFeatures() const noexcept;
         void applyTransparencyPyramidTopologyChange(
             std::optional<VkExtent2D> requestedOrdinary2AtlasExtent =
                 std::nullopt,

@@ -2595,7 +2595,7 @@ namespace {
         CHECK(source.find("Transparency renderer") != std::string::npos);
         CHECK(source.find("Classified hybrid (production)") !=
             std::string::npos);
-        CHECK(source.find("--developer-legacy-transparency") !=
+        CHECK(source.find("--developer-legacy-transparency") ==
             std::string::npos);
         CHECK(source.find("transparencyExecutionValues") ==
             std::string::npos);

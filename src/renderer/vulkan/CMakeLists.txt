@@ -2,8 +2,6 @@
 # executor) and RenderBackendFactory, which implements the rhi-declared factory.
 add_library(iridium_vulkan STATIC
         DescriptorAllocator.cpp
-        GlassDepthPipeline.cpp
-        GlassDepthRenderPass.cpp
         RenderBackendFactory.cpp
         VkContext.cpp
         VkForwardRenderPass.cpp
