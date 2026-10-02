@@ -3,7 +3,7 @@
 ## Header
 
 - **Milestone:** M7R — Architecture consolidation
-- **Status:** In Progress — plan approved by owner 2026-10-02; R0 active
+- **Status:** In Progress — plan approved by owner 2026-10-02; R0 accepted 2026-10-02; R1 active
 - **Lead:** M7R milestone-lead session (Claude Code); integration owner for all slices
 - **Branch / PR:** `m7r-consolidation` off `Render-Refactor-for-Modularity`; one PR
   for the milestone
@@ -75,8 +75,8 @@ Both are recorded as deferred exceptions. M7R applies the guideline to the files
   native-4K Release pair (A/B then B/A).
 - **Validation:** Vulkan validation is clean on the frozen set. Synchronization
   validation is clean from R3 onward.
-- **Allocations:** the per-frame count never rises above the R0 baseline. R5 restores
-  zero steady-frame allocations, and that becomes the invariant from then on.
+- **Allocations:** zero steady-frame C++ allocations on the timing routes, as measured
+  at R0. No route may rise above its R0 count.
 - **ADRs:**
   - one clustered-light representation;
   - scene-linear AP1 until the single output transform;
@@ -159,7 +159,7 @@ Exactly one slice is `In Progress`. Every slice ends with:
 - a `git status` check;
 - a commit named `M7R <slice>: …`.
 
-### R0 — Baseline freeze (`In Progress`)
+### R0 — Baseline freeze (`Accepted` 2026-10-02)
 
 **Frozen capture set.** Native 3840x2160, Release, SDR transport, ACES 2.
 - One `scene` PFM and one `final-sdr` TGA per fixture.
@@ -173,7 +173,13 @@ Exactly one slice is `In Progress`. Every slice ends with:
 | F4 | `ordinary2_lit_closed_v1`, `cinematic8_nested_tetrahedra_v1`, `weighted_oit_particles_v1` | `assets/benchmarks/m6/ordinary2-runtime-manifest.v1.json` | tracked |
 | F5 | `m7_heterogeneous_shadow_warm_motion_v1` (directional + spot), `point_shadow_contact_v1` | `assets/m7-heterogeneous-shadow-admission-manifest.v1.json`, `assets/m7-local-shadow-device-manifest.v1.json` | tracked |
 | F6 | `m7_probe_lod_reflection_motion_v1` | `assets/m7-probe-lod-admission-manifest.v1.json` | local-only |
-| F7 | `m7_occlusion_dense_depth_stack_v1` with Hi-Z on, plus F1 with LOD on | occlusion and LOD manifests | Confirm content in R0. Keeps the workload-selectable paths covered. |
+| F7 | `m7_occlusion_dense_depth_stack_v1` with Hi-Z on (`--experimental-depth-pyramid --experimental-depth-occlusion-rejection`); F3 with LOD on (`--experimental-gpu-lod-error-pixels 2 --gpu-lod-max-level 15`) | occlusion-performance and three-dense manifests | local-only. Keeps the workload-selectable paths covered. |
+
+**As implemented (R0):**
+- *Fixture definitions:* `tools/m7r/M7RFixtures.ps1` holds the exact fixture and route definitions.
+- *Cooked inputs:* models are cooked at the R0 commit into `out/m7r/ddc` by `Cook-FrozenModels.ps1`. The LOD route uses a separately cooked Alfa artifact made with the M7.5 topology-transactional LOD settings (`out/m7r/meta/alfa_romeo.lod.iridium.meta`); the default artifact has no LOD chains, so LOD flags alone are a no-op.
+- *Environment:* every fixture uses its declared constant environment, so no HDRI or environment artifact is involved.
+- *Determinism:* two fixtures vary from run to run at R0. They use measured tolerance envelopes; all other captures must be byte-identical (see the decision log).
 
 **Timing pair routes.** F1 is the GPU-representative route and F7 the CPU-heavy one. Settings:
 - 500 warm-up / 10,000 measured frames;
@@ -185,7 +191,7 @@ Exactly one slice is `In Progress`. Every slice ends with:
 **Also recorded:**
 - per-frame allocation calls and bytes;
 - per-frame `waitForAllFrames` and `uploadContext.flush` counts, through a new telemetry counter (no output effect);
-- hitch count (frames over 2× median) and p99 for a scripted probe/capacity-change run;
+- hitch count (frames over 2× median) and p99 for a scripted probe/capacity-change run. *As implemented:* no existing flag grows capacity or changes probes mid-run; table-scale validators run at startup. The scripted change run is therefore built as harness tooling at the start of R4c. Its baseline is measured then against the preserved R0 worktree build (`out/m7r/worktrees/r0`, commit `2c50b36`). R0 records steady-state drain counts on the timing routes;
 - clean Debug and Release build times;
 - incremental build times after touching `Application.cpp`, `rhi/Mesh.h`, one `.glsl` include and one `.comp` shader.
 
@@ -199,7 +205,7 @@ Exactly one slice is `In Progress`. Every slice ends with:
 - the hash table is valid for this machine only, because the local-only fixtures (F1–F3, F6) cannot be committed;
 - the historical M7 hashes stay as historical record and are not overwritten.
 
-### R1 — Build system and module DAG (`Proposed`)
+### R1 — Build system and module DAG (`In Progress`)
 
 **Layering:**
 - Break the include cycles by moving identity and handle PODs to `core/types`.
@@ -438,7 +444,9 @@ updated.
 |---|---|---|
 | 2026-10-02 | Owner approved this plan as written. | Owner, in the lead session. |
 | 2026-10-02 | Corrected audit figures recorded above; the plan uses them. | Four audit reports against `23d9ced`. |
-| 2026-10-02 | The allocation invariant becomes "never above the R0 baseline", restored to zero in R5, because current HEAD is not allocation-free. | Local M7 profile runs. |
+| 2026-10-02 | Allocation invariant: steady frames are already allocation-free on both timing routes at R0, so the invariant is "zero on the timing routes". The audit's nonzero counts came from older or dirty-tree runs. | R0 timing pair. |
+| 2026-10-02 | Captures at HEAD are not fully deterministic, and the frozen set is adjusted to match (details below). | Repeated R0 captures; `tools/m7r/Diff-Images.py`. |
+| 2026-10-02 | Historical M7 hashes are not comparable with R0 and stay as historical record. They used different cooked artifacts, resolutions or EV and older code; for example, `ordinary2` final-SDR was `25d690aa…` historically and is `5620cf98…` at R0. | R0 captures. |
 | 2026-10-02 | Async compute and `/W4` are out of scope. The editor and importer files over 2,500 lines are deferred exceptions. | Scope control. |
 | 2026-10-02 | ADR-0016 will record the actual executor model, because ADR-0002's claims about queue, history and imported resources are unimplemented. | Graph audit. |
 | 2026-10-02 | Owner approved removing `--developer-legacy-transparency` in R2. It is a post-M6 diagnostic A/B, never an automatic fallback (ADR-0012). It costs 3 graph passes, extra frame targets and 11 backend references, and complicates the R3 transparency owner. Serialized `LegacyTwoBucket` stays readable. | ADR-0012:94–113 |
@@ -455,7 +463,96 @@ Any other library needs an explanation to the owner first.
 
 ## Evidence
 
-(R0 tables are recorded here.)
+### R0 baseline (2026-10-02, commit `2c50b36`)
+
+**Environment and inputs**
+
+| Item | Value |
+|---|---|
+| Hardware | RTX 4090, i9-14900K, Windows 10.0.26220 |
+| Toolchain | MSVC 19.51, Vulkan SDK 1.4.335 |
+| Release `IridiumEngine.exe` SHA-256 | `253bfe0a…` |
+| Raw artifacts | `out/m7r/` (local only). Captures: `captures/r0` and `captures/r0-repeat`. Timing: `timing/r0-aa`. Build times: `build-times/r0-*.json`. |
+| Baseline worktree | `out/m7r/worktrees/r0`, used as side A of every later timing pair |
+
+Cooked inputs in `out/m7r/ddc/artifacts.json` (cook-key prefixes):
+
+| Model | Cook key |
+|---|---|
+| alfa | `a5431400` |
+| alfa-lod | `de6c732f` |
+| contact | `ba56a26c` |
+| ordinary2 | `926155db` |
+| cine8 | `58ca6f81` |
+| woit | `d31b89ce` |
+
+**Frozen captures** (native 4K, Release, SDR, ACES 2, 0 EV; SHA-256 prefix; full hashes are in `captures/r0/hashes.json`)
+
+| Fixture | Scene-linear PFM | Final-SDR TGA | Tolerance |
+|---|---|---|---|
+| F1-all | `d84fcb0d5b072598` | `eac6ee9364ce5d28` | exact |
+| F2-one | `c3d77c9e69a4664f` | `b6363dff7ef41d80` | exact |
+| F3-stress | `94e7822d77dc1f64` | `931fbdd2b624f7f2` | depth-tie |
+| F4-ord2 | `9ae03606a1d63f62` | `5620cf982001b9a3` | exact |
+| F4-cine8 | `18f090fdcd5b5d07` | `da270d13e67f5992` | exact |
+| F4-woit | `e9ca4c75490bb73b` | `fed121187d086b6b` | woit-order |
+| F5-hetero | `a522245d3ffddb8d` | `7e28ab5b55d40a2b` | exact |
+| F5-point | `015da6da08efc82d` | `0a5ae0fb1d4abab6` | exact |
+| F6-probe | `af8d80c0adc54f0f` | `445386281f9384c0` | exact |
+| F7-hiz | `fa9076ebb4c6f69a` | `83ba524a95b5523c` | exact |
+| F7-lod | `44965178cfa42171` | `25ac64369f55d0b9` | depth-tie |
+
+Every capture passed `--require-capture-signal`. A Release run with `--validation` over the whole set produced **zero** validation messages, with images identical or within tolerance.
+
+**Determinism.** Eight F3/F7-lod runs and eight F4-woit runs were compared.
+
+| Fixture | Run-to-run behavior | Likely cause | Envelope |
+|---|---|---|---|
+| F3, F7-lod (256 instances) | Rotate among four scene-linear and two final-SDR hashes. Each differs by **one pixel** (x = 1320). | A depth tie between distant instances whose draw order follows GPU compaction order. | `depth-tie`: at most 64 changed pixels |
+| F4-woit | Differs every run: about 1% of pixels, max abs AP1 0.031, max rel 0.0032; final-SDR at most 1 code on about 0.04% of pixels. | Order-dependent accumulation. | `woit-order`: the frozen M6.7 draw-order thresholds (0.0625 abs, 0.002 RMSE, 0.005 rel; SDR at most 1 code on at most 0.5% of pixels) |
+
+This variation is pre-existing and recorded, not fixed in M7R. A deterministic visibility and draw order is a candidate for the R3a culler, needing owner approval because it changes images.
+
+**Timing (A/A pair, two identical builds, A,B,B,A)**
+
+Settings: native 3840x2160, hidden borderless window, mailbox present, SDR, 500 warm-up / 10,000 measured frames. Values are in ms. "Non-wait CPU" is frame total minus fence wait, acquire and present.
+
+| Route | CPU frame median (A / B) | Non-wait CPU median (A / B) | GPU median (A / B) | GPU p99 | Alloc calls per frame | GPU drains per frame |
+|---|---|---|---|---|---|---|
+| T-F1-all | 3.290 / 3.280 | 0.645 / 0.654 | 1.171 / 1.171 | 1.45 | 0 | 0 drain, 0 upload-wait |
+| T-F7-stack | 9.838 / 9.576 | 6.122 / 5.968 | 2.099 / 2.100 | 2.66 | 0 | 0 / 0 |
+
+**Noise band** (from the A/A spread):
+- CPU about ±1.5% on F1 and ±2.6% on F7. The first cold process accounts for most of the F7 spread.
+- GPU ±0.3%.
+
+A regression must exceed this band in both orders.
+
+**Allocations.** Steady frames are **allocation-free** on both timing routes at R0. The audit's 2 and 16 calls per frame came from older or dirty-tree runs on other routes. The invariant is therefore zero allocations on the timing routes from R0 onward.
+
+**CPU on F7** (dense depth stack: 64 instances, 7,232 primitives, 3,904 transparent packets, 41,920 ambiguous intervals)
+- Non-wait CPU is **about 6.0 ms, twice the 3.0 ms target**.
+- `cpu.renderer.present` takes 3.54 ms but is excluded as a wait.
+- The largest named stages are extract 0.70 ms, forward record 0.45, transparent sort 0.39, opaque sort 0.34 and G-buffer record 0.24 ms.
+- **About 3.6 ms of non-wait CPU is in no named scope.** R5 attributes it first.
+
+**Build times** (14900K, Ninja, clean worktree)
+
+| Step | Release | Debug |
+|---|---:|---:|
+| Configure (clean, includes FetchContent clones) | 53.7 s | 53.3 s |
+| Clean build (664 Ninja steps) | 109.5 s | 90.8 s |
+| No-op build | 0.2 s | 0.2 s |
+| Touch `Application.cpp` (2 steps) | 10.9 s | 8.6 s |
+| Touch `rhi/Mesh.h` (108 steps) | 36.6 s | 20.7 s |
+| Touch `shadow_filter.glsl` (69 shader steps) | 0.9 s | 1.1 s |
+| Touch `cluster_count.comp` (1 step) | 0.3 s | 0.3 s |
+
+Notes:
+- Debug is faster than Release only because the Debug preset currently compiles without `/Od /Zi /RTC1` (fixed in R1). R1 will report the deltas with a corrected Debug baseline.
+- Shader include fan-out (all 69 shaders) is cheap in wall time, but R1 still adds depfiles.
+
+**Tests.** Debug 78/78 and Release 78/78 pass at `2c50b36`.
 
 ## Completion report
 
