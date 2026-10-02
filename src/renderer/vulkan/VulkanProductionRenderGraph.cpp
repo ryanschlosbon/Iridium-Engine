@@ -513,7 +513,7 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
         const auto readback = graph.addPass("shadow.virtual.request-readback", RenderGraph::QueueClass::Transfer);
         graph.read(readback, virtualWorking, Access::TransferSource);
         // Explicit qualification can copy the exact depth consumed above.
-        if (features.virtualShadowDepthSnapshot)
+        if (features.hooks.virtualShadowDepthSnapshot)
             graph.read(readback, depth, Access::TransferSource);
         graph.exportResource(virtualWorking, Access::TransferSource);
     }
@@ -533,11 +533,13 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
     if (depthPyramid) {
         const auto build = graph.addPass("depth.occlusion-pyramid.build", RenderGraph::QueueClass::Compute);
         graph.read(build, depth, Access::SampledRead);
-        depthPyramidValidation = graph.addPass(
-            "depth.occlusion-pyramid.validation-readback-hook",
-            RenderGraph::QueueClass::Transfer);
-        graph.read(depthPyramidValidation, depth, Access::TransferSource);
-        graph.addDependency(build, depthPyramidValidation);
+        if (features.hooks.depthPyramidValidation) {
+            depthPyramidValidation = graph.addPass(
+                "depth.occlusion-pyramid.validation-readback-hook",
+                RenderGraph::QueueClass::Transfer);
+            graph.read(depthPyramidValidation, depth, Access::TransferSource);
+            graph.addDependency(build, depthPyramidValidation);
+        }
     }
 
     const RenderGraph::PassHandle sortedTransparency =
@@ -593,19 +595,21 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
 
         // The explicit one-shot diagnostic validates both paired interfaces and
         // their evaluated local AP1 result after composition has completed.
-        const RenderGraph::PassHandle validationReadback = graph.addPass(
-            "transparent.layered.validation-readback-hook",
-            RenderGraph::QueueClass::Transfer);
-        graph.read(validationReadback, layeredEntryDepth,
-            Access::TransferSource);
-        graph.read(validationReadback, layeredEntryIdentity,
-            Access::TransferSource);
-        graph.read(validationReadback, layeredExitDepth,
-            Access::TransferSource);
-        graph.read(validationReadback, layeredExitIdentity,
-            Access::TransferSource);
-        graph.read(validationReadback, layeredLocalColor,
-            Access::TransferSource);
+        if (features.hooks.layeredValidation) {
+            const RenderGraph::PassHandle validationReadback = graph.addPass(
+                "transparent.layered.validation-readback-hook",
+                RenderGraph::QueueClass::Transfer);
+            graph.read(validationReadback, layeredEntryDepth,
+                Access::TransferSource);
+            graph.read(validationReadback, layeredEntryIdentity,
+                Access::TransferSource);
+            graph.read(validationReadback, layeredExitDepth,
+                Access::TransferSource);
+            graph.read(validationReadback, layeredExitIdentity,
+                Access::TransferSource);
+            graph.read(validationReadback, layeredLocalColor,
+                Access::TransferSource);
+        }
 
         const RenderGraph::PassHandle compositionContract = graph.addPass(
             "transparent.layered.compose-hook");
@@ -678,6 +682,7 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
         tier.localColor = graph.write(localComposition, tier.localColor,
             Access::ColorAttachment, LoadOp::Clear);
 
+        if (!features.hooks.layeredValidation) return;
         const RenderGraph::PassHandle validationReadback = graph.addPass(
             "transparent.layered." + tier.name +
                 ".validation-readback-hook",

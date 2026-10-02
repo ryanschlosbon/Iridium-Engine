@@ -11,7 +11,10 @@
 #include <iostream>
 #include <limits>
 #include <stdexcept>
+#include <string>
 #include <string_view>
+#include <vector>
+#include <algorithm>
 #include <utility>
 #include <tuple>
 
@@ -1095,10 +1098,59 @@ namespace {
             RenderGraph::Access::TransferSource);
         const auto vsmOracle = build({ .virtualShadowWorkingSetBytes = 8'192 });
         const auto vsmNoOracle = build({ .virtualShadowWorkingSetBytes = 8'192,
-            .virtualShadowDepthSnapshot = false });
+            .hooks = { .virtualShadowDepthSnapshot = false } });
         CHECK(hasPass(vsmNoOracle, "shadow.virtual.request-readback"));
         CHECK((depthUsages(vsmOracle) & transferSource) != 0);
         CHECK((depthUsages(vsmNoOracle) & transferSource) == 0);
+        return true;
+    }
+
+    // M7R R2.7: extension hook passes are declared by VulkanGraphHooks. The
+    // defaults (what the qualification extension declares) reproduce the
+    // pre-extension graph; with no extension none are declared, while the
+    // final-capture hook stays (retained editor views copy through it).
+    bool testExtensionHookPassDeclarations() {
+        const VulkanLayeredGraphConfig layered{ { 256u, 128u },
+            { 256u, 128u }, { 256u, 128u }, false };
+        const auto build = [&](VulkanGraphHooks hooks) {
+            return buildVulkanProductionRenderGraph({ 1920, 1080 },
+                VK_FORMAT_B8G8R8A8_SRGB, VK_FORMAT_B8G8R8A8_SRGB, false,
+                GBufferLayout::CanonicalReference, {}, 4096, 8192, true,
+                layered, { .depthPyramid = true,
+                    .virtualShadowWorkingSetBytes = 8'192, .hooks = hooks });
+        };
+        const auto passNames = [](const RenderGraph::CompiledGraph& graph) {
+            std::vector<std::string> names;
+            for (const auto& pass : graph.passes()) names.push_back(pass.name);
+            return names;
+        };
+        const auto has = [](const std::vector<std::string>& names,
+            std::string_view name) {
+            return std::ranges::find(names, name) != names.end();
+        };
+        const auto declared = passNames(build({}));
+        const auto none = passNames(build(VulkanGraphHooks::none()));
+        constexpr std::array<std::string_view, 4> hookPasses{
+            "depth.occlusion-pyramid.validation-readback-hook",
+            "transparent.layered.validation-readback-hook",
+            "transparent.layered.hero4.validation-readback-hook",
+            "transparent.layered.cinematic8.validation-readback-hook" };
+        for (std::string_view hook : hookPasses) {
+            CHECK(has(declared, hook));
+            CHECK(!has(none, hook));
+        }
+        CHECK(has(declared, "final-capture-hook"));
+        CHECK(has(none, "final-capture-hook"));
+        CHECK(declared.size() == none.size() + hookPasses.size());
+        // Removing the hooks leaves the order of every other pass unchanged.
+        std::vector<std::string> withoutHooks;
+        for (const std::string& name : declared)
+            if (std::ranges::find(hookPasses, name) == hookPasses.end())
+                withoutHooks.push_back(name);
+        CHECK(withoutHooks == none);
+        const auto partial = passNames(build({ .depthPyramidValidation = false }));
+        CHECK(!has(partial, hookPasses[0]));
+        CHECK(has(partial, hookPasses[1]));
         return true;
     }
 
@@ -1178,6 +1230,7 @@ int main() {
         { "access and format mappings", testAccessAndFormatMappings },
         { "optional occlusion depth pyramid", testOptionalOcclusionDepthPyramid },
         { "optional telemetry and qualification readbacks", testOptionalTelemetryAndQualificationReadbacks },
+        { "extension hook pass declarations", testExtensionHookPassDeclarations },
         { "production topology contract", testProductionTopologyContract },
         { "HDR10 topology contract", testHdr10TopologyContract },
         { "scene and presentation extent separation",

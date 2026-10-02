@@ -89,6 +89,32 @@ namespace Iridium {
         return interfaceBytes + tileBytes;
     }
 
+    // Extension hook passes (M7R R2.7). A hook's only graph effect is its
+    // declared usages and lifetimes (skipPass records nothing), so declaring
+    // exactly these whenever their consumer is active keeps the graph
+    // identical. Defaults reproduce the pre-R2.7 graph. "final-capture-hook"
+    // is not optional: retained editor views also copy output through it.
+    struct VulkanGraphHooks {
+        // "depth.occlusion-pyramid.validation-readback-hook" (with depthPyramid).
+        bool depthPyramidValidation = true;
+        // "transparent.layered[.<tier>].validation-readback-hook" per
+        // resident layered tier.
+        bool layeredValidation = true;
+        // Scene depth as a transfer source of the VSM request readback so the
+        // depth qualification oracle can copy it.
+        bool virtualShadowDepthSnapshot = true;
+
+        [[nodiscard]] static constexpr VulkanGraphHooks none() noexcept {
+            return { false, false, false };
+        }
+        [[nodiscard]] constexpr VulkanGraphHooks operator|(
+            const VulkanGraphHooks& other) const noexcept {
+            return { depthPyramidValidation || other.depthPyramidValidation,
+                layeredValidation || other.layeredValidation,
+                virtualShadowDepthSnapshot || other.virtualShadowDepthSnapshot };
+        }
+    };
+
     // Optional production-graph features. Defaults reproduce the default graph.
     struct VulkanProductionGraphFeatures {
         // M7.6 scene-depth pyramid (Hi-Z history/occlusion).
@@ -98,9 +124,7 @@ namespace Iridium {
         // Copies the 64-byte cluster diagnostics for CPU telemetry; only needed
         // when frame counters are collected.
         bool clusterTelemetryReadback = true;
-        // Declares the scene depth as a transfer source of the VSM request
-        // readback so the depth qualification oracle can copy it.
-        bool virtualShadowDepthSnapshot = true;
+        VulkanGraphHooks hooks{};
     };
 
     [[nodiscard]] RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(

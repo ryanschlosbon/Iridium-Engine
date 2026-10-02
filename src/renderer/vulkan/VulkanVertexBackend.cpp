@@ -180,18 +180,6 @@ namespace Iridium {
             return hash == 0u ? 1u : hash;
         }
 
-        uint32_t captureSourceBytesPerPixel(VkFormat format) noexcept {
-            switch (format) {
-            case VK_FORMAT_R8G8B8A8_SRGB:
-            case VK_FORMAT_B8G8R8A8_SRGB:
-                return 4;
-            case VK_FORMAT_R16G16B16A16_SFLOAT:
-                return 8;
-            default:
-                return 0;
-            }
-        }
-
         std::string versionString(uint32_t version) {
             return std::to_string(VK_API_VERSION_MAJOR(version)) + "." +
                 std::to_string(VK_API_VERSION_MINOR(version)) + "." +
@@ -275,6 +263,13 @@ namespace Iridium {
             throw std::logic_error("VulkanVertexBackend was initialized more than once.");
         }
 
+        // Extensions see the configuration before any graph or resource
+        // exists; their hook declarations and oracle are fixed for the process.
+        for (IVulkanBackendExtension* extension : extensions_)
+            extension->configure(config);
+        graphHooks_ = VulkanGraphHooks::none();
+        for (IVulkanBackendExtension* extension : extensions_)
+            graphHooks_ = graphHooks_ | extension->graphHooks();
         cpuProfiler_ = config.cpuProfiler;
         gBufferLayout_ = config.gBufferLayout;
         depthPyramidEnabled_ = config.experimentalDepthPyramid ||
@@ -284,13 +279,9 @@ namespace Iridium {
             config.experimentalDepthOcclusionRejection;
         depthOcclusionRejectionEnabled_ =
             config.experimentalDepthOcclusionRejection;
-        depthOcclusionQualificationOracle_ =
-            config.enableDepthOcclusionQualificationOracle;
         weightedOitOrderSeed_ = config.weightedOitOrderSeed;
         forceDirectGBufferReference_ = config.forceDirectGBufferReference;
         forceDirectShadowReference_ = config.forceDirectShadowReference;
-        shadowIndirectQualificationOracle_ =
-            config.enableShadowIndirectQualificationOracle;
         experimentalShadowLodErrorTexels_ =
             config.experimentalShadowLodErrorTexels;
         shadowLodMaximumLevel_ = (std::min)(config.shadowLodMaximumLevel,
@@ -298,13 +289,10 @@ namespace Iridium {
         experimentalGpuLodErrorPixels_ = config.experimentalGpuLodErrorPixels;
         gpuLodMaximumLevel_ = (std::min)(config.gpuLodMaximumLevel, MaximumGpuSceneLodLevels - 1u);
         gpuLodHysteresisFraction_ = config.gpuLodHysteresisFraction;
-        gpuLodQualificationOracle_ = config.enableGpuLodQualificationOracle;
         experimentalProbeLodErrorPixels_ =
             config.experimentalProbeLodErrorPixels;
         probeLodMaximumLevel_ = (std::min)(config.probeLodMaximumLevel,
             MaximumGpuSceneLodLevels - 1u);
-        probeLodQualificationOracle_ =
-            config.enableProbeLodQualificationOracle;
         if ((config.clusterTileSize != 16 && config.clusterTileSize != 32) ||
             (config.clusterDepthSlices != 24 &&
                 config.clusterDepthSlices != 32)) {
@@ -348,8 +336,10 @@ namespace Iridium {
         }
         resourceAllocator.init(vkContext->getPhysicalDevice(), vkContext->getDevice(),
             vkContext->hasMemoryBudget());
-        virtualShadowDepthQualificationOracle_ = config.virtualShadowDepthQualificationOracle;
-        if (config.experimentalVirtualShadowResources || virtualShadowDepthQualificationOracle_) {
+        // The VSM depth oracle qualifies live VSM demand, so it implies the
+        // resources.
+        if (config.experimentalVirtualShadowResources ||
+            activeIndirectOracle(VulkanIndirectOracleView::VirtualShadowDepth)) {
             virtualShadowClipPageSize_ = config.virtualShadowResources.pageSizeTexels;
             virtualShadowResources_.init(vkContext->getDevice(), resourceAllocator,
                 vkContext->getPhysicalDeviceProperties().limits,
@@ -421,40 +411,6 @@ namespace Iridium {
         reflectionProbeCaptureTargets_.init(vkContext->getDevice(),
             vkContext->getPhysicalDevice(), resourceAllocator,
             reflectionProbeCapturePass_.renderPass());
-        if (config.validateReflectionProbeCaptureTargets) {
-            const SceneEntityUuid validationOwner = *SceneEntityUuid::parse(
-                "019fb73d-5a80-7000-8000-000000000999");
-            const auto& validationTarget =
-                reflectionProbeCaptureTargets_.acquire(
-                    validationOwner, 1, 128);
-            if (!validationTarget.rawRadiance.isValid() ||
-                !validationTarget.depth.isValid() ||
-                !validationTarget.prefilteredRadiance.isValid())
-                throw std::runtime_error(
-                    "Reflection-probe validation capture allocation failed");
-            reflectionProbeCaptureTargets_.promote(validationOwner, 1);
-            if (reflectionProbeCaptureTargets_.capturesInFlight() != 0 ||
-                reflectionProbeCaptureTargets_.stagingLogicalBytes() != 0 ||
-                reflectionProbeCaptureTargets_.publishedCount() != 1 ||
-                reflectionProbeCaptureTargets_.published(validationOwner) == nullptr)
-                throw std::runtime_error(
-                    "Reflection-probe validation capture promotion failed");
-            [[maybe_unused]] const auto& validationRefreshTarget =
-                reflectionProbeCaptureTargets_.acquire(
-                    validationOwner, 2, 128);
-            reflectionProbeCaptureTargets_.abandon(validationOwner, 2);
-            if (reflectionProbeCaptureTargets_.capturesInFlight() != 0 ||
-                reflectionProbeCaptureTargets_.stagingLogicalBytes() != 0 ||
-                reflectionProbeCaptureTargets_.publishedCount() != 1 ||
-                reflectionProbeCaptureTargets_.published(validationOwner) == nullptr)
-                throw std::runtime_error(
-                    "Reflection-probe validation refresh retirement failed");
-            reflectionProbeCaptureTargets_.remove(validationOwner);
-            if (reflectionProbeCaptureTargets_.publishedCount() != 0 ||
-                reflectionProbeCaptureTargets_.publishedLogicalBytes() != 0)
-                throw std::runtime_error(
-                    "Reflection-probe validation owner retirement failed");
-        }
         forwardPass = std::make_unique<VkForwardRenderPass>(vkContext.get(),
             VulkanSceneColorFormat, VK_FORMAT_D32_SFLOAT);
         transparentPass = std::make_unique<VkForwardRenderPass>(vkContext.get(),
@@ -747,6 +703,79 @@ namespace Iridium {
 
         initialized_ = true;
         cleaned_ = false;
+        const VulkanBackendServices services = backendServices();
+        for (IVulkanBackendExtension* extension : extensions_)
+            extension->onBackendInitialized(services);
+    }
+
+    void VulkanVertexBackend::attachExtension(IRenderBackendExtension* extension) {
+        if (extension == nullptr)
+            throw std::invalid_argument("Render backend extension is null");
+        if (initialized_)
+            throw std::logic_error(
+                "Render backend extensions attach before init()");
+        if (extension->api() != RenderBackendApi::Vulkan)
+            throw std::invalid_argument(
+                "Render backend extension targets another graphics API");
+        auto* vulkanExtension = dynamic_cast<IVulkanBackendExtension*>(extension);
+        if (vulkanExtension == nullptr)
+            throw std::invalid_argument(
+                "Vulkan backend extension does not implement IVulkanBackendExtension");
+        extensions_.push_back(vulkanExtension);
+        // The first extension providing each service serves it.
+        if (indirectOracle_ == nullptr)
+            indirectOracle_ = vulkanExtension->indirectOracle();
+        if (legacyQualificationRequests_ == nullptr)
+            legacyQualificationRequests_ =
+                vulkanExtension->legacyQualificationRequests();
+    }
+
+    void VulkanVertexBackend::adoptExtension(
+        std::unique_ptr<IRenderBackendExtension> extension) {
+        if (ownedExtension_)
+            throw std::logic_error("The backend owns one default extension");
+        attachExtension(extension.get());
+        ownedExtension_ = std::move(extension);
+    }
+
+    VulkanBackendServices VulkanVertexBackend::backendServices() noexcept {
+        return {
+            .device = vkContext->getDevice(),
+            .allocator = &resourceAllocator,
+            .scheduler = &scheduler,
+            .graph = &renderGraph_,
+            .frameTargets = &frameTargets,
+            .probeCaptureTargets = &reflectionProbeCaptureTargets_,
+            .depthPyramid = depthPyramidEnabled_ ? &depthPyramid_ : nullptr,
+            .profiler = cpuProfiler_,
+        };
+    }
+
+    bool VulkanVertexBackend::anyExtensionWants(
+        const VulkanHookContext& context) const {
+        return std::ranges::any_of(extensions_,
+            [&](const IVulkanBackendExtension* extension) {
+                return extension->wantsHook(context);
+            });
+    }
+
+    void VulkanVertexBackend::runPassHook(const VulkanHookContext& context,
+        bool declared, std::string_view passName, const char* gpuRangeName) {
+        if (!declared) return;
+        if (!anyExtensionWants(context)) {
+            renderGraph_.skipPass(passName);
+            return;
+        }
+        VulkanGpuRangeToken gpuRange = scheduler.beginGpuRange(gpuRangeName);
+        renderGraph_.beginPass(currentCmd, passName);
+        for (IVulkanBackendExtension* extension : extensions_)
+            if (extension->wantsHook(context)) extension->onHook(context);
+        scheduler.endGpuRange(gpuRange);
+    }
+
+    void VulkanVertexBackend::notifyHook(const VulkanHookContext& context) {
+        for (IVulkanBackendExtension* extension : extensions_)
+            if (extension->wantsHook(context)) extension->onHook(context);
     }
     
     void VulkanVertexBackend::setEnvironmentLighting(
@@ -957,29 +986,16 @@ namespace Iridium {
         for (uint32_t frame = 0;
                 frame < VulkanFrameScheduler::FramesInFlight; ++frame)
             collectOpaqueIndirectValidation(frame);
-        for (uint32_t frame = 0;
-                frame < VulkanFrameScheduler::FramesInFlight; ++frame)
-            collectDirectionalShadowIndirectValidation(frame);
-        for (uint32_t frame = 0;
-                frame < VulkanFrameScheduler::FramesInFlight; ++frame)
-            collectSpotShadowIndirectValidation(frame);
-        for (uint32_t frame = 0;
-                frame < VulkanFrameScheduler::FramesInFlight; ++frame)
-            collectPointShadowIndirectValidation(frame);
-        for (uint32_t frame = 0;
-                frame < VulkanFrameScheduler::FramesInFlight; ++frame)
-            collectReflectionProbeIndirectValidation(frame);
-        destroyPendingFrameCaptures();
-        completedFrameCaptures_.clear();
-        destroyPendingOrdinary2CaptureValidations();
-        completedOrdinary2CaptureValidations_.clear();
-        ordinary2CaptureValidationRequest_.reset();
-        destroyPendingDeepLayeredCaptureValidations();
-        completedDeepLayeredCaptureValidations_.clear();
-        deepLayeredCaptureValidationRequest_.reset();
-        destroyPendingDepthPyramidCaptureValidations();
-        completedDepthPyramidCaptureValidations_.clear();
-        depthPyramidCaptureValidationRequest_.reset();
+        for (const VulkanIndirectOracleView view : {
+                VulkanIndirectOracleView::DirectionalShadow,
+                VulkanIndirectOracleView::SpotShadow,
+                VulkanIndirectOracleView::PointShadow,
+                VulkanIndirectOracleView::ReflectionProbe })
+            for (uint32_t frame = 0;
+                    frame < VulkanFrameScheduler::FramesInFlight; ++frame)
+                collectShadowIndirectValidation(view, frame);
+        for (IVulkanBackendExtension* extension : extensions_)
+            extension->onBeforeDeviceDestroy();
 
         pipelineLibrary.cleanup();
 
@@ -1083,7 +1099,6 @@ namespace Iridium {
         directionalShadow_.cleanup();
         spotShadow_.cleanup();
         pointShadow_.cleanup();
-        for (auto& readback : virtualShadowDepthReadbacks_) resourceAllocator.destroy(readback);
         virtualShadowResources_.cleanup();
         for (PendingReflectionProbeCapture& pending :
                 pendingReflectionProbeCaptures_) {
@@ -1796,7 +1811,7 @@ namespace Iridium {
             // The CPU profiler's enabled state is fixed for the process.
             .clusterTelemetryReadback =
                 cpuProfiler_ != nullptr && cpuProfiler_->isEnabled(),
-            .virtualShadowDepthSnapshot = virtualShadowDepthQualificationOracle_,
+            .hooks = graphHooks_,
         };
     }
 
@@ -3196,10 +3211,8 @@ namespace Iridium {
         const VulkanFrameBegin frame = scheduler.beginFrame(vkSwapchain->getSwapchain());
         // beginFrame has waited this slot's fence before returning, including
         // the out-of-date acquire path. Its capture readbacks are now CPU-safe.
-        collectFrameCapturesForSlot(completedFrameIndex);
-        collectOrdinary2CaptureValidationsForSlot(completedFrameIndex);
-        collectDeepLayeredCaptureValidationsForSlot(completedFrameIndex);
-        collectDepthPyramidCaptureValidationsForSlot(completedFrameIndex);
+        for (IVulkanBackendExtension* extension : extensions_)
+            extension->onFrameSlotRetired(completedFrameIndex);
         collectVirtualShadowRequests(completedFrameIndex);
         if (depthPyramidEnabled_) {
             depthPyramid_.onFrameFenceCompleted(completedFrameIndex,
@@ -3207,10 +3220,7 @@ namespace Iridium {
         }
         collectClusterDiagnostics(completedFrameIndex);
         collectOpaqueIndirectValidation(completedFrameIndex);
-        collectDirectionalShadowIndirectValidation(completedFrameIndex);
-        collectSpotShadowIndirectValidation(completedFrameIndex);
-        collectPointShadowIndirectValidation(completedFrameIndex);
-        collectReflectionProbeIndirectValidation(completedFrameIndex);
+        collectShadowIndirectValidations(completedFrameIndex);
         {
             CpuScope graphScope(cpuProfiler_, "cpu.render_graph.lookup");
             renderGraph_.onFrameFenceCompleted(completedFrameIndex);
@@ -3720,18 +3730,10 @@ namespace Iridium {
         validation.profileFrameId = cpuProfiler_ != nullptr &&
                 cpuProfiler_->isFrameOpen()
             ? cpuProfiler_->currentFrameId() : 0u;
-        validation.validateExpectedCounts =
-            shadowIndirectQualificationOracle_;
-        if (validation.validateExpectedCounts)
-            validation.expectedCounts.assign(
-                static_cast<size_t>(requiredCounts), 0u);
-        else
-            validation.expectedCounts.clear();
-        if (validation.validateExpectedCounts)
-            validation.expectedCommands.assign(
-                static_cast<size_t>(requiredCounts), {});
-        else
-            validation.expectedCommands.clear();
+        if (IVulkanIndirectOracle* oracle = activeIndirectOracle(
+                VulkanIndirectOracleView::DirectionalShadow))
+            oracle->beginShadowWork(VulkanIndirectOracleView::DirectionalShadow, frame,
+                static_cast<size_t>(requiredCounts));
         validation.countCapacities.clear();
         validation.commandOffsets.clear();
         validation.countCapacities.reserve(
@@ -3823,38 +3825,20 @@ namespace Iridium {
             (!packet && telemetry.outputRequestCount))
             throw std::runtime_error("Live virtual-shadow request telemetry violates the published slot contract");
         const auto* bytes = static_cast<const std::byte*>(buffer.mapped) + info.workingSetLayout.telemetry.size;
-        std::optional<DirectionalVirtualShadowMarkPlan> oracle;
-        if (virtualShadowDepthQualificationOracle_ && packet) {
-            CpuScope scope(cpuProfiler_, "cpu.render.virtual-shadow.depth-oracle");
-            const auto extent = virtualShadowDepthExtents_[slot];
-            const uint32_t pixels = extent.width * extent.height;
-            const auto& depthReadback = virtualShadowDepthReadbacks_[slot];
-            if (!depthReadback.mapped || !pixels)
-                throw std::logic_error("Virtual-shadow depth oracle has no retired depth snapshot");
-            const auto packedReceivers = buildVirtualShadowDepthReceivers(
-                {extent.width, extent.height, 0, 0, extent.width, extent.height, false},
-                virtualShadowInverseViewProjections_[slot],
-                std::span(static_cast<const float*>(depthReadback.mapped), pixels), pixels);
-            std::vector<DirectionalVirtualShadowReceiverSample> receivers;
-            receivers.reserve(packedReceivers.size());
-            for (const auto& receiver : packedReceivers)
-                if (receiver.receiverSamples)
-                    receivers.push_back({glm::vec3(receiver.worldPosition), receiver.receiverSamples});
-            DirectionalVirtualShadowMarkConfig markConfig{};
-            markConfig.pageSizeTexels = virtualShadowClipPageSize_;
-            markConfig.maximumUniquePageRequests = info.requestCapacity;
-            oracle = buildDirectionalVirtualShadowReceiverMarks(markConfig, packet->levels(), receivers);
-            if (oracle->uniquePagesBeforeCapacity != telemetry.uniquePagesBeforeCapacity ||
-                oracle->requests.size() != telemetry.outputRequestCount ||
-                oracle->requestCapacityOverflow != telemetry.requestCapacityOverflow ||
-                oracle->requestCapacityDroppedSamples != telemetry.requestCapacityDroppedSamples)
-                throw std::runtime_error("Live virtual-shadow depth oracle telemetry mismatch");
-            if (cpuProfiler_) {
-                cpuProfiler_->recordCounter("shadow.virtual.oracle.depth_pixels", pixels);
-                cpuProfiler_->recordCounter("shadow.virtual.oracle.receiver_samples", oracle->markedReceiverSamples);
-                cpuProfiler_->recordCounter("shadow.virtual.oracle.depth_readback_bytes", depthReadback.size);
-            }
-        }
+        IVulkanIndirectOracle* oracle = packet
+            ? activeIndirectOracle(VulkanIndirectOracleView::VirtualShadowDepth)
+            : nullptr;
+        if (oracle != nullptr && !oracle->beginVirtualShadowVerify({
+                .slot = slot,
+                .levels = packet->levels(),
+                .pageSizeTexels = virtualShadowClipPageSize_,
+                .requestCapacity = info.requestCapacity,
+                .uniquePagesBeforeCapacity = telemetry.uniquePagesBeforeCapacity,
+                .outputRequestCount = telemetry.outputRequestCount,
+                .requestCapacityOverflow = telemetry.requestCapacityOverflow,
+                .requestCapacityDroppedSamples =
+                    telemetry.requestCapacityDroppedSamples }))
+            oracle = nullptr;
         for (uint32_t i = 0; i < telemetry.outputRequestCount; ++i) {
             PackedDirectionalVirtualShadowGpuRequest request{};
             std::memcpy(&request, bytes + i * sizeof(request), sizeof(request));
@@ -3862,15 +3846,7 @@ namespace Iridium {
                 throw std::runtime_error("Live virtual-shadow request selects an unpublished clip");
             const auto ownedRequest = unpackDirectionalVirtualShadowGpuRequest(request,
                 packet->levels(), virtualShadowClipPageSize_);
-            if (oracle) {
-                const auto& expected = oracle->requests[i];
-                if (ownedRequest.address != expected.address ||
-                    ownedRequest.staticCasterRevision != expected.staticCasterRevision ||
-                    ownedRequest.dynamicCasterRevision != expected.dynamicCasterRevision ||
-                    ownedRequest.receiverSamples != expected.receiverSamples || ownedRequest.priority != expected.priority ||
-                    ownedRequest.requiredLayers != expected.requiredLayers)
-                    throw std::runtime_error("Live virtual-shadow depth oracle request/coverage mismatch");
-            }
+            if (oracle != nullptr) oracle->verifyVirtualShadowRequest(i, ownedRequest);
         }
         if (cpuProfiler_) {
             cpuProfiler_->recordCounter("shadow.virtual.requests.unique", telemetry.uniquePagesBeforeCapacity);
@@ -3879,8 +3855,9 @@ namespace Iridium {
             cpuProfiler_->recordCounter("shadow.virtual.requests.dropped_samples", telemetry.requestCapacityDroppedSamples);
             cpuProfiler_->recordCounter("shadow.virtual.requests.validated_slot", slot);
             cpuProfiler_->recordCounter("shadow.virtual.requests.readback_bytes", info.requestedReadbackBytes);
-            cpuProfiler_->recordCounter("shadow.virtual.oracle.compared_requests", oracle ? oracle->requests.size() : 0);
-            cpuProfiler_->recordCounter("shadow.virtual.oracle.validated", oracle.has_value());
+            cpuProfiler_->recordCounter("shadow.virtual.oracle.compared_requests",
+                oracle != nullptr ? oracle->comparedVirtualShadowRequests() : 0);
+            cpuProfiler_->recordCounter("shadow.virtual.oracle.validated", oracle != nullptr);
         }
         virtualShadowReadbackPending_[slot] = false;
     }
@@ -3980,6 +3957,8 @@ namespace Iridium {
             });
         const bool indirectValid =
             prepareDirectionalShadowIndirectSubmission(shadowCasters, shadows);
+        IVulkanIndirectOracle* const shadowOracle =
+            activeIndirectOracle(VulkanIndirectOracleView::DirectionalShadow);
         frameCounters_.shadowDirectionalDirectFallback =
             static_cast<uint64_t>(std::count_if(
                 shadowCasterScratch_.begin(), shadowCasterScratch_.end(),
@@ -4001,7 +3980,7 @@ namespace Iridium {
             const ResolvedShadowCaster& caster =
                 shadowCasterScratch_[casterIndex];
             const bool requiresCpuVisibility =
-                shadowIndirectQualificationOracle_ || !indirectValid ||
+                shadowOracle != nullptr || !indirectValid ||
                 caster.gpuScenePrimitiveIndex == InvalidGpuSceneIndex;
             if (!requiresCpuVisibility) {
                 directionalShadowCasterMaskScratch_[casterIndex] = 0u;
@@ -4087,7 +4066,7 @@ namespace Iridium {
                         sizeof(GpuSceneIndexedIndirectCommand));
                     ++frameCounters_.shadowDirectionalIndirectBins;
                 }
-                if (shadowIndirectQualificationOracle_) {
+                if (shadowOracle != nullptr) {
                     for (size_t casterIndex = 0;
                           casterIndex < shadowCasterScratch_.size();
                           ++casterIndex) {
@@ -4111,8 +4090,7 @@ namespace Iridium {
                                 frameIndex];
                         const size_t countIndex = countRegion +
                             binIndex;
-                        if (countIndex < validation.expectedCounts.size()) {
-                            ++validation.expectedCounts[countIndex];
+                        if (countIndex < validation.countCapacities.size()) {
                             const GpuSceneCpuMirror& scene =
                                 gpuSceneCpuMirrors_[frameIndex];
                             const uint32_t primitiveIndex =
@@ -4144,7 +4122,8 @@ namespace Iridium {
                                     candidate->maximumLod);
                             const GpuSceneGeometryRecord& selected =
                                 scene.geometries[geometryIndex];
-                            validation.expectedCommands[countIndex].push_back({
+                            shadowOracle->expectShadowCommand(VulkanIndirectOracleView::DirectionalShadow,
+                                frameIndex, countIndex, {
                                 .indexCount = selected.draw.y,
                                 .instanceCount = 1u,
                                 .firstIndex = selected.draw.x,
@@ -4440,18 +4419,10 @@ namespace Iridium {
         validation.profileFrameId = cpuProfiler_ != nullptr &&
                 cpuProfiler_->isFrameOpen()
             ? cpuProfiler_->currentFrameId() : 0u;
-        validation.validateExpectedCounts =
-            shadowIndirectQualificationOracle_;
-        if (validation.validateExpectedCounts)
-            validation.expectedCounts.assign(
-                static_cast<size_t>(requiredCounts), 0u);
-        else
-            validation.expectedCounts.clear();
-        if (validation.validateExpectedCounts)
-            validation.expectedCommands.assign(
-                static_cast<size_t>(requiredCounts), {});
-        else
-            validation.expectedCommands.clear();
+        if (IVulkanIndirectOracle* oracle = activeIndirectOracle(
+                VulkanIndirectOracleView::SpotShadow))
+            oracle->beginShadowWork(VulkanIndirectOracleView::SpotShadow, frame,
+                static_cast<size_t>(requiredCounts));
         validation.countCapacities.clear();
         validation.commandOffsets.clear();
         validation.countCapacities.reserve(
@@ -4566,6 +4537,8 @@ namespace Iridium {
             });
         const bool indirectValid =
             prepareSpotShadowIndirectSubmission(shadowCasters, shadows);
+        IVulkanIndirectOracle* const shadowOracle =
+            activeIndirectOracle(VulkanIndirectOracleView::SpotShadow);
         frameCounters_.shadowSpotDirectFallback =
             static_cast<uint64_t>(std::count_if(
                 shadowCasterScratch_.begin(), shadowCasterScratch_.end(),
@@ -4587,7 +4560,7 @@ namespace Iridium {
                 const ResolvedShadowCaster& caster =
                     shadowCasterScratch_[casterIndex];
                 const bool requiresCpuVisibility =
-                    shadowIndirectQualificationOracle_ || !indirectValid ||
+                    shadowOracle != nullptr || !indirectValid ||
                     caster.gpuScenePrimitiveIndex == InvalidGpuSceneIndex;
                 if (!requiresCpuVisibility) {
                     directionalShadowCasterMaskScratch_[casterIndex] = 0u;
@@ -4663,7 +4636,7 @@ namespace Iridium {
                         sizeof(GpuSceneIndexedIndirectCommand));
                     ++frameCounters_.shadowSpotIndirectBins;
                 }
-                if (shadowIndirectQualificationOracle_) {
+                if (shadowOracle != nullptr) {
                     for (size_t casterIndex = 0;
                           casterIndex < shadowCasterScratch_.size(); ++casterIndex) {
                     const ResolvedShadowCaster& caster =
@@ -4680,8 +4653,7 @@ namespace Iridium {
                         PendingShadowIndirectValidation& validation =
                             pendingSpotShadowIndirectValidations_[frameIndex];
                         const size_t countIndex = countRegion + binIndex;
-                        if (countIndex < validation.expectedCounts.size()) {
-                            ++validation.expectedCounts[countIndex];
+                        if (countIndex < validation.countCapacities.size()) {
                             const GpuSceneCpuMirror& scene =
                                 gpuSceneCpuMirrors_[frameIndex];
                             const uint32_t primitiveIndex =
@@ -4719,7 +4691,8 @@ namespace Iridium {
                                     candidate->maximumLod);
                             const GpuSceneGeometryRecord& selected =
                                 scene.geometries[geometryIndex];
-                            validation.expectedCommands[countIndex].push_back({
+                            shadowOracle->expectShadowCommand(VulkanIndirectOracleView::SpotShadow,
+                                frameIndex, countIndex, {
                                 .indexCount = selected.draw.y,
                                 .instanceCount = 1u,
                                 .firstIndex = selected.draw.x,
@@ -5018,18 +4991,10 @@ namespace Iridium {
         validation.profileFrameId = cpuProfiler_ != nullptr &&
                 cpuProfiler_->isFrameOpen()
             ? cpuProfiler_->currentFrameId() : 0u;
-        validation.validateExpectedCounts =
-            shadowIndirectQualificationOracle_;
-        if (validation.validateExpectedCounts)
-            validation.expectedCounts.assign(
-                static_cast<size_t>(requiredCounts), 0u);
-        else
-            validation.expectedCounts.clear();
-        if (validation.validateExpectedCounts)
-            validation.expectedCommands.assign(
-                static_cast<size_t>(requiredCounts), {});
-        else
-            validation.expectedCommands.clear();
+        if (IVulkanIndirectOracle* oracle = activeIndirectOracle(
+                VulkanIndirectOracleView::PointShadow))
+            oracle->beginShadowWork(VulkanIndirectOracleView::PointShadow, frame,
+                static_cast<size_t>(requiredCounts));
         validation.countCapacities.clear();
         validation.commandOffsets.clear();
         validation.countCapacities.reserve(
@@ -5152,6 +5117,8 @@ namespace Iridium {
             });
         const bool indirectValid =
             preparePointShadowIndirectSubmission(shadowCasters, shadows);
+        IVulkanIndirectOracle* const shadowOracle =
+            activeIndirectOracle(VulkanIndirectOracleView::PointShadow);
         frameCounters_.shadowPointDirectFallback =
             static_cast<uint64_t>(std::count_if(
                 shadowCasterScratch_.begin(), shadowCasterScratch_.end(),
@@ -5175,7 +5142,7 @@ namespace Iridium {
                     const ResolvedShadowCaster& caster =
                         shadowCasterScratch_[casterIndex];
                     const bool requiresCpuVisibility =
-                        shadowIndirectQualificationOracle_ || !indirectValid ||
+                        shadowOracle != nullptr || !indirectValid ||
                         caster.gpuScenePrimitiveIndex == InvalidGpuSceneIndex;
                     if (!requiresCpuVisibility) {
                         directionalShadowCasterMaskScratch_[casterIndex] = 0u;
@@ -5259,7 +5226,7 @@ namespace Iridium {
                             sizeof(GpuSceneIndexedIndirectCommand));
                         ++frameCounters_.shadowPointIndirectBins;
                     }
-                    if (shadowIndirectQualificationOracle_) {
+                    if (shadowOracle != nullptr) {
                         for (size_t casterIndex = 0;
                               casterIndex < shadowCasterScratch_.size();
                               ++casterIndex) {
@@ -5281,8 +5248,7 @@ namespace Iridium {
                                 pendingPointShadowIndirectValidations_[
                                     frameIndex];
                             const size_t countIndex = countRegion + binIndex;
-                            if (countIndex < validation.expectedCounts.size()) {
-                                ++validation.expectedCounts[countIndex];
+                            if (countIndex < validation.countCapacities.size()) {
                                 const GpuSceneCpuMirror& scene =
                                     gpuSceneCpuMirrors_[frameIndex];
                                 const uint32_t primitiveIndex =
@@ -5315,7 +5281,8 @@ namespace Iridium {
                                         candidate->maximumLod);
                                 const GpuSceneGeometryRecord& selected =
                                     scene.geometries[geometryIndex];
-                                validation.expectedCommands[countIndex].push_back({
+                                shadowOracle->expectShadowCommand(VulkanIndirectOracleView::PointShadow,
+                                frameIndex, countIndex, {
                                     .indexCount = selected.draw.y,
                                     .instanceCount = 1u,
                                     .firstIndex = selected.draw.x,
@@ -5588,19 +5555,10 @@ namespace Iridium {
         validation.profileFrameId = cpuProfiler_ != nullptr &&
                 cpuProfiler_->isFrameOpen()
             ? cpuProfiler_->currentFrameId() : 0u;
-        validation.validateExpectedCounts =
-            shadowIndirectQualificationOracle_ ||
-            probeLodQualificationOracle_;
-        if (validation.validateExpectedCounts)
-            validation.expectedCounts.assign(
-                static_cast<size_t>(requiredCounts), 0u);
-        else
-            validation.expectedCounts.clear();
-        if (validation.validateExpectedCounts)
-            validation.expectedCommands.assign(
-                static_cast<size_t>(requiredCounts), {});
-        else
-            validation.expectedCommands.clear();
+        if (IVulkanIndirectOracle* oracle = activeIndirectOracle(
+                VulkanIndirectOracleView::ReflectionProbe))
+            oracle->beginShadowWork(VulkanIndirectOracleView::ReflectionProbe, frame,
+                static_cast<size_t>(requiredCounts));
         validation.countCapacities.clear();
         validation.commandOffsets.clear();
         validation.countCapacities.reserve(
@@ -5703,9 +5661,10 @@ namespace Iridium {
             });
         const bool indirectValid =
             prepareReflectionProbeIndirectSubmission(probeCasters, captures);
+        IVulkanIndirectOracle* const shadowOracle =
+            activeIndirectOracle(VulkanIndirectOracleView::ReflectionProbe);
         const bool probeQualificationOracle =
-            shadowIndirectQualificationOracle_ ||
-            probeLodQualificationOracle_;
+            shadowOracle != nullptr;
         const uint64_t resolvedGpuSceneCasters =
             std::ranges::count_if(shadowCasterScratch_,
                 [](const ResolvedShadowCaster& caster) {
@@ -5868,8 +5827,7 @@ namespace Iridium {
                                 const size_t countIndex = countRegion +
                                     binIndex;
                                 if (countIndex <
-                                        validation.expectedCounts.size()) {
-                                    ++validation.expectedCounts[countIndex];
+                                        validation.countCapacities.size()) {
                                     const GpuSceneCpuMirror& scene =
                                         gpuSceneCpuMirrors_[frameIndex];
                                     const uint32_t primitiveIndex =
@@ -5902,7 +5860,8 @@ namespace Iridium {
                                             candidate->maximumLod);
                                     const GpuSceneGeometryRecord& selected =
                                         scene.geometries[geometryIndex];
-                                    validation.expectedCommands[countIndex].push_back({
+                                    shadowOracle->expectShadowCommand(VulkanIndirectOracleView::ReflectionProbe,
+                                frameIndex, countIndex, {
                                         .indexCount = selected.draw.y,
                                         .instanceCount = 1u,
                                         .firstIndex = selected.draw.x,
@@ -6214,36 +6173,33 @@ namespace Iridium {
         validation.expectedBinCounts.assign(
             opaqueIndirectBins_.size(), 0u);
         validation.binCapacities.resize(opaqueIndirectBins_.size());
-        validation.baseTriangles = validation.oracleTriangles = validation.oracleReducedCommands = 0;
-        validation.historyValid = validation.historyReset = validation.historyChanged = 0;
         validation.occlusionProfileFrameId = validation.profileFrameId;
-        validation.occlusionQueryCount = 0u;
-        validation.occlusionProjectionRejected = 0u;
         validation.gpuSceneOcclusionCandidateCount = 0u;
-        validation.occlusionProjectedCandidateIndices.clear();
         validation.occlusionCandidatePrimitiveIndices.clear();
         validation.occlusionCandidateBinIndices.clear();
-        validation.occlusionCpuVisibleCandidates.clear();
-        validation.occlusionQualificationOracle = false;
-        validation.occlusionPending = false;
         validation.gpuSceneOcclusionPending = false;
         validation.occlusionRejectionApplied = false;
-        if (experimentalGpuLodErrorPixels_ > 0.0f &&
-            gpuLodQualificationOracle_) {
-            validation.expectedCommandsByPrimitive.assign(primitiveRecords.size(), {});
-            validation.seenPrimitives.assign(primitiveRecords.size(), 0u);
-        }
-        else {
-            validation.expectedCommandsByPrimitive.clear();
-            validation.seenPrimitives.clear();
-        }
         const auto& viewUniform = gpuSceneCpuViews_[frame];
         depthOcclusionQueries_.clear();
         std::array<float, 16> worldToClip{};
         const bool queryOcclusion = depthOcclusionQueryEnabled_ &&
             currentDepthHistoryDecision_.eligible;
-        const bool qualifyOcclusion = queryOcclusion &&
-            depthOcclusionQualificationOracle_;
+        // Qualification-only expectation emission (R2.8): both oracles are
+        // null unless explicitly enabled in a qualification build.
+        IVulkanIndirectOracle* const lodOracle =
+            experimentalGpuLodErrorPixels_ > 0.0f
+            ? activeIndirectOracle(VulkanIndirectOracleView::OpaqueLod)
+            : nullptr;
+        IVulkanIndirectOracle* const occlusionOracle = queryOcclusion
+            ? activeIndirectOracle(VulkanIndirectOracleView::DepthOcclusion)
+            : nullptr;
+        validation.lodQualificationOracle = lodOracle != nullptr;
+        validation.occlusionQualificationOracle = occlusionOracle != nullptr;
+        if (lodOracle != nullptr || occlusionOracle != nullptr)
+            indirectOracle_->beginOpaqueWork(frame,
+                static_cast<uint32_t>(primitiveRecords.size()),
+                static_cast<uint32_t>(opaqueIndirectCandidates_.size()),
+                lodOracle != nullptr, occlusionOracle != nullptr);
         if (queryOcclusion) {
             validation.occlusionCandidatePrimitiveIndices.reserve(
                 opaqueIndirectCandidates_.size());
@@ -6256,16 +6212,13 @@ namespace Iridium {
                     candidate.binIndex);
             }
         }
-        if (qualifyOcclusion) {
+        if (occlusionOracle != nullptr) {
             const glm::mat4 clipFromWorld =
                 viewUniform.projection * viewUniform.view;
             for (uint32_t row = 0; row < 4u; ++row)
                 for (uint32_t column = 0; column < 4u; ++column)
                     worldToClip[row * 4u + column] =
                         clipFromWorld[column][row];
-            validation.occlusionCpuVisibleCandidates.assign(
-                opaqueIndirectCandidates_.size(), 0u);
-            validation.occlusionQualificationOracle = true;
         }
         const DepthPyramidExtent queryExtent{
             static_cast<uint32_t>(viewUniform.renderInfo.x),
@@ -6277,10 +6230,11 @@ namespace Iridium {
             for (uint32_t command = 0; command < bin.commandCount; ++command) {
                 const uint32_t packetIndex = bin.packetBegin + command;
                 if (cpuVisibilityOracleVisible(opaqueQueue[packetIndex])) {
-                    if (qualifyOcclusion)
-                        validation.occlusionCpuVisibleCandidates[packetIndex] = 1u;
+                    if (occlusionOracle != nullptr)
+                        occlusionOracle->expectOpaqueVisibleCandidate(frame,
+                            packetIndex);
                     ++validation.expectedBinCounts[binIndex];
-                    if (qualifyOcclusion) {
+                    if (occlusionOracle != nullptr) {
                         const auto& candidate =
                             opaqueIndirectCandidates_[packetIndex];
                         const auto& primitive =
@@ -6326,16 +6280,16 @@ namespace Iridium {
                             .depthBias = 0.00001f,
                         });
                         if (projection.eligible) {
-                            validation.occlusionProjectedCandidateIndices.push_back(
+                            occlusionOracle->expectOpaqueOcclusionQuery(frame,
                                 packetIndex);
                             depthOcclusionQueries_.push_back(
                                 packDepthPyramidDeviceQuery(projection.query));
                         }
                         else
-                            ++validation.occlusionProjectionRejected;
+                            occlusionOracle->expectOpaqueProjectionRejected(
+                                frame);
                     }
-                    if (experimentalGpuLodErrorPixels_ > 0.0f &&
-                        gpuLodQualificationOracle_) {
+                    if (lodOracle != nullptr) {
                         const auto& candidate = opaqueIndirectCandidates_[packetIndex];
                         const auto& primitive = primitiveRecords[candidate.primitiveIndex];
                         const auto& instance = instanceRecords[primitive.binding.x];
@@ -6351,15 +6305,18 @@ namespace Iridium {
                         const uint32_t selectedLod = selected == primitive.binding.y ? 0u :
                             static_cast<uint32_t>(geometry.localBoundsMax.w);
                         mainOpaqueLodHistory_.record(history, selectedLod);
-                        validation.historyValid += previous != InvalidGpuSceneIndex;
-                        validation.historyReset += previous == InvalidGpuSceneIndex;
-                        validation.historyChanged += previous != InvalidGpuSceneIndex && previous != selectedLod;
-                        validation.expectedCommandsByPrimitive[candidate.primitiveIndex] = {
-                            geometry.draw.y, 1u, geometry.draw.x, std::bit_cast<int32_t>(geometry.draw.z),
-                            candidate.primitiveIndex };
-                        validation.baseTriangles += geometryRecords[primitive.binding.y].draw.y / 3u;
-                        validation.oracleTriangles += geometry.draw.y / 3u;
-                        validation.oracleReducedCommands += selected != primitive.binding.y ? 1u : 0u;
+                        lodOracle->expectOpaqueLod(frame, candidate.primitiveIndex, {
+                            .command = { geometry.draw.y, 1u, geometry.draw.x,
+                                std::bit_cast<int32_t>(geometry.draw.z),
+                                candidate.primitiveIndex },
+                            .baseTriangles =
+                                geometryRecords[primitive.binding.y].draw.y / 3u,
+                            .oracleTriangles = geometry.draw.y / 3u,
+                            .reduced = selected != primitive.binding.y,
+                            .historyValid = previous != InvalidGpuSceneIndex,
+                            .historyChanged = previous != InvalidGpuSceneIndex &&
+                                previous != selectedLod,
+                        });
                     }
                 }
             }
@@ -6371,10 +6328,9 @@ namespace Iridium {
                 sizeof(GpuSceneIndirectCandidate));
         std::memset(opaqueIndirectCountBuffers_[frame].mapped, 0,
             opaqueIndirectBins_.size() * sizeof(uint32_t));
-        if (!depthOcclusionQueries_.empty()) {
-            validation.occlusionQueryCount = static_cast<uint32_t>(
-                depthOcclusionQueries_.size());
-            validation.occlusionPending = true;
+        const uint32_t occlusionQueryCount = static_cast<uint32_t>(
+            depthOcclusionQueries_.size());
+        if (occlusionQueryCount != 0u) {
             std::memcpy(depthOcclusionQueryBuffers_[frame].mapped,
                 depthOcclusionQueries_.data(),
                 depthOcclusionQueries_.size() *
@@ -6484,7 +6440,7 @@ namespace Iridium {
         scheduler.endGpuRange(range);
         ++frameCounters_.dispatchRecorded;
 
-        if (validation.occlusionPending) {
+        if (occlusionQueryCount != 0u) {
             range = scheduler.beginGpuRange("gpu.depth.occlusion-query");
             frameCounters_.dispatchRecorded += depthPyramid_.recordQueries(
                 currentCmd, frame, retainedRenderView_,
@@ -6492,7 +6448,7 @@ namespace Iridium {
                 depthOcclusionQueryBuffers_[frame].size,
                 depthOcclusionResultBuffers_[frame].buffer,
                 depthOcclusionResultBuffers_[frame].size,
-                validation.occlusionQueryCount);
+                occlusionQueryCount);
             scheduler.endGpuRange(range);
         }
         if (!validation.occlusionRejectionApplied)
@@ -7463,441 +7419,136 @@ VkDeviceSize offset = geometry->vertexOffset;
         }
     }
 
-    void VulkanVertexBackend::collectDirectionalShadowIndirectValidation(
-        uint32_t frameIndex) {
-        PendingShadowIndirectValidation& validation =
-            pendingDirectionalShadowIndirectValidations_[frameIndex];
-        if (!validation.pending) return;
-        const auto* counts = static_cast<const uint32_t*>(
-            directionalShadowIndirectCountBuffers_[frameIndex].mapped);
-        const auto* commands = static_cast<const GpuSceneIndexedIndirectCommand*>(
-            directionalShadowIndirectCommandBuffers_[frameIndex].mapped);
-        const GpuSceneCpuMirror& scene = gpuSceneCpuMirrors_[frameIndex];
-        uint64_t deviceCommands = 0u;
-        uint64_t oracleCommands = 0u;
-        uint64_t mismatchedBins = 0u;
-        uint64_t mismatchedCommandRegions = 0u;
-        uint64_t overflowCommands = 0u;
-        uint64_t deviceTriangles = 0u;
-        uint64_t oracleTriangles = 0u;
-        uint64_t deviceReducedCommands = 0u;
-        uint64_t oracleReducedCommands = 0u;
-        const auto baseIndexCount = [&](uint32_t primitiveIndex) {
-            if (primitiveIndex >= scene.primitives.size()) return 0u;
-            const uint32_t geometryIndex =
-                scene.primitives[primitiveIndex].binding.y;
-            return geometryIndex < scene.geometries.size()
-                ? scene.geometries[geometryIndex].draw.y : 0u;
+    namespace {
+        // Profile counter names per shadow/probe consumer, in emission order.
+        struct ShadowIndirectTelemetryNames {
+            const char* deviceCommands;
+            const char* oracleCommands;
+            const char* mismatchedBins;
+            const char* deviceTriangles;
+            const char* oracleTriangles;
+            const char* deviceReducedCommands;
+            const char* oracleReducedCommands;
+            const char* mismatchedCommandRegions;
+            const char* overflowCommands;
+            const char* qualificationOracle;
+            const char* subject;
         };
-        const auto commandLess = [](const GpuSceneIndexedIndirectCommand& left,
-                const GpuSceneIndexedIndirectCommand& right) {
-            return std::tie(left.firstInstance, left.indexCount,
-                left.firstIndex, left.vertexOffset, left.instanceCount) <
-                std::tie(right.firstInstance, right.indexCount,
-                    right.firstIndex, right.vertexOffset,
-                    right.instanceCount);
-        };
-        const auto commandEqual = [](const GpuSceneIndexedIndirectCommand& left,
-                const GpuSceneIndexedIndirectCommand& right) {
-            return left.indexCount == right.indexCount &&
-                left.instanceCount == right.instanceCount &&
-                left.firstIndex == right.firstIndex &&
-                left.vertexOffset == right.vertexOffset &&
-                left.firstInstance == right.firstInstance;
-        };
-        for (size_t index = 0; index < validation.countCapacities.size();
-                ++index) {
-            const uint32_t capacity = validation.countCapacities[index];
-            const uint32_t deviceCount = counts != nullptr
-                ? counts[index] : 0u;
-            const uint32_t submitted = (std::min)(deviceCount, capacity);
-            deviceCommands += submitted;
-            std::vector<GpuSceneIndexedIndirectCommand> actualCommands;
-            if (validation.validateExpectedCounts)
-                actualCommands.reserve(submitted);
-            const uint32_t commandOffset = index <
-                    validation.commandOffsets.size()
-                ? validation.commandOffsets[index] : 0u;
-            for (uint32_t commandIndex = 0u;
-                    commands != nullptr && commandIndex < submitted;
-                    ++commandIndex) {
-                const GpuSceneIndexedIndirectCommand command =
-                    commands[commandOffset + commandIndex];
-                deviceTriangles += command.indexCount / 3u;
-                deviceReducedCommands += command.indexCount <
-                    baseIndexCount(command.firstInstance) ? 1u : 0u;
-                if (validation.validateExpectedCounts)
-                    actualCommands.push_back(command);
-            }
-            if (validation.validateExpectedCounts) {
-                oracleCommands += validation.expectedCounts[index];
-                mismatchedBins += submitted !=
-                    validation.expectedCounts[index] ? 1u : 0u;
-                const auto& expected = validation.expectedCommands[index];
-                for (const GpuSceneIndexedIndirectCommand& command : expected) {
-                    oracleTriangles += command.indexCount / 3u;
-                    oracleReducedCommands += command.indexCount <
-                        baseIndexCount(command.firstInstance) ? 1u : 0u;
-                }
-                auto sortedExpected = expected;
-                std::ranges::sort(actualCommands, commandLess);
-                std::ranges::sort(sortedExpected, commandLess);
-                mismatchedCommandRegions += !std::ranges::equal(
-                    actualCommands, sortedExpected, commandEqual) ? 1u : 0u;
-            }
-            overflowCommands += deviceCount > capacity
-                ? static_cast<uint64_t>(deviceCount - capacity) : 0u;
-        }
-        if (validation.profileFrameId != 0u && cpuProfiler_ != nullptr) {
-            (void)cpuProfiler_->attachCounter(validation.profileFrameId,
-                "shadow.directional.indirect.device_commands",
-                deviceCommands);
-            (void)cpuProfiler_->attachCounter(validation.profileFrameId,
+        constexpr std::array<ShadowIndirectTelemetryNames,
+            kVulkanShadowOracleViewCount> ShadowIndirectTelemetry{ {
+            { "shadow.directional.indirect.device_commands",
                 "shadow.directional.indirect.oracle_commands",
-                oracleCommands);
-            (void)cpuProfiler_->attachCounter(validation.profileFrameId,
                 "shadow.directional.indirect.mismatched_bins",
-                mismatchedBins);
-            (void)cpuProfiler_->attachCounter(validation.profileFrameId,
-                "shadow.directional.lod.device_triangles", deviceTriangles);
-            (void)cpuProfiler_->attachCounter(validation.profileFrameId,
-                "shadow.directional.lod.oracle_triangles", oracleTriangles);
-            (void)cpuProfiler_->attachCounter(validation.profileFrameId,
+                "shadow.directional.lod.device_triangles",
+                "shadow.directional.lod.oracle_triangles",
                 "shadow.directional.lod.device_reduced_commands",
-                deviceReducedCommands);
-            (void)cpuProfiler_->attachCounter(validation.profileFrameId,
                 "shadow.directional.lod.oracle_reduced_commands",
-                oracleReducedCommands);
-            (void)cpuProfiler_->attachCounter(validation.profileFrameId,
                 "shadow.directional.lod.mismatched_command_regions",
-                mismatchedCommandRegions);
-            (void)cpuProfiler_->attachCounter(validation.profileFrameId,
                 "shadow.directional.indirect.overflow_commands",
-                overflowCommands);
-            (void)cpuProfiler_->attachCounter(validation.profileFrameId,
                 "shadow.directional.indirect.qualification_oracle",
-                validation.validateExpectedCounts ? 1u : 0u);
-        }
-        validation.pending = false;
-        validation.validateExpectedCounts = false;
-        validation.expectedCommands.clear();
-        validation.commandOffsets.clear();
-        if (mismatchedBins != 0u || mismatchedCommandRegions != 0u ||
-            overflowCommands != 0u) {
-            std::ostringstream diagnostic;
-            diagnostic << "directional-shadow device commands disagree with the CPU visibility/LOD oracle"
-                << " (bins=" << mismatchedBins
-                << ", command_regions=" << mismatchedCommandRegions
-                << ", overflow=" << overflowCommands
-                << ", device_triangles=" << deviceTriangles
-                << ", oracle_triangles=" << oracleTriangles
-                << ", device_reduced=" << deviceReducedCommands
-                << ", oracle_reduced=" << oracleReducedCommands << ')';
-            throw std::runtime_error(diagnostic.str());
-        }
-    }
-
-    void VulkanVertexBackend::collectSpotShadowIndirectValidation(
-        uint32_t frameIndex) {
-        PendingShadowIndirectValidation& validation =
-            pendingSpotShadowIndirectValidations_[frameIndex];
-        if (!validation.pending) return;
-        const auto* counts = static_cast<const uint32_t*>(
-            spotShadowIndirectCountBuffers_[frameIndex].mapped);
-        const auto* commands = static_cast<const GpuSceneIndexedIndirectCommand*>(
-            spotShadowIndirectCommandBuffers_[frameIndex].mapped);
-        const GpuSceneCpuMirror& scene = gpuSceneCpuMirrors_[frameIndex];
-        uint64_t deviceCommands = 0u;
-        uint64_t oracleCommands = 0u;
-        uint64_t mismatchedBins = 0u;
-        uint64_t mismatchedCommandRegions = 0u;
-        uint64_t overflowCommands = 0u;
-        uint64_t deviceTriangles = 0u;
-        uint64_t oracleTriangles = 0u;
-        uint64_t deviceReducedCommands = 0u;
-        uint64_t oracleReducedCommands = 0u;
-        const auto baseIndexCount = [&](uint32_t primitiveIndex) {
-            if (primitiveIndex >= scene.primitives.size()) return 0u;
-            const uint32_t geometryIndex =
-                scene.primitives[primitiveIndex].binding.y;
-            return geometryIndex < scene.geometries.size()
-                ? scene.geometries[geometryIndex].draw.y : 0u;
-        };
-        const auto commandLess = [](const GpuSceneIndexedIndirectCommand& left,
-                const GpuSceneIndexedIndirectCommand& right) {
-            return std::tie(left.firstInstance, left.indexCount,
-                left.firstIndex, left.vertexOffset, left.instanceCount) <
-                std::tie(right.firstInstance, right.indexCount,
-                    right.firstIndex, right.vertexOffset,
-                    right.instanceCount);
-        };
-        const auto commandEqual = [](const GpuSceneIndexedIndirectCommand& left,
-                const GpuSceneIndexedIndirectCommand& right) {
-            return left.indexCount == right.indexCount &&
-                left.instanceCount == right.instanceCount &&
-                left.firstIndex == right.firstIndex &&
-                left.vertexOffset == right.vertexOffset &&
-                left.firstInstance == right.firstInstance;
-        };
-        for (size_t index = 0; index < validation.countCapacities.size();
-                ++index) {
-            const uint32_t capacity = validation.countCapacities[index];
-            const uint32_t deviceCount = counts != nullptr
-                ? counts[index] : 0u;
-            const uint32_t submitted = (std::min)(deviceCount, capacity);
-            deviceCommands += submitted;
-            std::vector<GpuSceneIndexedIndirectCommand> actualCommands;
-            if (validation.validateExpectedCounts)
-                actualCommands.reserve(submitted);
-            const uint32_t commandOffset = index <
-                    validation.commandOffsets.size()
-                ? validation.commandOffsets[index] : 0u;
-            for (uint32_t commandIndex = 0u;
-                    commands != nullptr && commandIndex < submitted;
-                    ++commandIndex) {
-                const GpuSceneIndexedIndirectCommand command =
-                    commands[commandOffset + commandIndex];
-                deviceTriangles += command.indexCount / 3u;
-                deviceReducedCommands += command.indexCount <
-                    baseIndexCount(command.firstInstance) ? 1u : 0u;
-                if (validation.validateExpectedCounts)
-                    actualCommands.push_back(command);
-            }
-            if (validation.validateExpectedCounts) {
-                oracleCommands += validation.expectedCounts[index];
-                mismatchedBins += submitted != validation.expectedCounts[index]
-                    ? 1u : 0u;
-                const auto& expected = validation.expectedCommands[index];
-                for (const GpuSceneIndexedIndirectCommand& command : expected) {
-                    oracleTriangles += command.indexCount / 3u;
-                    oracleReducedCommands += command.indexCount <
-                        baseIndexCount(command.firstInstance) ? 1u : 0u;
-                }
-                auto sortedExpected = expected;
-                std::ranges::sort(actualCommands, commandLess);
-                std::ranges::sort(sortedExpected, commandLess);
-                mismatchedCommandRegions += !std::ranges::equal(
-                    actualCommands, sortedExpected, commandEqual) ? 1u : 0u;
-            }
-            overflowCommands += deviceCount > capacity
-                ? static_cast<uint64_t>(deviceCount - capacity) : 0u;
-        }
-        if (validation.profileFrameId != 0u && cpuProfiler_ != nullptr) {
-            (void)cpuProfiler_->attachCounter(validation.profileFrameId,
-                "shadow.spot.indirect.device_commands", deviceCommands);
-            (void)cpuProfiler_->attachCounter(validation.profileFrameId,
-                "shadow.spot.indirect.oracle_commands", oracleCommands);
-            (void)cpuProfiler_->attachCounter(validation.profileFrameId,
-                "shadow.spot.indirect.mismatched_bins", mismatchedBins);
-            (void)cpuProfiler_->attachCounter(validation.profileFrameId,
-                "shadow.spot.lod.device_triangles", deviceTriangles);
-            (void)cpuProfiler_->attachCounter(validation.profileFrameId,
-                "shadow.spot.lod.oracle_triangles", oracleTriangles);
-            (void)cpuProfiler_->attachCounter(validation.profileFrameId,
+                "directional-shadow" },
+            { "shadow.spot.indirect.device_commands",
+                "shadow.spot.indirect.oracle_commands",
+                "shadow.spot.indirect.mismatched_bins",
+                "shadow.spot.lod.device_triangles",
+                "shadow.spot.lod.oracle_triangles",
                 "shadow.spot.lod.device_reduced_commands",
-                deviceReducedCommands);
-            (void)cpuProfiler_->attachCounter(validation.profileFrameId,
                 "shadow.spot.lod.oracle_reduced_commands",
-                oracleReducedCommands);
-            (void)cpuProfiler_->attachCounter(validation.profileFrameId,
                 "shadow.spot.lod.mismatched_command_regions",
-                mismatchedCommandRegions);
-            (void)cpuProfiler_->attachCounter(validation.profileFrameId,
-                "shadow.spot.indirect.overflow_commands", overflowCommands);
-            (void)cpuProfiler_->attachCounter(validation.profileFrameId,
+                "shadow.spot.indirect.overflow_commands",
                 "shadow.spot.indirect.qualification_oracle",
-                validation.validateExpectedCounts ? 1u : 0u);
-        }
-        validation.pending = false;
-        validation.validateExpectedCounts = false;
-        validation.expectedCommands.clear();
-        validation.commandOffsets.clear();
-        if (mismatchedBins != 0u || mismatchedCommandRegions != 0u ||
-            overflowCommands != 0u) {
-            std::ostringstream diagnostic;
-            diagnostic << "spot-shadow device commands disagree with the CPU visibility/LOD oracle"
-                << " (bins=" << mismatchedBins
-                << ", command_regions=" << mismatchedCommandRegions
-                << ", overflow=" << overflowCommands
-                << ", device_triangles=" << deviceTriangles
-                << ", oracle_triangles=" << oracleTriangles
-                << ", device_reduced=" << deviceReducedCommands
-                << ", oracle_reduced=" << oracleReducedCommands << ')';
-            throw std::runtime_error(diagnostic.str());
-        }
-    }
-
-    void VulkanVertexBackend::collectPointShadowIndirectValidation(
-        uint32_t frameIndex) {
-        PendingShadowIndirectValidation& validation =
-            pendingPointShadowIndirectValidations_[frameIndex];
-        if (!validation.pending) return;
-        const auto* counts = static_cast<const uint32_t*>(
-            pointShadowIndirectCountBuffers_[frameIndex].mapped);
-        const auto* commands = static_cast<const GpuSceneIndexedIndirectCommand*>(
-            pointShadowIndirectCommandBuffers_[frameIndex].mapped);
-        const GpuSceneCpuMirror& scene = gpuSceneCpuMirrors_[frameIndex];
-        uint64_t deviceCommands = 0u;
-        uint64_t oracleCommands = 0u;
-        uint64_t mismatchedBins = 0u;
-        uint64_t mismatchedCommandRegions = 0u;
-        uint64_t overflowCommands = 0u;
-        uint64_t deviceTriangles = 0u;
-        uint64_t oracleTriangles = 0u;
-        uint64_t deviceReducedCommands = 0u;
-        uint64_t oracleReducedCommands = 0u;
-        const auto baseIndexCount = [&](uint32_t primitiveIndex) {
-            if (primitiveIndex >= scene.primitives.size()) return 0u;
-            const uint32_t geometryIndex =
-                scene.primitives[primitiveIndex].binding.y;
-            return geometryIndex < scene.geometries.size()
-                ? scene.geometries[geometryIndex].draw.y : 0u;
-        };
-        const auto commandLess = [](const GpuSceneIndexedIndirectCommand& left,
-                const GpuSceneIndexedIndirectCommand& right) {
-            return std::tie(left.firstInstance, left.indexCount,
-                left.firstIndex, left.vertexOffset, left.instanceCount) <
-                std::tie(right.firstInstance, right.indexCount,
-                    right.firstIndex, right.vertexOffset,
-                    right.instanceCount);
-        };
-        const auto commandEqual = [](const GpuSceneIndexedIndirectCommand& left,
-                const GpuSceneIndexedIndirectCommand& right) {
-            return left.indexCount == right.indexCount &&
-                left.instanceCount == right.instanceCount &&
-                left.firstIndex == right.firstIndex &&
-                left.vertexOffset == right.vertexOffset &&
-                left.firstInstance == right.firstInstance;
-        };
-        for (size_t index = 0; index < validation.countCapacities.size();
-                ++index) {
-            const uint32_t capacity = validation.countCapacities[index];
-            const uint32_t deviceCount = counts != nullptr
-                ? counts[index] : 0u;
-            const uint32_t submitted = (std::min)(deviceCount, capacity);
-            deviceCommands += submitted;
-            std::vector<GpuSceneIndexedIndirectCommand> actualCommands;
-            if (validation.validateExpectedCounts)
-                actualCommands.reserve(submitted);
-            const uint32_t commandOffset = index <
-                    validation.commandOffsets.size()
-                ? validation.commandOffsets[index] : 0u;
-            for (uint32_t commandIndex = 0u;
-                    commands != nullptr && commandIndex < submitted;
-                    ++commandIndex) {
-                const GpuSceneIndexedIndirectCommand command =
-                    commands[commandOffset + commandIndex];
-                deviceTriangles += command.indexCount / 3u;
-                deviceReducedCommands += command.indexCount <
-                    baseIndexCount(command.firstInstance) ? 1u : 0u;
-                if (validation.validateExpectedCounts)
-                    actualCommands.push_back(command);
-            }
-            if (validation.validateExpectedCounts) {
-                oracleCommands += validation.expectedCounts[index];
-                mismatchedBins += submitted != validation.expectedCounts[index]
-                    ? 1u : 0u;
-                const auto& expected = validation.expectedCommands[index];
-                for (const GpuSceneIndexedIndirectCommand& command : expected) {
-                    oracleTriangles += command.indexCount / 3u;
-                    oracleReducedCommands += command.indexCount <
-                        baseIndexCount(command.firstInstance) ? 1u : 0u;
-                }
-                auto sortedExpected = expected;
-                std::ranges::sort(actualCommands, commandLess);
-                std::ranges::sort(sortedExpected, commandLess);
-                mismatchedCommandRegions += !std::ranges::equal(
-                    actualCommands, sortedExpected, commandEqual) ? 1u : 0u;
-            }
-            overflowCommands += deviceCount > capacity
-                ? static_cast<uint64_t>(deviceCount - capacity) : 0u;
-        }
-        if (validation.profileFrameId != 0u && cpuProfiler_ != nullptr) {
-            (void)cpuProfiler_->attachCounter(validation.profileFrameId,
-                "shadow.point.indirect.device_commands", deviceCommands);
-            (void)cpuProfiler_->attachCounter(validation.profileFrameId,
-                "shadow.point.indirect.oracle_commands", oracleCommands);
-            (void)cpuProfiler_->attachCounter(validation.profileFrameId,
-                "shadow.point.indirect.mismatched_bins", mismatchedBins);
-            (void)cpuProfiler_->attachCounter(validation.profileFrameId,
-                "shadow.point.lod.device_triangles", deviceTriangles);
-            (void)cpuProfiler_->attachCounter(validation.profileFrameId,
-                "shadow.point.lod.oracle_triangles", oracleTriangles);
-            (void)cpuProfiler_->attachCounter(validation.profileFrameId,
+                "spot-shadow" },
+            { "shadow.point.indirect.device_commands",
+                "shadow.point.indirect.oracle_commands",
+                "shadow.point.indirect.mismatched_bins",
+                "shadow.point.lod.device_triangles",
+                "shadow.point.lod.oracle_triangles",
                 "shadow.point.lod.device_reduced_commands",
-                deviceReducedCommands);
-            (void)cpuProfiler_->attachCounter(validation.profileFrameId,
                 "shadow.point.lod.oracle_reduced_commands",
-                oracleReducedCommands);
-            (void)cpuProfiler_->attachCounter(validation.profileFrameId,
                 "shadow.point.lod.mismatched_command_regions",
-                mismatchedCommandRegions);
-            (void)cpuProfiler_->attachCounter(validation.profileFrameId,
-                "shadow.point.indirect.overflow_commands", overflowCommands);
-            (void)cpuProfiler_->attachCounter(validation.profileFrameId,
+                "shadow.point.indirect.overflow_commands",
                 "shadow.point.indirect.qualification_oracle",
-                validation.validateExpectedCounts ? 1u : 0u);
-        }
-        validation.pending = false;
-        validation.validateExpectedCounts = false;
-        validation.expectedCommands.clear();
-        validation.commandOffsets.clear();
-        if (mismatchedBins != 0u || mismatchedCommandRegions != 0u ||
-            overflowCommands != 0u) {
-            std::ostringstream diagnostic;
-            diagnostic << "point-shadow device commands disagree with the CPU visibility/LOD oracle"
-                << " (bins=" << mismatchedBins
-                << ", command_regions=" << mismatchedCommandRegions
-                << ", overflow=" << overflowCommands
-                << ", device_triangles=" << deviceTriangles
-                << ", oracle_triangles=" << oracleTriangles
-                << ", device_reduced=" << deviceReducedCommands
-                << ", oracle_reduced=" << oracleReducedCommands << ')';
-            throw std::runtime_error(diagnostic.str());
-        }
+                "point-shadow" },
+            { "probe.capture.indirect.device_commands",
+                "probe.capture.indirect.oracle_commands",
+                "probe.capture.indirect.mismatched_bins",
+                "probe.capture.lod.device_triangles",
+                "probe.capture.lod.oracle_triangles",
+                "probe.capture.lod.device_reduced_commands",
+                "probe.capture.lod.oracle_reduced_commands",
+                "probe.capture.lod.mismatched_command_regions",
+                "probe.capture.indirect.overflow_commands",
+                "probe.capture.indirect.qualification_oracle",
+                "reflection-probe" },
+        } };
     }
 
-    void VulkanVertexBackend::collectReflectionProbeIndirectValidation(
+    void VulkanVertexBackend::collectShadowIndirectValidations(
         uint32_t frameIndex) {
-        PendingShadowIndirectValidation& validation =
-            pendingReflectionProbeIndirectValidations_[frameIndex];
+        collectShadowIndirectValidation(
+            VulkanIndirectOracleView::DirectionalShadow, frameIndex);
+        collectShadowIndirectValidation(
+            VulkanIndirectOracleView::SpotShadow, frameIndex);
+        collectShadowIndirectValidation(
+            VulkanIndirectOracleView::PointShadow, frameIndex);
+        collectShadowIndirectValidation(
+            VulkanIndirectOracleView::ReflectionProbe, frameIndex);
+    }
+
+    void VulkanVertexBackend::collectShadowIndirectValidation(
+        VulkanIndirectOracleView view, uint32_t frameIndex) {
+        PendingShadowIndirectValidation* validationSlots = nullptr;
+        const VulkanBufferResource* countBuffers = nullptr;
+        const VulkanBufferResource* commandBuffers = nullptr;
+        size_t viewIndex = 0u;
+        switch (view) {
+        case VulkanIndirectOracleView::DirectionalShadow:
+            validationSlots = pendingDirectionalShadowIndirectValidations_.data();
+            countBuffers = directionalShadowIndirectCountBuffers_.data();
+            commandBuffers = directionalShadowIndirectCommandBuffers_.data();
+            viewIndex = 0u;
+            break;
+        case VulkanIndirectOracleView::SpotShadow:
+            validationSlots = pendingSpotShadowIndirectValidations_.data();
+            countBuffers = spotShadowIndirectCountBuffers_.data();
+            commandBuffers = spotShadowIndirectCommandBuffers_.data();
+            viewIndex = 1u;
+            break;
+        case VulkanIndirectOracleView::PointShadow:
+            validationSlots = pendingPointShadowIndirectValidations_.data();
+            countBuffers = pointShadowIndirectCountBuffers_.data();
+            commandBuffers = pointShadowIndirectCommandBuffers_.data();
+            viewIndex = 2u;
+            break;
+        case VulkanIndirectOracleView::ReflectionProbe:
+            validationSlots = pendingReflectionProbeIndirectValidations_.data();
+            countBuffers = reflectionProbeIndirectCountBuffers_.data();
+            commandBuffers = reflectionProbeIndirectCommandBuffers_.data();
+            viewIndex = 3u;
+            break;
+        default:
+            throw std::invalid_argument(
+                "Shadow indirect telemetry requires a shadow/probe consumer");
+        }
+        PendingShadowIndirectValidation& validation = validationSlots[frameIndex];
         if (!validation.pending) return;
+        const ShadowIndirectTelemetryNames& names =
+            ShadowIndirectTelemetry[viewIndex];
         const auto* counts = static_cast<const uint32_t*>(
-            reflectionProbeIndirectCountBuffers_[frameIndex].mapped);
+            countBuffers[frameIndex].mapped);
         const auto* commands = static_cast<const GpuSceneIndexedIndirectCommand*>(
-            reflectionProbeIndirectCommandBuffers_[frameIndex].mapped);
+            commandBuffers[frameIndex].mapped);
         const GpuSceneCpuMirror& scene = gpuSceneCpuMirrors_[frameIndex];
         uint64_t deviceCommands = 0u;
-        uint64_t oracleCommands = 0u;
-        uint64_t mismatchedBins = 0u;
-        uint64_t mismatchedCommandRegions = 0u;
         uint64_t overflowCommands = 0u;
         uint64_t deviceTriangles = 0u;
-        uint64_t oracleTriangles = 0u;
         uint64_t deviceReducedCommands = 0u;
-        uint64_t oracleReducedCommands = 0u;
         const auto baseIndexCount = [&](uint32_t primitiveIndex) {
             if (primitiveIndex >= scene.primitives.size()) return 0u;
             const uint32_t geometryIndex =
                 scene.primitives[primitiveIndex].binding.y;
             return geometryIndex < scene.geometries.size()
                 ? scene.geometries[geometryIndex].draw.y : 0u;
-        };
-        const auto commandLess = [](const GpuSceneIndexedIndirectCommand& left,
-                const GpuSceneIndexedIndirectCommand& right) {
-            return std::tie(left.firstInstance, left.indexCount,
-                left.firstIndex, left.vertexOffset, left.instanceCount) <
-                std::tie(right.firstInstance, right.indexCount,
-                    right.firstIndex, right.vertexOffset,
-                    right.instanceCount);
-        };
-        const auto commandEqual = [](const GpuSceneIndexedIndirectCommand& left,
-                const GpuSceneIndexedIndirectCommand& right) {
-            return left.indexCount == right.indexCount &&
-                left.instanceCount == right.instanceCount &&
-                left.firstIndex == right.firstIndex &&
-                left.vertexOffset == right.vertexOffset &&
-                left.firstInstance == right.firstInstance;
         };
         for (size_t index = 0; index < validation.countCapacities.size();
                 ++index) {
@@ -7906,9 +7557,6 @@ VkDeviceSize offset = geometry->vertexOffset;
                 ? counts[index] : 0u;
             const uint32_t submitted = (std::min)(deviceCount, capacity);
             deviceCommands += submitted;
-            std::vector<GpuSceneIndexedIndirectCommand> actualCommands;
-            if (validation.validateExpectedCounts)
-                actualCommands.reserve(submitted);
             const uint32_t commandOffset = index <
                     validation.commandOffsets.size()
                 ? validation.commandOffsets[index] : 0u;
@@ -7920,70 +7568,58 @@ VkDeviceSize offset = geometry->vertexOffset;
                 deviceTriangles += command.indexCount / 3u;
                 deviceReducedCommands += command.indexCount <
                     baseIndexCount(command.firstInstance) ? 1u : 0u;
-                if (validation.validateExpectedCounts)
-                    actualCommands.push_back(command);
-            }
-            if (validation.validateExpectedCounts) {
-                oracleCommands += validation.expectedCounts[index];
-                mismatchedBins += submitted != validation.expectedCounts[index]
-                    ? 1u : 0u;
-                const auto& expected = validation.expectedCommands[index];
-                for (const GpuSceneIndexedIndirectCommand& command : expected) {
-                    oracleTriangles += command.indexCount / 3u;
-                    oracleReducedCommands += command.indexCount <
-                        baseIndexCount(command.firstInstance) ? 1u : 0u;
-                }
-                auto sortedExpected = expected;
-                std::ranges::sort(actualCommands, commandLess);
-                std::ranges::sort(sortedExpected, commandLess);
-                mismatchedCommandRegions += !std::ranges::equal(
-                    actualCommands, sortedExpected, commandEqual)
-                    ? 1u : 0u;
             }
             overflowCommands += deviceCount > capacity
                 ? static_cast<uint64_t>(deviceCount - capacity) : 0u;
         }
+        VulkanIndirectOracleResult oracle{};
+        if (indirectOracle_ != nullptr) {
+            oracle = indirectOracle_->verifyShadowWork(view, frameIndex, {
+                .counts = counts,
+                .commands = commands,
+                .countCapacities = validation.countCapacities,
+                .commandOffsets = validation.commandOffsets,
+                .primitives = scene.primitives,
+                .geometries = scene.geometries,
+            });
+        }
         if (validation.profileFrameId != 0u && cpuProfiler_ != nullptr) {
-            (void)cpuProfiler_->attachCounter(validation.profileFrameId,
-                "probe.capture.indirect.device_commands", deviceCommands);
-            (void)cpuProfiler_->attachCounter(validation.profileFrameId,
-                "probe.capture.indirect.oracle_commands", oracleCommands);
-            (void)cpuProfiler_->attachCounter(validation.profileFrameId,
-                "probe.capture.indirect.mismatched_bins", mismatchedBins);
-            (void)cpuProfiler_->attachCounter(validation.profileFrameId,
-                "probe.capture.lod.device_triangles", deviceTriangles);
-            (void)cpuProfiler_->attachCounter(validation.profileFrameId,
-                "probe.capture.lod.oracle_triangles", oracleTriangles);
-            (void)cpuProfiler_->attachCounter(validation.profileFrameId,
-                "probe.capture.lod.device_reduced_commands",
-                deviceReducedCommands);
-            (void)cpuProfiler_->attachCounter(validation.profileFrameId,
-                "probe.capture.lod.oracle_reduced_commands",
-                oracleReducedCommands);
-            (void)cpuProfiler_->attachCounter(validation.profileFrameId,
-                "probe.capture.lod.mismatched_command_regions",
-                mismatchedCommandRegions);
-            (void)cpuProfiler_->attachCounter(validation.profileFrameId,
-                "probe.capture.indirect.overflow_commands", overflowCommands);
-            (void)cpuProfiler_->attachCounter(validation.profileFrameId,
-                "probe.capture.indirect.qualification_oracle",
-                validation.validateExpectedCounts ? 1u : 0u);
+            const uint64_t frameId = validation.profileFrameId;
+            (void)cpuProfiler_->attachCounter(frameId, names.deviceCommands,
+                deviceCommands);
+            (void)cpuProfiler_->attachCounter(frameId, names.oracleCommands,
+                oracle.oracleCommands);
+            (void)cpuProfiler_->attachCounter(frameId, names.mismatchedBins,
+                oracle.mismatchedBins);
+            (void)cpuProfiler_->attachCounter(frameId, names.deviceTriangles,
+                deviceTriangles);
+            (void)cpuProfiler_->attachCounter(frameId, names.oracleTriangles,
+                oracle.oracleTriangles);
+            (void)cpuProfiler_->attachCounter(frameId,
+                names.deviceReducedCommands, deviceReducedCommands);
+            (void)cpuProfiler_->attachCounter(frameId,
+                names.oracleReducedCommands, oracle.oracleReducedCommands);
+            (void)cpuProfiler_->attachCounter(frameId,
+                names.mismatchedCommandRegions, oracle.mismatchedCommandRegions);
+            (void)cpuProfiler_->attachCounter(frameId, names.overflowCommands,
+                overflowCommands);
+            (void)cpuProfiler_->attachCounter(frameId, names.qualificationOracle,
+                oracle.validated ? 1u : 0u);
         }
         validation.pending = false;
-        validation.validateExpectedCounts = false;
-        validation.expectedCommands.clear();
         validation.commandOffsets.clear();
-        if (mismatchedBins != 0u || mismatchedCommandRegions != 0u ||
-            overflowCommands != 0u) {
+        if (oracle.mismatchedBins != 0u ||
+            oracle.mismatchedCommandRegions != 0u || overflowCommands != 0u) {
             std::ostringstream diagnostic;
-            diagnostic << "reflection-probe device commands disagree with the CPU visibility/LOD oracle"
-                << " (bins=" << mismatchedBins
-                << ", command_regions=" << mismatchedCommandRegions
+            diagnostic << names.subject
+                << " device commands disagree with the CPU visibility/LOD oracle"
+                << " (bins=" << oracle.mismatchedBins
+                << ", command_regions=" << oracle.mismatchedCommandRegions
                 << ", overflow=" << overflowCommands
                 << ", device_triangles=" << deviceTriangles
-                << ", oracle_triangles=" << oracleTriangles
+                << ", oracle_triangles=" << oracle.oracleTriangles
                 << ", device_reduced=" << deviceReducedCommands
-                << ", oracle_reduced=" << oracleReducedCommands << ')';
+                << ", oracle_reduced=" << oracle.oracleReducedCommands << ')';
             throw std::runtime_error(diagnostic.str());
         }
     }
@@ -8041,7 +7677,8 @@ VkDeviceSize offset = geometry->vertexOffset;
             scheduler.waitForAllFrames();
         for (uint32_t frame = 0;
                 frame < VulkanFrameScheduler::FramesInFlight; ++frame)
-            collectDirectionalShadowIndirectValidation(frame);
+            collectShadowIndirectValidation(
+                VulkanIndirectOracleView::DirectionalShadow, frame);
         for (VulkanBufferResource& buffer :
                 directionalShadowIndirectCommandBuffers_)
             resourceAllocator.destroy(buffer);
@@ -8126,7 +7763,8 @@ VkDeviceSize offset = geometry->vertexOffset;
             scheduler.waitForAllFrames();
         for (uint32_t frame = 0;
                 frame < VulkanFrameScheduler::FramesInFlight; ++frame)
-            collectSpotShadowIndirectValidation(frame);
+            collectShadowIndirectValidation(
+                VulkanIndirectOracleView::SpotShadow, frame);
         for (VulkanBufferResource& buffer : spotShadowIndirectCommandBuffers_)
             resourceAllocator.destroy(buffer);
         for (VulkanBufferResource& buffer : spotShadowIndirectCountBuffers_)
@@ -8206,7 +7844,8 @@ VkDeviceSize offset = geometry->vertexOffset;
             scheduler.waitForAllFrames();
         for (uint32_t frame = 0;
                 frame < VulkanFrameScheduler::FramesInFlight; ++frame)
-            collectPointShadowIndirectValidation(frame);
+            collectShadowIndirectValidation(
+                VulkanIndirectOracleView::PointShadow, frame);
         for (VulkanBufferResource& buffer : pointShadowIndirectCommandBuffers_)
             resourceAllocator.destroy(buffer);
         for (VulkanBufferResource& buffer : pointShadowIndirectCountBuffers_)
@@ -8286,7 +7925,8 @@ VkDeviceSize offset = geometry->vertexOffset;
             scheduler.waitForAllFrames();
         for (uint32_t frame = 0;
                 frame < VulkanFrameScheduler::FramesInFlight; ++frame)
-            collectReflectionProbeIndirectValidation(frame);
+            collectShadowIndirectValidation(
+                VulkanIndirectOracleView::ReflectionProbe, frame);
         for (VulkanBufferResource& buffer :
                 reflectionProbeIndirectCommandBuffers_)
             resourceAllocator.destroy(buffer);
@@ -8449,15 +8089,15 @@ VkDeviceSize offset = geometry->vertexOffset;
 
         const auto* counts = static_cast<const uint32_t*>(
             opaqueIndirectCountBuffers_[frameIndex].mapped);
+        // Oracle state exists only for slots that emitted expectations.
+        IVulkanIndirectOracle* const lodOracle =
+            validation.lodQualificationOracle ? indirectOracle_ : nullptr;
+        IVulkanIndirectOracle* const occlusionOracle =
+            validation.occlusionQualificationOracle ? indirectOracle_ : nullptr;
         uint64_t deviceCommands = 0;
         uint64_t oracleCommands = 0;
         uint64_t mismatchedBins = 0;
         uint64_t overflowCommands = 0;
-        uint64_t mismatchedCommands = 0;
-        uint64_t deviceTriangles = 0;
-        uint64_t occlusionTested = 0;
-        uint64_t occlusionWouldReject = 0;
-        uint64_t invalidOcclusionResults = 0;
         uint64_t gpuSceneOcclusionTested = 0;
         uint64_t gpuSceneOcclusionWouldReject = 0;
         uint64_t gpuSceneOcclusionFailVisible = 0;
@@ -8465,21 +8105,6 @@ VkDeviceSize offset = geometry->vertexOffset;
         uint64_t gpuSceneOcclusionAppliedRejects = 0;
         uint64_t invalidGpuSceneOcclusionResults = 0;
         uint64_t unsafeGpuSceneOcclusionMismatches = 0;
-        std::vector<uint8_t> cpuProjectedCandidates(
-            validation.gpuSceneOcclusionCandidateCount, 0u);
-        std::vector<uint8_t> cpuOccludedCandidates(
-            validation.gpuSceneOcclusionCandidateCount, 0u);
-        uint32_t commandBase = 0;
-        if (!validation.expectedCommandsByPrimitive.empty()) {
-            uint32_t commandCapacity = 0;
-            for (uint32_t capacity : validation.binCapacities) commandCapacity += capacity;
-            validation.commandReadback.resize(commandCapacity);
-            // One contiguous readback avoids repeatedly touching uncached mapped
-            // memory during field-by-field oracle/duplicate checks.
-            std::memcpy(validation.commandReadback.data(), opaqueIndirectCommandBuffers_[frameIndex].mapped,
-                commandCapacity * sizeof(GpuSceneIndexedIndirectCommand));
-        }
-        const auto* commands = validation.commandReadback.data();
         for (size_t bin = 0; bin < validation.expectedBinCounts.size(); ++bin) {
             const uint32_t capacity = validation.binCapacities[bin];
             const uint32_t deviceCount = counts != nullptr ? counts[bin] : 0u;
@@ -8493,60 +8118,19 @@ VkDeviceSize offset = geometry->vertexOffset;
                 mismatchedBins += submittedCount !=
                     validation.expectedBinCounts[bin] ? 1u : 0u;
             }
-            if (!validation.expectedCommandsByPrimitive.empty()) {
-                for (uint32_t offset = 0; offset < submittedCount; ++offset) {
-                    const auto& command = commands[commandBase + offset];
-                    deviceTriangles += command.indexCount / 3u;
-                    if (command.firstInstance >= validation.expectedCommandsByPrimitive.size()) {
-                        ++mismatchedCommands;
-                        continue;
-                    }
-                    const auto& expected = validation.expectedCommandsByPrimitive[command.firstInstance];
-                    mismatchedCommands += validation.seenPrimitives[command.firstInstance] != 0 ||
-                        std::memcmp(&command, &expected, sizeof(command)) != 0 ? 1u : 0u;
-                    validation.seenPrimitives[command.firstInstance] = 1u;
-                }
-            }
-            commandBase += capacity;
         }
-        if (validation.occlusionPending) {
-            const auto* results = static_cast<const DepthPyramidDeviceResult*>(
-                depthOcclusionResultBuffers_[frameIndex].mapped);
-            if (results == nullptr ||
-                validation.occlusionProjectedCandidateIndices.size() !=
-                    validation.occlusionQueryCount) {
-                invalidOcclusionResults = validation.occlusionQueryCount;
-            }
-            else {
-                for (uint32_t index = 0;
-                        index < validation.occlusionQueryCount; ++index) {
-                    const auto& result = results[index];
-                    const bool valid =
-                        result.abiVersion == DepthPyramidAbiVersion &&
-                        result.mipLevel < 32u && result.sampledTexels >= 1u &&
-                        result.sampledTexels <= 4u && result.tested == 1u &&
-                        result.occluded <= 1u &&
-                        std::isfinite(result.farthestOccluderDepth) &&
-                        result.farthestOccluderDepth >= 0.0f &&
-                        result.farthestOccluderDepth <= 1.0f;
-                    if (!valid) {
-                        ++invalidOcclusionResults;
-                        continue;
-                    }
-                    ++occlusionTested;
-                    occlusionWouldReject += result.occluded;
-                    const uint32_t candidateIndex =
-                        validation.occlusionProjectedCandidateIndices[index];
-                    if (candidateIndex >= cpuProjectedCandidates.size()) {
-                        ++invalidOcclusionResults;
-                        continue;
-                    }
-                    cpuProjectedCandidates[candidateIndex] = 1u;
-                    cpuOccludedCandidates[candidateIndex] =
-                        static_cast<uint8_t>(result.occluded);
-                }
-            }
+        if (lodOracle != nullptr) {
+            lodOracle->verifyOpaqueLodCommands(frameIndex, counts,
+                validation.binCapacities,
+                static_cast<const GpuSceneIndexedIndirectCommand*>(
+                    opaqueIndirectCommandBuffers_[frameIndex].mapped));
         }
+        const VulkanOcclusionQueryVerdict occlusionQueries =
+            occlusionOracle != nullptr
+            ? occlusionOracle->verifyOcclusionQueries(frameIndex,
+                static_cast<const DepthPyramidDeviceResult*>(
+                    depthOcclusionResultBuffers_[frameIndex].mapped))
+            : VulkanOcclusionQueryVerdict{};
         if (validation.gpuSceneOcclusionPending) {
             const auto* results = static_cast<const DepthPyramidDeviceResult*>(
                 depthOcclusionGpuSceneResultBuffers_[frameIndex].mapped);
@@ -8556,10 +8140,7 @@ VkDeviceSize offset = geometry->vertexOffset;
                 validation.occlusionCandidatePrimitiveIndices.size() !=
                     candidateCount ||
                 validation.occlusionCandidateBinIndices.size() !=
-                    candidateCount ||
-                (validation.occlusionQualificationOracle &&
-                    validation.occlusionCpuVisibleCandidates.size() !=
-                        candidateCount)) {
+                    candidateCount) {
                 invalidGpuSceneOcclusionResults = candidateCount;
             }
             else {
@@ -8601,17 +8182,16 @@ VkDeviceSize offset = geometry->vertexOffset;
                     }
                     ++gpuSceneOcclusionTested;
                     gpuSceneOcclusionWouldReject += result.occluded;
-                    if (result.occluded != 0u &&
-                        validation.occlusionQualificationOracle &&
-                        validation.occlusionCpuVisibleCandidates[index] != 0u &&
-                        (cpuProjectedCandidates[index] == 0u ||
-                            cpuOccludedCandidates[index] == 0u)) {
+                    if (result.occluded != 0u && occlusionOracle != nullptr &&
+                        occlusionOracle->unsafeGpuSceneOcclusion(frameIndex,
+                            index)) {
                         ++unsafeGpuSceneOcclusionMismatches;
                     }
                     if (validation.occlusionRejectionApplied &&
                         result.occluded != 0u &&
-                        (!validation.occlusionQualificationOracle ||
-                            validation.occlusionCpuVisibleCandidates[index] != 0u)) {
+                        (occlusionOracle == nullptr ||
+                            occlusionOracle->opaqueCandidateCpuVisible(
+                                frameIndex, index))) {
                         const uint32_t bin =
                             validation.occlusionCandidateBinIndices[index];
                         if (bin >= validation.expectedBinCounts.size() ||
@@ -8621,17 +8201,11 @@ VkDeviceSize offset = geometry->vertexOffset;
                         }
                         --validation.expectedBinCounts[bin];
                         ++gpuSceneOcclusionAppliedRejects;
-                        if (!validation.expectedCommandsByPrimitive.empty()) {
-                            const uint32_t primitive = validation.
-                                occlusionCandidatePrimitiveIndices[index];
-                            if (primitive >= validation.
-                                    expectedCommandsByPrimitive.size()) {
-                                ++invalidGpuSceneOcclusionResults;
-                            }
-                            else {
-                                validation.expectedCommandsByPrimitive[
-                                    primitive].instanceCount = 0u;
-                            }
+                        if (lodOracle != nullptr &&
+                            !lodOracle->rejectOpaqueLodPrimitive(frameIndex,
+                                validation.occlusionCandidatePrimitiveIndices[
+                                    index])) {
+                            ++invalidGpuSceneOcclusionResults;
                         }
                     }
                 }
@@ -8652,11 +8226,8 @@ VkDeviceSize offset = geometry->vertexOffset;
                         validation.binCapacities[bin]) != expected ? 1u : 0u;
             }
         }
-        if (!validation.expectedCommandsByPrimitive.empty())
-            for (size_t primitive = 0; primitive <
-                    validation.expectedCommandsByPrimitive.size(); ++primitive)
-                if (validation.expectedCommandsByPrimitive[primitive].instanceCount != 0 &&
-                    validation.seenPrimitives[primitive] == 0) ++mismatchedCommands;
+        const VulkanOpaqueLodVerdict lod = lodOracle != nullptr
+            ? lodOracle->finishOpaqueLod(frameIndex) : VulkanOpaqueLodVerdict{};
         if (validation.profileFrameId != 0u && cpuProfiler_ != nullptr) {
             (void)cpuProfiler_->attachCounter(validation.profileFrameId,
                 "gpu_scene.visibility.device_commands", deviceCommands);
@@ -8674,46 +8245,45 @@ VkDeviceSize offset = geometry->vertexOffset;
                     : ProfileCounterStatus::Exact);
             (void)cpuProfiler_->attachCounter(validation.profileFrameId,
                 "gpu_scene.visibility.device_overflow_commands", overflowCommands);
-            if (!validation.expectedCommandsByPrimitive.empty()) {
+            if (lod.active) {
                 (void)cpuProfiler_->attachCounter(validation.profileFrameId,
-                    "gpu_scene.lod.base_triangles", validation.baseTriangles);
+                    "gpu_scene.lod.base_triangles", lod.baseTriangles);
                 (void)cpuProfiler_->attachCounter(validation.profileFrameId,
-                    "gpu_scene.lod.oracle_triangles", validation.oracleTriangles);
+                    "gpu_scene.lod.oracle_triangles", lod.oracleTriangles);
                 (void)cpuProfiler_->attachCounter(validation.profileFrameId,
-                    "gpu_scene.lod.device_triangles", deviceTriangles);
+                    "gpu_scene.lod.device_triangles", lod.deviceTriangles);
                 (void)cpuProfiler_->attachCounter(validation.profileFrameId,
-                    "gpu_scene.lod.oracle_reduced_commands", validation.oracleReducedCommands);
+                    "gpu_scene.lod.oracle_reduced_commands", lod.oracleReducedCommands);
                 (void)cpuProfiler_->attachCounter(validation.profileFrameId,
-                    "gpu_scene.lod.device_mismatched_commands", mismatchedCommands);
+                    "gpu_scene.lod.device_mismatched_commands", lod.mismatchedCommands);
                 (void)cpuProfiler_->attachCounter(validation.profileFrameId,
-                    "gpu_scene.lod.history_valid", validation.historyValid);
+                    "gpu_scene.lod.history_valid", lod.historyValid);
                 (void)cpuProfiler_->attachCounter(validation.profileFrameId,
-                    "gpu_scene.lod.history_reset", validation.historyReset);
+                    "gpu_scene.lod.history_reset", lod.historyReset);
                 (void)cpuProfiler_->attachCounter(validation.profileFrameId,
-                    "gpu_scene.lod.history_changed", validation.historyChanged);
+                    "gpu_scene.lod.history_changed", lod.historyChanged);
             }
         }
         if (validation.occlusionProfileFrameId != 0u &&
-            cpuProfiler_ != nullptr &&
-            (validation.occlusionPending ||
-                validation.occlusionProjectionRejected != 0u)) {
-            const uint64_t requested = validation.occlusionQueryCount +
-                validation.occlusionProjectionRejected;
+            cpuProfiler_ != nullptr && occlusionQueries.active) {
+            const uint64_t requested = occlusionQueries.queryCount +
+                occlusionQueries.projectionRejected;
             (void)cpuProfiler_->attachCounter(validation.occlusionProfileFrameId,
                 "depth.occlusion.query.requested", requested);
             (void)cpuProfiler_->attachCounter(validation.occlusionProfileFrameId,
                 "depth.occlusion.query.projected",
-                validation.occlusionQueryCount);
+                occlusionQueries.queryCount);
             (void)cpuProfiler_->attachCounter(validation.occlusionProfileFrameId,
-                "depth.occlusion.query.tested", occlusionTested);
+                "depth.occlusion.query.tested", occlusionQueries.tested);
             (void)cpuProfiler_->attachCounter(validation.occlusionProfileFrameId,
-                "depth.occlusion.query.would_reject", occlusionWouldReject);
+                "depth.occlusion.query.would_reject",
+                occlusionQueries.wouldReject);
             (void)cpuProfiler_->attachCounter(validation.occlusionProfileFrameId,
                 "depth.occlusion.query.invalid_results",
-                invalidOcclusionResults);
+                occlusionQueries.invalidResults);
             (void)cpuProfiler_->attachCounter(validation.occlusionProfileFrameId,
                 "depth.occlusion.query.projection_fail_visible",
-                validation.occlusionProjectionRejected);
+                occlusionQueries.projectionRejected);
         }
         if (validation.occlusionProfileFrameId != 0u &&
             cpuProfiler_ != nullptr && validation.gpuSceneOcclusionPending) {
@@ -8788,7 +8358,7 @@ VkDeviceSize offset = geometry->vertexOffset;
                 "depth.occlusion.gpu_scene.applied_rejects",
                 appliedRejects);
         }
-        if (mismatchedCommands != 0)
+        if (lod.mismatchedCommands != 0)
             throw std::runtime_error("experimental GPU LOD command readback disagrees with the CPU oracle");
         if (validation.occlusionRejectionApplied &&
             (overflowCommands != 0u ||
@@ -8796,7 +8366,7 @@ VkDeviceSize offset = geometry->vertexOffset;
                     mismatchedBins != 0u)))
             throw std::runtime_error(
                 "experimental GPU-scene depth-occlusion rejection disagrees with the indirect-command oracle");
-        if (invalidOcclusionResults != 0)
+        if (occlusionQueries.invalidResults != 0)
             throw std::runtime_error(
                 "experimental depth-occlusion query returned invalid device results");
         if (invalidGpuSceneOcclusionResults != 0)
@@ -8805,7 +8375,6 @@ VkDeviceSize offset = geometry->vertexOffset;
         if (unsafeGpuSceneOcclusionMismatches != 0)
             throw std::runtime_error(
                 "experimental GPU-scene depth-occlusion query rejected CPU-visible work");
-        validation.occlusionPending = false;
         validation.gpuSceneOcclusionPending = false;
         validation.pending = false;
     }
@@ -8821,10 +8390,11 @@ VkDeviceSize offset = geometry->vertexOffset;
         Buffers commands{}, counts{}, candidates{}, occlusionQueries{},
             occlusionResults{}, gpuSceneOcclusionResults{};
         VulkanBufferResource history{};
+        const bool depthOcclusionOracle = activeIndirectOracle(
+            VulkanIndirectOracleView::DepthOcclusion) != nullptr;
         const bool standaloneOcclusionOracle =
             depthOcclusionQueryEnabled_ &&
-            (!depthOcclusionRejectionEnabled_ ||
-                depthOcclusionQualificationOracle_);
+            (!depthOcclusionRejectionEnabled_ || depthOcclusionOracle);
         const uint32_t historyCapacity = experimentalGpuLodErrorPixels_ > 0.0f ? capacity : 1u;
         try {
             history = resourceAllocator.createBuffer(
@@ -8875,8 +8445,7 @@ VkDeviceSize offset = geometry->vertexOffset;
                 }
                 if (depthOcclusionQueryEnabled_) {
                     const uint32_t resultCapacity =
-                        !depthOcclusionRejectionEnabled_ ||
-                            depthOcclusionQualificationOracle_
+                        !depthOcclusionRejectionEnabled_ || depthOcclusionOracle
                         ? capacity : 1u;
                     gpuSceneOcclusionResults[frame] =
                         resourceAllocator.createBuffer(
@@ -10887,101 +10456,15 @@ const VkDeviceSize offset = geometry->vertexOffset;
         }
         vkCmdEndRenderPass(currentCmd);
         scheduler.endGpuRange(gpuRange);
-        for (PendingDeepLayeredCaptureValidation& pending :
-            pendingDeepLayeredCaptureValidations_) {
-            if (pending.frameIndex == frameIndex) {
-                pending.sceneResolveDrawCount = sceneResolveDrawCounts[
-                    layeredQualityTierIndex(pending.quality)];
-            }
-        }
+        notifyHook({ .point = VulkanHookPoint::DeepLayeredResolveCounts,
+            .cmd = currentCmd, .slot = frameIndex,
+            .payload = VulkanDeepResolveCountsPayload{ sceneResolveDrawCounts } });
     }
 
-    void VulkanVertexBackend::recordOrdinary2CaptureValidationReadback(
-        std::span<const Ordinary2CaptureDraw> draws) {
-        if (!ordinary2CaptureValidationRequest_ || draws.empty()) {
-            renderGraph_.skipPass(
-                "transparent.layered.validation-readback-hook");
-            return;
-        }
-        if (ordinary2AtlasExtent_.width == 0u ||
-            ordinary2AtlasExtent_.height == 0u) {
-            throw std::logic_error(
-                "Ordinary2 validation readback requires a resident atlas");
-        }
-
-        const uint64_t pixelCount =
-            static_cast<uint64_t>(ordinary2AtlasExtent_.width) *
-            ordinary2AtlasExtent_.height;
-        constexpr uint64_t BytesPerImagePixel = sizeof(uint32_t);
-        constexpr uint64_t InterfaceImageCount = 4u;
-        if (pixelCount > std::numeric_limits<VkDeviceSize>::max() /
-                (BytesPerImagePixel * InterfaceImageCount + 8u)) {
-            throw std::overflow_error(
-                "Ordinary2 validation readback exceeds VkDeviceSize");
-        }
-        const VkDeviceSize imageBytes = pixelCount * BytesPerImagePixel;
-        const VkDeviceSize localColorBytes = pixelCount * 8u;
-        const VkDeviceSize totalBytes =
-            imageBytes * InterfaceImageCount + localColorBytes;
-
-        PendingOrdinary2CaptureValidation pending{};
-        pending.validationId = *ordinary2CaptureValidationRequest_;
-        pending.frameIndex = scheduler.currentFrameIndex();
-        pending.extent = ordinary2AtlasExtent_;
-        pending.expectedDrawCount = static_cast<uint32_t>(draws.size());
-        pending.workItemCount = static_cast<uint32_t>(
-            ordinary2AtlasPlan_.workIdentities().size());
-        pending.readback = resourceAllocator.createBuffer(totalBytes,
-            VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-            true, ProfileMemoryCategory::CaptureReadback);
-        try {
-            pendingOrdinary2CaptureValidations_.push_back(std::move(pending));
-        }
-        catch (...) {
-            resourceAllocator.destroy(pending.readback);
-            throw;
-        }
-        ordinary2CaptureValidationRequest_.reset();
-
-        VulkanGpuRangeToken gpuRange = scheduler.beginGpuRange(
-            "gpu.transparency.layered.validation-readback");
-        renderGraph_.beginPass(currentCmd,
-            "transparent.layered.validation-readback-hook");
-        PendingOrdinary2CaptureValidation& recorded =
-            pendingOrdinary2CaptureValidations_.back();
-        VulkanCommandList commandList(currentCmd);
-        commandList.transition(recorded.readback,
-            ResourceState::CopyDestination);
-        VulkanFrameContextTargets& targets = frameTargets.get(
-            scheduler.currentFrameIndex());
-        const auto copyImage = [&](const VulkanImageResource& image,
-                VkImageAspectFlags aspect, VkDeviceSize offset) {
-            VkBufferImageCopy copy{};
-            copy.bufferOffset = offset;
-            copy.imageSubresource.aspectMask = aspect;
-            copy.imageSubresource.layerCount = 1u;
-            copy.imageExtent = { ordinary2AtlasExtent_.width,
-                ordinary2AtlasExtent_.height, 1u };
-            commandList.copyImageToBuffer(image, recorded.readback, copy);
-        };
-        copyImage(targets.layeredEntryIdentity, VK_IMAGE_ASPECT_COLOR_BIT,
-            0u);
-        copyImage(targets.layeredEntryDepth, VK_IMAGE_ASPECT_DEPTH_BIT,
-            imageBytes);
-        copyImage(targets.layeredExitIdentity, VK_IMAGE_ASPECT_COLOR_BIT,
-            imageBytes * 2u);
-        copyImage(targets.layeredExitDepth, VK_IMAGE_ASPECT_DEPTH_BIT,
-            imageBytes * 3u);
-        copyImage(targets.layeredLocalColor, VK_IMAGE_ASPECT_COLOR_BIT,
-            imageBytes * InterfaceImageCount);
-        scheduler.endGpuRange(gpuRange);
-    }
-
-    void VulkanVertexBackend::recordDeepLayeredCaptureValidationReadback(
+    void VulkanVertexBackend::recordDeepLayeredValidationHook(
         std::span<const LayeredCaptureDraw> draws,
         TransparencyQuality quality) {
+        if (!graphHooks_.layeredValidation) return;
         const uint32_t interfaceCount = layeredQualityTierContract(
             quality).maximumInterfaceCount;
         const std::span<const std::string_view> passNames = quality ==
@@ -10995,135 +10478,20 @@ const VkDeviceSize offset = geometry->vertexOffset;
             throw std::invalid_argument(
                 "Deep validation requires Hero4 or Cinematic8");
         }
-        const std::string_view passName = passNames[interfaceCount + 1u];
-        const bool requested = deepLayeredCaptureValidationRequest_ &&
-            deepLayeredCaptureValidationRequest_->quality == quality;
-        const uint32_t expectedDrawCount = static_cast<uint32_t>(
+        const uint32_t drawCount = static_cast<uint32_t>(
             std::ranges::count_if(draws,
                 [quality](const LayeredCaptureDraw& draw) {
                     return draw.quality == quality;
                 }));
-        if (!requested || expectedDrawCount == 0u) {
-            renderGraph_.skipPass(passName);
-            return;
-        }
-
-        VulkanFrameContextTargets& targets = frameTargets.get(
-            scheduler.currentFrameIndex());
-        VulkanFrameContextTargets::DeepLayeredTier& tier = quality ==
-                TransparencyQuality::Hero4
-            ? targets.hero4 : targets.cinematic8;
-        if (!tier.active() || tier.interfaceCount != interfaceCount ||
-            tier.atlasExtent.width == 0u || tier.atlasExtent.height == 0u) {
-            throw std::logic_error(
-                "Deep validation readback requires a complete resident tier");
-        }
-        const uint64_t pixelCount =
-            static_cast<uint64_t>(tier.atlasExtent.width) *
-            tier.atlasExtent.height;
-        constexpr uint64_t BytesPerImagePixel = sizeof(uint32_t);
-        const uint64_t interfaceImageCount = interfaceCount * 2ull;
-        const uint64_t bytesPerPixel =
-            BytesPerImagePixel * interfaceImageCount + 8ull;
-        if (pixelCount > std::numeric_limits<VkDeviceSize>::max() /
-                bytesPerPixel) {
-            throw std::overflow_error(
-                "Deep validation readback exceeds VkDeviceSize");
-        }
-        const VkDeviceSize imageBytes = pixelCount * BytesPerImagePixel;
-        const VkExtent2D tileExtent{
-            (tier.atlasExtent.width +
-                kDeepLayeredEarlyTerminationTileSize - 1u) /
-                kDeepLayeredEarlyTerminationTileSize,
-            (tier.atlasExtent.height +
-                kDeepLayeredEarlyTerminationTileSize - 1u) /
-                kDeepLayeredEarlyTerminationTileSize };
-        const VkDeviceSize tileImageBytes = static_cast<VkDeviceSize>(
-            tileExtent.width) * tileExtent.height * sizeof(uint32_t);
-        const VkDeviceSize interfaceAndLocalBytes = pixelCount * bytesPerPixel;
-        if (tileImageBytes > ((std::numeric_limits<VkDeviceSize>::max)() -
-                interfaceAndLocalBytes) / interfaceCount) {
-            throw std::overflow_error(
-                "Deep validation tile readback exceeds VkDeviceSize");
-        }
-        const VkDeviceSize totalBytes = interfaceAndLocalBytes +
-            tileImageBytes * interfaceCount;
-
-        PendingDeepLayeredCaptureValidation pending{};
-        pending.validationId =
-            deepLayeredCaptureValidationRequest_->validationId;
-        pending.frameIndex = scheduler.currentFrameIndex();
-        pending.extent = tier.atlasExtent;
-        pending.quality = quality;
-        pending.interfaceCount = interfaceCount;
-        pending.expectedDrawCount = expectedDrawCount;
-        pending.workItemCount = static_cast<uint32_t>(
-            deepLayeredAtlasPlan_.workIdentities().size());
-        pending.readback = resourceAllocator.createBuffer(totalBytes,
-            VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-            true, ProfileMemoryCategory::CaptureReadback);
-        try {
-            pendingDeepLayeredCaptureValidations_.push_back(
-                std::move(pending));
-        }
-        catch (...) {
-            resourceAllocator.destroy(pending.readback);
-            throw;
-        }
-        deepLayeredCaptureValidationRequest_.reset();
-
-        const char* gpuRangeName = quality == TransparencyQuality::Hero4
-            ? "gpu.transparency.layered.hero4.validation-readback"
-            : "gpu.transparency.layered.cinematic8.validation-readback";
-        VulkanGpuRangeToken gpuRange = scheduler.beginGpuRange(gpuRangeName);
-        renderGraph_.beginPass(currentCmd, passName);
-        PendingDeepLayeredCaptureValidation& recorded =
-            pendingDeepLayeredCaptureValidations_.back();
-        VulkanCommandList commandList(currentCmd);
-        commandList.transition(recorded.readback,
-            ResourceState::CopyDestination);
-        const auto copyImage = [&](const VulkanImageResource& image,
-                VkImageAspectFlags aspect, VkDeviceSize offset) {
-            VkBufferImageCopy copy{};
-            copy.bufferOffset = offset;
-            copy.imageSubresource.aspectMask = aspect;
-            copy.imageSubresource.layerCount = 1u;
-            copy.imageExtent = { tier.atlasExtent.width,
-                tier.atlasExtent.height, 1u };
-            commandList.copyImageToBuffer(image, recorded.readback, copy);
-        };
-        for (uint32_t interfaceIndex = 0u;
-            interfaceIndex < interfaceCount; ++interfaceIndex) {
-            copyImage(tier.interfaceIdentity[interfaceIndex],
-                VK_IMAGE_ASPECT_COLOR_BIT,
-                imageBytes * (interfaceIndex * 2u));
-            copyImage(tier.interfaceDepth[interfaceIndex],
-                VK_IMAGE_ASPECT_DEPTH_BIT,
-                imageBytes * (interfaceIndex * 2u + 1u));
-        }
-        copyImage(tier.localColor, VK_IMAGE_ASPECT_COLOR_BIT,
-            imageBytes * interfaceImageCount);
-        const VkDeviceSize tileBaseOffset = imageBytes *
-            interfaceImageCount + pixelCount * 8ull;
-        for (uint32_t interfaceIndex = 0u;
-            interfaceIndex < interfaceCount; ++interfaceIndex) {
-            if (!deepLayeredTerminationInterface(interfaceIndex,
-                    interfaceCount)) {
-                continue;
-            }
-            VkBufferImageCopy copy{};
-            copy.bufferOffset = tileBaseOffset +
-                tileImageBytes * interfaceIndex;
-            copy.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-            copy.imageSubresource.layerCount = 1u;
-            copy.imageExtent = { tileExtent.width, tileExtent.height, 1u };
-            commandList.copyImageToBuffer(
-                tier.tileTermination[interfaceIndex], recorded.readback,
-                copy);
-        }
-        scheduler.endGpuRange(gpuRange);
+        runPassHook({ .point = VulkanHookPoint::DeepLayeredValidation,
+                .cmd = currentCmd, .slot = scheduler.currentFrameIndex(),
+                .payload = VulkanDeepLayeredHookPayload{ quality, interfaceCount,
+                    drawCount, static_cast<uint32_t>(
+                        deepLayeredAtlasPlan_.workIdentities().size()) } },
+            true, passNames[interfaceCount + 1u],
+            quality == TransparencyQuality::Hero4
+                ? "gpu.transparency.layered.hero4.validation-readback"
+                : "gpu.transparency.layered.cinematic8.validation-readback");
     }
 
     void VulkanVertexBackend::submitForwardQueues(
@@ -11502,34 +10870,13 @@ const VkDeviceSize offset = geometry->vertexOffset;
             }
             scheduler.endGpuRange(gpuRange);
             renderGraph_.beginPass(currentCmd, "shadow.virtual.request-readback");
-            if (virtualShadowDepthQualificationOracle_ && packet) {
-                auto& depthReadback = virtualShadowDepthReadbacks_[slot];
-                const uint64_t pixels = uint64_t{sceneExtent_.width} * sceneExtent_.height;
-                if (pixels > std::numeric_limits<uint32_t>::max())
-                    throw std::overflow_error("Virtual-shadow depth oracle pixel count exceeds its ABI");
-                const VkDeviceSize depthBytes = pixels * sizeof(float);
-                if (depthReadback.size != depthBytes) {
-                    // Current slot's fence retired its previous capture before resize.
-                    resourceAllocator.destroy(depthReadback);
-                    depthReadback = resourceAllocator.createBuffer(depthBytes,
-                        VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                        true, ProfileMemoryCategory::CaptureReadback);
-                }
-                virtualShadowDepthExtents_[slot] = sceneExtent_;
-                virtualShadowInverseViewProjections_[slot] = view.inverseView * view.inverseProjection;
-                VkBufferImageCopy copy{};
-                copy.imageSubresource = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1};
-                copy.imageExtent = {sceneExtent_.width, sceneExtent_.height, 1};
-                vkCmdCopyImageToBuffer(currentCmd, targets.depth.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                    depthReadback.buffer, 1, &copy);
-                VkBufferMemoryBarrier depthBarrier{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
-                depthBarrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-                depthBarrier.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
-                depthBarrier.srcQueueFamilyIndex = depthBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                depthBarrier.buffer = depthReadback.buffer; depthBarrier.size = depthReadback.size;
-                vkCmdPipelineBarrier(currentCmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT,
-                    0, 0, nullptr, 1, &depthBarrier, 0, nullptr);
+            if constexpr (kQualificationBuild) {
+                // Explicit qualification copies the exact depth consumed above.
+                if (packet && graphHooks_.virtualShadowDepthSnapshot)
+                    notifyHook({ .point = VulkanHookPoint::VirtualShadowDepthSnapshot,
+                        .cmd = currentCmd, .slot = slot,
+                        .payload = VulkanVirtualShadowDepthPayload{ &targets.depth,
+                            sceneExtent_, view.inverseView * view.inverseProjection } });
             }
             const auto& layout = virtualShadowResources_.info().workingSetLayout;
             const auto& readback = virtualShadowResources_.requestReadback(slot);
@@ -11593,7 +10940,12 @@ const VkDeviceSize offset = geometry->vertexOffset;
             if (collectFrameCounters_)
                 frameCounters_.dispatchRecorded += dispatches;
             scheduler.endGpuRange(range);
-            recordDepthPyramidCaptureValidationReadback();
+            runPassHook({ .point = VulkanHookPoint::DepthPyramidValidation,
+                    .cmd = currentCmd, .slot = scheduler.currentFrameIndex(),
+                    .payload = VulkanDepthPyramidHookPayload{ retainedRenderView_ } },
+                graphHooks_.depthPyramidValidation,
+                "depth.occlusion-pyramid.validation-readback-hook",
+                "gpu.depth.occlusion-pyramid.validation-readback");
         }
         recordForwardPass(sortedSurfaceQueue, "transparent.sorted.forward",
             "gpu.transparency.sorted.forward", transparentPass->getRenderPass(),
@@ -11609,7 +10961,15 @@ const VkDeviceSize offset = geometry->vertexOffset;
                 captureDraws);
             recordOrdinary2LocalComposition(compatibilityTransparentQueue,
                 captureDraws);
-            recordOrdinary2CaptureValidationReadback(captureDraws);
+            runPassHook({ .point = VulkanHookPoint::Ordinary2Validation,
+                    .cmd = currentCmd, .slot = scheduler.currentFrameIndex(),
+                    .payload = VulkanOrdinary2HookPayload{ ordinary2AtlasExtent_,
+                        static_cast<uint32_t>(captureDraws.size()),
+                        static_cast<uint32_t>(
+                            ordinary2AtlasPlan_.workIdentities().size()) } },
+                graphHooks_.layeredValidation,
+                "transparent.layered.validation-readback-hook",
+                "gpu.transparency.layered.validation-readback");
             recordOrdinary2SceneResolve(compatibilityTransparentQueue,
                 captureDraws);
         }
@@ -11619,7 +10979,7 @@ const VkDeviceSize offset = geometry->vertexOffset;
                 deepCaptureDraws, TransparencyQuality::Hero4);
             recordDeepLayeredLocalComposition(compatibilityTransparentQueue,
                 deepCaptureDraws, TransparencyQuality::Hero4);
-            recordDeepLayeredCaptureValidationReadback(deepCaptureDraws,
+            recordDeepLayeredValidationHook(deepCaptureDraws,
                 TransparencyQuality::Hero4);
         }
         if (cinematic8CaptureTopologyActive) {
@@ -11627,7 +10987,7 @@ const VkDeviceSize offset = geometry->vertexOffset;
                 deepCaptureDraws, TransparencyQuality::Cinematic8);
             recordDeepLayeredLocalComposition(compatibilityTransparentQueue,
                 deepCaptureDraws, TransparencyQuality::Cinematic8);
-            recordDeepLayeredCaptureValidationReadback(deepCaptureDraws,
+            recordDeepLayeredValidationHook(deepCaptureDraws,
                 TransparencyQuality::Cinematic8);
         }
         if (hero4CaptureTopologyActive || cinematic8CaptureTopologyActive) {
@@ -11891,20 +11251,62 @@ const VkDeviceSize offset = geometry->vertexOffset;
         if (pipelineStatisticsActive) {
             scheduler.endTransparentPipelineStatistics();
         }
+        runCaptureHook(VulkanHookPoint::SceneColorComplete,
+            FrameCapturePoint::SceneLinear);
     }
 
-    std::optional<FrameCapturePixelFormat> VulkanVertexBackend::capturePixelFormat(
-        VkFormat format) noexcept {
-        switch (format) {
-        case VK_FORMAT_R8G8B8A8_SRGB:
-            return FrameCapturePixelFormat::Rgba8Srgb;
-        case VK_FORMAT_B8G8R8A8_SRGB:
-            return FrameCapturePixelFormat::Bgra8Srgb;
-        case VK_FORMAT_R16G16B16A16_SFLOAT:
-            return FrameCapturePixelFormat::Rgba32Float;
-        default:
-            return std::nullopt;
+    // ------------------------------------------------------------------
+    // Capture and capture-validation requests (M7R R2.7). The qualification
+    // extension owns the readbacks and analysis; the backend owns the graph
+    // bracket around a capture copy. R2.9 removes the forwarding methods.
+    // ------------------------------------------------------------------
+
+    VulkanCaptureHookPayload VulkanVertexBackend::captureSource(
+        FrameCapturePoint point) {
+        VulkanFrameContextTargets& targets = frameTargets.get(
+            scheduler.currentFrameIndex());
+        const bool sceneLinear = point == FrameCapturePoint::SceneLinear;
+        return { point, sceneLinear ? &targets.litScene : &targets.output,
+            frameTargets.extent(),
+            sceneLinear ? frameTargets.format() : outputTargetFormat_ };
+    }
+
+    template<typename Record>
+    void VulkanVertexBackend::recordCaptureCopy(FrameCapturePoint point,
+        Record&& record) {
+        const VulkanCaptureHookPayload source = captureSource(point);
+        if (point == FrameCapturePoint::SceneLinear) {
+            renderGraph_.transitionImage(currentCmd, "scene.color",
+                RenderGraph::Access::TransferSource);
         }
+        else if (!finalCaptureHookRecorded_) {
+            renderGraph_.beginPass(currentCmd, "final-capture-hook");
+            finalCaptureHookRecorded_ = true;
+        }
+        record(source);
+        if (point == FrameCapturePoint::SceneLinear) {
+            renderGraph_.transitionImage(currentCmd, "scene.color",
+                RenderGraph::Access::SampledRead);
+        }
+    }
+
+    void VulkanVertexBackend::runCaptureHook(VulkanHookPoint point,
+        FrameCapturePoint capturePoint) {
+        VulkanHookContext context{ .point = point, .cmd = currentCmd,
+            .slot = scheduler.currentFrameIndex() };
+        if (!anyExtensionWants(context)) return;
+        recordCaptureCopy(capturePoint, [&](const VulkanCaptureHookPayload& source) {
+            context.payload = source;
+            notifyHook(context);
+        });
+    }
+
+    IVulkanLegacyQualificationRequests& VulkanVertexBackend::legacyRequests(
+        const char* request) const {
+        if (legacyQualificationRequests_ == nullptr)
+            throw std::logic_error(std::string(request) +
+                " requires the Vulkan qualification extension");
+        return *legacyQualificationRequests_;
     }
 
     void VulkanVertexBackend::captureCurrentFrame(uint64_t captureId,
@@ -11912,953 +11314,61 @@ const VkDeviceSize offset = geometry->vertexOffset;
         if (!frameOpen_ || currentCmd == VK_NULL_HANDLE) {
             throw std::logic_error("Frame capture requires an active frame.");
         }
-        const VkExtent2D extent = frameTargets.extent();
-        const VkFormat format = point == FrameCapturePoint::SceneLinear
-            ? frameTargets.format() : outputTargetFormat_;
-        const uint32_t sourceBytesPerPixel = captureSourceBytesPerPixel(format);
-        const uint32_t outputBytesPerPixel =
-            format == VK_FORMAT_R16G16B16A16_SFLOAT ? 16u : 4u;
-        if (!capturePixelFormat(format) || sourceBytesPerPixel == 0) {
-            throw std::runtime_error(
-                "Frame capture requires a supported sRGB or FP16 scene target.");
-        }
-        if (extent.width == 0 || extent.height == 0) {
-            throw std::runtime_error("Frame capture requires a non-empty render extent.");
-        }
-        const uint64_t pixelCount = static_cast<uint64_t>(extent.width) *
-            static_cast<uint64_t>(extent.height);
-        if (pixelCount > std::numeric_limits<uint64_t>::max() /
-            sourceBytesPerPixel) {
-            throw std::overflow_error("Frame capture byte count exceeds uint64_t.");
-        }
-        const uint64_t byteCount = pixelCount * sourceBytesPerPixel;
-        if (byteCount > std::numeric_limits<size_t>::max() ||
-            static_cast<uint64_t>(extent.width) * sourceBytesPerPixel >
-                std::numeric_limits<uint32_t>::max() ||
-            pixelCount > std::numeric_limits<size_t>::max() /
-                outputBytesPerPixel ||
-            static_cast<uint64_t>(extent.width) * outputBytesPerPixel >
-                std::numeric_limits<uint32_t>::max()) {
-            throw std::overflow_error("Frame capture dimensions exceed the readback contract.");
-        }
-        const auto duplicatePending = std::find_if(pendingFrameCaptures_.begin(),
-            pendingFrameCaptures_.end(), [captureId](const PendingFrameCapture& capture) {
-                return capture.captureId == captureId;
-            });
-        const auto duplicateCompleted = std::find_if(completedFrameCaptures_.begin(),
-            completedFrameCaptures_.end(), [captureId](const FrameCapture& capture) {
-                return capture.captureId == captureId;
-            });
-        if (duplicatePending != pendingFrameCaptures_.end() ||
-            duplicateCompleted != completedFrameCaptures_.end()) {
-            throw std::invalid_argument("Frame capture IDs must be unique.");
-        }
-
-        PendingFrameCapture pending{};
-        pending.captureId = captureId;
-        pending.frameIndex = scheduler.currentFrameIndex();
-        pending.extent = extent;
-        pending.format = format;
-        pending.point = point;
-        pending.readback = resourceAllocator.createBuffer(byteCount,
-            VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-            true, ProfileMemoryCategory::CaptureReadback);
-
-        try {
-            pendingFrameCaptures_.push_back(std::move(pending));
-        }
-        catch (...) {
-            resourceAllocator.destroy(pending.readback);
-            throw;
-        }
-
-        PendingFrameCapture& recorded = pendingFrameCaptures_.back();
-        VulkanFrameContextTargets& targets = frameTargets.get(
-            scheduler.currentFrameIndex());
-        VulkanImageResource& source = point == FrameCapturePoint::SceneLinear
-            ? targets.litScene : targets.output;
-        VulkanCommandList commandList(currentCmd);
-        if (point == FrameCapturePoint::SceneLinear) {
-            renderGraph_.transitionImage(currentCmd, "scene.color",
-                RenderGraph::Access::TransferSource);
-        }
-        else {
-            renderGraph_.beginPass(currentCmd, "final-capture-hook");
-            finalCaptureHookRecorded_ = true;
-        }
-        commandList.transition(recorded.readback, ResourceState::CopyDestination);
-
-        VkBufferImageCopy copy{};
-        copy.bufferOffset = 0;
-        copy.bufferRowLength = 0;
-        copy.bufferImageHeight = 0;
-        copy.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        copy.imageSubresource.mipLevel = 0;
-        copy.imageSubresource.baseArrayLayer = 0;
-        copy.imageSubresource.layerCount = 1;
-        copy.imageExtent = { extent.width, extent.height, 1 };
-        commandList.copyImageToBuffer(source, recorded.readback, copy);
-        if (point == FrameCapturePoint::SceneLinear) {
-            renderGraph_.transitionImage(currentCmd, "scene.color",
-                RenderGraph::Access::SampledRead);
-        }
-    }
-
-    void VulkanVertexBackend::collectFrameCapturesForSlot(uint32_t frameIndex) {
-        size_t index = 0;
-        while (index < pendingFrameCaptures_.size()) {
-            if (pendingFrameCaptures_[index].frameIndex != frameIndex) {
-                ++index;
-                continue;
-            }
-
-            PendingFrameCapture& pending = pendingFrameCaptures_[index];
-            const auto pixelFormat = capturePixelFormat(pending.format);
-            if (!pixelFormat || pending.readback.mapped == nullptr) {
-                resourceAllocator.destroy(pending.readback);
-                throw std::runtime_error("A completed frame capture has invalid readback state.");
-            }
-            const size_t pixelCount = static_cast<size_t>(pending.extent.width) *
-                static_cast<size_t>(pending.extent.height);
-            const bool sceneLinear =
-                pending.point == FrameCapturePoint::SceneLinear;
-            const bool floatCapture = pending.format ==
-                VK_FORMAT_R16G16B16A16_SFLOAT;
-            const size_t outputBytesPerPixel = floatCapture ? 16 : 4;
-            const size_t byteCount = pixelCount * outputBytesPerPixel;
-            FrameCapture completed{};
-            completed.captureId = pending.captureId;
-            completed.width = pending.extent.width;
-            completed.height = pending.extent.height;
-            completed.rowPitchBytes = pending.extent.width *
-                static_cast<uint32_t>(outputBytesPerPixel);
-            completed.pixelFormat = *pixelFormat;
-            completed.colorDomain = sceneLinear
-                ? FrameCaptureColorDomain::SceneLinearAcesCg
-                : (floatCapture ? FrameCaptureColorDomain::DisplayLinearHdr
-                    : FrameCaptureColorDomain::DisplayEncodedSdr);
-            completed.pixels.resize(byteCount);
-            if (floatCapture) {
-                const auto* source = static_cast<const std::byte*>(
-                    pending.readback.mapped);
-                for (size_t pixel = 0; pixel < pixelCount; ++pixel) {
-                    uint16_t channels[4]{};
-                    std::memcpy(channels, source + pixel * 8, sizeof(channels));
-                    float rgba[4] = { Color::halfToFloat(channels[0]),
-                        Color::halfToFloat(channels[1]),
-                        Color::halfToFloat(channels[2]),
-                        Color::halfToFloat(channels[3]) };
-                    std::memcpy(completed.pixels.data() + pixel * 16,
-                        rgba, sizeof(rgba));
-                }
-            }
-            else {
-                std::memcpy(completed.pixels.data(), pending.readback.mapped,
-                    byteCount);
-            }
-            completedFrameCaptures_.push_back(std::move(completed));
-            resourceAllocator.destroy(pending.readback);
-            if (index + 1 != pendingFrameCaptures_.size()) {
-                pendingFrameCaptures_[index] =
-                    std::move(pendingFrameCaptures_.back());
-            }
-            pendingFrameCaptures_.pop_back();
-        }
+        IVulkanLegacyQualificationRequests& requests =
+            legacyRequests("Frame capture");
+        recordCaptureCopy(point, [&](const VulkanCaptureHookPayload& source) {
+            requests.captureCurrentFrame(captureId, frameRecording(), source);
+        });
     }
 
     std::vector<FrameCapture> VulkanVertexBackend::collectFrameCaptures(
         bool waitForPending) {
-        if (frameOpen_) {
-            throw std::logic_error(
-                "Frame captures cannot be collected while a frame is open.");
-        }
-        if (waitForPending && !pendingFrameCaptures_.empty()) {
-            scheduler.waitForAllFrames();
-            for (uint32_t frameIndex = 0;
-                frameIndex < VulkanFrameScheduler::FramesInFlight; ++frameIndex) {
-                collectFrameCapturesForSlot(frameIndex);
-            }
-        }
-        std::vector<FrameCapture> result = std::move(completedFrameCaptures_);
-        completedFrameCaptures_.clear();
-        return result;
+        if (legacyQualificationRequests_ == nullptr) return {};
+        return legacyQualificationRequests_->collectFrameCaptures(frameOpen_,
+            waitForPending);
     }
 
     void VulkanVertexBackend::requestOrdinary2CaptureValidation(
         uint64_t validationId) {
-        if (!frameOpen_ || currentCmd == VK_NULL_HANDLE) {
-            throw std::logic_error(
-                "Ordinary2 capture validation must be requested during a frame");
-        }
-        const bool duplicatePending = std::ranges::any_of(
-            pendingOrdinary2CaptureValidations_,
-            [validationId](const PendingOrdinary2CaptureValidation& pending) {
-                return pending.validationId == validationId;
-            });
-        const bool duplicateCompleted = std::ranges::any_of(
-            completedOrdinary2CaptureValidations_,
-            [validationId](const Ordinary2CaptureValidationResult& completed) {
-                return completed.validationId == validationId;
-            });
-        if (ordinary2CaptureValidationRequest_ || duplicatePending ||
-            duplicateCompleted) {
-            throw std::invalid_argument(
-                "Ordinary2 capture validation permits one unique request at a time");
-        }
-        ordinary2CaptureValidationRequest_ = validationId;
-    }
-
-    void VulkanVertexBackend::collectOrdinary2CaptureValidationsForSlot(
-        uint32_t frameIndex) {
-        constexpr uint32_t OrientationBit = 0x80000000u;
-        constexpr uint32_t WorkMask = kLayeredInterfaceWorkMask;
-        size_t pendingIndex = 0u;
-        while (pendingIndex < pendingOrdinary2CaptureValidations_.size()) {
-            PendingOrdinary2CaptureValidation& pending =
-                pendingOrdinary2CaptureValidations_[pendingIndex];
-            if (pending.frameIndex != frameIndex) {
-                ++pendingIndex;
-                continue;
-            }
-            if (pending.readback.mapped == nullptr) {
-                resourceAllocator.destroy(pending.readback);
-                throw std::runtime_error(
-                    "Completed Ordinary2 readback is not host mapped");
-            }
-
-            Ordinary2CaptureValidationResult result{};
-            result.validationId = pending.validationId;
-            result.atlasWidth = pending.extent.width;
-            result.atlasHeight = pending.extent.height;
-            result.expectedDrawCount = pending.expectedDrawCount;
-            result.workItemCount = pending.workItemCount;
-            result.inspectedPixelCount =
-                static_cast<uint64_t>(pending.extent.width) *
-                pending.extent.height;
-            const size_t pixelCount = static_cast<size_t>(
-                result.inspectedPixelCount);
-            const size_t imageBytes = pixelCount * sizeof(uint32_t);
-            const auto* bytes = static_cast<const std::byte*>(
-                pending.readback.mapped);
-            const auto readUint = [&](size_t base, size_t pixel) {
-                uint32_t value = 0u;
-                std::memcpy(&value,
-                    bytes + base + pixel * sizeof(uint32_t), sizeof(value));
-                return value;
-            };
-            const auto readFloat = [&](size_t base, size_t pixel) {
-                float value = 0.0f;
-                std::memcpy(&value,
-                    bytes + base + pixel * sizeof(float), sizeof(value));
-                return value;
-            };
-            float minimumDelta = (std::numeric_limits<float>::max)();
-            float maximumDelta = 0.0f;
-            float minimumLocalAlpha = (std::numeric_limits<float>::max)();
-            float maximumLocalAlpha = 0.0f;
-            for (size_t pixel = 0; pixel < pixelCount; ++pixel) {
-                const uint32_t entryIdentity = readUint(0u, pixel);
-                const float entryDepth = readFloat(imageBytes, pixel);
-                const uint32_t exitIdentity = readUint(
-                    imageBytes * 2u, pixel);
-                const float exitDepth = readFloat(
-                    imageBytes * 3u, pixel);
-                const bool hasEntry = entryIdentity != 0u;
-                const bool hasExit = exitIdentity != 0u;
-                const uint32_t entryWork = entryIdentity & WorkMask;
-                const uint32_t exitWork = exitIdentity & WorkMask;
-                const auto validDepth = [](float depth) {
-                    return std::isfinite(depth) && depth >= 0.0f &&
-                        depth <= 1.0f;
-                };
-
-                if (hasEntry) {
-                    ++result.entryPixelCount;
-                    if ((entryIdentity & OrientationBit) != 0u)
-                        ++result.invalidOrientationPixelCount;
-                    if (entryWork == 0u ||
-                        entryWork > pending.workItemCount)
-                        ++result.invalidWorkIndexPixelCount;
-                    if (!validDepth(entryDepth))
-                        ++result.invalidDepthPixelCount;
-                }
-                if (hasExit) {
-                    ++result.exitPixelCount;
-                    if ((exitIdentity & OrientationBit) == 0u)
-                        ++result.invalidOrientationPixelCount;
-                    if (exitWork == 0u || exitWork > pending.workItemCount)
-                        ++result.invalidWorkIndexPixelCount;
-                    if (!validDepth(exitDepth))
-                        ++result.invalidDepthPixelCount;
-                    if (!hasEntry) {
-                        ++result.unpairedExitPixelCount;
-                    }
-                    else {
-                        ++result.pairedPixelCount;
-                        if (entryWork != exitWork)
-                            ++result.workMismatchPixelCount;
-                        if (validDepth(entryDepth) && validDepth(exitDepth)) {
-                            if (!(exitDepth > entryDepth)) {
-                                ++result.nonIncreasingDepthPixelCount;
-                            }
-                            else {
-                                const float delta = exitDepth - entryDepth;
-                                minimumDelta = (std::min)(minimumDelta, delta);
-                                maximumDelta = (std::max)(maximumDelta, delta);
-                            }
-                        }
-                    }
-                }
-                if (hasEntry && !hasExit)
-                    ++result.entryOnlyPixelCount;
-
-                std::array<uint16_t, 4> localHalf{};
-                std::memcpy(localHalf.data(),
-                    bytes + imageBytes * 4u + pixel * 8u, 8u);
-                const std::array<float, 4> local{
-                    Color::halfToFloat(localHalf[0]),
-                    Color::halfToFloat(localHalf[1]),
-                    Color::halfToFloat(localHalf[2]),
-                    Color::halfToFloat(localHalf[3]) };
-                const bool occupied = local[0] != 0.0f ||
-                    local[1] != 0.0f || local[2] != 0.0f ||
-                    local[3] != 0.0f;
-                if (occupied) {
-                    ++result.localColorPixelCount;
-                    const bool valid = std::ranges::all_of(local,
-                        [](float value) { return std::isfinite(value); }) &&
-                        local[0] >= 0.0f && local[1] >= 0.0f &&
-                        local[2] >= 0.0f && local[3] > 0.0f &&
-                        local[3] <= 1.0f;
-                    if (!valid) {
-                        ++result.localColorInvalidPixelCount;
-                    }
-                    else {
-                        minimumLocalAlpha = (std::min)(minimumLocalAlpha,
-                            local[3]);
-                        maximumLocalAlpha = (std::max)(maximumLocalAlpha,
-                            local[3]);
-                    }
-                }
-            }
-            if (minimumDelta != (std::numeric_limits<float>::max)()) {
-                result.minimumPairedDepthDelta = minimumDelta;
-                result.maximumPairedDepthDelta = maximumDelta;
-            }
-            if (minimumLocalAlpha != (std::numeric_limits<float>::max)()) {
-                result.minimumLocalAlpha = minimumLocalAlpha;
-                result.maximumLocalAlpha = maximumLocalAlpha;
-            }
-            completedOrdinary2CaptureValidations_.push_back(result);
-            resourceAllocator.destroy(pending.readback);
-            if (pendingIndex + 1u !=
-                    pendingOrdinary2CaptureValidations_.size()) {
-                pendingOrdinary2CaptureValidations_[pendingIndex] = std::move(
-                    pendingOrdinary2CaptureValidations_.back());
-            }
-            pendingOrdinary2CaptureValidations_.pop_back();
-        }
+        legacyRequests("Ordinary2 capture validation")
+            .requestOrdinary2CaptureValidation(validationId, frameRecording());
     }
 
     std::vector<Ordinary2CaptureValidationResult>
     VulkanVertexBackend::collectOrdinary2CaptureValidations(
         bool waitForPending) {
-        if (frameOpen_) {
-            throw std::logic_error(
-                "Ordinary2 validation cannot be collected during a frame");
-        }
-        if (waitForPending &&
-            !pendingOrdinary2CaptureValidations_.empty()) {
-            scheduler.waitForAllFrames();
-            for (uint32_t frameIndex = 0;
-                frameIndex < VulkanFrameScheduler::FramesInFlight;
-                ++frameIndex) {
-                collectOrdinary2CaptureValidationsForSlot(frameIndex);
-            }
-        }
-        std::vector<Ordinary2CaptureValidationResult> result =
-            std::move(completedOrdinary2CaptureValidations_);
-        completedOrdinary2CaptureValidations_.clear();
-        return result;
+        if (legacyQualificationRequests_ == nullptr) return {};
+        return legacyQualificationRequests_->collectOrdinary2CaptureValidations(
+            frameOpen_, waitForPending);
     }
 
     void VulkanVertexBackend::requestDeepLayeredCaptureValidation(
         uint64_t validationId, TransparencyQuality quality) {
-        if (!frameOpen_ || currentCmd == VK_NULL_HANDLE) {
-            throw std::logic_error(
-                "Deep layered validation must be requested during a frame");
-        }
-        if (quality != TransparencyQuality::Hero4 &&
-            quality != TransparencyQuality::Cinematic8) {
-            throw std::invalid_argument(
-                "Deep layered validation requires Hero4 or Cinematic8");
-        }
-        const bool duplicatePending = std::ranges::any_of(
-            pendingDeepLayeredCaptureValidations_,
-            [validationId](
-                const PendingDeepLayeredCaptureValidation& pending) {
-                return pending.validationId == validationId;
-            });
-        const bool duplicateCompleted = std::ranges::any_of(
-            completedDeepLayeredCaptureValidations_,
-            [validationId](
-                const DeepLayeredCaptureValidationResult& completed) {
-                return completed.validationId == validationId;
-            });
-        if (deepLayeredCaptureValidationRequest_ || duplicatePending ||
-            duplicateCompleted) {
-            throw std::invalid_argument(
-                "Deep layered validation permits one unique request at a time");
-        }
-        deepLayeredCaptureValidationRequest_ =
-            DeepLayeredCaptureValidationRequest{ validationId, quality };
-    }
-
-    void VulkanVertexBackend::collectDeepLayeredCaptureValidationsForSlot(
-        uint32_t frameIndex) {
-        constexpr uint32_t OrientationBit = 0x80000000u;
-        constexpr uint32_t WorkMask = kDeepLayeredWorkMask;
-        size_t pendingIndex = 0u;
-        while (pendingIndex < pendingDeepLayeredCaptureValidations_.size()) {
-            PendingDeepLayeredCaptureValidation& pending =
-                pendingDeepLayeredCaptureValidations_[pendingIndex];
-            if (pending.frameIndex != frameIndex) {
-                ++pendingIndex;
-                continue;
-            }
-            if (pending.readback.mapped == nullptr) {
-                resourceAllocator.destroy(pending.readback);
-                throw std::runtime_error(
-                    "Completed deep layered readback is not host mapped");
-            }
-
-            DeepLayeredCaptureValidationResult result{};
-            result.validationId = pending.validationId;
-            result.quality = pending.quality;
-            result.atlasWidth = pending.extent.width;
-            result.atlasHeight = pending.extent.height;
-            result.interfaceCount = pending.interfaceCount;
-            result.expectedDrawCount = pending.expectedDrawCount;
-            result.sceneResolveDrawCount = pending.sceneResolveDrawCount;
-            result.compatibilityForwardDrawCount =
-                pending.compatibilityForwardDrawCount;
-            result.workItemCount = pending.workItemCount;
-            result.inspectedPixelCount =
-                static_cast<uint64_t>(pending.extent.width) *
-                pending.extent.height;
-            const size_t pixelCount = static_cast<size_t>(
-                result.inspectedPixelCount);
-            const size_t imageBytes = pixelCount * sizeof(uint32_t);
-            const size_t localColorOffset = imageBytes *
-                pending.interfaceCount * 2u;
-            const uint32_t tileWidth = (pending.extent.width +
-                kDeepLayeredEarlyTerminationTileSize - 1u) /
-                kDeepLayeredEarlyTerminationTileSize;
-            const uint32_t tileHeight = (pending.extent.height +
-                kDeepLayeredEarlyTerminationTileSize - 1u) /
-                kDeepLayeredEarlyTerminationTileSize;
-            const size_t tileImageBytes = static_cast<size_t>(tileWidth) *
-                tileHeight * sizeof(uint32_t);
-            const size_t tileBaseOffset = localColorOffset + pixelCount * 8u;
-            const auto* bytes = static_cast<const std::byte*>(
-                pending.readback.mapped);
-            const auto readUint = [&](size_t base, size_t pixel) {
-                uint32_t value = 0u;
-                std::memcpy(&value,
-                    bytes + base + pixel * sizeof(uint32_t), sizeof(value));
-                return value;
-            };
-            const auto readFloat = [&](size_t base, size_t pixel) {
-                float value = 0.0f;
-                std::memcpy(&value,
-                    bytes + base + pixel * sizeof(float), sizeof(value));
-                return value;
-            };
-            const auto validDepth = [](float depth) {
-                return std::isfinite(depth) && depth >= 0.0f &&
-                    depth <= 1.0f;
-            };
-            float minimumDelta = (std::numeric_limits<float>::max)();
-            float maximumDelta = 0.0f;
-            float minimumLocalAlpha = (std::numeric_limits<float>::max)();
-            float maximumLocalAlpha = 0.0f;
-
-            for (size_t pixel = 0u; pixel < pixelCount; ++pixel) {
-                std::array<uint32_t, kMaximumLayeredInterfaceCount>
-                    openWorks{};
-                uint32_t openCount = 0u;
-                uint32_t observedCount = 0u;
-                uint32_t maximumOpenCount = 0u;
-                uint32_t pairCount = 0u;
-                uint32_t lastIdentity = 0u;
-                bool crossingPair = false;
-                bool seenEmpty = false;
-                bool pixelInvalid = false;
-                bool hasPreviousDepth = false;
-                float previousDepth = 0.0f;
-                for (uint32_t interfaceIndex = 0u;
-                    interfaceIndex < pending.interfaceCount;
-                    ++interfaceIndex) {
-                    const size_t identityOffset = imageBytes *
-                        (interfaceIndex * 2u);
-                    const size_t depthOffset = identityOffset + imageBytes;
-                    const uint32_t identity = readUint(identityOffset, pixel);
-                    if (identity == 0u) {
-                        seenEmpty = true;
-                        continue;
-                    }
-                    ++result.interfacePixelCounts[interfaceIndex];
-                    ++observedCount;
-                    lastIdentity = identity;
-                    if (seenEmpty) {
-                        ++result.interfaceGapPixelCount;
-                        pixelInvalid = true;
-                    }
-                    const uint32_t work = identity & WorkMask;
-                    if (work == 0u || work > pending.workItemCount) {
-                        ++result.invalidWorkIndexPixelCount;
-                        pixelInvalid = true;
-                    }
-                    const float depth = readFloat(depthOffset, pixel);
-                    if (!validDepth(depth)) {
-                        ++result.invalidDepthPixelCount;
-                        pixelInvalid = true;
-                    }
-                    else if (hasPreviousDepth) {
-                        if (!(depth > previousDepth)) {
-                            ++result.nonIncreasingDepthPixelCount;
-                            pixelInvalid = true;
-                        }
-                        else {
-                            const float delta = depth - previousDepth;
-                            minimumDelta = (std::min)(minimumDelta, delta);
-                            maximumDelta = (std::max)(maximumDelta, delta);
-                        }
-                    }
-                    if (validDepth(depth)) {
-                        previousDepth = depth;
-                        hasPreviousDepth = true;
-                    }
-
-                    const bool exit = (identity & OrientationBit) != 0u;
-                    if (!exit) {
-                        const bool duplicate = std::find(
-                            openWorks.begin(), openWorks.begin() + openCount,
-                            work) != openWorks.begin() + openCount;
-                        if (duplicate ||
-                            openCount >= openWorks.size()) {
-                            ++result.duplicateEntryPixelCount;
-                            pixelInvalid = true;
-                        }
-                        else {
-                            openWorks[openCount++] = work;
-                            maximumOpenCount = (std::max)(maximumOpenCount,
-                                openCount);
-                        }
-                    }
-                    else {
-                        uint32_t match = openCount;
-                        while (match > 0u &&
-                            openWorks[match - 1u] != work) {
-                            --match;
-                        }
-                        if (match == 0u) {
-                            ++result.unmatchedExitPixelCount;
-                            pixelInvalid = true;
-                        }
-                        else {
-                            const uint32_t matchIndex = match - 1u;
-                            // Closing something other than the most recently
-                            // opened work proves a valid crossing sequence:
-                            // Entry(A), Entry(B), Exit(A), Exit(B).
-                            crossingPair |= matchIndex + 1u != openCount;
-                            for (uint32_t move = matchIndex + 1u;
-                                move < openCount; ++move) {
-                                openWorks[move - 1u] = openWorks[move];
-                            }
-                            --openCount;
-                            ++pairCount;
-                        }
-                    }
-                }
-                result.maximumObservedInterfaceCount = (std::max)(
-                    result.maximumObservedInterfaceCount, observedCount);
-                if (openCount != 0u) {
-                    if (observedCount == pending.interfaceCount) {
-                        // A topology-validated closed workload that fills the
-                        // tier while volumes remain open is a saturated exact
-                        // prefix, not malformed capture. The unmatched entry
-                        // and uncaptured entry surfaces are evaluated by the
-                        // bounded residual material path.
-                        ++result.saturatedResidualPixelCount;
-                    }
-                    else {
-                        ++result.unclosedEntryPixelCount;
-                        pixelInvalid = true;
-                    }
-                }
-                const bool paired = !pixelInvalid && pairCount != 0u;
-                if (paired) {
-                    ++result.pairedPixelCount;
-                    if (observedCount >= 4u && maximumOpenCount >= 2u)
-                        ++result.nestedFourInterfacePixelCount;
-                    if (crossingPair)
-                        ++result.crossingPairPixelCount;
-                    if (observedCount < pending.interfaceCount &&
-                        deepLayeredOpenCount(lastIdentity) == 0u &&
-                        deepLayeredTransmissionQuantized(lastIdentity) <=
-                            kDeepLayeredTerminationThresholdQuantized) {
-                        ++result.earlyTerminatedPixelCount;
-                    }
-                }
-
-                std::array<uint16_t, 4> localHalf{};
-                std::memcpy(localHalf.data(),
-                    bytes + localColorOffset + pixel * 8u, 8u);
-                const std::array<float, 4> local{
-                    Color::halfToFloat(localHalf[0]),
-                    Color::halfToFloat(localHalf[1]),
-                    Color::halfToFloat(localHalf[2]),
-                    Color::halfToFloat(localHalf[3]) };
-                const bool occupied = local[0] != 0.0f ||
-                    local[1] != 0.0f || local[2] != 0.0f ||
-                    local[3] != 0.0f;
-                if (occupied) {
-                    ++result.localColorPixelCount;
-                    const bool valid = std::ranges::all_of(local,
-                        [](float value) { return std::isfinite(value); }) &&
-                        local[0] >= 0.0f && local[1] >= 0.0f &&
-                        local[2] >= 0.0f && local[3] > 0.0f &&
-                        local[3] <= 1.0f;
-                    if (!valid || !paired) {
-                        ++result.localColorInvalidPixelCount;
-                    }
-                    else {
-                        minimumLocalAlpha = (std::min)(minimumLocalAlpha,
-                            local[3]);
-                        maximumLocalAlpha = (std::max)(maximumLocalAlpha,
-                            local[3]);
-                    }
-                }
-            }
-
-            for (uint32_t interfaceIndex = 0u;
-                interfaceIndex < pending.interfaceCount; ++interfaceIndex) {
-                if (!deepLayeredTerminationInterface(interfaceIndex,
-                        pending.interfaceCount)) {
-                    continue;
-                }
-                const size_t identityOffset = imageBytes *
-                    (interfaceIndex * 2u);
-                const size_t maskOffset = tileBaseOffset +
-                    tileImageBytes * interfaceIndex;
-                for (uint32_t tileY = 0u; tileY < tileHeight; ++tileY) {
-                    for (uint32_t tileX = 0u; tileX < tileWidth; ++tileX) {
-                        const size_t tileIndex = static_cast<size_t>(tileY) *
-                            tileWidth + tileX;
-                        if (readUint(maskOffset, tileIndex) == 0u)
-                            continue;
-                        bool occupied = false;
-                        const uint32_t beginX = tileX *
-                            kDeepLayeredEarlyTerminationTileSize;
-                        const uint32_t beginY = tileY *
-                            kDeepLayeredEarlyTerminationTileSize;
-                        const uint32_t endX = (std::min)(beginX +
-                            kDeepLayeredEarlyTerminationTileSize,
-                            pending.extent.width);
-                        const uint32_t endY = (std::min)(beginY +
-                            kDeepLayeredEarlyTerminationTileSize,
-                            pending.extent.height);
-                        for (uint32_t y = beginY; y < endY && !occupied;
-                            ++y) {
-                            for (uint32_t x = beginX; x < endX; ++x) {
-                                const size_t pixel = static_cast<size_t>(y) *
-                                    pending.extent.width + x;
-                                if ((readUint(identityOffset, pixel) &
-                                        kDeepLayeredWorkMask) != 0u) {
-                                    occupied = true;
-                                    break;
-                                }
-                            }
-                        }
-                        if (occupied) {
-                            ++result.terminatedOccupiedTileCounts[
-                                interfaceIndex];
-                            ++result.terminatedOccupiedTileCount;
-                        }
-                    }
-                }
-            }
-            if (minimumDelta != (std::numeric_limits<float>::max)()) {
-                result.minimumDepthDelta = minimumDelta;
-                result.maximumDepthDelta = maximumDelta;
-            }
-            if (minimumLocalAlpha != (std::numeric_limits<float>::max)()) {
-                result.minimumLocalAlpha = minimumLocalAlpha;
-                result.maximumLocalAlpha = maximumLocalAlpha;
-            }
-            completedDeepLayeredCaptureValidations_.push_back(result);
-            resourceAllocator.destroy(pending.readback);
-            if (pendingIndex + 1u !=
-                    pendingDeepLayeredCaptureValidations_.size()) {
-                pendingDeepLayeredCaptureValidations_[pendingIndex] =
-                    std::move(pendingDeepLayeredCaptureValidations_.back());
-            }
-            pendingDeepLayeredCaptureValidations_.pop_back();
-        }
+        legacyRequests("Deep layered validation")
+            .requestDeepLayeredCaptureValidation(validationId, quality,
+                frameRecording());
     }
 
     std::vector<DeepLayeredCaptureValidationResult>
     VulkanVertexBackend::collectDeepLayeredCaptureValidations(
         bool waitForPending) {
-        if (frameOpen_) {
-            throw std::logic_error(
-                "Deep layered validation cannot be collected during a frame");
-        }
-        if (waitForPending &&
-            !pendingDeepLayeredCaptureValidations_.empty()) {
-            scheduler.waitForAllFrames();
-            for (uint32_t frameIndex = 0u;
-                frameIndex < VulkanFrameScheduler::FramesInFlight;
-                ++frameIndex) {
-                collectDeepLayeredCaptureValidationsForSlot(frameIndex);
-            }
-        }
-        std::vector<DeepLayeredCaptureValidationResult> result =
-            std::move(completedDeepLayeredCaptureValidations_);
-        completedDeepLayeredCaptureValidations_.clear();
-        return result;
+        if (legacyQualificationRequests_ == nullptr) return {};
+        return legacyQualificationRequests_->collectDeepLayeredCaptureValidations(
+            frameOpen_, waitForPending);
     }
 
     void VulkanVertexBackend::requestDepthPyramidCaptureValidation(
         uint64_t validationId) {
-        if (!frameOpen_ || currentCmd == VK_NULL_HANDLE) {
-            throw std::logic_error(
-                "Depth-pyramid validation must be requested during a frame");
-        }
-        if (!depthPyramidEnabled_) {
-            throw std::logic_error(
-                "Depth-pyramid validation requires the experimental build path");
-        }
-        const bool duplicatePending = std::ranges::any_of(
-            pendingDepthPyramidCaptureValidations_,
-            [validationId](const PendingDepthPyramidCaptureValidation& pending) {
-                return pending.validationId == validationId;
-            });
-        const bool duplicateCompleted = std::ranges::any_of(
-            completedDepthPyramidCaptureValidations_,
-            [validationId](const DepthPyramidCaptureValidationResult& completed) {
-                return completed.validationId == validationId;
-            });
-        if (depthPyramidCaptureValidationRequest_ || duplicatePending ||
-            duplicateCompleted) {
-            throw std::invalid_argument(
-                "Depth-pyramid validation permits one unique request at a time");
-        }
-        depthPyramidCaptureValidationRequest_ = validationId;
-    }
-
-    void VulkanVertexBackend::recordDepthPyramidCaptureValidationReadback() {
-        constexpr std::string_view PassName =
-            "depth.occlusion-pyramid.validation-readback-hook";
-        if (!depthPyramidCaptureValidationRequest_) {
-            renderGraph_.skipPass(PassName);
-            return;
-        }
-        const uint32_t frameIndex = scheduler.currentFrameIndex();
-        const VulkanImageResource& source = frameTargets.get(frameIndex).depth;
-        if (!source.isValid() || source.format != VK_FORMAT_D32_SFLOAT) {
-            throw std::logic_error(
-                "Depth-pyramid validation requires a live D32 source image");
-        }
-        const uint32_t mipCount = depthPyramidMipCount(
-            {source.extent.width, source.extent.height});
-        uint64_t pyramidTexels = 0;
-        for (uint32_t mip = 0; mip < mipCount; ++mip) {
-            const DepthPyramidExtent mipExtent = depthPyramidMipExtent(
-                {source.extent.width, source.extent.height}, mip);
-            pyramidTexels += static_cast<uint64_t>(mipExtent.width) *
-                mipExtent.height;
-        }
-        const uint64_t sourceTexels = static_cast<uint64_t>(source.extent.width) *
-            source.extent.height;
-        const uint64_t maximumFloatCount =
-            (std::numeric_limits<VkDeviceSize>::max)() / sizeof(float);
-        if (sourceTexels > maximumFloatCount ||
-            pyramidTexels > maximumFloatCount - sourceTexels) {
-            throw std::overflow_error(
-                "Depth-pyramid validation readback exceeds VkDeviceSize");
-        }
-        const VkDeviceSize readbackBytes =
-            (sourceTexels + pyramidTexels) * sizeof(float);
-        PendingDepthPyramidCaptureValidation pending{};
-        pending.validationId = *depthPyramidCaptureValidationRequest_;
-        pending.frameIndex = frameIndex;
-        pending.extent = source.extent;
-        pending.mipCount = mipCount;
-        pending.readback = resourceAllocator.createBuffer(readbackBytes,
-            VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-            true, ProfileMemoryCategory::CaptureReadback);
-        try {
-            pendingDepthPyramidCaptureValidations_.push_back(std::move(pending));
-        }
-        catch (...) {
-            resourceAllocator.destroy(pending.readback);
-            throw;
-        }
-        depthPyramidCaptureValidationRequest_.reset();
-
-        auto range = scheduler.beginGpuRange(
-            "gpu.depth.occlusion-pyramid.validation-readback");
-        renderGraph_.beginPass(currentCmd, PassName);
-        PendingDepthPyramidCaptureValidation& recorded =
-            pendingDepthPyramidCaptureValidations_.back();
-        VulkanCommandList commands(currentCmd);
-        commands.transition(recorded.readback, ResourceState::CopyDestination);
-        VkBufferImageCopy copy{};
-        copy.imageSubresource = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1};
-        copy.imageExtent = {source.extent.width, source.extent.height, 1};
-        vkCmdCopyImageToBuffer(currentCmd, source.image,
-            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, recorded.readback.buffer,
-            1, &copy);
-        VkDeviceSize offset = sourceTexels * sizeof(float);
-        depthPyramid_.recordHistoryReadback(currentCmd,
-            retainedRenderView_, recorded.readback.buffer, offset);
-        scheduler.endGpuRange(range);
-    }
-
-    void VulkanVertexBackend::collectDepthPyramidCaptureValidationsForSlot(
-        uint32_t frameIndex) {
-        size_t pendingIndex = 0;
-        while (pendingIndex < pendingDepthPyramidCaptureValidations_.size()) {
-            PendingDepthPyramidCaptureValidation& pending =
-                pendingDepthPyramidCaptureValidations_[pendingIndex];
-            if (pending.frameIndex != frameIndex) {
-                ++pendingIndex;
-                continue;
-            }
-            if (pending.readback.mapped == nullptr) {
-                resourceAllocator.destroy(pending.readback);
-                throw std::runtime_error(
-                    "Completed depth-pyramid readback is not host mapped");
-            }
-            DepthPyramidCaptureValidationResult result{};
-            result.validationId = pending.validationId;
-            result.extent = {pending.extent.width, pending.extent.height};
-            result.mipCount = pending.mipCount;
-            result.sourceTexelCount = static_cast<uint64_t>(pending.extent.width) *
-                pending.extent.height;
-            std::vector<float> source(static_cast<size_t>(result.sourceTexelCount));
-            std::memcpy(source.data(), pending.readback.mapped,
-                source.size() * sizeof(float));
-            result.invalidSourceTexelCount = static_cast<uint64_t>(
-                std::ranges::count_if(source, [](float value) {
-                    return !std::isfinite(value) || value < 0.0f || value > 1.0f;
-                }));
-            DepthPyramidReference reference;
-            reference.build(result.extent,
-                DeviceDepthConvention::ForwardZeroToOne, source);
-            const auto* bytes = static_cast<const std::byte*>(
-                pending.readback.mapped);
-            size_t byteOffset = source.size() * sizeof(float);
-            bool firstMismatch = true;
-            for (uint32_t mip = 0; mip < pending.mipCount; ++mip) {
-                const std::span<const float> expected = reference.mip(mip);
-                for (size_t texel = 0; texel < expected.size(); ++texel) {
-                    float observed = 0.0f;
-                    std::memcpy(&observed,
-                        bytes + byteOffset + texel * sizeof(float), sizeof(float));
-                    ++result.pyramidTexelCount;
-                    if (std::bit_cast<uint32_t>(observed) !=
-                        std::bit_cast<uint32_t>(expected[texel])) {
-                        ++result.mismatchTexelCount;
-                        if (firstMismatch) {
-                            result.firstMismatchMip = mip;
-                            result.firstMismatchTexel = texel;
-                            firstMismatch = false;
-                        }
-                        if (std::isfinite(observed) &&
-                            std::isfinite(expected[texel])) {
-                            result.maximumAbsoluteError = (std::max)(
-                                result.maximumAbsoluteError,
-                                std::abs(observed - expected[texel]));
-                        }
-                        else {
-                            result.maximumAbsoluteError =
-                                (std::numeric_limits<float>::infinity)();
-                        }
-                    }
-                }
-                byteOffset += expected.size() * sizeof(float);
-            }
-            completedDepthPyramidCaptureValidations_.push_back(result);
-            resourceAllocator.destroy(pending.readback);
-            if (pendingIndex + 1 !=
-                    pendingDepthPyramidCaptureValidations_.size()) {
-                pendingDepthPyramidCaptureValidations_[pendingIndex] =
-                    std::move(pendingDepthPyramidCaptureValidations_.back());
-            }
-            pendingDepthPyramidCaptureValidations_.pop_back();
-        }
+        legacyRequests("Depth-pyramid validation")
+            .requestDepthPyramidCaptureValidation(validationId, frameRecording());
     }
 
     std::vector<DepthPyramidCaptureValidationResult>
     VulkanVertexBackend::collectDepthPyramidCaptureValidations(
         bool waitForPending) {
-        if (frameOpen_) {
-            throw std::logic_error(
-                "Depth-pyramid validation cannot be collected during a frame");
-        }
-        if (waitForPending && !pendingDepthPyramidCaptureValidations_.empty()) {
-            scheduler.waitForAllFrames();
-            for (uint32_t frameIndex = 0;
-                frameIndex < VulkanFrameScheduler::FramesInFlight; ++frameIndex) {
-                depthPyramid_.onFrameFenceCompleted(frameIndex,
-                    scheduler.completedSerial());
-                collectDepthPyramidCaptureValidationsForSlot(frameIndex);
-            }
-        }
-        std::vector<DepthPyramidCaptureValidationResult> result =
-            std::move(completedDepthPyramidCaptureValidations_);
-        completedDepthPyramidCaptureValidations_.clear();
-        return result;
-    }
-
-    void VulkanVertexBackend::destroyPendingFrameCaptures() noexcept {
-        for (PendingFrameCapture& pending : pendingFrameCaptures_) {
-            resourceAllocator.destroy(pending.readback);
-        }
-        pendingFrameCaptures_.clear();
-    }
-
-    void VulkanVertexBackend::destroyPendingOrdinary2CaptureValidations()
-        noexcept {
-        for (PendingOrdinary2CaptureValidation& pending :
-                pendingOrdinary2CaptureValidations_) {
-            resourceAllocator.destroy(pending.readback);
-        }
-        pendingOrdinary2CaptureValidations_.clear();
-    }
-
-    void VulkanVertexBackend::destroyPendingDeepLayeredCaptureValidations()
-        noexcept {
-        for (PendingDeepLayeredCaptureValidation& pending :
-                pendingDeepLayeredCaptureValidations_) {
-            resourceAllocator.destroy(pending.readback);
-        }
-        pendingDeepLayeredCaptureValidations_.clear();
-    }
-
-    void VulkanVertexBackend::destroyPendingDepthPyramidCaptureValidations()
-        noexcept {
-        for (PendingDepthPyramidCaptureValidation& pending :
-                pendingDepthPyramidCaptureValidations_) {
-            resourceAllocator.destroy(pending.readback);
-        }
-        pendingDepthPyramidCaptureValidations_.clear();
+        if (legacyQualificationRequests_ == nullptr) return {};
+        return legacyQualificationRequests_->collectDepthPyramidCaptureValidations(
+            frameOpen_, waitForPending);
     }
 
     void VulkanVertexBackend::submitOutputPass() {
@@ -12889,6 +11399,9 @@ const VkDeviceSize offset = geometry->vertexOffset;
                 }
             }
         }
+        runCaptureHook(VulkanHookPoint::FinalCaptureHook,
+            outputTransport_ == Color::OutputTransport::SdrSrgb
+                ? FrameCapturePoint::FinalSdr : FrameCapturePoint::FinalOutput);
     }
 
     void VulkanVertexBackend::submitUIPass() {

@@ -260,6 +260,14 @@ iridium_add_test(VulkanOutputTransportTests
         SOURCES renderer/VulkanOutputTransportTests.cpp
         LIBS iridium_vulkan)
 
+# M7R R2.7/R2.8 Vulkan qualification extension: readback analyzers, oracle
+# comparisons, hook declarations and factory attachment (no device).
+if(TARGET iridium_qualification)
+    iridium_add_test(VulkanQualificationExtensionTests
+            SOURCES qualification/VulkanQualificationExtensionTests.cpp
+            LIBS iridium_qualification)
+endif()
+
 # Hardware qualification: these create a Vulkan device and load SPIR-V from
 # assets/shaders, so they carry the `vulkan` label and depend on iridium_shaders.
 # Both exceed 5 s in Debug (VulkanVirtualShadowMarkingTests ~95 s), hence `slow`.

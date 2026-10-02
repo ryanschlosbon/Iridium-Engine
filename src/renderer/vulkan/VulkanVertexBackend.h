@@ -33,6 +33,7 @@
 #include "VulkanFrameTargets.h"
 #include "VulkanSceneDescriptors.h"
 #include "VulkanProductionRenderGraph.h"
+#include "VulkanBackendExtension.h"
 #include "VulkanRenderGraphExecutor.h"
 #include "VulkanTransparencyPyramid.h"
 #include "VulkanDepthPyramid.h"
@@ -56,6 +57,7 @@
 #include "renderer/transparency/Ordinary2Atlas.h"
 
 #include "utils/DeletionQueue.h"
+#include "core/BuildFeatures.h"
 
 namespace Iridium {
 
@@ -275,10 +277,6 @@ namespace Iridium {
         uint32_t virtualShadowClipPageSize_ = 128;
         std::array<VkImageView, VulkanFrameScheduler::FramesInFlight> virtualShadowDepthBindings_{};
         std::array<bool, VulkanFrameScheduler::FramesInFlight> virtualShadowReadbackPending_{};
-        bool virtualShadowDepthQualificationOracle_ = false;
-        std::array<VulkanBufferResource, VulkanFrameScheduler::FramesInFlight> virtualShadowDepthReadbacks_{};
-        std::array<VkExtent2D, VulkanFrameScheduler::FramesInFlight> virtualShadowDepthExtents_{};
-        std::array<glm::mat4, VulkanFrameScheduler::FramesInFlight> virtualShadowInverseViewProjections_{};
         void collectVirtualShadowRequests(uint32_t slot);
         EnvironmentLightingHandles environmentLighting_;
         EnvironmentLightingSettings environmentLightingSettings_;
@@ -478,14 +476,12 @@ namespace Iridium {
         std::vector<uint32_t> directionalShadowIndirectPrimitiveBinScratch_;
         std::array<uint32_t, kDirectionalShadowLayerCount>
             directionalShadowIndirectWorkIndices_{};
+        // Device telemetry for one shadow/probe consumer's compaction; the
+        // qualification oracle owns the expected commands (R2.8).
         struct PendingShadowIndirectValidation {
             uint64_t profileFrameId = 0;
-            std::vector<uint32_t> expectedCounts;
             std::vector<uint32_t> countCapacities;
             std::vector<uint32_t> commandOffsets;
-            std::vector<std::vector<GpuSceneIndexedIndirectCommand>>
-                expectedCommands;
-            bool validateExpectedCounts = false;
             bool pending = false;
         };
         std::array<PendingShadowIndirectValidation,
@@ -601,27 +597,19 @@ namespace Iridium {
         std::vector<OpaqueIndirectBin> opaqueIndirectBins_;
         std::vector<GpuSceneIndirectCandidate> opaqueIndirectCandidates_;
         std::vector<DepthPyramidDeviceQuery> depthOcclusionQueries_;
+        // Main-view compaction telemetry. The CPU visibility counts are
+        // production telemetry; GPU LOD and occlusion qualification state is
+        // owned by the oracle (R2.8).
         struct PendingOpaqueIndirectValidation {
             uint64_t profileFrameId = 0;
             std::vector<uint32_t> expectedBinCounts;
             std::vector<uint32_t> binCapacities;
-            std::vector<GpuSceneIndexedIndirectCommand> expectedCommandsByPrimitive;
-            std::vector<uint8_t> seenPrimitives;
-            std::vector<GpuSceneIndexedIndirectCommand> commandReadback;
-            uint64_t baseTriangles = 0;
-            uint64_t oracleTriangles = 0;
-            uint64_t oracleReducedCommands = 0;
-            uint64_t historyValid = 0, historyReset = 0, historyChanged = 0;
             uint64_t occlusionProfileFrameId = 0;
-            uint32_t occlusionQueryCount = 0;
-            uint32_t occlusionProjectionRejected = 0;
             uint32_t gpuSceneOcclusionCandidateCount = 0;
-            std::vector<uint32_t> occlusionProjectedCandidateIndices;
             std::vector<uint32_t> occlusionCandidatePrimitiveIndices;
             std::vector<uint32_t> occlusionCandidateBinIndices;
-            std::vector<uint8_t> occlusionCpuVisibleCandidates;
+            bool lodQualificationOracle = false;
             bool occlusionQualificationOracle = false;
-            bool occlusionPending = false;
             bool gpuSceneOcclusionPending = false;
             bool occlusionRejectionApplied = false;
             bool pending = false;
@@ -687,19 +675,15 @@ namespace Iridium {
         uint64_t weightedOitOrderSeed_ = 0;
         bool forceDirectGBufferReference_ = false;
         bool forceDirectShadowReference_ = false;
-        bool shadowIndirectQualificationOracle_ = false;
         float experimentalShadowLodErrorTexels_ = 0.0f;
         uint32_t shadowLodMaximumLevel_ = 15u;
         bool depthOcclusionQueryEnabled_ = false;
         bool depthOcclusionRejectionEnabled_ = false;
-        bool depthOcclusionQualificationOracle_ = false;
         float experimentalGpuLodErrorPixels_ = 0.0f;
         uint32_t gpuLodMaximumLevel_ = 15u;
         float gpuLodHysteresisFraction_ = 0.15f;
-        bool gpuLodQualificationOracle_ = false;
         float experimentalProbeLodErrorPixels_ = 0.0f;
         uint32_t probeLodMaximumLevel_ = 15u;
-        bool probeLodQualificationOracle_ = false;
         glm::mat4 ordinary2ViewProjection_{ 1.0f };
         bool ordinary2ViewProjectionValid_ = false;
         std::vector<uint32_t> uniqueMaterialIds_;
@@ -729,64 +713,15 @@ namespace Iridium {
         TextureHandle outputTransformLut_{};
         bool finalCaptureHookRecorded_ = false;
 
-        struct PendingFrameCapture {
-            uint64_t captureId = 0;
-            uint32_t frameIndex = 0;
-            VkExtent2D extent{};
-            VkFormat format = VK_FORMAT_UNDEFINED;
-            FrameCapturePoint point = FrameCapturePoint::SceneLinear;
-            VulkanBufferResource readback;
-        };
-        std::vector<PendingFrameCapture> pendingFrameCaptures_;
-        std::vector<FrameCapture> completedFrameCaptures_;
-
-        struct PendingOrdinary2CaptureValidation {
-            uint64_t validationId = 0;
-            uint32_t frameIndex = 0;
-            VkExtent2D extent{};
-            uint32_t expectedDrawCount = 0;
-            uint32_t workItemCount = 0;
-            VulkanBufferResource readback;
-        };
-        std::optional<uint64_t> ordinary2CaptureValidationRequest_;
-        std::vector<PendingOrdinary2CaptureValidation>
-            pendingOrdinary2CaptureValidations_;
-        std::vector<Ordinary2CaptureValidationResult>
-            completedOrdinary2CaptureValidations_;
-        struct PendingDeepLayeredCaptureValidation {
-            uint64_t validationId = 0;
-            uint32_t frameIndex = 0;
-            VkExtent2D extent{};
-            TransparencyQuality quality = TransparencyQuality::Hero4;
-            uint32_t interfaceCount = 0;
-            uint32_t expectedDrawCount = 0;
-            uint32_t sceneResolveDrawCount = 0;
-            uint32_t compatibilityForwardDrawCount = 0;
-            uint32_t workItemCount = 0;
-            VulkanBufferResource readback;
-        };
-        struct DeepLayeredCaptureValidationRequest {
-            uint64_t validationId = 0;
-            TransparencyQuality quality = TransparencyQuality::Hero4;
-        };
-        std::optional<DeepLayeredCaptureValidationRequest>
-            deepLayeredCaptureValidationRequest_;
-        std::vector<PendingDeepLayeredCaptureValidation>
-            pendingDeepLayeredCaptureValidations_;
-        std::vector<DeepLayeredCaptureValidationResult>
-            completedDeepLayeredCaptureValidations_;
-        struct PendingDepthPyramidCaptureValidation {
-            uint64_t validationId = 0;
-            uint32_t frameIndex = 0;
-            VkExtent2D extent{};
-            uint32_t mipCount = 0;
-            VulkanBufferResource readback;
-        };
-        std::optional<uint64_t> depthPyramidCaptureValidationRequest_;
-        std::vector<PendingDepthPyramidCaptureValidation>
-            pendingDepthPyramidCaptureValidations_;
-        std::vector<DepthPyramidCaptureValidationResult>
-            completedDepthPyramidCaptureValidations_;
+        // --- 4. EXTENSIONS (M7R R2.7) ---
+        // Attached by the factory before init(). The backend owns only the
+        // legacy factory's default extension; null pointers are the null
+        // object (no hook passes, no oracle work).
+        std::unique_ptr<IRenderBackendExtension> ownedExtension_;
+        std::vector<IVulkanBackendExtension*> extensions_;
+        IVulkanIndirectOracle* indirectOracle_ = nullptr;
+        IVulkanLegacyQualificationRequests* legacyQualificationRequests_ = nullptr;
+        VulkanGraphHooks graphHooks_ = VulkanGraphHooks::none();
 
         // Private helpers that Application.cpp no longer needs to worry about
         void createUniformBuffers();
@@ -802,28 +737,28 @@ namespace Iridium {
         void createDirectionalShadowIndirectPipeline();
         void createDirectionalShadowIndirectBuffers(uint32_t primitiveCapacity);
         void bindDirectionalShadowIndirectBuffers();
-        void collectDirectionalShadowIndirectValidation(uint32_t frameIndex);
         [[nodiscard]] bool prepareDirectionalShadowIndirectSubmission(
             const ShadowCasterSubmission& shadowCasters,
             std::span<const DirectionalShadowFramePacket> shadows);
         void createSpotShadowIndirectPipeline();
         void createSpotShadowIndirectBuffers(uint32_t primitiveCapacity);
         void bindSpotShadowIndirectBuffers();
-        void collectSpotShadowIndirectValidation(uint32_t frameIndex);
         [[nodiscard]] bool prepareSpotShadowIndirectSubmission(
             const ShadowCasterSubmission& shadowCasters,
             std::span<const SpotShadowFramePacket> shadows);
         void createPointShadowIndirectPipeline();
         void createPointShadowIndirectBuffers(uint32_t primitiveCapacity);
         void bindPointShadowIndirectBuffers();
-        void collectPointShadowIndirectValidation(uint32_t frameIndex);
         [[nodiscard]] bool preparePointShadowIndirectSubmission(
             const ShadowCasterSubmission& shadowCasters,
             std::span<const PointShadowFramePacket> shadows);
         void createReflectionProbeIndirectPipeline();
         void createReflectionProbeIndirectBuffers(uint32_t primitiveCapacity);
         void bindReflectionProbeIndirectBuffers();
-        void collectReflectionProbeIndirectValidation(uint32_t frameIndex);
+        // Device telemetry (+ oracle verdict) for a shadow/probe consumer.
+        void collectShadowIndirectValidation(VulkanIndirectOracleView view,
+            uint32_t frameIndex);
+        void collectShadowIndirectValidations(uint32_t frameIndex);
         [[nodiscard]] bool prepareReflectionProbeIndirectSubmission(
             const ReflectionProbeCasterSubmission& probeCasters,
             std::span<const ReflectionProbeCaptureScheduleEntry> captures);
@@ -924,27 +859,50 @@ namespace Iridium {
         void releaseSampler(uint32_t cacheIndex) noexcept;
         void cleanupSamplerCache() noexcept;
         [[nodiscard]] uint64_t liveSamplerCount() const noexcept;
-        void collectFrameCapturesForSlot(uint32_t frameIndex);
-        void destroyPendingFrameCaptures() noexcept;
-        void recordOrdinary2CaptureValidationReadback(
-            std::span<const Ordinary2CaptureDraw> draws);
-        void recordDeepLayeredCaptureValidationReadback(
+        void recordDeepLayeredValidationHook(
             std::span<const LayeredCaptureDraw> draws,
             TransparencyQuality quality);
-        void collectOrdinary2CaptureValidationsForSlot(uint32_t frameIndex);
-        void collectDeepLayeredCaptureValidationsForSlot(uint32_t frameIndex);
-        void recordDepthPyramidCaptureValidationReadback();
-        void collectDepthPyramidCaptureValidationsForSlot(uint32_t frameIndex);
-        void destroyPendingOrdinary2CaptureValidations() noexcept;
-        void destroyPendingDeepLayeredCaptureValidations() noexcept;
-        void destroyPendingDepthPyramidCaptureValidations() noexcept;
-        [[nodiscard]] static std::optional<FrameCapturePixelFormat>
-            capturePixelFormat(VkFormat format) noexcept;
+        // Extension hooks (R2.7). A pass hook does nothing when undeclared,
+        // skips its pass when no extension wants it, or begins the GPU range
+        // and pass and calls every extension that wants it.
+        [[nodiscard]] bool anyExtensionWants(
+            const VulkanHookContext& context) const;
+        void runPassHook(const VulkanHookContext& context, bool declared,
+            std::string_view passName, const char* gpuRangeName);
+        void notifyHook(const VulkanHookContext& context);
+        // Brackets a capture copy: scene-linear transitions scene.color to
+        // TransferSource and back; final output runs in final-capture-hook.
+        template<typename Record>
+        void recordCaptureCopy(FrameCapturePoint point, Record&& record);
+        void runCaptureHook(VulkanHookPoint point, FrameCapturePoint capturePoint);
+        [[nodiscard]] VulkanCaptureHookPayload captureSource(
+            FrameCapturePoint point);
+        [[nodiscard]] VulkanFrameRecording frameRecording() const noexcept {
+            return { frameOpen_, currentCmd, scheduler.currentFrameIndex() };
+        }
+        [[nodiscard]] VulkanBackendServices backendServices() noexcept;
+        [[nodiscard]] IVulkanLegacyQualificationRequests& legacyRequests(
+            const char* request) const;
+        // Oracle access for expectation-emission sites: null unless this is a
+        // qualification build with an attached oracle enabled for the view.
+        [[nodiscard]] IVulkanIndirectOracle* activeIndirectOracle(
+            VulkanIndirectOracleView view) const noexcept {
+            if constexpr (kQualificationBuild) {
+                if (indirectOracle_ != nullptr && indirectOracle_->enabled(view))
+                    return indirectOracle_;
+            }
+            return nullptr;
+        }
         [[nodiscard]] FrameMemoryProfile memorySnapshot();
 
     public:
         VulkanVertexBackend() = default;
         ~VulkanVertexBackend() override { cleanup(); }
+
+        // Factory-only, before init(). attachExtension does not take
+        // ownership; adoptExtension owns the legacy default extension.
+        void attachExtension(IRenderBackendExtension* extension);
+        void adoptExtension(std::unique_ptr<IRenderBackendExtension> extension);
 
         // --- IRenderBackend Interface Implementation ---
         void init(GLFWwindow* window, const RenderBackendConfig& config) override;
