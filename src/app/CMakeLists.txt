@@ -3,6 +3,11 @@
 add_library(iridium_app STATIC
         Application.cpp
         ApplicationConfig.cpp
+        cli/CliValueParsers.cpp
+        cli/RuntimeOptions.cpp
+        cli/EditorOptions.cpp
+        cli/RendererOptions.cpp
+        cli/QualificationOptions.cpp
 )
 target_link_libraries(iridium_app PUBLIC
         iridium_vulkan

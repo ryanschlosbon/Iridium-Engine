@@ -1,7 +1,9 @@
-# iridium_core: logging, identity/handle PODs (core/types) and small utilities
+# iridium_core: logging, identity/handle PODs (core/types), the command-line
+# option registry (core/cli) and small utilities
 # (src/utils). Bottom of the module DAG; publishes the `src` include root and GLM.
 add_library(iridium_core STATIC
         EngineLog.cpp
+        cli/CliOptionRegistry.cpp
         types/AssetGuid.cpp
         types/SceneEntityUuid.cpp
         ../utils/Sha256.cpp

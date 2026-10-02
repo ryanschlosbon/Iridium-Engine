@@ -16,6 +16,16 @@ iridium_add_test(ApplicationConfigTests
         SOURCES core/ApplicationConfigTests.cpp
         LIBS iridium_app)
 
+iridium_add_test(CliOptionRegistryTests
+        SOURCES core/CliOptionRegistryTests.cpp)
+
+# R2.4 CLI parity: the registry parser against a frozen copy of the 6b000ad
+# parser (FrozenApplicationConfigParser.cpp, test-only). Remove at M7R R2.10.
+iridium_add_test(ApplicationCliParityTests
+        SOURCES core/ApplicationCliParityTests.cpp
+                core/FrozenApplicationConfigParser.cpp
+        LIBS iridium_app)
+
 iridium_add_test(TransformSystemTests
         SOURCES ecs/TransformSystemTests.cpp
         LIBS iridium_scene iridium_vendor_imgui)
