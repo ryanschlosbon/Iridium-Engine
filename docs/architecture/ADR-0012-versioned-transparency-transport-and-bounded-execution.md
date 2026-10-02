@@ -1,9 +1,9 @@
 # ADR-0012: Versioned Transparency Transport and Bounded Execution
 
-- Status: Accepted; M6 implements the decision in sequential slices
+- Status: Accepted; implemented and production-qualified by M6
 - Date: 2026-08-13
 - Accepted: 2026-08-13
-- Last updated: 2026-08-14
+- Last updated: 2026-08-27
 - Owners: Renderer, material compiler, asset cooker, RHI, and editor
 - Refines: ADR-0005; does not supersede its classified-hybrid direction
 
@@ -94,6 +94,23 @@ fence retired.
 `LegacyTwoBucket` is a named comparison mode through qualification. Classified
 execution becomes the production default only after its routing and visual gates
 pass; unsupported per-class work uses the explicit local fallbacks above.
+
+M6.9 completed that accepted cutover after the routing, visual, lifecycle, performance,
+diagnostic, and allocation gates for the classified paths passed. Fresh current-
+schema imports and uninitialized runtime transport records now default to Classified.
+The frozen schema-1 migration and historical current-schema legacy values remain
+readable so existing CookKeys are not invalidated or silently rewritten, but serialized
+execution mode no longer selects production rendering. Artist architecture selection
+is removed. The only comparison control is the explicit
+`--developer-legacy-transparency` runtime option, applied before complete cooked-model
+publication so geometry routing, material variants and feature flags, shader/pass,
+blend, and depth state change as one contract. The default graph omits legacy
+glass-depth/two-bucket resources; they are materialized only for that developer A/B
+mode. The completed production qualification is frozen in the M6 acceptance report;
+the legacy topology remains a post-M6 diagnostic comparison path and is never selected
+as an automatic fallback. A classified packet rejected by a bounded specialist path
+uses one direct compatibility-forward pass rather than reviving the retired glass-depth
+approximation.
 
 ## Consequences
 

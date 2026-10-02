@@ -3,9 +3,9 @@
 ## Header
 
 - **Milestone:** M6 — Hybrid Transparency
-- **Status:** Approved. M6.0-M6.6 are complete; M6.7 is the active slice.
+- **Status:** Complete. M6.0-M6.10 were accepted on 2026-08-27.
 - **Lead:** current M6 milestone-lead task
-- **Last updated:** 2026-08-24
+- **Last updated:** 2026-08-27
 - **Source audit revision:** `b7d10e3f9c8ea263a49f24f0dc11d8a839da1647`
   on `Render-Refactor-for-Modularity`
 - **Dependencies:** accepted M0-M5, including M5.12 reflection-resolution
@@ -1816,7 +1816,7 @@ forward draws, rejects, preparation fallbacks, measured topology changes, profil
 overflows, nesting errors, or dropped frames. M6.6 is complete; importer/product
 schemas and accepted ADRs remain unchanged.
 
-### M6.7 — WeightedOIT approximate workloads — `In Progress`
+### M6.7 — WeightedOIT approximate workloads — `Complete`
 
 - **Likely systems:** OIT graph targets/pipelines/resolve, compiler restrictions,
   fixture particles, profiler/debug.
@@ -1846,7 +1846,185 @@ qualified FP16 envelope, explicit over-envelope rejection, and exact storage. Vu
 resources, routing, fixtures, visible output, and performance qualification remain
 open; default graph memory is unchanged and no schema or ADR changes are required.
 
-### M6.8 — Editor controls, diagnostics, debug views, counters, allocation hardening — `Pending`
+The second foundation slice conditionally materializes the two frame-owned Vulkan
+graph images and introduces backend-neutral `R16_FLOAT` format mapping. When an
+explicit test config requests WeightedOIT, the graph adds exactly one full-resolution
+`RGBA16_FLOAT` accumulation product, one `R16_FLOAT` revealage product, and dormant
+accumulation/resolve hooks after foreground forward and before bloom. Accumulation
+declares opaque depth read-only; resolve samples both products and loads the existing
+scene-linear color target. Frame-context targets acquire both images by stable graph
+name. The production backend still supplies the default-disabled config, so this
+slice changes neither visible pixels nor default graph memory. Automated topology
+tests prove formats, usages, pass order, read-only depth, exact logical storage, and
+the zero-resource disabled case. Active Vulkan render passes, shaders, draw routing,
+fixtures, and performance qualification remain open; schemas and ADRs are unchanged.
+
+The third foundation slice activates content-driven residency and correct queue
+routing. A shared RHI predicate
+identifies only classified `WeightedOIT` packets. Source extraction routes those
+packets beside SortedSurface instead of into the legacy refractive glass queue, and
+startup model inspection excludes them from refraction-pyramid demand. The Vulkan
+backend prewarms the OIT topology for known startup content or enables it on the next
+frame after dynamic demand, retains it for 120 inactive frames, and participates in
+the existing fence-safe publish/restore transaction. Before the active pass landed,
+these packets rendered through deterministic premultiplied sorted fallback and both
+resident OIT graph hooks were explicitly skipped. New counters
+separate requested WeightedOIT work, sorted fallback, and residency. Explicit
+WeightedOIT output therefore changed away from the incorrect glass path; scenes with
+no such materials retain zero OIT bytes and identical visible output.
+
+The fourth M6.7 slice activates Vulkan accumulation and resolve. The shared complex
+material body emits bounded premultiplied AP1 color/weight plus scalar coverage only
+for the dedicated indexed OIT shader. A fixed cull-none pipeline tests opaque depth
+`LESS_OR_EQUAL` without writing it, adds weighted color into `RGBA16F`, and multiplies
+`R16F` revealage by one-minus-coverage. A fullscreen resolve rejects non-finite or
+empty pixels, reconstructs weighted-average radiance, and blends the resulting
+premultiplied operator into scene HDR. Framebuffers and resolve descriptors are owned
+and rebuilt with conditional frame targets; descriptor retirement precedes target
+retirement on cleanup, resize, topology changes, and rollback. Resident classified
+packets no longer execute in SortedSurface; startup prewarm avoids fallback, while
+the first frame of previously unknown dynamic demand remains sorted until next-frame
+residency. The default topology still owns zero OIT bytes.
+
+The fifth M6.7 slice adds the tracked cooked `weighted_oit_particles_v1` fixture: 256
+explicit particles in an 8x8x4 overlap grid, alpha 0.18, and emissive strength 16.
+The first populated Debug run exposed a Vulkan layout error because the shared scene
+set's unreachable refraction bindings fell back to a graph image that aliased the OIT
+color attachment. WeightedOIT remains nonrefractive; its shader now compile-time
+removes refraction transport and those bindings rather than paying for pyramids or a
+new persistent dummy image. The corrected validation run records 256 OIT packets and
+accumulation draws, one resolve, zero sorted/compatibility draws, no refraction or
+layered residency, no validation messages, and no profiler drops. A final-SDR capture
+shows the overlapped tetrahedral field without opaque fallback. A separate
+post-transparency, pre-output PFM readback covers all 921,600 pixels with zero
+nonfinite values. It has 142,884 active pixels (15.504% coverage), reaches linear AP1
+RGB [10.21875, 3.193359375, 0.96875], and therefore confirms finite HDR energy above
+one at the fixture's emissive strength 16. Capture-perturbed timing is excluded.
+
+The sixth M6.7 slice adds an independent tracked emissive-256 boundary fixture rather
+than mutating the emissive-16 baseline. Importer v6 cooks it in 54 ms with no
+diagnostics; the artifact remains classified and contains one material, one primitive,
+four vertices, twelve indices, and 1,168 GPU-upload bytes. Its Vulkan-clean
+scene-linear PFM again has all 921,600 pixels finite, zero nonfinite pixels, identical
+142,884-pixel coverage, and linear AP1 RGB maxima [163.5, 51.09375, 15.5]. No pixel
+reaches the FP16 65,504 limit. Routing remains exactly 256 accumulation draws, one
+resolve, zero sorted or compatibility draws, resident OIT, and no refraction pyramid.
+This closes the emissive-256 finite/saturation boundary; capture timings remain
+explicitly excluded from performance evidence.
+
+The seventh M6.7 slice makes GPU draw-order qualification real instead of inferring it
+from the already sorted input queue. `--weighted-oit-order-seed` is carried through
+the backend-neutral configuration; seed zero is the unchanged production order,
+while nonzero seeds use a deterministic allocation-free coprime affine permutation.
+The profiler exports the exact seed. CPU tests prove 64 distinct 256-packet
+permutations, complete one-to-one packet visitation, finite resolution, and bounded
+error. Sixty-four independent hidden-window Vulkan-validation processes then capture
+the post-transparency scene-linear result at 1280x720. Every process records exact
+256/1/0 accumulation/resolve/fallback routing, zero compatibility draws, no
+refraction pyramid, no validation message, and no profiler overflow. All 64 capture
+hashes are distinct while the 142,884-pixel active mask is identical. Against seed
+zero, the worst result is 0.046875 absolute AP1 (seed 2), 0.001718 RMSE (seed 9),
+0.0078125 p99 absolute error, and 0.4587% relative error (seed 2), within the frozen
+0.0625/0.002/0.5% limits. This closes the draw-order gate.
+
+The eighth M6.7 slice replaces the provisional one-entity/one-packet-per-particle
+path at the two high-overdraw tiers with a bounded backend-neutral instance stream.
+`DrawPacket` uses its existing eight tail bytes for a transform range and remains
+exactly 240 bytes; `submitForwardQueues` publishes the corresponding `glm::mat4`
+span through the RHI. A runtime-only `RenderInstanceBatchComponent` owns local
+transforms and cached aggregate submesh bounds, so the 4,096 and 65,536 fixtures each
+construct one ECS entity and extract one WeightedOIT packet. Vulkan validates ranges,
+uploads at most 4 MiB per frame context, and records one instanced draw. At 65,536,
+Debug-validation extraction falls from 567.681 ms to 0.261 ms and transparent sort
+from 389.941 ms to 0.0009 ms; GPU accumulation remains the intended bottleneck at
+7.447 ms. Both tiers have exact upload/instance counters and zero sorted/capacity
+fallback. The finite scene-linear 65,536 capture remains inside the frozen
+draw-order envelope versus the explicit-packet baseline (0.03125 maximum absolute
+AP1, 0.000348 RMSE, 0.2926% maximum relative). This closes the high-overdraw gate.
+
+The ninth M6.7 slice closes resize and output lifecycle. A populated 65,536-instance
+validation performs 960x540, 1600x900, and restored 1280x720 scene-target rebuilds;
+all three succeed, OIT remains resident, refraction remains absent, and the restored
+scene-linear capture is byte-identical to the pre-resize image. Separate populated
+4,096-instance SDR, scRGB, and HDR10 processes all retain one packet, one draw, exact
+262,144-byte upload, and zero fallback. Requested and effective transports match
+without diagnostics; both HDR PFMs contain 2,764,800 finite values and zero
+nonfinite values. Only five-process native-4K Release acceptance remains open.
+
+The tenth M6.7 slice closes native-4K Release acceptance with five independent
+processes and 50,000 measured frames of the representative 256-particle/four-layer
+field. It records 18,053,612 fragment invocations (about 2.18 fullscreen
+equivalents), exact 256 logical packets and instances, one accumulation draw, one
+resolve, zero sorted/compatibility fallback, and no refraction residency every
+frame. GPU-frame median-of-medians is 3.182048 ms; accumulation is 2.742272 ms and
+resolve 0.020480 ms. Worst process GPU p95 is 4.212288 ms. Graph and live memory are
+identical across all processes, as are 17/5,216-byte steady C++ allocation samples;
+there are no dropped frames or profiler errors. Total GPU remains comfortably below
+the 10 ms target. The provisional per-fullscreen OIT microbudget remains a future
+shader/fill optimization target, while 4,096/65,536 stay explicit stress tiers.
+M6.7 is complete and M6.8 becomes active.
+
+At native 4K, one Release process with 60 warmups and 300 measured frames reports
+4.005 ms CPU, 3.185 ms total GPU, 2.764 ms accumulation, and 0.020 ms resolve medians.
+The graph has 27 resources and 23 passes, requests 902,445,832 bytes, commits
+1,009,105,696 bytes, and retains exact 256/1/0 accumulation/resolve/fallback counts.
+This exceeds the provisional 0.25-0.65 ms budget because the fixture intentionally
+submits 256 independent geometry draws with overlapping closed tetrahedra; it still
+clears the 100 FPS frame target comfortably. The later bounded instance-stream slice
+now makes the 4096/65536-particle tiers representative and closes that gate. The
+later lifecycle and five-process qualification slices close the remaining gates;
+M6.7 is complete.
+
+### M6.8 — Editor controls, diagnostics, debug views, counters, allocation hardening — `Completed`
+
+The first M6.8 slices are active. A backend-neutral diagnostic derivation now maps
+each compiled policy to an execution route, topology state, precise fallback cause,
+explicit/Auto state, and sanitization state. The deterministic material snapshot,
+Material Diagnostics panel, and Asset Browser cooked result all consume that same
+contract. Two viewport/CLI views visualize resolved transparency class and policy
+fallback state. Debug identity travels in reserved per-view bits rather than the
+layered per-draw work slot, so Ordinary2/deep composition and WeightedOIT can expose
+the same view without changing final rendering or draw ABI.
+
+Four deeper viewport/CLI views now expose actual transport state rather than authored
+labels: measured refractive interval, selected scene-pyramid mip/rejection, retained
+layer count, and bounded overflow/saturation. Ordinary2 validation identifies 5,888
+measured/selected/two-interface pixels; Cinematic8 identifies 15,042 eight-interface
+pixels split into 12,572 accepted, 1,820 exact-capacity, and 650 residual-tail pixels.
+That residual count exactly matches independent deep-layer readback. WeightedOIT
+marks 142,884 covered pixels inside its FP16 accumulation envelope and zero saturation
+risk. A latent deep scene-resolve identity-mask mismatch found by these views is fixed.
+The views reuse existing attachments and descriptors and add no steady allocation.
+
+Cooked opaque model primitives now show a disabled compact result and keep detailed
+transparency policy controls collapsed until an artist checks the explicit stable-GUID
+override. Transparent primitives and material assets retain the full workflow, and a
+missing/pending cooked result never hides authoring controls. The Profiler now has a
+dedicated transparency table grouped by routing, refraction, Ordinary2, deep layers,
+Weighted OIT, and legacy A/B work. Nonzero fallback/rejection/overflow evidence is
+highlighted, bounded counter overflow remains visible, byte/millionth units are
+readable, and every active `gpu.transparency.*` range is listed dynamically.
+
+Asset import and transparency-policy settings now use a dedicated backend-neutral
+transaction history instead of borrowing scene transactions. Apply, undo, and redo
+each enqueue a normal asynchronous settings recook; the history cursor moves only
+after the matching catalog result succeeds. Failed jobs preserve the cursor, external
+sidecar divergence is rejected rather than overwritten, and these edits never advance
+or dirty scene-document state. The Asset Browser exposes scoped Undo/Redo controls
+beside Apply. A real temporary glTF test performs apply/undo/redo cooks, verifies the
+persisted settings after each completion, and preserves stable root and primitive
+GUIDs.
+
+The allocation gate is closed on the representative M6 paths. The inherited M6.7
+baseline was 17 C++ allocation calls and 5,216 requested bytes per measured frame.
+Persistent transform and Vulkan shadow-mapping scratch, sorted duplicate/owner
+validation in the local-shadow and reflection-probe schedulers, and static deep-layer
+tile-termination pass identities reduce that result to exactly zero calls and zero
+requested bytes in every one of 96 Release frames: 32 each for Ordinary2,
+Cinematic8, and WeightedOIT after 20 warmups. Capture/readback output work is kept
+outside the steady-frame claim. A separate Vulkan-validation overflow capture retains
+the exact pre-hardening SHA-256 and the same 650 residual-tail pixels with no validation
+messages. No graph resources, descriptors, or final rendering changed.
 
 - **Likely systems:** backend-neutral editor transactions, material diagnostics,
   debug-view enum/shaders, profiler UI/export, frame scratch.
@@ -1862,7 +2040,34 @@ open; default graph memory is unchanged and no schema or ADR changes are require
 - **Complete when:** every class and fallback is authorable/inspectable without Vulkan
   or ImGui leaking into runtime data and allocation gate is resolved.
 
-### M6.9 — Legacy cutover and production qualification — `Pending`
+### M6.9 — Legacy cutover and production qualification — `Complete`
+
+The first cutover slice makes classified hybrid execution the production default for
+fresh current-schema glTF imports and for uninitialized cooked material, model product,
+runtime model, draw-packet, and model-asset records. The frozen schema-1 migration
+continues to select `LegacyTwoBucket`, and an explicit current-schema legacy value is
+still honored as the named comparison path; neither is the new-import default. This
+preserves historical CookKeys and author intent while stopping new assets from entering
+the bridge accidentally. The Asset Browser also selects classified when the field is
+missing.
+
+A real fresh source import writes schema-2 classified settings with ten stable
+subassets, cooks in 19 ms with zero diagnostics, and inspects as a classified five-
+material/five-primitive artifact. A separate Vulkan-validation Ordinary2 run accepts
+one packet and records exact entry, exit, local-composition, and scene-resolve draws.
+GPU readback finds 5,888 paired pixels with no semantic errors, while compatibility
+forward and both legacy bucket counters remain zero. Final rendering code is unchanged.
+The completed cutover moves comparison selection out of serialized artist settings
+and behind an explicitly named developer runtime override. Production no longer owns
+the legacy glass-depth image or two-bucket passes. Final qualification is recorded in
+`docs/milestones/M6-acceptance-report-2026-08-27.md`: Debug and Release pass 71/71;
+classified Vulkan validation is clean across ordinary, deep, OIT, resize, output,
+selection, fallback, capture, and lifecycle paths; the Alfa result is byte-identical
+to the accepted pre-cutover image; and five native-4K Ordinary2 processes complete
+50,000 measured frames at 0.720192 ms GPU median-of-medians with zero retained-frame
+C++ allocations or profiler loss. Separate 10,000-frame Cinematic8 and WeightedOIT
+profiles measure 1.612576 and 2.657440 ms GPU medians. The matched Alfa workload
+measures 5.820864 ms versus the 6.092096 ms M6.0 median.
 
 - **Likely systems:** compatibility path, frozen fixtures/hashes, docs/ADR/roadmap,
   acceptance evidence.
@@ -1877,6 +2082,42 @@ open; default graph memory is unchanged and no schema or ADR changes are require
   automatic production escape hatch.
 - **Complete when:** every M6 acceptance gate passes, dated acceptance report and this
   completion report are final, ADR is accepted, and only then is `ROADMAP.md` updated.
+
+### M6.10 — Editor workflow closeout — `Complete`
+
+This post-qualification slice restores viewport mesh picking and completes the artist
+workflow around transforms, lighting, and model assets. The viewport owns an adaptive
+metric ground grid, a world SI display unit, independent translation/rotation/scale
+snap controls, Ctrl bypass for fine motion, and world/local gizmo space. Snapping is
+applied only while manipulating, so enabling it never rewrites an existing transform.
+At rest the grid lies flat on Iridium's Y-up world XZ plane at `Y=0`. Its optional translation-follow
+mode moves it through the selected pivot and aligns it with the active world/local
+translation axis or plane for the duration of the drag. Frustum-clipped adaptive lines
+reach the visible horizon and fade at glancing view angles without unbounded draw work.
+The Inspector provides component/property search, converts position and light-distance
+presentation through the selected world unit, and exposes unbounded nonnegative light
+values with lux/kilolux and candela/lumen display modes while preserving lux/candela
+runtime storage.
+
+Asset Browser folders can be physically moved into folders from the content grid or
+tree. Between-row tree drops maintain a project-local custom order without changing
+the alphabetical content grid. Expanded models now attach a horizontally scrollable
+thumbnail strip of selectable materials and primitives to the original model card,
+and the Up button is wider. The custom order is editor state under
+`out/editor/asset-browser-folder-order.json`.
+
+The six `ASSET_GUID_DUPLICATE` diagnostics were caused by a tracked benchmark metadata
+snapshot using the discoverable `.iridium.meta` suffix. The snapshot remains tracked
+as `cinematic8_nested_tetrahedra.mixed-deep.metadata-fixture.json`, its manifest
+reference is updated, and catalog inspection reports zero duplicate GUIDs. The M6
+fixture contract prevents the snapshot from becoming a live sidecar again.
+
+- **Architecture:** editor settings remain independent of runtime component data;
+  physical quantities stay in metres/lux/candela and are converted only for display.
+- **Performance:** grid rendering is an ImGui overlay and picking runs only on a click;
+  no render-graph resource, pass, descriptor, or per-frame scene submission changed.
+- **Verification:** complete Debug/Release suites, catalog duplicate scan, and a
+  validation-enabled bounded startup smoke run.
 
 ## Delegation and integration
 
@@ -2011,6 +2252,26 @@ not relaxed after observing a regression without a recorded visual decision.
 | 2026-08-24 | In progress | M6.6 activates conservative 16x16 per-tile early termination at 1/1024. Deep R32 identities retain upward-rounded Q14 transmission plus open-stack state; only useful odd non-final boundaries dispatch (one Hero4, three Cinematic8), and later peels reject terminated tiles before material/texture evaluation. A tracked separated-shell Hero4 fixture proves 7,522 suppressed deeper-interface pixels across 43 occupied tiles, finite local color, exact resolve, zero fallback, and zero semantic/Vulkan errors. The crossing control retains all prior counts with zero false termination. Lifecycle and native-4K qualification remain. |
 | 2026-08-24 | Completed | M6.6 closes with two real 120-frame retire/reactivate cycles for both Hero4 and Cinematic8, corrected full-resolution R32 descriptor aliasing, clean final GPU readbacks, and five native-4K Release processes covering 50,000 measured Cinematic8 frames. GPU-frame median-of-medians is 1.680448 ms and the complete transparency-chain median is 1.276928 ms; graph/total memory and all deep work counters are repeatable with zero actual compatibility draws, rejects, topology events, profiler errors, or dropped frames. M6.7 becomes active. |
 | 2026-08-24 | In progress | M6.7 freezes a backend-neutral WeightedOIT reference with explicit-only nonrefractive eligibility, premultiplied AP1 input, bounded `[1/4096,1/16]` depth/coverage weights, a 4,096-fragment/128-radiance FP16 qualification envelope, weighted-average/revealage resolve, and exact 82,944,000-byte native-4K logical storage per frame context. CPU reference tests pass without graph or visible-rendering changes. Vulkan execution and fixture qualification remain open. |
+| 2026-08-24 | In progress | M6.7 conditionally materializes one full-resolution `RGBA16F` accumulation image and one `R16F` revealage image per frame context, with dormant hooks ordered after foreground transparency and before bloom and opaque depth declared read-only. Stable frame-target acquisition and graph tests cover formats, usages, ordering, exact 82,944,000-byte native-4K storage, and the zero-delta disabled topology. The live backend remains disabled, so visible output and default memory are unchanged; active Vulkan accumulation/resolve remains open. |
+| 2026-08-24 | In progress | M6.7 activates rollback-safe content-driven OIT residency and corrects explicit WeightedOIT routing. Startup content prewarms the two products; dynamic demand enables them next frame and 120 inactive frames retire them. Weighted packets no longer request refraction pyramids or enter legacy glass, instead using deterministic premultiplied sorted fallback while dormant OIT hooks are skipped. New class/work/fallback/residency counters are active. Default scenes retain zero OIT bytes; active Vulkan accumulation/resolve remains open. |
+| 2026-08-24 | In progress | M6.7 activates the Vulkan WeightedOIT path: the shared complex-material body emits bounded weighted AP1 radiance and coverage, `RGBA16F` accumulation blends additively, `R16F` revealage multiplies by one-minus-coverage against read-only opaque depth, and a finite-guarded premultiplied fullscreen resolve publishes into scene HDR. Conditional framebuffers/descriptors follow rollback-safe target lifecycle. Resident packets leave SortedSurface; only first dynamic demand falls back. Debug build and shader compilation pass; draw-order/high-overdraw, HDR, resize, and native-4K qualification remain open. |
+| 2026-08-24 | In progress | M6.7 default-topology conditional-cost evidence passes at native 4K Release: 60 warmups plus 300 measured frames produce 0.922 ms CPU and 0.460 ms GPU medians with zero OIT residency, packets, or accumulation draws and unchanged 25-resource/21-pass graph topology. The run exposed 207 emitted counters exceeding the old 192 bound; capacity is now a fixed 256 with no steady allocation, and the repeated run has zero dropped events, GPU ranges, or counters. Populated OIT visual/performance qualification remains open. |
+| 2026-08-25 | In progress | M6.7 adds a tracked cooked 256-particle emissive-16 overlap fixture. Its first populated run exposed and corrected unreachable refraction descriptors aliasing an active OIT attachment; refraction transport is now compiled out for explicit nonrefractive OIT. Corrected Debug validation records exact 256 accumulation/one resolve/zero fallback draws with no Vulkan or profiler errors and a visible final-SDR capture. A 300-frame native-4K Release baseline measures 4.005 ms CPU, 3.185 ms GPU, 2.764 ms accumulation, and 0.020 ms resolve medians. Larger/permuted/lifecycle acceptance tiers remain open. |
+| 2026-08-25 | In progress | M6.7 closes its HDR and draw-order gates. A separate emissive-256 fixture cooks in 54 ms without diagnostics and produces a finite 163.5-AP1 scene-linear peak with zero FP16-limit pixels. A new seed-zero-preserving, allocation-free OIT permutation control drives 64 independent Vulkan-validation processes; all retain identical coverage and exact 256/1/0 routing, while worst FP16 order error remains 0.046875 absolute AP1, 0.001718 RMSE, and 0.4587% relative inside frozen thresholds. High-overdraw, lifecycle, and multi-process 4K gates remain. |
+| 2026-08-25 | In progress | M6.7 closes the 4,096/65,536 high-overdraw gate with a bounded RHI transform stream and conditional 4 MiB-per-context Vulkan instance buffers. Each tier is one runtime entity, packet, and draw with exact uploads and zero fallback. At 65,536, Debug extraction/sort falls from 567.681/389.941 ms to 0.261/0.0009 ms; the finite scene-linear result remains inside the frozen order-error envelope. Resize/output lifecycle and five-process native-4K Release acceptance remain open. |
+| 2026-08-25 | In progress | M6.7 closes resize/output lifecycle. The populated 65,536 tier survives 960x540 -> 1600x900 -> 1280x720 with three successful graph rebuilds and a byte-identical restored capture. Separate SDR/scRGB/HDR10 processes preserve exact one-packet/one-draw/zero-fallback routing; requested transports are effective without diagnostics and both HDR captures are fully finite. Only five-process native-4K Release acceptance remains. |
+| 2026-08-25 | Completed | M6.7 closes with five native-4K Release processes and 50,000 measured frames of the representative four-layer field. GPU-frame median-of-medians is 3.182048 ms, accumulation 2.742272 ms, and resolve 0.020480 ms; worst process GPU p95 is 4.212288 ms. Every frame has exact 18,053,612 fragment invocations, 256 logical instances, one accumulation draw, one resolve, zero fallback/refraction, identical graph/live memory and 17/5,216-byte steady C++ allocation samples. There are no dropped frames or profiler errors. M6.8 becomes active. |
+| 2026-08-26 | In progress | M6.8 establishes one backend-neutral policy-diagnostics contract for source request, resolved route, topology state, fallback cause, and sanitization, consumed by headless snapshots and both artist panels. New Transparency Class and Transparency Fallback views share per-view transport across opaque, sorted/thin, Ordinary2/deep layered, and WeightedOIT paths without reusing layered work identity. Vulkan validation captures show exactly 5,888 orange LayeredGlass pixels, 142,884 purple WeightedOIT pixels, and 5,888 magenta invalid-topology fallback pixels; Ordinary2 readback and fallback validation both pass. Remaining M6.8 work is the deeper interval/mip/layer/overflow views, counter/profiler presentation, transaction qualification, and inherited allocation debt. |
+| 2026-08-26 | In progress | M6.8 makes opaque-primitive transparency authoring evidence-driven: a cooked opaque result collapses disabled policy controls by default, one stable-GUID override checkbox reveals the complete policy, and missing cook evidence never hides controls. The Profiler now groups all M6 transparency counters, highlights active bounded fallback/rejection/overflow signals, preserves visible profiler-overflow evidence, formats byte/millionth units, and dynamically lists all active M6 GPU ranges. Focused presentation tests pass; deeper debug views, transaction/persistence qualification, and inherited allocation debt remain. |
+| 2026-08-26 | In progress | M6.8 adds a backend-neutral asset-settings transaction service independent of scene state. Apply/undo/redo each enqueue the standard asynchronous recook, successful matching catalog completion alone advances history, failures preserve the cursor, and external settings divergence clears unsafe history instead of overwriting it. Asset Browser exposes scoped history controls. A real headless glTF policy apply/undo/redo test verifies persisted sidecars and stable root/primitive GUIDs. Transaction/persistence qualification is closed; deeper debug views and inherited steady-allocation debt remain. |
+| 2026-08-26 | In progress | M6.8 validates measured interval, selected pyramid mip, retained-layer, and overflow/saturation views across Ordinary2, Cinematic8, and WeightedOIT. Exact pixel evidence is 5,888 Ordinary2 interval/mip/two-interface pixels, 15,042 Cinematic8 eight-interface pixels split into 12,572 accepted, 1,820 exact-capacity, and 650 residual-tail pixels, plus 142,884 WeightedOIT pixels inside the FP16 envelope and zero saturation risk. Deep readback independently reports the same 650 residual pixels. The work fixes a latent deep scene-resolve identity mask and adds no images, descriptors, or steady allocations. Only inherited steady-frame allocation debt remains in M6.8. |
+| 2026-08-26 | Completed | M6.8 closes its final allocation gate. Persistent frame scratch, sorted owner validation, and static deep-pass identities reduce the inherited 17-call/5,216-byte baseline to exact zero calls and zero requested bytes across 96 measured Release frames spanning Ordinary2, Cinematic8, and WeightedOIT. A separate Vulkan-validation overflow capture is byte-identical to the pre-hardening capture, preserves the same 650 residual-tail pixels, and reports no validation messages. Graph resources, descriptors, and rendering are unchanged; M6.9 becomes active. |
+| 2026-08-26 | In progress | M6.9 begins production cutover by making classified hybrid execution the default for fresh schema-2 glTF imports and all uninitialized runtime transport records. Schema-1 migration and explicit legacy settings remain nondefault comparison paths. A real fresh import/cook completes in 19 ms without diagnostics and publishes a classified artifact. Vulkan validation routes the Ordinary2 control through exact one-draw entry/exit/composition/resolve stages with 5,888 paired pixels and zero compatibility-forward or legacy-bucket work. The explicit developer runtime override, production graph resource removal, and final qualification remain. |
+| 2026-08-26 | In progress | M6.9 moves the retired two-bucket renderer behind the sole explicit `--developer-legacy-transparency` A/B option and removes architecture selection from artist import controls. Complete cooked-model publication now forces one coherent runtime mode across geometry routing, material variants/feature flags, shaders, passes, blend, and depth state while preserving historical settings and CookKeys. Vulkan-validation runs of the same classified Ordinary2 artifact prove the default 1/1/1/1 entry/exit/composition/resolve route with 5,888 paired pixels and the override's one legacy depth/forward route with zero Ordinary2 work; distinct final-SDR hashes confirm a real switch. Default-graph legacy-resource removal and final qualification remain. |
+| 2026-08-26 | In progress | M6.9 removes `depth.glass` and all four background/foreground two-bucket passes from the production graph while conditionally retaining the complete old topology for `--developer-legacy-transparency`. The base graph falls from 22/27/20 to 19/26/19 passes/logical resources/physical slots. The active 1280x720 Ordinary2 graph saves exactly 7,372,800 requested and 7,864,320 committed bytes, remains Vulkan-clean, preserves 5,888 exact paired pixels, and is byte-identical to the pre-cutover capture. The invalid open-shell control records one direct classified compatibility-forward draw with zero glass-depth draws or legacy buckets. Only final matched visual/lifecycle/output/memory/allocation/native-4K qualification remains. |
+| 2026-08-27 | Completed | M6.9 and M6 close after final production qualification. Debug/Release pass 71/71. Classified validation is clean across Ordinary2 resize/selection, two Cinematic8 retire/reactivate cycles, 65,536-instance WeightedOIT resize, SDR/scRGB/HDR10, invalid fallback, and matched Alfa capture. Five native-4K Ordinary2 Release processes cover 50,000 measured frames at 0.720192 ms GPU median-of-medians and 0.403456 ms complete-transparency median with identical memory/counters, zero fallback/legacy work, zero profiler loss, and zero retained-frame C++ allocations. Separate 10,000-frame Cinematic8 and OIT profiles measure 1.612576 and 2.657440 ms. The Alfa result is byte-identical to the accepted pre-cutover image and measures 5.820864 ms GPU versus 6.092096 ms at M6.0. `docs/milestones/M6-acceptance-report-2026-08-27.md` freezes the decision and remaining deferrals. |
+| 2026-08-27 | Completed | M6.10 closes the editor workflow: exclusive viewport picking, adaptive metric grid and world-unit display, independent transform snapping with Ctrl bypass, world/local gizmos, searchable components, uncapped convertible light controls, folder nesting/custom tree order, and the attached model-subasset strip. The false benchmark sidecar is preserved under a non-discoverable fixture name; 1,042 catalog records produce zero duplicate-GUID matches. Debug/Release pass 71/71 and a bounded validation startup is clean. Rendering architecture and accepted image/performance evidence are unchanged. |
+| 2026-08-27 | Completed | The M6.10 grid is hardened into an infinite procedural renderer overlay. A compact backend-neutral plane/spacing record feeds the output transform, which reconstructs the plane per pixel, selects decade spacing from screen derivatives, fades toward the horizon, and rejects fragments behind the existing opaque depth. The finite 258-line ImGui overlay is removed. Benchmarks, asset previews, and renderer captures explicitly disable the grid; no image or pass is added. Debug/Release pass 71/71 and a 20-frame active-grid Debug Vulkan-validation run is clean. A 500-frame 1280x720 Release profile measures 0.013312 ms output-transform median with the grid versus 0.006144 ms disabled, a roughly 0.007 ms cost, with zero dropped frames. |
 
 ## Approved owner decisions
 
@@ -2035,8 +2296,12 @@ not relaxed after observing a regression without a recorded visual decision.
 
 ## Completion report
 
-Not started. At acceptance this section will record changed behavior/interfaces,
-Debug/Release and validation results, matched scene/final visual decisions, CPU/GPU
-and memory deltas against the corrected M6.0 baseline, allocation/overflow results,
-remaining risks/deferrals, final ADR status, the dated M6 acceptance-report path, and
-the post-gate `ROADMAP.md` update.
+M6 is complete. Classified hybrid is the production architecture, the legacy renderer
+is available only through its explicit developer A/B flag, and the production graph
+has no legacy glass-depth or two-bucket resources. All class, topology, transport,
+bounded-layer, OIT, diagnostics, artist authoring, import transaction, lifecycle,
+output, validation, performance, memory, and allocation gates pass. ADR-0012 remains
+accepted without supersession. The complete behavior/interface list, Debug/Release
+results, exact captures and hashes, M6.0 performance/memory comparison, remaining
+risks, and deferrals are recorded in
+`docs/milestones/M6-acceptance-report-2026-08-27.md`; `ROADMAP.md` marks M6 complete.

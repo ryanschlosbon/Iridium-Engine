@@ -141,8 +141,11 @@ Windows desktop HDR state does not silently override Iridium's requested transpo
 SDR remains the safe default; scRGB is the preferred Windows desktop HDR transport
 and HDR10 remains the explicit Rec.2100/PQ option. Neither requires exclusive
 fullscreen. Because the swapchain format/color space and HDR10 graph topology differ,
-transport changes require renderer restart; paper-white and peak values remain
-visible in SDR but are clearly labeled inactive there.
+this record originally required transport changes to restart the renderer;
+paper-white and peak values remain visible in SDR but are clearly labeled inactive
+there. ADR-0013 supersedes only that restart restriction with a frame-boundary
+presentation-resource rebuild while retaining this record's color and composition
+contracts.
 
 ## Rejected alternatives
 
