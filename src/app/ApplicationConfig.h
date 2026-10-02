@@ -23,6 +23,8 @@ namespace Iridium {
 #else
         bool enableValidation = true;
 #endif
+        // Khronos synchronization validation (implies enableValidation; M7R R3).
+        bool enableSynchronizationValidation = false;
         bool enableCpuProfiling = false;
         bool enableGpuProfiling = false;
         bool enableTransparentPipelineStatistics = false;

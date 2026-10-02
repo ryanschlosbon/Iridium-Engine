@@ -38,6 +38,12 @@ namespace Iridium::AppCli {
             [&c] { c.enableValidation = true; });
         addSwitch(registry, owner, "--no-validation", "Disable Vulkan validation",
             [&c] { c.enableValidation = false; });
+        addSwitch(registry, owner, "--validation-sync",
+            "Enable Vulkan validation with synchronization hazard checks",
+            [&c] {
+                c.enableValidation = true;
+                c.enableSynchronizationValidation = true;
+            });
         addSwitch(registry, owner, "--profile-cpu", "Collect bounded CPU frame telemetry",
             [&c] { c.enableCpuProfiling = true; });
         addSwitch(registry, owner, "--profile-gpu", "Collect delayed Vulkan GPU timestamps",

@@ -14,6 +14,8 @@ namespace Iridium {
 
     struct RenderBackendConfig {
         bool enableValidation = false;
+        // Adds Khronos synchronization validation when enableValidation is set.
+        bool enableSynchronizationValidation = false;
         // M7.6 build-only qualification: no history consumption or occlusion rejection.
         bool experimentalDepthPyramid = false;
         // M7.8 live depth-demand qualification; virtual raster/sampling stay off.

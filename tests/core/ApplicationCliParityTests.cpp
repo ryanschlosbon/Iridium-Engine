@@ -79,6 +79,7 @@ namespace {
         };
         const auto flag = [&](const char* name, bool value) { field(name, value ? "1" : "0"); };
         flag("enableValidation", c.enableValidation);
+        flag("enableSynchronizationValidation", c.enableSynchronizationValidation);
         flag("enableCpuProfiling", c.enableCpuProfiling);
         flag("enableGpuProfiling", c.enableGpuProfiling);
         flag("enableTransparentPipelineStatistics", c.enableTransparentPipelineStatistics);
@@ -278,6 +279,8 @@ namespace {
             // --- runtime (13) ---
             { "--validation", R, {}, {}, [](C& c) { c.enableValidation = true; }, {}, {} },
             { "--no-validation", R, {}, {}, [](C& c) { c.enableValidation = false; }, {}, {} },
+            { "--validation-sync", R, {}, {}, [](C& c) {
+                c.enableValidation = true; c.enableSynchronizationValidation = true; }, {}, {} },
             { "--profile-cpu", R, {}, {}, [](C& c) { c.enableCpuProfiling = true; }, {}, {} },
             { "--profile-gpu", R, {}, {}, [](C& c) {
                 c.enableCpuProfiling = true; c.enableGpuProfiling = true; }, {}, {} },
@@ -566,8 +569,8 @@ namespace {
         Cli::CliOptionRegistry registry;
         registerEngineOptions(registry, scratch);
 
-        CHECK(table.size() == 82);
-        CHECK(registry.options().size() == 82);
+        CHECK(table.size() == 83);
+        CHECK(registry.options().size() == 83);
         std::set<std::string_view> names;
         std::map<std::string_view, size_t> ownerCounts;
         for (const FlagCase& row : table) {
@@ -607,7 +610,7 @@ namespace {
         for (const Cli::CliOption& option : registry.options()) {
             CHECK_MSG(names.contains(option.name), option.name);
         }
-        CHECK(ownerCounts[R] == 13);
+        CHECK(ownerCounts[R] == 14);
         CHECK(ownerCounts[E] == 4);
         CHECK(ownerCounts[G] == 29);
         CHECK(ownerCounts[Q] == 36);
@@ -661,7 +664,7 @@ namespace {
     bool testUsageParity() {
         const std::string usage = engineUsage();
         CHECK(usage.starts_with("Usage: IridiumEngine [options]\n"));
-        CHECK(optionLines(usage).size() == 82);
+        CHECK(optionLines(usage).size() == 83);
         // Groups appear in owner order: runtime, editor, renderer, qualification.
         const size_t runtime = usage.find("runtime options:");
         const size_t editor = usage.find("editor options:");
@@ -680,7 +683,7 @@ namespace {
         AppCli::registerRuntimeOptions(registry, config);
         AppCli::registerEditorOptions(registry, config);
         AppCli::registerRendererOptions(registry, config);
-        CHECK(registry.options().size() == 46);
+        CHECK(registry.options().size() == 47);
         try {
             registry.parse(Args{ "--benchmark", "material_lab_v1" });
             CHECK(false);
@@ -736,7 +739,7 @@ int main() {
     };
 
     constexpr TestCase tests[] = {
-        { "Per-flag table (82 flags)", testFlagTable },
+        { "Per-flag table (83 flags)", testFlagTable },
         { "Aliases and removed flags", testAliasesAndRemovedFlags },
         { "Usage parity", testUsageParity },
         { "Registry without qualification", testRegistryWithoutQualification },

@@ -59,8 +59,11 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(VkDebugUtilsMessageSeverityF
 
 // Constructor
 VkContext::VkContext(bool enableValidation, bool enableDebugUtils,
-	bool enablePipelineStatistics, GLFWwindow* window)
+	bool enablePipelineStatistics, GLFWwindow* window,
+	bool enableSynchronizationValidation)
 	: enableValidationLayers(enableValidation),
+	  synchronizationValidationRequested(
+		  enableValidation && enableSynchronizationValidation),
 	  requestDebugUtils(enableValidation || enableDebugUtils),
 	  pipelineStatisticsRequested(enablePipelineStatistics) {
 	// Initialize the library
@@ -164,9 +167,20 @@ void VkContext::createInstance() {
 	createInfo.ppEnabledExtensionNames = extensions.data();
 
 	// Layers
+	// Synchronization validation (M7R R3) is an explicit layer feature: it is
+	// expensive and only requested with --validation-sync.
+	const VkValidationFeatureEnableEXT synchronizationValidation =
+		VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT;
+	VkValidationFeaturesEXT validationFeatures{
+		VK_STRUCTURE_TYPE_VALIDATION_FEATURES_EXT };
+	validationFeatures.enabledValidationFeatureCount = 1;
+	validationFeatures.pEnabledValidationFeatures = &synchronizationValidation;
 	if (enableValidationLayers) {
 		createInfo.enabledLayerCount = static_cast<uint32_t>(validationLayers.size());
 		createInfo.ppEnabledLayerNames = validationLayers.data();
+		if (synchronizationValidationRequested) {
+			createInfo.pNext = &validationFeatures;
+		}
 	}
 	else {
 		createInfo.enabledLayerCount = 0;
@@ -403,8 +417,11 @@ void VkContext::createLogicalDevice() {
 		drawIndirectFirstInstanceEnabled ? VK_TRUE : VK_FALSE;
 	maxDrawIndirectCount = physicalDeviceProperties.limits.maxDrawIndirectCount;
 
+    VkPhysicalDeviceVulkan13Features supportedVulkan13{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES };
     VkPhysicalDeviceVulkan12Features supportedVulkan12{
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES };
+    supportedVulkan12.pNext = &supportedVulkan13;
     VkPhysicalDeviceFeatures2 supportedFeatures2{
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2 };
     supportedFeatures2.pNext = &supportedVulkan12;
@@ -442,6 +459,13 @@ void VkContext::createLogicalDevice() {
     }
 	if (drawIndirectCountEnabled)
 		enabledVulkan12.drawIndirectCount = VK_TRUE;
+	// M7R R3: synchronization2 is enabled when available (core in Vulkan 1.3);
+	// barrier recording migrates to vkCmdPipelineBarrier2 incrementally.
+	synchronization2Enabled = supportedVulkan13.synchronization2 == VK_TRUE;
+	VkPhysicalDeviceVulkan13Features enabledVulkan13{
+		VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES };
+	enabledVulkan13.synchronization2 = synchronization2Enabled ? VK_TRUE : VK_FALSE;
+	enabledVulkan12.pNext = synchronization2Enabled ? &enabledVulkan13 : nullptr;
 
     // 3. Extensions Setup (THE MAC COMPATIBILITY FIX)
     // Start with the Swapchain extension, which is required on all platforms.
@@ -478,8 +502,8 @@ void VkContext::createLogicalDevice() {
     createInfo.pQueueCreateInfos = queueCreateInfos.data();
 
     createInfo.pEnabledFeatures = &deviceFeatures;
-    createInfo.pNext = descriptorIndexingEnabled || drawIndirectCountEnabled
-		? &enabledVulkan12 : nullptr;
+    createInfo.pNext = descriptorIndexingEnabled || drawIndirectCountEnabled ||
+		synchronization2Enabled ? &enabledVulkan12 : nullptr;
 
     // Pass the dynamically created list of extensions
     createInfo.enabledExtensionCount = static_cast<uint32_t>(deviceExtensions.size());

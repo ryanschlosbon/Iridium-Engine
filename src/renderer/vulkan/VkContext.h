@@ -33,7 +33,8 @@ class VkContext {
 public:
 	// The Constructor takes the Window pointer so we can create the Surface
 	VkContext(bool enableValidation, bool enableDebugUtils,
-		bool enablePipelineStatistics, GLFWwindow* window);
+		bool enablePipelineStatistics, GLFWwindow* window,
+		bool enableSynchronizationValidation = false);
 	~VkContext();
 
 	// Getters: The rest of the engine will need these handles later.
@@ -58,6 +59,8 @@ public:
 		return drawIndirectFirstInstanceEnabled;
 	}
 	bool hasDrawIndirectCount() const { return drawIndirectCountEnabled; }
+	// Vulkan 1.3 synchronization2 (vkCmdPipelineBarrier2); M7R R3 enables it.
+	bool hasSynchronization2() const { return synchronization2Enabled; }
 	uint32_t getMaxDrawIndirectCount() const { return maxDrawIndirectCount; }
 	uint32_t getMaxIndexedTextureViews() const { return maxIndexedTextureViews; }
 	uint32_t getMaxIndexedSamplers() const { return maxIndexedSamplers; }
@@ -109,6 +112,8 @@ private:
 	bool multiDrawIndirectEnabled = false;
 	bool drawIndirectFirstInstanceEnabled = false;
 	bool drawIndirectCountEnabled = false;
+	bool synchronization2Enabled = false;
+	bool synchronizationValidationRequested = false;
 	uint32_t maxDrawIndirectCount = 0;
 	uint32_t maxIndexedTextureViews = 0;
 	uint32_t maxIndexedSamplers = 0;

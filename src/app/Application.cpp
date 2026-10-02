@@ -343,6 +343,8 @@ namespace Iridium {
         const AppRenderRouting& routing = policy_.routing;
         renderBackend->init(window, {
             .enableValidation = config_.enableValidation,
+            .enableSynchronizationValidation =
+                config_.enableSynchronizationValidation,
             .experimentalDepthPyramid = config_.experimentalDepthPyramid,
             .experimentalVirtualShadowResources =
                 config_.experimentalVirtualShadowResources,

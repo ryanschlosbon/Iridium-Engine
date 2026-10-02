@@ -328,7 +328,8 @@ namespace Iridium {
         }
         vkContext = std::make_unique<VkContext>(config.enableValidation,
             config.enableGpuProfiling,
-            config.enableTransparentPipelineStatistics, window);
+            config.enableTransparentPipelineStatistics, window,
+            config.enableValidation && config.enableSynchronizationValidation);
         if (!vkContext->hasDescriptorIndexing()) {
             throw std::runtime_error(
                 "Indexed material descriptors are required for the production path, "

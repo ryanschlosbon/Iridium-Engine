@@ -7,6 +7,8 @@ param(
     [Parameter(Mandatory)] [string] $Label,
     [string] $Exe = 'out/build/x64-release/bin/IridiumEngine.exe',
     [switch] $Validation,
+    # Synchronization validation (implies -Validation); 'hazard detected' lines are counted separately.
+    [switch] $SyncValidation,
     [string[]] $Only = @(),
     [string[]] $Points = @('scene', 'final-sdr'),
     [string[]] $ExtraArgs = @()
@@ -43,7 +45,7 @@ try {
                 '--warmup-frames', '12', '--frame-limit', '6',
                 '--capture-frame', '4', '--capture-directory', $captureDir,
                 '--capture-point', $point, '--require-capture-signal',
-                $(if ($Validation) { '--validation' } else { '--no-validation' })
+                $(if ($SyncValidation) { '--validation-sync' } elseif ($Validation) { '--validation' } else { '--no-validation' })
             ) + $fixture.Args + $ExtraArgs
             if ($fixture.Environment) {
                 $arguments += @('--cooked-environment-artifact', (Join-Path $root (Get-M7RModelArtifact $root $fixture.Environment)))
@@ -52,6 +54,7 @@ try {
             $exit = Invoke-M7REngine $exePath $arguments $log
             $seconds = ((Get-Date) - $started).TotalSeconds
             $validationLines = @(Select-String -Path $log -Pattern '^\[Validation\]:' -ErrorAction SilentlyContinue).Count
+            $syncHazards = @(Select-String -Path $log -Pattern 'hazard detected' -ErrorAction SilentlyContinue).Count
             $sidecar = Get-ChildItem $captureDir -Filter '*.json' | Select-Object -First 1
             $sha = $null; $stem = $null
             if ($sidecar) {
@@ -61,11 +64,11 @@ try {
             }
             $results += [pscustomobject]@{
                 key = $fixture.Key; fixture = $fixture.Id; point = $point; sha256 = $sha
-                exit = $exit; validationMessages = $validationLines; seconds = [math]::Round($seconds, 1)
+                exit = $exit; validationMessages = $validationLines; syncHazards = $syncHazards; seconds = [math]::Round($seconds, 1)
                 stem = $stem; args = ($fixture.Args -join ' ')
             }
             $status = if ($exit -eq 0 -and $sha) { 'ok' } else { 'FAILED' }
-            Write-Host ("{0,-10} {1,-9} {2} {3} validation={4}" -f $fixture.Key, $point, $status, $(if ($sha) { $sha.Substring(0, 16) } else { '-' }), $validationLines)
+            Write-Host ("{0,-10} {1,-9} {2} {3} validation={4} sync={5}" -f $fixture.Key, $point, $status, $(if ($sha) { $sha.Substring(0, 16) } else { '-' }), $validationLines, $syncHazards)
         }
     }
 
@@ -74,7 +77,7 @@ try {
     $exeSha = (Get-FileHash $exePath -Algorithm SHA256).Hash.ToLowerInvariant()
     $report = [pscustomobject]@{
         label = $Label; commit = $git; dirtyTrackedFiles = $dirty; executable = $Exe; executableSha256 = $exeSha
-        validation = [bool]$Validation; extraArgs = $ExtraArgs; captured = (Get-Date).ToString('o'); results = $results
+        validation = [bool]($Validation -or $SyncValidation); syncValidation = [bool]$SyncValidation; extraArgs = $ExtraArgs; captured = (Get-Date).ToString('o'); results = $results
     }
     $report | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 (Join-Path $outDir 'hashes.json')
 
