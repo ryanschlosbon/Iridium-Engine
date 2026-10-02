@@ -32,6 +32,19 @@ add_compile_definitions(PROJECT_ROOT_DIR="${CMAKE_CURRENT_SOURCE_DIR}/")
 include(IridiumHelpers)
 include(CTest)
 
+# Qualification harness (M7R R2): oracles, readback validation, frame captures,
+# validators, deterministic benchmark scenes and run reports. OFF builds a
+# shipping-shaped engine without that code; C++ sees kQualificationBuild.
+option(IRIDIUM_QUALIFICATION
+    "Build the qualification harness (oracles, captures, validators, benchmarks)" ON)
+if(IRIDIUM_QUALIFICATION)
+    set(IRIDIUM_QUALIFICATION_BUILD true)
+else()
+    set(IRIDIUM_QUALIFICATION_BUILD false)
+endif()
+configure_file(cmake/BuildFeatures.h.in
+    "${CMAKE_BINARY_DIR}/generated/core/BuildFeatures.h" @ONLY)
+
 add_subdirectory(src)
 add_subdirectory(tools)
 if(BUILD_TESTING)

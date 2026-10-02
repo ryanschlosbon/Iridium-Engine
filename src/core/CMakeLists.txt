@@ -6,7 +6,8 @@ add_library(iridium_core STATIC
         types/SceneEntityUuid.cpp
         ../utils/Sha256.cpp
 )
-target_include_directories(iridium_core PUBLIC ${PROJECT_SOURCE_DIR}/src)
+target_include_directories(iridium_core PUBLIC ${PROJECT_SOURCE_DIR}/src
+        ${CMAKE_BINARY_DIR}/generated)
 target_link_libraries(iridium_core PUBLIC glm::glm Threads::Threads)
 if(WIN32)
     # AssetGuid/SceneEntityUuid generation and Sha256 use the CNG API.

@@ -20,6 +20,7 @@
 #   iridium_editor        editor/**                                        -> scene, assets, rhi, platform, profiling, imgui
 #   iridium_app           app/* except main.cpp                            -> everything above
 #   IridiumEngine         app/main.cpp                                     -> app, allocation profile, shaders
+#   iridium_qualification qualification/** (IRIDIUM_QUALIFICATION=ON only)   -> app, vulkan, capture, benchmarks
 #
 # Vendor code (src/vendor) is compiled once into iridium_vendor_imgui,
 # iridium_vendor_gltf and iridium_vendor_stb.
@@ -37,3 +38,4 @@ add_subdirectory(assets)
 add_subdirectory(scene)
 add_subdirectory(editor)
 add_subdirectory(app)
+add_subdirectory(qualification)
