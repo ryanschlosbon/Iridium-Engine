@@ -1,0 +1,121 @@
+{
+  "schema_version": 1,
+  "fixtures": [
+    {
+      "id": "m7_shadow_lod_warm_motion_v1",
+      "revision": 1,
+      "required": true,
+      "source_asset": "models/alfa_romeo/alfa_romeo.gltf",
+      "environment": {
+        "kind": "procedural_constant",
+        "constant_linear_rgb": [0.012, 0.016, 0.024]
+      },
+      "camera": {
+        "id": "m7_shadow_lod_warm_motion_camera_v1",
+        "position": [18.0, 10.0, 26.0],
+        "target": [0.0, 0.7, 0.0],
+        "up": [0.0, 1.0, 0.0],
+        "vertical_fov_degrees": 45.0,
+        "near": 0.1,
+        "far": 180.0
+      },
+      "scene_factory": {
+        "kind": "instanced_grid",
+        "instance_grid": [4, 1, 2],
+        "instance_spacing": [7.0, 0.0, 9.0],
+        "object_motion": {
+          "enabled": true,
+          "amplitude": 0.15,
+          "period_frames": 120
+        }
+      },
+      "lights": [
+        {
+          "type": "directional",
+          "position": [0.0, 0.0, 0.0],
+          "rotation_degrees": [45.0, 25.0, 0.0],
+          "color_linear_rec709": [1.0, 0.96, 0.9],
+          "illuminance_lux": 65000.0,
+          "range_meters": 1.0,
+          "casts_shadows": true,
+          "shadow_quality": "ultra",
+          "priority": 3
+        },
+        {
+          "type": "spot",
+          "position": [-18.0, 18.0, 22.0],
+          "rotation_degrees": [32.35, 140.71, 0.0],
+          "color_linear_rec709": [1.0, 0.72, 0.5],
+          "luminous_intensity_candela": 220000.0,
+          "range_meters": 70.0,
+          "source_radius_meters": 0.18,
+          "inner_cone_degrees": 30.0,
+          "outer_cone_degrees": 54.0,
+          "casts_shadows": true,
+          "shadow_quality": "high",
+          "priority": 2
+        },
+        {
+          "type": "spot",
+          "position": [18.0, 14.0, -18.0],
+          "rotation_degrees": [28.70, -45.0, 0.0],
+          "color_linear_rec709": [0.38, 0.56, 1.0],
+          "luminous_intensity_candela": 180000.0,
+          "range_meters": 65.0,
+          "source_radius_meters": 0.16,
+          "inner_cone_degrees": 28.0,
+          "outer_cone_degrees": 52.0,
+          "casts_shadows": true,
+          "shadow_quality": "high",
+          "priority": 2
+        },
+        {
+          "type": "point",
+          "position": [-10.0, 5.0, 0.0],
+          "rotation_degrees": [0.0, 0.0, 0.0],
+          "color_linear_rec709": [1.0, 0.32, 0.16],
+          "luminous_intensity_candela": 70000.0,
+          "range_meters": 42.0,
+          "source_radius_meters": 0.22,
+          "casts_shadows": true,
+          "shadow_quality": "high",
+          "priority": 1
+        },
+        {
+          "type": "point",
+          "position": [10.0, 5.0, 0.0],
+          "rotation_degrees": [0.0, 0.0, 0.0],
+          "color_linear_rec709": [0.18, 0.36, 1.0],
+          "luminous_intensity_candela": 70000.0,
+          "range_meters": 42.0,
+          "source_radius_meters": 0.22,
+          "casts_shadows": true,
+          "shadow_quality": "high",
+          "priority": 1
+        }
+      ],
+      "output_label": "m7_shadow_lod_warm_motion",
+      "warmup_frames": 120,
+      "measured_frames": 600,
+      "content_files": [
+        {
+          "path": "models/alfa_romeo/alfa_romeo.gltf",
+          "sha256": "96f80eb8b302219aaec343920431877386cebb0ea5bf1a4a6df6e97b38456816"
+        },
+        {
+          "path": "models/alfa_romeo/alfa_romeo.gltf.iridium.meta",
+          "sha256": "4102702841eb79a375961f1ed13683fbdb54cf1c2f90f60d79c59a572ec5d169"
+        }
+      ],
+      "expected_behavior": [
+        "Moving dense LOD-chain geometry continuously refreshes directional, spotlight, and point-cube shadow consumers after warmup.",
+        "The shared shadow-texel threshold independently selects geometry for every conventional shadow consumer without borrowing the main-view LOD.",
+        "Validation reports exact device/oracle command agreement with zero overflow while matched LOD0 and candidate captures bound visible error."
+      ],
+      "unavailable_capabilities": [
+        "transparent shadows",
+        "virtual shadow maps"
+      ]
+    }
+  ]
+}

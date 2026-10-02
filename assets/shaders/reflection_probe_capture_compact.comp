@@ -1,0 +1,168 @@
+#version 450
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(std140, set = 0, binding = 0) uniform CaptureFaceData {
+    mat4 worldToClip;
+    mat4 clipToWorld;
+    vec4 capturePositionNear;
+    uvec4 metadata;
+} capture;
+
+struct Transform { vec4 row0; vec4 row1; vec4 row2; };
+struct Instance {
+    vec4 worldBoundsSphere; vec4 worldBoundsMin; vec4 worldBoundsMax;
+    uvec4 references; uvec4 state;
+};
+struct Primitive { uvec4 binding; uvec4 state; uvec4 revisions; };
+struct Geometry {
+    vec4 localBoundsSphere; vec4 localBoundsMin; vec4 localBoundsMax;
+    uvec4 draw; uvec4 storage; uvec4 state;
+};
+struct Candidate {
+    uint primitiveIndex; uint binIndex; uint commandBase; uint commandCapacity;
+    uint maximumLod; uint historySlot; uint historyTokenLow; uint historyTokenHigh;
+};
+struct IndexedCommand {
+    uint indexCount; uint instanceCount; uint firstIndex;
+    int vertexOffset; uint firstInstance;
+};
+
+layout(std430, set = 1, binding = 0) readonly buffer Transforms {
+    Transform values[];
+} transforms;
+layout(std430, set = 1, binding = 1) readonly buffer Instances {
+    Instance values[];
+} instances;
+layout(std430, set = 1, binding = 2) readonly buffer Primitives {
+    Primitive values[];
+} primitives;
+layout(std430, set = 1, binding = 3) readonly buffer Geometries {
+    Geometry values[];
+} geometries;
+layout(std430, set = 2, binding = 0) readonly buffer Candidates {
+    Candidate values[];
+} candidates;
+layout(std430, set = 2, binding = 1) writeonly buffer Commands {
+    IndexedCommand values[];
+} commands;
+layout(std430, set = 2, binding = 2) buffer Counts {
+    uint values[];
+} counts;
+
+layout(push_constant) uniform Parameters {
+    uint candidateCount;
+    uint transformCount;
+    uint instanceCount;
+    uint primitiveCount;
+    uint geometryCount;
+    uint excludedInstanceIndex;
+    uint countBase;
+    uint commandBase;
+    float lodErrorPixels;
+    uint reserved;
+} parameters;
+
+bool finiteValue(float value) { return !isnan(value) && !isinf(value); }
+bool finite3(vec3 value) {
+    return finiteValue(value.x) && finiteValue(value.y) && finiteValue(value.z);
+}
+
+bool visible(Instance instance) {
+    vec3 center = instance.worldBoundsSphere.xyz;
+    float radius = instance.worldBoundsSphere.w;
+    if (!finite3(center) || !finiteValue(radius) || radius < 0.0)
+        return true;
+    vec4 row0 = vec4(capture.worldToClip[0][0],
+        capture.worldToClip[1][0], capture.worldToClip[2][0],
+        capture.worldToClip[3][0]);
+    vec4 row1 = vec4(capture.worldToClip[0][1],
+        capture.worldToClip[1][1], capture.worldToClip[2][1],
+        capture.worldToClip[3][1]);
+    vec4 row2 = vec4(capture.worldToClip[0][2],
+        capture.worldToClip[1][2], capture.worldToClip[2][2],
+        capture.worldToClip[3][2]);
+    vec4 row3 = vec4(capture.worldToClip[0][3],
+        capture.worldToClip[1][3], capture.worldToClip[2][3],
+        capture.worldToClip[3][3]);
+    vec4 planes[6] = vec4[6](row3 + row0, row3 - row0,
+        row3 + row1, row3 - row1, row2, row3 - row2);
+    vec4 homogeneousCenter = vec4(center, 1.0);
+    for (uint index = 0u; index < 6u; ++index) {
+        float normalLength = length(planes[index].xyz);
+        if (!finiteValue(normalLength) || normalLength <= 1.0e-8)
+            return true;
+        if (dot(planes[index], homogeneousCenter) <
+            -radius * normalLength) return false;
+    }
+    return true;
+}
+
+uint selectedGeometry(uint baseIndex, Instance instance, uint maximumLod) {
+    if (maximumLod == 0u || !finiteValue(parameters.lodErrorPixels) ||
+        parameters.lodErrorPixels <= 0.0) return baseIndex;
+    Geometry base = geometries.values[baseIndex];
+    float localRadius = base.localBoundsSphere.w;
+    float worldRadius = instance.worldBoundsSphere.w;
+    if (!finiteValue(localRadius) || localRadius <= 0.0 ||
+        !finiteValue(worldRadius) || worldRadius <= 0.0 ||
+        base.localBoundsMin.w != 0.0 || base.localBoundsMax.w != 0.0 ||
+        !finite3(instance.worldBoundsSphere.xyz) ||
+        !finite3(capture.capturePositionNear.xyz)) return baseIndex;
+    float distanceToBounds = length(instance.worldBoundsSphere.xyz -
+        capture.capturePositionNear.xyz) - worldRadius;
+    float worldScale = worldRadius / localRadius;
+    if (!finiteValue(distanceToBounds) || distanceToBounds <= 0.0 ||
+        !finiteValue(worldScale) || worldScale <= 0.0) return baseIndex;
+
+    uint selected = baseIndex;
+    uint current = baseIndex;
+    float previousError = 0.0;
+    uint previousCount = base.draw.y;
+    for (uint lod = 1u; lod <= min(maximumLod, 15u); ++lod) {
+        uint next = geometries.values[current].state.z;
+        if (next == 0xffffffffu) break;
+        if (next >= parameters.geometryCount) return baseIndex;
+        Geometry child = geometries.values[next];
+        float error = child.localBoundsMin.w;
+        if (!finiteValue(error) || error < previousError ||
+            child.localBoundsMax.w != float(lod) ||
+            child.draw.w != base.draw.w || child.storage.z != base.storage.z ||
+            child.draw.y == 0u || child.draw.y % 3u != 0u ||
+            child.draw.y >= previousCount) return baseIndex;
+        // All six 90-degree faces share this radial displacement estimate.
+        float pixelError = error * worldScale *
+            float(capture.metadata.z) * 0.5 / distanceToBounds;
+        if (finiteValue(pixelError) &&
+            pixelError <= parameters.lodErrorPixels) selected = next;
+        previousError = error;
+        previousCount = child.draw.y;
+        current = next;
+    }
+    return selected;
+}
+
+void main() {
+    uint candidateIndex = gl_GlobalInvocationID.x;
+    if (candidateIndex >= parameters.candidateCount) return;
+    Candidate candidate = candidates.values[candidateIndex];
+    if (candidate.primitiveIndex >= parameters.primitiveCount) return;
+    Primitive primitive = primitives.values[candidate.primitiveIndex];
+    if (primitive.binding.x >= parameters.instanceCount ||
+        primitive.binding.y >= parameters.geometryCount ||
+        primitive.binding.x == parameters.excludedInstanceIndex) return;
+    Instance instance = instances.values[primitive.binding.x];
+    if (instance.references.x >= parameters.transformCount ||
+        (instance.state.z & 1u) == 0u ||
+        (instance.state.w & 8u) == 0u ||
+        (primitive.state.w & 8u) == 0u || !visible(instance)) return;
+    uint commandIndex = atomicAdd(
+        counts.values[parameters.countBase + candidate.binIndex], 1u);
+    if (commandIndex >= candidate.commandCapacity) return;
+    uint geometryIndex = selectedGeometry(primitive.binding.y, instance,
+        candidate.maximumLod);
+    Geometry geometry = geometries.values[geometryIndex];
+    commands.values[parameters.commandBase + candidate.commandBase +
+        commandIndex] = IndexedCommand(geometry.draw.y, 1u,
+            geometry.draw.x, int(geometry.draw.z), candidate.primitiveIndex);
+}

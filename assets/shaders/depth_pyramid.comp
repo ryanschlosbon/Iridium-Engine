@@ -1,0 +1,30 @@
+#version 450
+
+// Each descriptor exposes exactly one source/output mip. Mip zero uses the
+// sampled device-depth image; equal source/output extents perform sanitizing copy.
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0) uniform sampler2D sourceDepth;
+layout(r32f, set = 0, binding = 1) uniform writeonly image2D outputDepth;
+layout(push_constant) uniform DepthPyramidPush { uint reverseDepth; } push;
+
+void main() {
+    uvec2 pixel = gl_GlobalInvocationID.xy;
+    uvec2 outputSize = uvec2(imageSize(outputDepth));
+    if (any(greaterThanEqual(pixel, outputSize))) return;
+    uvec2 sourceSize = uvec2(textureSize(sourceDepth, 0));
+    // Match the CPU oracle's integer partition at EVERY level. In particular,
+    // odd edges cannot be dropped by a fixed 2x2 reduction.
+    uvec2 first = pixel * sourceSize / outputSize;
+    uvec2 end = (pixel + uvec2(1)) * sourceSize / outputSize;
+    float farDepth = push.reverseDepth != 0u ? 0.0 : 1.0;
+    float reduced = 1.0 - farDepth;
+    for (uint y = first.y; y < end.y; ++y) {
+        for (uint x = first.x; x < end.x; ++x) {
+            float depth = texelFetch(sourceDepth, ivec2(x, y), 0).r;
+            if (isnan(depth) || isinf(depth) || depth < 0.0 || depth > 1.0)
+                depth = farDepth;
+            reduced = push.reverseDepth != 0u ? min(reduced, depth) : max(reduced, depth);
+        }
+    }
+    imageStore(outputDepth, ivec2(pixel), vec4(reduced));
+}

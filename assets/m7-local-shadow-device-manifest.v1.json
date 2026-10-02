@@ -1,0 +1,87 @@
+{
+  "schema_version": 1,
+  "fixtures": [
+    {
+      "id": "spot_shadow_contact_v1",
+      "revision": 2,
+      "required": true,
+      "source_asset": "benchmarks/m5/directional-shadow-contact.gltf",
+      "environment": {
+        "kind": "procedural_constant",
+        "constant_linear_rgb": [0.005, 0.005, 0.005]
+      },
+      "camera": {
+        "id": "m7_spot_device_contact_front_v1",
+        "position": [0.0, 0.0, 10.0],
+        "target": [0.0, 0.0, 0.0],
+        "up": [0.0, 1.0, 0.0],
+        "vertical_fov_degrees": 45.0,
+        "near": 0.1,
+        "far": 100.0
+      },
+      "scene_factory": {
+        "kind": "instanced_grid",
+        "instance_grid": [3, 1, 1],
+        "instance_spacing": [3.0, 0.0, 0.0]
+      },
+      "output_label": "m7_spot_shadow_device_commands",
+      "warmup_frames": 0,
+      "measured_frames": 1,
+      "content_files": [
+        {
+          "path": "benchmarks/m5/directional-shadow-contact.gltf",
+          "sha256": "d1c8cb68508d8e2b43ab1bc6639d0fadffce7683429c8d2129d6c764faa9bc3e"
+        }
+      ],
+      "expected_behavior": [
+        "The refreshed spot tile compacts the independent light-view caster set into bounded indirect bins.",
+        "GPU-scene transforms and material identities preserve the direct reference image.",
+        "Device counts match the CPU clip-volume oracle without overflow."
+      ],
+      "unavailable_capabilities": [
+        "transparent shadows"
+      ]
+    },
+    {
+      "id": "point_shadow_contact_v1",
+      "revision": 2,
+      "required": true,
+      "source_asset": "benchmarks/m5/directional-shadow-contact.gltf",
+      "environment": {
+        "kind": "procedural_constant",
+        "constant_linear_rgb": [0.005, 0.005, 0.005]
+      },
+      "camera": {
+        "id": "m7_point_device_contact_front_v1",
+        "position": [0.0, 0.0, 10.0],
+        "target": [0.0, 0.0, 0.0],
+        "up": [0.0, 1.0, 0.0],
+        "vertical_fov_degrees": 45.0,
+        "near": 0.1,
+        "far": 100.0
+      },
+      "scene_factory": {
+        "kind": "instanced_grid",
+        "instance_grid": [3, 1, 1],
+        "instance_spacing": [3.0, 0.0, 0.0]
+      },
+      "output_label": "m7_point_shadow_device_commands",
+      "warmup_frames": 0,
+      "measured_frames": 1,
+      "content_files": [
+        {
+          "path": "benchmarks/m5/directional-shadow-contact.gltf",
+          "sha256": "d1c8cb68508d8e2b43ab1bc6639d0fadffce7683429c8d2129d6c764faa9bc3e"
+        }
+      ],
+      "expected_behavior": [
+        "All refreshed point-cube faces independently compact their conservative caster sets.",
+        "Cube-face GPU-scene transforms and material identities preserve the direct reference image.",
+        "Every device bin count matches the CPU clip-volume oracle without overflow."
+      ],
+      "unavailable_capabilities": [
+        "transparent shadows"
+      ]
+    }
+  ]
+}

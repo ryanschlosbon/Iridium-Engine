@@ -1,0 +1,112 @@
+#version 450
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform sampler2D depthPyramid;
+
+struct Query {
+    uvec4 rectangle; // Base-mip minimum XY, exclusive maximum XY.
+    vec2 depth;      // Nearest device depth, conservative bias.
+    uvec2 reserved;
+};
+
+struct Result {
+    uvec4 metadata;  // ABI, selected mip, sampled texels, tested.
+    float farthestOccluderDepth;
+    uint occluded;
+    uvec2 reserved;
+};
+
+layout(std430, set = 0, binding = 1) readonly buffer Queries {
+    Query values[];
+} queries;
+
+layout(std430, set = 0, binding = 2) writeonly buffer Results {
+    Result values[];
+} results;
+
+layout(push_constant) uniform Parameters {
+    uint queryCount;
+    uint reverseDepth;
+    uint abiVersion;
+} parameters;
+
+uint proportionalCeil(uint coordinate, uint targetExtent, uint sourceExtent) {
+    // All live extents are <= 65535. Splitting quotient/remainder keeps the
+    // rounded numerator within uint32 even at the maximum supported extent.
+    uint quotient = coordinate / sourceExtent;
+    uint remainder = coordinate % sourceExtent;
+    return quotient * targetExtent +
+        (remainder * targetExtent + sourceExtent - 1u) / sourceExtent;
+}
+
+bool finiteValue(float value) {
+    return !isnan(value) && !isinf(value);
+}
+
+void main() {
+    uint index = gl_GlobalInvocationID.x;
+    if (index >= parameters.queryCount) return;
+
+    Query query = queries.values[index];
+    uvec2 baseExtent = uvec2(textureSize(depthPyramid, 0));
+    Result result;
+    result.metadata = uvec4(parameters.abiVersion, 0u, 0u, 0u);
+    result.farthestOccluderDepth = parameters.reverseDepth != 0u ? 0.0 : 1.0;
+    result.occluded = 0u;
+    result.reserved = uvec2(0u);
+
+    if (any(equal(baseExtent, uvec2(0u))) ||
+        query.rectangle.x >= query.rectangle.z ||
+        query.rectangle.y >= query.rectangle.w ||
+        query.rectangle.z > baseExtent.x || query.rectangle.w > baseExtent.y ||
+        !finiteValue(query.depth.x) || query.depth.x < 0.0 || query.depth.x > 1.0 ||
+        !finiteValue(query.depth.y) || query.depth.y < 0.0) {
+        results.values[index] = result;
+        return;
+    }
+
+    uint firstX = query.rectangle.x;
+    uint firstY = query.rectangle.y;
+    uint lastX = query.rectangle.z - 1u;
+    uint lastY = query.rectangle.w - 1u;
+    uvec2 selectedExtent = baseExtent;
+    uint selectedMip = 0u;
+    uint mipCount = uint(textureQueryLevels(depthPyramid));
+    for (uint mip = 0u; mip < mipCount; ++mip) {
+        uvec2 candidateExtent = uvec2(textureSize(depthPyramid, int(mip)));
+        if (mip != 0u) {
+            firstX = proportionalCeil(firstX + 1u, candidateExtent.x,
+                selectedExtent.x) - 1u;
+            firstY = proportionalCeil(firstY + 1u, candidateExtent.y,
+                selectedExtent.y) - 1u;
+            lastX = proportionalCeil(lastX + 1u, candidateExtent.x,
+                selectedExtent.x) - 1u;
+            lastY = proportionalCeil(lastY + 1u, candidateExtent.y,
+                selectedExtent.y) - 1u;
+        }
+        selectedMip = mip;
+        selectedExtent = candidateExtent;
+        if (lastX - firstX < 2u && lastY - firstY < 2u) break;
+    }
+
+    float sampled = parameters.reverseDepth != 0u ? 1.0 : 0.0;
+    uint sampledTexels = 0u;
+    for (uint y = firstY; y <= lastY; ++y) {
+        for (uint x = firstX; x <= lastX; ++x) {
+            float value = texelFetch(depthPyramid, ivec2(x, y),
+                int(selectedMip)).r;
+            sampled = parameters.reverseDepth != 0u
+                ? min(sampled, value) : max(sampled, value);
+            ++sampledTexels;
+        }
+    }
+
+    result.metadata = uvec4(parameters.abiVersion, selectedMip,
+        sampledTexels, sampledTexels != 0u ? 1u : 0u);
+    result.farthestOccluderDepth = sampled;
+    result.occluded = parameters.reverseDepth != 0u
+        ? (query.depth.x < sampled - query.depth.y ? 1u : 0u)
+        : (query.depth.x > sampled + query.depth.y ? 1u : 0u);
+    results.values[index] = result;
+}

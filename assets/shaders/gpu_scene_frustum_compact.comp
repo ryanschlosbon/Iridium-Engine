@@ -1,0 +1,322 @@
+#version 450
+
+#ifndef IRIDIUM_GPU_SCENE_OCCLUSION
+#define IRIDIUM_GPU_SCENE_OCCLUSION 0
+#endif
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform UniformBufferObject {
+    mat4 model; mat4 view; mat4 proj; mat4 inverseView;
+    mat4 inverseProjection; vec4 cameraPosition; vec4 depthRange;
+    uvec4 renderInfo; vec4 worldUnits;
+} ubo;
+
+struct Transform { vec4 row0; vec4 row1; vec4 row2; };
+struct Instance {
+    vec4 worldBoundsSphere; vec4 worldBoundsMin; vec4 worldBoundsMax;
+    uvec4 references; uvec4 state;
+};
+struct Primitive { uvec4 binding; uvec4 state; uvec4 revisions; };
+struct Geometry {
+    vec4 localBoundsSphere; vec4 localBoundsMin; vec4 localBoundsMax;
+    uvec4 draw; uvec4 storage; uvec4 state;
+};
+struct Candidate {
+    uint primitiveIndex; uint binIndex; uint commandBase; uint commandCapacity;
+    uint maximumLod; uint historySlot; uint historyTokenLow; uint historyTokenHigh;
+};
+struct IndexedCommand {
+    uint indexCount; uint instanceCount; uint firstIndex;
+    int vertexOffset; uint firstInstance;
+};
+#if IRIDIUM_GPU_SCENE_OCCLUSION
+struct GpuSceneDepthResult {
+    uvec4 metadata; // ABI, selected mip, sampled texels, tested.
+    float farthestOccluderDepth;
+    uint occluded;
+    uvec2 reserved; // Projection rejection, primitive index.
+};
+#endif
+struct PixelErrorProjection {
+    vec2 viewport;
+    vec2 maximumAbsClip;
+    vec2 xyLength;
+    float minimumW;
+    float minimumZ;
+    float minimumWMinusZ;
+    float wLength;
+    float zLength;
+    float wMinusZLength;
+    uint valid;
+};
+
+layout(std430, set = 1, binding = 0) readonly buffer Transforms {
+    Transform values[];
+} transforms;
+layout(std430, set = 1, binding = 1) readonly buffer Instances {
+    Instance values[];
+} instances;
+layout(std430, set = 1, binding = 2) readonly buffer Primitives {
+    Primitive values[];
+} primitives;
+layout(std430, set = 1, binding = 3) readonly buffer Geometries {
+    Geometry values[];
+} geometries;
+layout(std430, set = 2, binding = 0) readonly buffer Candidates {
+    Candidate values[];
+} candidates;
+layout(std430, set = 2, binding = 1) writeonly buffer Commands {
+    IndexedCommand values[];
+} commands;
+layout(std430, set = 2, binding = 2) buffer Counts {
+    uint values[];
+} counts;
+// One main-view table shared by consecutive queue submissions. Host tokens
+// encode stable primitive generation and invalidation, never selected LOD.
+layout(std430, set = 2, binding = 3) buffer LodHistory {
+    uvec4 values[]; // token low/high, selected ordinal, last view frame
+} lodHistory;
+#if IRIDIUM_GPU_SCENE_OCCLUSION
+layout(std430, set = 2, binding = 4) writeonly buffer OcclusionResults {
+    GpuSceneDepthResult values[];
+} occlusionResults;
+layout(set = 2, binding = 5) uniform sampler2D depthPyramid;
+#endif
+
+layout(push_constant) uniform Parameters {
+    uint candidateCount;
+    uint transformCount;
+    uint instanceCount;
+    uint primitiveCount;
+    uint geometryCount;
+    float lodErrorPixels;
+    uint historyCapacity;
+    uint viewFrame;
+    float hysteresisFraction;
+    uint occlusionEnabled;
+    uint occlusionResultEnabled;
+} parameters;
+
+const uint DepthPyramidAbiVersion = 2u;
+
+#if IRIDIUM_GPU_SCENE_OCCLUSION
+#include "include/depth_pyramid_gpu_scene_query.glsl"
+#endif
+
+bool finiteValue(float value) { return !isnan(value) && !isinf(value); }
+bool finite3(vec3 value) {
+    return finiteValue(value.x) && finiteValue(value.y) &&
+        finiteValue(value.z);
+}
+bool finite4(vec4 value) {
+    return finiteValue(value.x) && finiteValue(value.y) &&
+        finiteValue(value.z) && finiteValue(value.w);
+}
+
+vec3 transformPoint(Transform transform, vec3 point) {
+    return vec3(dot(transform.row0.xyz, point) + transform.row0.w,
+        dot(transform.row1.xyz, point) + transform.row1.w,
+        dot(transform.row2.xyz, point) + transform.row2.w);
+}
+
+bool visible(uint primitiveIndex) {
+    if (primitiveIndex >= parameters.primitiveCount) return true;
+    Primitive primitive = primitives.values[primitiveIndex];
+    if (primitive.binding.x >= parameters.instanceCount ||
+        primitive.binding.y >= parameters.geometryCount) return true;
+    Instance instance = instances.values[primitive.binding.x];
+    if (instance.references.x >= parameters.transformCount) return true;
+    Geometry geometry = geometries.values[primitive.binding.y];
+    vec3 minimum = geometry.localBoundsMin.xyz;
+    vec3 maximum = geometry.localBoundsMax.xyz;
+    if (any(greaterThan(minimum, maximum)) ||
+        !finite3(minimum) || !finite3(maximum)) return true;
+
+    Transform transform = transforms.values[instance.references.x];
+    mat4 viewProjection = ubo.proj * ubo.view;
+    vec4 clips[8];
+    for (uint corner = 0u; corner < 8u; ++corner) {
+        vec3 local = vec3((corner & 1u) != 0u ? maximum.x : minimum.x,
+            (corner & 2u) != 0u ? maximum.y : minimum.y,
+            (corner & 4u) != 0u ? maximum.z : minimum.z);
+        clips[corner] = viewProjection * vec4(transformPoint(transform, local), 1.0);
+        if (!finite4(clips[corner])) return true;
+    }
+    for (uint plane = 0u; plane < 6u; ++plane) {
+        bool allOutside = true;
+        for (uint corner = 0u; corner < 8u; ++corner) {
+            vec4 clip = clips[corner];
+            bool outside = plane == 0u ? clip.x < -clip.w :
+                plane == 1u ? clip.x > clip.w :
+                plane == 2u ? clip.y < -clip.w :
+                plane == 3u ? clip.y > clip.w :
+                plane == 4u ? clip.z < 0.0 : clip.z > clip.w;
+            allOutside = allOutside && outside;
+        }
+        if (allOutside) return false;
+    }
+    return true;
+}
+
+// The base bounds and clip transform are invariant across one primitive's LOD
+// chain. Compute their projection once rather than repeating the eight-corner
+// transform and matrix norms for every child level.
+PixelErrorProjection projectPixelError(Geometry base, mat4 clipFromLocal) {
+    PixelErrorProjection projection;
+    projection.valid = 0u;
+    projection.viewport = vec2(ubo.renderInfo.xy);
+    vec3 minimum = base.localBoundsMin.xyz;
+    vec3 maximum = base.localBoundsMax.xyz;
+    if (any(lessThanEqual(projection.viewport, vec2(0))) ||
+        !finite3(minimum) || !finite3(maximum) ||
+        any(greaterThan(minimum, maximum))) return projection;
+    float invalid = uintBitsToFloat(0x7f800000u);
+    float minimumW = invalid;
+    float minimumZ = invalid;
+    float minimumWMinusZ = invalid;
+    vec2 maximumAbsClip = vec2(0);
+    for (uint corner = 0u; corner < 8u; ++corner) {
+        vec4 clip = clipFromLocal * vec4(
+            (corner & 1u) != 0u ? maximum.x : minimum.x,
+            (corner & 2u) != 0u ? maximum.y : minimum.y,
+            (corner & 4u) != 0u ? maximum.z : minimum.z, 1.0);
+        if (!finite4(clip)) return projection;
+        minimumW = min(minimumW, clip.w);
+        minimumZ = min(minimumZ, clip.z);
+        minimumWMinusZ = min(minimumWMinusZ, clip.w - clip.z);
+        maximumAbsClip = max(maximumAbsClip, abs(clip.xy));
+    }
+    projection.minimumW = minimumW;
+    projection.minimumZ = minimumZ;
+    projection.minimumWMinusZ = minimumWMinusZ;
+    projection.maximumAbsClip = maximumAbsClip;
+    projection.wLength = length(vec3(
+        clipFromLocal[0].w, clipFromLocal[1].w, clipFromLocal[2].w));
+    projection.zLength = length(vec3(
+        clipFromLocal[0].z, clipFromLocal[1].z, clipFromLocal[2].z));
+    projection.wMinusZLength = length(vec3(clipFromLocal[0].w - clipFromLocal[0].z,
+        clipFromLocal[1].w - clipFromLocal[1].z, clipFromLocal[2].w - clipFromLocal[2].z));
+    projection.xyLength = vec2(
+        length(vec3(clipFromLocal[0].x, clipFromLocal[1].x, clipFromLocal[2].x)),
+        length(vec3(clipFromLocal[0].y, clipFromLocal[1].y, clipFromLocal[2].y)));
+    projection.valid = finiteValue(minimumW) && minimumW > 0.0 ? 1u : 0u;
+    return projection;
+}
+
+// Mirrors boundGpuSceneLodPixelError; bounds the rational projection of an
+// object-space error ball, including perspective depth changes and off-axis XY.
+float pixelError(PixelErrorProjection projection, float error) {
+    float invalid = uintBitsToFloat(0x7f800000u);
+    if (projection.valid == 0u || !finiteValue(error) || error < 0.0) return invalid;
+    float denominator = projection.minimumW - error * projection.wLength;
+    if (!finiteValue(denominator) || denominator <= 0.0) return invalid;
+    float zMargin = projection.minimumZ - error * projection.zLength;
+    float wMinusZMargin = projection.minimumWMinusZ -
+        error * projection.wMinusZLength;
+    if (!finiteValue(zMargin) || zMargin <= 0.0 ||
+        !finiteValue(wMinusZMargin) || wMinusZMargin <= 0.0) return invalid;
+    float bound = length(error * (projection.xyLength +
+        projection.maximumAbsClip / projection.minimumW * projection.wLength) /
+        denominator * projection.viewport * 0.5) * 1.0001;
+    return finiteValue(bound) ? bound : invalid;
+}
+
+uint selectedGeometry(uint baseIndex, Transform transform, uint maximumLod, uint previousLod) {
+    if (maximumLod == 0u || !finiteValue(parameters.lodErrorPixels) ||
+        parameters.lodErrorPixels <= 0.0) return baseIndex;
+    Geometry base = geometries.values[baseIndex];
+    if (base.localBoundsMin.w != 0.0 || base.localBoundsMax.w != 0.0 ||
+        !finiteValue(parameters.hysteresisFraction) || parameters.hysteresisFraction < 0.0 ||
+        parameters.hysteresisFraction > 0.5) return baseIndex;
+    mat4 world = mat4(
+        vec4(transform.row0.x, transform.row1.x, transform.row2.x, 0),
+        vec4(transform.row0.y, transform.row1.y, transform.row2.y, 0),
+        vec4(transform.row0.z, transform.row1.z, transform.row2.z, 0),
+        vec4(transform.row0.w, transform.row1.w, transform.row2.w, 1));
+    mat4 clipFromLocal = ubo.proj * ubo.view * world;
+    PixelErrorProjection errorProjection = projectPixelError(base, clipFromLocal);
+    uint selected = baseIndex;
+    uint current = baseIndex;
+    float previousError = 0.0;
+    uint previousCount = base.draw.y;
+    for (uint lod = 1u; lod <= min(maximumLod, 15u); ++lod) {
+        uint next = geometries.values[current].state.z;
+        if (next == 0xffffffffu) break;
+        if (next >= parameters.geometryCount) return baseIndex;
+        Geometry child = geometries.values[next];
+        float error = child.localBoundsMin.w;
+        if (!finiteValue(error) || error < previousError || child.localBoundsMax.w != float(lod) ||
+            child.draw.w != base.draw.w || child.storage.z != base.storage.z ||
+            child.draw.y == 0u || child.draw.y % 3u != 0u || child.draw.y >= previousCount) return baseIndex;
+        float threshold = previousLod != 0xffffffffu && lod > previousLod
+            ? parameters.lodErrorPixels * (1.0 - parameters.hysteresisFraction) : parameters.lodErrorPixels;
+        if (pixelError(errorProjection, error) <= threshold) selected = next;
+        previousError = error;
+        previousCount = child.draw.y;
+        current = next;
+    }
+    return selected;
+}
+
+void main() {
+    uint candidateIndex = gl_GlobalInvocationID.x;
+    if (candidateIndex >= parameters.candidateCount) return;
+    Candidate candidate = candidates.values[candidateIndex];
+    // Host packet validation owns malformed-reference fail-visible fallback;
+    // the device path must never dereference an invalid table record.
+    if (candidate.primitiveIndex >= parameters.primitiveCount) return;
+    Primitive candidatePrimitive = primitives.values[candidate.primitiveIndex];
+    if (candidatePrimitive.binding.x >= parameters.instanceCount ||
+        candidatePrimitive.binding.y >= parameters.geometryCount) return;
+    Instance candidateInstance = instances.values[candidatePrimitive.binding.x];
+    if (candidateInstance.references.x >= parameters.transformCount) return;
+#if IRIDIUM_GPU_SCENE_OCCLUSION
+    if (parameters.occlusionEnabled != 0u) {
+        // The shared query already transforms the eight bounds corners and
+        // evaluates every frustum plane. Repeating visible() first doubled the
+        // dominant projection work in the fused path.
+        GpuSceneDepthResult result = iridiumQueryGpuSceneDepth(
+            candidate.primitiveIndex, depthPyramid,
+            uvec4(parameters.transformCount, parameters.instanceCount,
+                parameters.primitiveCount, parameters.geometryCount),
+            0u, DepthPyramidAbiVersion);
+        if (parameters.occlusionResultEnabled != 0u)
+            occlusionResults.values[candidateIndex] = result;
+        if (result.reserved.x == IridiumDepthRejectionOutsideView) return;
+        // Any malformed or fail-visible result retains the candidate. The CPU
+        // qualification oracle independently checks every consumed rejection.
+        bool valid = result.metadata.x == DepthPyramidAbiVersion &&
+            result.metadata.w == 1u && result.metadata.y < 32u &&
+            result.metadata.z >= 1u && result.metadata.z <= 4u &&
+            result.occluded <= 1u && result.reserved.x == 0u &&
+            result.reserved.y == candidate.primitiveIndex &&
+            finiteValue(result.farthestOccluderDepth) &&
+            result.farthestOccluderDepth >= 0.0 &&
+            result.farthestOccluderDepth <= 1.0;
+        if (valid && result.occluded != 0u) return;
+    }
+    else if (!visible(candidate.primitiveIndex)) return;
+#else
+    if (!visible(candidate.primitiveIndex)) return;
+#endif
+    uint commandIndex = atomicAdd(counts.values[candidate.binIndex], 1u);
+    if (commandIndex >= candidate.commandCapacity) return;
+    Primitive primitive = primitives.values[candidate.primitiveIndex];
+    uint previousLod = 0xffffffffu;
+    bool validSlot = candidate.historySlot < parameters.historyCapacity && parameters.lodErrorPixels > 0.0;
+    if (validSlot && parameters.viewFrame > 1u) {
+        uvec4 previous = lodHistory.values[candidate.historySlot];
+        if (previous.xy == uvec2(candidate.historyTokenLow, candidate.historyTokenHigh) &&
+            previous.w == parameters.viewFrame - 1u) previousLod = previous.z;
+    }
+    uint selected = selectedGeometry(primitive.binding.y,
+        transforms.values[candidateInstance.references.x], candidate.maximumLod, previousLod);
+    Geometry geometry = geometries.values[selected];
+    if (validSlot) lodHistory.values[candidate.historySlot] = uvec4(
+        candidate.historyTokenLow, candidate.historyTokenHigh,
+        selected == primitive.binding.y ? 0u : uint(geometry.localBoundsMax.w), parameters.viewFrame);
+    commands.values[candidate.commandBase + commandIndex] = IndexedCommand(
+        geometry.draw.y, 1u, geometry.draw.x,
+        int(geometry.draw.z), candidate.primitiveIndex);
+}
