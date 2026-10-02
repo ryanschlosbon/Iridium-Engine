@@ -1,0 +1,100 @@
+{
+  "schema_version": 1,
+  "milestone": "M2.10",
+  "resolution": [3840, 2160],
+  "benchmark_manifest": "assets/benchmarks/m0/manifest.v1.json",
+  "benchmark_fixture": "material_lab_v1",
+  "cache_state": "warm-steady-state",
+  "warmup_frames": 500,
+  "measured_frames": 10000,
+  "production_renderer": {
+    "render_graph_unconditional": true,
+    "gbuffer_layout_default": "reference",
+    "deprecated_arguments_rejected": [
+      "--render-graph",
+      "--render-graph-shadow",
+      "--canonical-materials"
+    ]
+  },
+  "required_runs": [
+    {
+      "id": "reference_release_4k_10000_v1",
+      "build": "x64-release",
+      "warmup_frames": 500,
+      "measured_frames": 10000,
+      "arguments": [
+        "--no-validation", "--hidden-window", "--gbuffer-layout", "reference",
+        "--window-size", "3840x2160", "--benchmark", "material_lab_v1",
+        "--benchmark-manifest", "assets/benchmarks/m0/manifest.v1.json",
+        "--warmup-frames", "500", "--frame-limit", "10000",
+        "--profile-gpu", "--profile-cpu-output", "{artifact_root}/reference-release.jsonl",
+        "--cache-state", "warm-steady-state"
+      ],
+      "expected_render_mode": "graph_deferred_plus_forward_scene_linear_canonical_reference",
+      "required_artifacts": ["profile_jsonl", "gpu_ranges", "draw_material_counters", "memory_snapshot"]
+    },
+    {
+      "id": "compact_release_4k_10000_experiment_v1",
+      "build": "x64-release",
+      "warmup_frames": 500,
+      "measured_frames": 10000,
+      "arguments": [
+        "--no-validation", "--hidden-window", "--gbuffer-layout", "compact",
+        "--window-size", "3840x2160",
+        "--benchmark", "material_lab_v1", "--benchmark-manifest",
+        "assets/benchmarks/m0/manifest.v1.json", "--warmup-frames", "500",
+        "--frame-limit", "10000", "--profile-gpu", "--profile-cpu-output",
+        "{artifact_root}/compact-release.jsonl", "--cache-state", "warm-steady-state"
+      ],
+      "expected_render_mode": "graph_deferred_plus_forward_scene_linear_canonical_compact",
+      "required_artifacts": ["profile_jsonl", "gpu_ranges", "draw_material_counters", "memory_snapshot"]
+    },
+    {
+      "id": "reference_debug_validation_scene_capture_v1",
+      "build": "x64-debug",
+      "warmup_frames": 8,
+      "measured_frames": 1,
+      "arguments": [
+        "--validation", "--hidden-window", "--gbuffer-layout", "reference", "--window-size",
+        "3840x2160", "--benchmark", "material_lab_v1", "--benchmark-manifest",
+        "assets/benchmarks/m0/manifest.v1.json", "--warmup-frames", "8",
+        "--frame-limit", "1", "--capture-frame", "0", "--capture-point", "scene",
+        "--capture-directory", "{artifact_root}/scene", "--debug-view", "final",
+        "--profile-gpu", "--profile-cpu-output", "{artifact_root}/graph-debug-scene.jsonl"
+      ],
+      "expected_render_mode": "graph_deferred_plus_forward_scene_linear_canonical_reference",
+      "required_artifacts": ["profile_jsonl", "scene_pfm", "capture_metadata", "validation_log"]
+    },
+    {
+      "id": "reference_debug_validation_final_sdr_capture_v1",
+      "build": "x64-debug",
+      "warmup_frames": 8,
+      "measured_frames": 1,
+      "arguments": [
+        "--validation", "--hidden-window", "--gbuffer-layout", "reference", "--window-size",
+        "3840x2160", "--benchmark", "material_lab_v1", "--benchmark-manifest",
+        "assets/benchmarks/m0/manifest.v1.json", "--warmup-frames", "8",
+        "--frame-limit", "1", "--capture-frame", "0", "--capture-point", "final-sdr",
+        "--capture-directory", "{artifact_root}/final-sdr", "--debug-view", "final",
+        "--profile-gpu", "--profile-cpu-output", "{artifact_root}/graph-debug-final-sdr.jsonl"
+      ],
+      "expected_render_mode": "graph_deferred_plus_forward_scene_linear_canonical_reference",
+      "required_artifacts": ["profile_jsonl", "final_sdr_tga", "capture_metadata", "validation_log"]
+    }
+  ],
+  "required_debug_views": ["base-color", "normal", "roughness", "metallic", "emissive", "depth"],
+  "optional_local_runs": [
+    {
+      "id": "sample_car_reference_release_v1",
+      "source_asset": "assets/models/alfa_romeo/alfa_romeo.gltf",
+      "arguments": [
+        "--no-validation", "--hidden-window", "--gbuffer-layout", "reference",
+        "--window-size", "3840x2160", "--benchmark", "m2_sample_car_local_v1",
+        "--benchmark-manifest", "assets/m2-car-local-manifest.v1.json",
+        "--warmup-frames", "500",
+        "--frame-limit", "10000", "--profile-gpu", "--profile-cpu-output",
+        "{artifact_root}/sample-car-release.jsonl", "--cache-state", "warm-steady-state"
+      ]
+    }
+  ]
+}

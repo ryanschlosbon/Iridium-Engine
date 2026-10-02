@@ -1,0 +1,35 @@
+#version 450
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_shuffle : require
+#include "include/clustered_lighting.glsl"
+
+// Each native subgroup sorts one compacted <=32-light cluster. A 1024-lane
+// workgroup packs as many independent lists as the device subgroup width allows,
+// amortizing dispatch and scheduling overhead without coupling their ordering.
+layout(local_size_x = 1024) in;
+
+void main() {
+    uint usedIndex = gl_WorkGroupID.x * gl_NumSubgroups + gl_SubgroupID;
+    if (usedIndex >= clusterIndirectArgs[3]) return;
+    uint cluster = clusterCounts[usedIndex];
+    ClusterLightHeader header = clusterHeaders[cluster];
+    uint lane = gl_SubgroupInvocationID;
+    uint value = lane < header.count
+        ? clusterLightSlots[header.offset + lane]
+        : IRIDIUM_INVALID_LIGHT_SLOT;
+
+    uint sortCount = 1u;
+    while (sortCount < header.count) sortCount <<= 1u;
+    for (uint sequence = 2u; sequence <= sortCount; sequence <<= 1u) {
+        for (uint stride = sequence >> 1u; stride > 0u; stride >>= 1u) {
+            uint partner = subgroupShuffleXor(value, stride);
+            bool ascending = (lane & sequence) == 0u;
+            bool lowerLane = (lane & stride) == 0u;
+            value = lowerLane == ascending
+                ? min(value, partner) : max(value, partner);
+        }
+    }
+
+    if (lane < header.count)
+        clusterLightSlots[header.offset + lane] = value;
+}

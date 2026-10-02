@@ -1,0 +1,94 @@
+{
+  "schema": "iridium.m5.1.light-component-v2-benchmark.v1",
+  "configuration": "Release",
+  "compiler": "MSVC 19.51.36252.0",
+  "lightCount": 1000,
+  "v1SourceBytes": 357970,
+  "v2SourceBytes": 468970,
+  "migratedCanonicalBytes": 871991,
+  "cookedArtifactBytes": 122208,
+  "runtimeManifestHash": "6e8a840aa3ac0a0b20a0749434695a934407e72d484e925a6eb66c77465a7c5c",
+  "workloads": [
+    {
+      "name": "read-v1-and-migrate",
+      "warmups": 2,
+      "samples": 15,
+      "durationMs": {
+        "min": 24.3629,
+        "median": 26.1903,
+        "p95": 29.441,
+        "p99": 29.441,
+        "max": 29.441
+      },
+      "allocationCount": {
+        "min": 260633.0,
+        "median": 260633.0,
+        "p95": 260633.0,
+        "p99": 260633.0,
+        "max": 260633.0
+      },
+      "allocationBytes": {
+        "min": 16757205.0,
+        "median": 16757205.0,
+        "p95": 16757205.0,
+        "p99": 16757205.0,
+        "max": 16757205.0
+      },
+      "checksum": 3000
+    },
+    {
+      "name": "read-v2-current",
+      "warmups": 2,
+      "samples": 15,
+      "durationMs": {
+        "min": 19.565,
+        "median": 21.3574,
+        "p95": 22.6039,
+        "p99": 22.6039,
+        "max": 22.6039
+      },
+      "allocationCount": {
+        "min": 214610.0,
+        "median": 214610.0,
+        "p95": 214610.0,
+        "p99": 214610.0,
+        "max": 214610.0
+      },
+      "allocationBytes": {
+        "min": 11682289.0,
+        "median": 11682289.0,
+        "p95": 11682289.0,
+        "p99": 11682289.0,
+        "max": 11682289.0
+      },
+      "checksum": 1000
+    },
+    {
+      "name": "stage-and-cook-v2",
+      "warmups": 2,
+      "samples": 15,
+      "durationMs": {
+        "min": 7.4384,
+        "median": 8.5563,
+        "p95": 9.0812,
+        "p99": 9.0812,
+        "max": 9.0812
+      },
+      "allocationCount": {
+        "min": 72451.0,
+        "median": 72451.0,
+        "p95": 72451.0,
+        "p99": 72451.0,
+        "max": 72451.0
+      },
+      "allocationBytes": {
+        "min": 5366915.0,
+        "median": 5366915.0,
+        "p95": 5366915.0,
+        "p99": 5366915.0,
+        "max": 5366915.0
+      },
+      "checksum": 122208
+    }
+  ]
+}

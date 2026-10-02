@@ -1,0 +1,25 @@
+{
+  "schema": "iridium.m5.cluster-gpu-benchmark.v1",
+  "date": "2026-08-09",
+  "gpu": "NVIDIA GeForce RTX 4090",
+  "driver": "610.74.0.0",
+  "build": "Release",
+  "extent": [3840, 2160],
+  "warmup_frames": 2,
+  "measured_frames": 8,
+  "algorithm": "workgroup-parallel light-centric count/fill; compacted subgroup and shared-memory deterministic sort",
+  "bakeoff_results": [
+    {"tile": 16, "slices": 24, "lights": 64, "median_ns": 118208, "p95_ns": 122464, "p99_ns": 122464, "requested_references": 87993, "published_references": 87993, "clusters_used": 24664, "max_occupancy": 12, "fallback_lights": 0, "dropped_lights": 0, "overflow": 0},
+    {"tile": 16, "slices": 24, "lights": 512, "median_ns": 787040, "p95_ns": 811520, "p99_ns": 811520, "requested_references": 1749648, "published_references": 1749648, "clusters_used": 149420, "max_occupancy": 34, "fallback_lights": 0, "dropped_lights": 0, "overflow": 0},
+    {"tile": 16, "slices": 24, "lights": 4096, "median_ns": 1319520, "p95_ns": 1426208, "p99_ns": 1426208, "requested_references": 4194305, "published_references": 0, "clusters_used": 0, "max_occupancy": 0, "fallback_lights": 64, "dropped_lights": 4032, "overflow": 3},
+    {"tile": 16, "slices": 32, "lights": 512, "median_ns": 997312, "p95_ns": 1038688, "p99_ns": 1038688, "requested_references": 2054072, "published_references": 2054072, "clusters_used": 183365, "max_occupancy": 27, "fallback_lights": 0, "dropped_lights": 0, "overflow": 0},
+    {"tile": 32, "slices": 24, "lights": 64, "median_ns": 54912, "p95_ns": 56896, "p99_ns": 56896, "requested_references": 23903, "published_references": 23903, "clusters_used": 6595, "max_occupancy": 12, "fallback_lights": 0, "dropped_lights": 0, "overflow": 0},
+    {"tile": 32, "slices": 24, "lights": 512, "median_ns": 267488, "p95_ns": 273184, "p99_ns": 273184, "requested_references": 454085, "published_references": 454085, "clusters_used": 38025, "max_occupancy": 34, "fallback_lights": 0, "dropped_lights": 0, "overflow": 0},
+    {"tile": 32, "slices": 24, "lights": 4096, "median_ns": 1920000, "p95_ns": 1950560, "p99_ns": 1950560, "requested_references": 3633184, "published_references": 0, "clusters_used": 0, "max_occupancy": 0, "fallback_lights": 64, "dropped_lights": 4032, "overflow": 2},
+    {"tile": 32, "slices": 32, "lights": 512, "median_ns": 300480, "p95_ns": 322368, "p99_ns": 322368, "requested_references": 532970, "published_references": 532970, "clusters_used": 46755, "max_occupancy": 28, "fallback_lights": 0, "dropped_lights": 0, "overflow": 0}
+  ],
+  "selected_default_verification": [
+    {"tile": 32, "slices": 24, "lights": 512, "median_ns": 240800, "p95_ns": 259360, "buffer_bytes_per_frame": 19914116, "fallback_cpu_median_ns": 28100, "fallback_cpu_p95_ns": 28700, "requested_references": 454085, "published_references": 454085, "overflow": 0},
+    {"tile": 32, "slices": 24, "lights": 4096, "median_ns": 1911008, "p95_ns": 1921088, "buffer_bytes_per_frame": 19914116, "fallback_cpu_median_ns": 87100, "fallback_cpu_p95_ns": 136200, "requested_references": 3633184, "published_references": 0, "fallback_lights": 64, "dropped_lights": 4032, "overflow": 2}
+  ]
+}

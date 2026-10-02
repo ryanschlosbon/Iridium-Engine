@@ -1,0 +1,102 @@
+{
+  "asset": {
+    "version": "2.0",
+    "generator": "Iridium Engine M0 deterministic opaque emissive range"
+  },
+  "extensionsUsed": ["KHR_materials_emissive_strength"],
+  "buffers": [
+    {
+      "uri": "data:application/octet-stream;base64,AABAvwAAQL8AAAAAAABAPwAAQL8AAAAAAAAAAAAAQD8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAD8AAIA/AAACAAEA",
+      "byteLength": 102
+    }
+  ],
+  "bufferViews": [
+    { "buffer": 0, "byteOffset": 0, "byteLength": 36, "target": 34962 },
+    { "buffer": 0, "byteOffset": 36, "byteLength": 36, "target": 34962 },
+    { "buffer": 0, "byteOffset": 72, "byteLength": 24, "target": 34962 },
+    { "buffer": 0, "byteOffset": 96, "byteLength": 6, "target": 34963 }
+  ],
+  "accessors": [
+    {
+      "bufferView": 0,
+      "componentType": 5126,
+      "count": 3,
+      "type": "VEC3",
+      "min": [-0.75, -0.75, 0.0],
+      "max": [0.75, 0.75, 0.0]
+    },
+    { "bufferView": 1, "componentType": 5126, "count": 3, "type": "VEC3" },
+    { "bufferView": 2, "componentType": 5126, "count": 3, "type": "VEC2" },
+    { "bufferView": 3, "componentType": 5123, "count": 3, "type": "SCALAR" }
+  ],
+  "materials": [
+    {
+      "name": "Opaque emissive 0.0",
+      "pbrMetallicRoughness": { "baseColorFactor": [0.01, 0.01, 0.01, 1.0], "metallicFactor": 0.0, "roughnessFactor": 0.8 },
+      "emissiveFactor": [1.0, 1.0, 1.0],
+      "alphaMode": "OPAQUE",
+      "doubleSided": true,
+      "extensions": { "KHR_materials_emissive_strength": { "emissiveStrength": 0.0 } }
+    },
+    {
+      "name": "Opaque emissive 0.03125",
+      "pbrMetallicRoughness": { "baseColorFactor": [0.01, 0.01, 0.01, 1.0], "metallicFactor": 0.0, "roughnessFactor": 0.8 },
+      "emissiveFactor": [1.0, 1.0, 1.0],
+      "alphaMode": "OPAQUE",
+      "doubleSided": true,
+      "extensions": { "KHR_materials_emissive_strength": { "emissiveStrength": 0.03125 } }
+    },
+    {
+      "name": "Opaque emissive 0.125",
+      "pbrMetallicRoughness": { "baseColorFactor": [0.01, 0.01, 0.01, 1.0], "metallicFactor": 0.0, "roughnessFactor": 0.8 },
+      "emissiveFactor": [1.0, 1.0, 1.0],
+      "alphaMode": "OPAQUE",
+      "doubleSided": true,
+      "extensions": { "KHR_materials_emissive_strength": { "emissiveStrength": 0.125 } }
+    },
+    {
+      "name": "Opaque emissive 0.5",
+      "pbrMetallicRoughness": { "baseColorFactor": [0.01, 0.01, 0.01, 1.0], "metallicFactor": 0.0, "roughnessFactor": 0.8 },
+      "emissiveFactor": [1.0, 1.0, 1.0],
+      "alphaMode": "OPAQUE",
+      "doubleSided": true,
+      "extensions": { "KHR_materials_emissive_strength": { "emissiveStrength": 0.5 } }
+    },
+    {
+      "name": "Opaque emissive 1.0",
+      "pbrMetallicRoughness": { "baseColorFactor": [0.01, 0.01, 0.01, 1.0], "metallicFactor": 0.0, "roughnessFactor": 0.8 },
+      "emissiveFactor": [1.0, 1.0, 1.0],
+      "alphaMode": "OPAQUE",
+      "doubleSided": true,
+      "extensions": { "KHR_materials_emissive_strength": { "emissiveStrength": 1.0 } }
+    },
+    {
+      "name": "Opaque emissive 2.0",
+      "pbrMetallicRoughness": { "baseColorFactor": [0.01, 0.01, 0.01, 1.0], "metallicFactor": 0.0, "roughnessFactor": 0.8 },
+      "emissiveFactor": [1.0, 1.0, 1.0],
+      "alphaMode": "OPAQUE",
+      "doubleSided": true,
+      "extensions": { "KHR_materials_emissive_strength": { "emissiveStrength": 2.0 } }
+    }
+  ],
+  "meshes": [
+    { "name": "opaque_emissive_0", "primitives": [{ "attributes": { "POSITION": 0, "NORMAL": 1, "TEXCOORD_0": 2 }, "indices": 3, "material": 0 }] },
+    { "name": "opaque_emissive_003125", "primitives": [{ "attributes": { "POSITION": 0, "NORMAL": 1, "TEXCOORD_0": 2 }, "indices": 3, "material": 1 }] },
+    { "name": "opaque_emissive_0125", "primitives": [{ "attributes": { "POSITION": 0, "NORMAL": 1, "TEXCOORD_0": 2 }, "indices": 3, "material": 2 }] },
+    { "name": "opaque_emissive_05", "primitives": [{ "attributes": { "POSITION": 0, "NORMAL": 1, "TEXCOORD_0": 2 }, "indices": 3, "material": 3 }] },
+    { "name": "opaque_emissive_1", "primitives": [{ "attributes": { "POSITION": 0, "NORMAL": 1, "TEXCOORD_0": 2 }, "indices": 3, "material": 4 }] },
+    { "name": "opaque_emissive_2", "primitives": [{ "attributes": { "POSITION": 0, "NORMAL": 1, "TEXCOORD_0": 2 }, "indices": 3, "material": 5 }] }
+  ],
+  "nodes": [
+    { "name": "emissive_0", "mesh": 0, "translation": [-3.0, 0.0, 0.0] },
+    { "name": "emissive_003125", "mesh": 1, "translation": [-1.8, 0.0, 0.0] },
+    { "name": "emissive_0125", "mesh": 2, "translation": [-0.6, 0.0, 0.0] },
+    { "name": "emissive_05", "mesh": 3, "translation": [0.6, 0.0, 0.0] },
+    { "name": "emissive_1", "mesh": 4, "translation": [1.8, 0.0, 0.0] },
+    { "name": "emissive_2", "mesh": 5, "translation": [3.0, 0.0, 0.0] }
+  ],
+  "scenes": [
+    { "name": "opaque_emissive_v1", "nodes": [0, 1, 2, 3, 4, 5] }
+  ],
+  "scene": 0
+}

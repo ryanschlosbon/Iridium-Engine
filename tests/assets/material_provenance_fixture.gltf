@@ -1,0 +1,62 @@
+{
+  "asset": { "version": "2.0", "generator": "Iridium M0 fixture" },
+  "extensionsUsed": [
+    "KHR_materials_clearcoat",
+    "KHR_materials_specular",
+    "KHR_materials_transmission",
+    "KHR_texture_transform",
+    "IRIDIUM_unknown_material_extension"
+  ],
+  "images": [
+    { "uri": "base.png" },
+    { "uri": "normal.png" },
+    { "uri": "mr.png" },
+    { "uri": "emissive.png" },
+    { "uri": "transmission.png" }
+  ],
+  "samplers": [
+    { "magFilter": 9729, "minFilter": 9987, "wrapS": 33071 }
+  ],
+  "textures": [
+    { "source": 0, "sampler": 0 },
+    { "source": 1 },
+    { "source": 2 },
+    { "source": 3 },
+    { "source": 4 }
+  ],
+  "materials": [
+    { "name": "All glTF defaults" },
+    {
+      "name": "Known explicit values",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [0.8, 0.2, 0.1, 0.75],
+        "metallicFactor": 1.0,
+        "roughnessFactor": 0.35,
+        "baseColorTexture": {
+          "index": 0,
+          "texCoord": 1,
+          "extensions": {
+            "KHR_texture_transform": { "offset": [0.25, 0.5] }
+          }
+        },
+        "metallicRoughnessTexture": { "index": 2 }
+      },
+      "normalTexture": { "index": 1, "scale": 0.6 },
+      "occlusionTexture": { "index": 2, "texCoord": 1 },
+      "emissiveTexture": { "index": 3 },
+      "emissiveFactor": [2.0, 1.0, 0.5],
+      "alphaMode": "BLEND",
+      "alphaCutoff": 0.4,
+      "doubleSided": true,
+      "extensions": {
+        "KHR_materials_clearcoat": { "clearcoatFactor": 0.9 },
+        "KHR_materials_specular": { "specularFactor": 0.7 },
+        "KHR_materials_transmission": {
+          "transmissionFactor": 0.65,
+          "transmissionTexture": { "index": 4 }
+        },
+        "IRIDIUM_unknown_material_extension": { "value": 42 }
+      }
+    }
+  ]
+}

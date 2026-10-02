@@ -1,0 +1,93 @@
+{
+  "asset": { "version": "2.0", "generator": "Iridium Engine M2.4 material GPU lab" },
+  "extensionsUsed": ["KHR_texture_transform"],
+  "buffers": [
+    {
+      "uri": "data:application/octet-stream;base64,AABAvwAAQL8AAAAAAABAPwAAQL8AAAAAAAAAAAAAQD8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAD8AAIA/AAACAAEA",
+      "byteLength": 102
+    }
+  ],
+  "bufferViews": [
+    { "buffer": 0, "byteOffset": 0, "byteLength": 36, "target": 34962 },
+    { "buffer": 0, "byteOffset": 36, "byteLength": 36, "target": 34962 },
+    { "buffer": 0, "byteOffset": 72, "byteLength": 24, "target": 34962 },
+    { "buffer": 0, "byteOffset": 96, "byteLength": 6, "target": 34963 }
+  ],
+  "accessors": [
+    { "bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3", "min": [-0.75, -0.75, 0.0], "max": [0.75, 0.75, 0.0] },
+    { "bufferView": 1, "componentType": 5126, "count": 3, "type": "VEC3" },
+    { "bufferView": 2, "componentType": 5126, "count": 3, "type": "VEC2" },
+    { "bufferView": 3, "componentType": 5123, "count": 3, "type": "SCALAR" }
+  ],
+  "images": [
+    { "uri": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFElEQVR4nGP4z8DwHwRZGME0AwMAPv8GAPpcE7AAAAAASUVORK5CYII=" },
+    { "uri": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFUlEQVR4nGNsaPj/n4GBgYEJRIAwAC2ZAwJII6IEAAAAAElFTkSuQmCC" },
+    { "uri": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFUlEQVR4nGP838Dwn4GBgYEJRIAwACcXAoLNMXkHAAAAAElFTkSuQmCC" },
+    { "uri": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFUlEQVR4nGNsaGj4z8DAwMAEIkAYACYoAoOzgGuDAAAAAElFTkSuQmCC" }
+  ],
+  "samplers": [
+    { "magFilter": 9728, "minFilter": 9984, "wrapS": 33648, "wrapT": 33071 }
+  ],
+  "textures": [
+    { "source": 0, "sampler": 0 },
+    { "source": 1, "sampler": 0 },
+    { "source": 2, "sampler": 0 },
+    { "source": 3, "sampler": 0 }
+  ],
+  "materials": [
+    {
+      "name": "Factor only",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [0.7, 0.15, 0.05, 1.0],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.35
+      }
+    },
+    {
+      "name": "Textured UV sampler normal MR AO",
+      "pbrMetallicRoughness": {
+        "baseColorTexture": {
+          "index": 0,
+          "texCoord": 1,
+          "extensions": {
+            "KHR_texture_transform": {
+              "offset": [0.25, 0.0],
+              "scale": [0.75, 1.0]
+            }
+          }
+        },
+        "metallicRoughnessTexture": { "index": 2 },
+        "metallicFactor": 1.0,
+        "roughnessFactor": 1.0
+      },
+      "normalTexture": { "index": 1, "scale": 0.75 },
+      "occlusionTexture": { "index": 3, "texCoord": 1, "strength": 0.5 },
+      "doubleSided": true
+    },
+    {
+      "name": "Masked emissive texture",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [0.1, 0.1, 0.1, 1.0],
+        "baseColorTexture": { "index": 0 },
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.8
+      },
+      "emissiveFactor": [1.0, 0.25, 0.05],
+      "emissiveTexture": { "index": 0 },
+      "alphaMode": "MASK",
+      "alphaCutoff": 0.5
+    }
+  ],
+  "meshes": [
+    { "primitives": [{ "attributes": { "POSITION": 0, "NORMAL": 1, "TEXCOORD_0": 2, "TEXCOORD_1": 2 }, "indices": 3, "material": 0 }] },
+    { "primitives": [{ "attributes": { "POSITION": 0, "NORMAL": 1, "TEXCOORD_0": 2, "TEXCOORD_1": 2 }, "indices": 3, "material": 1 }] },
+    { "primitives": [{ "attributes": { "POSITION": 0, "NORMAL": 1, "TEXCOORD_0": 2, "TEXCOORD_1": 2 }, "indices": 3, "material": 2 }] }
+  ],
+  "nodes": [
+    { "mesh": 0, "translation": [-1.4, 0.0, 0.0] },
+    { "mesh": 1, "translation": [0.0, 0.0, 0.0] },
+    { "mesh": 2, "translation": [1.4, 0.0, 0.0] }
+  ],
+  "scenes": [{ "nodes": [0, 1, 2] }],
+  "scene": 0
+}

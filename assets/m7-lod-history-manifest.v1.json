@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "fixtures": [
+    {
+      "id": "m7_lod_history_oscillation_cut_v1",
+      "revision": 1,
+      "required": true,
+      "source_asset": "models/alfa_romeo/alfa_romeo.gltf",
+      "environment": { "kind": "procedural_constant", "constant_linear_rgb": [0.035, 0.04, 0.05] },
+      "camera": {
+        "id": "m7_lod_history_oscillation_cut_camera_v1",
+        "position": [18.0, 8.0, 28.0], "target": [0.0, 0.65, 0.0],
+        "up": [0.0, 1.0, 0.0], "vertical_fov_degrees": 45.0,
+        "near": 0.1, "far": 200.0
+      },
+      "scene_factory": {
+        "kind": "instanced_grid", "instance_grid": [1, 1, 3],
+        "instance_spacing": [0.0, 0.0, 12.0],
+        "camera_motion": {
+          "oscillation": { "amplitude": [0.0, 0.0, 6.0], "period_frames": 24 },
+          "cut": { "frame": 120, "position": [18.0, 8.0, 22.0], "target": [0.0, 0.65, -6.0] }
+        }
+      },
+      "output_label": "m7_lod_history_oscillation_cut",
+      "warmup_frames": 0, "measured_frames": 240,
+      "content_files": [
+        { "path": "models/alfa_romeo/alfa_romeo.gltf", "sha256": "96f80eb8b302219aaec343920431877386cebb0ea5bf1a4a6df6e97b38456816" },
+        { "path": "models/alfa_romeo/alfa_romeo.gltf.iridium.meta", "sha256": "4102702841eb79a375961f1ed13683fbdb54cf1c2f90f60d79c59a572ec5d169" }
+      ],
+      "expected_behavior": [
+        "Compare hysteresis fractions 0 and 0.15 at the same strict two-pixel error ceiling and native 4K.",
+        "Camera motion preserves temporal history; the cut at application frame 120 invalidates all main-view histories.",
+        "Each visible device command must match the independent CPU temporal oracle; forward, shadow, probe and RT consumers remain independent.",
+        "This diagnostic fixture does not replace frozen static fidelity or performance baselines."
+      ],
+      "unavailable_capabilities": ["progressive geometry residency", "temporal perceptual quality admission"]
+    }
+  ]
+}

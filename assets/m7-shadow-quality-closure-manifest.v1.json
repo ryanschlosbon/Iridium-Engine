@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "fixtures": [
+    {
+      "id": "m7_shadow_quality_closure_v1",
+      "revision": 1,
+      "required": true,
+      "source_asset": "benchmarks/m5/directional-shadow-contact.gltf",
+      "environment": {
+        "kind": "procedural_constant",
+        "constant_linear_rgb": [0.02, 0.02, 0.02]
+      },
+      "camera": {
+        "id": "m7_shadow_quality_closure_camera_v1",
+        "position": [0.0, 0.0, 28.0],
+        "target": [0.0, 0.0, 0.0],
+        "up": [0.0, 1.0, 0.0],
+        "vertical_fov_degrees": 45.0,
+        "near": 0.1,
+        "far": 180.0
+      },
+      "scene_factory": {
+        "kind": "instanced_grid",
+        "instance_grid": [3, 1, 1],
+        "instance_spacing": [8.0, 0.0, 0.0],
+        "camera_motion": {
+          "velocity_per_frame": [0.0, 0.0, 0.0],
+          "oscillation": {
+            "amplitude": [0.0, 0.0, 20.0],
+            "period_frames": 120
+          }
+        }
+      },
+      "lights": [
+        {
+          "type": "directional",
+          "position": [0.0, 0.0, 0.0],
+          "rotation_degrees": [0.0, 110.0, 0.0],
+          "color_linear_rec709": [1.0, 0.96, 0.9],
+          "illuminance_lux": 100000.0,
+          "range_meters": 1.0,
+          "casts_shadows": true,
+          "shadow_quality": "ultra",
+          "priority": 1
+        }
+      ],
+      "output_label": "m7_shadow_quality_closure",
+      "warmup_frames": 120,
+      "measured_frames": 240,
+      "content_files": [
+        {
+          "path": "benchmarks/m5/directional-shadow-contact.gltf",
+          "sha256": "d1c8cb68508d8e2b43ab1bc6639d0fadffce7683429c8d2129d6c764faa9bc3e"
+        }
+      ],
+      "expected_behavior": [
+        "The near-to-far camera sweep increases directional-shadow detail toward the camera and crosses cascade density regions without visible popping, stale shadows, or staircase-shaped penumbrae.",
+        "The thin warm blocker retains a finite stable shadow without disappearing or leaking as its projected footprint approaches a shadow texel.",
+        "The fully clipped alpha-mask blocker casts no shadow while opaque alpha-mask coverage retains the same cutoff semantics as the visible surface.",
+        "Double-sided shadow casters preserve their material culling semantics in both conventional direct and device-generated indirect shadow paths.",
+        "Close-contact and grazing-angle shadows remain attached without objectionable acne or peter-panning under the Ultra quality preset.",
+        "The conventional direct and device-generated indirect shadow paths produce byte-identical captures at matching camera phases and report zero qualification mismatches, overflow, and fallback draws."
+      ],
+      "unavailable_capabilities": [
+        "transparent shadows"
+      ]
+    }
+  ]
+}

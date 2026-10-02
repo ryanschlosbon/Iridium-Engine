@@ -1,0 +1,2489 @@
+{
+  "allocationScope": "C++ global new/new[] requested bytes",
+  "cases": [
+    {
+      "allocationCount": {
+        "max": 106.0,
+        "median": 106.0,
+        "min": 106.0,
+        "p95": 106.0,
+        "p99": 106.0
+      },
+      "checksum": 42949722955000,
+      "durationMs": {
+        "max": 2.0013,
+        "median": 1.5814,
+        "min": 1.344,
+        "p95": 1.695,
+        "p99": 2.0013
+      },
+      "entityCount": 10000,
+      "name": "ecs_create_transform_only",
+      "nsPerOperation": {
+        "max": 200.13,
+        "median": 158.14,
+        "min": 134.4,
+        "p95": 169.5,
+        "p99": 200.13
+      },
+      "occupancy": "Transform-only",
+      "operationCountPerSample": 10000,
+      "peakWorkingSetBytesMax": 8491008,
+      "privateDeltaBytes": {
+        "max": 2072576.0,
+        "median": 745472.0,
+        "min": 745472.0,
+        "p95": 2072576.0,
+        "p99": 2072576.0
+      },
+      "requestedAllocationBytes": {
+        "max": 6602393.0,
+        "median": 6602393.0,
+        "min": 6602393.0,
+        "p95": 6602393.0,
+        "p99": 6602393.0
+      },
+      "requestedBytesPerEntity": {
+        "max": 660.2393,
+        "median": 660.2393,
+        "min": 660.2393,
+        "p95": 660.2393,
+        "p99": 660.2393
+      },
+      "sampleCount": 30,
+      "warmupSampleCount": 1,
+      "workingSetDeltaBytes": {
+        "max": 1880064.0,
+        "median": 1794048.0,
+        "min": 1732608.0,
+        "p95": 1871872.0,
+        "p99": 1880064.0
+      }
+    },
+    {
+      "allocationCount": {
+        "max": 10303.0,
+        "median": 10303.0,
+        "min": 10303.0,
+        "p95": 10303.0,
+        "p99": 10303.0
+      },
+      "checksum": 42949722955000,
+      "durationMs": {
+        "max": 3.5471,
+        "median": 3.242,
+        "min": 2.9254,
+        "p95": 3.5325,
+        "p99": 3.5471
+      },
+      "entityCount": 10000,
+      "name": "ecs_create_mixed",
+      "nsPerOperation": {
+        "max": 354.71,
+        "median": 324.2,
+        "min": 292.54,
+        "p95": 353.25,
+        "p99": 354.71
+      },
+      "occupancy": "Transform+Name+Relationship+50%-Mesh",
+      "operationCountPerSample": 10000,
+      "peakWorkingSetBytesMax": 11038720,
+      "privateDeltaBytes": {
+        "max": 5947392.0,
+        "median": 5214208.0,
+        "min": 2957312.0,
+        "p95": 5935104.0,
+        "p99": 5947392.0
+      },
+      "requestedAllocationBytes": {
+        "max": 13103909.0,
+        "median": 13103909.0,
+        "min": 13103909.0,
+        "p95": 13103909.0,
+        "p99": 13103909.0
+      },
+      "requestedBytesPerEntity": {
+        "max": 1310.3909,
+        "median": 1310.3909,
+        "min": 1310.3909,
+        "p95": 1310.3909,
+        "p99": 1310.3909
+      },
+      "sampleCount": 30,
+      "warmupSampleCount": 1,
+      "workingSetDeltaBytes": {
+        "max": 5312512.0,
+        "median": 4726784.0,
+        "min": 3129344.0,
+        "p95": 5267456.0,
+        "p99": 5312512.0
+      }
+    },
+    {
+      "allocationCount": {
+        "max": 224.0,
+        "median": 224.0,
+        "min": 224.0,
+        "p95": 224.0,
+        "p99": 224.0
+      },
+      "checksum": 429501729550000,
+      "durationMs": {
+        "max": 13.408,
+        "median": 12.8601,
+        "min": 12.659,
+        "p95": 13.2646,
+        "p99": 13.408
+      },
+      "entityCount": 100000,
+      "name": "ecs_create_transform_only",
+      "nsPerOperation": {
+        "max": 134.08,
+        "median": 128.601,
+        "min": 126.59,
+        "p95": 132.646,
+        "p99": 134.08
+      },
+      "occupancy": "Transform-only",
+      "operationCountPerSample": 100000,
+      "peakWorkingSetBytesMax": 39194624,
+      "privateDeltaBytes": {
+        "max": 27025408.0,
+        "median": 25239552.0,
+        "min": 23560192.0,
+        "p95": 27025408.0,
+        "p99": 27025408.0
+      },
+      "requestedAllocationBytes": {
+        "max": 75110247.0,
+        "median": 75110247.0,
+        "min": 75110247.0,
+        "p95": 75110247.0,
+        "p99": 75110247.0
+      },
+      "requestedBytesPerEntity": {
+        "max": 751.10247,
+        "median": 751.10247,
+        "min": 751.10247,
+        "p95": 751.10247,
+        "p99": 751.10247
+      },
+      "sampleCount": 30,
+      "warmupSampleCount": 1,
+      "workingSetDeltaBytes": {
+        "max": 20090880.0,
+        "median": 18751488.0,
+        "min": 17014784.0,
+        "p95": 20041728.0,
+        "p99": 20090880.0
+      }
+    },
+    {
+      "allocationCount": {
+        "max": 100739.0,
+        "median": 100739.0,
+        "min": 100739.0,
+        "p95": 100739.0,
+        "p99": 100739.0
+      },
+      "checksum": 429501729550000,
+      "durationMs": {
+        "max": 34.5693,
+        "median": 33.7421,
+        "min": 32.0724,
+        "p95": 34.5328,
+        "p99": 34.5693
+      },
+      "entityCount": 100000,
+      "name": "ecs_create_mixed",
+      "nsPerOperation": {
+        "max": 345.693,
+        "median": 337.421,
+        "min": 320.724,
+        "p95": 345.328,
+        "p99": 345.693
+      },
+      "occupancy": "Transform+Name+Relationship+50%-Mesh",
+      "operationCountPerSample": 100000,
+      "peakWorkingSetBytesMax": 61276160,
+      "privateDeltaBytes": {
+        "max": 56987648.0,
+        "median": 55410688.0,
+        "min": 49836032.0,
+        "p95": 56741888.0,
+        "p99": 56987648.0
+      },
+      "requestedAllocationBytes": {
+        "max": 148475991.0,
+        "median": 148475991.0,
+        "min": 148475991.0,
+        "p95": 148475991.0,
+        "p99": 148475991.0
+      },
+      "requestedBytesPerEntity": {
+        "max": 1484.75991,
+        "median": 1484.75991,
+        "min": 1484.75991,
+        "p95": 1484.75991,
+        "p99": 1484.75991
+      },
+      "sampleCount": 30,
+      "warmupSampleCount": 1,
+      "workingSetDeltaBytes": {
+        "max": 44761088.0,
+        "median": 43802624.0,
+        "min": 37707776.0,
+        "p95": 44716032.0,
+        "p99": 44761088.0
+      }
+    },
+    {
+      "allocationCount": {
+        "max": 1129.0,
+        "median": 1129.0,
+        "min": 1129.0,
+        "p95": 1129.0,
+        "p99": 1129.0
+      },
+      "checksum": 4295467295500000,
+      "durationMs": {
+        "max": 156.0195,
+        "median": 145.2169,
+        "min": 104.9262,
+        "p95": 153.8898,
+        "p99": 156.0195
+      },
+      "entityCount": 1000000,
+      "name": "ecs_create_transform_only",
+      "nsPerOperation": {
+        "max": 156.0195,
+        "median": 145.2169,
+        "min": 104.9262,
+        "p95": 153.8898,
+        "p99": 156.0195
+      },
+      "occupancy": "Transform-only",
+      "operationCountPerSample": 1000000,
+      "peakWorkingSetBytesMax": 256073728,
+      "privateDeltaBytes": {
+        "max": 196493312.0,
+        "median": 190238720.0,
+        "min": 187473920.0,
+        "p95": 196489216.0,
+        "p99": 196493312.0
+      },
+      "requestedAllocationBytes": {
+        "max": 571457976.0,
+        "median": 571457976.0,
+        "min": 571457976.0,
+        "p95": 571457976.0,
+        "p99": 571457976.0
+      },
+      "requestedBytesPerEntity": {
+        "max": 571.457976,
+        "median": 571.457976,
+        "min": 571.457976,
+        "p95": 571.457976,
+        "p99": 571.457976
+      },
+      "sampleCount": 30,
+      "warmupSampleCount": 1,
+      "workingSetDeltaBytes": {
+        "max": 186662912.0,
+        "median": 181137408.0,
+        "min": 177848320.0,
+        "p95": 186630144.0,
+        "p99": 186662912.0
+      }
+    },
+    {
+      "allocationCount": {
+        "max": 1004328.0,
+        "median": 1004328.0,
+        "min": 1004328.0,
+        "p95": 1004328.0,
+        "p99": 1004328.0
+      },
+      "checksum": 4295467295500000,
+      "durationMs": {
+        "max": 524.3294,
+        "median": 498.0756,
+        "min": 475.4635,
+        "p95": 521.1824,
+        "p99": 524.3294
+      },
+      "entityCount": 1000000,
+      "name": "ecs_create_mixed",
+      "nsPerOperation": {
+        "max": 524.3294,
+        "median": 498.0756,
+        "min": 475.4635,
+        "p95": 521.1824,
+        "p99": 524.3294
+      },
+      "occupancy": "Transform+Name+Relationship+50%-Mesh",
+      "operationCountPerSample": 1000000,
+      "peakWorkingSetBytesMax": 478494720,
+      "privateDeltaBytes": {
+        "max": 474673152.0,
+        "median": 450412544.0,
+        "min": 446697472.0,
+        "p95": 474603520.0,
+        "p99": 474673152.0
+      },
+      "requestedAllocationBytes": {
+        "max": 1262280774.0,
+        "median": 1262280774.0,
+        "min": 1262280774.0,
+        "p95": 1262280774.0,
+        "p99": 1262280774.0
+      },
+      "requestedBytesPerEntity": {
+        "max": 1262.280774,
+        "median": 1262.280774,
+        "min": 1262.280774,
+        "p95": 1262.280774,
+        "p99": 1262.280774
+      },
+      "sampleCount": 30,
+      "warmupSampleCount": 1,
+      "workingSetDeltaBytes": {
+        "max": 421400576.0,
+        "median": 398716928.0,
+        "min": 395001856.0,
+        "p95": 421285888.0,
+        "p99": 421400576.0
+      }
+    },
+    {
+      "allocationCount": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "checksum": 49995066803,
+      "durationMs": {
+        "max": 11.1552,
+        "median": 10.2543,
+        "min": 9.5561,
+        "p95": 10.9111,
+        "p99": 11.1552
+      },
+      "entityCount": 100000,
+      "lookupResult": "hit",
+      "name": "ecs_random_lookup_hits",
+      "nsPerOperation": {
+        "max": 11.1552,
+        "median": 10.2543,
+        "min": 9.5561,
+        "p95": 10.9111,
+        "p99": 11.1552
+      },
+      "operationCountPerSample": 1000000,
+      "peakWorkingSetBytesMax": 478494720,
+      "privateDeltaBytes": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "requestedAllocationBytes": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "requestedBytesPerEntity": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "sampleCount": 30,
+      "warmupSampleCount": 1,
+      "workingSetDeltaBytes": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      }
+    },
+    {
+      "allocationCount": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "checksum": 0,
+      "durationMs": {
+        "max": 1.2701,
+        "median": 1.1236,
+        "min": 1.0501,
+        "p95": 1.2568,
+        "p99": 1.2701
+      },
+      "entityCount": 100000,
+      "lookupResult": "miss",
+      "name": "ecs_random_lookup_misses",
+      "nsPerOperation": {
+        "max": 1.2701,
+        "median": 1.1236,
+        "min": 1.0501,
+        "p95": 1.2568,
+        "p99": 1.2701
+      },
+      "operationCountPerSample": 1000000,
+      "peakWorkingSetBytesMax": 478494720,
+      "privateDeltaBytes": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "requestedAllocationBytes": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "requestedBytesPerEntity": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "sampleCount": 30,
+      "warmupSampleCount": 1,
+      "workingSetDeltaBytes": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      }
+    },
+    {
+      "allocationCount": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "checksum": 499995000000,
+      "durationMs": {
+        "max": 23.7782,
+        "median": 23.2285,
+        "min": 21.7632,
+        "p95": 23.7374,
+        "p99": 23.7782
+      },
+      "entityCount": 100000,
+      "name": "ecs_dense_transform_iteration",
+      "nsPerOperation": {
+        "max": 2.37782,
+        "median": 2.32285,
+        "min": 2.17632,
+        "p95": 2.37374,
+        "p99": 2.37782
+      },
+      "operationCountPerSample": 10000000,
+      "peakWorkingSetBytesMax": 478494720,
+      "privateDeltaBytes": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "requestedAllocationBytes": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "requestedBytesPerEntity": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "sampleCount": 30,
+      "warmupSampleCount": 1,
+      "workingSetDeltaBytes": {
+        "max": 4096.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 4096.0
+      }
+    },
+    {
+      "allocationCount": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "checksum": 0,
+      "dirtyPercent": 0,
+      "durationMs": {
+        "max": 0.1928,
+        "median": 0.1761,
+        "min": 0.1558,
+        "p95": 0.1882,
+        "p99": 0.1928
+      },
+      "entityCount": 100000,
+      "name": "ecs_changed_transform_update",
+      "nsPerOperation": {
+        "max": 1.928,
+        "median": 1.761,
+        "min": 1.558,
+        "p95": 1.882,
+        "p99": 1.928
+      },
+      "operationCountPerSample": 100000,
+      "peakWorkingSetBytesMax": 478494720,
+      "privateDeltaBytes": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "requestedAllocationBytes": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "requestedBytesPerEntity": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "sampleCount": 30,
+      "warmupSampleCount": 1,
+      "workingSetDeltaBytes": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      }
+    },
+    {
+      "allocationCount": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "checksum": 1000,
+      "dirtyPercent": 1,
+      "durationMs": {
+        "max": 0.2036,
+        "median": 0.1835,
+        "min": 0.1647,
+        "p95": 0.2001,
+        "p99": 0.2036
+      },
+      "entityCount": 100000,
+      "name": "ecs_changed_transform_update",
+      "nsPerOperation": {
+        "max": 2.036,
+        "median": 1.835,
+        "min": 1.647,
+        "p95": 2.001,
+        "p99": 2.036
+      },
+      "operationCountPerSample": 100000,
+      "peakWorkingSetBytesMax": 478494720,
+      "privateDeltaBytes": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "requestedAllocationBytes": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "requestedBytesPerEntity": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "sampleCount": 30,
+      "warmupSampleCount": 1,
+      "workingSetDeltaBytes": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      }
+    },
+    {
+      "allocationCount": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "checksum": 10000,
+      "dirtyPercent": 10,
+      "durationMs": {
+        "max": 0.217,
+        "median": 0.2025,
+        "min": 0.187,
+        "p95": 0.216,
+        "p99": 0.217
+      },
+      "entityCount": 100000,
+      "name": "ecs_changed_transform_update",
+      "nsPerOperation": {
+        "max": 2.17,
+        "median": 2.025,
+        "min": 1.87,
+        "p95": 2.16,
+        "p99": 2.17
+      },
+      "operationCountPerSample": 100000,
+      "peakWorkingSetBytesMax": 478494720,
+      "privateDeltaBytes": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "requestedAllocationBytes": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "requestedBytesPerEntity": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "sampleCount": 30,
+      "warmupSampleCount": 1,
+      "workingSetDeltaBytes": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      }
+    },
+    {
+      "allocationCount": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "checksum": 100000,
+      "dirtyPercent": 100,
+      "durationMs": {
+        "max": 0.3382,
+        "median": 0.3146,
+        "min": 0.288,
+        "p95": 0.332,
+        "p99": 0.3382
+      },
+      "entityCount": 100000,
+      "name": "ecs_changed_transform_update",
+      "nsPerOperation": {
+        "max": 3.382,
+        "median": 3.146,
+        "min": 2.88,
+        "p95": 3.32,
+        "p99": 3.382
+      },
+      "operationCountPerSample": 100000,
+      "peakWorkingSetBytesMax": 478494720,
+      "privateDeltaBytes": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "requestedAllocationBytes": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "requestedBytesPerEntity": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "sampleCount": 30,
+      "warmupSampleCount": 1,
+      "workingSetDeltaBytes": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      }
+    },
+    {
+      "allocationCount": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "checksum": 214750864750000,
+      "durationMs": {
+        "max": 0.8871,
+        "median": 0.8466,
+        "min": 0.7727,
+        "p95": 0.8821,
+        "p99": 0.8871
+      },
+      "entityCount": 100000,
+      "name": "ecs_view_transform_mesh",
+      "nsPerOperation": {
+        "max": 8.871,
+        "median": 8.466,
+        "min": 7.727,
+        "p95": 8.821,
+        "p99": 8.871
+      },
+      "operationCountPerSample": 100000,
+      "peakWorkingSetBytesMax": 478494720,
+      "privateDeltaBytes": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "requestedAllocationBytes": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "requestedBytesPerEntity": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "sampleCount": 30,
+      "view": "Transform+Mesh",
+      "warmupSampleCount": 1,
+      "workingSetDeltaBytes": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      }
+    },
+    {
+      "allocationCount": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "checksum": 5000050000,
+      "durationMs": {
+        "max": 0.7299,
+        "median": 0.4716,
+        "min": 0.252,
+        "p95": 0.7171,
+        "p99": 0.7299
+      },
+      "entityCount": 100000,
+      "name": "ecs_view_transform_relationship",
+      "nsPerOperation": {
+        "max": 7.299,
+        "median": 4.716,
+        "min": 2.52,
+        "p95": 7.171,
+        "p99": 7.299
+      },
+      "operationCountPerSample": 100000,
+      "peakWorkingSetBytesMax": 478494720,
+      "privateDeltaBytes": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "requestedAllocationBytes": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "requestedBytesPerEntity": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "sampleCount": 30,
+      "view": "Transform+Relationship",
+      "warmupSampleCount": 1,
+      "workingSetDeltaBytes": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      }
+    },
+    {
+      "affectedPercent": 1,
+      "allocationCount": {
+        "max": 18.0,
+        "median": 18.0,
+        "min": 18.0,
+        "p95": 18.0,
+        "p99": 18.0
+      },
+      "checksum": 8589935091500,
+      "durationMs": {
+        "max": 0.0893,
+        "median": 0.0785,
+        "min": 0.0754,
+        "p95": 0.0847,
+        "p99": 0.0893
+      },
+      "entityCount": 100000,
+      "name": "ecs_batch_delete_recreate",
+      "nsPerOperation": {
+        "max": 44.65,
+        "median": 39.25,
+        "min": 37.7,
+        "p95": 42.35,
+        "p99": 44.65
+      },
+      "operationCountPerSample": 2000,
+      "peakWorkingSetBytesMax": 478494720,
+      "privateDeltaBytes": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "requestedAllocationBytes": {
+        "max": 12851.0,
+        "median": 12851.0,
+        "min": 12851.0,
+        "p95": 12851.0,
+        "p99": 12851.0
+      },
+      "requestedBytesPerEntity": {
+        "max": 0.12851,
+        "median": 0.12851,
+        "min": 0.12851,
+        "p95": 0.12851,
+        "p99": 0.12851
+      },
+      "sampleCount": 30,
+      "warmupSampleCount": 1,
+      "workingSetDeltaBytes": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      }
+    },
+    {
+      "affectedPercent": 10,
+      "allocationCount": {
+        "max": 33.0,
+        "median": 33.0,
+        "min": 33.0,
+        "p95": 33.0,
+        "p99": 33.0
+      },
+      "checksum": 85899395915000,
+      "durationMs": {
+        "max": 0.8184,
+        "median": 0.746,
+        "min": 0.7178,
+        "p95": 0.8138,
+        "p99": 0.8184
+      },
+      "entityCount": 100000,
+      "name": "ecs_batch_delete_recreate",
+      "nsPerOperation": {
+        "max": 40.92,
+        "median": 37.3,
+        "min": 35.89,
+        "p95": 40.69,
+        "p99": 40.92
+      },
+      "operationCountPerSample": 20000,
+      "peakWorkingSetBytesMax": 478494720,
+      "privateDeltaBytes": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "requestedAllocationBytes": {
+        "max": 182861.0,
+        "median": 182861.0,
+        "min": 182861.0,
+        "p95": 182861.0,
+        "p99": 182861.0
+      },
+      "requestedBytesPerEntity": {
+        "max": 1.82861,
+        "median": 1.82861,
+        "min": 1.82861,
+        "p95": 1.82861,
+        "p99": 1.82861
+      },
+      "sampleCount": 30,
+      "warmupSampleCount": 1,
+      "workingSetDeltaBytes": {
+        "max": 12288.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 8192.0,
+        "p99": 12288.0
+      }
+    },
+    {
+      "affectedPercent": 50,
+      "allocationCount": {
+        "max": 76.0,
+        "median": 76.0,
+        "min": 76.0,
+        "p95": 76.0,
+        "p99": 76.0
+      },
+      "checksum": 429497979575000,
+      "durationMs": {
+        "max": 4.6425,
+        "median": 4.1019,
+        "min": 3.8895,
+        "p95": 4.5521,
+        "p99": 4.6425
+      },
+      "entityCount": 100000,
+      "name": "ecs_batch_delete_recreate",
+      "nsPerOperation": {
+        "max": 46.425,
+        "median": 41.019,
+        "min": 38.895,
+        "p95": 45.521,
+        "p99": 46.425
+      },
+      "operationCountPerSample": 100000,
+      "peakWorkingSetBytesMax": 478494720,
+      "privateDeltaBytes": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "requestedAllocationBytes": {
+        "max": 934633.0,
+        "median": 934633.0,
+        "min": 934633.0,
+        "p95": 934633.0,
+        "p99": 934633.0
+      },
+      "requestedBytesPerEntity": {
+        "max": 9.34633,
+        "median": 9.34633,
+        "min": 9.34633,
+        "p95": 9.34633,
+        "p99": 9.34633
+      },
+      "sampleCount": 30,
+      "warmupSampleCount": 1,
+      "workingSetDeltaBytes": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      }
+    },
+    {
+      "allocationCount": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "checksum": 0,
+      "durationMs": {
+        "max": 2.7171,
+        "median": 1.7023,
+        "min": 1.6631,
+        "p95": 1.7619,
+        "p99": 2.7171
+      },
+      "entityCount": 100000,
+      "name": "ecs_stale_handle_probe",
+      "nsPerOperation": {
+        "max": 2.7171,
+        "median": 1.7023,
+        "min": 1.6631,
+        "p95": 1.7619,
+        "p99": 2.7171
+      },
+      "operationCountPerSample": 1000000,
+      "peakWorkingSetBytesMax": 478494720,
+      "privateDeltaBytes": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "probeResult": "stale-rejected-after-index-reuse",
+      "requestedAllocationBytes": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "requestedBytesPerEntity": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "sampleCount": 30,
+      "warmupSampleCount": 1,
+      "workingSetDeltaBytes": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      }
+    },
+    {
+      "allocationCount": {
+        "max": 20053.0,
+        "median": 20053.0,
+        "min": 20053.0,
+        "p95": 20053.0,
+        "p99": 20053.0
+      },
+      "checksum": 42949722955000,
+      "durationMs": {
+        "max": 2.9216,
+        "median": 2.5287,
+        "min": 2.4059,
+        "p95": 2.8276,
+        "p99": 2.9216
+      },
+      "entityCount": 10000,
+      "name": "scene_identity_create_bind",
+      "nsPerOperation": {
+        "max": 292.16,
+        "median": 252.87,
+        "min": 240.59,
+        "p95": 282.76,
+        "p99": 292.16
+      },
+      "operationCountPerSample": 10000,
+      "peakWorkingSetBytesMax": 478494720,
+      "privateDeltaBytes": {
+        "max": 1970176.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 1724416.0,
+        "p99": 1970176.0
+      },
+      "requestedAllocationBytes": {
+        "max": 1984477.0,
+        "median": 1984477.0,
+        "min": 1984477.0,
+        "p95": 1984477.0,
+        "p99": 1984477.0
+      },
+      "requestedBytesPerEntity": {
+        "max": 198.4477,
+        "median": 198.4477,
+        "min": 198.4477,
+        "p95": 198.4477,
+        "p99": 198.4477
+      },
+      "sampleCount": 30,
+      "warmupSampleCount": 1,
+      "workingSetDeltaBytes": {
+        "max": 1650688.0,
+        "median": 8192.0,
+        "min": 0.0,
+        "p95": 1417216.0,
+        "p99": 1650688.0
+      }
+    },
+    {
+      "allocationCount": {
+        "max": 200071.0,
+        "median": 200071.0,
+        "min": 200071.0,
+        "p95": 200071.0,
+        "p99": 200071.0
+      },
+      "checksum": 429501729550000,
+      "durationMs": {
+        "max": 45.1622,
+        "median": 39.1301,
+        "min": 33.1888,
+        "p95": 42.739,
+        "p99": 45.1622
+      },
+      "entityCount": 100000,
+      "name": "scene_identity_create_bind",
+      "nsPerOperation": {
+        "max": 451.622,
+        "median": 391.301,
+        "min": 331.888,
+        "p95": 427.39,
+        "p99": 451.622
+      },
+      "operationCountPerSample": 100000,
+      "peakWorkingSetBytesMax": 478494720,
+      "privateDeltaBytes": {
+        "max": 4214784.0,
+        "median": 4214784.0,
+        "min": 4214784.0,
+        "p95": 4214784.0,
+        "p99": 4214784.0
+      },
+      "requestedAllocationBytes": {
+        "max": 18077929.0,
+        "median": 18077929.0,
+        "min": 18077929.0,
+        "p95": 18077929.0,
+        "p99": 18077929.0
+      },
+      "requestedBytesPerEntity": {
+        "max": 180.77929,
+        "median": 180.77929,
+        "min": 180.77929,
+        "p95": 180.77929,
+        "p99": 180.77929
+      },
+      "sampleCount": 30,
+      "warmupSampleCount": 1,
+      "workingSetDeltaBytes": {
+        "max": 4247552.0,
+        "median": 4202496.0,
+        "min": 4194304.0,
+        "p95": 4247552.0,
+        "p99": 4247552.0
+      }
+    },
+    {
+      "allocationCount": {
+        "max": 2000088.0,
+        "median": 2000088.0,
+        "min": 2000088.0,
+        "p95": 2000088.0,
+        "p99": 2000088.0
+      },
+      "checksum": 4295467295500000,
+      "durationMs": {
+        "max": 580.7887,
+        "median": 550.2865,
+        "min": 522.0238,
+        "p95": 575.8025,
+        "p99": 580.7887
+      },
+      "entityCount": 1000000,
+      "name": "scene_identity_create_bind",
+      "nsPerOperation": {
+        "max": 580.7887,
+        "median": 550.2865,
+        "min": 522.0238,
+        "p95": 575.8025,
+        "p99": 580.7887
+      },
+      "operationCountPerSample": 1000000,
+      "peakWorkingSetBytesMax": 478494720,
+      "privateDeltaBytes": {
+        "max": 143814656.0,
+        "median": 95719424.0,
+        "min": 87261184.0,
+        "p95": 143691776.0,
+        "p99": 143814656.0
+      },
+      "requestedAllocationBytes": {
+        "max": 160186660.0,
+        "median": 160186660.0,
+        "min": 160186660.0,
+        "p95": 160186660.0,
+        "p99": 160186660.0
+      },
+      "requestedBytesPerEntity": {
+        "max": 160.18666,
+        "median": 160.18666,
+        "min": 160.18666,
+        "p95": 160.18666,
+        "p99": 160.18666
+      },
+      "sampleCount": 30,
+      "warmupSampleCount": 1,
+      "workingSetDeltaBytes": {
+        "max": 134602752.0,
+        "median": 91275264.0,
+        "min": 83259392.0,
+        "p95": 134578176.0,
+        "p99": 134602752.0
+      }
+    },
+    {
+      "allocationCount": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "checksum": 4295017295500000,
+      "durationMs": {
+        "max": 149.2353,
+        "median": 128.4851,
+        "min": 98.8673,
+        "p95": 145.1113,
+        "p99": 149.2353
+      },
+      "entityCount": 100000,
+      "name": "scene_identity_uuid_resolve",
+      "nsPerOperation": {
+        "max": 149.2353,
+        "median": 128.4851,
+        "min": 98.8673,
+        "p95": 145.1113,
+        "p99": 149.2353
+      },
+      "operationCountPerSample": 1000000,
+      "peakWorkingSetBytesMax": 478494720,
+      "privateDeltaBytes": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "requestedAllocationBytes": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "requestedBytesPerEntity": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "sampleCount": 30,
+      "warmupSampleCount": 1,
+      "workingSetDeltaBytes": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      }
+    },
+    {
+      "allocationCount": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "checksum": 82000000,
+      "durationMs": {
+        "max": 52.068,
+        "median": 32.9492,
+        "min": 23.8483,
+        "p95": 48.4345,
+        "p99": 52.068
+      },
+      "entityCount": 100000,
+      "name": "scene_identity_handle_reverse_lookup",
+      "nsPerOperation": {
+        "max": 52.068,
+        "median": 32.9492,
+        "min": 23.8483,
+        "p95": 48.4345,
+        "p99": 52.068
+      },
+      "operationCountPerSample": 1000000,
+      "peakWorkingSetBytesMax": 478494720,
+      "privateDeltaBytes": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "requestedAllocationBytes": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "requestedBytesPerEntity": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "sampleCount": 30,
+      "warmupSampleCount": 1,
+      "workingSetDeltaBytes": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      }
+    },
+    {
+      "allocationCount": {
+        "max": 200032.0,
+        "median": 200032.0,
+        "min": 200032.0,
+        "p95": 200032.0,
+        "p99": 200032.0
+      },
+      "checksum": 200000,
+      "durationMs": {
+        "max": 72.7238,
+        "median": 64.6161,
+        "min": 54.5691,
+        "p95": 69.4454,
+        "p99": 72.7238
+      },
+      "entityCount": 100000,
+      "name": "scene_identity_destroy_recreate",
+      "nsPerOperation": {
+        "max": 363.619,
+        "median": 323.0805,
+        "min": 272.8455,
+        "p95": 347.227,
+        "p99": 363.619
+      },
+      "oldUuidResult": "unbound",
+      "operationCountPerSample": 200000,
+      "peakWorkingSetBytesMax": 478494720,
+      "privateDeltaBytes": {
+        "max": 1888256.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 1888256.0,
+        "p99": 1888256.0
+      },
+      "requestedAllocationBytes": {
+        "max": 12059689.0,
+        "median": 12059689.0,
+        "min": 12059689.0,
+        "p95": 12059689.0,
+        "p99": 12059689.0
+      },
+      "requestedBytesPerEntity": {
+        "max": 120.59689,
+        "median": 120.59689,
+        "min": 120.59689,
+        "p95": 120.59689,
+        "p99": 120.59689
+      },
+      "sampleCount": 30,
+      "warmupSampleCount": 1,
+      "workingSetDeltaBytes": {
+        "max": 2023424.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 1855488.0,
+        "p99": 2023424.0
+      }
+    },
+    {
+      "allocationCount": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "checksum": 10000,
+      "durationMs": {
+        "max": 0.067,
+        "median": 0.0578,
+        "min": 0.0561,
+        "p95": 0.0625,
+        "p99": 0.067
+      },
+      "entityCount": 10000,
+      "name": "ecs_hierarchy_depth_traversal",
+      "nsPerOperation": {
+        "max": 6.7,
+        "median": 5.78,
+        "min": 5.61,
+        "p95": 6.25,
+        "p99": 6.7
+      },
+      "operationCountPerSample": 10000,
+      "peakWorkingSetBytesMax": 478494720,
+      "privateDeltaBytes": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "requestedAllocationBytes": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "requestedBytesPerEntity": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "sampleCount": 30,
+      "shape": "depth",
+      "warmupSampleCount": 1,
+      "workingSetDeltaBytes": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      }
+    },
+    {
+      "allocationCount": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "checksum": 10000,
+      "durationMs": {
+        "max": 0.0204,
+        "median": 0.0183,
+        "min": 0.0182,
+        "p95": 0.0187,
+        "p99": 0.0204
+      },
+      "entityCount": 10000,
+      "name": "ecs_hierarchy_breadth_traversal",
+      "nsPerOperation": {
+        "max": 2.04,
+        "median": 1.83,
+        "min": 1.82,
+        "p95": 1.87,
+        "p99": 2.04
+      },
+      "operationCountPerSample": 10000,
+      "peakWorkingSetBytesMax": 478494720,
+      "privateDeltaBytes": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "requestedAllocationBytes": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "requestedBytesPerEntity": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "sampleCount": 30,
+      "shape": "breadth",
+      "warmupSampleCount": 1,
+      "workingSetDeltaBytes": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      }
+    },
+    {
+      "allocationCount": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "checksum": 100000,
+      "durationMs": {
+        "max": 1.0839,
+        "median": 0.8901,
+        "min": 0.6899,
+        "p95": 1.0614,
+        "p99": 1.0839
+      },
+      "entityCount": 100000,
+      "name": "ecs_hierarchy_depth_traversal",
+      "nsPerOperation": {
+        "max": 10.839,
+        "median": 8.901,
+        "min": 6.899,
+        "p95": 10.614,
+        "p99": 10.839
+      },
+      "operationCountPerSample": 100000,
+      "peakWorkingSetBytesMax": 478494720,
+      "privateDeltaBytes": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "requestedAllocationBytes": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "requestedBytesPerEntity": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "sampleCount": 30,
+      "shape": "depth",
+      "warmupSampleCount": 1,
+      "workingSetDeltaBytes": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      }
+    },
+    {
+      "allocationCount": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "checksum": 100000,
+      "durationMs": {
+        "max": 0.1995,
+        "median": 0.1896,
+        "min": 0.1878,
+        "p95": 0.1988,
+        "p99": 0.1995
+      },
+      "entityCount": 100000,
+      "name": "ecs_hierarchy_breadth_traversal",
+      "nsPerOperation": {
+        "max": 1.995,
+        "median": 1.896,
+        "min": 1.878,
+        "p95": 1.988,
+        "p99": 1.995
+      },
+      "operationCountPerSample": 100000,
+      "peakWorkingSetBytesMax": 478494720,
+      "privateDeltaBytes": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "requestedAllocationBytes": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "requestedBytesPerEntity": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "sampleCount": 30,
+      "shape": "breadth",
+      "warmupSampleCount": 1,
+      "workingSetDeltaBytes": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      }
+    },
+    {
+      "allocationCount": {
+        "max": 46.0,
+        "median": 46.0,
+        "min": 46.0,
+        "p95": 46.0,
+        "p99": 46.0
+      },
+      "checksum": 9,
+      "durationMs": {
+        "max": 0.0108,
+        "median": 0.0072,
+        "min": 0.007,
+        "p95": 0.0096,
+        "p99": 0.0108
+      },
+      "entityCount": 0,
+      "name": "editor_inspector_registry_construction",
+      "nsPerOperation": {
+        "max": 10800.0,
+        "median": 7200.0,
+        "min": 7000.0,
+        "p95": 9600.0,
+        "p99": 10800.0
+      },
+      "operationCountPerSample": 1,
+      "peakWorkingSetBytesMax": 478494720,
+      "privateDeltaBytes": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "requestedAllocationBytes": {
+        "max": 13704.0,
+        "median": 13704.0,
+        "min": 13704.0,
+        "p95": 13704.0,
+        "p99": 13704.0
+      },
+      "requestedBytesPerEntity": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "sampleCount": 30,
+      "warmupSampleCount": 1,
+      "workingSetDeltaBytes": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      }
+    },
+    {
+      "allocationCount": {
+        "max": 2.0,
+        "median": 2.0,
+        "min": 2.0,
+        "p95": 2.0,
+        "p99": 2.0
+      },
+      "checksum": 4294977295,
+      "durationMs": {
+        "max": 0.9836,
+        "median": 0.9335,
+        "min": 0.9125,
+        "p95": 0.9701,
+        "p99": 0.9836
+      },
+      "entityCount": 10000,
+      "name": "editor_hierarchy_snapshot_sort",
+      "nsPerOperation": {
+        "max": 98.36,
+        "median": 93.35,
+        "min": 91.25,
+        "p95": 97.01,
+        "p99": 98.36
+      },
+      "operationCountPerSample": 10000,
+      "peakWorkingSetBytesMax": 478494720,
+      "privateDeltaBytes": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "requestedAllocationBytes": {
+        "max": 120039.0,
+        "median": 120039.0,
+        "min": 120039.0,
+        "p95": 120039.0,
+        "p99": 120039.0
+      },
+      "requestedBytesPerEntity": {
+        "max": 12.0039,
+        "median": 12.0039,
+        "min": 12.0039,
+        "p95": 12.0039,
+        "p99": 12.0039
+      },
+      "sampleCount": 30,
+      "warmupSampleCount": 1,
+      "workingSetDeltaBytes": {
+        "max": 4096.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 4096.0,
+        "p99": 4096.0
+      }
+    },
+    {
+      "allocationCount": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "checksum": 20889242,
+      "durationMs": {
+        "max": 2.6167,
+        "median": 2.4025,
+        "min": 2.338,
+        "p95": 2.5967,
+        "p99": 2.6167
+      },
+      "entityCount": 10000,
+      "name": "editor_selection_lookup",
+      "nsPerOperation": {
+        "max": 2.6167,
+        "median": 2.4025,
+        "min": 2.338,
+        "p95": 2.5967,
+        "p99": 2.6167
+      },
+      "operationCountPerSample": 1000000,
+      "peakWorkingSetBytesMax": 478494720,
+      "privateDeltaBytes": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "requestedAllocationBytes": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "requestedBytesPerEntity": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "sampleCount": 30,
+      "warmupSampleCount": 1,
+      "workingSetDeltaBytes": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      }
+    },
+    {
+      "allocationCount": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "checksum": 50000,
+      "durationMs": {
+        "max": 1.9107,
+        "median": 1.8745,
+        "min": 1.8338,
+        "p95": 1.9005,
+        "p99": 1.9107
+      },
+      "entityCount": 10000,
+      "name": "editor_inspector_descriptor_construction",
+      "nsPerOperation": {
+        "max": 47.7675,
+        "median": 46.8625,
+        "min": 45.845,
+        "p95": 47.5125,
+        "p99": 47.7675
+      },
+      "operationCountPerSample": 40000,
+      "peakWorkingSetBytesMax": 478494720,
+      "privateDeltaBytes": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "requestedAllocationBytes": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "requestedBytesPerEntity": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "sampleCount": 30,
+      "warmupSampleCount": 1,
+      "workingSetDeltaBytes": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      }
+    },
+    {
+      "allocationCount": {
+        "max": 2.0,
+        "median": 2.0,
+        "min": 2.0,
+        "p95": 2.0,
+        "p99": 2.0
+      },
+      "checksum": 4295067295,
+      "durationMs": {
+        "max": 11.1158,
+        "median": 10.4545,
+        "min": 10.129,
+        "p95": 10.652,
+        "p99": 11.1158
+      },
+      "entityCount": 100000,
+      "name": "editor_hierarchy_snapshot_sort",
+      "nsPerOperation": {
+        "max": 111.158,
+        "median": 104.545,
+        "min": 101.29,
+        "p95": 106.52,
+        "p99": 111.158
+      },
+      "operationCountPerSample": 100000,
+      "peakWorkingSetBytesMax": 478494720,
+      "privateDeltaBytes": {
+        "max": 811008.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 811008.0
+      },
+      "requestedAllocationBytes": {
+        "max": 1200039.0,
+        "median": 1200039.0,
+        "min": 1200039.0,
+        "p95": 1200039.0,
+        "p99": 1200039.0
+      },
+      "requestedBytesPerEntity": {
+        "max": 12.00039,
+        "median": 12.00039,
+        "min": 12.00039,
+        "p95": 12.00039,
+        "p99": 12.00039
+      },
+      "sampleCount": 30,
+      "warmupSampleCount": 1,
+      "workingSetDeltaBytes": {
+        "max": 798720.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 798720.0
+      }
+    },
+    {
+      "allocationCount": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "checksum": 21889124,
+      "durationMs": {
+        "max": 5.2247,
+        "median": 4.7091,
+        "min": 4.2411,
+        "p95": 5.0592,
+        "p99": 5.2247
+      },
+      "entityCount": 100000,
+      "name": "editor_selection_lookup",
+      "nsPerOperation": {
+        "max": 5.2247,
+        "median": 4.7091,
+        "min": 4.2411,
+        "p95": 5.0592,
+        "p99": 5.2247
+      },
+      "operationCountPerSample": 1000000,
+      "peakWorkingSetBytesMax": 478494720,
+      "privateDeltaBytes": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "requestedAllocationBytes": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "requestedBytesPerEntity": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "sampleCount": 30,
+      "warmupSampleCount": 1,
+      "workingSetDeltaBytes": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      }
+    },
+    {
+      "allocationCount": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "checksum": 500000,
+      "durationMs": {
+        "max": 19.2342,
+        "median": 18.7621,
+        "min": 18.4819,
+        "p95": 19.1216,
+        "p99": 19.2342
+      },
+      "entityCount": 100000,
+      "name": "editor_inspector_descriptor_construction",
+      "nsPerOperation": {
+        "max": 48.0855,
+        "median": 46.90525,
+        "min": 46.20475,
+        "p95": 47.804,
+        "p99": 48.0855
+      },
+      "operationCountPerSample": 400000,
+      "peakWorkingSetBytesMax": 478494720,
+      "privateDeltaBytes": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "requestedAllocationBytes": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "requestedBytesPerEntity": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "sampleCount": 30,
+      "warmupSampleCount": 1,
+      "workingSetDeltaBytes": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      }
+    },
+    {
+      "allocationCount": {
+        "max": 122346.0,
+        "median": 122346.0,
+        "min": 122346.0,
+        "p95": 122346.0,
+        "p99": 122346.0
+      },
+      "checksum": 785536,
+      "durationMs": {
+        "max": 18.0732,
+        "median": 16.4463,
+        "min": 14.2416,
+        "p95": 17.8635,
+        "p99": 18.0732
+      },
+      "entityCount": 1000,
+      "name": "scene_v0_save",
+      "nsPerOperation": {
+        "max": 18073.2,
+        "median": 16446.3,
+        "min": 14241.6,
+        "p95": 17863.5,
+        "p99": 18073.2
+      },
+      "operationCountPerSample": 1000,
+      "peakWorkingSetBytesMax": 478494720,
+      "privateDeltaBytes": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "requestedAllocationBytes": {
+        "max": 8537077.0,
+        "median": 8537077.0,
+        "min": 8537077.0,
+        "p95": 8537077.0,
+        "p99": 8537077.0
+      },
+      "requestedBytesPerEntity": {
+        "max": 8537.077,
+        "median": 8537.077,
+        "min": 8537.077,
+        "p95": 8537.077,
+        "p99": 8537.077
+      },
+      "sampleCount": 30,
+      "warmupSampleCount": 1,
+      "workingSetDeltaBytes": {
+        "max": 20480.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 16384.0,
+        "p99": 20480.0
+      }
+    },
+    {
+      "allocationCount": {
+        "max": 41247.0,
+        "median": 41247.0,
+        "min": 41247.0,
+        "p95": 41247.0,
+        "p99": 41247.0
+      },
+      "checksum": 1000,
+      "durationMs": {
+        "max": 12.2127,
+        "median": 11.1287,
+        "min": 10.6336,
+        "p95": 11.9917,
+        "p99": 12.2127
+      },
+      "entityCount": 1000,
+      "name": "scene_v0_load",
+      "nsPerOperation": {
+        "max": 12212.7,
+        "median": 11128.7,
+        "min": 10633.6,
+        "p95": 11991.7,
+        "p99": 12212.7
+      },
+      "operationCountPerSample": 1000,
+      "peakWorkingSetBytesMax": 478494720,
+      "privateDeltaBytes": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 0.0,
+        "p99": 0.0
+      },
+      "requestedAllocationBytes": {
+        "max": 2993687.0,
+        "median": 2993687.0,
+        "min": 2993687.0,
+        "p95": 2993687.0,
+        "p99": 2993687.0
+      },
+      "requestedBytesPerEntity": {
+        "max": 2993.687,
+        "median": 2993.687,
+        "min": 2993.687,
+        "p95": 2993.687,
+        "p99": 2993.687
+      },
+      "sampleCount": 30,
+      "warmupSampleCount": 1,
+      "workingSetDeltaBytes": {
+        "max": 12288.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 12288.0,
+        "p99": 12288.0
+      }
+    },
+    {
+      "allocationCount": {
+        "max": 1222315.0,
+        "median": 1222315.0,
+        "min": 1222315.0,
+        "p95": 1222315.0,
+        "p99": 1222315.0
+      },
+      "checksum": 7921251,
+      "durationMs": {
+        "max": 215.4427,
+        "median": 164.4091,
+        "min": 155.1684,
+        "p95": 174.0191,
+        "p99": 215.4427
+      },
+      "entityCount": 10000,
+      "name": "scene_v0_save",
+      "nsPerOperation": {
+        "max": 21544.27,
+        "median": 16440.91,
+        "min": 15516.84,
+        "p95": 17401.91,
+        "p99": 21544.27
+      },
+      "operationCountPerSample": 10000,
+      "peakWorkingSetBytesMax": 478494720,
+      "privateDeltaBytes": {
+        "max": 43454464.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 1015808.0,
+        "p99": 43454464.0
+      },
+      "requestedAllocationBytes": {
+        "max": 88719620.0,
+        "median": 88719620.0,
+        "min": 88719620.0,
+        "p95": 88719620.0,
+        "p99": 88719620.0
+      },
+      "requestedBytesPerEntity": {
+        "max": 8871.962,
+        "median": 8871.962,
+        "min": 8871.962,
+        "p95": 8871.962,
+        "p99": 8871.962
+      },
+      "sampleCount": 30,
+      "warmupSampleCount": 1,
+      "workingSetDeltaBytes": {
+        "max": 40058880.0,
+        "median": 0.0,
+        "min": 0.0,
+        "p95": 950272.0,
+        "p99": 40058880.0
+      }
+    },
+    {
+      "allocationCount": {
+        "max": 410122.0,
+        "median": 410122.0,
+        "min": 410122.0,
+        "p95": 410122.0,
+        "p99": 410122.0
+      },
+      "checksum": 10000,
+      "durationMs": {
+        "max": 151.0362,
+        "median": 135.1249,
+        "min": 126.6656,
+        "p95": 142.3512,
+        "p99": 151.0362
+      },
+      "entityCount": 10000,
+      "name": "scene_v0_load",
+      "nsPerOperation": {
+        "max": 15103.62,
+        "median": 13512.49,
+        "min": 12666.56,
+        "p95": 14235.12,
+        "p99": 15103.62
+      },
+      "operationCountPerSample": 10000,
+      "peakWorkingSetBytesMax": 478494720,
+      "privateDeltaBytes": {
+        "max": 28438528.0,
+        "median": 2048000.0,
+        "min": 0.0,
+        "p95": 2048000.0,
+        "p99": 28438528.0
+      },
+      "requestedAllocationBytes": {
+        "max": 31563885.0,
+        "median": 31563885.0,
+        "min": 31563885.0,
+        "p95": 31563885.0,
+        "p99": 31563885.0
+      },
+      "requestedBytesPerEntity": {
+        "max": 3156.3885,
+        "median": 3156.3885,
+        "min": 3156.3885,
+        "p95": 3156.3885,
+        "p99": 3156.3885
+      },
+      "sampleCount": 30,
+      "warmupSampleCount": 1,
+      "workingSetDeltaBytes": {
+        "max": 26992640.0,
+        "median": 1712128.0,
+        "min": 0.0,
+        "p95": 2252800.0,
+        "p99": 26992640.0
+      }
+    },
+    {
+      "allocationCount": {
+        "max": 12221985.0,
+        "median": 12221985.0,
+        "min": 12221985.0,
+        "p95": 12221985.0,
+        "p99": 12221985.0
+      },
+      "checksum": 79810232,
+      "durationMs": {
+        "max": 1972.0969,
+        "median": 1772.6692,
+        "min": 962.0673,
+        "p95": 1848.058,
+        "p99": 1972.0969
+      },
+      "entityCount": 100000,
+      "name": "scene_v0_save",
+      "nsPerOperation": {
+        "max": 19720.969,
+        "median": 17726.692,
+        "min": 9620.673,
+        "p95": 18480.58,
+        "p99": 19720.969
+      },
+      "operationCountPerSample": 100000,
+      "peakWorkingSetBytesMax": 602996736,
+      "privateDeltaBytes": {
+        "max": 132284416.0,
+        "median": 17674240.0,
+        "min": 0.0,
+        "p95": 132263936.0,
+        "p99": 132284416.0
+      },
+      "requestedAllocationBytes": {
+        "max": 925838497.0,
+        "median": 925838497.0,
+        "min": 925838497.0,
+        "p95": 925838497.0,
+        "p99": 925838497.0
+      },
+      "requestedBytesPerEntity": {
+        "max": 9258.38497,
+        "median": 9258.38497,
+        "min": 9258.38497,
+        "p95": 9258.38497,
+        "p99": 9258.38497
+      },
+      "sampleCount": 30,
+      "warmupSampleCount": 1,
+      "workingSetDeltaBytes": {
+        "max": 123138048.0,
+        "median": 16367616.0,
+        "min": 0.0,
+        "p95": 122724352.0,
+        "p99": 123138048.0
+      }
+    },
+    {
+      "allocationCount": {
+        "max": 4097859.0,
+        "median": 4097859.0,
+        "min": 4097859.0,
+        "p95": 4097859.0,
+        "p99": 4097859.0
+      },
+      "checksum": 100000,
+      "durationMs": {
+        "max": 1445.6715,
+        "median": 1400.66,
+        "min": 821.289,
+        "p95": 1445.21,
+        "p99": 1445.6715
+      },
+      "entityCount": 100000,
+      "name": "scene_v0_load",
+      "nsPerOperation": {
+        "max": 14456.715,
+        "median": 14006.6,
+        "min": 8212.89,
+        "p95": 14452.1,
+        "p99": 14456.715
+      },
+      "operationCountPerSample": 100000,
+      "peakWorkingSetBytesMax": 602996736,
+      "privateDeltaBytes": {
+        "max": 230297600.0,
+        "median": 52969472.0,
+        "min": 0.0,
+        "p95": 229126144.0,
+        "p99": 230297600.0
+      },
+      "requestedAllocationBytes": {
+        "max": 330956381.0,
+        "median": 330956381.0,
+        "min": 330956381.0,
+        "p95": 330956381.0,
+        "p99": 330956381.0
+      },
+      "requestedBytesPerEntity": {
+        "max": 3309.56381,
+        "median": 3309.56381,
+        "min": 3309.56381,
+        "p95": 3309.56381,
+        "p99": 3309.56381
+      },
+      "sampleCount": 30,
+      "warmupSampleCount": 1,
+      "workingSetDeltaBytes": {
+        "max": 206516224.0,
+        "median": 41988096.0,
+        "min": 0.0,
+        "p95": 204865536.0,
+        "p99": 206516224.0
+      }
+    }
+  ],
+  "clock": "steady_clock",
+  "compiler": "MSVC 19.51.36252.0",
+  "configuration": "Release",
+  "fixedSeed": 5570198094586900512,
+  "measuredSamplesPerCase": 30,
+  "registryContract": "generational-64-bit-handle+dense-vector+paged-32-bit-sparse-index+generation-validation-m4.8",
+  "sceneIdentityContract": "uuidv7+bidirectional-map-m4.1",
+  "schema": "iridium.m4.ecs-scene-baseline",
+  "sourceCommit": "30252593f8fdd2de5dffbb8da31bb570ff49a7c0",
+  "sourceDirtyAtConfigure": true,
+  "sourceSceneContract": "legacy-v0-comparator; schema1 production measured separately",
+  "system": {
+    "logicalProcessorCount": 32,
+    "processor": "Intel64 Family 6 Model 183 Stepping 1, GenuineIntel",
+    "totalPhysicalMemoryBytes": 68466892800
+  },
+  "unsupportedCases": [
+    {
+      "appendInSlice": "M4.4 accepted",
+      "name": "cooked_scene_save_load",
+      "reason": "measured by the dedicated IridiumCookedSceneBenchmark"
+    }
+  ],
+  "version": 4,
+  "warmupSamplesPerCase": 1
+}

@@ -1,0 +1,46 @@
+#version 450
+#include "include/clustered_lighting.glsl"
+
+// Dense clusters are rare in the normal product. They retain the fully bounded
+// shared-memory network while the common <=32-light lists use subgroup packing.
+layout(local_size_x = 32) in;
+
+shared uint sortedSlots[256];
+
+void main() {
+    uint denseIndex = gl_WorkGroupID.x;
+    uint cluster = clusterCounts[
+        iridiumClusterCount() - 1u - denseIndex];
+    ClusterLightHeader header = clusterHeaders[cluster];
+    uint lane = gl_LocalInvocationID.x;
+
+    for (uint index = lane; index < clusterLimits.y; index += 32u) {
+        sortedSlots[index] = index < header.count
+            ? clusterLightSlots[header.offset + index]
+            : IRIDIUM_INVALID_LIGHT_SLOT;
+    }
+    barrier();
+
+    uint sortCount = 1u;
+    while (sortCount < header.count) sortCount <<= 1u;
+    for (uint sequence = 2u; sequence <= sortCount; sequence <<= 1u) {
+        for (uint stride = sequence >> 1u; stride > 0u; stride >>= 1u) {
+            for (uint index = lane; index < sortCount; index += 32u) {
+                uint partner = index ^ stride;
+                if (partner > index) {
+                    bool ascending = (index & sequence) == 0u;
+                    uint left = sortedSlots[index];
+                    uint right = sortedSlots[partner];
+                    if ((left > right) == ascending) {
+                        sortedSlots[index] = right;
+                        sortedSlots[partner] = left;
+                    }
+                }
+            }
+            barrier();
+        }
+    }
+
+    for (uint index = lane; index < header.count; index += 32u)
+        clusterLightSlots[header.offset + index] = sortedSlots[index];
+}

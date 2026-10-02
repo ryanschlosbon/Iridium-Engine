@@ -1,0 +1,146 @@
+{
+  "schema_version": 1,
+  "milestone": "M5.0",
+  "source_baseline": "30252593f8fdd2de5dffbb8da31bb570ff49a7c0",
+  "color_domain": "scene_linear_acescg_ap1",
+  "capture_domains": ["scene-linear", "final-sdr", "scrgb", "hdr10"],
+  "tracked_sources": [
+    {
+      "path": "../../../tests/scene/fixtures/m5_lighting_v1.iridium.scene.json",
+      "sha256": "13ed37bcef83d92251f25f4ffc7d2517fa52593079f5f4a3bb2fa419419c6d1b",
+      "asset_guid": "01890f4c-0000-7000-8000-000000000050",
+      "expected_entities": 3,
+      "expected_lights": { "directional": 1, "point": 1, "spot": 1 }
+    }
+  ],
+  "generated_scene_policy": {
+    "seed": 5570760448869348193,
+    "identity_order": "ascending_uuid",
+    "local_light_layout": "centered_3d_hammersley",
+    "camera_near": 0.1,
+    "camera_far": 1000.0,
+    "camera_vertical_fov_degrees": 60.0,
+    "production_resolution": [3840, 2160]
+  },
+  "cases": [
+    {
+      "id": "legacy_fixed_lighting_v1",
+      "availability": "existing_runtime",
+      "active_from": "M5.0",
+      "source_asset": "../m0/material_lab.gltf",
+      "purpose": "Capture the fixed vec3(1) light, vec3(3) radiance, and raw equirectangular environment as defects to remove, not as physical references."
+    },
+    {
+      "id": "sun_sky_v1",
+      "availability": "tracked_source_scene",
+      "active_from": "M5.1",
+      "source_asset": "../../../tests/scene/fixtures/m5_lighting_v1.iridium.scene.json",
+      "purpose": "Directional lux, AP1-normalized color, exposure calibration, cascades, and cooked sky IBL."
+    },
+    {
+      "id": "point_spot_v1",
+      "availability": "tracked_source_scene",
+      "active_from": "M5.1",
+      "source_asset": "../../../tests/scene/fixtures/m5_lighting_v1.iridium.scene.json",
+      "purpose": "Candela conversion, inverse-square falloff, finite radius, range window, cone profile, and local shadows."
+    },
+    {
+      "id": "cone_boundary_v1",
+      "availability": "deterministic_recipe",
+      "active_from": "M5.1",
+      "recipe": { "spot_count": 4, "sample_cosines": [0.0, 0.5, 0.8660254037844386, 0.9659258262890683, 1.0] },
+      "purpose": "Freeze inner, outer, midpoint, outside, and degenerate cone boundaries."
+    },
+    {
+      "id": "local_lights_64_v1",
+      "availability": "deterministic_recipe",
+      "active_from": "M5.2",
+      "recipe": { "local_light_count": 64, "point_fraction": 0.75, "spot_fraction": 0.25 },
+      "purpose": "Nominal extraction, upload, clustered assignment, and shading."
+    },
+    {
+      "id": "local_lights_512_v1",
+      "availability": "deterministic_recipe",
+      "active_from": "M5.2",
+      "recipe": { "local_light_count": 512, "point_fraction": 0.75, "spot_fraction": 0.25 },
+      "purpose": "Representative high-end clustered assignment and shadow prioritization."
+    },
+    {
+      "id": "local_lights_4096_v1",
+      "availability": "deterministic_recipe",
+      "active_from": "M5.2",
+      "recipe": { "local_light_count": 4096, "point_fraction": 0.75, "spot_fraction": 0.25 },
+      "purpose": "Stress extraction, upload, clusters, memory, and deterministic identity ordering."
+    },
+    {
+      "id": "cluster_overflow_v1",
+      "availability": "deterministic_recipe",
+      "active_from": "M5.3",
+      "recipe": { "local_light_count": 8192, "coincident_volume": true, "required_fallback_count": 64 },
+      "purpose": "Force whole-product deterministic overflow fallback and visible diagnostics."
+    },
+    {
+      "id": "standard_deferred_forward_parity_v1",
+      "availability": "existing_runtime_pair",
+      "active_from": "M5.4",
+      "source_assets": ["../m2/standard_shading_opaque.gltf", "../m2/standard_shading_forward.gltf"],
+      "purpose": "Compare equivalent standard closures through deferred and forced forward consumers."
+    },
+    {
+      "id": "emissive_no_implicit_gi_v1",
+      "availability": "existing_runtime",
+      "active_from": "M5.4",
+      "source_asset": "../m0/opaque_emissive_range.gltf",
+      "purpose": "Prove emissive is added once and does not illuminate black neighbors."
+    },
+    {
+      "id": "ibl_roughness_f0_f90_v1",
+      "availability": "deterministic_recipe",
+      "active_from": "M5.5",
+      "recipe": { "roughness_steps": 9, "f0_values": [0.0, 0.04, 0.5, 1.0], "f90_values": [0.25, 1.0] },
+      "purpose": "Diffuse irradiance, GGX prefilter, BRDF split sum, seams, and energy boundaries."
+    },
+    {
+      "id": "directional_shadow_motion_v1",
+      "availability": "deterministic_recipe",
+      "active_from": "M5.6",
+      "recipe": { "cascade_count": 4, "sub_texel_camera_steps": 16, "moving_casters": 2 },
+      "purpose": "Contacts, acne, leaks, cascade seams, stabilization, and invalidation."
+    },
+    {
+      "id": "local_shadow_cache_v1",
+      "availability": "deterministic_recipe",
+      "active_from": "M5.7",
+      "recipe": { "spot_lights": 8, "point_lights": 8, "moving_lights": 2, "moving_casters": 4, "moving_receivers": 2 },
+      "purpose": "Spot atlas allocation, point cube seams, cache keys, budgets, and stale-map safety."
+    },
+    {
+      "id": "reflection_probe_overlap_v1",
+      "availability": "deterministic_recipe",
+      "active_from": "M5.8",
+      "recipe": { "sphere_probes": 3, "box_probes": 3, "maximum_candidates": 4, "maximum_blended": 2 },
+      "purpose": "Global fallback, overlap selection, blend boundaries, box correction, residency, and capture publication."
+    },
+    {
+      "id": "baked_contract_v1",
+      "availability": "deterministic_recipe",
+      "active_from": "M5.9",
+      "recipe": { "lightmap_bindings": 4, "irradiance_probe_volumes": 2, "missing_products": 1 },
+      "purpose": "Stable association, versioning, dependency invalidation, and neutral fallback without a GI solver."
+    },
+    {
+      "id": "complex_closure_lighting_v1",
+      "availability": "existing_runtime",
+      "active_from": "M5.4",
+      "source_asset": "../m2/complex_closure_lab.gltf",
+      "purpose": "Feature-heavy forward lighting, shared assignment, and named IBL approximations."
+    },
+    {
+      "id": "sample_car_lighting_local_v1",
+      "availability": "optional_local",
+      "active_from": "M5.0",
+      "source_asset": "../../models/alfa_romeo/alfa_romeo.gltf",
+      "purpose": "Preserve the accepted local car comparison and material provenance under the dressed M5 rig."
+    }
+  ]
+}

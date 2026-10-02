@@ -1,0 +1,27 @@
+#version 450
+#include "include/clustered_lighting.glsl"
+
+layout(local_size_x = 256) in;
+
+void main() {
+    uint index = gl_GlobalInvocationID.x;
+    uint count = iridiumClusterCount();
+    if (index < count) {
+        clusterCounts[index] = 0u;
+        clusterCursors[index] = 0u;
+    }
+    if (index < clusterLimits.w) globalLightSlots[index] = IRIDIUM_INVALID_LIGHT_SLOT;
+    if (index < clusterInput.y) fallbackLightSlots[index] = IRIDIUM_INVALID_LIGHT_SLOT;
+    if (index < 16u) clusterDiagnostics[index] = 0u;
+    if (index == 0u) {
+        clusterDiagnostics[IRIDIUM_DIAGNOSTIC_ACTIVE] = clusterInput.x;
+        clusterIndirectArgs[0] = 0u;
+        clusterIndirectArgs[1] = 1u;
+        clusterIndirectArgs[2] = 1u;
+        clusterIndirectArgs[3] = 0u;
+        clusterIndirectArgs[4] = 0u;
+        clusterIndirectArgs[5] = 1u;
+        clusterIndirectArgs[6] = 1u;
+        clusterIndirectArgs[7] = 0u;
+    }
+}

@@ -1,0 +1,111 @@
+{
+  "schema": "iridium.m5.0.lighting-baseline",
+  "version": 1,
+  "date": "2026-08-08",
+  "source": {
+    "commit": "30252593f8fdd2de5dffbb8da31bb570ff49a7c0",
+    "branch": "Render-Refactor-for-Modularity",
+    "dirty": true,
+    "planning_status_entries": 313,
+    "post_slice_pre_evidence_status_entries": 316,
+    "post_slice_pre_evidence_status_sha256": "000242c418c76f5f2c05e3e0fe4295f5ad379d95cde2046e2969725b2c47237f"
+  },
+  "system": {
+    "cpu": "Intel Core i9-14900K",
+    "gpu": "NVIDIA GeForce RTX 4090",
+    "driver": "610.74",
+    "gpu_state_at_start": "P0, 2580 MHz graphics, 10501 MHz memory, 450 W power limit",
+    "compiler": "MSVC 19.51.36252.0",
+    "vulkan_sdk": "1.4.335"
+  },
+  "protocol": {
+    "configuration": "Release",
+    "resolution": [3840, 2160],
+    "warmup_frames": 500,
+    "measured_frames_per_process": 10000,
+    "independent_processes_per_fixture": 5,
+    "validation": false,
+    "cache_state": "warm-steady-state",
+    "model_load_mode": "self-contained-cooked-artifact",
+    "source_import_ns": 0,
+    "statistics": "median of five per-process full-run statistics"
+  },
+  "fixtures": [
+    {
+      "id": "complex_closure_lab_v1",
+      "frames": 50000,
+      "drops": 0,
+      "cpu_frame_ms": { "median": 0.6224, "p95": 0.6899, "p99": 0.8753 },
+      "gpu_frame_ms": { "median": 0.45584, "p95": 0.462048, "p99": 0.671904 },
+      "memory_bytes": { "requested_live": 896281104, "requested_peak": 929837728, "committed_live": 969519504, "committed_peak": 1003076176 }
+    },
+    {
+      "id": "lighting_legacy_v1",
+      "frames": 50000,
+      "drops": 0,
+      "cpu_frame_ms": { "median": 0.5897, "p95": 0.6503, "p99": 0.8471 },
+      "gpu_frame_ms": { "median": 0.434176, "p95": 0.440352, "p99": 0.647264 },
+      "memory_bytes": { "requested_live": 896280192, "requested_peak": 929835904, "committed_live": 969518592, "committed_peak": 1003074352 }
+    },
+    {
+      "id": "m2_sample_car_local_v1",
+      "frames": 50000,
+      "drops": 0,
+      "cpu_frame_ms": { "median": 1.1066, "p95": 1.2715, "p99": 1.3974 },
+      "gpu_frame_ms": { "median": 0.902784, "p95": 0.914272, "p99": 1.139072 },
+      "memory_bytes": { "requested_live": 941158176, "requested_peak": 1019485376, "committed_live": 1014567200, "committed_peak": 1092894448 },
+      "m4_memory_byte_identical": true
+    },
+    {
+      "id": "material_lab_v1",
+      "frames": 50000,
+      "drops": 0,
+      "cpu_frame_ms": { "median": 0.5894, "p95": 0.6552, "p99": 0.8666 },
+      "gpu_frame_ms": { "median": 0.434016, "p95": 0.440352, "p99": 0.6472 },
+      "memory_bytes": { "requested_live": 896280192, "requested_peak": 929835904, "committed_live": 969518592, "committed_peak": 1003074352 }
+    },
+    {
+      "id": "opaque_emissive_v1",
+      "frames": 50000,
+      "drops": 0,
+      "cpu_frame_ms": { "median": 0.4835, "p95": 0.5418, "p99": 0.6801 },
+      "gpu_frame_ms": { "median": 0.35584, "p95": 0.362432, "p99": 0.365472 },
+      "memory_bytes": { "requested_live": 896280420, "requested_peak": 929836360, "committed_live": 969518816, "committed_peak": 1003074800 }
+    }
+  ],
+  "allocation_counter_note": {
+    "scope": "2560 retained frame samples per fixture; the current run summary does not aggregate counters across all completed frames",
+    "sample_car_calls": { "median": 1, "p99": 1, "maximum": 3 },
+    "sample_car_bytes": { "median": 8, "p99": 8, "maximum": 88 },
+    "m4_accepted_median_p99": "0 / 0",
+    "status": "pre-existing baseline discrepancy; investigate before claiming the M5 zero-allocation gate"
+  },
+  "captures": {
+    "validation_profiles": 10,
+    "validation_layer": "Khronos Validation Layer 335",
+    "validation_messages": 0,
+    "scene_linear_sha256": {
+      "material_lab_v1": "21a8997862d803235a3b399923b75892a2c336a4fea32873e4862ad50c13f5ad",
+      "lighting_legacy_v1": "92c835cf85bf87e0e4ce10e2c84f3b2d054aaa0bdd91f1582e1a5fdcc81441c1",
+      "opaque_emissive_v1": "a82928b13080210abf9f04f027169f46cae3e2edcdc7b3e42e1d12d0d24793f3",
+      "complex_closure_lab_v1": "0979c21e6aacd8042941695289f37994d20b9f46be7c69bd638febf721432596",
+      "m2_sample_car_local_v1": "b7d9c28ddfc9fd6789c0c95781986f5f7e8f05b1e09d54d4e566ac2a010b2d8d"
+    },
+    "final_sdr_sha256": {
+      "material_lab_v1": "63e209d640cefd582551b958670960f81260dda85ce49453f6e6970cc5bacbc7",
+      "lighting_legacy_v1": "023e2370fa7a9224bc134dc36112dcac154a55d348c4ab29bc3b3c82a3f94e05",
+      "opaque_emissive_v1": "ebdc2d31ce32b138e4adea26bfb55c894bc0aab6320f61fc0a73d1b2e91ee507",
+      "complex_closure_lab_v1": "ebf0f875122bcc7b16b426df312f49b1e3c10a54a225a1750e3b350aff3de4f4",
+      "m2_sample_car_local_v1_frame0_debug": "bc49ca0fa76b98ba19cedc7e6e953c66edcd3dcd35feb193181c8ce4167a1dff",
+      "m2_sample_car_local_v1_m4_protocol_release_frame299": "fb0a37e71ab557a12e7a42609e6544b9f8d9c0de1b9d304ff3f689ea9b1f14d4"
+    },
+    "m4_exact_comparison": { "max_abs_code": 0, "changed_pixels": 0, "mean_luma_ssim": 1.0, "passed": true }
+  },
+  "verification": {
+    "debug_build": "passed",
+    "debug_ctest": { "passed": 62, "failed": 0 },
+    "release_build": "passed",
+    "release_ctest": { "passed": 62, "failed": 0 },
+    "new_tests": ["LightingReferenceTests", "M5FixtureContractTests"]
+  }
+}

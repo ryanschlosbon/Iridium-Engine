@@ -1,0 +1,68 @@
+{
+  "schema": "iridium.image_comparison.v1",
+  "reference": "out/validation/m4.10/m3.7-baseline.tga",
+  "candidate": "out/validation/m4.10/m4.10-candidate.tga",
+  "width": 3840,
+  "height": 2160,
+  "pixel_count": 8294400,
+  "settings": {
+    "changed_pixel_code_threshold": 0,
+    "ssim_window_size": 8,
+    "ssim_color_domain": "srgb_decoded_linear_rec709_luma",
+    "ssim_window_layout": "anchored_non_overlapping_with_partial_edges",
+    "heatmap_scale": 4.0
+  },
+  "thresholds": {
+    "max_abs_code": 0,
+    "max_changed_pixel_fraction": 0.0,
+    "min_mean_luma_ssim": 1.0
+  },
+  "metrics": {
+    "rgba": {
+      "r": {
+        "mae_code": 0.0,
+        "rmse_code": 0.0,
+        "max_abs_code": 0
+      },
+      "g": {
+        "mae_code": 0.0,
+        "rmse_code": 0.0,
+        "max_abs_code": 0
+      },
+      "b": {
+        "mae_code": 0.0,
+        "rmse_code": 0.0,
+        "max_abs_code": 0
+      },
+      "a": {
+        "mae_code": 0.0,
+        "rmse_code": 0.0,
+        "max_abs_code": 0
+      }
+    },
+    "max_abs_code": 0,
+    "max_rgb_pixel_diff_p95_code": 0.0,
+    "max_rgb_pixel_diff_p99_code": 0.0,
+    "changed_pixel_count": 0,
+    "changed_pixel_fraction": 0.0,
+    "luma_ssim": {
+      "mean": 1.0,
+      "minimum": 1.0,
+      "p5": 1.0,
+      "window_count": 129600
+    }
+  },
+  "checks": {
+    "max_abs_code": true,
+    "changed_pixel_fraction": true,
+    "mean_luma_ssim": true
+  },
+  "passed": true,
+  "metadata_compatibility": {
+    "checked": false,
+    "reference_path": "out/validation/m4.10/m3.7-baseline.json",
+    "candidate_path": "out/validation/m4.10/m4.10-candidate.json",
+    "checked_fields": []
+  },
+  "heatmap": null
+}

@@ -1,7 +1,6 @@
 #pragma once
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
-#include "../../editor/Reflection.h"
 
 struct TransformComponent {
     // Raw Data
@@ -34,16 +33,4 @@ struct TransformComponent {
     void setRotation(const glm::vec3& newRot) { rotation = newRot; isDirty = true; }
     void setScale(const glm::vec3& newScale) { scale = newScale; isDirty = true; }
 
-    void OnInspector() {
-        bool changed = false;
-
-        // If any of these get edited, changed becomes true
-        changed |= PROPERTY(position);
-        changed |= PROPERTY(rotation);
-        changed |= PROPERTY(scale);
-
-        if (changed) {
-            isDirty = true; // Now the TransformSystem will catch it next frame!
-        }
-    }
 };

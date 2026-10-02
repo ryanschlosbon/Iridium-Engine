@@ -1,0 +1,332 @@
+#version 450
+
+// Deterministic hierarchical compactor. Each 256-entry block sorts in shared
+// memory, followed by logarithmic global merge passes. The host inserts a
+// compute-to-compute barrier between stages and merge widths.
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+struct ClipLevel { mat4 worldToShadowClip; ivec4 page; ivec4 state; };
+struct Mark { ivec4 page; uvec4 metadata; };
+struct Request { ivec4 address; uvec4 metadata; };
+
+layout(std430, set = 0, binding = 0) readonly buffer ClipLevels {
+    ClipLevel values[];
+} levels;
+layout(std430, set = 0, binding = 1) readonly buffer Marks {
+    Mark values[];
+} marks;
+layout(std430, set = 0, binding = 2) buffer AlternateRequests {
+    Request values[];
+} alternateRequests;
+layout(std430, set = 0, binding = 3) buffer DenseRequests {
+    Request values[];
+} denseRequests;
+layout(std430, set = 0, binding = 4) writeonly buffer OutputRequests {
+    Request values[];
+} outputRequests;
+layout(std430, set = 0, binding = 5) buffer Telemetry {
+    uvec4 counts;
+    uvec4 errors;
+} telemetry;
+
+layout(push_constant) uniform Parameters {
+    uint stage;
+    uint markCount;
+    uint levelCount;
+    uint scratchCapacity;
+    uint maximumOutputRequests;
+    uint abiVersion;
+    uint mergeWidth;
+    uint reserved;
+} parameters;
+
+const uint StageClear = 0u;
+const uint StageProject = 1u;
+const uint StageLocalAddressSort = 2u;
+const uint StageMergeAddressAToB = 3u;
+const uint StageMergeAddressBToA = 4u;
+const uint StageCopyBToA = 5u;
+const uint StageReduce = 6u;
+const uint StagePrepareRank = 7u;
+const uint StageLocalRankSort = 8u;
+const uint StageMergeRankAToB = 9u;
+const uint StageMergeRankBToA = 10u;
+const uint StageDroppedBlockReduce = 11u;
+const uint StageDroppedFinalReduce = 12u;
+const uint StageFinalize = 13u;
+const uint InvalidSelection = 0xffffffffu;
+const uint LocalSortSize = 256u;
+
+shared ivec4 sharedAddress[LocalSortSize];
+shared uvec4 sharedMetadata[LocalSortSize];
+shared uint sharedSamples[LocalSortSize];
+
+Request invalidRequest() {
+    Request result;
+    result.address = ivec4(0);
+    result.metadata = uvec4(0u, 0u, 0u, InvalidSelection);
+    return result;
+}
+
+bool validRequest(Request request) {
+    return request.metadata.w != InvalidSelection;
+}
+
+bool sameAddress(Request left, Request right) {
+    return validRequest(left) && validRequest(right) &&
+        all(equal(left.address, right.address));
+}
+
+bool addressLess(ivec4 left, ivec4 right) {
+    if (left.x != right.x) return left.x < right.x;
+    if (left.y != right.y) return left.y < right.y;
+    if (left.w != right.w) return left.w < right.w;
+    return left.z < right.z;
+}
+
+bool addressBefore(Request candidate, Request current) {
+    bool candidateValid = validRequest(candidate);
+    bool currentValid = validRequest(current);
+    if (candidateValid != currentValid) return candidateValid;
+    if (!candidateValid) return false;
+    return addressLess(candidate.address, current.address);
+}
+
+bool rankBefore(Request candidate, Request current) {
+    bool candidateValid = validRequest(candidate);
+    bool currentValid = validRequest(current);
+    if (candidateValid != currentValid) return candidateValid;
+    if (!candidateValid) return false;
+    int candidatePriority = int(candidate.metadata.y);
+    int currentPriority = int(current.metadata.y);
+    if (candidatePriority != currentPriority)
+        return candidatePriority > currentPriority;
+    if (candidate.metadata.x != current.metadata.x)
+        return candidate.metadata.x > current.metadata.x;
+    return addressLess(candidate.address, current.address);
+}
+
+bool before(Request candidate, Request current, bool rankOrder) {
+    return rankOrder
+        ? rankBefore(candidate, current)
+        : addressBefore(candidate, current);
+}
+
+Request loadA(uint index) { return denseRequests.values[index]; }
+Request loadB(uint index) { return alternateRequests.values[index]; }
+
+void clearStage(uint index) {
+    if (index < parameters.scratchCapacity) {
+        denseRequests.values[index] = invalidRequest();
+        alternateRequests.values[index] = invalidRequest();
+    }
+    if (index == 0u) {
+        telemetry.counts = uvec4(0u);
+        telemetry.errors = uvec4(0u);
+    }
+}
+
+void projectStage(uint index) {
+    if (index >= parameters.markCount) return;
+    Mark mark = marks.values[index];
+    if (mark.page.w != 1) return;
+    if (mark.metadata.y != parameters.abiVersion) {
+        atomicAdd(telemetry.errors.x, 1u);
+        return;
+    }
+    int selectedIndex = mark.page.z;
+    if (selectedIndex < 0 || uint(selectedIndex) >= parameters.levelCount) {
+        atomicAdd(telemetry.errors.y, 1u);
+        return;
+    }
+    ClipLevel level = levels.values[selectedIndex];
+    Request request;
+    request.address = ivec4(mark.page.xy,
+        int(uint(level.page.w) & 0xffu),
+        int((uint(level.page.w) >> 8u) & 0xffffu));
+    request.metadata = uvec4(mark.metadata.x, uint(level.state.x),
+        uint(level.state.y), uint(selectedIndex));
+    denseRequests.values[index] = request;
+}
+
+void localSortStage(uint index, bool rankOrder) {
+    uint localIndex = gl_LocalInvocationID.x;
+    Request value = loadA(index);
+    sharedAddress[localIndex] = value.address;
+    sharedMetadata[localIndex] = value.metadata;
+    barrier();
+    for (uint k = 2u; k <= LocalSortSize; k <<= 1u) {
+        for (uint j = k >> 1u; j > 0u; j >>= 1u) {
+            uint partner = localIndex ^ j;
+            if (partner > localIndex) {
+                Request left;
+                left.address = sharedAddress[localIndex];
+                left.metadata = sharedMetadata[localIndex];
+                Request right;
+                right.address = sharedAddress[partner];
+                right.metadata = sharedMetadata[partner];
+                bool ascending = (localIndex & k) == 0u;
+                bool swapValues = ascending
+                    ? before(right, left, rankOrder)
+                    : before(left, right, rankOrder);
+                if (swapValues) {
+                    sharedAddress[localIndex] = right.address;
+                    sharedMetadata[localIndex] = right.metadata;
+                    sharedAddress[partner] = left.address;
+                    sharedMetadata[partner] = left.metadata;
+                }
+            }
+            barrier();
+        }
+    }
+    value.address = sharedAddress[localIndex];
+    value.metadata = sharedMetadata[localIndex];
+    denseRequests.values[index] = value;
+}
+
+Request sourceRequest(uint index, bool sourceA) {
+    return sourceA ? loadA(index) : loadB(index);
+}
+
+void mergeStage(uint outputIndex, bool rankOrder, bool sourceA) {
+    uint width = parameters.mergeWidth;
+    uint runBase = (outputIndex / (width * 2u)) * (width * 2u);
+    uint leftCount = min(width, parameters.scratchCapacity - runBase);
+    uint rightBase = runBase + leftCount;
+    uint rightCount = min(width,
+        parameters.scratchCapacity - rightBase);
+    uint rank = outputIndex - runBase;
+    uint low = rank > rightCount ? rank - rightCount : 0u;
+    uint high = min(rank, leftCount);
+    while (low < high) {
+        uint leftIndex = (low + high) >> 1u;
+        uint rightIndex = rank - leftIndex;
+        if (leftIndex > 0u && rightIndex < rightCount &&
+            before(sourceRequest(rightBase + rightIndex, sourceA),
+                sourceRequest(runBase + leftIndex - 1u, sourceA), rankOrder))
+            high = leftIndex;
+        else if (rightIndex > 0u && leftIndex < leftCount &&
+            !before(sourceRequest(rightBase + rightIndex - 1u, sourceA),
+                sourceRequest(runBase + leftIndex, sourceA), rankOrder))
+            low = leftIndex + 1u;
+        else {
+            low = leftIndex;
+            break;
+        }
+    }
+    uint leftIndex = low;
+    uint rightIndex = rank - leftIndex;
+    Request result;
+    if (leftIndex < leftCount && (rightIndex >= rightCount ||
+        !before(sourceRequest(rightBase + rightIndex, sourceA),
+            sourceRequest(runBase + leftIndex, sourceA), rankOrder)))
+        result = sourceRequest(runBase + leftIndex, sourceA);
+    else
+        result = sourceRequest(rightBase + rightIndex, sourceA);
+    if (sourceA) alternateRequests.values[outputIndex] = result;
+    else denseRequests.values[outputIndex] = result;
+}
+
+void reduceStage(uint index) {
+    if (index >= parameters.markCount) return;
+    Request first = loadA(index);
+    if (!validRequest(first) ||
+        (index > 0u && sameAddress(loadA(index - 1u), first)))
+        return;
+    uint samples = 0u;
+    uint layers = 0u;
+    for (uint cursor = index;
+        cursor < parameters.markCount && sameAddress(first, loadA(cursor));
+        ++cursor) {
+        uint addend = loadA(cursor).metadata.x;
+        samples = addend > 0xffffffffu - samples
+            ? 0xffffffffu : samples + addend;
+        layers |= loadA(cursor).metadata.z;
+    }
+    first.metadata.x = samples;
+    first.metadata.z = layers;
+    uint outputIndex = atomicAdd(telemetry.counts.x, 1u);
+    alternateRequests.values[outputIndex] = first;
+}
+
+void prepareRankStage(uint index) {
+    denseRequests.values[index] = index < telemetry.counts.x
+        ? alternateRequests.values[index] : invalidRequest();
+}
+
+uint saturatingAdd(uint left, uint right) {
+    return right > 0xffffffffu - left ? 0xffffffffu : left + right;
+}
+
+void droppedBlockReduceStage(uint index) {
+    uint uniqueCount = telemetry.counts.x;
+    uint outputCount = min(uniqueCount, parameters.maximumOutputRequests);
+    uint localIndex = gl_LocalInvocationID.x;
+    sharedSamples[localIndex] = index >= outputCount && index < uniqueCount
+        ? loadA(index).metadata.x : 0u;
+    barrier();
+    for (uint stride = LocalSortSize >> 1u; stride > 0u; stride >>= 1u) {
+        if (localIndex < stride)
+            sharedSamples[localIndex] = saturatingAdd(
+                sharedSamples[localIndex],
+                sharedSamples[localIndex + stride]);
+        barrier();
+    }
+    if (localIndex == 0u)
+        alternateRequests.values[gl_WorkGroupID.x].metadata.x =
+            sharedSamples[0];
+}
+
+void droppedFinalReduceStage() {
+    uint localIndex = gl_LocalInvocationID.x;
+    uint blockCount = parameters.scratchCapacity / LocalSortSize;
+    sharedSamples[localIndex] = localIndex < blockCount
+        ? alternateRequests.values[localIndex].metadata.x : 0u;
+    barrier();
+    for (uint stride = LocalSortSize >> 1u; stride > 0u; stride >>= 1u) {
+        if (localIndex < stride)
+            sharedSamples[localIndex] = saturatingAdd(
+                sharedSamples[localIndex],
+                sharedSamples[localIndex + stride]);
+        barrier();
+    }
+    if (localIndex == 0u) telemetry.counts.w = sharedSamples[0];
+}
+
+void finalizeStage(uint index) {
+    uint uniqueCount = telemetry.counts.x;
+    uint outputCount = min(uniqueCount, parameters.maximumOutputRequests);
+    if (index == 0u) {
+        telemetry.counts.y = outputCount;
+        telemetry.counts.z = uniqueCount - outputCount;
+    }
+    if (index < outputCount)
+        outputRequests.values[index] = loadA(index);
+}
+
+void main() {
+    uint index = gl_GlobalInvocationID.x;
+    if (parameters.stage == StageClear) clearStage(index);
+    else if (parameters.stage == StageProject) projectStage(index);
+    else if (parameters.stage == StageLocalAddressSort)
+        localSortStage(index, false);
+    else if (parameters.stage == StageMergeAddressAToB)
+        mergeStage(index, false, true);
+    else if (parameters.stage == StageMergeAddressBToA)
+        mergeStage(index, false, false);
+    else if (parameters.stage == StageCopyBToA)
+        denseRequests.values[index] = alternateRequests.values[index];
+    else if (parameters.stage == StageReduce) reduceStage(index);
+    else if (parameters.stage == StagePrepareRank) prepareRankStage(index);
+    else if (parameters.stage == StageLocalRankSort)
+        localSortStage(index, true);
+    else if (parameters.stage == StageMergeRankAToB)
+        mergeStage(index, true, true);
+    else if (parameters.stage == StageMergeRankBToA)
+        mergeStage(index, true, false);
+    else if (parameters.stage == StageDroppedBlockReduce)
+        droppedBlockReduceStage(index);
+    else if (parameters.stage == StageDroppedFinalReduce)
+        droppedFinalReduceStage();
+    else if (parameters.stage == StageFinalize) finalizeStage(index);
+}

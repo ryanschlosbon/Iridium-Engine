@@ -1,0 +1,36 @@
+#version 450
+layout(local_size_x = 64) in;
+struct Receiver { vec4 worldPosition; uvec4 metadata; };
+layout(set = 0, binding = 0) uniform sampler2D sceneDepth;
+layout(std430, set = 0, binding = 1) writeonly buffer Receivers {
+    Receiver values[];
+} receivers;
+layout(push_constant) uniform Parameters {
+    mat4 inverseViewProjection;
+    uvec4 region; // Origin XY, region width/height.
+    uvec4 source; // Source width/height, reverse depth, capacity.
+} parameters;
+bool finiteValue(float x) { return !isnan(x) && !isinf(x); }
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    uint count = parameters.region.z * parameters.region.w;
+    if (i >= count || i >= parameters.source.w) return;
+    Receiver receiver;
+    receiver.worldPosition = vec4(0, 0, 0, 1);
+    receiver.metadata = uvec4(0);
+    uvec2 pixel = parameters.region.xy + uvec2(i % parameters.region.z, i / parameters.region.z);
+    float depth = texelFetch(sceneDepth, ivec2(pixel), 0).r;
+    float clearDepth = parameters.source.z == 0u ? 1.0 : 0.0;
+    if (finiteValue(depth) && depth >= 0.0 && depth <= 1.0 && depth != clearDepth) {
+        vec2 ndc = (vec2(pixel) + 0.5) / vec2(parameters.source.xy) * 2.0 - 1.0;
+        vec4 world = parameters.inverseViewProjection * vec4(ndc, depth, 1.0);
+        if (finiteValue(world.w) && abs(world.w) > 1e-7) {
+            world.xyz /= world.w;
+            if (finiteValue(world.x) && finiteValue(world.y) && finiteValue(world.z)) {
+                receiver.worldPosition = vec4(world.xyz, 1.0);
+                receiver.metadata.x = 1u;
+            }
+        }
+    }
+    receivers.values[i] = receiver;
+}

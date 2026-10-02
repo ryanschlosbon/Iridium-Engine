@@ -1,0 +1,256 @@
+{
+  "schema_version": 1,
+  "fixtures": [
+    {
+      "id": "directional_shadow_contact_v1",
+      "revision": 1,
+      "required": true,
+      "source_asset": "directional-shadow-contact.gltf",
+      "environment": {
+        "kind": "procedural_constant",
+        "constant_linear_rgb": [0.02, 0.02, 0.02]
+      },
+      "camera": {
+        "id": "contact_front_v1",
+        "position": [0.0, 0.0, 7.0],
+        "target": [0.0, 0.0, 0.0],
+        "up": [0.0, 1.0, 0.0],
+        "vertical_fov_degrees": 45.0,
+        "near": 0.1,
+        "far": 100.0
+      },
+      "scene_factory": {
+        "kind": "instanced_grid",
+        "instance_grid": [1, 1, 1],
+        "instance_spacing": [0.0, 0.0, 0.0]
+      },
+      "output_label": "m5_directional_shadow_contact",
+      "warmup_frames": 64,
+      "measured_frames": 64,
+      "content_files": [
+        {
+          "path": "directional-shadow-contact.gltf",
+          "sha256": "d1c8cb68508d8e2b43ab1bc6639d0fadffce7683429c8d2129d6c764faa9bc3e"
+        }
+      ],
+      "expected_behavior": [
+        "The foreground triangle casts a filtered, directionally offset contact shadow onto the receiver plane.",
+        "The receiver and blocker select the closest published directional cascade.",
+        "Shadow visibility remains finite and bounded through the shared deferred and forward sampler."
+      ],
+      "unavailable_capabilities": [
+        "transparent shadows"
+      ]
+    },
+    {
+      "id": "directional_shadow_motion_v1",
+      "revision": 1,
+      "required": true,
+      "source_asset": "directional-shadow-contact.gltf",
+      "environment": {
+        "kind": "procedural_constant",
+        "constant_linear_rgb": [0.02, 0.02, 0.02]
+      },
+      "camera": {
+        "id": "contact_motion_front_v1",
+        "position": [0.0, 0.0, 7.0],
+        "target": [0.0, 0.0, 0.0],
+        "up": [0.0, 1.0, 0.0],
+        "vertical_fov_degrees": 45.0,
+        "near": 0.1,
+        "far": 100.0
+      },
+      "scene_factory": {
+        "kind": "instanced_grid",
+        "instance_grid": [1, 1, 1],
+        "instance_spacing": [0.0, 0.0, 0.0],
+        "object_motion": {
+          "enabled": true,
+          "amplitude": 0.15,
+          "period_frames": 120
+        }
+      },
+      "output_label": "m5_directional_shadow_motion",
+      "warmup_frames": 64,
+      "measured_frames": 64,
+      "content_files": [
+        {
+          "path": "directional-shadow-contact.gltf",
+          "sha256": "d1c8cb68508d8e2b43ab1bc6639d0fadffce7683429c8d2129d6c764faa9bc3e"
+        }
+      ],
+      "expected_behavior": [
+        "Moving shadow casters invalidate and refresh every directional cascade without publishing stale projections.",
+        "The filtered contact shadow tracks the moving geometry without temporal lag.",
+        "Directional shadow scheduling remains finite and deterministic across the measured frame interval."
+      ],
+      "unavailable_capabilities": [
+        "transparent shadows"
+      ]
+    },
+    {
+      "id": "spot_shadow_contact_v1",
+      "revision": 1,
+      "required": true,
+      "source_asset": "directional-shadow-contact.gltf",
+      "environment": {
+        "kind": "procedural_constant",
+        "constant_linear_rgb": [0.005, 0.005, 0.005]
+      },
+      "camera": {
+        "id": "spot_contact_front_v1",
+        "position": [0.0, 0.0, 7.0],
+        "target": [0.0, 0.0, 0.0],
+        "up": [0.0, 1.0, 0.0],
+        "vertical_fov_degrees": 45.0,
+        "near": 0.1,
+        "far": 100.0
+      },
+      "scene_factory": {
+        "kind": "instanced_grid",
+        "instance_grid": [1, 1, 1],
+        "instance_spacing": [0.0, 0.0, 0.0]
+      },
+      "output_label": "m5_spot_shadow_contact",
+      "warmup_frames": 64,
+      "measured_frames": 64,
+      "content_files": [
+        {
+          "path": "directional-shadow-contact.gltf",
+          "sha256": "d1c8cb68508d8e2b43ab1bc6639d0fadffce7683429c8d2129d6c764faa9bc3e"
+        }
+      ],
+      "expected_behavior": [
+        "Two opposing colored spot lights retain independent atlas tiles and cast independent filtered contact shadows.",
+        "The first frame renders both tiles; compatible static frames reuse both cached maps without shadow draws.",
+        "Deferred and complex-forward lighting resolve the same per-light shadow data slot."
+      ],
+      "unavailable_capabilities": [
+        "transparent shadows"
+      ]
+    },
+    {
+      "id": "point_shadow_contact_v1",
+      "revision": 1,
+      "required": true,
+      "source_asset": "directional-shadow-contact.gltf",
+      "environment": {
+        "kind": "procedural_constant",
+        "constant_linear_rgb": [0.005, 0.005, 0.005]
+      },
+      "camera": {
+        "id": "point_contact_front_v1",
+        "position": [0.0, 0.0, 7.0],
+        "target": [0.0, 0.0, 0.0],
+        "up": [0.0, 1.0, 0.0],
+        "vertical_fov_degrees": 45.0,
+        "near": 0.1,
+        "far": 100.0
+      },
+      "scene_factory": {
+        "kind": "instanced_grid",
+        "instance_grid": [1, 1, 1],
+        "instance_spacing": [0.0, 0.0, 0.0]
+      },
+      "output_label": "m5_point_shadow_contact",
+      "warmup_frames": 64,
+      "measured_frames": 64,
+      "content_files": [
+        {
+          "path": "directional-shadow-contact.gltf",
+          "sha256": "d1c8cb68508d8e2b43ab1bc6639d0fadffce7683429c8d2129d6c764faa9bc3e"
+        }
+      ],
+      "expected_behavior": [
+        "Two opposing colored point lights retain independent stable cube slots and cast independent filtered contact shadows.",
+        "The first frame renders twelve faces; compatible static frames reuse both cached cubes without shadow draws.",
+        "Cube filtering crosses face boundaries without visible seam discontinuities in deferred or complex-forward lighting."
+      ],
+      "unavailable_capabilities": [
+        "transparent shadows"
+      ]
+    },
+    {
+      "id": "spot_shadow_contact_forward_v1",
+      "revision": 1,
+      "required": true,
+      "source_asset": "local-shadow-contact-forward.gltf",
+      "environment": {
+        "kind": "procedural_constant",
+        "constant_linear_rgb": [0.005, 0.005, 0.005]
+      },
+      "camera": {
+        "id": "spot_contact_forward_v1",
+        "position": [0.0, 0.0, 7.0],
+        "target": [0.0, 0.0, 0.0],
+        "up": [0.0, 1.0, 0.0],
+        "vertical_fov_degrees": 45.0,
+        "near": 0.1,
+        "far": 100.0
+      },
+      "scene_factory": {
+        "kind": "instanced_grid",
+        "instance_grid": [1, 1, 1],
+        "instance_spacing": [0.0, 0.0, 0.0]
+      },
+      "output_label": "m5_spot_shadow_contact_forward",
+      "warmup_frames": 64,
+      "measured_frames": 64,
+      "content_files": [
+        {
+          "path": "local-shadow-contact-forward.gltf",
+          "sha256": "08876f01dc6164007640554397b6ea34dc5a2f93ed2f363b6994e43318752b4f"
+        }
+      ],
+      "expected_behavior": [
+        "The opaque clearcoat receiver selects the complex-forward path while retaining the deferred twin's base-layer inputs and caster participation.",
+        "Both opposing spot owners resolve their independent atlas entries through the shared forward lighting contract.",
+        "The shadow-visibility footprint matches the deferred spot fixture apart from documented raster path tolerances."
+      ],
+      "unavailable_capabilities": [
+        "transparent shadows"
+      ]
+    },
+    {
+      "id": "point_shadow_contact_forward_v1",
+      "revision": 1,
+      "required": true,
+      "source_asset": "local-shadow-contact-forward.gltf",
+      "environment": {
+        "kind": "procedural_constant",
+        "constant_linear_rgb": [0.005, 0.005, 0.005]
+      },
+      "camera": {
+        "id": "point_contact_forward_v1",
+        "position": [0.0, 0.0, 7.0],
+        "target": [0.0, 0.0, 0.0],
+        "up": [0.0, 1.0, 0.0],
+        "vertical_fov_degrees": 45.0,
+        "near": 0.1,
+        "far": 100.0
+      },
+      "scene_factory": {
+        "kind": "instanced_grid",
+        "instance_grid": [1, 1, 1],
+        "instance_spacing": [0.0, 0.0, 0.0]
+      },
+      "output_label": "m5_point_shadow_contact_forward",
+      "warmup_frames": 64,
+      "measured_frames": 64,
+      "content_files": [
+        {
+          "path": "local-shadow-contact-forward.gltf",
+          "sha256": "08876f01dc6164007640554397b6ea34dc5a2f93ed2f363b6994e43318752b4f"
+        }
+      ],
+      "expected_behavior": [
+        "The opaque clearcoat receiver selects the complex-forward path while retaining the deferred twin's base-layer inputs and caster participation.",
+        "Both opposing point owners resolve their independent cube entries through the shared forward lighting contract.",
+        "The shadow-visibility footprint and cube-face transitions match the deferred point fixture apart from documented raster path tolerances."
+      ],
+      "unavailable_capabilities": [
+        "transparent shadows"
+      ]
+    }
+  ]
+}

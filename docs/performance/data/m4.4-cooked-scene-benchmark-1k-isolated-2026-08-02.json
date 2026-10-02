@@ -1,0 +1,232 @@
+{
+  "schema": "IridiumCookedSceneBenchmark/v1",
+  "configuration": "Release",
+  "compiler": "MSVC 19.51.36252.0",
+  "sourceCommit": "30252593f8fdd2de5dffbb8da31bb570ff49a7c0",
+  "sourceDirty": true,
+  "logicalProcessorCount": 32,
+  "allocationScope": "C++ global new/new[] requested bytes",
+  "entityCount": 1000,
+  "results": [
+    {
+      "name": "cold_source_compile",
+      "entityCount": 1000,
+      "sampleCount": 5,
+      "checksum": 56720,
+      "artifactBytes": 56720,
+      "artifactBytesPerEntity": 56.72,
+      "durationMs": {
+        "min": 1.4284,
+        "median": 1.4972,
+        "p95": 1.5417,
+        "p99": 1.5417,
+        "max": 1.5417
+      },
+      "allocationCount": {
+        "min": 13228.0,
+        "median": 13228.0,
+        "p95": 13228.0,
+        "p99": 13228.0,
+        "max": 13228.0
+      },
+      "requestedAllocationBytes": {
+        "min": 1108211.0,
+        "median": 1108211.0,
+        "p95": 1108211.0,
+        "p99": 1108211.0,
+        "max": 1108211.0
+      },
+      "workingSetDeltaBytes": {
+        "min": 0.0,
+        "median": 81920.0,
+        "p95": 135168.0,
+        "p99": 135168.0,
+        "max": 135168.0
+      },
+      "privateDeltaBytes": {
+        "min": 0.0,
+        "median": 122880.0,
+        "p95": 323584.0,
+        "p99": 323584.0,
+        "max": 323584.0
+      },
+      "peakWorkingSetBytes": 7200768
+    },
+    {
+      "name": "warm_ddc_read",
+      "entityCount": 1000,
+      "sampleCount": 5,
+      "checksum": 56720,
+      "artifactBytes": 56720,
+      "artifactBytesPerEntity": 56.72,
+      "durationMs": {
+        "min": 0.6965,
+        "median": 0.706,
+        "p95": 0.7489,
+        "p99": 0.7489,
+        "max": 0.7489
+      },
+      "allocationCount": {
+        "min": 70.0,
+        "median": 70.0,
+        "p95": 70.0,
+        "p99": 70.0,
+        "max": 70.0
+      },
+      "requestedAllocationBytes": {
+        "min": 288447.0,
+        "median": 288447.0,
+        "p95": 288447.0,
+        "p99": 288447.0,
+        "max": 288447.0
+      },
+      "workingSetDeltaBytes": {
+        "min": 122880.0,
+        "median": 122880.0,
+        "p95": 122880.0,
+        "p99": 122880.0,
+        "max": 122880.0
+      },
+      "privateDeltaBytes": {
+        "min": 323584.0,
+        "median": 323584.0,
+        "p95": 323584.0,
+        "p99": 323584.0,
+        "max": 323584.0
+      },
+      "peakWorkingSetBytes": 7200768
+    },
+    {
+      "name": "artifact_read_validate",
+      "entityCount": 1000,
+      "sampleCount": 5,
+      "checksum": 4,
+      "artifactBytes": 56720,
+      "artifactBytesPerEntity": 56.72,
+      "durationMs": {
+        "min": 0.5349,
+        "median": 0.5431,
+        "p95": 0.555,
+        "p99": 0.555,
+        "max": 0.555
+      },
+      "allocationCount": {
+        "min": 51.0,
+        "median": 51.0,
+        "p95": 51.0,
+        "p99": 51.0,
+        "max": 51.0
+      },
+      "requestedAllocationBytes": {
+        "min": 229298.0,
+        "median": 229298.0,
+        "p95": 229298.0,
+        "p99": 229298.0,
+        "max": 229298.0
+      },
+      "workingSetDeltaBytes": {
+        "min": 0.0,
+        "median": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 0.0
+      },
+      "privateDeltaBytes": {
+        "min": 0.0,
+        "median": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 0.0
+      },
+      "peakWorkingSetBytes": 7200768
+    },
+    {
+      "name": "cpu_ready_stage",
+      "entityCount": 1000,
+      "sampleCount": 5,
+      "checksum": 1000,
+      "artifactBytes": 56720,
+      "artifactBytesPerEntity": 56.72,
+      "durationMs": {
+        "min": 1.0882,
+        "median": 1.1119,
+        "p95": 1.1461,
+        "p99": 1.1461,
+        "max": 1.1461
+      },
+      "allocationCount": {
+        "min": 8189.0,
+        "median": 8189.0,
+        "p95": 8189.0,
+        "p99": 8189.0,
+        "max": 8189.0
+      },
+      "requestedAllocationBytes": {
+        "min": 888679.0,
+        "median": 888679.0,
+        "p95": 888679.0,
+        "p99": 888679.0,
+        "max": 888679.0
+      },
+      "workingSetDeltaBytes": {
+        "min": 131072.0,
+        "median": 229376.0,
+        "p95": 249856.0,
+        "p99": 249856.0,
+        "max": 249856.0
+      },
+      "privateDeltaBytes": {
+        "min": 0.0,
+        "median": 0.0,
+        "p95": 135168.0,
+        "p99": 135168.0,
+        "max": 135168.0
+      },
+      "peakWorkingSetBytes": 7393280
+    },
+    {
+      "name": "active_scene_commit",
+      "entityCount": 1000,
+      "sampleCount": 5,
+      "checksum": 1000,
+      "artifactBytes": 56720,
+      "artifactBytesPerEntity": 56.72,
+      "durationMs": {
+        "min": 0.0,
+        "median": 0.0,
+        "p95": 0.0001,
+        "p99": 0.0001,
+        "max": 0.0001
+      },
+      "allocationCount": {
+        "min": 0.0,
+        "median": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 0.0
+      },
+      "requestedAllocationBytes": {
+        "min": 0.0,
+        "median": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 0.0
+      },
+      "workingSetDeltaBytes": {
+        "min": 0.0,
+        "median": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 0.0
+      },
+      "privateDeltaBytes": {
+        "min": 0.0,
+        "median": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 0.0
+      },
+      "peakWorkingSetBytes": 7397376
+    }
+  ]
+}

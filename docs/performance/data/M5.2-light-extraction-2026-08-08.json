@@ -1,0 +1,553 @@
+{
+  "schema": "iridium.m5.2.light-extraction-benchmark.v1",
+  "configuration": "Release",
+  "compiler": "MSVC 19.51.36252.0",
+  "gpuFrameContexts": 2,
+  "packedGpuLightBytes": 64,
+  "workloads": [
+    {
+      "lightCount": 1,
+      "changePermille": 0,
+      "changedRecordCount": 0,
+      "changedRecordBytes": 0,
+      "changedRangeCount": 0,
+      "capacity": 1,
+      "cpuRecordAndRevisionBytes": 72,
+      "gpuRecordBytesTwoFrames": 128,
+      "warmups": 3,
+      "samples": 21,
+      "durationMs": {
+        "min": 0.0002,
+        "median": 0.0002,
+        "p95": 0.0003,
+        "p99": 0.0003,
+        "max": 0.0003
+      },
+      "allocationCount": {
+        "min": 0.0,
+        "median": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 0.0
+      },
+      "allocationBytes": {
+        "min": 0.0,
+        "median": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 0.0
+      },
+      "checksum": 4294967296
+    },
+    {
+      "lightCount": 1,
+      "changePermille": 10,
+      "changedRecordCount": 1,
+      "changedRecordBytes": 64,
+      "changedRangeCount": 1,
+      "capacity": 1,
+      "cpuRecordAndRevisionBytes": 72,
+      "gpuRecordBytesTwoFrames": 128,
+      "warmups": 3,
+      "samples": 21,
+      "durationMs": {
+        "min": 0.0002,
+        "median": 0.0002,
+        "p95": 0.0003,
+        "p99": 0.0003,
+        "max": 0.0003
+      },
+      "allocationCount": {
+        "min": 0.0,
+        "median": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 0.0
+      },
+      "allocationBytes": {
+        "min": 0.0,
+        "median": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 0.0
+      },
+      "checksum": 4294967297
+    },
+    {
+      "lightCount": 1,
+      "changePermille": 100,
+      "changedRecordCount": 1,
+      "changedRecordBytes": 64,
+      "changedRangeCount": 1,
+      "capacity": 1,
+      "cpuRecordAndRevisionBytes": 72,
+      "gpuRecordBytesTwoFrames": 128,
+      "warmups": 3,
+      "samples": 21,
+      "durationMs": {
+        "min": 0.0002,
+        "median": 0.0002,
+        "p95": 0.0003,
+        "p99": 0.0003,
+        "max": 0.0003
+      },
+      "allocationCount": {
+        "min": 0.0,
+        "median": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 0.0
+      },
+      "allocationBytes": {
+        "min": 0.0,
+        "median": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 0.0
+      },
+      "checksum": 4294967297
+    },
+    {
+      "lightCount": 1,
+      "changePermille": 1000,
+      "changedRecordCount": 1,
+      "changedRecordBytes": 64,
+      "changedRangeCount": 1,
+      "capacity": 1,
+      "cpuRecordAndRevisionBytes": 72,
+      "gpuRecordBytesTwoFrames": 128,
+      "warmups": 3,
+      "samples": 21,
+      "durationMs": {
+        "min": 0.0002,
+        "median": 0.0002,
+        "p95": 0.0003,
+        "p99": 0.0003,
+        "max": 0.0003
+      },
+      "allocationCount": {
+        "min": 0.0,
+        "median": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 0.0
+      },
+      "allocationBytes": {
+        "min": 0.0,
+        "median": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 0.0
+      },
+      "checksum": 4294967297
+    },
+    {
+      "lightCount": 256,
+      "changePermille": 0,
+      "changedRecordCount": 0,
+      "changedRecordBytes": 0,
+      "changedRangeCount": 0,
+      "capacity": 256,
+      "cpuRecordAndRevisionBytes": 18432,
+      "gpuRecordBytesTwoFrames": 32768,
+      "warmups": 3,
+      "samples": 21,
+      "durationMs": {
+        "min": 0.0415,
+        "median": 0.0417,
+        "p95": 0.0559,
+        "p99": 0.0684,
+        "max": 0.0684
+      },
+      "allocationCount": {
+        "min": 0.0,
+        "median": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 0.0
+      },
+      "allocationBytes": {
+        "min": 0.0,
+        "median": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 0.0
+      },
+      "checksum": 1099511627776
+    },
+    {
+      "lightCount": 256,
+      "changePermille": 10,
+      "changedRecordCount": 2,
+      "changedRecordBytes": 128,
+      "changedRangeCount": 2,
+      "capacity": 256,
+      "cpuRecordAndRevisionBytes": 18432,
+      "gpuRecordBytesTwoFrames": 32768,
+      "warmups": 3,
+      "samples": 21,
+      "durationMs": {
+        "min": 0.0414,
+        "median": 0.0417,
+        "p95": 0.0487,
+        "p99": 0.0633,
+        "max": 0.0633
+      },
+      "allocationCount": {
+        "min": 0.0,
+        "median": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 0.0
+      },
+      "allocationBytes": {
+        "min": 0.0,
+        "median": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 0.0
+      },
+      "checksum": 1099511627778
+    },
+    {
+      "lightCount": 256,
+      "changePermille": 100,
+      "changedRecordCount": 25,
+      "changedRecordBytes": 1600,
+      "changedRangeCount": 25,
+      "capacity": 256,
+      "cpuRecordAndRevisionBytes": 18432,
+      "gpuRecordBytesTwoFrames": 32768,
+      "warmups": 3,
+      "samples": 21,
+      "durationMs": {
+        "min": 0.0421,
+        "median": 0.0656,
+        "p95": 0.093,
+        "p99": 0.1121,
+        "max": 0.1121
+      },
+      "allocationCount": {
+        "min": 0.0,
+        "median": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 0.0
+      },
+      "allocationBytes": {
+        "min": 0.0,
+        "median": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 0.0
+      },
+      "checksum": 1099511627801
+    },
+    {
+      "lightCount": 256,
+      "changePermille": 1000,
+      "changedRecordCount": 256,
+      "changedRecordBytes": 16384,
+      "changedRangeCount": 1,
+      "capacity": 256,
+      "cpuRecordAndRevisionBytes": 18432,
+      "gpuRecordBytesTwoFrames": 32768,
+      "warmups": 3,
+      "samples": 21,
+      "durationMs": {
+        "min": 0.0712,
+        "median": 0.0819,
+        "p95": 0.116,
+        "p99": 0.1244,
+        "max": 0.1244
+      },
+      "allocationCount": {
+        "min": 0.0,
+        "median": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 0.0
+      },
+      "allocationBytes": {
+        "min": 0.0,
+        "median": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 0.0
+      },
+      "checksum": 1099511628032
+    },
+    {
+      "lightCount": 4096,
+      "changePermille": 0,
+      "changedRecordCount": 0,
+      "changedRecordBytes": 0,
+      "changedRangeCount": 0,
+      "capacity": 4096,
+      "cpuRecordAndRevisionBytes": 294912,
+      "gpuRecordBytesTwoFrames": 524288,
+      "warmups": 3,
+      "samples": 21,
+      "durationMs": {
+        "min": 0.8567,
+        "median": 0.9112,
+        "p95": 1.4993,
+        "p99": 1.6891,
+        "max": 1.6891
+      },
+      "allocationCount": {
+        "min": 0.0,
+        "median": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 0.0
+      },
+      "allocationBytes": {
+        "min": 0.0,
+        "median": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 0.0
+      },
+      "checksum": 17592186044416
+    },
+    {
+      "lightCount": 4096,
+      "changePermille": 10,
+      "changedRecordCount": 40,
+      "changedRecordBytes": 2560,
+      "changedRangeCount": 40,
+      "capacity": 4096,
+      "cpuRecordAndRevisionBytes": 294912,
+      "gpuRecordBytesTwoFrames": 524288,
+      "warmups": 3,
+      "samples": 21,
+      "durationMs": {
+        "min": 0.8441,
+        "median": 0.9051,
+        "p95": 1.5383,
+        "p99": 1.868,
+        "max": 1.868
+      },
+      "allocationCount": {
+        "min": 0.0,
+        "median": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 0.0
+      },
+      "allocationBytes": {
+        "min": 0.0,
+        "median": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 0.0
+      },
+      "checksum": 17592186044456
+    },
+    {
+      "lightCount": 4096,
+      "changePermille": 100,
+      "changedRecordCount": 409,
+      "changedRecordBytes": 26176,
+      "changedRangeCount": 409,
+      "capacity": 4096,
+      "cpuRecordAndRevisionBytes": 294912,
+      "gpuRecordBytesTwoFrames": 524288,
+      "warmups": 3,
+      "samples": 21,
+      "durationMs": {
+        "min": 0.8464,
+        "median": 1.1134,
+        "p95": 1.4643,
+        "p99": 1.6867,
+        "max": 1.6867
+      },
+      "allocationCount": {
+        "min": 0.0,
+        "median": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 0.0
+      },
+      "allocationBytes": {
+        "min": 0.0,
+        "median": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 0.0
+      },
+      "checksum": 17592186044825
+    },
+    {
+      "lightCount": 4096,
+      "changePermille": 1000,
+      "changedRecordCount": 4096,
+      "changedRecordBytes": 262144,
+      "changedRangeCount": 1,
+      "capacity": 4096,
+      "cpuRecordAndRevisionBytes": 294912,
+      "gpuRecordBytesTwoFrames": 524288,
+      "warmups": 3,
+      "samples": 21,
+      "durationMs": {
+        "min": 0.8931,
+        "median": 1.2242,
+        "p95": 1.6178,
+        "p99": 1.6901,
+        "max": 1.6901
+      },
+      "allocationCount": {
+        "min": 0.0,
+        "median": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 0.0
+      },
+      "allocationBytes": {
+        "min": 0.0,
+        "median": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 0.0
+      },
+      "checksum": 17592186048512
+    },
+    {
+      "lightCount": 65536,
+      "changePermille": 0,
+      "changedRecordCount": 0,
+      "changedRecordBytes": 0,
+      "changedRangeCount": 0,
+      "capacity": 65536,
+      "cpuRecordAndRevisionBytes": 4718592,
+      "gpuRecordBytesTwoFrames": 8388608,
+      "warmups": 3,
+      "samples": 21,
+      "durationMs": {
+        "min": 25.0156,
+        "median": 26.5381,
+        "p95": 30.4264,
+        "p99": 31.8501,
+        "max": 31.8501
+      },
+      "allocationCount": {
+        "min": 0.0,
+        "median": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 0.0
+      },
+      "allocationBytes": {
+        "min": 0.0,
+        "median": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 0.0
+      },
+      "checksum": 281474976710656
+    },
+    {
+      "lightCount": 65536,
+      "changePermille": 10,
+      "changedRecordCount": 655,
+      "changedRecordBytes": 41920,
+      "changedRangeCount": 655,
+      "capacity": 65536,
+      "cpuRecordAndRevisionBytes": 4718592,
+      "gpuRecordBytesTwoFrames": 8388608,
+      "warmups": 3,
+      "samples": 21,
+      "durationMs": {
+        "min": 23.7377,
+        "median": 26.2567,
+        "p95": 28.0068,
+        "p99": 30.8118,
+        "max": 30.8118
+      },
+      "allocationCount": {
+        "min": 0.0,
+        "median": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 0.0
+      },
+      "allocationBytes": {
+        "min": 0.0,
+        "median": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 0.0
+      },
+      "checksum": 281474976711311
+    },
+    {
+      "lightCount": 65536,
+      "changePermille": 100,
+      "changedRecordCount": 6553,
+      "changedRecordBytes": 419392,
+      "changedRangeCount": 6553,
+      "capacity": 65536,
+      "cpuRecordAndRevisionBytes": 4718592,
+      "gpuRecordBytesTwoFrames": 8388608,
+      "warmups": 3,
+      "samples": 21,
+      "durationMs": {
+        "min": 24.1202,
+        "median": 25.8359,
+        "p95": 29.4451,
+        "p99": 29.7052,
+        "max": 29.7052
+      },
+      "allocationCount": {
+        "min": 0.0,
+        "median": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 0.0
+      },
+      "allocationBytes": {
+        "min": 0.0,
+        "median": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 0.0
+      },
+      "checksum": 281474976717209
+    },
+    {
+      "lightCount": 65536,
+      "changePermille": 1000,
+      "changedRecordCount": 65536,
+      "changedRecordBytes": 4194304,
+      "changedRangeCount": 1,
+      "capacity": 65536,
+      "cpuRecordAndRevisionBytes": 4718592,
+      "gpuRecordBytesTwoFrames": 8388608,
+      "warmups": 3,
+      "samples": 21,
+      "durationMs": {
+        "min": 23.5174,
+        "median": 26.184,
+        "p95": 30.1047,
+        "p99": 50.9126,
+        "max": 50.9126
+      },
+      "allocationCount": {
+        "min": 0.0,
+        "median": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 0.0
+      },
+      "allocationBytes": {
+        "min": 0.0,
+        "median": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 0.0
+      },
+      "checksum": 281474976776192
+    }
+  ]
+}

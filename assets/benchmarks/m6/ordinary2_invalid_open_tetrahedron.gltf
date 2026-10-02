@@ -1,0 +1,61 @@
+{
+  "asset": {
+    "version": "2.0",
+    "generator": "Iridium Engine M6.5 invalid-topology runtime fixture"
+  },
+  "extensionsUsed": [
+    "KHR_materials_ior",
+    "KHR_materials_transmission",
+    "KHR_materials_volume"
+  ],
+  "buffers": [{
+    "uri": "data:application/octet-stream;base64,zcxMv5qZGb8AAAAAzcxMP5qZGb8AAAAAAAAAAM3MTD8AAAAAAAAAAAAAAACamZk/MzMzvwAAAL8AAAC/MzMzPwAAAL8AAAC/AAAAAM3MTD8AAAC/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAD8AAIA/AAAAPwAAAD8AAAIAAQAAAAEAAwABAAIAAwA=",
+    "byteLength": 146
+  }],
+  "bufferViews": [
+    { "buffer": 0, "byteOffset": 0, "byteLength": 48, "target": 34962 },
+    { "buffer": 0, "byteOffset": 48, "byteLength": 48, "target": 34962 },
+    { "buffer": 0, "byteOffset": 96, "byteLength": 32, "target": 34962 },
+    { "buffer": 0, "byteOffset": 128, "byteLength": 18, "target": 34963 }
+  ],
+  "accessors": [
+    { "bufferView": 0, "componentType": 5126, "count": 4, "type": "VEC3", "min": [-0.8, -0.6, 0.0], "max": [0.8, 0.8, 1.2] },
+    { "bufferView": 1, "componentType": 5126, "count": 4, "type": "VEC3" },
+    { "bufferView": 2, "componentType": 5126, "count": 4, "type": "VEC2" },
+    { "bufferView": 3, "componentType": 5123, "count": 9, "type": "SCALAR" }
+  ],
+  "materials": [{
+    "name": "Invalid open absorbing glass",
+    "pbrMetallicRoughness": {
+      "baseColorFactor": [0.82, 0.94, 1.0, 0.72],
+      "metallicFactor": 0.0,
+      "roughnessFactor": 0.12
+    },
+    "alphaMode": "BLEND",
+    "doubleSided": true,
+    "extensions": {
+      "KHR_materials_ior": { "ior": 1.5 },
+      "KHR_materials_transmission": { "transmissionFactor": 1.0 },
+      "KHR_materials_volume": {
+        "thicknessFactor": 0.8,
+        "attenuationDistance": 1.5,
+        "attenuationColor": [0.55, 0.86, 1.0]
+      }
+    }
+  }],
+  "meshes": [{
+    "name": "invalid_open_tetrahedron",
+    "primitives": [{
+      "attributes": { "POSITION": 0, "NORMAL": 1, "TEXCOORD_0": 2 },
+      "indices": 3,
+      "material": 0
+    }]
+  }],
+  "nodes": [{
+    "name": "ordinary2_invalid_open_tetrahedron",
+    "mesh": 0,
+    "scale": [0.25, 0.25, 0.25]
+  }],
+  "scenes": [{ "name": "m6_ordinary2_invalid_topology", "nodes": [0] }],
+  "scene": 0
+}

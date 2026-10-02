@@ -1,0 +1,672 @@
+{
+  "schema_version": 1,
+  "milestone": "M5.0",
+  "resolution": [3840, 2160],
+  "warmup_frames": 500,
+  "measured_frames": 10000,
+  "independent_processes": 5,
+  "comparison_baseline": "M4.10",
+  "fixture_matrix": "assets/benchmarks/m5/fixture-matrix.v1.json",
+  "required_existing_fixtures": [
+    { "manifest": "assets/benchmarks/m0/manifest.v1.json", "fixture": "material_lab_v1" },
+    { "manifest": "assets/benchmarks/m0/manifest.v1.json", "fixture": "opaque_emissive_v1" },
+    { "manifest": "assets/benchmarks/m2/fixture-matrix.v1.json", "fixture": "complex_closure_grid_v1" }
+  ],
+  "optional_local_fixtures": ["sample_car_lighting_local_v1"],
+  "capture_contract": {
+    "scene-linear": { "extension": ".pfm", "color_space": "ACEScg/AP1", "output_transform_applied": false },
+    "final-sdr": { "extension": ".tga", "color_space": "sRGB", "output_transform_applied": true },
+    "scrgb": { "extension": ".pfm", "color_space": "linear Rec.709 scRGB", "output_transform_applied": true },
+    "hdr10": { "extension": ".pfm", "color_space": "Rec.2100 PQ", "output_transform_applied": true }
+  },
+  "required_metadata": [
+    "git_revision", "dirty_worktree_manifest", "build_configuration",
+    "gpu_name", "driver_version", "cpu_name", "display_transport",
+    "clock_and_power_state", "validation_enabled", "cache_state",
+    "scene_hash", "camera_hash", "product_hashes", "output_mode",
+    "warmup_frames", "measured_frames"
+  ],
+  "statistics": ["median", "p95", "p99"],
+  "required_counters": [
+    "cpu_frame_ms", "gpu_frame_ms", "gpu_pass_ranges", "requested_live_bytes",
+    "requested_peak_bytes", "committed_live_bytes", "committed_peak_bytes",
+    "cpp_allocation_count", "upload_bytes", "upload_range_count"
+  ],
+  "current_defects": [
+    "Deferred and complex-forward shaders use independent fixed vec3(1) light directions and vec3(3) radiance.",
+    "The runtime ignores persisted Light components.",
+    "The environment is a raw sampler2D equirectangular lookup without cooked irradiance, GGX prefilter, or BRDF LUT.",
+    "Production startup parses a source HDR image rather than resolving a cooked environment product."
+  ],
+  "current_defect_shader_hashes": {
+    "assets/shaders/include/canonical_lighting_body.glsl": "09a75d9e9940ec097213ce12e0f89b799f51f631780182dda9f9aa1b396cac6a",
+    "assets/shaders/include/complex_material_body.glsl": "877de707e48376b28e57fac6ae4b8d5eb47d23f7a3b7739a19cf8e4bb0ddabc4"
+  },
+  "m5_2Supersession": {
+    "status": "M5.2 GPU light-record declaration added; M5.0 defect hashes remain historical",
+    "current_shader_hashes": {
+      "assets/shaders/include/canonical_lighting_body.glsl": "13ece561efee65de2000ab80d37ed62a586dcfc36ea7a7a6526a068c97f33f41",
+      "assets/shaders/include/complex_material_body.glsl": "877de707e48376b28e57fac6ae4b8d5eb47d23f7a3b7739a19cf8e4bb0ddabc4",
+      "assets/shaders/include/lighting_records.glsl": "9ba0551363ec93b690d19c6dd6881f629611f97b3334440beeb246542ca476eb"
+    },
+    "current_spirv_hashes": {
+      "assets/shaders/canonical_reference_lighting_frag.spv": "18751c19262060bf8247d482dacb590e9e8923c963485231876ce8703694f2c3",
+      "assets/shaders/canonical_packed_lighting_frag.spv": "29f49bd6f0327dcc6bda078c0022af27be7f8b2f41156bb9903895f716cd6365"
+    }
+  },
+  "m5_3Supersession": {
+    "status": "M5.3 shared cluster declarations and diagnostic views added; M5.0/M5.2 hashes remain historical",
+    "current_shader_hashes": {
+      "assets/shaders/include/canonical_lighting_body.glsl": "e05aab93105530a54a817ecf3270a30973ec5202ce388fc23cfc518e2275d51a",
+      "assets/shaders/include/complex_material_body.glsl": "877de707e48376b28e57fac6ae4b8d5eb47d23f7a3b7739a19cf8e4bb0ddabc4",
+      "assets/shaders/include/lighting_records.glsl": "9ba0551363ec93b690d19c6dd6881f629611f97b3334440beeb246542ca476eb"
+    },
+    "current_spirv_hashes": {
+      "assets/shaders/canonical_reference_lighting_frag.spv": "84cbc14a007d05ef73abfd91f77476b395cc383efeea82eaafe8d1efc5a0a2ce",
+      "assets/shaders/canonical_packed_lighting_frag.spv": "2a88de401fc67021a06ef011b6741d293574bb1434b955e1e9d32da812d8cdff"
+    }
+  },
+  "m5_4Supersession": {
+    "status": "M5.4 authored clustered direct lighting replaces both fixed production lights; all earlier hashes remain historical",
+    "current_shader_hashes": {
+      "assets/shaders/include/canonical_lighting_body.glsl": "42dfb06971863e87953968f07de46f743509dd9c500361a7ec53382ec6eb8c3d",
+      "assets/shaders/include/complex_material_body.glsl": "68c585eae878e4775e019af3fed2ba544e8dac2f5149f09614e50c7d7408d48d",
+      "assets/shaders/include/direct_lighting.glsl": "9e729d04b0be82223dbdd24f0ffa0c1572d1cdf657241bccc3bd3e7c591c5f3c",
+      "assets/shaders/include/clustered_light_access.glsl": "928d8a86649bf672fadb7c2c806cbc4feb99add07f07786a656a5fc18b58a30e",
+      "assets/shaders/include/lighting_records.glsl": "9ba0551363ec93b690d19c6dd6881f629611f97b3334440beeb246542ca476eb"
+    },
+    "current_spirv_hashes": {
+      "assets/shaders/canonical_reference_lighting_frag.spv": "f1386cde3a731a4e7367ecd60f4ae586a4ffb5150a5196351c97793fecb2f12e",
+      "assets/shaders/canonical_packed_lighting_frag.spv": "ecd0613d8efb703fe1286ce765753c2660b8c20f02c7b9ac5860185c40899d91",
+      "assets/shaders/complex_material_indexed_frag.spv": "2b4b6c7664034ebae1f97dff0b1aa2cf35dcc6b20a487f7321d24f93ed85b966",
+      "assets/shaders/complex_opaque_material_indexed_frag.spv": "f1db3abc354ccec136fb15d32e5568e7c61dc0d319f29051cc90640ea9f575f2"
+    }
+  },
+  "m5_5Supersession": {
+    "status": "M5.5 candidate cooked AP1 irradiance, GGX prefilter, F0/F90 split-sum, and radiance cubes replace raw equirectangular production sampling; earlier hashes remain historical",
+    "current_shader_hashes": {
+      "assets/shaders/include/canonical_lighting_body.glsl": "c017daef0bd76489fc9e24e390056f332084cc3572c83e33deb06742845e28da",
+      "assets/shaders/include/complex_material_body.glsl": "1e8f1cf7bf6817e68d367c8e2a77f0eca1071acb22c1753637131ce058b7ebdc",
+      "assets/shaders/include/environment_ibl.glsl": "74e72d3233bfa894469d206becd2d137b3c163e66b3d65b656977e63c272b222",
+      "assets/shaders/include/direct_lighting.glsl": "9e729d04b0be82223dbdd24f0ffa0c1572d1cdf657241bccc3bd3e7c591c5f3c",
+      "assets/shaders/include/clustered_light_access.glsl": "928d8a86649bf672fadb7c2c806cbc4feb99add07f07786a656a5fc18b58a30e",
+      "assets/shaders/include/lighting_records.glsl": "9ba0551363ec93b690d19c6dd6881f629611f97b3334440beeb246542ca476eb"
+    },
+    "current_spirv_hashes": {
+      "assets/shaders/canonical_reference_lighting_frag.spv": "016818a1ebb6efd8a6965dfae528e09fc43e9a92d2fe251add694f4c8e75a2fb",
+      "assets/shaders/canonical_packed_lighting_frag.spv": "f618ba72b807164cbd0cfd1acb6270d2545aab7ab00eb69ed9dcdc560e74fd8c",
+      "assets/shaders/complex_material_indexed_frag.spv": "9bc968aa6072dbada0c62b090d88e2ae67dcb84adce5e5d53afd58c1ed8746b5",
+      "assets/shaders/complex_opaque_material_indexed_frag.spv": "b6eaa257d257cc4f1114c6887ecd6a4aefde4789adbfa35f150ce7a21f7c19b4"
+    }
+  },
+  "m5_6Supersession": {
+    "status": "M5.6 candidate stabilized directional cascade rendering and shared deferred/forward compare sampling; earlier hashes remain historical",
+    "current_shader_hashes": {
+      "assets/shaders/include/canonical_lighting_body.glsl": "57435481b110248d98f710174be847fb8cb0483e4643e4b85b48b5ea57033ffb",
+      "assets/shaders/include/complex_material_body.glsl": "65060ed10dcac7dc52a40208a0eff0a4d3a6672fc5840cb55c0fb8bc821b3212",
+      "assets/shaders/include/directional_shadow.glsl": "90d3a70b9fe1af4a50e5ff781564c79cf58691e4672b1b631704494fc6779a90",
+      "assets/shaders/directional_shadow.vert": "56f7f181871651c5ed7400c2e8e5bf6d36e329609f678e96c7b3cf535d62e7d9",
+      "assets/shaders/directional_shadow_mask.frag": "b95726919520e87f3ee93e7da211ab33da8139d948bf201220e1c9b1d272564d"
+    },
+    "current_spirv_hashes": {
+      "assets/shaders/canonical_reference_lighting_frag.spv": "aedbf2df197803a8734419083ca48be2b82f76a06f9637d5988400932738f7b9",
+      "assets/shaders/canonical_packed_lighting_frag.spv": "71927d265340fb2305458784073fca44f970f56ea63ff4acea0b50ea7bf5fe09",
+      "assets/shaders/complex_material_indexed_frag.spv": "0ca107c645f96c3b892016b5347c5c68e503d174ceeb4793f52107e4c4c5a051",
+      "assets/shaders/complex_opaque_material_indexed_frag.spv": "89b4b7b4bd6440915ced0fcf03d557dcbf852f1e41de6179ddb545308ae326ba",
+      "assets/shaders/directional_shadow_vert.spv": "6f83a388beb7461d042d78fa872fb34ea2f0325608f44272380c0922152071cb",
+      "assets/shaders/directional_shadow_mask_frag.spv": "09ba27fe02e01d23b8b7c820252c6d74112145eb204c4fd58eb622fac63c23ef"
+    }
+  },
+  "m5_7Supersession": {
+    "status": "M5.7 multi-owner directional visibility plus persistent spot-atlas and tiered point-cube GPU slices supersede only the M5.6 single-owner capacity; M5.6 hashes remain historical",
+    "current_shader_hashes": {
+      "assets/shaders/include/canonical_lighting_body.glsl": "91ca6cfd538b901880f1b8cc337c4eccbbaa9f51231995400a9b6c9aae5f5108",
+      "assets/shaders/include/complex_material_body.glsl": "16190ce01175b99721cdfa740a66be2e4ff8b1980d08c3fd0859d5faa03e4605",
+      "assets/shaders/include/directional_shadow.glsl": "22d8bb9805908ba9d90965775de616f5c4b02d026e4cc5c9ea8ca27b42665d22",
+      "assets/shaders/include/spot_shadow.glsl": "059b76c0d3ce4588347a6c04a1eedb5feba5b2d1bd9bd327be397f14ba94a418",
+      "assets/shaders/include/point_shadow.glsl": "23d6d037fcc247b12e634d2667aba8325c8271e5b9d09399cf64a38cff6193eb",
+      "assets/shaders/directional_shadow.vert": "323ca6ad02a9279b2e035d3e741767e3659679ab85db3096bab543e2a7ae9081",
+      "assets/shaders/directional_shadow_mask.frag": "b95726919520e87f3ee93e7da211ab33da8139d948bf201220e1c9b1d272564d",
+      "assets/shaders/spot_shadow.vert": "eaa3a46fff0a4c3f77913c47a84e2aab9e502cde987f62558c19c02c6672b7df",
+      "assets/shaders/point_shadow.vert": "85b5faf9da65d7958c3cce53f332ea227efc15c05f8925736dde08b6d6244595"
+    },
+    "current_spirv_hashes": {
+      "assets/shaders/canonical_reference_lighting_frag.spv": "d3158c541ee0dbe4d6007b976b31a033d51a34109c13d0d04970a891285981f7",
+      "assets/shaders/canonical_packed_lighting_frag.spv": "ec774ac54b743d5fe0980b9ac65ad41f4dbf5fde56ba25fd93625055fb485eab",
+      "assets/shaders/complex_material_indexed_frag.spv": "9c4d98d9e888fd109263f34d34bb6efe7f0372bd0837059f3f39ea04bbb085f5",
+      "assets/shaders/complex_opaque_material_indexed_frag.spv": "c9aa3947cf0dbd98c01533e66e0b2982647f9442254bc3b044dc7b147336edc0",
+      "assets/shaders/directional_shadow_vert.spv": "8e859fc12f40359894848aba995eea85aee9b5134f881fb42fca0534da28b5ff",
+      "assets/shaders/directional_shadow_mask_frag.spv": "09ba27fe02e01d23b8b7c820252c6d74112145eb204c4fd58eb622fac63c23ef",
+      "assets/shaders/spot_shadow_vert.spv": "a226c03e6c3ab527712a97d7c6b23b0d3adb9239f187c3da7143154fc0025c65",
+      "assets/shaders/point_shadow_vert.spv": "299cf1b016f17107b832591aed64c5bb589af746bcd0b67afcafcbcc09c6efcc"
+    }
+  },
+  "m5_8Supersession": {
+    "status": "M5.8 HDRI Sky plus bounded local reflection-probe GPU assignment, indexed prefiltered cubemaps, boundary blending, and box projection are current; M5.7 hashes remain historical",
+    "current_shader_hashes": {
+      "assets/shaders/include/canonical_lighting_body.glsl": "ffa87cf13543215df2de5ff330b65a737144e33dec18007fe1c56ba2b94f95e6",
+      "assets/shaders/include/complex_material_body.glsl": "6b377ce876617b16158d6e2b1c0df46d68fe2031789b8d567b17a4da06579fda",
+      "assets/shaders/include/clustered_light_access.glsl": "90383ea8703d821bdeba771ed0c83d61ce00cc670b71ac4ea5839b2392df6dc6",
+      "assets/shaders/include/environment_ibl.glsl": "08d801bfa9cb7b6712e8e49accc11e23375102d5949c7c15b8278ea3f3912d7b",
+      "assets/shaders/include/reflection_probe_records.glsl": "a8e3be259ed008b42ac02b94c3e00407a80201482594bd2541afd8e40a5e63dc",
+      "assets/shaders/reflection_probe_cluster.comp": "1cf38bb72cf744ad01ab58ff9c7bda51d1bee5a48fea140d589b3db67279a00b"
+    },
+    "current_spirv_hashes": {
+      "assets/shaders/canonical_reference_lighting_frag.spv": "1b8291a9db68994a2bf578fa23b30a87f420844b62453b6e5f5e446b9fb4d8cc",
+      "assets/shaders/canonical_packed_lighting_frag.spv": "2edbb990351e113281446cc8e1231ce88e9b14bf8f5ea43c9d13e7df7144fa20",
+      "assets/shaders/complex_material_indexed_frag.spv": "677a31bcf21b8239d35467052b9917b24559f3ded4d9efc5486288232306e4c0",
+      "assets/shaders/complex_opaque_material_indexed_frag.spv": "c89af6c484bf818a0b5141904b5ad4dbc6b61c5390d4212c9af81c0e01a29f3e",
+      "assets/shaders/reflection_probe_cluster_comp.spv": "cea70c7fc488aca6fd4ae30c993b5f3c8f00b779653e419bfbcd704171bf90e4"
+    }
+  },
+  "m5_9Supersession": {
+    "status": "M5.9 bounded spatial PCSS uses physical emitter extent, deterministic raw-depth blocker search, quality ceilings, and fixed-PCF or hard-shadow fallback; M9 owns temporal reconstruction",
+    "current_shader_hashes": {
+      "assets/shaders/include/directional_shadow.glsl": "592842851af338cf64d6ad4baba4e24a7bf2aca4804193450d4af52055b7ca9f",
+      "assets/shaders/include/spot_shadow.glsl": "619ca8d7a56cf0c3814c8846eb5f5aa552ba40ab4f2ad01bc5d4e66558be3d00",
+      "assets/shaders/include/point_shadow.glsl": "01ceb01500d46563a1550bf7c4439ecb59706e6f15e1df1c751da592a9fc9f6e",
+      "assets/shaders/include/shadow_filter.glsl": "d4d2416990f4c5c8ab6b63e5a98697a1cf93da4d54a8e3e3d4186107119640dd"
+    },
+    "current_spirv_hashes": {
+      "assets/shaders/canonical_reference_lighting_frag.spv": "a972c4963615564c4d98f55ab70917bfa25722066c2bda0a3b3ce853afcf018f",
+      "assets/shaders/canonical_packed_lighting_frag.spv": "173b3ff2d309864ff4b6705c7669b14051a79d9f2ee87ea9874919ce74ac3218",
+      "assets/shaders/complex_material_indexed_frag.spv": "08432f6b30b920f71ec597d7a39b62aae4460fd2907ecc0ee8bdd61ffd5ecffd",
+      "assets/shaders/complex_opaque_material_indexed_frag.spv": "4974aa57a7ebef72c43bf928b2b76fd2f4cc0bb3b83c9ce5c5fabae0b85f30d9",
+      "assets/shaders/reflection_probe_capture_frag.spv": "4bd5186a42e9699185e0ec6558a9682836b0cd03d2d0d01d3944985a3b0efae5"
+    }
+  },
+  "m5_11Acceptance": {
+    "status": "Accepted 2026-08-13: M5 production light, sky, shadow, reflection-probe, baked-lighting, and qualification-fixture contracts are frozen; later milestones must supersede changed hashes explicitly",
+    "contract_hashes": {
+      "src/scene/components/LightComponent.h": "d58dec43c5f291acca2eafa6f60d86ed7a00a500b8aaf162e02aaeb9ed67629f",
+      "src/scene/components/SkyComponent.h": "55263d9513db4eaae8606a222da9ea70c25491bf9aa2e41d29abb23c396eb2b3",
+      "src/scene/components/ReflectionProbeComponent.h": "7afb0c07a67f7503e7ffbda3858794ffe1303084bdcd2847ea33ec04981996b0",
+      "src/scene/components/BakedLightingSetComponent.h": "3fba603b111dfeb3b13f0aa8b66fafd97f14cfec35161ff4c2337b5930859e03",
+      "src/renderer/rhi/ShadowSettings.h": "2387e1b7ca187d8df3774fa6d5d64b45c2ae8c5b673e9556eafbd332523f00ce",
+      "src/renderer/rhi/ReflectionProbeSettings.h": "217d93dd0960c4a2bac76d257168bf19220c546da2b1b5bd1dec21d52b810e5e",
+      "src/assets/lighting/BakedLightingProduct.h": "802cbeaa486424f35752bf8733265ce8a40327af3e645494121fda924d2486a7",
+      "assets/benchmarks/m5/directional-shadow-manifest.v1.json": "4bdc7ecd28c90669f046779b7ba2091d9626435538012f2603159f70562d7648",
+      "assets/m5-sample-car-manifest.v1.json": "2b6e14fb3896929f9ca137c6915919c92dc558a401373423883c086f2ab3c240"
+    }
+  },
+  "m5_13CorrectiveHardening": {
+    "status": "Post-acceptance corrective hardening: local +Z is the common visible emission direction, receiver bias is expressed in world-space shadow texels instead of normalized depth or fixed centimeters, hard/contact edges use compare-then-filter reconstruction, Ultra filtering is denser, high-end directional/spot defaults increase spatial density, and point raw-depth filtering no longer interpolates nonlinear projected depth. Historical acceptance hashes remain unchanged and are explicitly superseded here.",
+    "current_contract_hashes": {
+      "src/scene/components/LightComponent.h": "a7c117f9f33dc3bffb06bc7c0acdc31e31dc784ca966d365b7da6cc9d4cfb3f1",
+      "src/renderer/rhi/ShadowSettings.h": "516c95eb863f63b4fb6530e10a22d80006b4dc8c831f4cc69cb66460d57af289",
+      "src/renderer/rhi/LightingTypes.h": "7969758d946b22b07e5c5c2f37e6a4b52e5c17238746e047ec68e4fb357ed53f",
+      "src/renderer/lighting/LightExtractor.h": "26ecb91046ab89b887d5ede14bb331fdf3dad754a339076172f671ad59cff0c4",
+      "src/renderer/lighting/LightExtractor.cpp": "aece2d46ef532a7d5d3e582ecebfb5eb05310809324ce53f5eddd08139c6320b",
+      "src/renderer/lighting/ClusteredLighting.cpp": "992748bf05e390626aa8e4435ee483f71fd754d18667513d39ce31d0d5f8255f",
+      "src/renderer/lighting/LocalShadow.cpp": "09084af5a2d4f4a988fe94793d34d44033c9838d221a4e72beeda1d0e1ada6e7",
+      "src/renderer/vulkan/VulkanDirectionalShadowMap.h": "1fa1b8ebd43dff49861cb3f1a5159e5aa8cb9a1ff68970315c4edcd205ab5cc0",
+      "src/renderer/vulkan/VulkanDirectionalShadowMap.cpp": "2c3914e9147954d7a4d438bfd110e2acab3dc04140d90948f5bde29f8f068a24",
+      "src/renderer/vulkan/VulkanSpotShadowAtlas.h": "26b85faa6ba3b9a928cdc65df1a47dc1e4aa1de395844aac7e2ef460376108a5",
+      "src/renderer/vulkan/VulkanSpotShadowAtlas.cpp": "75035b2ad1f709ff459f8b3e6a59e7ea450adf6259e679e8e9c5d61ec0d1eb39",
+      "src/renderer/vulkan/VulkanPointShadowPools.h": "90c73c04ccc982dca24a3ceb5d0e5aaaa948a4e88bc74b08e6950593f9da933c",
+      "src/renderer/vulkan/VulkanPointShadowPools.cpp": "8743d08743cea25527d965edf5c8df1c8cfc83c1c007721c8bfc7d7d3df0e183",
+      "assets/shaders/include/direct_lighting.glsl": "c0d904c7b94d3a5911903e90a3036d034c5d93d930dee3f774942e55660d5a9a",
+      "assets/shaders/include/clustered_lighting.glsl": "20e7f128c8a4c7098ad90439e405dbaa38a4f064d22e4339a75c8424c06fed83",
+      "assets/shaders/include/directional_shadow.glsl": "5dc5d3228716ebf14b70169588990a178bda7343100c81d7460d32867abe135e",
+      "assets/shaders/include/spot_shadow.glsl": "f0a2fe066b4cb5e06ba2ed3e7f44542bb3e12577e7eb35fc04b2ef5289e59b71",
+      "assets/shaders/include/point_shadow.glsl": "bf9af10cffcfba892b5b2b8bb5472e5533982a8f6359b1f9a1ec3d6ed0d0437d",
+      "assets/shaders/canonical_reference_lighting_frag.spv": "30a545117cae70f552a8fc04d21961767118a941de860f51b205c48d1e9c6974",
+      "assets/shaders/canonical_packed_lighting_frag.spv": "7b733eb34769bb94703c2d5d53205f9828bde4759a442d9ee3ed985819651569",
+      "assets/shaders/complex_material_indexed_frag.spv": "f52826ab050dfad0226dfa4b0ee80fa6d529477fdceeb8b8222cdf8fef9b8966",
+      "assets/shaders/complex_opaque_material_indexed_frag.spv": "60fe9b73a91629034aadab2ffaf75e046f22ccc339f99ffa44ba4e049955a209",
+      "assets/shaders/reflection_probe_capture_frag.spv": "7e7caf114f5fa6b21deb615936a5b6cd686aa53e61b25b0dbdae420906198a7c"
+    }
+  },
+  "m6_1Supersession": {
+    "status": "M6.1 advances the fixed 832-byte packed-material ABI to schema 3 by replacing its reserved tail with versioned transparency policy fields and moving packed-normal Z reconstruction to a feature bit. M5 acceptance and corrective hashes remain historical; only the three consumers of packed_material.glsl are superseded here, with LegacyTwoBucket captures verified pixel-identical.",
+    "current_contract_hashes": {
+      "assets/shaders/complex_material_indexed_frag.spv": "1dc89dc164aa17919f82b29d552be3987b39b26b67db9e54e9f857e6d7548aac",
+      "assets/shaders/complex_opaque_material_indexed_frag.spv": "2533ecde7c1ab0c9a91fc114c38274b9593a1a80f3a189b0a097439a3a195981",
+      "assets/shaders/reflection_probe_capture_frag.spv": "28168c8439bc5de15bcf1317e22a5934786b217a61b5d5f16654661a3d26554d"
+    }
+  },
+  "m6_2Supersession": {
+    "status": "M6.2 adds classified SortedSurface execution with premultiplied output in a dedicated depth-read-only forward pass. M5 acceptance, corrective, and M6.1 hashes remain historical; only the two complex material programs are superseded here.",
+    "current_contract_hashes": {
+      "assets/shaders/complex_material_indexed_frag.spv": "224a7381f32558d2eb97e76e1bf111e66598c8b4a857d04cbb8282937db07c3a",
+      "assets/shaders/complex_opaque_material_indexed_frag.spv": "5f34f7685623bf792638d4b74465f5306693596682a67a423c17473e1ccd0edc"
+    }
+  },
+  "m6_3Supersession": {
+    "status": "M6.3 replaces empirical glass camera/thickness constants with the active per-view transport record, exact dielectric Fresnel/TIR, metric ThinGlass paths, and bounded Beer-Lambert absorption. Earlier accepted hashes remain historical; only the two complex material programs are superseded here.",
+    "current_contract_hashes": {
+      "assets/shaders/complex_material_indexed_frag.spv": "2d2628ed649c5e3f44c40d7bcf8fb9209ebbe08f9929a6e42418018866ef418f",
+      "assets/shaders/complex_opaque_material_indexed_frag.spv": "6d1ec9d5d3be2e2a325163976bc9fc14824dffa9831cfc75a6d409c8f2944e59"
+    }
+  },
+  "m6_4Supersession": {
+    "status": "M6.4 replaces the repeated single-level compatibility scene copies with one pre-transparency AP1 color pyramid, conservative metric-depth pyramid, projection-aware rough refraction, and probe/sky edge fallback. Earlier accepted hashes remain historical; only the transparent complex-material program is superseded here.",
+    "current_contract_hashes": {
+      "assets/shaders/complex_material_indexed_frag.spv": "117862421c2fa87da09b4c89b4d5aeecb54e172ce52663176ad42a63a9efab07"
+    }
+  },
+  "m6_5Supersession": {
+    "status": "M6.5 corrects the current local Alfa headlamp dielectric input and zero-thickness classified-glass composition. Earlier accepted benchmark hashes remain historical; the current sample-car manifest source and transparent complex-material program hashes are superseded here.",
+    "current_contract_hashes": {
+        "assets/m5-sample-car-manifest.v1.json": "8df702eec08679d191db7cbd699e7984cffadff147c8651024cd94392c8067ff",
+      "assets/shaders/complex_material_indexed_frag.spv": "73aa949c96c1fcb3d2944f3d68910ab17e58728e9b9a505b21293165e18ce0a8"
+    }
+  },
+  "m6_6Supersession": {
+    "status": "M6.6 shares the indexed complex-material body with exact and bounded-residual deep-tier local composition. Earlier accepted benchmark hashes remain historical; the current opaque and transparent complex-material programs are superseded here.",
+    "current_contract_hashes": {
+      "assets/shaders/complex_material_indexed_frag.spv": "9fc16199c60d8a27583f842157e092da48ad017c71b16be3415ca77befac828a",
+      "assets/shaders/complex_opaque_material_indexed_frag.spv": "a8e053ade7e843f90b75d07b49f309e881ccfd3f034775ca8acf88ed043067fd"
+    }
+  },
+  "m6_7Supersession": {
+    "status": "M6.7 adds the active WeightedOIT accumulation output contract to the shared transparent complex-material body and compile-time excludes the unreachable refraction transport/descriptors from the explicit nonrefractive WeightedOIT shader. Earlier accepted benchmark hashes remain historical; the shared body and ordinary transparent complex-material program are superseded here.",
+    "current_contract_hashes": {
+      "assets/shaders/include/complex_material_body.glsl": "ff4808db70979850ddffdb1986fd858d2587fd7736a31c6e6d582dac268f62d0",
+      "assets/shaders/complex_material_indexed_frag.spv": "ea7404b8444915853295d7860e88e1d086178d16627ca4587b027b3a9da2369b",
+      "assets/shaders/complex_opaque_material_indexed_frag.spv": "46038a5258cf4fdb8cda952d53896dab469eb14c73b1e43ff488e12fff81e20c"
+    }
+  },
+  "m6_8Supersession": {
+    "status": "M6.8 adds backend-neutral transparency class, fallback, measured interval, selected pyramid mip, retained-layer, and overflow/saturation diagnostics. Deferred opaque/alpha-clip and all shared complex-forward variants expose the same per-view identity without overlapping layered per-draw work identity. Allocation hardening replaces transient local-shadow duplicate-owner storage with deterministic sorted validation while preserving scheduler semantics. Earlier accepted hashes remain historical; only diagnostic shader and allocation-hardening contracts are superseded here.",
+    "current_contract_hashes": {
+      "src/renderer/lighting/LocalShadow.cpp": "45acb370fa53df9741eba262d109c9fdd773f217902f95c7ad9ec267b0fd1286",
+      "assets/shaders/include/canonical_lighting_body.glsl": "6fe53fc75e02aace3bdb52116972dc8c25a8345a6c9711aed66bdeab025223f5",
+      "assets/shaders/include/complex_material_body.glsl": "a2425a5893a7600098667f0b6623ce65d3391bc26cca7c55198846dbe7584296",
+      "assets/shaders/canonical_reference_lighting_frag.spv": "b0a5bba010b7b2b4db399ed911c67ef92eea50a1ab09056eb1af277924299fe7",
+      "assets/shaders/canonical_packed_lighting_frag.spv": "d38c4dff255dfe9c88496ab3303f2ced3c0b5a3cbaf2c2fd76cc08612e6e87ef",
+      "assets/shaders/complex_material_indexed_frag.spv": "59bb8a8c090b4646ea6e8fac59ddc4a9bdd8f01f4be20f367bee3e35e91c82f8",
+      "assets/shaders/complex_opaque_material_indexed_frag.spv": "3f28ab76c9bf81f1d587b515a5e98b37900550452f26bf40e6568762183aaebc",
+      "assets/shaders/layered_ordinary2_material_indexed_frag.spv": "2e9f63679c05024b34576b984cede3c6c51734c80c42a1a4ecf7d676dec5df1b",
+      "assets/shaders/layered_deep_material_indexed_frag.spv": "1aa6161ee19d4aa337ffb07fb122fcfc2feb76524b962e3b1674d08ff4f6a947",
+      "assets/shaders/layered_deep_residual_material_indexed_frag.spv": "4a9b1eaa81b2230c255f34320d4d9680d752a2cfb2c0b7e6aecf74dd39a1822c",
+      "assets/shaders/weighted_oit_material_indexed_frag.spv": "66ab41d0a06983ad083df3b72ddf5a9097d23c687db9a696a7400d4b839a882b"
+    }
+  },
+  "m7_7Supersession": {
+    "status": "M7.7 caps directional coverage by project/profile policy, retains practical/log splits with world-density diagnostics, reconstructs PCSS filter comparisons bilinearly while retaining raw blocker depth, and makes the Cinematic project tier reachable. Accepted M5/M6 hashes remain historical and are explicitly superseded here.",
+    "current_contract_hashes": {
+      "src/renderer/rhi/ShadowSettings.h": "0e118bb4a687f1cb6b00ec5c1ba55d949baeb0e409e92a9e0d5d081f3eb98092",
+      "assets/shaders/include/directional_shadow.glsl": "7e1d078920c4b570f6655bada9d37cf3c75413efeb1a597586c4b0eeb21330b5",
+      "assets/shaders/canonical_reference_lighting_frag.spv": "a0a6080cf6fde58c2606235d8f90bc6135fd824070b9d573cbf9bf9d575435b3",
+      "assets/shaders/canonical_packed_lighting_frag.spv": "f61f4ab72ac3cb5f856cda44c8bd6d364e484a6de9558e21fe68c23e57432220",
+      "assets/shaders/complex_material_indexed_frag.spv": "51e62306a8336df9be983ef05dd0251bc7ae95af21415d51425504ca0ac04e28",
+      "assets/shaders/complex_opaque_material_indexed_frag.spv": "22b1e97b805d219d69063fc2a2332b18684df23758e3da6828fd234e047694ab",
+      "assets/shaders/reflection_probe_capture_frag.spv": "1126af63e62fba4934b09f4ab2749aa6356e870d0878e88c2d27983d6df03a86",
+      "assets/shaders/layered_ordinary2_material_indexed_frag.spv": "91e41fbdb3c19a665112a043a6bc4d55e6a03b8ee0766c9b483ba0e3c74d9382",
+      "assets/shaders/layered_deep_material_indexed_frag.spv": "d6819302516c05a6fcc1a4a61872f1c31d3635bd17d21f6853d43b1608736b66",
+      "assets/shaders/layered_deep_residual_material_indexed_frag.spv": "cbf74661d2cdaf88b7e464c9ad4be478906358214a54b189d8c5f00828f2e3c2",
+      "assets/shaders/weighted_oit_material_indexed_frag.spv": "7999686333cf5c37c70ecef6c8dd0bb6047867c2460ea603f1d4f5abe6bd17d1"
+    }
+  },
+  "m7_7BiasSupersession": {
+    "status": "M7.7 adds bounded receiver-plane depth correction and geometric-normal offset in cascade world-texel units, validates the terms with a fixture-owned grazing receiver, and records active bias settings in profiles and captures. Earlier accepted hashes remain historical and are explicitly superseded here.",
+    "current_contract_hashes": {
+      "src/renderer/rhi/ShadowSettings.h": "9d8a9d545e21cf59722d18cbdfeefc53a513c4559fef609ffc2bdcc26ca17e7a",
+      "src/renderer/rhi/ShadowTypes.h": "30b5a044a440a4dd8921c373c49ea6d9b5bfb49bc20958cf9e357e3b1d40160d",
+      "src/renderer/lighting/DirectionalShadow.h": "d6ebf490b3ab54942758f9e3ec81741ff4da87bd084f4ade4bd41df1a62236f3",
+      "src/renderer/lighting/DirectionalShadow.cpp": "9e5a9e4d198a289bded5c0eebc8ed80550a6ff2634ebfa7bdb1ba655faf096b1",
+      "src/renderer/vulkan/VulkanDirectionalShadowMap.h": "39d5a9eb16906a89545ecec7b40a0538044fde353978071119db458c4a9a11e9",
+      "src/renderer/vulkan/VulkanDirectionalShadowMap.cpp": "834a5115743dbb8eeb6de950376ae67c95fe9bbbfc249b788b11678a1e6dae2a",
+      "src/core/ApplicationConfig.cpp": "12f586345fa0caa7e211d2d7c9fc997f1a88c71cfa0c0af1e5a05ad69894b2df",
+      "src/core/Application.cpp": "0c1adcec63c602d788c71757fb3673abc470766f2db36def212522fa9948bc62",
+      "src/capture/CaptureArtifact.h": "ea4bf046a226bbdcdfc50d83b7c4a55414284f3a3f27f36ce707e56a25e1fa3f",
+      "src/capture/CaptureArtifact.cpp": "e8a2c8c75956190d3b88f04fe4980bf888a9e13cb417e0622be8e8cd00a34bda",
+      "src/editor/panels/windows/ProjectSettingsPanel.cpp": "4c64b48b848fc430eef561d376e6c24efee822272ffccd96bb3f55064a6051e8",
+      "assets/m7-directional-shadow-grazing-manifest.v1.json": "5f4dc88382827398671963a148bd27a68552121418a0fa8748172dc4d7df1f86",
+      "assets/shaders/include/directional_shadow.glsl": "0afafeaee8c8f706d8ca5f18a1c75dc067e0c73e32bdfe3a186a43948184cbf3",
+      "assets/shaders/include/canonical_lighting_body.glsl": "0bc1e94b1ce0d11b2e6a26c65f6468af3060d6120bef44c3dbdd59fc9417de25",
+      "assets/shaders/include/complex_material_body.glsl": "f3b9632ff6f625ec2e59b85d1d01b9b4756cd07f528e26c0942175a4f34e6a1a",
+      "assets/shaders/reflection_probe_capture.frag": "600bb2bcf390b51c8b1bcd2e03c8f4a4de423627f64c693c75d859ace3996cb3",
+      "assets/shaders/canonical_reference_lighting_frag.spv": "f28b0507dbf89ec96e81bef37335eeacc5e58aa9e5a74f2f8954728dc3c31fdb",
+      "assets/shaders/canonical_packed_lighting_frag.spv": "ac75fa0adf6b724f62ea0060c391cca1e8ccbf6bf6bb476dfb9a99f5e63de7ec",
+      "assets/shaders/complex_material_indexed_frag.spv": "57f02750e0640786e3f66497d0c96e984c4b27962dc1dc94bf8b86b1066c912a",
+      "assets/shaders/complex_opaque_material_indexed_frag.spv": "7540ce30576c06570a0c1e16916e89a02c48f93843ad75bed4a4ff55ff7297ed",
+      "assets/shaders/reflection_probe_capture_frag.spv": "46d54c3bf1126598b4bd9c1a364fb63adff4bd955e9c7771b0862379ad8a3e59",
+      "assets/shaders/layered_ordinary2_material_indexed_frag.spv": "92a190764985dd64980687d20d769f779b67a0bb8f57923506ba1686bb75827a",
+      "assets/shaders/layered_deep_material_indexed_frag.spv": "ef516610ba3f82d7a3e0ade31484034eeb8b5b51fcd84611272b4ed0e625f394",
+      "assets/shaders/layered_deep_residual_material_indexed_frag.spv": "3d338718676b8b201a65907312182ba254754f63f6143496c1547998aa7a642e",
+      "assets/shaders/weighted_oit_material_indexed_frag.spv": "c1f451bfad3b6bc577e4a89b7aa54b152c3acda2d6e2534989b6ced6081f7d28"
+    }
+  },
+  "m7_7CasterVisibilitySupersession": {
+    "status": "M7.7 derives an independent conservative caster set for each refreshed directional cascade, retains unknown bounds fail-visible, and records exact tested/culled caster-cascade telemetry. Earlier accepted hashes remain historical and are explicitly superseded here.",
+    "current_contract_hashes": {
+      "src/renderer/lighting/DirectionalShadow.h": "20f6015bcf52d1052535ad01ba69394a42f1f67d28e8b316978deced94be5657",
+      "src/renderer/lighting/DirectionalShadow.cpp": "f05713543f2bc909d0cde3912094a76a420f7cb4c13df68fd5d47aa3c292eb3a",
+      "src/renderer/vulkan/VulkanVertexBackend.h": "19908970e4f52df0c22b7c6a0ca870d6d31c4e3869c1f75fa97d8b6dc9ef80c7",
+      "src/renderer/vulkan/VulkanVertexBackend.cpp": "d2f1003ee44b86098630502d7fc855fa31a334c21328d611459c0ca277ddfec1",
+      "assets/m7-directional-shadow-grazing-manifest.v1.json": "f7742665399e6c8b77f61b6a4a14cf46fe2d90f766d683dd22be44dcab04a094"
+    }
+  },
+  "m7_7AffectedBoundsSupersession": {
+    "status": "M7.7 replaces the global directional caster cache key with four backend-owned conservative caster revisions, so entering, leaving, or changing a caster invalidates only affected cascades while the others remain sampleable. Earlier accepted hashes remain historical and are explicitly superseded here.",
+    "current_contract_hashes": {
+      "src/renderer/lighting/DirectionalShadow.h": "7223b6a29dd85a1a56022878d0b3147dc1a7224cea5c4d731d261ac97219c91d",
+      "src/renderer/lighting/DirectionalShadow.cpp": "721e90278bcb253aaafd5cddab475e31cb08a41d5f6005e2b43bc6b43ea65a58",
+      "src/renderer/rhi/IRenderBackend.h": "521b88fc634eb5db7dd30178ae539891ee39d19930e1ff9196d583f090672fc6",
+      "src/renderer/vulkan/VulkanVertexBackend.h": "d70a021c9fea8abc4011abb06600bd9e09f8776d0a11ba56d5c987fbadff4016",
+      "src/renderer/vulkan/VulkanVertexBackend.cpp": "2c08c3aace9c3f22f0bfe039c77b9b5bc0f83bdafb595c6dccf2ea1424580c96",
+      "src/core/Application.cpp": "2b1ad7259c280fe9febc0b56f7ca1b278cc06edf2edf0adf7546fe6066c9f0c0",
+      "assets/m7-directional-shadow-grazing-manifest.v1.json": "1dc6c4afe4b39f0c07aae5aa1c2bbe1aba5752d92ba92fe3cab7636d9436defb"
+    }
+  },
+  "m7_7GpuSceneShadowSubmissionSupersession": {
+    "status": "M7.7 replaces copied persistent CPU caster packets with compact camera-independent GPU-scene primitive references shared by directional, spot, and point shadows, while retaining explicit direct fallback packets. Vulkan still resolves references to direct indexed draws; device-built shadow indirect commands remain open. Earlier accepted hashes remain historical and are explicitly superseded here.",
+    "current_contract_hashes": {
+      "src/renderer/rhi/GpuScene.h": "d08a9d18863be9e245429f8347b66874ebbfa9944589c9607cd706827b87e825",
+      "src/renderer/rhi/GpuScene.cpp": "423f6ad2ffea2630faefb1c077b75eb7e47fa2b4e4335359194565c9cdd9bc56",
+      "src/renderer/rhi/IRenderBackend.h": "35373c14657cbcf75dbb541c61cea56a54c7f934d86f4afbbef92f899ab955a4",
+      "src/renderer/vulkan/VulkanVertexBackend.h": "506d831fd34099548b001d15109cbf11a06831fcecffbbd1a170cbc1316c3149",
+      "src/renderer/vulkan/VulkanVertexBackend.cpp": "b2df692549f9f31b73c8733eef351f5dec0be8a84c0a4e0fbdd10dc55cf6746e",
+      "src/core/Application.h": "cbe8e5b5be74d7381825cf863dffac4954759e54c2ae4318df4ee6d6c3522b6f",
+      "src/core/Application.cpp": "99e59f822af227835caa65cb34acd35a30ee3baedcf7ab288fd4ea3c2ca92b72"
+    }
+  },
+  "m7_7DirectionalDeviceCommandSupersession": {
+    "status": "M7.7 builds directional-cascade indexed commands on the device from compact GPU-scene primitive references, reuses one candidate table across cascade output regions, validates fence-delayed device counts against the independent CPU oracle, and retains direct capability, tiny-workload, capacity, invalid-data, mixed-submission, and qualification-reference fallbacks. Earlier accepted hashes remain historical and are explicitly superseded here.",
+    "current_contract_hashes": {
+      "src/renderer/rhi/GpuSceneIndirect.h": "7f347b86606b114fd594bedb3bc1bb7674929c1214b017d011f17dc0a54ec39f",
+      "src/renderer/vulkan/VulkanDirectionalShadowMap.h": "545da4ce3084c99e4cd8484192008bd924d2bdc6ce4fdd226a50b5ad05ac5ad5",
+      "src/renderer/vulkan/VulkanDirectionalShadowMap.cpp": "8496178e406e30abf5feae8ec7411e55916bcc00e114167dff63d6a9f8fc933b",
+      "src/renderer/vulkan/VulkanVertexBackend.h": "e1909a0e39b75dc341f4837a100474cb3e8eca39b4e25aa77cd79b2ff442daed",
+      "src/renderer/vulkan/VulkanVertexBackend.cpp": "36757efab3b46e283f2fc170b2c16db515581dd6783c92057c0f54c9932d89e7",
+      "src/core/ApplicationConfig.cpp": "845fcda49e321be8e2e4ade5818f5c8b339aabae490098a2d9158640f160d4f8",
+      "assets/shaders/directional_shadow.vert": "2cbe4a3a2836641e37663f1027bf2b4f8f868c2e04dfb7002000955e21ed8ddb",
+      "assets/shaders/directional_shadow_compact.comp": "e936dd483aac2e1b798a7bef650d7db6a55d6b03b7a6114d2c0b97377838c40a",
+      "assets/shaders/directional_shadow_gpu_scene.vert": "940c679dda1599243218b0da3e6894790376332817b139d4d271dccd7e19837b",
+      "assets/shaders/directional_shadow_gpu_scene_mask.frag": "3ad488d630fcc0bec3ae077f9da03bba73766594cf7fe95cabb01c8cff3678d1",
+      "assets/shaders/directional_shadow_vert.spv": "d662c82e3d8d2f6489c12c0265f1b1007f47a5a2ce91aa69a283fa2fdb3bada0",
+      "assets/shaders/directional_shadow_compact_comp.spv": "cdc177a33d7e1162a4403d6d793bb2eee8dac60f5375d5f53766f05ac2c8636e",
+      "assets/shaders/directional_shadow_gpu_scene_vert.spv": "7a3b5715d4c9796895cebae7cb71ec105d3ef818d8d6490cf8da0c75ae034c87",
+      "assets/shaders/directional_shadow_gpu_scene_mask_frag.spv": "85c5a01817f16421df513e831d53d4c24ce3a2f57938aa06f2116ca988febb5c"
+    }
+  },
+  "m7_7LocalShadowDeviceCommandSupersession": {
+    "status": "M7.7 extends device-built indexed commands to spot-atlas tiles and point-cube faces. Each refreshed local-light view owns a bounded output region, GPU-scene transform and bindless material identity flow through indirect firstInstance, fence-delayed counts are checked against an independent CPU clip-volume oracle, and direct capability, tiny-workload, capacity, invalid-data, mixed-submission, and qualification-reference fallbacks remain explicit. Earlier accepted hashes remain historical and are explicitly superseded here.",
+    "current_contract_hashes": {
+      "src/renderer/rhi/GpuSceneIndirect.h": "7f347b86606b114fd594bedb3bc1bb7674929c1214b017d011f17dc0a54ec39f",
+      "src/renderer/vulkan/VulkanVertexBackend.h": "fea7285b0e902a1a5be766cd70c66838805c2725c5293662768a70463838bd42",
+      "src/renderer/vulkan/VulkanVertexBackend.cpp": "9a02a62576dcb24675cb9b89a1260310794d35b9685df8eb6dad320862179556",
+      "src/renderer/vulkan/VulkanSpotShadowAtlas.h": "1c11efcf52e297718e9fe401e132aa3e2882b13d7440495241bd57e3135eef06",
+      "src/renderer/vulkan/VulkanSpotShadowAtlas.cpp": "b532e1c26a416e9fb2963e751133f6c17723e83c95ef2b21dcb93a42e8196d22",
+      "src/renderer/vulkan/VulkanPointShadowPools.h": "b6244e6bbc7472dab044ef99f3cce732f9b7bbf122728c10a00414d1c63397e9",
+      "src/renderer/vulkan/VulkanPointShadowPools.cpp": "33fbf456a367c1bac9a8dd629f32718a773692eeadbbf9af939a554b10b4cc0d",
+      "src/core/ApplicationConfig.cpp": "b79cf853de0ff3505da114b3e124fd8bdea13e7a1d3d7eeae0b383056474e7e3",
+      "assets/shaders/spot_shadow.vert": "dc6272e8bcea2b3d86e079798ae9a2c2789111f53579c6d24247d4c595d493ea",
+      "assets/shaders/spot_shadow_compact.comp": "32475ac8692fd606bc3d773163af0f8b2c39066c2c1ad2690c6b9a89138e53aa",
+      "assets/shaders/spot_shadow_gpu_scene.vert": "edcd2ccfa2511417fa29791a3919882ebdfec3099ee8d0a9d50b5ce489639f26",
+      "assets/shaders/point_shadow.vert": "05f927cc0cbaccef47e833a57e807460fcaa9c657fa1fa2d1ecd229993911ed2",
+      "assets/shaders/point_shadow_compact.comp": "8190936d306b2d354d4c3979a6964446092444ed0f7f901c1441750e144bd899",
+      "assets/shaders/point_shadow_gpu_scene.vert": "f42e6c52a6a646e57fd1f7427562af1464996b4898a65841db3bdff2323ae624",
+      "assets/shaders/directional_shadow_gpu_scene_mask.frag": "3ad488d630fcc0bec3ae077f9da03bba73766594cf7fe95cabb01c8cff3678d1",
+      "assets/shaders/spot_shadow_vert.spv": "e0ca7f9ab035fc50e7077cbfd352594f2f7b5558cd78e32b1baef42e45f7e12b",
+      "assets/shaders/spot_shadow_compact_comp.spv": "40d0b5b94427e86aee9b62cd76582d0594fd2467f9d57b1a27133172ccd6348c",
+      "assets/shaders/spot_shadow_gpu_scene_vert.spv": "9d7bb210e894e9d1cb8a6595cc535c3380e1e9cb135f21a221035ff00028d45e",
+      "assets/shaders/point_shadow_vert.spv": "d9cc9986d4d60a0742598e877442992f1cc25b6b93229c0c65f6b77547e69fc8",
+      "assets/shaders/point_shadow_compact_comp.spv": "013649c7c5503d9568b580985e76d85941cf65744d587ceba8ae59b21b25e064",
+      "assets/shaders/point_shadow_gpu_scene_vert.spv": "8c8af4ed54c75cfcdd24875bef628ed8e88991bae81782a42d298599debca5bb",
+      "assets/shaders/directional_shadow_gpu_scene_mask_frag.spv": "85c5a01817f16421df513e831d53d4c24ce3a2f57938aa06f2116ca988febb5c",
+      "assets/m7-local-shadow-device-manifest.v1.json": "047b67d489463d2f82d7c7bd8d48dcbbdd1910f897e9378127f8d7220d40e982"
+    }
+  },
+  "m7_7ShadowCommandOracleGatingSupersession": {
+    "status": "M7.7 makes per-view CPU shadow visibility an explicit qualification oracle instead of a production device-command dependency. Vulkan retains fence-delayed exact device-count and overflow readback without the oracle, validation builds enable comparison automatically, and --shadow-indirect-qualification-oracle enables it independently. Earlier accepted hashes remain historical and are explicitly superseded here.",
+    "current_contract_hashes": {
+      "src/renderer/rhi/RenderBackendConfig.h": "865a709d2101fc2e5f9f7a506b1694af0ec8c30f35d116e021e8dd5ea0220a53",
+      "src/core/ApplicationConfig.h": "9ad35eaf4db5356a8c99f0af23eb56d6422b974d7166e9036ee46b9cf7137aca",
+      "src/core/ApplicationConfig.cpp": "e0a973cbd0c3cb13f0aeae7096cf48123a714825cead1a3ff0164006d971fa06",
+      "src/core/Application.cpp": "a5e471faf9fdd60545d0597e6a4aa50e3654aaeab65d0be4de8ca3feac0a6282",
+      "src/renderer/vulkan/VulkanVertexBackend.h": "a9a7a6ab8155914fcf4acd1d22cc92fef1566f18dd7f7dee653f8edb4606e5ef",
+      "src/renderer/vulkan/VulkanVertexBackend.cpp": "db39848f5750f1ed658aa9fd46f8a0e9390dc94d0a186326929b081f0b02615a",
+      "tests/core/ApplicationConfigTests.cpp": "632a810723aceb977770e7ebe20ca0edfa562bc50798b1fdfa4b61620d002001"
+    }
+  },
+  "m7_7IndependentProbeVisibilitySupersession": {
+    "status": "M7.7 gives reflection capture an independent compact GpuSceneConsumerProbe submission, mirrors stable primitive owners for self-capture exclusion, performs conservative visibility per scheduled cube face, and retains an explicit direct qualification/fallback path. Earlier accepted hashes remain historical and are explicitly superseded here.",
+    "current_contract_hashes": {
+      "src/renderer/rhi/GpuScene.h": "d08a9d18863be9e245429f8347b66874ebbfa9944589c9607cd706827b87e825",
+      "src/renderer/rhi/GpuScene.cpp": "423f6ad2ffea2630faefb1c077b75eb7e47fa2b4e4335359194565c9cdd9bc56",
+      "src/renderer/rhi/IRenderBackend.h": "53a4c82cd5a8bb8064b56b2ae53334d21b35474a4f5788ee693909bc334ea136",
+      "src/core/Application.h": "e19ac1348c1e08de486f248fdd5271614d902b4750f013addaf324ebc31a01ae",
+      "src/core/Application.cpp": "179194c9b91b6c53a83fab62b75682a623876b78183eb450b672eafad739ae07",
+      "src/core/ApplicationConfig.cpp": "9d10028a11bbe5b6e5580fb71bbc005c42c70b2d6fb3527d17329cbf3789cae6",
+      "src/renderer/vulkan/VulkanVertexBackend.h": "b5564e5ae7f56dd9d774ccef0f62956c1e4198bca653937090d8d2ff791987bf",
+      "src/renderer/vulkan/VulkanVertexBackend.cpp": "e60791ed2c308c3bd4bdc021e102e12a0efc7d0a01fe2a42e5d59d18d83409d0",
+      "tests/renderer/GpuSceneTests.cpp": "faac552837af2c88f0dd3f0a5126f314f43fce6fca5ab453c912c018d6713e92"
+    }
+  },
+  "m7_7ProbeGpuSceneCapturePipelineSupersession": {
+    "status": "M7.7 adds a probe-capture graphics pipeline that resolves transform and material identity from the persistent GPU scene for compact casters, preserves the direct packet reference/fallback pipeline, and exposes a probe-only direct qualification switch. Device-built cube-face commands remain a subsequent gate; the paired scene-linear checkpoint is numerically equivalent within one R16 quantization step rather than byte-identical.",
+    "current_contract_hashes": {
+      "CMakeLists.txt": "2c396c85fc97b676d0be876c0e43a82956ef612bc5231581533e60ffb5f6a6e1",
+      "assets/shaders/reflection_probe_capture.vert": "3b0dfee40f400a2f5eeafe9cb43a1a40472facd72e1db7ecbd3e5df9effbfe70",
+      "assets/shaders/reflection_probe_capture.frag": "a2e54bebf33333e9f0886967904fddfac5f27a0c3f2f18b6123fef4e5332de66",
+      "assets/shaders/reflection_probe_capture_gpu_scene.vert": "dc5829bfdbc890b4878a5033d3a1da7da3b3b9b971298117251ecd04da27e769",
+      "assets/shaders/reflection_probe_capture_vert.spv": "0d76e526ee1245a54543ceb94aa43781b1587ece4c17e74b8f0ac118f7b74950",
+      "assets/shaders/reflection_probe_capture_frag.spv": "70f78b7d51f4c6361b725c585461c45c4edb062994d1a6c3dd171157392825ba",
+      "assets/shaders/reflection_probe_capture_gpu_scene_vert.spv": "2ca541a06973baffc7fa7cd4532ccf80a4642ceedb78b8c7d461702d76177d0b",
+      "src/core/Application.cpp": "ed68d506648fe2ea4adf1d0473b1a04049b0e3c7ae182acf5807f3fec2ff7673",
+      "src/core/ApplicationConfig.h": "5d5981ed24a108da263302cac4a5db37c1ab44917c9762c833432202dfc5d112",
+      "src/core/ApplicationConfig.cpp": "aff7e1156f853a87e26d5f4d4b8f49a7b2a91de70f146cabd297138ddf75b036",
+      "src/renderer/vulkan/VulkanReflectionProbeCapturePass.h": "cd06ecb208ba9b8be4583f035cafa312cb993131f7383de92f461529ee765f09",
+      "src/renderer/vulkan/VulkanReflectionProbeCapturePass.cpp": "da1898ac4cf7788f276d3261d2f1b6ec017e3c45ca85e554b795c211bce81fd5",
+      "src/renderer/vulkan/VulkanVertexBackend.cpp": "482993b72998478352ae86b789fcfa3eae614b17f8b84a6b4760ec66175697aa",
+      "tests/core/ApplicationConfigTests.cpp": "42a5c79cbf47363b9cd8a4f99fbc74e395778726d6951d430227586199f7d50c",
+      "tests/scene/M5FixtureContractTests.cpp": "8d353b1db7a6bbdde938bb80adc817380bfe90ca913bfff2512bec968b2f9d60"
+    }
+  },
+  "m7_7ProbeDeviceCommandSupersession": {
+    "status": "M7.7 gives reflection capture bounded probe-owned candidate, command, and count storage; performs conservative cube-face visibility and stable-owner exclusion in compute; submits compatible bins with indirect-count draws; and retains mixed/direct fallback plus fence-delayed exact count and overflow validation. The accepted nine-primitive fixture produces 33 device commands matching the CPU oracle with zero mismatch or overflow, while the deployable route performs no GPU-owned CPU face tests and retains the preceding capture hash.",
+    "current_contract_hashes": {
+      "CMakeLists.txt": "2c396c85fc97b676d0be876c0e43a82956ef612bc5231581533e60ffb5f6a6e1",
+      "assets/shaders/reflection_probe_capture_compact.comp": "02c78c72d4960428e1fd3dd2a709aeed68fb4f4c50f834ddaf4359256b05a72d",
+      "assets/shaders/reflection_probe_capture_compact_comp.spv": "b410ba12ebd886244c8930dd841db542494b504f42f524f47f594fca8643d19e",
+      "src/renderer/vulkan/VulkanReflectionProbeCapturePass.h": "70a4a4f58e763e0646eafbbcb867061971402df8a959509b9f4cce4d49d60b34",
+      "src/renderer/vulkan/VulkanReflectionProbeCapturePass.cpp": "357f9fe6ad6caad207a226cd715c92bc7f1ad2c8c036e8ae289ae6e4ab0f7e0c",
+      "src/renderer/vulkan/VulkanVertexBackend.h": "4f5440549326ed26591a5c1726bc3da28333df0b7070ecd9562b7e12bd9d3c14",
+      "src/renderer/vulkan/VulkanVertexBackend.cpp": "5040a1d46a0c8440c2e77833e540a2521e3f559b744980480e383f9b578bf7a2",
+      "tests/renderer/Stage3ArchitectureTests.cpp": "b9e64c2a66c9a733130bf77754da10315673609bc1e28580bf916d21bd7d5fff",
+      "tests/scene/M5FixtureContractTests.cpp": "3d1478ca0fde4519dfc7c654b423624cf9df4b5fa0bc086f8daca6b955619b84"
+    }
+  },
+  "m7_7ProbeLodSupersession": {
+    "status": "M7.7 adds independent face-invariant radial LOD selection to reflection-probe device commands. The host admits only resident buffer-compatible LOD prefixes; malformed input retains LOD0; validation compares complete command multisets after the fence; and production repeats neither visibility nor LOD on the CPU. The accepted 2-pixel near/mid/far fixture reduces 7 of 226 commands and 4,508 triangles with zero mismatch/overflow and a byte-identical LOD0 scene capture. LOD0 remains the global default pending reflection-sensitive warmed admission.",
+    "current_contract_hashes": {
+      "assets/shaders/reflection_probe_capture_compact.comp": "499bdf4f7ca5a68633159563616ab051c84fa9e57dbb3eae63695a48b274e3d2",
+      "assets/shaders/reflection_probe_capture_compact_comp.spv": "d3007440248ff4b2354a8d9a99f9b82485c2c0ee8df16fc5ee71f5ce67700cf4",
+      "src/core/ApplicationConfig.h": "8938cd855d342589956234bd8167cb18b3064bb3c95b06d1ee821da267927951",
+      "src/core/ApplicationConfig.cpp": "dbec2b89b6604cf2ea2721f0e4865d7533224945ab10692be11249c9f7bfd117",
+      "src/core/Application.cpp": "98c05483cd7925ee565af5b50b8639d47e1b1f9ffec7893fe670647bde729a73",
+      "src/renderer/rhi/RenderBackendConfig.h": "1298dbb8d2f55b83bf01bf59a3d975882f1ab86c53ec4e9e772ed020fcfc4705",
+      "src/renderer/rhi/GpuSceneLod.h": "e7ed9367c5b9a45d197a288d0024d1981f4a62492521fe4b721a9da1d25f689c",
+      "src/renderer/rhi/GpuSceneLod.cpp": "0dd42a1e037337bfd5e45faf4e20be6325d73246d9061e6c30f9b4ab8a9c53dc",
+      "src/renderer/vulkan/VulkanVertexBackend.h": "2d8b2f2e45f726071adaa0ec341d1c2a23373003266c1b133b6d2b09a8b56325",
+      "src/renderer/vulkan/VulkanVertexBackend.cpp": "fa04b579443ec4379dce1c15b2a676c0b4b3a2530f148d5ec0aa0e72f7a8d88f",
+      "tests/core/ApplicationConfigTests.cpp": "88d75781c9dbed5c9eca175967224716aceb34d9899de715b2ffb7fa0de285e6",
+      "tests/renderer/GpuSceneLodTests.cpp": "a2c1437b511292b9c0ba8d9a52095c25a003127bb31a59367df2ac1e96f60ead",
+      "tests/renderer/Stage3ArchitectureTests.cpp": "102a9b2d479c7436bcde80a271127023376c2dcc40b155f538efa5add2bd4048",
+      "tests/scene/M5FixtureContractTests.cpp": "a2a7a24eb5045363c0568f63c989c4fd32c11d926dcced0b0eca4600a9eb6fa7"
+    }
+  },
+  "m7_7DirectionalShadowLodSupersession": {
+    "status": "M7.7 adds independent density-based LOD selection to directional-cascade device commands. Selection converts cooked object-space error through packed world scale and each cascade's measured world-units-per-texel, the host admits only resident buffer-compatible prefixes, validation compares complete command multisets, and production repeats neither light-view visibility nor shadow LOD on the CPU. The accepted 2-texel dense near/mid/far fixture reduces 21 of 1,243 commands and 13,524 triangles with zero mismatch and a byte-identical LOD0 scene capture. LOD0 remains the global default pending native-4K visual and warmed admission.",
+    "current_contract_hashes": {
+      "assets/m7-directional-shadow-lod-manifest.v1.json": "084505b17a4456330ff7322a1409e1811a7cc9f4bf0caf46a1b48efc4749bf42",
+      "assets/shaders/directional_shadow_compact.comp": "03ec4cbc59de9a8119c2ea3495be4adbfcfe4e3de56c0aac2a669bff5a4ee6fc",
+      "assets/shaders/directional_shadow_compact_comp.spv": "b01687afc7a06916b499ba5addbf980ef2b10423fabd5493dbc8199faa8adc75",
+      "src/core/ApplicationConfig.h": "04f4e025b5d44f37b8a66a94b6cfa3718a99cd9380dd05fe6693fdb9a4ca568a",
+      "src/core/ApplicationConfig.cpp": "60e9b1dc4b51613c770f129a89bfd6710b1454f2dad11dbd4ba15bc95523d10d",
+      "src/core/Application.cpp": "2815be5f08401dbf156b477bcdd179bbd7d1893840320a29cfe270d442da3def",
+      "src/renderer/rhi/RenderBackendConfig.h": "263fbba43dc28aa9795ee727af052905e042ee73528ee45f7d002d238ecfde27",
+      "src/renderer/rhi/GpuSceneLod.h": "13bc74578b2ca8e457179249ebae26cbb810277d7c649fb715aa93cbe6e269a7",
+      "src/renderer/rhi/GpuSceneLod.cpp": "6444d656c7f93c11dfbb94bc07c8aafe2371401dd627cbc68768ac744e50a8a2",
+      "src/renderer/vulkan/VulkanVertexBackend.h": "8636768677885ad53344170a4f2fe9956c9bfd99ba80658d0b6f81c35cf1875c",
+      "src/renderer/vulkan/VulkanVertexBackend.cpp": "24cb4b4b332d15ed5f5a9befa8485c5c5f6d7e875dbb993e13a816c32f74e6e5",
+      "tests/core/ApplicationConfigTests.cpp": "9d58d4e23ac7617e4989140d5098395bd69f38cca2bd853e691baf6c3c680b42",
+      "tests/renderer/GpuSceneLodTests.cpp": "41003b176fd75abead97674fc0cd4904e8ab99093b578a400e0b4bd6a3fc09b3",
+      "tests/renderer/Stage3ArchitectureTests.cpp": "700e5c09e6267954cf9b9c1e0c0a40471bf933ceca81386783db86665755a81b",
+      "tests/benchmarks/BenchmarkManifestTests.cpp": "f2d801405980c3b15f216f37dd00e5739de000102df009fe455c1fd7f45d895e",
+      "tests/scene/M5FixtureContractTests.cpp": "27f2b8e9942eeeeb4a41d99b4a1fccf6259dc1d5ade2c162a557e7b78d618da4"
+    }
+  },
+  "m7_7PointShadowLodSupersession": {
+    "status": "M7.7 adds face-invariant radial LOD selection to point-cube device commands. The light position, cube resolution, and conservative bounds produce one LOD shared by all six faces; the host admits only resident buffer-compatible prefixes; validation compares complete command multisets; and production repeats neither point-face visibility nor LOD on the CPU. The accepted 2-texel dense near/mid/far fixture reduces 16 of 565 commands and 11,436 triangles with zero mismatch/overflow and no scene-linear pixel exceeding 1e-6 difference from LOD0. LOD0 remains the global default pending native-4K visual and warmed admission.",
+    "current_contract_hashes": {
+      "assets/m7-point-shadow-lod-manifest.v1.json": "1535ee9364ab974fd136354b7f0de2bf2848c298b64cadfff1c4af895f59d4af",
+      "assets/shaders/point_shadow_compact.comp": "f38c2b91362f6247709ee5ca0eb53f44e6368c20e57ade932f2be4d4d847f989",
+      "assets/shaders/point_shadow_compact_comp.spv": "44060c2523d387940eea4724751a465f7b120d52bc56103f3c4e1ffea96f5e5d",
+      "src/core/ApplicationConfig.cpp": "0f669aeddef44c9d4ad7508f91e100d2bd75ab8980bd6f9c118c50a57d636018",
+      "src/renderer/vulkan/VulkanVertexBackend.h": "f8723aa8442fb3cb6f4b87c14f9a250f0616de0057c954dad8bc70eed2dd1785",
+      "src/renderer/vulkan/VulkanVertexBackend.cpp": "18bb028289f6f19d17b95c51d38fb730b195a9564e163559cdd80acf23d1bfbd",
+      "tests/renderer/Stage3ArchitectureTests.cpp": "daa30913068c72fbab92ff47be3449fcdda434020c8cbf29d8a2e368105c1cd1",
+      "tests/benchmarks/BenchmarkManifestTests.cpp": "0d0be260d0489fb3b3d185d2afbca84f6fa6f7e5bd52b28e9527648a6f35371a",
+      "tests/scene/M5FixtureContractTests.cpp": "33af43615fcbc49a4901521b64db6f52319231c48774ac6661cc365b9f35db9b"
+    }
+  },
+  "m7_7SpotShadowLodSupersession": {
+    "status": "M7.7 adds independent projected-error LOD selection to spot-atlas device commands. The authored spotlight clip transform and atlas-tile resolution drive the conservative perspective bound; the host admits only resident buffer-compatible prefixes; validation compares complete command multisets; and production repeats neither spotlight visibility nor LOD on the CPU. The accepted 2-texel dense near/mid/far fixture reduces 10 of 339 commands and 6,376 triangles with zero mismatch/overflow and a byte-identical LOD0 scene capture. LOD0 remains the global default pending native-4K visual and warmed admission.",
+    "current_contract_hashes": {
+      "assets/m7-spot-shadow-lod-manifest.v1.json": "66b8ad4db2eb267b79a299cfdfc412958fa58434028e2f85312659d7adacd31b",
+      "assets/shaders/spot_shadow_compact.comp": "2bb576daa34bf5d0341824bf68c65c02fa5dd2df1c97644afd2b4636a898e9d6",
+      "assets/shaders/spot_shadow_compact_comp.spv": "5708c0b3dcde355e836ddc4797a3c6959f2c88266076402b46dba680af154c44",
+      "src/core/ApplicationConfig.cpp": "b303e060976b87ebe816862cc8a4b14e8bce7e880ed8650a83e9b7b29fb0ff56",
+      "src/renderer/vulkan/VulkanVertexBackend.h": "45dbe80b8ea44e7b0868f633e928859eda98ae6193bbbfdaaa93f65365ff12c9",
+      "src/renderer/vulkan/VulkanVertexBackend.cpp": "e2b28a10a9b8758335dcda6dcf2fdbb086974e3e887171b1cda4ddc588587687",
+      "tests/renderer/Stage3ArchitectureTests.cpp": "ce7180b41b00d26a9fc830e73a6f1245783539564861d92890ebc9a625953d6c",
+      "tests/benchmarks/BenchmarkManifestTests.cpp": "ad631ff70ab5a8f7676b100468ee96f74f6c13740a8af275955989ba1c8e4ef4",
+      "tests/scene/M5FixtureContractTests.cpp": "d4fe348f1bd934f1411e342379ba8f7b06d7eacf46a1622866eb1d5ddd3d72d1"
+    }
+  },
+  "m7_7HeterogeneousShadowAdmissionSupersession": {
+    "status": "M7.7 admits production directional, spot, and point device-command submission on a warmed native-4K moving heterogeneous workload. A shadow-only direct-reference switch isolates the comparison from main-view and probe routing. Two reversed-order 600-frame pairs reduce median combined CPU shadow recording by 70.1-70.9%, slightly reduce combined GPU shadow time, and preserve byte-identical final-SDR output. Validation reports exact command-oracle parity and zero mismatch, overflow, fallback, or dropped telemetry counters. Shadow LOD remains default-off pending its separate visual threshold gate.",
+    "current_contract_hashes": {
+      "assets/m7-heterogeneous-shadow-admission-manifest.v1.json": "71351743454f395a61f57e41d5de00e858f01dc6476070d039f5d2e215537553",
+      "src/core/ApplicationConfig.h": "c0d9f3ed7f0bf716ae3ff65e7924b31fb60cd05031ed0d23337567676ebcafee",
+      "src/core/ApplicationConfig.cpp": "d648d30d9a06aa7e96d6a6beb075ec1a0f92219ebbbb873f949cc3160fd03cf9",
+      "src/core/Application.cpp": "f61051ae92f571ff24e04cfe8f4e0c25644acd67794a2243315e3bc3d85d543f",
+      "src/renderer/rhi/RenderBackendConfig.h": "567fd9428c5d2284842d97915f564cd003da133b30fc8451f59b5adf2902475e",
+      "src/renderer/vulkan/VulkanVertexBackend.h": "30ca4946114f6493940a7f41758ab13ba4edca051de09dd873b94d927b661ffe",
+      "src/renderer/vulkan/VulkanVertexBackend.cpp": "479e2a2ed7e54b3d0f823fd4eb028f3a8f0e5631adc07c33b99537d04e9fe9ba",
+      "src/profiling/CpuProfiler.h": "5dda6f172b862256c957d29b34093d908329e07825b1e22fbbb03654a7c220ec",
+      "tests/core/ApplicationConfigTests.cpp": "3c60fc82e123328a2baf76f6ce006d6a03af1eae1ddb56158dddc0875a6c9bed",
+      "tests/profiling/CpuProfilerTests.cpp": "1630fe3fe867e21adf3a516e8eebd7d6c71b7b0ee1f97354f2cf183c6cf1a1a6",
+      "tests/benchmarks/BenchmarkManifestTests.cpp": "9cb8bb1ef05ba4b6f2e00ed383532e57e6dc2308c3cc9ec819caab1cbf4693c0",
+      "tests/scene/M5FixtureContractTests.cpp": "acf9b72f82bbfbb9acdf8e8c5f102b82f830e5babdd5b7f4274395276ebf311d"
+    }
+  },
+  "m7_7ProbeLodWarmedAdmissionSupersession": {
+    "status": "M7.7 completes the reflection-sensitive warmed probe-LOD gate without production admission. A fixture-owned standalone 1024-pixel realtime probe captures all moving high-detail primitives and publishes into visible glossy reflections. Multi-frame capture tickets now finish and publish before newer scene or settings revisions queue a refresh, preserving backend staging lifetime and progress. A 16-pixel bound preserves byte-identical native-4K final-SDR output with exact device/oracle agreement, but removes only 0.9263% of retained capture triangles and produces no repeatable CPU, GPU, wall-time, or memory win. LOD0 remains global and radial probe LOD remains experimental.",
+    "current_contract_hashes": {
+      "assets/m7-probe-lod-admission-manifest.v1.json": "ada18ecc957a62a2edf8b462f71bc7126f023235f59106863eca86d49087b57b",
+      "src/benchmarks/BenchmarkManifest.h": "95c7e585e3b5c46ec5befbc518d1d18c070b8974c9c334cf5d970f3ef77b1a16",
+      "src/benchmarks/BenchmarkManifest.cpp": "6dc06ef119c5c3b4d4d7c1a66ec38f93fe511e3284c1f4b58a5f42a85de51372",
+      "src/core/Application.cpp": "18391cca2504b8936da4e07291a7dfcc4e018c64bf3f7f2345c372069578ce4e",
+      "src/renderer/lighting/ReflectionProbeCapture.h": "4e34f54525e1f5593eaf7163dd56ad1f4ccb2e656a091114be474e51b350bf40",
+      "src/renderer/lighting/ReflectionProbeCapture.cpp": "b484766cc1f46326a5006f255bb8db12c060950b861f207e5f18e16fdcd1a34f",
+      "tests/benchmarks/BenchmarkManifestTests.cpp": "49b1386bd84eca93e8c9f191aae0b53770b395d75d0dc3e7f061c4ad478eb937",
+      "tests/renderer/ReflectionProbeTests.cpp": "91e9e6605571fbecb643df2f92f4ad6aebe19528c3f65aa38f77fd6a74453d09",
+      "tests/scene/M5FixtureContractTests.cpp": "264c257cf18152b8ebdfce40de2fe0d5caa6561b509814a705cbb1c7ae4754de"
+    }
+  },
+  "m7_7ShadowLodWarmedAdmissionSupersession": {
+    "status": "M7.7 completes the conventional shadow-LOD visual and warmed admission gate without changing the global default. Native-4K directional, spot, and point threshold sweeps remain visually bounded through eight shadow texels; the warmed moving dense-geometry fixture reports exact device/oracle command agreement and zero overflow. Eight texels remove 1.2685% of combined shadow triangles and save 0.007-0.011 ms of combined shadow GPU time, but CPU shadow recording regresses and reversed-order whole-frame results do not repeat. LOD0 remains the production default and shadow LOD remains an explicit experiment.",
+    "current_contract_hashes": {
+      "assets/m7-shadow-lod-warmed-admission-manifest.v1.json": "46844d64987cd04cd8e8e60917cfa7dd42153e530def5b48bf40891d495d4057",
+      "tests/benchmarks/BenchmarkManifestTests.cpp": "12f56c2d701e3d0684a6b50150b5490b0bff3d6c8c5a2adb985636490f77154b",
+      "tests/scene/M5FixtureContractTests.cpp": "ee0bc3b5c375ea0c0485e1d5a4ec7cf88f4588429d7cb4c8a4a60c127ea3c2eb"
+    }
+  },
+  "m7_7ShadowMembershipCacheSupersession": {
+    "status": "M7.7 publishes camera-independent shadow and probe consumer membership with stable revisions, removing per-frame application scans. Vulkan directional, spot, and point shadow submission caches geometry/material bins and candidate layouts across transform-only frames while continuing per-light device visibility and LOD compaction. Membership revisions invalidate for scene epochs, enablement, consumer masks, LOD ceilings, material/bin state, and geometry products. LOD policy changes and shadow-buffer reallocations also invalidate the backend cache.",
+    "current_contract_hashes": {
+      "src/core/Application.cpp": "3c61a775ac506148af49bd33f3e2d2a21aeddc70898a5a3a1e14a77bbb094cda",
+      "src/core/Application.h": "82737f57a3577234f8bfef2fc224f37d958bc74bf6f5dda0bc75fa1cceb68f98",
+      "src/renderer/rhi/IRenderBackend.h": "6a924a8beb6c7f2db17798a6489ce874c5de216327c54548ee23d3e05d5b0ed9",
+      "src/renderer/rhi/GpuScene.cpp": "e9c0526b43b02e16fceefc74faec8c43ee63bde7e78cbcdbd67541dc16fc5b12",
+      "src/renderer/rhi/GpuScene.h": "9a737a10eb500541bd32b2d094ac5896287f1de21afae73d9962892bf6744bc3",
+      "src/renderer/scene/GpuScenePublisher.cpp": "8929b1a833ef7d1939e3f4a176867bad904da3a1c4c3dc202cf45436257ee6a2",
+      "src/renderer/vulkan/VulkanVertexBackend.cpp": "da395fb2c3eca4073efff3bcb711fe635092149df71253ade466f274ad9e6450",
+      "src/renderer/vulkan/VulkanVertexBackend.h": "8df533c5f66b2b88b0b8397c915ba45107c7bd07ce9fb54e5882a09e516843bd",
+      "tests/renderer/GpuSceneTests.cpp": "ab12d824dc7e8ad2b94fd52376a0506c293e1e8125661644d676be80ee4c08af",
+      "tests/scene/M5FixtureContractTests.cpp": "068ba6c2d51d7d7dd4ea21d227f727617534778f9bb978d144928a8ceb0c892f"
+    }
+  },
+  "m7_7OpaqueShadowPositionFetchSupersession": {
+    "status": "M7.7 specializes opaque conventional-shadow vertex fetch without duplicating geometry storage. Direct and GPU-scene directional, spot, and point pipelines use position-only shaders and one Vulkan vertex attribute; alpha-masked casters retain position, vertex color, UV0, and UV1. Two reversed-order native-4K pairs save 0.082-0.088 ms of combined shadow raster time with byte-identical final-SDR output. A separate compact position buffer remains rejected pending a memory-inclusive benefit.",
+    "current_contract_hashes": {
+      "assets/shaders/directional_shadow_opaque.vert": "6b2ff6f5d851fc4f2923bf2ac1c0e88b3705e5d03bea1df2d855dfcac36784b8",
+      "assets/shaders/directional_shadow_opaque_vert.spv": "5416a3f53174928501a63e0dee8ac87e5c50580dee5a1f800449de4356e7381a",
+      "assets/shaders/directional_shadow_gpu_scene_opaque.vert": "e4d12f168077da9eca9b1c554d4ecff7c1ed62152e137183f7c8ab05db1dde8e",
+      "assets/shaders/directional_shadow_gpu_scene_opaque_vert.spv": "884588781a007530a12b18b22c33670e31b01811dac996101bc032dedd17ddd2",
+      "assets/shaders/spot_shadow_opaque.vert": "02e1507261b060782feb8a13ec70940e01daeaf3415685a34bdcc572ad52f3c1",
+      "assets/shaders/spot_shadow_opaque_vert.spv": "9e903765161bd09c022e4740c7248870fddfa304919de79542e66a5ae5b3b1ca",
+      "assets/shaders/spot_shadow_gpu_scene_opaque.vert": "3746b59d9819d1079b7f32381739408e674bd7dcaea2e14efe2c4febb957c4ba",
+      "assets/shaders/spot_shadow_gpu_scene_opaque_vert.spv": "2990f1e91e7094031ec694faa3db7403a101240bb8ba4185695d80d63231c4f2",
+      "assets/shaders/point_shadow_opaque.vert": "2641b275515381f882ef27dfc9a93d2787852d9c54fbc53ad6a9de3db4773bd1",
+      "assets/shaders/point_shadow_opaque_vert.spv": "a448cbca97fd51fff88386a4c654190a6a1ebb6e58023f2dd0b0b995a6a209a7",
+      "assets/shaders/point_shadow_gpu_scene_opaque.vert": "5e8e7c30ae5dc4d259fc1de41373db4c84832ce3cf8c5d11dd9df023077b0890",
+      "assets/shaders/point_shadow_gpu_scene_opaque_vert.spv": "cdd0099b45edc8b4c80e3b39834542a714ee08bbe9bbf70c66e451704dde1bd8",
+      "src/renderer/vulkan/VulkanDirectionalShadowMap.cpp": "3a452cdb3b45ac113e559ca355dd1f25fe5f0ce199f6c902c79e275b7baade42",
+      "src/renderer/vulkan/VulkanSpotShadowAtlas.cpp": "faa424624a95dedeb7c6e9c5129c23e18c9b660d74ea8e9aeefcf2c0c82b8e1f",
+      "src/renderer/vulkan/VulkanPointShadowPools.cpp": "e25930b32baba7f0429f726e1235da664737423c13f313adedc69d308b4889c6",
+      "tests/renderer/Stage3ArchitectureTests.cpp": "e37226e6cd5d78be96e4a2bf21d3355f305d6be2ee6384dffbdf536271d40179",
+      "tests/scene/M5FixtureContractTests.cpp": "4dbde7ab165b43e5922242e1494255f5deec7b56fd189e5e3bbd8baa13cb8b1f"
+    }
+  },
+  "m7_7ShadowQualityClosureSupersession": {
+    "status": "M7.7 closes the conventional-shadow quality matrix with a deterministic near-to-far camera sweep over thin, alpha-clipped, double-sided, close-contact, and grazing-angle geometry. Validation reports exact device/oracle command agreement with zero mismatched bins, overflow, or direct fallback. Native-4K direct and device-generated captures are byte-identical at both sweep extremes, while visual inspection confirms stable finite contact shadows and a fully clipped alpha caster with no residual shadow.",
+    "current_contract_hashes": {
+      "assets/m7-shadow-quality-closure-manifest.v1.json": "1c245c1db0e068e15c38e89873573aba99709e7b5bbfb5e72211e977e6399b73",
+      "tests/benchmarks/BenchmarkManifestTests.cpp": "293a3f22a3cd66f618c4d56b37bd5e5720e5da0852f24ee312b5474bf8c46681",
+      "tests/scene/M5FixtureContractTests.cpp": "751d75ec937a877b28a0f938b301ca71d72f53ee1702ea8ffb4fc16a7afb8399"
+    }
+  },
+  "m7_8VirtualShadowResidencyContractSupersession": {
+    "status": "M7.8 defines the backend-neutral sparse virtual-shadow residency contract and deterministic CPU reference planner, maps its bounded dimensions to a default-off Vulkan allocation, and freezes directional receiver marking plus bounded compaction. ABI v2 uses signed world-page coordinates and snapped clip origins so camera scrolling preserves cache identity. Raw marking and the deterministic reference compactor have Debug/Release RTX 4090 parity. The first global-bitonic candidate was rejected near 845 ms; its hierarchical replacement retains exact 4,096-receiver and 65,536-mark parity and measures 0.145792/0.145984 ms Debug/Release median with device-local storage. Two frame-owned aligned device-local working sets now persist the admitted compute layout; immutable per-frame descriptors and the shared direct mark/compact chain now pass exact populated/empty reuse under synchronization validation at 0.148512/0.147264 ms Debug/Release for 65,536 receivers. The sampled-D32 region producer now reconstructs every pixel and chains exact requests through forward/reverse depth, odd offset regions, invalid values and perspective/singular cameras; its 4,095-pixel chain measures 0.067904/0.067872 ms Debug/Release. Full-view depth accumulation now uses bounded per-clip page cells without spatial subsampling or extra tracked buffer/image storage. Exact odd two-clip and native-4K requests and overflow telemetry match under synchronization validation; the full4K chain measures 0.569824/0.569504 ms Debug/Release. Camera-driven clip construction now preserves signed world pages across snapped positive/negative scroll and retains fixed light-space depth; generated CPU/GPU guard fallback agrees exactly. The four-level builder measures 0.186163 us Release with fixed-capacity storage. Live CPU publication now derives the first selected light's packet from actual camera and caster spheres even on conventional cache-hit frames. A monotonic publisher conservatively retains/expands quantized depth limits and suppresses unknown-bound packets; all 12 validation smoke frames publish four levels at revision 1. Both caster layers use the complete content revision conservatively. Per-slot immutable packet snapshots now upload 1536 checked packed clip bytes through an optional graph pass. Non-owning imported-buffer bindings enforce retired/distinct slots and persistent write hazards; a 12-frame validation launch uploads both slots without added GPU storage. Live opaque scene depth now drives full-view accumulation and compaction through ordered graph passes; both retired slots validate request metadata. An explicit full-depth CPU oracle matches native-4K moving-camera request addresses and coverage exactly. Matched captures remain byte-identical, and five paired runs record demand-only overhead rather than production admission. Request readbacks add 262208 qualification bytes; full-depth readbacks are separately opt-in. Whole-frame virtual-path admission, residency updates, page raster and sampling remain open; conventional shadows remain active. A shared RHI physical-tile layout and pending-page crop now define rasterized borders, interior UVs, conservative sphere eligibility and strict owner/projection/requested-layer revision rejection; scroll preserves the cropped world volume. The Vulkan resource owner consumes the same checked layout without allocation growth. This is a raster-projection prerequisite, not GPU residency or page drawing. Residency ABI v1 now defines lossless 48-byte keys and 96-byte resident records with full UUID, signed 64-bit pages, revisions, frame age, physical slot and independent layer validity. A checked compact-request bridge is used by retired-slot validation and compares full identity/revisions against the live CPU oracle. A bounded serial qualification shader now consumes full-key requests and resident records in a private hardware test; 14 oracle dispatches and five atomic rejection checks pass. The 256-request/256-slot/64-update GPU median is 10.5083/10.8429 ms Debug/Release, so this reference is explicitly rejected for live production integration. It validates identity, priority/coverage/full-address ordering, separate layer invalidation, eviction, budget overflow and fallback, but does not raster or commit pages. Live runtime GPU storage and marking ABI v2 remain unchanged; a scalable allocator, raster, generation-safe completion and shared sampling remain open.",
+    "current_contract_hashes": {
+      "assets/shaders/virtual_shadow_residency_reference_comp.spv": "d477ce36ff5275188301a91cc0f1d57d46058c0ef6f361bceab723a49c1c3bf4",
+      "assets/shaders/virtual_shadow_residency_reference.comp": "322510fba20a90b3f772ff2d2e3c0be67e7a42698d89232ac5b9b80f31031493",
+      "assets/m7-virtual-shadow-depth-qualification-manifest.v1.json": "e3895bad9f85357cf4053e1c4f4f5f7bb4c58930374f298e578a60575fe676fd",
+      "CMakeLists.txt": "44c64c0ec4f554e8dc8f8584fb4e86a2b451b35078a05d70454e4b765bd0a3dd",
+      "src/renderer/vulkan/VulkanVirtualShadowFullViewPass.h": "a830b1f7bd0536bac069f9e8f248ae4c5e7ddf67f2020b4f406cc06266a24fec",
+      "src/renderer/vulkan/VulkanVirtualShadowFullViewPass.cpp": "20cdcae4c8f0d65bec7633a9d3649df6cd08eb258a10046f06ddf4d3829a3456",
+      "assets/shaders/virtual_shadow_full_view_mark.comp": "8c60ad517814cd6455ca2fa973a526fa5c518c208092ee1d5fee628e4112f479",
+      "assets/shaders/virtual_shadow_full_view_mark_comp.spv": "50d45ab21170843bc589aadcf6e9d16ad2bef115755ac3e92bde7a4dc005813b",
+      "src/renderer/vulkan/VulkanVirtualShadowDepthReceiverPass.h": "64ea7a7cf354ca2afef4af55c3b78ef63b58ec00d5ac41aaaeac9baabb7b1443",
+      "src/renderer/vulkan/VulkanVirtualShadowDepthReceiverPass.cpp": "a9c46616b607d1c26ab05830e2d7709a09ad90fe848290d09f9f30cb8ade531c",
+      "assets/shaders/virtual_shadow_depth_receivers.comp": "ff058b74eb50cba6789a690472b0783866704e7e8a027f1d5c52ad8ce1178502",
+      "assets/shaders/virtual_shadow_depth_receivers_comp.spv": "b7a224a1c012ba02decb21a4a8ed2e91ab6e71b776e8386f9f02867079bd3262",
+      "src/renderer/rhi/VirtualShadowMap.h": "26c2e87aeb819774c37fd32f6d5f4099ffdb776d97a292351ad0a70092d3c272",
+      "src/renderer/vulkan/VulkanRenderGraphExecutor.h": "acbc910311477703874640e687a256912dcd1713280c2ab55dca7b097ebec0ff",
+      "src/renderer/vulkan/VulkanRenderGraphExecutor.cpp": "0dd2476fae30f17d124589bc7fae33b56ba35f82d11286225dddf80464781bc7",
+      "src/renderer/vulkan/VulkanProductionRenderGraph.h": "2da8ce3a2cdc1819df173e0e39011d5ae21fe99127ebe7a1e2c13c088c6974dc",
+      "src/renderer/vulkan/VulkanProductionRenderGraph.cpp": "cf11caddf899ecd2cc03e57ed3cd9728c9aca87c8166f36393bdadf8647c2cdb",
+      "tests/renderer/VulkanRenderGraphExecutorTests.cpp": "639801fb7dc4dfa1aa4ab633d4d51df0b5cc7bd4d425fe32b18214a20949c708",
+      "src/renderer/rhi/VirtualShadowMap.cpp": "e0b3a154bd6c45adef38748b4297938408d8747e8fd9e850b37932b82fc570e1",
+      "tests/renderer/VirtualShadowMapTests.cpp": "64cadcd719238a6e26074bdba33af43b5f515d567cadd5abb20638f3be773216",
+      "assets/shaders/virtual_shadow_directional_mark.comp": "3de51c5a13311572f9bd8ac59ec82ddc688601cb779f86413f166be9e9e01dbe",
+      "assets/shaders/virtual_shadow_directional_mark_comp.spv": "39ea6283f42571a91874a3cb6cbde796bd321cd8c14090d4ae62babc2726e1c4",
+      "assets/shaders/virtual_shadow_directional_compact.comp": "b3f301628097fc5bedd4ee9960a925e8d4d673d7eb2b2502944ecbf23372f44c",
+      "assets/shaders/virtual_shadow_directional_compact_comp.spv": "2e85bae3c55e2939c26affb0fb41f855c4d3e12abd9c4628215a96859b9d1f2d",
+      "assets/shaders/virtual_shadow_directional_compact_parallel.comp": "45ba7b846b573eebe6a64815821df76119642c48d3af6725caa1f17aade759f8",
+      "assets/shaders/virtual_shadow_directional_compact_parallel_comp.spv": "d26c54ad08a0b4d48af20044bb2a4a12c6078f631da4657a5d2593ed59fc6927",
+      "tests/renderer/VulkanVirtualShadowMarkingTests.cpp": "39f916e354c9036198ddaeb15f6c99fb4ddb6520dbd8aae0105dc7dcdec18eaf",
+      "src/renderer/vulkan/VulkanVirtualShadowResources.h": "fbedae87dfc789aa9e9cca96dadde6a459e8851bade2733cbb554e5d2da2f0a7",
+      "src/renderer/vulkan/VulkanVirtualShadowMarkingPass.h": "0ebe544b4c2e0dc19fded2b34525ec7de8de71951cda333d787ede4038104dcf",
+      "src/renderer/vulkan/VulkanVirtualShadowMarkingPass.cpp": "e1dd542bff8482ec8c5919a18f656f46067a7cb6ba4d85a1599d1d6138da1018",
+      "src/renderer/vulkan/VulkanVirtualShadowResources.cpp": "e9313ac25435873f731e3d7e1a7751bef66029aacaf3d7d6cc1fc1004117030f",
+      "src/profiling/MemoryProfile.h": "f928fc2c1783b2dde06dba40e467c21bb75b6396fe163743f236b077148d8261",
+      "src/profiling/MemoryProfile.cpp": "f71fe055223e3dbb9f2b9280f1bbb5e223d728a8ec9b206ea29081c8aee9c42f",
+      "tests/profiling/CpuProfilerTests.cpp": "0dc55520ffb24585ccbc629c63054a00b0d63379a208c12f5cace051f31f8c55",
+      "src/core/ApplicationConfig.h": "a38593a9ec0297457b8605ceb4fc0c25585fe8f5fa131db24cfc6bdcf3aef57b",
+      "src/core/ApplicationConfig.cpp": "396ae1ad79f7e61fbd2432a98423f249b8d6c68ae5485015b2f778db050febe5",
+      "tests/core/ApplicationConfigTests.cpp": "f4ff661bda890d32e12d6067992be85c0bcffc8b5ffedf7a4ec609986e8999ee",
+      "src/renderer/rhi/RenderBackendConfig.h": "e03ae1ca8b17243bf689431139720fb03b153824bbba917a74092f4ae1fcebf3",
+      "src/core/Application.cpp": "bb4f0abb9c7e9c102954b80826f87b7003fd43de89f05e51cb20691f6a616d80",
+      "src/renderer/vulkan/VulkanVertexBackend.h": "855aa838a0f81154d98ac32aeca2e33606086913085650edfaee5512681c1327",
+      "src/renderer/vulkan/VulkanVertexBackend.cpp": "b11718081dbac78f867ea99521fbbd7009d8a4426ec61d5ee90a74d0da0b84f4",
+      "tests/scene/M5FixtureContractTests.cpp": "e5c3724d10d9caaf77bb09dd8ea4d447f6a351ac5cf14bf85206c0b2bd2ae6d5"
+    }
+  }
+}

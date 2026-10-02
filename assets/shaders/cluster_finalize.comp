@@ -1,0 +1,39 @@
+#version 450
+#include "include/clustered_lighting.glsl"
+
+layout(local_size_x = 1) in;
+
+void buildFallback() {
+    uint fallbackCount = min(clusterInput.x, clusterInput.y);
+    for (uint index = 0u; index < fallbackCount; ++index)
+        fallbackLightSlots[index] = fallbackCandidateSlots[index];
+    clusterDiagnostics[IRIDIUM_DIAGNOSTIC_FALLBACK] = fallbackCount;
+    clusterDiagnostics[IRIDIUM_DIAGNOSTIC_DROPPED] =
+        clusterInput.x - fallbackCount;
+    clusterDiagnostics[IRIDIUM_DIAGNOSTIC_PUBLISHED] = 0u;
+}
+
+void sortGlobalLights() {
+    uint count = min(clusterDiagnostics[IRIDIUM_DIAGNOSTIC_DIRECTIONAL],
+        clusterLimits.w);
+    for (uint outer = 1u; outer < count; ++outer) {
+        uint slot = globalLightSlots[outer];
+        uint inner = outer;
+        while (inner > 0u && globalLightSlots[inner - 1u] > slot) {
+            globalLightSlots[inner] = globalLightSlots[inner - 1u];
+            --inner;
+        }
+        globalLightSlots[inner] = slot;
+    }
+}
+
+void main() {
+    uint overflow = clusterDiagnostics[IRIDIUM_DIAGNOSTIC_OVERFLOW];
+    if (overflow != 0u) {
+        buildFallback();
+        return;
+    }
+    sortGlobalLights();
+    clusterDiagnostics[IRIDIUM_DIAGNOSTIC_PUBLISHED] =
+        clusterDiagnostics[IRIDIUM_DIAGNOSTIC_REQUESTED];
+}

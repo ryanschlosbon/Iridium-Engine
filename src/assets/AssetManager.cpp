@@ -1,698 +1,1423 @@
-#include "AssetManager.h"
-#include <stb_image.h>
-#include <fastgltf/tools.hpp> // Required for iteration tools
-#include <fastgltf/glm_element_traits.hpp>
-#include <glm/gtc/type_ptr.hpp>    // Required for glm::make_mat4
-#include <glm/gtx/quaternion.hpp> // Required for mat4_cast
+#include "assets/AssetManager.h"
+#include "assets/BuiltInAssets.h"
+#include "assets/environment/EnvironmentProduct.h"
+#include "assets/model/ModelProduct.h"
+#include "assets/model/ModelRuntimeProduct.h"
+#include "material/MaterialAuthoringPatch.h"
+#include "assets/model/MaterialPreviewPolicy.h"
+#include <algorithm>
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
+#include <filesystem>
 #include <iostream>
+#include <memory>
+#include <optional>
+#include <set>
+#include <stdexcept>
+#include <span>
+#include <string>
+#include <utility>
+#include <vector>
 
-AssetManager::AssetManager(VkContext* context, VkCommandManager* cmdManager)
-    : vkContext(context), vkCmdManager(cmdManager) {
-}
+namespace Iridium {
 
-AssetManager::~AssetManager() {
-    // Cleanup logic for all cached models
-    for (auto& pair : modelCache) {
-        auto asset = pair.second;
-        vkDestroyBuffer(vkContext->getDevice(), asset->vertexBuffer, nullptr);
-        vkFreeMemory(vkContext->getDevice(), asset->vertexBufferMemory, nullptr);
-        vkDestroyBuffer(vkContext->getDevice(), asset->indexBuffer, nullptr);
-        vkFreeMemory(vkContext->getDevice(), asset->indexBufferMemory, nullptr);
+    namespace {
 
-        for (auto& tex : asset->textures) {
-            vkDestroySampler(vkContext->getDevice(), tex.sampler, nullptr);
-            vkDestroyImageView(vkContext->getDevice(), tex.view, nullptr);
-            vkDestroyImage(vkContext->getDevice(), tex.image, nullptr);
-            vkFreeMemory(vkContext->getDevice(), tex.memory, nullptr);
-        }
-    }
-}
-
-static glm::mat4 convertToGLM(const fastgltf::Node& node) {
-    auto transform = fastgltf::getTransformMatrix(node); // Use library tool
-    return glm::make_mat4(transform.data()); // Convert to GLM
-}
-
-void loadNodes(fastgltf::Asset& gltf, size_t nodeIndex, Node* parent, ModelAsset* model) {
-    auto& gltfNode = gltf.nodes[nodeIndex];
-    auto newNode = std::make_unique<Node>();
-
-    newNode->meshIndex = -1;
-    newNode->name = std::string(gltfNode.name);
-    newNode->localTransform = convertToGLM(gltfNode);
-
-    if (gltfNode.meshIndex.has_value()) {
-        newNode->meshIndex = static_cast<int>(gltfNode.meshIndex.value());
-    }
-
-    Node* ptr = newNode.get();
-    if (parent) {
-        parent->children.push_back(std::move(newNode));
-    }
-    else {
-        model->rootNodes.push_back(std::move(newNode));
-    }
-
-    for (auto& childIndex : gltfNode.children) {
-        loadNodes(gltf, childIndex, ptr, model);
-    }
-}
-
-// AssetManager.cpp helper
-void flattenNodes(Node* node, glm::mat4 parentTransform, ModelAsset* model) {
-    glm::mat4 globalTransform = parentTransform * node->localTransform;
-
-    if (node->meshIndex != -1) {
-        // Iterate through ALL submeshes of this mesh individually!
-        const auto& subMeshIndices = model->meshToSubMeshes[node->meshIndex];
-
-        for (int subIdx : subMeshIndices) {
-            int matIdx = model->subMeshes[subIdx].materialIndex;
-
-            ModelAsset::BakedPart part;
-            part.subMeshIndex = subIdx; // Store the specific submesh
-            part.transform = globalTransform;
-
-            model->materialBuckets[matIdx].push_back(part);
-        }
-    }
-
-    for (auto& child : node->children) {
-        flattenNodes(child.get(), globalTransform, model);
-    }
-}
-Texture AssetManager::createDefaultPbrTexture() {
-    Texture tex{};
-    // R: 255 (No Shadows), G: 255 (Max Roughness), B: 0 (Zero Metallic)
-    unsigned char pixels[] = { 255, 255, 255, 255 };
-
-    VkBuffer stagingBuffer;
-    VkDeviceMemory stagingBufferMemory;
-    vkContext->createBuffer(4, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-        stagingBuffer, stagingBufferMemory);
-
-    void* data;
-    vkMapMemory(vkContext->getDevice(), stagingBufferMemory, 0, 4, 0, &data);
-    memcpy(data, pixels, 4);
-    vkUnmapMemory(vkContext->getDevice(), stagingBufferMemory);
-
-    vkContext->createImage(1, 1, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_TILING_OPTIMAL,
-        VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, tex.image, tex.memory);
-
-    vkCmdManager->transitionImageLayout(tex.image, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-    vkCmdManager->copyBufferToImage(stagingBuffer, tex.image, 1, 1);
-    vkCmdManager->transitionImageLayout(tex.image, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-
-    vkDestroyBuffer(vkContext->getDevice(), stagingBuffer, nullptr);
-    vkFreeMemory(vkContext->getDevice(), stagingBufferMemory, nullptr);
-
-    // Create View & Sampler for 1x1...
-    VkImageViewCreateInfo viewInfo{ VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
-    viewInfo.image = tex.image;
-    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    viewInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
-    viewInfo.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
-    vkCreateImageView(vkContext->getDevice(), &viewInfo, nullptr, &tex.view);
-
-    VkSamplerCreateInfo samplerInfo{ VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO };
-    samplerInfo.magFilter = VK_FILTER_NEAREST;
-    samplerInfo.minFilter = VK_FILTER_NEAREST;
-    vkCreateSampler(vkContext->getDevice(), &samplerInfo, nullptr, &tex.sampler);
-
-    return tex;
-}
-
-// SCOPED to AssetManager
-Texture AssetManager::createDefaultTexture() {
-    Texture tex{};
-    unsigned char pixels[] = { 255, 255, 255, 255 };
-
-    VkBuffer stagingBuffer;
-    VkDeviceMemory stagingBufferMemory;
-    vkContext->createBuffer(4, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-        stagingBuffer, stagingBufferMemory);
-
-    void* data;
-    vkMapMemory(vkContext->getDevice(), stagingBufferMemory, 0, 4, 0, &data);
-    memcpy(data, pixels, 4);
-    vkUnmapMemory(vkContext->getDevice(), stagingBufferMemory);
-
-    vkContext->createImage(1, 1, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_TILING_OPTIMAL,
-        VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, tex.image, tex.memory);
-
-    vkCmdManager->transitionImageLayout(tex.image, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-    vkCmdManager->copyBufferToImage(stagingBuffer, tex.image, 1, 1);
-    vkCmdManager->transitionImageLayout(tex.image, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-
-    vkDestroyBuffer(vkContext->getDevice(), stagingBuffer, nullptr);
-    vkFreeMemory(vkContext->getDevice(), stagingBufferMemory, nullptr);
-
-    // Create View & Sampler for 1x1...
-    VkImageViewCreateInfo viewInfo{ VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
-    viewInfo.image = tex.image;
-    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    viewInfo.format = VK_FORMAT_R8G8B8A8_SRGB;
-    viewInfo.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
-    vkCreateImageView(vkContext->getDevice(), &viewInfo, nullptr, &tex.view);
-
-    VkSamplerCreateInfo samplerInfo{ VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO };
-    samplerInfo.magFilter = VK_FILTER_NEAREST;
-    samplerInfo.minFilter = VK_FILTER_NEAREST;
-    vkCreateSampler(vkContext->getDevice(), &samplerInfo, nullptr, &tex.sampler);
-
-    return tex;
-}
-
-void AssetManager::mergeMaterials(ModelAsset* model, std::vector<Vertex>& originalVertices, std::vector<uint32_t>& originalIndices) {
-    std::vector<Vertex> mergedVertices;
-    std::vector<uint32_t> mergedIndices;
-    std::vector<SubMesh> mergedSubMeshes;
-
-    for (auto& [matIdx, parts] : model->materialBuckets) {
-        SubMesh superSubMesh{};
-        superSubMesh.materialIndex = matIdx;
-        superSubMesh.indexStart = static_cast<uint32_t>(mergedIndices.size());
-
-        for (auto& part : parts) {
-            uint32_t vertexStartInMerged = static_cast<uint32_t>(mergedVertices.size());
-
-            // THE FIX: Directly grab the correct submesh!
-            const SubMesh& sub = model->subMeshes[part.subMeshIndex];
-
-            std::map<uint32_t, uint32_t> localToMergedMap;
-
-            for (uint32_t i = 0; i < sub.indexCount; ++i) {
-                uint32_t oldIdx = originalIndices[sub.indexStart + i];
-
-                if (localToMergedMap.find(oldIdx) == localToMergedMap.end()) {
-                    Vertex v = originalVertices[oldIdx];
-
-                    glm::vec4 bakedPos = part.transform * glm::vec4(v.pos, 1.0f);
-                    v.pos = glm::vec3(bakedPos);
-
-                    v.normal = glm::normalize(glm::mat3(glm::transpose(glm::inverse(part.transform))) * v.normal);
-                    glm::vec3 t = glm::mat3(part.transform) * glm::vec3(v.tangent);
-                    v.tangent = glm::vec4(glm::normalize(t), v.tangent.w);
-
-                    localToMergedMap[oldIdx] = static_cast<uint32_t>(mergedVertices.size());
-                    mergedVertices.push_back(v);
+        CookedArtifact readCookedArtifactFile(
+            const std::filesystem::path& path) {
+            CookedArtifactBlob blob =
+                readCookedArtifactBlobFile(path);
+            CookedArtifactReadResult decoded =
+                readCookedArtifact(
+                    blob.bytes,
+                    blob.artifactHash);
+            if (!decoded.valid()) {
+                std::string message =
+                    "Cooked model container validation failed";
+                for (const CookDiagnostic& diagnostic :
+                    decoded.diagnostics) {
+                    if (diagnostic.severity ==
+                        CookDiagnosticSeverity::Error) {
+                        message += ": " +
+                            diagnostic.code + " " +
+                            diagnostic.message;
+                    }
                 }
-                mergedIndices.push_back(localToMergedMap[oldIdx]);
+                throw std::runtime_error(message);
             }
+            return std::move(*decoded.artifact);
         }
 
-        superSubMesh.indexCount = static_cast<uint32_t>(mergedIndices.size()) - superSubMesh.indexStart;
-        mergedSubMeshes.push_back(superSubMesh);
+    } // namespace
+
+    AssetManager::AssetManager(IRenderBackend* backend,
+        TransparencyExecutionMode runtimeTransparencyExecutionMode,
+        uint32_t minimumResidentLodLevel)
+        : renderBackend(backend),
+          runtimeTransparencyExecutionMode_(
+              runtimeTransparencyExecutionMode),
+          minimumResidentLodLevel_(minimumResidentLodLevel) {
+        if (minimumResidentLodLevel_ >= MaximumGpuSceneLodLevels) {
+            throw std::invalid_argument(
+                "Asset manager LOD residency floor exceeds the GPU-scene ABI");
+        }
     }
 
-    model->subMeshes = mergedSubMeshes;
-    originalVertices = mergedVertices;
-    originalIndices = mergedIndices;
-    model->materialBuckets.clear();
-}
-// Public entry point that checks the cache first
-std::shared_ptr<ModelAsset> AssetManager::getModel(const std::string& path) {
-    if (modelCache.find(path) != modelCache.end()) {
-        return modelCache[path];
+    void AssetManager::requestMaterialPreview(AssetGuid document, AssetGuid root,
+        const std::map<AssetGuid, SourceMaterial>& sources, const nlohmann::json& settings,
+        std::string_view sourceCookKey, const nlohmann::json& publishedSettings) {
+        if (sources.empty()) return;
+        auto& preview = materialPreviews_[document];
+        if (preview.root == root && preview.settings == settings && preview.publishedSettings == publishedSettings && preview.sourceCookKey == sourceCookKey && !preview.sources.empty()) return;
+        preview.root = root;
+        preview.sources = sources;
+        preview.settings = settings;
+        preview.publishedSettings = publishedSettings;
+        preview.sourceCookKey = sourceCookKey;
+        preview.pending = true;
+        preview.requestSerial = ++previewRequestSerial_;
     }
 
-    auto newModel = loadModelFromFile(path);
-    modelCache[path] = newModel;
-    return newModel;
-}
-
-// ADDED AssetManager:: scope here
-std::shared_ptr<ModelAsset> AssetManager::loadModelFromFile(const std::string& path) {
-    constexpr auto extensions = fastgltf::Extensions::KHR_materials_emissive_strength;
-    fastgltf::Parser parser(extensions);
-    
-    auto data = fastgltf::GltfDataBuffer::FromPath(path);
-    if (data.error() != fastgltf::Error::None) {
-        throw std::runtime_error("Failed to load glTF file: " + path);
+    std::shared_ptr<ModelAsset> AssetManager::findMaterialPreview(AssetGuid document) const {
+        const auto found = materialPreviews_.find(document);
+        if (found == materialPreviews_.end()) return {};
+        const auto parent = findCookedModel(found->second.root);
+        return parent && parent->artifactCookKey == found->second.cookKey ? found->second.model : nullptr;
     }
 
-    auto folder = std::filesystem::path(path).parent_path();
-    auto asset = parser.loadGltf(data.get(), folder, fastgltf::Options::LoadExternalBuffers);
-
-    if (auto error = asset.error(); error != fastgltf::Error::None) {
-        throw std::runtime_error("Failed to parse glTF: " + std::to_string(static_cast<int>(error)));
+    std::string AssetManager::materialPreviewDiagnostic(AssetGuid document) const {
+        const auto found = materialPreviews_.find(document);
+        return found == materialPreviews_.end() ? std::string{} : found->second.diagnostic;
     }
 
-    auto& gltf = asset.get();
-    auto model = std::make_shared<ModelAsset>();
-    model->filePath = path;
-
-    // Add Fallback White Texture
-    model->textures.push_back(createDefaultTexture());
-    int whiteTextureIndex = static_cast<int>(model->textures.size() - 1);
-
-    // ADD FLAT NORMAL TEXTURE
-    model->textures.push_back(createDefaultNormalTexture());
-    int flatNormalIndex = static_cast<int>(model->textures.size() - 1);
-
-    model->textures.push_back(createDefaultPbrTexture());
-    int flatPbrIndex = static_cast<int>(model->textures.size() - 1);
-
-    // 0. Initialize map with -1 (Unmapped) instead of white!
-    std::vector<int> gltfToOurTextureMap(gltf.images.size(), -1);
-
-    std::cerr << "\n[DEBUG] --- LOADING GLTF IMAGES FOR: " << path << " ---" << std::endl;
-
-    for (size_t i = 0; i < gltf.images.size(); ++i) {
-        auto& image = gltf.images[i];
-
-        if (auto* uri = std::get_if<fastgltf::sources::URI>(&image.data)) {
-            std::string texturePath = (folder / uri->uri.path()).string();
-
-            if (!std::filesystem::exists(texturePath)) {
-                std::cerr << "   -> [ERROR] FILE NOT FOUND ON DISK!" << std::string(texturePath) << std::endl;
+    void AssetManager::processMaterialPreviews(std::span<const AssetGuid> openDocuments) {
+        auto completion = previewCompiler_.poll();
+        const auto release = [&](MaterialPreview& preview) {
+            for (const auto& binding : preview.ownedBindings) renderBackend->freeMaterial(binding.material);
+            preview.ownedBindings.clear();
+            preview.canonicalAssets.clear();
+            preview.model.reset();
+        };
+        for (auto it = materialPreviews_.begin(); it != materialPreviews_.end();) {
+            if (std::ranges::find(openDocuments, it->first) == openDocuments.end()) {
+                release(it->second);
+                it = materialPreviews_.erase(it);
                 continue;
             }
-
+            auto& preview = it++->second;
+            const auto parent = findCookedModel(preview.root);
+            const auto input = previewInputs_.find(preview.root);
+            if (!parent || input == previewInputs_.end()) continue;
+            if (preview.cookKey != parent->artifactCookKey) {
+                release(preview);
+                preview.pending = true;
+                preview.requestSerial = ++previewRequestSerial_;
+                preview.cookKey = parent->artifactCookKey;
+            }
+            const bool completed = completion && completion->serial == preview.requestSerial;
+            if (!preview.pending && !completed) continue;
+            if (preview.sourceCookKey != input->second.cookKey) {
+                preview.diagnostic = "Waiting for matching source material revision after reimport...";
+                continue;
+            }
+            std::vector<MaterialBinding> allocated;
             try {
-                model->textures.push_back(loadTexture(texturePath));
-                gltfToOurTextureMap[i] = static_cast<int>(model->textures.size() - 1);
+                if (!completed) {
+                    if (previewCompiler_.busy()) continue;
+                    auto inputs = input->second;
+                    auto policies = applyPreviewPolicySettings(inputs.product, preview.sources, preview.settings);
+                    auto compile = [inputs = std::move(inputs), sources = preview.sources,
+                        settings = preview.settings, publishedSettings = preview.publishedSettings,
+                        executionMode = runtimeTransparencyExecutionMode_]() {
+                        CookedModelProductData product = inputs.product;
+                        auto views = inputs.views;
+                        const auto patches = settings.value("material_overrides", nlohmann::json::object());
+                        for (auto& material : product.materials) {
+                            const auto source = sources.find(material.materialGuid);
+                            if (source == sources.end()) continue;
+                            const auto patch = patches.value(material.materialGuid.toString(),
+                                nlohmann::json{{"schema_version", 1}, {"values", nlohmann::json::object()}});
+                            auto edited = withMaterialAuthoringPatch(source->second, patch);
+                            auto compiled = compileSourceMaterial(edited);
+                            const auto publishedPatch = publishedSettings.value("material_overrides", nlohmann::json::object()).value(
+                                material.materialGuid.toString(), nlohmann::json{{"schema_version", 1}, {"values", nlohmann::json::object()}});
+                            const auto baseline = compileSourceMaterial(withMaterialAuthoringPatch(source->second, publishedPatch));
+                            if (!compiled.succeeded()) {
+                                std::string error = "Preview compilation failed";
+                                for (const auto& diagnostic : compiled.diagnostics) error += ": " + diagnostic.message;
+                                throw std::runtime_error(error);
+                            }
+                            // Topology-dependent routing must stay consistent with the
+                            // cooked primitive contract. Do not pretend a scalar update
+                            // can validate a new closed-volume transport classification.
+                            if (!baseline.succeeded()) throw std::runtime_error("Imported source material cannot be previewed");
+                            if (compiled.material->standard.alphaMode != material.compiled.standard.alphaMode ||
+                                compiled.material->transparency.resolvedClass != baseline.material->transparency.resolvedClass)
+                                throw std::runtime_error("Coverage/transport route changed: Apply and reimport is required. Last valid preview retained.");
+                            std::vector<CookedModelTextureBinding> remapped;
+                            std::vector<RuntimeTextureViewBinding> remappedViews;
+                            for (uint32_t operation = 0; operation < compiled.material->textureOperations.size(); ++operation) {
+                                const auto semantic = compiled.material->textureOperations[operation].semantic;
+                                const auto old = std::ranges::find_if(material.compiled.textureOperations,
+                                    [&](const auto& value) { return value.semantic == semantic; });
+                                if (old == material.compiled.textureOperations.end())
+                                    throw std::runtime_error("New texture bindings require Apply and reimport");
+                                const auto oldIndex = static_cast<uint32_t>(old - material.compiled.textureOperations.begin());
+                                const auto binding = std::ranges::find_if(material.textureBindings,
+                                    [&](const auto& value) { return value.operationIndex == oldIndex; });
+                                const auto view = std::ranges::find_if(views, [&](const auto& value) {
+                                    return value.materialGuid == material.materialGuid && value.operationIndex == oldIndex;
+                                });
+                                if (binding == material.textureBindings.end() || view == views.end())
+                                    throw std::runtime_error("Preview texture is not resident");
+                                remapped.push_back(*binding);
+                                remapped.back().operationIndex = operation;
+                                remappedViews.push_back(*view);
+                                remappedViews.back().operationIndex = operation;
+                            }
+                            std::erase_if(views, [&](const auto& value) { return value.materialGuid == material.materialGuid; });
+                            views.insert(views.end(), remappedViews.begin(), remappedViews.end());
+                            material.textureBindings = std::move(remapped);
+                            const auto policy = material.compiled.transparency;
+                            material.compiled = *compiled.material;
+                            material.compiled.transparency = policy;
+                        }
+                        const auto canonical = makeRuntimeCanonicalMaterials(product, views,
+                            inputs.fallbacks, false, executionMode);
+                        if (!canonical.valid()) throw std::runtime_error("Preview material packing failed; last valid preview retained");
+                        return canonical;
+                    };
+                    if (previewCompiler_.submit(preview.requestSerial, std::move(compile))) {
+                        preview.preparedPrimitivePolicies = std::move(policies);
+                        preview.pending = false;
+                        preview.diagnostic = "Compiling private preview; showing the last valid material...";
+                    }
+                    continue;
+                }
+                if (!completion->diagnostic.empty()) throw std::runtime_error(completion->diagnostic);
+                const auto& canonical = completion->result;
+                const auto bindPrimitives = [&](ModelAsset& model) {
+                    for (auto& primitive : model.subMeshes) {
+                        const auto policy = preview.preparedPrimitivePolicies.find(primitive.primitiveGuid);
+                        if (policy == preview.preparedPrimitivePolicies.end())
+                            throw std::runtime_error("Preview primitive policy is unresolved");
+                        const auto material = std::ranges::find_if(canonical.materials, [&](const auto& value) {
+                            return value.materialGuid == primitive.materialGuid &&
+                                (runtimeTransparencyExecutionMode_ != TransparencyExecutionMode::Classified ||
+                                    value.transparency == policy->second);
+                        });
+                        if (material == canonical.materials.end()) throw std::runtime_error("Preview material slot is unresolved");
+                        primitive.transparency = policy->second;
+                        primitive.materialIndex = static_cast<int>(material - canonical.materials.begin());
+                    }
+                };
+                bool updateOnly = preview.model && preview.canonicalAssets.size() == canonical.materials.size();
+                for (size_t index = 0; updateOnly && index < canonical.materials.size(); ++index) {
+                    const auto& before = preview.canonicalAssets[index];
+                    const auto& after = canonical.materials[index].asset;
+                    updateOnly = before.pipelineState == after.pipelineState && before.textures == after.textures &&
+                        before.packed.closureClass == after.packed.closureClass;
+                }
+                if (updateOnly) {
+                    auto rebound = preview.model;
+                    if (preview.preparedPrimitivePolicies != preview.publishedPrimitivePolicies) {
+                        rebound = std::make_shared<ModelAsset>(*preview.model);
+                        bindPrimitives(*rebound);
+                    }
+                    for (size_t index = 0; index < canonical.materials.size(); ++index) {
+                        const auto& next = canonical.materials[index].asset;
+                        if (std::memcmp(&preview.canonicalAssets[index].packed, &next.packed, sizeof(PackedGpuMaterial)) != 0)
+                            renderBackend->updateCanonicalMaterial(preview.ownedBindings[index].material, next.packed);
+                        preview.canonicalAssets[index] = next;
+                    }
+                    preview.model = std::move(rebound);
+                    preview.publishedPrimitivePolicies = preview.preparedPrimitivePolicies;
+                    preview.diagnostic = "Private live preview. Apply publishes to shared scene materials; Revert discards draft edits.";
+                    continue;
+                }
+                auto model = std::make_shared<ModelAsset>(*parent);
+                model->ownsGeometry = model->ownsMaterials = model->ownsTextures = false;
+                model->materials.clear();
+                for (const auto& material : canonical.materials) {
+                    allocated.push_back(renderBackend->allocateCanonicalMaterial(material.asset));
+                    model->materials.push_back(allocated.back());
+                }
+                bindPrimitives(*model);
+                release(preview);
+                preview.model = std::move(model);
+                preview.ownedBindings = std::move(allocated);
+                preview.publishedPrimitivePolicies = preview.preparedPrimitivePolicies;
+                for (const auto& material : canonical.materials) preview.canonicalAssets.push_back(material.asset);
+                preview.diagnostic = "Private live preview. Apply publishes to shared scene materials; Revert discards draft edits.";
+            } catch (const std::exception& error) {
+                preview.pending = false;
+                for (const auto& binding : allocated) renderBackend->freeMaterial(binding.material);
+                preview.diagnostic = error.what();
             }
-            catch (const std::exception& e) {
-                std::cerr << "   -> [CRITICAL] stbi_load threw exception: " << e.what() << std::endl;
-            }
-        }
-        else if (std::holds_alternative<fastgltf::sources::BufferView>(image.data)) {
-            std::cerr << "   -> [WARNING] Embedded BufferView detected! Engine ignores these right now." << std::endl;
-        }
-        else {
-            std::cerr << "   -> [WARNING] Unknown image data type!" << std::endl;
         }
     }
-    std::cerr << "[DEBUG] --- END IMAGE LOADING ---\n" << std::endl;
 
-    // 2. Load Materials
-    std::vector<glm::vec3> materialColors;
-    for (auto& mat : gltf.materials) {
-        auto& factor = mat.pbrData.baseColorFactor;
-        materialColors.push_back(glm::vec3(factor[0], factor[1], factor[2]));
+    AssetManager::~AssetManager() {
+        processMaterialPreviews({});
+        std::set<MaterialHandle> freedMaterials;
+        std::set<TextureHandle> freedTextures;
+        std::set<GeometryHandle> freedGeometry;
 
-        Material iridiumMat{};
-        iridiumMat.baseColor = glm::vec4(factor[0], factor[1], factor[2], factor[3]);
-        iridiumMat.metallicFactor = mat.pbrData.metallicFactor;
-        iridiumMat.roughnessFactor = mat.pbrData.roughnessFactor;
-        float maxEmissiveColor = std::max({ mat.emissiveFactor[0], mat.emissiveFactor[1], mat.emissiveFactor[2] });
-        iridiumMat.emissiveFactor = mat.emissiveStrength * maxEmissiveColor;
-        
-        // 3. THE FIX: If the material glows, inject the emissive color into the Base Color!
-        // This ensures our packed G-Buffer shader has actual color to multiply, preventing the "black hole" bug.
-        if (iridiumMat.emissiveFactor > 0.0f) {
-            iridiumMat.baseColor.r = std::max(iridiumMat.baseColor.r, mat.emissiveFactor[0]);
-            iridiumMat.baseColor.g = std::max(iridiumMat.baseColor.g, mat.emissiveFactor[1]);
-            iridiumMat.baseColor.b = std::max(iridiumMat.baseColor.b, mat.emissiveFactor[2]);
-        }
-        
-        // Albedo
-        if (mat.pbrData.baseColorTexture.has_value()) {
-            size_t texIndex = mat.pbrData.baseColorTexture.value().textureIndex;
-            if (gltf.textures[texIndex].imageIndex.has_value()) {
-                int mapIdx = gltfToOurTextureMap[gltf.textures[texIndex].imageIndex.value()];
-                iridiumMat.albedoTextureIndex = (mapIdx != -1) ? mapIdx : whiteTextureIndex;
-            }
-            else {
-                iridiumMat.albedoTextureIndex = whiteTextureIndex;
+        for (auto& pair : cookedModelCache) {
+            auto asset = pair.second;
+            if (!asset->ownsMaterials) continue;
+            for (const MaterialBinding& binding : asset->materials) {
+                if (binding.material.isValid() &&
+                    freedMaterials.insert(binding.material).second) {
+                    renderBackend->freeMaterial(binding.material);
+                }
             }
         }
-        else {
-            iridiumMat.albedoTextureIndex = whiteTextureIndex;
-        }
 
-        // Normal
-        if (mat.normalTexture.has_value()) {
-            size_t texIndex = mat.normalTexture.value().textureIndex;
-            if (gltf.textures[texIndex].imageIndex.has_value()) {
-                int mapIdx = gltfToOurTextureMap[gltf.textures[texIndex].imageIndex.value()];
-                iridiumMat.normalTextureIndex = (mapIdx != -1) ? mapIdx : flatNormalIndex;
-            }
-            else {
-                iridiumMat.normalTextureIndex = flatNormalIndex;
+        for (auto& pair : cookedModelCache) {
+            auto asset = pair.second;
+            if (!asset->ownsTextures) continue;
+            for (auto& textureHandle : asset->ownedTextures) {
+                if (textureHandle.isValid() &&
+                    freedTextures.insert(textureHandle).second) {
+                    renderBackend->freeTexture(textureHandle);
+                }
             }
         }
-        else {
-            iridiumMat.normalTextureIndex = flatNormalIndex;
-        }
-
-        // Metallic/Roughness
-        if (mat.pbrData.metallicRoughnessTexture.has_value()) {
-            size_t texIndex = mat.pbrData.metallicRoughnessTexture.value().textureIndex;
-            if (gltf.textures[texIndex].imageIndex.has_value()) {
-                int mapIdx = gltfToOurTextureMap[gltf.textures[texIndex].imageIndex.value()];
-                iridiumMat.metallicRoughnessTextureIndex = (mapIdx != -1) ? mapIdx : flatPbrIndex;
-            }
-            else {
-                iridiumMat.metallicRoughnessTextureIndex = flatPbrIndex;
+        for (const auto& [guid, thumbnail] :
+            editorThumbnails_) {
+            (void)guid;
+            if (thumbnail.texture.isValid() &&
+                freedTextures.insert(
+                    thumbnail.texture).second) {
+                renderBackend->freeTexture(
+                    thumbnail.texture);
             }
         }
-        else {
-            iridiumMat.metallicRoughnessTextureIndex = flatPbrIndex;
+        if (editorDetailThumbnail_
+                .texture.isValid() &&
+            freedTextures.insert(
+                editorDetailThumbnail_
+                    .texture).second) {
+            renderBackend->freeTexture(
+                editorDetailThumbnail_
+                    .texture);
+        }
+        for (TextureHandle texture : ownedEnvironmentTextures_) {
+            if (texture.isValid() && freedTextures.insert(texture).second)
+                renderBackend->freeTexture(texture);
         }
 
-        if (mat.alphaMode == fastgltf::AlphaMode::Blend) {
-            iridiumMat.alphaMode = AlphaMode::Blend;
+        for (auto& pair : cookedModelCache) {
+            auto asset = pair.second;
+            if (!asset->ownsGeometry) continue;
+            if (!asset->geometryArena.empty()) {
+                renderBackend->freeGeometryArena(asset->geometryArena);
+                for (GeometryHandle handle : asset->geometryArena)
+                    freedGeometry.insert(handle);
+            }
+            else if (asset->geometry.isValid() &&
+                    freedGeometry.insert(asset->geometry).second) {
+                renderBackend->freeGeometry(asset->geometry);
+            }
         }
-        else if (mat.alphaMode == fastgltf::AlphaMode::Mask) {
-            iridiumMat.alphaMode = AlphaMode::Mask;
-        }
-        else {
-            iridiumMat.alphaMode = AlphaMode::Opaque;
-        }
-
-        model->materials.push_back(iridiumMat);
     }
 
-    // 3. Load Geometry & Map Submeshes to Nodes
-    std::vector<Vertex> vertices;
-    std::vector<uint32_t> indices;
-    int subMeshGlobalIndex = 0;
+    // --- THE TEXTURE ABSTRACTIONS ---
 
-    for (size_t i = 0; i < gltf.meshes.size(); ++i) {
-        auto& mesh = gltf.meshes[i];
-        model->meshToSubMeshes[i] = {}; // Initialize submesh list for this glTF mesh
+    TextureHandle AssetManager::createDefaultPbrTexture() {
+        // The glTF factors are multiplied by this texture. White preserves both
+        // roughness (G) and metallic (B) factors when no texture is supplied.
+        const unsigned char pixels[] = { 255, 255, 255, 255 };
+        TextureDesc desc{};
+        desc.width = 1;
+        desc.height = 1;
+        desc.format = TextureFormat::RGBA8_UNorm;
+        return renderBackend->allocateTexture(desc, std::as_bytes(std::span(pixels)));
+    }
 
-        for (auto& primitive : mesh.primitives) {
-            SubMesh subMesh{};
-            subMesh.indexStart = static_cast<uint32_t>(indices.size());
-            subMesh.materialIndex = primitive.materialIndex.value_or(0);
+    TextureHandle AssetManager::createDefaultTexture() {
+        const unsigned char pixels[] = { 255, 255, 255, 255 };
+        TextureDesc desc{};
+        desc.width = 1;
+        desc.height = 1;
+        desc.format = TextureFormat::RGBA8_sRGB;
+        return renderBackend->allocateTexture(desc, std::as_bytes(std::span(pixels)));
+    }
 
-            uint32_t globalVertexOffset = static_cast<uint32_t>(vertices.size());
-            glm::vec3 meshColor = (subMesh.materialIndex < materialColors.size()) ? materialColors[subMesh.materialIndex] : glm::vec3(1.0f);
+    TextureHandle AssetManager::createDefaultNormalTexture() {
+        const unsigned char pixels[] = { 128, 128, 255, 255 };
+        TextureDesc desc{};
+        desc.width = 1;
+        desc.height = 1;
+        desc.format = TextureFormat::RGBA8_UNorm;
+        return renderBackend->allocateTexture(desc, std::as_bytes(std::span(pixels)));
+    }
 
-            // Accessor Iteration
-            auto posIt = primitive.findAttribute("POSITION");
-            if (posIt != primitive.attributes.end()) {
-                auto& accessor = gltf.accessors[posIt->accessorIndex];
-                size_t initialVtxCount = vertices.size();
-                vertices.resize(initialVtxCount + accessor.count);
+    LoadedEnvironmentAsset AssetManager::loadEnvironmentFromCookedArtifact(
+        const CookedArtifact& artifact) {
+        const CookedEnvironmentReadResult decoded =
+            readCookedEnvironmentProduct(artifact);
+        if (!decoded.valid()) {
+            std::string message = "Cooked environment artifact validation failed";
+            for (const CookDiagnostic& diagnostic : decoded.diagnostics)
+                if (diagnostic.severity == CookDiagnosticSeverity::Error)
+                    message += ": " + diagnostic.code + " " + diagnostic.message;
+            throw std::runtime_error(message);
+        }
+        const CookedEnvironmentProductData& product = *decoded.data;
+        std::vector<TextureHandle> allocated;
+        const auto upload = [&](const EnvironmentImageProductDesc& image,
+            std::span<const std::byte> payload, bool cube) {
+            TextureDesc desc{};
+            desc.width = image.width;
+            desc.height = image.height;
+            desc.format = image.format;
+            desc.usageClass = TextureUsageClass::Environment;
+            desc.mipLevels = image.mipLevels;
+            desc.arrayLayers = image.arrayLayers;
+            desc.topology = cube ? TextureTopology::Cube : TextureTopology::Texture2D;
+            desc.sampler.addressU = SamplerAddressMode::ClampToEdge;
+            desc.sampler.addressV = SamplerAddressMode::ClampToEdge;
+            desc.sampler.addressW = SamplerAddressMode::ClampToEdge;
+            desc.sampler.maxLod = image.mipLevels - 1u;
+            TextureHandle handle = renderBackend->allocateTexture(desc, payload);
+            allocated.push_back(handle);
+            return handle;
+        };
+        try {
+            EnvironmentLightingHandles handles{
+                .radiance = upload(product.manifest.radiance,
+                    product.radiance, true),
+                .irradiance = upload(product.manifest.irradiance,
+                    product.irradiance, true),
+                .prefilteredSpecular = upload(
+                    product.manifest.prefilteredSpecular,
+                    product.prefilteredSpecular, true),
+                .brdfLut = upload(product.manifest.brdfLut,
+                    product.brdfLut, false),
+            };
+            ownedEnvironmentTextures_.insert(ownedEnvironmentTextures_.end(),
+                allocated.begin(), allocated.end());
+            return {
+                .lighting = handles,
+                .assetGuid = artifact.assetGuid,
+                .cookKey = artifact.cookKey,
+                .manifest = product.manifest,
+                .brdfLut = product.brdfLut,
+            };
+        } catch (...) {
+            for (TextureHandle handle : allocated) renderBackend->freeTexture(handle);
+            throw;
+        }
+    }
 
-                fastgltf::iterateAccessorWithIndex<glm::vec3>(gltf, accessor, [&](glm::vec3 v, size_t idx) {
-                    Vertex& vertex = vertices[initialVtxCount + idx];
-                    vertex.pos = v;
-                    vertex.color = meshColor;
-                    vertex.uv = { 0.0f, 0.0f };
-                    vertex.normal = { 0.0f, 1.0f, 0.0f };
-                    vertex.tangent = { 1.0f, 0.0f, 0.0f, 1.0f };
+    LoadedEnvironmentAsset
+        AssetManager::loadEnvironmentFromCookedArtifactFile(
+            const std::filesystem::path& path) {
+        return loadEnvironmentFromCookedArtifact(readCookedArtifactFile(path));
+    }
+
+    void AssetManager::releaseEnvironment(
+        EnvironmentLightingHandles lighting) {
+        const std::array handles{ lighting.radiance, lighting.irradiance,
+            lighting.prefilteredSpecular, lighting.brdfLut };
+        for (TextureHandle handle : handles) {
+            const auto owned = std::ranges::find(
+                ownedEnvironmentTextures_, handle);
+            if (owned == ownedEnvironmentTextures_.end()) continue;
+            renderBackend->freeTexture(handle);
+            ownedEnvironmentTextures_.erase(owned);
+        }
+    }
+
+    // --- GEOMETRY PROCESSING ---
+
+    void AssetManager::uploadToGPU(ModelAsset* asset, const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices) {
+        // The massive Vulkan buffer creation logic is completely gone. 
+        // We just hand the raw data to the backend and store the ticket!
+        GeometryDesc desc{};
+        desc.vertexStride = sizeof(Vertex);
+        desc.indexFormat = IndexFormat::UInt32;
+        asset->geometry = renderBackend->allocateGeometry(desc,
+            std::as_bytes(std::span(vertices)), std::as_bytes(std::span(indices)));
+        asset->sourceIndexBytes = indices.size() * sizeof(uint32_t);
+        asset->arenaIndexBytes = asset->sourceIndexBytes;
+        for (SubMesh& primitive : asset->subMeshes) {
+            primitive.geometry = asset->geometry;
+            primitive.indexFormat = 1;
+        }
+    }
+
+    void AssetManager::uploadArenaToGPU(ModelAsset* asset,
+        const RuntimeModelCpuData& geometry) {
+        GeometryArenaAllocation allocation =
+            renderBackend->allocateGeometryArena(sizeof(Vertex),
+                std::as_bytes(std::span(geometry.vertices)),
+                geometry.geometryArena);
+        if (!allocation.valid() || allocation.primitiveGeometry.size() !=
+                geometry.geometryArena.primitives.size()) {
+            if (!allocation.primitiveGeometry.empty())
+                renderBackend->freeGeometryArena(
+                    allocation.primitiveGeometry);
+            throw std::runtime_error(
+                "Backend returned an incomplete geometry arena allocation");
+        }
+        try {
+            const auto assignRange = [&](SubMesh& primitive) {
+                const GeometryArenaPrimitiveIdentity identity{
+                    primitive.sourcePrimitiveGuid, primitive.primitiveGuid };
+                const auto found = std::ranges::find(
+                    geometry.geometryArena.primitives, identity,
+                    &GeometryArenaPrimitiveRange::identity);
+                if (found == geometry.geometryArena.primitives.end()) {
+                    throw std::logic_error(
+                        "Runtime primitive is absent from its geometry arena");
+                }
+                const size_t rangeIndex = static_cast<size_t>(
+                    found - geometry.geometryArena.primitives.begin());
+                primitive.geometry =
+                    allocation.primitiveGeometry[rangeIndex];
+                primitive.indexStart = found->firstIndex;
+                primitive.vertexOffset = found->vertexOffset;
+                primitive.indexFormat = found->indexStream ==
+                        GeometryArenaIndexStream::UInt16 ? 0u : 1u;
+            };
+            for (SubMesh& primitive : asset->subMeshes) {
+                assignRange(primitive);
+            }
+            for (ModelLodChain& chain : asset->lodChains) {
+                for (ModelLodLevel& level : chain.levels)
+                    assignRange(level.subMesh);
+            }
+        }
+        catch (...) {
+            renderBackend->freeGeometryArena(
+                allocation.primitiveGeometry);
+            throw;
+        }
+        asset->geometryArena = std::move(
+            allocation.primitiveGeometry);
+        asset->geometry = asset->geometryArena.front();
+        asset->sourceIndexBytes = geometry.geometryArena.stats.sourceIndexBytes;
+        asset->arenaIndexBytes = geometry.geometryArena.stats.arenaIndexBytes;
+        asset->arenaSavedIndexBytes = geometry.geometryArena.stats.savedIndexBytes;
+        asset->arenaUInt16IndexCount =
+            geometry.geometryArena.stats.uint16IndexCount;
+        asset->arenaUInt32IndexCount =
+            geometry.geometryArena.stats.uint32IndexCount;
+    }
+
+    std::shared_ptr<ModelAsset> AssetManager::loadModelFromCookedArtifact(
+        const CookedArtifact& artifact,
+        std::span<const RuntimeMaterialBinding> materials) {
+        if (const auto cached = cookedModelCache.find(artifact.assetGuid);
+            cached != cookedModelCache.end()) {
+            if (cached->second->artifactCookKey == artifact.cookKey) {
+                return cached->second;
+            }
+            throw std::runtime_error(
+                "Cooked model revision replacement is owned by M3.5 hot publish.");
+        }
+
+        const CookedModelReadResult decoded =
+            readCookedModelProduct(artifact);
+        if (!decoded.valid()) {
+            std::string message = "Cooked model artifact validation failed";
+            for (const CookDiagnostic& diagnostic : decoded.diagnostics) {
+                if (diagnostic.severity == CookDiagnosticSeverity::Error) {
+                    message += ": " + diagnostic.code + " " +
+                        diagnostic.message;
+                }
+            }
+            throw std::runtime_error(message);
+        }
+        RuntimeModelCpuResult runtime =
+            makeRuntimeModelCpuData(*decoded.data);
+        if (!runtime.valid()) {
+            std::string message = "Cooked model runtime conversion failed";
+            for (const CookDiagnostic& diagnostic : runtime.diagnostics) {
+                if (diagnostic.severity == CookDiagnosticSeverity::Error) {
+                    message += ": " + diagnostic.code + " " +
+                        diagnostic.message;
+                }
+            }
+            throw std::runtime_error(message);
+        }
+        const RuntimeModelLodResidencyStats lodResidency =
+            applyRuntimeModelLodResidencyFloor(
+                *runtime.data, minimumResidentLodLevel_);
+        ResolvedRuntimeModelCpuResult resolved =
+            resolveRuntimeModelMaterials(
+                std::move(*runtime.data), materials);
+        if (!resolved.valid()) {
+            std::string message =
+                "Cooked model material resolution failed";
+            for (const CookDiagnostic& diagnostic : resolved.diagnostics) {
+                if (diagnostic.severity == CookDiagnosticSeverity::Error) {
+                    message += ": " + diagnostic.code + " " +
+                        diagnostic.message;
+                }
+            }
+            throw std::runtime_error(message);
+        }
+
+        auto model = std::make_shared<ModelAsset>();
+        model->filePath = "asset://" + artifact.assetGuid.toString();
+        model->assetGuid = artifact.assetGuid;
+        model->artifactCookKey = artifact.cookKey;
+        model->transparencyExecutionMode =
+            resolved.data->geometry.transparencyExecutionMode;
+        model->ownsMaterials = false;
+        model->ownsTextures = false;
+        model->subMeshes =
+            std::move(resolved.data->geometry.primitives);
+        model->lodChains =
+            std::move(resolved.data->geometry.lodChains);
+        model->materials = std::move(resolved.data->materials);
+        model->totalIndices =
+            static_cast<uint32_t>(
+                resolved.data->geometry.indices.size());
+        model->lodResidentBaseLevel = lodResidency.maximumAppliedLevel;
+        model->lodFallbackChainCount = lodResidency.fallbackChainCount;
+        model->lodWithheldPrimitiveRangeCount =
+            lodResidency.withheldPrimitiveRangeCount;
+        model->lodWithheldIndexBytes = lodResidency.withheldIndexBytes();
+        uploadArenaToGPU(model.get(), resolved.data->geometry);
+        if (lodResidency.fallbackChainCount != 0u) {
+            std::cout << "IRIDIUM_LOD_PHYSICAL_FALLBACK {\"asset_guid\":\""
+                << model->assetGuid.toString() << "\",\"requested_floor\":"
+                << lodResidency.requestedMinimumLevel
+                << ",\"maximum_applied_floor\":"
+                << lodResidency.maximumAppliedLevel
+                << ",\"fallback_chains\":"
+                << lodResidency.fallbackChainCount
+                << ",\"withheld_ranges\":"
+                << lodResidency.withheldPrimitiveRangeCount
+                << ",\"withheld_index_bytes\":"
+                << lodResidency.withheldIndexBytes() << "}\n";
+        }
+        cookedModelCache.emplace(artifact.assetGuid, model);
+        if (onModelLoadedCallback) onModelLoadedCallback(model);
+        return model;
+    }
+
+    std::shared_ptr<ModelAsset> AssetManager::loadBuiltInCubeModel() {
+        if (const auto cached = cookedModelCache.find(kBuiltInCubeAssetGuid);
+            cached != cookedModelCache.end()) {
+            return cached->second;
+        }
+
+        struct Face {
+            glm::vec3 normal;
+            glm::vec3 tangent;
+            glm::vec3 bitangent;
+        };
+        constexpr std::array faces{
+            Face{ { 0.0f, 0.0f, 1.0f }, { 1.0f, 0.0f, 0.0f },
+                { 0.0f, 1.0f, 0.0f } },
+            Face{ { 0.0f, 0.0f, -1.0f }, { -1.0f, 0.0f, 0.0f },
+                { 0.0f, 1.0f, 0.0f } },
+            Face{ { 1.0f, 0.0f, 0.0f }, { 0.0f, 0.0f, -1.0f },
+                { 0.0f, 1.0f, 0.0f } },
+            Face{ { -1.0f, 0.0f, 0.0f }, { 0.0f, 0.0f, 1.0f },
+                { 0.0f, 1.0f, 0.0f } },
+            Face{ { 0.0f, 1.0f, 0.0f }, { 1.0f, 0.0f, 0.0f },
+                { 0.0f, 0.0f, -1.0f } },
+            Face{ { 0.0f, -1.0f, 0.0f }, { 1.0f, 0.0f, 0.0f },
+                { 0.0f, 0.0f, 1.0f } },
+        };
+        constexpr std::array<glm::vec2, 4> corners{
+            glm::vec2{ -0.5f, -0.5f }, glm::vec2{ 0.5f, -0.5f },
+            glm::vec2{ 0.5f, 0.5f }, glm::vec2{ -0.5f, 0.5f },
+        };
+        constexpr std::array<glm::vec2, 4> uvs{
+            glm::vec2{ 0.0f, 0.0f }, glm::vec2{ 1.0f, 0.0f },
+            glm::vec2{ 1.0f, 1.0f }, glm::vec2{ 0.0f, 1.0f },
+        };
+        constexpr std::array<uint32_t, 6> faceIndices{ 0, 2, 1, 0, 3, 2 };
+
+        std::vector<Vertex> vertices;
+        std::vector<uint32_t> indices;
+        vertices.reserve(faces.size() * corners.size());
+        indices.reserve(faces.size() * faceIndices.size());
+        for (const Face& face : faces) {
+            const uint32_t firstVertex = static_cast<uint32_t>(vertices.size());
+            for (size_t index = 0; index < corners.size(); ++index) {
+                const glm::vec2 corner = corners[index];
+                vertices.push_back({
+                    .pos = face.normal * 0.5f + face.tangent * corner.x +
+                        face.bitangent * corner.y,
+                    .color = glm::vec4(1.0f),
+                    .normal = face.normal,
+                    .uv0 = uvs[index],
+                    .tangent = glm::vec4(face.tangent, 1.0f),
+                    .uv1 = uvs[index],
+                });
+            }
+            for (uint32_t index : faceIndices) {
+                indices.push_back(firstVertex + index);
+            }
+        }
+
+        CanonicalMaterialAsset material{};
+        material.name = "Built-in Cube Material";
+        material.packed.closureClass = static_cast<uint32_t>(
+            MaterialClosureClass::StandardDeferred);
+        material.packed.transparencyPolicy =
+            packTransparencyPolicyWord(CompiledTransparencyPolicy{});
+        material.packed.textureIndices.fill(
+            PackedGpuMaterial::InvalidTextureIndex);
+        material.packed.baseColorFactor = { 0.62f, 0.68f, 0.78f, 1.0f };
+        material.packed.metallicRoughnessIorSpecular = {
+            0.0f, 0.55f, 1.5f, 1.0f };
+        material.packed.specularColorNormalScale = {
+            1.0f, 1.0f, 1.0f, 1.0f };
+        material.packed.diffuseFactor = { 1.0f, 1.0f, 1.0f, 1.0f };
+        material.packed.specularGlossinessFactorGloss = {
+            1.0f, 1.0f, 1.0f, 1.0f };
+        material.packed.emissiveFactorStrength = { 0.0f, 0.0f, 0.0f, 1.0f };
+        material.packed.surfaceParameters = { 1.0f, 0.5f, 0.0f, 0.0f };
+
+        auto model = std::make_shared<ModelAsset>();
+        model->filePath = "builtin://cube";
+        model->assetGuid = kBuiltInCubeAssetGuid;
+        model->artifactCookKey = "builtin-cube-v1";
+        model->totalIndices = static_cast<uint32_t>(indices.size());
+        model->subMeshes.push_back({
+            .indexStart = 0,
+            .indexCount = model->totalIndices,
+            .materialIndex = 0,
+            .sourcePrimitiveGuid = kBuiltInCubePrimitiveGuid,
+            .primitiveGuid = kBuiltInCubePrimitiveGuid,
+            .materialGuid = kBuiltInCubeMaterialGuid,
+            .attributeMask = ModelAttributePosition | ModelAttributeColor0 |
+                ModelAttributeNormal | ModelAttributeTexCoord0 |
+                ModelAttributeTangent | ModelAttributeTexCoord1,
+            .coverage = static_cast<uint8_t>(ModelCoverage::Opaque),
+            .boundsMin = glm::vec3(-0.5f),
+            .boundsMax = glm::vec3(0.5f),
+            .boundsSphereCenter = glm::vec3(0.0f),
+            .boundsSphereRadius = 0.8660254f,
+        });
+
+        std::vector<TextureHandle> allocatedTextures;
+        const auto remember = [&allocatedTextures](TextureHandle texture) {
+            allocatedTextures.push_back(texture);
+            return texture;
+        };
+        try {
+            const TextureHandle white = remember(createDefaultTexture());
+            const TextureHandle normal =
+                remember(createDefaultNormalTexture());
+            const TextureHandle linearData =
+                remember(createDefaultPbrTexture());
+            material.textures.fill(white);
+            material.textures[static_cast<uint32_t>(
+                SourceTextureSemantic::Normal)] = normal;
+            material.textures[static_cast<uint32_t>(
+                SourceTextureSemantic::ClearcoatNormal)] = normal;
+            material.textures[static_cast<uint32_t>(
+                SourceTextureSemantic::MetallicRoughness)] = linearData;
+            material.textures[static_cast<uint32_t>(
+                SourceTextureSemantic::Occlusion)] = linearData;
+            material.textures[static_cast<uint32_t>(
+                SourceTextureSemantic::Transmission)] = linearData;
+            material.textures[static_cast<uint32_t>(
+                SourceTextureSemantic::Thickness)] = linearData;
+            model->materials.push_back(
+                renderBackend->allocateCanonicalMaterial(material));
+            uploadToGPU(model.get(), vertices, indices);
+            model->ownedTextures = std::move(allocatedTextures);
+        } catch (...) {
+            for (const MaterialBinding& binding : model->materials) {
+                if (binding.material.isValid()) {
+                    renderBackend->freeMaterial(binding.material);
+                }
+            }
+            for (TextureHandle texture : allocatedTextures) {
+                if (texture.isValid()) {
+                    renderBackend->freeTexture(texture);
+                }
+            }
+            throw;
+        }
+        cookedModelCache.emplace(kBuiltInCubeAssetGuid, model);
+        if (onModelLoadedCallback) onModelLoadedCallback(model);
+        return model;
+    }
+
+    std::shared_ptr<ModelAsset>
+        AssetManager::loadCompleteModelFromCookedArtifact(
+            const CookedArtifact& artifact,
+            std::span<const RuntimeTextureViewBinding>
+                textureViews,
+            const RuntimeMaterialFallbacks& fallbacks) {
+        if (const auto cached =
+                cookedModelCache.find(artifact.assetGuid);
+            cached != cookedModelCache.end()) {
+            if (cached->second->artifactCookKey ==
+                artifact.cookKey) {
+                return cached->second;
+            }
+            throw std::runtime_error(
+                "Cooked model revision replacement is owned by M3.5 hot publish.");
+        }
+
+        const CookedModelReadResult decoded =
+            readCookedModelProduct(artifact);
+        if (!decoded.valid()) {
+            std::string message =
+                "Complete cooked model artifact validation failed";
+            for (const CookDiagnostic& diagnostic :
+                decoded.diagnostics) {
+                if (diagnostic.severity ==
+                    CookDiagnosticSeverity::Error) {
+                    message += ": " + diagnostic.code +
+                        " " + diagnostic.message;
+                }
+            }
+            throw std::runtime_error(message);
+        }
+        return loadCompleteModelFromCookedProduct(
+            artifact, *decoded.data, textureViews,
+            fallbacks, true);
+    }
+
+    std::shared_ptr<ModelAsset>
+        AssetManager::loadCompleteModelFromCookedProduct(
+            const CookedArtifact& artifact,
+            const CookedModelProductData& product,
+            std::span<const RuntimeTextureViewBinding>
+                textureViews,
+            const RuntimeMaterialFallbacks& fallbacks,
+            bool notifyLoaded) {
+        RuntimeModelCpuResult geometry =
+            makeRuntimeModelCpuData(product, false,
+                runtimeTransparencyExecutionMode_);
+        if (!geometry.valid()) {
+            throw std::runtime_error(
+                "Complete cooked model geometry conversion failed.");
+        }
+        const RuntimeModelLodResidencyStats lodResidency =
+            applyRuntimeModelLodResidencyFloor(
+                *geometry.data, minimumResidentLodLevel_);
+        RuntimeCanonicalMaterialResult canonical =
+            makeRuntimeCanonicalMaterials(product,
+                textureViews, fallbacks, false,
+                runtimeTransparencyExecutionMode_);
+        if (!canonical.valid()) {
+            std::string message =
+                "Complete cooked model material reconstruction failed";
+            for (const CookDiagnostic& diagnostic :
+                canonical.diagnostics) {
+                if (diagnostic.severity ==
+                    CookDiagnosticSeverity::Error) {
+                    message += ": " + diagnostic.code +
+                        " " + diagnostic.message;
+                }
+            }
+            throw std::runtime_error(message);
+        }
+
+        std::vector<RuntimeMaterialBinding>
+            runtimeBindings;
+        runtimeBindings.reserve(canonical.materials.size());
+        try {
+            for (const RuntimeCanonicalMaterial& material :
+                canonical.materials) {
+                runtimeBindings.push_back({
+                    .materialGuid = material.materialGuid,
+                    .transparency = material.transparency,
+                    .binding =
+                        renderBackend->allocateCanonicalMaterial(
+                            material.asset),
+                });
+            }
+        } catch (...) {
+            for (const RuntimeMaterialBinding& binding :
+                runtimeBindings) {
+                if (binding.binding.material.isValid()) {
+                    renderBackend->freeMaterial(
+                        binding.binding.material);
+                }
+            }
+            throw;
+        }
+
+        ResolvedRuntimeModelCpuResult resolved =
+            resolveRuntimeModelMaterials(
+                std::move(*geometry.data),
+                runtimeBindings);
+        if (!resolved.valid()) {
+            for (const RuntimeMaterialBinding& binding :
+                runtimeBindings) {
+                if (binding.binding.material.isValid()) {
+                    renderBackend->freeMaterial(
+                        binding.binding.material);
+                }
+            }
+            throw std::runtime_error(
+                "Complete cooked model material GUID resolution failed.");
+        }
+        for (const RuntimeMaterialBinding& binding : runtimeBindings) {
+            const bool retained = std::ranges::any_of(
+                resolved.data->materials,
+                [&binding](const MaterialBinding& candidate) {
+                    return candidate.material == binding.binding.material;
+                });
+            if (!retained && binding.binding.material.isValid()) {
+                renderBackend->freeMaterial(binding.binding.material);
+            }
+        }
+
+        auto model = std::make_shared<ModelAsset>();
+        model->filePath =
+            "asset://" + artifact.assetGuid.toString();
+        model->assetGuid = artifact.assetGuid;
+        model->artifactCookKey = artifact.cookKey;
+        model->transparencyExecutionMode =
+            resolved.data->geometry.transparencyExecutionMode;
+        model->ownsMaterials = true;
+        model->ownsTextures = false;
+        model->subMeshes =
+            std::move(resolved.data->geometry.primitives);
+        model->lodChains =
+            std::move(resolved.data->geometry.lodChains);
+        model->materials =
+            std::move(resolved.data->materials);
+        model->totalIndices = static_cast<uint32_t>(
+            resolved.data->geometry.indices.size());
+        model->lodResidentBaseLevel = lodResidency.maximumAppliedLevel;
+        model->lodFallbackChainCount = lodResidency.fallbackChainCount;
+        model->lodWithheldPrimitiveRangeCount =
+            lodResidency.withheldPrimitiveRangeCount;
+        model->lodWithheldIndexBytes = lodResidency.withheldIndexBytes();
+        try {
+            uploadArenaToGPU(model.get(), resolved.data->geometry);
+        } catch (...) {
+            for (const MaterialBinding& binding :
+                model->materials) {
+                if (binding.material.isValid()) {
+                    renderBackend->freeMaterial(
+                        binding.material);
+                }
+            }
+            throw;
+        }
+        if (lodResidency.fallbackChainCount != 0u) {
+            std::cout << "IRIDIUM_LOD_PHYSICAL_FALLBACK {\"asset_guid\":\""
+                << model->assetGuid.toString() << "\",\"requested_floor\":"
+                << lodResidency.requestedMinimumLevel
+                << ",\"maximum_applied_floor\":"
+                << lodResidency.maximumAppliedLevel
+                << ",\"fallback_chains\":"
+                << lodResidency.fallbackChainCount
+                << ",\"withheld_ranges\":"
+                << lodResidency.withheldPrimitiveRangeCount
+                << ",\"withheld_index_bytes\":"
+                << lodResidency.withheldIndexBytes() << "}\n";
+        }
+        PreviewInputs inputs;
+        inputs.product.materials = product.materials;
+        inputs.product.manifest.primitives = product.manifest.primitives;
+        inputs.product.manifest.transparencyExecutionMode = product.manifest.transparencyExecutionMode;
+        inputs.views.assign(textureViews.begin(), textureViews.end());
+        inputs.fallbacks = fallbacks;
+        inputs.cookKey = artifact.cookKey;
+        previewInputs_.insert_or_assign(artifact.assetGuid, std::move(inputs));
+        cookedModelCache.emplace(artifact.assetGuid, model);
+        if (notifyLoaded && onModelLoadedCallback) {
+            onModelLoadedCallback(model);
+        }
+        return model;
+    }
+
+    std::shared_ptr<ModelAsset>
+        AssetManager::loadSelfContainedModelFromCookedArtifact(
+            const CookedArtifact& artifact) {
+        if (const auto cached =
+                cookedModelCache.find(artifact.assetGuid);
+            cached != cookedModelCache.end()) {
+            if (cached->second->artifactCookKey ==
+                artifact.cookKey) {
+                return cached->second;
+            }
+            throw std::runtime_error(
+                "Cooked model revision replacement is owned by M3.5 hot publish.");
+        }
+        const CookedModelReadResult decoded =
+            readCookedModelProduct(artifact);
+        if (!decoded.valid()) {
+            throw std::runtime_error(
+                "Self-contained cooked model validation failed.");
+        }
+        return loadSelfContainedModelFromCookedProduct(
+            artifact, *decoded.data);
+    }
+
+    std::shared_ptr<ModelAsset>
+        AssetManager::loadSelfContainedModelFromCookedProduct(
+            const CookedArtifact& artifact,
+            const CookedModelProductData& product) {
+        std::vector<TextureHandle> allocatedTextures;
+        const auto remember = [&allocatedTextures](
+            TextureHandle texture) {
+            allocatedTextures.push_back(texture);
+            return MaterialTextureBinding{
+                texture,
+                SamplerHandle::fromParts(
+                    texture.getIndex(),
+                    texture.getGeneration()),
+            };
+        };
+        try {
+            const RuntimeMaterialFallbacks fallbacks{
+                .white = remember(createDefaultTexture()),
+                .normal =
+                    remember(createDefaultNormalTexture()),
+                .linearData =
+                    remember(createDefaultPbrTexture()),
+            };
+
+            struct AllocatedView {
+                uint32_t textureViewIndex = 0;
+                SamplerDesc sampler;
+                MaterialTextureBinding binding;
+            };
+            std::vector<AllocatedView> allocatedViews;
+            std::vector<RuntimeTextureViewBinding>
+                runtimeViews;
+            for (const CookedModelMaterial& material :
+                product.materials) {
+                for (const CookedModelTextureBinding& cooked :
+                    material.textureBindings) {
+                    const CompiledTextureOperation& operation =
+                        material.compiled.textureOperations.at(
+                            cooked.operationIndex);
+                    const CookedModelTextureView& view =
+                        product.textureViews.at(
+                            cooked.textureViewIndex);
+                    const MaterialTextureCompatibilityPlan plan =
+                        planMaterialTextureCompatibility(
+                            operation.sampler,
+                            view.manifest.width,
+                            view.manifest.height);
+                    auto existing = std::ranges::find_if(
+                        allocatedViews,
+                        [&cooked, &plan](
+                            const AllocatedView& value) {
+                            return value.textureViewIndex ==
+                                    cooked.textureViewIndex &&
+                                value.sampler == plan.sampler;
+                        });
+                    MaterialTextureBinding binding;
+                    if (existing != allocatedViews.end()) {
+                        binding = existing->binding;
+                    } else {
+                        TextureDesc desc{
+                            .width = view.manifest.width,
+                            .height = view.manifest.height,
+                            .format =
+                                view.manifest.storageFormat,
+                            .mipLevels =
+                                static_cast<uint32_t>(
+                                    view.manifest.mips.size()),
+                            .sampler = plan.sampler,
+                        };
+                        binding = remember(
+                            renderBackend->allocateTexture(
+                                desc, view.payload));
+                        binding.reconstructNormalZ =
+                            view.manifest.semantic ==
+                                TextureSemantic::Normal &&
+                            view.manifest.storageFormat ==
+                                TextureFormat::BC5_UNorm;
+                        allocatedViews.push_back({
+                            .textureViewIndex =
+                                cooked.textureViewIndex,
+                            .sampler = plan.sampler,
+                            .binding = binding,
+                        });
+                    }
+                    runtimeViews.push_back({
+                        .materialGuid =
+                            material.materialGuid,
+                        .operationIndex =
+                            cooked.operationIndex,
+                        .textureGuid =
+                            cooked.textureGuid,
+                        .binding = binding,
                     });
-
-                // Search for TEXCOORD_0, and if it's missing, fallback to TEXCOORD_1
-                auto uvIt = primitive.findAttribute("TEXCOORD_0");
-                if (uvIt == primitive.attributes.end()) {
-                    uvIt = primitive.findAttribute("TEXCOORD_1");
-                }
-
-                if (uvIt != primitive.attributes.end()) {
-                    auto& accessor = gltf.accessors[uvIt->accessorIndex];
-                    fastgltf::iterateAccessorWithIndex<glm::vec2>(gltf, accessor, [&](glm::vec2 uv, size_t idx) {
-                        vertices[initialVtxCount + idx].uv = uv;
-                        });
-                }
-                else {
-                    // Fallback just in case a mesh truly has no UVs
-                    // Use accessor.count instead of vertexCount
-                    for (size_t i = 0; i < accessor.count; ++i) {
-                        vertices[initialVtxCount + i].uv = glm::vec2(0.0f);
-                    }
-                }
-
-                auto normIt = primitive.findAttribute("NORMAL");
-                if (normIt != primitive.attributes.end()) {
-                    auto& normAccessor = gltf.accessors[normIt->accessorIndex];
-                    fastgltf::iterateAccessorWithIndex<glm::vec3>(gltf, normAccessor, [&](glm::vec3 n, size_t idx) {
-                        vertices[initialVtxCount + idx].normal = n;
-                        });
-                }
-
-                auto tanIt = primitive.findAttribute("TANGENT");
-                if (tanIt != primitive.attributes.end()) {
-                    auto& tanAccessor = gltf.accessors[tanIt->accessorIndex];
-                    fastgltf::iterateAccessorWithIndex<glm::vec4>(gltf, tanAccessor, [&](glm::vec4 t, size_t idx) {
-                        vertices[initialVtxCount + idx].tangent = t;
-                        });
                 }
             }
-
-            if (primitive.indicesAccessor.has_value()) {
-                auto& accessor = gltf.accessors[primitive.indicesAccessor.value()];
-                subMesh.indexCount = static_cast<uint32_t>(accessor.count);
-                fastgltf::iterateAccessor<std::uint32_t>(gltf, accessor, [&](std::uint32_t idx) {
-                    indices.push_back(idx + globalVertexOffset);
-                    });
+            std::shared_ptr<ModelAsset> model =
+                loadCompleteModelFromCookedProduct(
+                    artifact, product,
+                    runtimeViews, fallbacks, false);
+            model->ownedTextures =
+                std::move(allocatedTextures);
+            model->ownsTextures = true;
+            if (onModelLoadedCallback) {
+                onModelLoadedCallback(model);
             }
-
-            auto tanIt = primitive.findAttribute("TANGENT");
-            if (tanIt == primitive.attributes.end() && primitive.indicesAccessor.has_value()) {
-                // 1. Initialize tangents to zero
-                for (size_t j = 0; j < subMesh.indexCount; ++j) {
-                    vertices[indices[subMesh.indexStart + j]].tangent = glm::vec4(0.0f);
-                }
-
-                // 2. Accumulate tangents for each triangle based on UV delta
-                for (size_t j = 0; j < subMesh.indexCount; j += 3) {
-                    uint32_t i0 = indices[subMesh.indexStart + j];
-                    uint32_t i1 = indices[subMesh.indexStart + j + 1];
-                    uint32_t i2 = indices[subMesh.indexStart + j + 2];
-
-                    Vertex& v0 = vertices[i0];
-                    Vertex& v1 = vertices[i1];
-                    Vertex& v2 = vertices[i2];
-
-                    glm::vec3 edge1 = v1.pos - v0.pos;
-                    glm::vec3 edge2 = v2.pos - v0.pos;
-                    glm::vec2 deltaUV1 = v1.uv - v0.uv;
-                    glm::vec2 deltaUV2 = v2.uv - v0.uv;
-
-                    float f = 1.0f / (deltaUV1.x * deltaUV2.y - deltaUV2.x * deltaUV1.y);
-                    if (std::isinf(f) || std::isnan(f)) f = 1.0f; // Prevent div by zero
-
-                    glm::vec3 tangent;
-                    tangent.x = f * (deltaUV2.y * edge1.x - deltaUV1.y * edge2.x);
-                    tangent.y = f * (deltaUV2.y * edge1.y - deltaUV1.y * edge2.y);
-                    tangent.z = f * (deltaUV2.y * edge1.z - deltaUV1.y * edge2.z);
-
-                    v0.tangent += glm::vec4(tangent, 0.0f);
-                    v1.tangent += glm::vec4(tangent, 0.0f);
-                    v2.tangent += glm::vec4(tangent, 0.0f);
-                }
-
-                // 3. Orthogonalize via Gram-Schmidt and normalize
-                for (size_t j = 0; j < subMesh.indexCount; ++j) {
-                    Vertex& v = vertices[indices[subMesh.indexStart + j]];
-                    glm::vec3 t = glm::vec3(v.tangent);
-
-                    if (glm::length(t) > 0.0f) {
-                        glm::vec3 n = v.normal;
-                        t = glm::normalize(t - n * glm::dot(n, t));
-                        v.tangent = glm::vec4(t, 1.0f);
-                    }
-                    else {
-                        v.tangent = glm::vec4(1.0f, 0.0f, 0.0f, 1.0f); // Absolute fallback
-                    }
+            return model;
+        } catch (...) {
+            for (TextureHandle texture :
+                allocatedTextures) {
+                if (texture.isValid()) {
+                    renderBackend->freeTexture(texture);
                 }
             }
-
-            model->subMeshes.push_back(subMesh);
-            model->meshToSubMeshes[i].push_back(subMeshGlobalIndex);
-            subMeshGlobalIndex++;
+            throw;
         }
     }
 
-    // 4. Load Scene Hierarchy (The Tree)
-    auto& scene = gltf.scenes[gltf.defaultScene.value_or(0)];
-    for (auto& nodeIndex : scene.nodeIndices) {
-        loadNodes(gltf, nodeIndex, nullptr, model.get());
+    std::shared_ptr<ModelAsset>
+        AssetManager::loadSelfContainedModelFromCookedArtifactFile(
+            const std::filesystem::path& path) {
+        const CookedArtifact artifact =
+            readCookedArtifactFile(path);
+        std::shared_ptr<ModelAsset> model =
+            loadSelfContainedModelFromCookedArtifact(
+                artifact);
+        model->filePath =
+            path.lexically_normal().string();
+        return model;
     }
 
-    // 5. Bake the tree into a flat list for performance
-    for (auto& root : model->rootNodes) {
-        flattenNodes(root.get(), glm::mat4(1.0f), model.get());
+    std::shared_ptr<ModelAsset>
+        AssetManager::replaceSelfContainedModelFromCookedArtifact(
+            const CookedArtifact& artifact) {
+        const CookedModelReadResult decoded =
+            readCookedModelProduct(artifact);
+        if (!decoded.valid()) {
+            throw std::runtime_error(
+                "Self-contained cooked model replacement validation failed.");
+        }
+        return replaceSelfContainedModelFromCookedProduct(
+            artifact, *decoded.data);
     }
 
-    mergeMaterials(model.get(), vertices, indices);
+    std::shared_ptr<ModelAsset>
+        AssetManager::replaceSelfContainedModelFromCookedProduct(
+            const CookedArtifact& artifact,
+            const CookedModelProductData& product) {
+        const auto found =
+            cookedModelCache.find(artifact.assetGuid);
+        if (found == cookedModelCache.end()) {
+            return loadSelfContainedModelFromCookedProduct(
+                artifact, product);
+        }
+        std::shared_ptr<ModelAsset> stable = found->second;
+        if (stable->artifactCookKey == artifact.cookKey) {
+            return stable;
+        }
 
-    model->totalIndices = static_cast<uint32_t>(indices.size());
-    uploadToGPU(model.get(), vertices, indices);
+        auto previousNode =
+            cookedModelCache.extract(found);
+        auto loadedCallback =
+            std::move(onModelLoadedCallback);
+        onModelLoadedCallback = {};
+        std::shared_ptr<ModelAsset> replacement;
+        try {
+            replacement =
+                loadSelfContainedModelFromCookedProduct(
+                    artifact, product);
+        } catch (...) {
+            onModelLoadedCallback =
+                std::move(loadedCallback);
+            cookedModelCache.insert(
+                std::move(previousNode));
+            throw;
+        }
+        onModelLoadedCallback =
+            std::move(loadedCallback);
 
-    if (onModelLoadedCallback) {
-        onModelLoadedCallback(model);
+        using std::swap;
+        swap(*stable, *replacement);
+        cookedModelCache[artifact.assetGuid] =
+            stable;
+
+        if (replacement->ownsMaterials) {
+            for (const MaterialBinding& binding :
+                replacement->materials) {
+                if (binding.material.isValid()) {
+                    renderBackend->freeMaterial(
+                        binding.material);
+                }
+            }
+            replacement->ownsMaterials = false;
+        }
+        if (replacement->ownsTextures) {
+            for (TextureHandle texture :
+                replacement->ownedTextures) {
+                if (texture.isValid()) {
+                    renderBackend->freeTexture(texture);
+                }
+            }
+            replacement->ownsTextures = false;
+        }
+        if (replacement->ownsGeometry &&
+            !replacement->geometryArena.empty()) {
+            renderBackend->freeGeometryArena(
+                replacement->geometryArena);
+            replacement->ownsGeometry = false;
+        }
+        else if (replacement->ownsGeometry &&
+                replacement->geometry.isValid()) {
+            renderBackend->freeGeometry(replacement->geometry);
+            replacement->ownsGeometry = false;
+        }
+        if (onModelLoadedCallback) {
+            onModelLoadedCallback(stable);
+        }
+        return stable;
     }
 
-    return model;
-}
+    std::shared_ptr<ModelAsset>
+        AssetManager::replaceSelfContainedModelFromCookedArtifactFile(
+            const std::filesystem::path& path) {
+        const CookedArtifact artifact =
+            readCookedArtifactFile(path);
+        std::shared_ptr<ModelAsset> model =
+            replaceSelfContainedModelFromCookedArtifact(
+                artifact);
+        model->filePath =
+            path.lexically_normal().string();
+        return model;
+    }
 
-// SCOPED to AssetManager
-Texture AssetManager::loadTexture(const std::string& path) {
-    Texture tex{};
-    int texWidth, texHeight, texChannels;
-    stbi_uc* pixels = stbi_load(path.c_str(), &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
-    if (!pixels) throw std::runtime_error("failed to load texture: " + path);
+    std::shared_ptr<ModelAsset>
+        AssetManager::findCookedModel(
+            AssetGuid assetGuid) const {
+        const auto found =
+            cookedModelCache.find(assetGuid);
+        return found != cookedModelCache.end()
+            ? found->second
+            : std::shared_ptr<ModelAsset>{};
+    }
 
-    size_t middlePixelIdx = ((texHeight / 2) * texWidth + (texWidth / 2)) * 4;
-    int r = pixels[middlePixelIdx];
-    int g = pixels[middlePixelIdx + 1];
-    int b = pixels[middlePixelIdx + 2];
+    std::optional<MaterialBinding>
+        AssetManager::findCookedMaterial(
+            AssetGuid materialGuid) const {
+        const auto runtime = findCookedMaterialRuntime(materialGuid);
+        return runtime
+            ? std::optional<MaterialBinding>{ runtime->binding }
+            : std::nullopt;
+    }
 
-    VkDeviceSize imageSize = texWidth * texHeight * 4;
+    std::optional<CookedMaterialRuntimeBinding>
+        AssetManager::findCookedMaterialRuntime(
+            AssetGuid materialGuid) const {
+        for (const auto& [guid, model] :
+            cookedModelCache) {
+            (void)guid;
+            if (!model) continue;
+            for (const SubMesh& primitive :
+                model->subMeshes) {
+                if (primitive.materialGuid !=
+                        materialGuid ||
+                    primitive.materialIndex < 0 ||
+                    static_cast<size_t>(
+                        primitive.materialIndex) >=
+                        model->materials.size()) {
+                    continue;
+                }
+                return CookedMaterialRuntimeBinding{
+                    .materialGuid = materialGuid,
+                    .transparency = primitive.transparency,
+                    .transparencyExecutionMode =
+                        model->transparencyExecutionMode,
+                    .binding = model->materials[
+                        static_cast<size_t>(
+                            primitive.materialIndex)],
+                };
+            }
+        }
+        return std::nullopt;
+    }
 
-    VkBuffer stagingBuffer;
-    VkDeviceMemory stagingBufferMemory;
-    vkContext->createBuffer(imageSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-        stagingBuffer, stagingBufferMemory);
+    std::span<const MaterialProvenance> AssetManager::getMaterialProvenance(
+        const ModelAsset& model) const {
+        const auto found = materialProvenanceCache.find(&model);
+        if (found == materialProvenanceCache.end()) return {};
+        return found->second;
+    }
 
-    void* data;
-    vkMapMemory(vkContext->getDevice(), stagingBufferMemory, 0, imageSize, 0, &data);
-    memcpy(data, pixels, (size_t)imageSize);
-    vkUnmapMemory(vkContext->getDevice(), stagingBufferMemory);
-    stbi_image_free(pixels);
+    void* AssetManager::getMaterialTexturePreview(TextureHandle texture) const {
+        return renderBackend != nullptr && texture.isValid()
+            ? renderBackend->getEditorTextureID(texture) : nullptr;
+    }
 
-    vkContext->createImage(texWidth, texHeight, VK_FORMAT_R8G8B8A8_UNORM,
-        VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, tex.image, tex.memory);
+    std::optional<AssetGuid>
+        AssetManager::publishEditorThumbnail(
+            AssetGuid assetGuid,
+            uint32_t width,
+            uint32_t height,
+            std::span<const std::byte> rgba8) {
+        return publishEditorThumbnailInternal(
+            assetGuid, width, height,
+            rgba8, false);
+    }
 
-    // Call through our member vkCmdManager
-    vkCmdManager->transitionImageLayout(tex.image, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-    vkCmdManager->copyBufferToImage(stagingBuffer, tex.image, (uint32_t)texWidth, (uint32_t)texHeight);
-    vkCmdManager->transitionImageLayout(tex.image, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    void AssetManager::
+        publishEditorDetailThumbnail(
+            AssetGuid assetGuid,
+            uint32_t width,
+            uint32_t height,
+            std::span<const std::byte> rgba8) {
+        (void)publishEditorThumbnailInternal(
+            assetGuid, width, height,
+            rgba8, true);
+    }
 
-    vkDestroyBuffer(vkContext->getDevice(), stagingBuffer, nullptr);
-    vkFreeMemory(vkContext->getDevice(), stagingBufferMemory, nullptr);
+    std::optional<AssetGuid>
+        AssetManager::
+        publishEditorThumbnailInternal(
+            AssetGuid assetGuid,
+            uint32_t width,
+            uint32_t height,
+            std::span<const std::byte> rgba8,
+            bool detail) {
+        if (!renderBackend ||
+            assetGuid.isNil() ||
+            width == 0 || height == 0 ||
+            rgba8.size() !=
+                static_cast<size_t>(width) *
+                    height * 4) {
+            throw std::invalid_argument(
+                "Editor thumbnail publication requires a GUID and complete RGBA8 pixels.");
+        }
+        TextureDesc description{
+            .width = width,
+            .height = height,
+            .format = TextureFormat::RGBA8_sRGB,
+            .usageClass =
+                TextureUsageClass::Sampled2D,
+            .mipLevels = 1,
+            .sampler = {
+                .minFilter = FilterMode::Linear,
+                .magFilter = FilterMode::Linear,
+                .mipmapFilter =
+                    MipmapFilterMode::Nearest,
+                .addressU =
+                    SamplerAddressMode::ClampToEdge,
+                .addressV =
+                    SamplerAddressMode::ClampToEdge,
+                .addressW =
+                    SamplerAddressMode::ClampToEdge,
+                .maxLod = 0,
+            },
+        };
+        const TextureHandle texture =
+            renderBackend->allocateTexture(
+                description, rgba8);
 
-    // ImageView & Sampler setup...
-    VkImageViewCreateInfo viewInfo{ VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
-    viewInfo.image = tex.image;
-    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    viewInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
-    viewInfo.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
-    vkCreateImageView(vkContext->getDevice(), &viewInfo, nullptr, &tex.view);
+        std::optional<AssetGuid> evicted;
+        if (detail) {
+            if (editorDetailThumbnail_
+                    .texture.isValid()) {
+                renderBackend->freeTexture(
+                    editorDetailThumbnail_
+                        .texture);
+            }
+            editorDetailThumbnailGuid_ =
+                assetGuid;
+            editorDetailThumbnail_ = {
+                .texture = texture,
+                .lastUseSerial =
+                    ++editorThumbnailSerial_,
+            };
+            return evicted;
+        }
+        const auto existing =
+            editorThumbnails_.find(assetGuid);
+        if (existing !=
+            editorThumbnails_.end()) {
+            if (existing->second.texture.isValid()) {
+                renderBackend->freeTexture(
+                    existing->second.texture);
+            }
+            existing->second = {
+                .texture = texture,
+                .lastUseSerial =
+                    ++editorThumbnailSerial_,
+            };
+            return evicted;
+        }
+        if (editorThumbnails_.size() >=
+            EditorThumbnailCapacity) {
+            const auto oldest =
+                std::ranges::min_element(
+                    editorThumbnails_,
+                    [](const auto& lhs,
+                        const auto& rhs) {
+                        if (lhs.second
+                                .lastUseSerial !=
+                            rhs.second
+                                .lastUseSerial) {
+                            return lhs.second
+                                .lastUseSerial <
+                                rhs.second
+                                .lastUseSerial;
+                        }
+                        return lhs.first <
+                            rhs.first;
+                    });
+            evicted = oldest->first;
+            if (oldest->second.texture.isValid()) {
+                renderBackend->freeTexture(
+                    oldest->second.texture);
+            }
+            editorThumbnails_.erase(oldest);
+        }
+        editorThumbnails_.emplace(
+            assetGuid,
+            EditorThumbnailEntry{
+                .texture = texture,
+                .lastUseSerial =
+                    ++editorThumbnailSerial_,
+            });
+        return evicted;
+    }
 
-    VkSamplerCreateInfo samplerInfo{ VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO };
-    samplerInfo.magFilter = VK_FILTER_LINEAR;
-    samplerInfo.minFilter = VK_FILTER_LINEAR;
-    samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-    samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-    samplerInfo.anisotropyEnable = VK_FALSE;
-    VkPhysicalDeviceProperties props{};
-    vkGetPhysicalDeviceProperties(vkContext->getPhysicalDevice(), &props);
-    samplerInfo.maxAnisotropy = props.limits.maxSamplerAnisotropy;
-    vkCreateSampler(vkContext->getDevice(), &samplerInfo, nullptr, &tex.sampler);
+    void* AssetManager::getEditorThumbnail(
+        AssetGuid assetGuid) {
+        const auto found =
+            editorThumbnails_.find(assetGuid);
+        if (found ==
+            editorThumbnails_.end()) {
+            return nullptr;
+        }
+        found->second.lastUseSerial =
+            ++editorThumbnailSerial_;
+        return renderBackend != nullptr &&
+            found->second.texture.isValid()
+            ? renderBackend->getEditorTextureID(
+                found->second.texture)
+            : nullptr;
+    }
 
-    return tex;
-}
+    void* AssetManager::
+        getEditorDetailThumbnail(
+            AssetGuid assetGuid) {
+        if (editorDetailThumbnailGuid_ !=
+                std::optional(assetGuid) ||
+            !editorDetailThumbnail_
+                .texture.isValid()) {
+            return nullptr;
+        }
+        editorDetailThumbnail_
+            .lastUseSerial =
+                ++editorThumbnailSerial_;
+        return renderBackend != nullptr
+            ? renderBackend->getEditorTextureID(
+                editorDetailThumbnail_
+                    .texture)
+            : nullptr;
+    }
 
-Texture AssetManager::loadHDRI(const std::string& path) {
-    Texture tex{};
-    int texWidth, texHeight, texChannels;
-
-    // HDRIs often need to be flipped vertically
-    stbi_set_flip_vertically_on_load(true);
-    float* pixels = stbi_loadf(path.c_str(), &texWidth, &texHeight, &texChannels, 4);
-    stbi_set_flip_vertically_on_load(false); // Reset for other textures
-
-    if (!pixels) throw std::runtime_error("failed to load HDRI: " + path);
-
-    // CRITICAL: 4 channels * 4 bytes per float!
-    VkDeviceSize imageSize = texWidth * texHeight * 4 * sizeof(float);
-
-    VkBuffer stagingBuffer;
-    VkDeviceMemory stagingBufferMemory;
-    vkContext->createBuffer(imageSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-        stagingBuffer, stagingBufferMemory);
-
-    void* data;
-    vkMapMemory(vkContext->getDevice(), stagingBufferMemory, 0, imageSize, 0, &data);
-    memcpy(data, pixels, (size_t)imageSize);
-    vkUnmapMemory(vkContext->getDevice(), stagingBufferMemory);
-    stbi_image_free(pixels);
-
-    // Use 32-bit float format!
-    VkFormat hdrFormat = VK_FORMAT_R32G32B32A32_SFLOAT;
-
-    vkContext->createImage(texWidth, texHeight, hdrFormat,
-        VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, tex.image, tex.memory);
-
-    vkCmdManager->transitionImageLayout(tex.image, hdrFormat, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-    vkCmdManager->copyBufferToImage(stagingBuffer, tex.image, (uint32_t)texWidth, (uint32_t)texHeight);
-    vkCmdManager->transitionImageLayout(tex.image, hdrFormat, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-
-    vkDestroyBuffer(vkContext->getDevice(), stagingBuffer, nullptr);
-    vkFreeMemory(vkContext->getDevice(), stagingBufferMemory, nullptr);
-
-    VkImageViewCreateInfo viewInfo{ VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
-    viewInfo.image = tex.image;
-    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    viewInfo.format = hdrFormat;
-    viewInfo.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
-    vkCreateImageView(vkContext->getDevice(), &viewInfo, nullptr, &tex.view);
-
-    VkSamplerCreateInfo samplerInfo{ VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO };
-    samplerInfo.magFilter = VK_FILTER_LINEAR;
-    samplerInfo.minFilter = VK_FILTER_LINEAR;
-    samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-    samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE; // Don't loop the sky poles!
-    vkCreateSampler(vkContext->getDevice(), &samplerInfo, nullptr, &tex.sampler);
-
-    return tex;
-}
-
-Texture AssetManager::createDefaultNormalTexture() {
-    Texture tex{};
-    unsigned char pixels[] = { 128, 128, 255, 255 };
-
-    VkBuffer stagingBuffer;
-    VkDeviceMemory stagingBufferMemory;
-    vkContext->createBuffer(4, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-        stagingBuffer, stagingBufferMemory);
-
-    void* data;
-    vkMapMemory(vkContext->getDevice(), stagingBufferMemory, 0, 4, 0, &data);
-    memcpy(data, pixels, 4);
-    vkUnmapMemory(vkContext->getDevice(), stagingBufferMemory);
-
-    vkContext->createImage(1, 1, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_TILING_OPTIMAL,
-        VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, tex.image, tex.memory);
-
-    vkCmdManager->transitionImageLayout(tex.image, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-    vkCmdManager->copyBufferToImage(stagingBuffer, tex.image, 1, 1);
-    vkCmdManager->transitionImageLayout(tex.image, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-
-    vkDestroyBuffer(vkContext->getDevice(), stagingBuffer, nullptr);
-    vkFreeMemory(vkContext->getDevice(), stagingBufferMemory, nullptr);
-
-    // Create View & Sampler for 1x1...
-    VkImageViewCreateInfo viewInfo{ VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
-    viewInfo.image = tex.image;
-    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    viewInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
-    viewInfo.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
-    vkCreateImageView(vkContext->getDevice(), &viewInfo, nullptr, &tex.view);
-
-    VkSamplerCreateInfo samplerInfo{ VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO };
-    samplerInfo.magFilter = VK_FILTER_NEAREST;
-    samplerInfo.minFilter = VK_FILTER_NEAREST;
-    vkCreateSampler(vkContext->getDevice(), &samplerInfo, nullptr, &tex.sampler);
-
-    return tex;
-}
-
-// SCOPED to AssetManager
-void AssetManager::uploadToGPU(ModelAsset* asset, const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices) {
-    VkDeviceSize vSize = sizeof(Vertex) * vertices.size();
-    VkDeviceSize iSize = sizeof(uint32_t) * indices.size();
-
-    vkContext->createGPUBuffer(vSize, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, vertices.data(),
-        asset->vertexBuffer, asset->vertexBufferMemory, vkCmdManager);
-    vkContext->createGPUBuffer(iSize, VK_BUFFER_USAGE_INDEX_BUFFER_BIT, indices.data(),
-        asset->indexBuffer, asset->indexBufferMemory, vkCmdManager);
-}
+} // namespace Iridium

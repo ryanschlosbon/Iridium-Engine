@@ -1,0 +1,18 @@
+{
+  "Scene": "Removed meshPath shape",
+  "Entities": [
+    {
+      "EntityID": 1,
+      "Name": "Legacy meshPath",
+      "TransformComponent": {
+        "position": [0, 0, 0],
+        "rotation": [0, 0, 0],
+        "scale": [1, 1, 1]
+      },
+      "MeshComponent": {
+        "enabled": true,
+        "meshPath": "models/legacy.gltf"
+      }
+    }
+  ]
+}

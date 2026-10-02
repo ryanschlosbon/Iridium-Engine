@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "contract": "docs/performance/M7-performance-fidelity-contract.md",
+  "cases": [
+    { "id": "three_dense_all_visible", "purpose": "Main scaling and production visual reference", "availability": "runnable", "fixture_id": "m7_three_dense_all_visible_v1" },
+    { "id": "one_and_two_off_frustum", "purpose": "Frustum rejection and CPU submission scaling", "availability": "runnable", "fixture_id": "m7_three_dense_one_visible_v1" },
+    { "id": "large_occluder", "purpose": "Hi-Z rejection and temporal conservatism", "availability": "runnable_external_manifest", "fixture_id": "m7_occlusion_depth_stack_v1", "manifest": "assets/m7-occlusion-temporal-manifest.v1.json", "required_slice": "M7.6" },
+    { "id": "near_mid_far", "purpose": "LOD selection, hysteresis, and shadow/probe LOD", "availability": "runnable", "fixture_id": "m7_three_dense_near_mid_far_v1" },
+    { "id": "entirely_static_transforms", "purpose": "Zero unchanged-instance upload and cache reuse", "availability": "runnable", "fixture_id": "m7_three_dense_static_v1" },
+    { "id": "one_moving_asset", "purpose": "Sparse transform/history update and shadow invalidation", "availability": "runnable_with_known_limitation", "fixture_id": "m7_three_dense_moving_v1", "limitation": "The schema currently animates every grid instance; M7.2 must add a single-instance selector." },
+    { "id": "shadow_only_caster", "purpose": "Independent light-view visibility", "availability": "contract_frozen_fixture_pending", "required_slice": "M7.7" },
+    { "id": "probe_only_off_camera", "purpose": "Independent reflection-capture visibility", "availability": "contract_frozen_fixture_pending", "required_slice": "M7.7" },
+    { "id": "representative_m6_transparency", "purpose": "Prove classified transparency is unchanged", "availability": "runnable_external_manifest", "manifest": "assets/benchmarks/m6/ordinary2-runtime-manifest.v1.json" },
+    { "id": "many_instance_stress", "purpose": "GPU culling, compaction, and indirect scaling", "availability": "runnable", "fixture_id": "m7_many_instance_stress_v1" },
+    { "id": "many_material_stress", "purpose": "Pipeline/material bin behavior and resolve coherence", "availability": "contract_frozen_fixture_pending", "required_slice": "M7.4" },
+    { "id": "many_local_light_stress", "purpose": "Cluster assignment and shadow-owner scaling", "availability": "runnable_cli_fixture", "command_option": "--cluster-stress-lights" },
+    { "id": "directional_outdoor_shadow", "purpose": "CSM versus virtual directional clip levels", "availability": "contract_frozen_fixture_pending", "required_slice": "M7.8" },
+    { "id": "local_light_shadow_stress", "purpose": "Conventional atlas/cubes versus virtual residency", "availability": "contract_frozen_fixture_pending", "required_slice": "M7.8" },
+    { "id": "dynamic_invalidation_stress", "purpose": "Virtual-page cache behavior under movement", "availability": "contract_frozen_fixture_pending", "required_slice": "M7.8" },
+    { "id": "oversized_model_publication", "purpose": "Fine-grained cook, cancellation, and residency", "availability": "contract_frozen_fixture_pending", "required_slice": "M7.9" }
+  ]
+}

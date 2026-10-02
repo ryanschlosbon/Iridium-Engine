@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "milestone_slice": "M7.0",
+  "source": {
+    "commit": "5a9f705688829f61a5b12eda2eb36d14a15bbf15",
+    "branch": "Render-Refactor-for-Modularity",
+    "dirty_at_configure": true
+  },
+  "machine": {
+    "cpu": "Intel(R) Core(TM) i9-14900K",
+    "physical_memory_bytes": 68466892800,
+    "gpu": "NVIDIA GeForce RTX 4090",
+    "gpu_uuid": "3e45ec9c96fc398d79613146f37d826d",
+    "driver": "610.74",
+    "vulkan_device_api": "1.4.341"
+  },
+  "build": {
+    "configuration": "Release",
+    "compiler": "MSVC 19.51.36256.0",
+    "shader_compiler": "shaderc v2023.8 v2025.5",
+    "vulkan_sdk": "1.4.335",
+    "executable_path_at_run": "out/build/x64-release/bin/IridiumEngine.exe",
+    "executable_sha256_at_run": "60170225a75964f7581dea81d69f7c8ab59d8155863268c2fa373cd509197ce9",
+    "executable_binary_retained": false
+  },
+  "workload": {
+    "fixture_id": "m7_three_dense_all_visible_v1",
+    "fixture_revision": 1,
+    "manifest": "assets/m7-three-dense-assets-manifest.v1.json",
+    "manifest_sha256": "29ec40d1f2e4fdc5bda66554ecb933891f6477af5e672106d79a7bee2e0a193d",
+    "artifact": "out/editor/model-ddc/64/843c4e15e20e12e08eba81f0a2e8bdede01e8cf0a6d3781ab56b8d61c8445d.irartifact",
+    "artifact_cook_key": "64843c4e15e20e12e08eba81f0a2e8bdede01e8cf0a6d3781ab56b8d61c8445d",
+    "artifact_sha256": "498522d03e036be44b63faf0c10e43bc111ae74216057fdb1c82c53f1b122972",
+    "resolution": [3840, 2160],
+    "warmup_frames": 500,
+    "measured_frames": 10000,
+    "present_mode": "VK_PRESENT_MODE_MAILBOX_KHR",
+    "output_transport": "sdr_srgb",
+    "quality_settings": "m5_cluster_32x32x24_scene_linear_fixed_quality",
+    "cache_state": "warm-steady-state"
+  },
+  "profiles": [
+    { "run": 1, "path": "out/benchmarks/m7.0/native-4k/m7-three-dense-all-visible-r1.jsonl", "sha256": "436dd7793a9e991f76e29ea41bb34fb6010e21068405c67b78c975c45464d65a", "wall_average_ms": 4.701589, "cpu_median_ms": 1.8205, "gpu_median_ms": 1.214816 },
+    { "run": 2, "path": "out/benchmarks/m7.0/native-4k/m7-three-dense-all-visible-r2.jsonl", "sha256": "2ac1a767c71dd4feafba41c36a558efda6fe09e313a84837b552eb9e2a242304", "wall_average_ms": 4.725761, "cpu_median_ms": 1.7757, "gpu_median_ms": 1.214784 },
+    { "run": 3, "path": "out/benchmarks/m7.0/native-4k/m7-three-dense-all-visible-r3.jsonl", "sha256": "0014177c2774ec924a5665c4809889b80baba451754534795ae3dbd4aa18d667", "wall_average_ms": 4.641494, "cpu_median_ms": 1.7697, "gpu_median_ms": 1.213856 },
+    { "run": 4, "path": "out/benchmarks/m7.0/native-4k/m7-three-dense-all-visible-r4.jsonl", "sha256": "3a7fd99da2ee7b63a91280bed918785c82dbdc6518dfbe5720ab712980c64220", "wall_average_ms": 3.814887, "cpu_median_ms": 1.8307, "gpu_median_ms": 1.217152 },
+    { "run": 5, "path": "out/benchmarks/m7.0/native-4k/m7-three-dense-all-visible-r5.jsonl", "sha256": "136afcce0f97f955e9621756c8fa991f74b8377c4645d82283e47b7e6cd29b79", "wall_average_ms": 3.574145, "cpu_median_ms": 1.6251, "gpu_median_ms": 1.198592 }
+  ],
+  "aggregate": {
+    "wall_median_of_run_averages_ms": 4.641494,
+    "cpu_median_of_run_medians_ms": 1.7757,
+    "cpu_worst_p95_ms": 15.9136,
+    "cpu_worst_p99_ms": 16.3732,
+    "gpu_median_of_run_medians_ms": 1.214784,
+    "gpu_worst_p95_ms": 2.056224,
+    "gpu_worst_p99_ms": 2.334208,
+    "requested_live_mib": 2154.153271,
+    "requested_peak_mib": 2228.852886,
+    "steady_cpp_allocation_calls": 0,
+    "steady_cpp_allocation_bytes": 0
+  },
+  "validation_capture": {
+    "validation_enabled": true,
+    "validation_messages_observed": 0,
+    "path": "out/benchmarks/m7.0/validation/captures/m7_three_dense_all_visible_v1__r1__m7_three_dense_all_visible_camera_v1__final__1280x720__mf0.pfm",
+    "sha256": "2073f5d985ce3632a1e0fb438fa441e06617ce76623534705f170c5bf423a297"
+  }
+}

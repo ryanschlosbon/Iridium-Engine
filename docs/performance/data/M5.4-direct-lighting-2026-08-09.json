@@ -1,0 +1,94 @@
+{
+  "schema": "iridium.m5_4_direct_lighting.v1",
+  "date": "2026-08-09",
+  "hardware": {
+    "gpu": "NVIDIA GeForce RTX 4090",
+    "cpu": "Intel Core i9-14900K",
+    "resolution": [3840, 2160],
+    "configuration": "x64-release",
+    "validation_configuration": "x64-debug"
+  },
+  "measurement": {
+    "warmup_frames": 8,
+    "measured_frames": 16,
+    "cluster_grid": [32, 32, 24],
+    "raw_profiles": "out/benchmarks/m5.4/profiles"
+  },
+  "cases": [
+    {
+      "id": "standard-deferred-zero",
+      "lights": 0,
+      "gpu_frame_us": { "median": 380.288, "p95": 385.344 },
+      "gpu_cluster_us": { "median": 19.136, "p95": 20.160 },
+      "gpu_deferred_direct_ibl_us": { "median": 122.880, "p95": 126.976 },
+      "cpu_lighting_record_us": { "median": 27.9, "p95": 36.4 }
+    },
+    {
+      "id": "standard-deferred-64",
+      "lights": 64,
+      "gpu_frame_us": { "median": 417.024, "p95": 758.592 },
+      "gpu_cluster_us": { "median": 53.152, "p95": 54.624 },
+      "gpu_deferred_direct_ibl_us": { "median": 122.880, "p95": 125.952 },
+      "cpu_lighting_record_us": { "median": 36.2, "p95": 45.3 }
+    },
+    {
+      "id": "standard-deferred-512",
+      "lights": 512,
+      "gpu_frame_us": { "median": 558.880, "p95": 570.176 },
+      "gpu_cluster_us": { "median": 195.872, "p95": 210.336 },
+      "gpu_deferred_direct_ibl_us": { "median": 122.880, "p95": 124.928 },
+      "cpu_lighting_record_us": { "median": 57.4, "p95": 80.5 }
+    },
+    {
+      "id": "standard-forced-forward-zero",
+      "lights": 0,
+      "gpu_frame_us": { "median": 510.848, "p95": 531.584 },
+      "gpu_forward_direct_ibl_us": { "median": 56.320, "p95": 59.392 },
+      "cpu_forward_record_us": { "median": 12.0, "p95": 14.8 }
+    },
+    {
+      "id": "standard-forced-forward-64",
+      "lights": 64,
+      "gpu_frame_us": { "median": 548.896, "p95": 765.152 },
+      "gpu_forward_direct_ibl_us": { "median": 62.464, "p95": 64.512 },
+      "cpu_forward_record_us": { "median": 13.4, "p95": 16.7 }
+    },
+    {
+      "id": "standard-forced-forward-512",
+      "lights": 512,
+      "gpu_frame_us": { "median": 698.208, "p95": 1048.064 },
+      "gpu_forward_direct_ibl_us": { "median": 61.440, "p95": 64.512 },
+      "cpu_forward_record_us": { "median": 13.7, "p95": 15.6 }
+    },
+    {
+      "id": "complex-lab-64",
+      "lights": 64,
+      "gpu_frame_us": { "median": 524.832, "p95": 868.480 },
+      "gpu_forward_opaque_us": { "median": 2.048, "p95": 3.072 },
+      "gpu_forward_background_us": { "median": 5.120, "p95": 5.120 },
+      "gpu_forward_foreground_us": { "median": 5.120, "p95": 5.120 }
+    }
+  ],
+  "parity": {
+    "direct_final_sdr_4k": {
+      "maximum_rgba_code_delta": 1,
+      "changed_pixel_fraction": 0.00028935185185185184,
+      "mean_luma_ssim": 0.9999964843724359,
+      "report": "out/benchmarks/m5.4/direct-parity-4k.json"
+    },
+    "direct_scene_linear_4k": {
+      "maximum_absolute_delta": 0.1875,
+      "mean_absolute_delta": 0.0010701720602810383,
+      "relative_p99": 0.0016012809937819839,
+      "maximum_relative_delta_above_0_01": 0.002923976629972458,
+      "finite": true
+    }
+  },
+  "captures": {
+    "direct_sdr_deferred_sha256": "c318d9eac8a27ef424826d0977bdb8d6a86ad6128210902dc84e85071ddb781a",
+    "direct_sdr_forward_sha256": "9925c9676134b7807771882c4ac19912577927ccd84362c2caabd80b648338f1",
+    "direct_scene_deferred_sha256": "2bdcfb2c4163e7d5df89d1a5ab9e45fa72f0dc322fae4ee366c6bf09f33ecfc4",
+    "direct_scene_forward_sha256": "825a31b459cb2bfe0b2386ed8d7ea0c1feba89ac264be4e0021566153d81fe76",
+    "direct_scrgb_sha256": "995772c20bf0de1103be69fbc2177464b75723e814e5b02a2b4d67ea04e63f55"
+  }
+}

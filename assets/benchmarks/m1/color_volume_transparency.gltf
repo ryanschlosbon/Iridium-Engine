@@ -1,0 +1,233 @@
+{
+  "asset": {
+    "version": "2.0",
+    "generator": "Iridium Engine M1 scene-linear color-volume and transparent highlight fixture"
+  },
+  "extensionsUsed": ["KHR_materials_emissive_strength", "KHR_materials_transmission"],
+  "buffers": [
+    {
+      "uri": "data:application/octet-stream;base64,AABAvwAAQL8AAAAAAABAPwAAQL8AAAAAAAAAAAAAQD8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAD8AAIA/AAACAAEA",
+      "byteLength": 102
+    }
+  ],
+  "bufferViews": [
+    { "buffer": 0, "byteOffset": 0, "byteLength": 36, "target": 34962 },
+    { "buffer": 0, "byteOffset": 36, "byteLength": 36, "target": 34962 },
+    { "buffer": 0, "byteOffset": 72, "byteLength": 24, "target": 34962 },
+    { "buffer": 0, "byteOffset": 96, "byteLength": 6, "target": 34963 }
+  ],
+  "accessors": [
+    {
+      "bufferView": 0,
+      "componentType": 5126,
+      "count": 3,
+      "type": "VEC3",
+      "min": [-0.75, -0.75, 0.0],
+      "max": [0.75, 0.75, 0.0]
+    },
+    { "bufferView": 1, "componentType": 5126, "count": 3, "type": "VEC3" },
+    { "bufferView": 2, "componentType": 5126, "count": 3, "type": "VEC2" },
+    { "bufferView": 3, "componentType": 5123, "count": 3, "type": "SCALAR" }
+  ],
+  "materials": [
+    {
+      "name": "Near black neutral 0.01",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [0.0, 0.0, 0.0, 1.0],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.8
+      },
+      "emissiveFactor": [0.01, 0.01, 0.01],
+      "alphaMode": "OPAQUE",
+      "doubleSided": true,
+      "extensions": {
+        "KHR_materials_emissive_strength": { "emissiveStrength": 1.0 }
+      }
+    },
+    {
+      "name": "Neutral 0.18",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [0.0, 0.0, 0.0, 1.0],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.8
+      },
+      "emissiveFactor": [0.18, 0.18, 0.18],
+      "alphaMode": "OPAQUE",
+      "doubleSided": true
+    },
+    {
+      "name": "Neutral 1.0",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [0.0, 0.0, 0.0, 1.0],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.8
+      },
+      "emissiveFactor": [1.0, 1.0, 1.0],
+      "alphaMode": "OPAQUE",
+      "doubleSided": true
+    },
+    {
+      "name": "Neutral highlight 8.0",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [0.0, 0.0, 0.0, 1.0],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.8
+      },
+      "emissiveFactor": [1.0, 1.0, 1.0],
+      "alphaMode": "OPAQUE",
+      "doubleSided": true,
+      "extensions": {
+        "KHR_materials_emissive_strength": { "emissiveStrength": 8.0 }
+      }
+    },
+    {
+      "name": "Saturated source red",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [0.0, 0.0, 0.0, 1.0],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.8
+      },
+      "emissiveFactor": [1.0, 0.0, 0.0],
+      "alphaMode": "OPAQUE",
+      "doubleSided": true
+    },
+    {
+      "name": "Saturated source green",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [0.0, 0.0, 0.0, 1.0],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.8
+      },
+      "emissiveFactor": [0.0, 1.0, 0.0],
+      "alphaMode": "OPAQUE",
+      "doubleSided": true
+    },
+    {
+      "name": "Saturated source blue",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [0.0, 0.0, 0.0, 1.0],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.8
+      },
+      "emissiveFactor": [0.0, 0.0, 1.0],
+      "alphaMode": "OPAQUE",
+      "doubleSided": true
+    },
+    {
+      "name": "Saturated source white",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [0.0, 0.0, 0.0, 1.0],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.8
+      },
+      "emissiveFactor": [1.0, 1.0, 1.0],
+      "alphaMode": "OPAQUE",
+      "doubleSided": true
+    },
+    {
+      "name": "Out of gamut red highlight",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [0.0, 0.0, 0.0, 1.0],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.8
+      },
+      "emissiveFactor": [1.0, 0.02, 0.02],
+      "alphaMode": "OPAQUE",
+      "doubleSided": true,
+      "extensions": {
+        "KHR_materials_emissive_strength": { "emissiveStrength": 8.0 }
+      }
+    },
+    {
+      "name": "Out of gamut green highlight",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [0.0, 0.0, 0.0, 1.0],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.8
+      },
+      "emissiveFactor": [0.02, 1.0, 0.02],
+      "alphaMode": "OPAQUE",
+      "doubleSided": true,
+      "extensions": {
+        "KHR_materials_emissive_strength": { "emissiveStrength": 8.0 }
+      }
+    },
+    {
+      "name": "Out of gamut blue highlight",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [0.0, 0.0, 0.0, 1.0],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.8
+      },
+      "emissiveFactor": [0.02, 0.02, 1.0],
+      "alphaMode": "OPAQUE",
+      "doubleSided": true,
+      "extensions": {
+        "KHR_materials_emissive_strength": { "emissiveStrength": 8.0 }
+      }
+    },
+    {
+      "name": "Opaque warm highlight",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [0.0, 0.0, 0.0, 1.0],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.8
+      },
+      "emissiveFactor": [1.0, 0.35, 0.08],
+      "alphaMode": "OPAQUE",
+      "doubleSided": true,
+      "extensions": {
+        "KHR_materials_emissive_strength": { "emissiveStrength": 4.0 }
+      }
+    },
+    {
+      "name": "Transmissive emissive highlight",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [0.15, 0.55, 1.0, 0.35],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.08
+      },
+      "emissiveFactor": [0.15, 0.3, 1.0],
+      "alphaMode": "BLEND",
+      "doubleSided": true,
+      "extensions": {
+        "KHR_materials_emissive_strength": { "emissiveStrength": 2.0 },
+        "KHR_materials_transmission": { "transmissionFactor": 1.0 }
+      }
+    }
+  ],
+  "meshes": [
+    { "name": "near_black", "primitives": [{ "attributes": { "POSITION": 0, "NORMAL": 1, "TEXCOORD_0": 2 }, "indices": 3, "material": 0 }] },
+    { "name": "neutral_018", "primitives": [{ "attributes": { "POSITION": 0, "NORMAL": 1, "TEXCOORD_0": 2 }, "indices": 3, "material": 1 }] },
+    { "name": "neutral_1", "primitives": [{ "attributes": { "POSITION": 0, "NORMAL": 1, "TEXCOORD_0": 2 }, "indices": 3, "material": 2 }] },
+    { "name": "neutral_8", "primitives": [{ "attributes": { "POSITION": 0, "NORMAL": 1, "TEXCOORD_0": 2 }, "indices": 3, "material": 3 }] },
+    { "name": "source_red", "primitives": [{ "attributes": { "POSITION": 0, "NORMAL": 1, "TEXCOORD_0": 2 }, "indices": 3, "material": 4 }] },
+    { "name": "source_green", "primitives": [{ "attributes": { "POSITION": 0, "NORMAL": 1, "TEXCOORD_0": 2 }, "indices": 3, "material": 5 }] },
+    { "name": "source_blue", "primitives": [{ "attributes": { "POSITION": 0, "NORMAL": 1, "TEXCOORD_0": 2 }, "indices": 3, "material": 6 }] },
+    { "name": "source_white", "primitives": [{ "attributes": { "POSITION": 0, "NORMAL": 1, "TEXCOORD_0": 2 }, "indices": 3, "material": 7 }] },
+    { "name": "gamut_red", "primitives": [{ "attributes": { "POSITION": 0, "NORMAL": 1, "TEXCOORD_0": 2 }, "indices": 3, "material": 8 }] },
+    { "name": "gamut_green", "primitives": [{ "attributes": { "POSITION": 0, "NORMAL": 1, "TEXCOORD_0": 2 }, "indices": 3, "material": 9 }] },
+    { "name": "gamut_blue", "primitives": [{ "attributes": { "POSITION": 0, "NORMAL": 1, "TEXCOORD_0": 2 }, "indices": 3, "material": 10 }] },
+    { "name": "warm_highlight", "primitives": [{ "attributes": { "POSITION": 0, "NORMAL": 1, "TEXCOORD_0": 2 }, "indices": 3, "material": 11 }] },
+    { "name": "transparent_highlight", "primitives": [{ "attributes": { "POSITION": 0, "NORMAL": 1, "TEXCOORD_0": 2 }, "indices": 3, "material": 12 }] }
+  ],
+  "nodes": [
+    { "name": "near_black", "mesh": 0, "translation": [-2.2, 1.4, 0.0], "scale": [0.85, 0.85, 1.0] },
+    { "name": "neutral_018", "mesh": 1, "translation": [-0.75, 1.4, 0.0], "scale": [0.85, 0.85, 1.0] },
+    { "name": "neutral_1", "mesh": 2, "translation": [0.7, 1.4, 0.0], "scale": [0.85, 0.85, 1.0] },
+    { "name": "neutral_8", "mesh": 3, "translation": [2.15, 1.4, 0.0], "scale": [0.85, 0.85, 1.0] },
+    { "name": "source_red", "mesh": 4, "translation": [-2.2, 0.0, 0.0], "scale": [0.85, 0.85, 1.0] },
+    { "name": "source_green", "mesh": 5, "translation": [-0.75, 0.0, 0.0], "scale": [0.85, 0.85, 1.0] },
+    { "name": "source_blue", "mesh": 6, "translation": [0.7, 0.0, 0.0], "scale": [0.85, 0.85, 1.0] },
+    { "name": "source_white", "mesh": 7, "translation": [2.15, 0.0, 0.0], "scale": [0.85, 0.85, 1.0] },
+    { "name": "gamut_red", "mesh": 8, "translation": [-2.2, -1.4, -0.2], "scale": [0.85, 0.85, 1.0] },
+    { "name": "gamut_green", "mesh": 9, "translation": [-0.75, -1.4, -0.2], "scale": [0.85, 0.85, 1.0] },
+    { "name": "gamut_blue", "mesh": 10, "translation": [0.7, -1.4, -0.2], "scale": [0.85, 0.85, 1.0] },
+    { "name": "warm_highlight", "mesh": 11, "translation": [2.15, -1.4, -0.2], "scale": [0.85, 0.85, 1.0] },
+    { "name": "transparent_highlight", "mesh": 12, "translation": [2.15, -1.4, 0.2], "scale": [0.65, 0.65, 1.0] }
+  ],
+  "scenes": [
+    { "name": "color_volume_transparency_v1", "nodes": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12] }
+  ],
+  "scene": 0
+}

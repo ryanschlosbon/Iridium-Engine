@@ -136,6 +136,8 @@ struct ImGui_ImplVulkan_InitInfo
     // - Shader inputs/outputs need to match ours. Code/data pointed to by the structure needs to survive for whole during of backend usage.
     VkShaderModuleCreateInfo        CustomShaderVertCreateInfo;
     VkShaderModuleCreateInfo        CustomShaderFragCreateInfo;
+    float                           DisplayColorScale;          // Fragment output scale for linear HDR transports. Defaults to 1.0.
+    uint32_t                        OutputColorSpace;           // 0 = linear sRGB/Rec.709, 1 = linear Rec.2020.
 };
 
 // Follow "Getting Started" link and check examples/ folder to learn about using backends!
@@ -144,6 +146,7 @@ IMGUI_IMPL_API void             ImGui_ImplVulkan_Shutdown();
 IMGUI_IMPL_API void             ImGui_ImplVulkan_NewFrame();
 IMGUI_IMPL_API void             ImGui_ImplVulkan_RenderDrawData(ImDrawData* draw_data, VkCommandBuffer command_buffer, VkPipeline pipeline = VK_NULL_HANDLE);
 IMGUI_IMPL_API void             ImGui_ImplVulkan_SetMinImageCount(uint32_t min_image_count); // To override MinImageCount after initialization (e.g. if swap chain is recreated)
+IMGUI_IMPL_API void             ImGui_ImplVulkan_SetDisplayColorConfiguration(float display_color_scale, uint32_t output_color_space);
 
 // (Advanced) Use e.g. if you need to recreate pipeline without reinitializing the backend (see #8110, #8111)
 // The main window pipeline will be created by ImGui_ImplVulkan_Init() if possible (== RenderPass xor (UseDynamicRendering && PipelineRenderingCreateInfo->sType == VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO_KHR))

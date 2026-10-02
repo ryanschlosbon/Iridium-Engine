@@ -21,9 +21,25 @@ cmake-build-release/
 # Ignore compiled Vulkan shaders
 assets/shaders/*.spv
 
-# Ignore Assets
-assets/models/
-assets/hdri
+# Third-party content (models, textures, HDRIs, scenes) is local-test only and must
+# never be pushed: licenses (e.g. CC-BY-NC-SA) may forbid redistribution. Assets are
+# allowlisted: only engine-authored fixtures, color LUTs, shaders, and manifests are
+# tracked. Anything else dropped under assets/ stays local automatically.
+/assets/*
+!/assets/benchmarks/
+!/assets/color/
+!/assets/shaders/
+!/assets/*.json
+!/assets/scenes/
+/assets/scenes/*
+!/assets/scenes/test_scene.json
+
+# Common third-party content formats anywhere outside the allowlist above
+*.hdr
+*.exr
+*.fbx
+*.blend
+*.blend1
 
 # System
 .DS_Store

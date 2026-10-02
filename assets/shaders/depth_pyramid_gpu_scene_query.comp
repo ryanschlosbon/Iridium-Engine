@@ -1,0 +1,74 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform UniformBufferObject {
+    mat4 model; mat4 view; mat4 proj; mat4 inverseView;
+    mat4 inverseProjection; vec4 cameraPosition; vec4 depthRange;
+    uvec4 renderInfo; vec4 worldUnits;
+} ubo;
+
+struct Transform { vec4 row0; vec4 row1; vec4 row2; };
+struct Instance {
+    vec4 worldBoundsSphere; vec4 worldBoundsMin; vec4 worldBoundsMax;
+    uvec4 references; uvec4 state;
+};
+struct Primitive { uvec4 binding; uvec4 state; uvec4 revisions; };
+struct Geometry {
+    vec4 localBoundsSphere; vec4 localBoundsMin; vec4 localBoundsMax;
+    uvec4 draw; uvec4 storage; uvec4 state;
+};
+struct Candidate {
+    uint primitiveIndex; uint binIndex; uint commandBase; uint commandCapacity;
+    uint maximumLod; uint historySlot; uint historyTokenLow; uint historyTokenHigh;
+};
+struct GpuSceneDepthResult {
+    uvec4 metadata; // ABI, selected mip, sampled texels, tested.
+    float farthestOccluderDepth;
+    uint occluded;
+    uvec2 reserved; // Projection rejection, primitive index.
+};
+
+layout(std430, set = 1, binding = 0) readonly buffer Transforms {
+    Transform values[];
+} transforms;
+layout(std430, set = 1, binding = 1) readonly buffer Instances {
+    Instance values[];
+} instances;
+layout(std430, set = 1, binding = 2) readonly buffer Primitives {
+    Primitive values[];
+} primitives;
+layout(std430, set = 1, binding = 3) readonly buffer Geometries {
+    Geometry values[];
+} geometries;
+layout(std430, set = 2, binding = 0) readonly buffer Candidates {
+    Candidate values[];
+} candidates;
+layout(std430, set = 2, binding = 1) writeonly buffer Results {
+    GpuSceneDepthResult values[];
+} results;
+layout(set = 2, binding = 2) uniform sampler2D depthPyramid;
+
+layout(push_constant) uniform Parameters {
+    uint candidateCount;
+    uint transformCount;
+    uint instanceCount;
+    uint primitiveCount;
+    uint geometryCount;
+    uint reverseDepth;
+    uint abiVersion;
+    uint reserved;
+} parameters;
+
+#include "include/depth_pyramid_gpu_scene_query.glsl"
+
+void main() {
+    uint index = gl_GlobalInvocationID.x;
+    if (index >= parameters.candidateCount) return;
+    uint primitiveIndex = candidates.values[index].primitiveIndex;
+    results.values[index] = iridiumQueryGpuSceneDepth(primitiveIndex,
+        depthPyramid, uvec4(parameters.transformCount, parameters.instanceCount,
+            parameters.primitiveCount, parameters.geometryCount),
+        parameters.reverseDepth, parameters.abiVersion);
+}

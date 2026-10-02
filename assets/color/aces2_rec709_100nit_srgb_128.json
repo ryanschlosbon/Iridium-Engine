@@ -1,0 +1,156 @@
+{
+  "schema": "iridium.aces_output_lut",
+  "schema_version": 1,
+  "asset": {
+    "path": "assets/color/aces2_rec709_100nit_srgb_128.irlt",
+    "sha256": "79f5c05609e853f843772d8f85902c074d05cef751fa092cfa6a416605c46558",
+    "size": 128,
+    "layout": "2d_tiled_z_slices_rgba32f_srgb_values",
+    "interpolation": "tetrahedral",
+    "width": 16384,
+    "height": 128
+  },
+  "shaper": {
+    "type": "log2_offset",
+    "minimum_log2": -10.0,
+    "maximum_log2": 16.0
+  },
+  "source": {
+    "aces_package": "v2.0.0+2025.04.04",
+    "aces_core_commit": "2d7af39344725aaa8ac3bf1746693c9a1d6c4792",
+    "aces_output_commit": "aab74723f76728c37345ed01e51ebb24fb1f2f1f",
+    "opencolorio": "2.4.2",
+    "input_builtin": "ACEScg_to_ACES2065-1",
+    "output_builtin": "ACES-OUTPUT - ACES2065-1_to_CIE-XYZ-D65 - SDR-100nit-REC709_2.0",
+    "display_builtin": "DISPLAY - CIE-XYZ-D65_to_sRGB",
+    "transform_id": "urn:ampas:aces:transformId:v2.0:Output.Academy.Rec709-D65_100nit_in_Rec709-D65_sRGB-Piecewise.a2.v1"
+  },
+  "validation": {
+    "seed": "0x1A2CE520",
+    "random_rgb_samples": 20000,
+    "encoded_absolute_error_max": 0.08119691858993469,
+    "encoded_absolute_error_p99": 0.001150242080532271,
+    "encoded_absolute_error_mean": 0.00010024207954942225,
+    "vectors": [
+      {
+        "acescg": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "reference_srgb": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "lut_srgb": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "acescg": [
+          0.18,
+          0.18,
+          0.18
+        ],
+        "reference_srgb": [
+          0.3491874039173126,
+          0.3491881191730499,
+          0.34918779134750366
+        ],
+        "lut_srgb": [
+          0.34925073778331134,
+          0.349250737759287,
+          0.3492507437293612
+        ]
+      },
+      {
+        "acescg": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "reference_srgb": [
+          0.7066829800605774,
+          0.7066836357116699,
+          0.706683337688446
+        ],
+        "lut_srgb": [
+          0.7066110272541472,
+          0.7066111761734319,
+          0.7066111236136844
+        ]
+      },
+      {
+        "acescg": [
+          4.0,
+          4.0,
+          4.0
+        ],
+        "reference_srgb": [
+          0.8998692631721497,
+          0.8998690843582153,
+          0.8998692631721497
+        ],
+        "lut_srgb": [
+          0.899713320172115,
+          0.8997131730428611,
+          0.8997132186875237
+        ]
+      },
+      {
+        "acescg": [
+          1.0,
+          0.0,
+          0.0
+        ],
+        "reference_srgb": [
+          0.8771548867225647,
+          0.0,
+          0.04025142639875412
+        ],
+        "lut_srgb": [
+          0.877169552432852,
+          0.0,
+          0.040218936994076616
+        ]
+      },
+      {
+        "acescg": [
+          0.0,
+          1.0,
+          0.0
+        ],
+        "reference_srgb": [
+          0.0,
+          0.7144404053688049,
+          0.2748624384403229
+        ],
+        "lut_srgb": [
+          0.0,
+          0.7143686871374215,
+          0.2748254187217084
+        ]
+      },
+      {
+        "acescg": [
+          0.0,
+          0.0,
+          1.0
+        ],
+        "reference_srgb": [
+          0.0,
+          0.21054446697235107,
+          0.6467321515083313
+        ],
+        "lut_srgb": [
+          0.0,
+          0.21055777786629376,
+          0.6467893084701007
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,246 @@
+#version 450
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+struct SpotShadowEntry {
+    mat4 worldToShadowClip;
+    vec4 atlasScaleBias;
+    uvec4 metadata;
+    vec4 biasParameters;
+    vec4 projectionParameters;
+    uvec4 filterMetadata;
+};
+layout(std140, set = 0, binding = 0) uniform SpotShadowData {
+    SpotShadowEntry entries[256];
+    uvec4 metadata;
+} shadowData;
+
+struct Transform { vec4 row0; vec4 row1; vec4 row2; };
+struct Instance {
+    vec4 worldBoundsSphere; vec4 worldBoundsMin; vec4 worldBoundsMax;
+    uvec4 references; uvec4 state;
+};
+struct Primitive { uvec4 binding; uvec4 state; uvec4 revisions; };
+struct Geometry {
+    vec4 localBoundsSphere; vec4 localBoundsMin; vec4 localBoundsMax;
+    uvec4 draw; uvec4 storage; uvec4 state;
+};
+struct Candidate {
+    uint primitiveIndex; uint binIndex; uint commandBase; uint commandCapacity;
+    uint maximumLod; uint historySlot; uint historyTokenLow; uint historyTokenHigh;
+};
+struct IndexedCommand {
+    uint indexCount; uint instanceCount; uint firstIndex;
+    int vertexOffset; uint firstInstance;
+};
+
+layout(std430, set = 1, binding = 0) readonly buffer Transforms {
+    Transform values[];
+} transforms;
+layout(std430, set = 1, binding = 1) readonly buffer Instances {
+    Instance values[];
+} instances;
+layout(std430, set = 1, binding = 2) readonly buffer Primitives {
+    Primitive values[];
+} primitives;
+layout(std430, set = 1, binding = 3) readonly buffer Geometries {
+    Geometry values[];
+} geometries;
+layout(std430, set = 2, binding = 0) readonly buffer Candidates {
+    Candidate values[];
+} candidates;
+layout(std430, set = 2, binding = 1) writeonly buffer Commands {
+    IndexedCommand values[];
+} commands;
+layout(std430, set = 2, binding = 2) buffer Counts {
+    uint values[];
+} counts;
+
+layout(push_constant) uniform Parameters {
+    uint candidateCount;
+    uint transformCount;
+    uint instanceCount;
+    uint primitiveCount;
+    uint geometryCount;
+    uint shadowDataSlot;
+    uint countBase;
+    uint commandBase;
+    float lodErrorTexels;
+} parameters;
+
+bool finiteValue(float value) { return !isnan(value) && !isinf(value); }
+bool finite3(vec3 value) {
+    return finiteValue(value.x) && finiteValue(value.y) && finiteValue(value.z);
+}
+bool finite4(vec4 value) {
+    return finiteValue(value.x) && finiteValue(value.y) &&
+        finiteValue(value.z) && finiteValue(value.w);
+}
+
+struct PixelErrorProjection {
+    vec2 viewport;
+    vec2 maximumAbsClip;
+    vec2 xyLength;
+    float minimumW;
+    float minimumZ;
+    float minimumWMinusZ;
+    float wLength;
+    float zLength;
+    float wMinusZLength;
+    uint valid;
+};
+
+PixelErrorProjection projectPixelError(Geometry base, mat4 clipFromLocal) {
+    PixelErrorProjection projection;
+    projection.valid = 0u;
+    projection.viewport = vec2(float(
+        shadowData.entries[parameters.shadowDataSlot].metadata.z));
+    vec3 minimum = base.localBoundsMin.xyz;
+    vec3 maximum = base.localBoundsMax.xyz;
+    if (any(lessThanEqual(projection.viewport, vec2(0))) ||
+        !finite3(minimum) || !finite3(maximum) ||
+        any(greaterThan(minimum, maximum))) return projection;
+    float invalid = uintBitsToFloat(0x7f800000u);
+    float minimumW = invalid;
+    float minimumZ = invalid;
+    float minimumWMinusZ = invalid;
+    vec2 maximumAbsClip = vec2(0);
+    for (uint corner = 0u; corner < 8u; ++corner) {
+        vec4 clip = clipFromLocal * vec4(
+            (corner & 1u) != 0u ? maximum.x : minimum.x,
+            (corner & 2u) != 0u ? maximum.y : minimum.y,
+            (corner & 4u) != 0u ? maximum.z : minimum.z, 1.0);
+        if (!finite4(clip)) return projection;
+        minimumW = min(minimumW, clip.w);
+        minimumZ = min(minimumZ, clip.z);
+        minimumWMinusZ = min(minimumWMinusZ, clip.w - clip.z);
+        maximumAbsClip = max(maximumAbsClip, abs(clip.xy));
+    }
+    projection.minimumW = minimumW;
+    projection.minimumZ = minimumZ;
+    projection.minimumWMinusZ = minimumWMinusZ;
+    projection.maximumAbsClip = maximumAbsClip;
+    projection.wLength = length(vec3(
+        clipFromLocal[0].w, clipFromLocal[1].w, clipFromLocal[2].w));
+    projection.zLength = length(vec3(
+        clipFromLocal[0].z, clipFromLocal[1].z, clipFromLocal[2].z));
+    projection.wMinusZLength = length(vec3(
+        clipFromLocal[0].w - clipFromLocal[0].z,
+        clipFromLocal[1].w - clipFromLocal[1].z,
+        clipFromLocal[2].w - clipFromLocal[2].z));
+    projection.xyLength = vec2(
+        length(vec3(clipFromLocal[0].x, clipFromLocal[1].x,
+            clipFromLocal[2].x)),
+        length(vec3(clipFromLocal[0].y, clipFromLocal[1].y,
+            clipFromLocal[2].y)));
+    projection.valid = finiteValue(minimumW) && minimumW > 0.0 ? 1u : 0u;
+    return projection;
+}
+
+float pixelError(PixelErrorProjection projection, float error) {
+    float invalid = uintBitsToFloat(0x7f800000u);
+    if (projection.valid == 0u || !finiteValue(error) || error < 0.0)
+        return invalid;
+    float denominator = projection.minimumW - error * projection.wLength;
+    if (!finiteValue(denominator) || denominator <= 0.0) return invalid;
+    float zMargin = projection.minimumZ - error * projection.zLength;
+    float wMinusZMargin = projection.minimumWMinusZ -
+        error * projection.wMinusZLength;
+    if (!finiteValue(zMargin) || zMargin <= 0.0 ||
+        !finiteValue(wMinusZMargin) || wMinusZMargin <= 0.0) return invalid;
+    float bound = length(error * (projection.xyLength +
+        projection.maximumAbsClip / projection.minimumW * projection.wLength) /
+        denominator * projection.viewport * 0.5) * 1.0001;
+    return finiteValue(bound) ? bound : invalid;
+}
+
+uint selectedGeometry(uint baseIndex, Transform transform, uint maximumLod) {
+    if (maximumLod == 0u || !finiteValue(parameters.lodErrorTexels) ||
+        parameters.lodErrorTexels <= 0.0) return baseIndex;
+    Geometry base = geometries.values[baseIndex];
+    if (base.localBoundsMin.w != 0.0 || base.localBoundsMax.w != 0.0)
+        return baseIndex;
+    mat4 world = mat4(
+        vec4(transform.row0.x, transform.row1.x, transform.row2.x, 0),
+        vec4(transform.row0.y, transform.row1.y, transform.row2.y, 0),
+        vec4(transform.row0.z, transform.row1.z, transform.row2.z, 0),
+        vec4(transform.row0.w, transform.row1.w, transform.row2.w, 1));
+    mat4 clipFromLocal =
+        shadowData.entries[parameters.shadowDataSlot].worldToShadowClip * world;
+    PixelErrorProjection errorProjection =
+        projectPixelError(base, clipFromLocal);
+    uint selected = baseIndex;
+    uint current = baseIndex;
+    float previousError = 0.0;
+    uint previousCount = base.draw.y;
+    for (uint lod = 1u; lod <= min(maximumLod, 15u); ++lod) {
+        uint next = geometries.values[current].state.z;
+        if (next == 0xffffffffu) break;
+        if (next >= parameters.geometryCount) return baseIndex;
+        Geometry child = geometries.values[next];
+        float error = child.localBoundsMin.w;
+        if (!finiteValue(error) || error < previousError ||
+            child.localBoundsMax.w != float(lod) ||
+            child.draw.w != base.draw.w || child.storage.z != base.storage.z ||
+            child.draw.y == 0u || child.draw.y % 3u != 0u ||
+            child.draw.y >= previousCount) return baseIndex;
+        if (pixelError(errorProjection, error) <= parameters.lodErrorTexels)
+            selected = next;
+        previousError = error;
+        previousCount = child.draw.y;
+        current = next;
+    }
+    return selected;
+}
+
+bool visible(Instance instance) {
+    vec3 center = instance.worldBoundsSphere.xyz;
+    float radius = instance.worldBoundsSphere.w;
+    if (!finite3(center) || !finiteValue(radius) || radius < 0.0)
+        return true;
+    mat4 worldToClip =
+        shadowData.entries[parameters.shadowDataSlot].worldToShadowClip;
+    vec4 row0 = vec4(worldToClip[0][0], worldToClip[1][0],
+        worldToClip[2][0], worldToClip[3][0]);
+    vec4 row1 = vec4(worldToClip[0][1], worldToClip[1][1],
+        worldToClip[2][1], worldToClip[3][1]);
+    vec4 row2 = vec4(worldToClip[0][2], worldToClip[1][2],
+        worldToClip[2][2], worldToClip[3][2]);
+    vec4 row3 = vec4(worldToClip[0][3], worldToClip[1][3],
+        worldToClip[2][3], worldToClip[3][3]);
+    vec4 planes[6] = vec4[6](row3 + row0, row3 - row0,
+        row3 + row1, row3 - row1, row2, row3 - row2);
+    vec4 homogeneousCenter = vec4(center, 1.0);
+    for (uint index = 0u; index < 6u; ++index) {
+        float normalLength = length(planes[index].xyz);
+        if (!finiteValue(normalLength) || normalLength <= 1.0e-8)
+            return true;
+        if (dot(planes[index], homogeneousCenter) <
+            -radius * normalLength) return false;
+    }
+    return true;
+}
+
+void main() {
+    uint candidateIndex = gl_GlobalInvocationID.x;
+    if (candidateIndex >= parameters.candidateCount) return;
+    Candidate candidate = candidates.values[candidateIndex];
+    if (candidate.primitiveIndex >= parameters.primitiveCount) return;
+    Primitive primitive = primitives.values[candidate.primitiveIndex];
+    if (primitive.binding.x >= parameters.instanceCount ||
+        primitive.binding.y >= parameters.geometryCount) return;
+    Instance instance = instances.values[primitive.binding.x];
+    if (instance.references.x >= parameters.transformCount ||
+        (instance.state.z & 1u) == 0u ||
+        (instance.state.w & 4u) == 0u ||
+        (primitive.state.w & 4u) == 0u || !visible(instance)) return;
+    uint commandIndex = atomicAdd(
+        counts.values[parameters.countBase + candidate.binIndex], 1u);
+    if (commandIndex >= candidate.commandCapacity) return;
+    uint geometryIndex = selectedGeometry(primitive.binding.y,
+        transforms.values[instance.references.x], candidate.maximumLod);
+    Geometry geometry = geometries.values[geometryIndex];
+    commands.values[parameters.commandBase + candidate.commandBase +
+        commandIndex] = IndexedCommand(geometry.draw.y, 1u,
+            geometry.draw.x, int(geometry.draw.z), candidate.primitiveIndex);
+}

@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "status": "implementation-checkpoint",
+  "date": "2026-08-11",
+  "resolution": [3840, 2160],
+  "warmup_frames": 100,
+  "measured_frames": 300,
+  "independent_processes": 1,
+  "directional_owner_capacity": 2,
+  "cascade_count_per_owner": 4,
+  "default_resolution": 2048,
+  "default_shadow_bytes": 134217728,
+  "validated_1024_shadow_bytes": 33554432,
+  "moving_update": {
+    "gpu_shadow_ns": { "median": 29440, "p95": 30560, "p99": 30880 },
+    "cpu_record_ns": { "median": 22900, "p95": 26900, "p99": 34600 },
+    "shadow_draws": 24,
+    "alpha_mask_draws": 8
+  },
+  "static_one_owner": {
+    "gpu_deferred_ns": { "median": 287744, "p95": 308224, "p99": 660480 },
+    "gpu_frame_ns": { "median": 636704, "p95": 694048, "p99": 1040896 }
+  },
+  "static_two_owner": {
+    "gpu_deferred_ns": { "median": 438272, "p95": 896000, "p99": 906240 },
+    "gpu_frame_ns": { "median": 795392, "p95": 1254176, "p99": 1270016 }
+  },
+  "capture_sha256": "497716bee3c54eac1be81a434998170c6eaad9b19f5332cfeebb07b2e324b96d",
+  "debug_tests": "67/67",
+  "release_tests": "67/67",
+  "bloom_implemented": false
+}

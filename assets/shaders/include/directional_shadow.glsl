@@ -1,0 +1,253 @@
+#ifndef IRIDIUM_DIRECTIONAL_SHADOW_GLSL
+#define IRIDIUM_DIRECTIONAL_SHADOW_GLSL
+
+#include "include/shadow_filter.glsl"
+
+#ifndef IRIDIUM_LIGHTING_SET
+#error IRIDIUM_LIGHTING_SET must name the shared scene descriptor set
+#endif
+
+layout(set = IRIDIUM_LIGHTING_SET, binding = 20)
+    uniform sampler2DArray iridiumDirectionalShadowMap;
+layout(std140, set = IRIDIUM_LIGHTING_SET, binding = 21) uniform
+    IridiumDirectionalShadowData {
+    mat4 iridiumWorldToShadowClip[8];
+    vec4 iridiumShadowSplitFar[2];
+    uvec4 iridiumShadowMetadata[2];
+    vec4 iridiumShadowTexelWorldSize[2];
+    vec4 iridiumShadowDepthSpanMeters[2];
+    vec4 iridiumShadowFilterParameters[2];
+    uvec4 iridiumShadowFilterMetadata[2];
+    vec4 iridiumShadowBiasParameters;
+};
+
+struct IridiumDirectionalShadowReceiver {
+    vec3 worldPosition;
+    vec3 shadingNormal;
+    vec3 geometricNormal;
+    vec3 worldPositionDx;
+    vec3 worldPositionDy;
+};
+
+vec2 iridiumDirectionalShadowDepthGradient(vec2 uvDx, vec2 uvDy,
+    float depthDx, float depthDy) {
+    float determinant = uvDx.x * uvDy.y - uvDx.y * uvDy.x;
+    if (abs(determinant) < 1.0e-12 || isnan(determinant) || isinf(determinant))
+        return vec2(0.0);
+    vec2 gradient = vec2(
+        (depthDx * uvDy.y - depthDy * uvDx.y) / determinant,
+        (depthDy * uvDx.x - depthDx * uvDy.x) / determinant);
+    return any(isnan(gradient)) || any(isinf(gradient))
+        ? vec2(0.0) : gradient;
+}
+
+float iridiumDirectionalShadowReceiverReference(float referenceDepth,
+    vec2 depthGradient, vec2 uvOffset, float maximumCorrection) {
+    return referenceDepth + clamp(dot(depthGradient, uvOffset),
+        -maximumCorrection, maximumCorrection);
+}
+
+float iridiumDirectionalShadowBilinearCompare(uint layer, vec2 uv,
+    vec2 receiverUv, float referenceDepth, vec2 depthGradient,
+    float maximumPlaneCorrection) {
+    ivec2 size = textureSize(iridiumDirectionalShadowMap, 0).xy;
+    vec2 pixel = uv * vec2(size) - vec2(0.5);
+    ivec2 base = ivec2(floor(pixel));
+    vec2 blend = fract(pixel);
+    ivec2 maximumPixel = size - ivec2(1);
+    ivec2 p00 = clamp(base, ivec2(0), maximumPixel);
+    ivec2 p10 = clamp(base + ivec2(1, 0), ivec2(0), maximumPixel);
+    ivec2 p01 = clamp(base + ivec2(0, 1), ivec2(0), maximumPixel);
+    ivec2 p11 = clamp(base + ivec2(1, 1), ivec2(0), maximumPixel);
+    vec2 inverseSize = 1.0 / vec2(size);
+    vec2 uv00 = (vec2(p00) + vec2(0.5)) * inverseSize;
+    vec2 uv10 = (vec2(p10) + vec2(0.5)) * inverseSize;
+    vec2 uv01 = (vec2(p01) + vec2(0.5)) * inverseSize;
+    vec2 uv11 = (vec2(p11) + vec2(0.5)) * inverseSize;
+    float v00 = iridiumShadowCompare(iridiumDirectionalShadowReceiverReference(
+        referenceDepth, depthGradient, uv00 - receiverUv,
+        maximumPlaneCorrection), texelFetch(
+        iridiumDirectionalShadowMap, ivec3(p00, int(layer)), 0).r);
+    float v10 = iridiumShadowCompare(iridiumDirectionalShadowReceiverReference(
+        referenceDepth, depthGradient, uv10 - receiverUv,
+        maximumPlaneCorrection), texelFetch(
+        iridiumDirectionalShadowMap, ivec3(p10, int(layer)), 0).r);
+    float v01 = iridiumShadowCompare(iridiumDirectionalShadowReceiverReference(
+        referenceDepth, depthGradient, uv01 - receiverUv,
+        maximumPlaneCorrection), texelFetch(
+        iridiumDirectionalShadowMap, ivec3(p01, int(layer)), 0).r);
+    float v11 = iridiumShadowCompare(iridiumDirectionalShadowReceiverReference(
+        referenceDepth, depthGradient, uv11 - receiverUv,
+        maximumPlaneCorrection), texelFetch(
+        iridiumDirectionalShadowMap, ivec3(p11, int(layer)), 0).r);
+    return mix(mix(v00, v10, blend.x), mix(v01, v11, blend.x), blend.y);
+}
+
+float iridiumDirectionalShadowHardFilter(uint layer, vec2 uv,
+    vec2 texel, float referenceDepth, vec2 depthGradient,
+    float maximumPlaneCorrection) {
+    const float tentWeights[3] = float[3](1.0, 2.0, 1.0);
+    float visibility = 0.0;
+    for (int y = -1; y <= 1; ++y)
+        for (int x = -1; x <= 1; ++x)
+            visibility += tentWeights[x + 1] * tentWeights[y + 1] *
+                iridiumDirectionalShadowBilinearCompare(layer,
+                    uv + vec2(x, y) * texel, uv, referenceDepth,
+                    depthGradient, maximumPlaneCorrection);
+    return visibility / 16.0;
+}
+
+uint iridiumDirectionalShadowOwner(uint lightSlot) {
+    for (uint shadowIndex = 0u; shadowIndex < 2u; ++shadowIndex)
+        if (iridiumShadowMetadata[shadowIndex].w != 0u &&
+            iridiumShadowMetadata[shadowIndex].x == lightSlot)
+            return shadowIndex;
+    return 2u;
+}
+
+uint iridiumDirectionalShadowCascade(uint shadowIndex, float viewDepth) {
+    if (viewDepth <= iridiumShadowSplitFar[shadowIndex].x) return 0u;
+    if (viewDepth <= iridiumShadowSplitFar[shadowIndex].y) return 1u;
+    if (viewDepth <= iridiumShadowSplitFar[shadowIndex].z) return 2u;
+    return 3u;
+}
+
+vec3 iridiumDirectionalShadowCascadeDebug(float viewDepth) {
+    uint shadowIndex = iridiumShadowMetadata[0].w != 0u ? 0u : 1u;
+    if (viewDepth > iridiumShadowSplitFar[shadowIndex].w)
+        return vec3(0.0);
+    uint cascade = iridiumDirectionalShadowCascade(shadowIndex, viewDepth);
+    if (iridiumShadowMetadata[shadowIndex].w == 0u ||
+        (iridiumShadowMetadata[shadowIndex].y & (1u << cascade)) == 0u)
+        return vec3(0.0);
+    const vec3 colors[4] = vec3[4](vec3(1.0, 0.08, 0.04),
+        vec3(0.04, 1.0, 0.08), vec3(0.05, 0.2, 1.0),
+        vec3(1.0, 0.85, 0.05));
+    if (cascade == 3u ||
+        (iridiumShadowMetadata[shadowIndex].y &
+            (1u << (cascade + 1u))) == 0u)
+        return colors[cascade];
+    float splitNear = cascade == 0u ? 0.0 :
+        iridiumShadowSplitFar[shadowIndex][cascade - 1u];
+    float blendWidth = (iridiumShadowSplitFar[shadowIndex][cascade] -
+        splitNear) * 0.1;
+    float blend = smoothstep(iridiumShadowSplitFar[shadowIndex][cascade] -
+        blendWidth, iridiumShadowSplitFar[shadowIndex][cascade], viewDepth);
+    return mix(colors[cascade], colors[cascade + 1u], blend);
+}
+
+float iridiumSampleDirectionalShadowCascade(uint shadowIndex, uint cascade,
+    IridiumDirectionalShadowReceiver receiver, vec3 surfaceToLight) {
+    uint layer = iridiumShadowMetadata[shadowIndex].z + cascade;
+    float texelWorldSize =
+        iridiumShadowTexelWorldSize[shadowIndex][cascade];
+    float geometricNoL = clamp(dot(receiver.geometricNormal,
+        surfaceToLight), 0.0, 1.0);
+    float normalOffsetScale = geometricNoL > 0.0
+        ? iridiumShadowBiasParameters.w *
+            sqrt(max(1.0 - geometricNoL * geometricNoL, 0.0))
+        : 0.0;
+    vec3 offsetWorldPosition = receiver.worldPosition +
+        receiver.geometricNormal * texelWorldSize * normalOffsetScale;
+    vec4 clip = iridiumWorldToShadowClip[layer] *
+        vec4(offsetWorldPosition, 1.0);
+    vec3 coordinate = clip.xyz / clip.w;
+    vec2 uv = coordinate.xy * 0.5 + 0.5;
+    if (coordinate.z <= 0.0 || coordinate.z >= 1.0 ||
+        any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0))))
+        return 1.0;
+    float noL = clamp(dot(receiver.shadingNormal, surfaceToLight), 0.0, 1.0);
+    float depthSpan = iridiumShadowDepthSpanMeters[shadowIndex][cascade];
+    float receiverWorldBias = texelWorldSize *
+        iridiumShadowBiasParameters.z * mix(1.0, 2.0, 1.0 - noL);
+    float receiverBias = receiverWorldBias / max(depthSpan, 0.000001);
+    float referenceDepth = coordinate.z - receiverBias;
+    vec2 texel = 1.0 / vec2(textureSize(
+        iridiumDirectionalShadowMap, 0).xy);
+    uvec4 filterMetadata = iridiumShadowFilterMetadata[shadowIndex];
+    vec4 filterParameters = iridiumShadowFilterParameters[shadowIndex];
+    vec4 clipDx = iridiumWorldToShadowClip[layer] *
+        vec4(receiver.worldPositionDx, 0.0);
+    vec4 clipDy = iridiumWorldToShadowClip[layer] *
+        vec4(receiver.worldPositionDy, 0.0);
+    vec2 depthGradient = iridiumDirectionalShadowDepthGradient(
+        clipDx.xy * 0.5, clipDy.xy * 0.5, clipDx.z, clipDy.z);
+    float maximumPlaneCorrection = filterParameters.z * texelWorldSize /
+        max(depthSpan, 0.000001);
+    if (filterMetadata.z != 0u && filterMetadata.x != 0u &&
+        filterParameters.x > 0.0) {
+        float maximumRadius = filterParameters.y;
+        float searchRadius = clamp(filterParameters.x * coordinate.z *
+            depthSpan / max(texelWorldSize, 0.000001), 0.0, maximumRadius);
+        float rotation = iridiumShadowRotation(gl_FragCoord.xy);
+        float blockerDepth = 0.0;
+        uint blockerCount = 0u;
+        for (uint sampleIndex = 0u; sampleIndex < 32u; ++sampleIndex) {
+            if (sampleIndex >= filterMetadata.x) break;
+            vec2 offset = iridiumShadowDiskSample(sampleIndex,
+                filterMetadata.x, rotation) * searchRadius * texel;
+            vec2 sampleUv = clamp(uv + offset, vec2(0.0), vec2(1.0));
+            float storedDepth = texture(iridiumDirectionalShadowMap,
+                vec3(sampleUv, float(layer))).r;
+            float sampleReference = iridiumDirectionalShadowReceiverReference(
+                referenceDepth, depthGradient, sampleUv - uv,
+                maximumPlaneCorrection);
+            if (storedDepth < sampleReference) {
+                blockerDepth += storedDepth;
+                ++blockerCount;
+            }
+        }
+        if (blockerCount == 0u) return 1.0;
+        blockerDepth /= float(blockerCount);
+        float penumbraRadius = clamp((referenceDepth - blockerDepth) *
+            depthSpan * filterParameters.x /
+            max(texelWorldSize, 0.000001), 0.0, maximumRadius);
+        if (penumbraRadius <= 1.0)
+            return iridiumDirectionalShadowHardFilter(layer, uv, texel,
+                referenceDepth, depthGradient, maximumPlaneCorrection);
+        float visibility = 0.0;
+        uint filterSamples = max(filterMetadata.y, 1u);
+        for (uint sampleIndex = 0u; sampleIndex < 64u; ++sampleIndex) {
+            if (sampleIndex >= filterSamples) break;
+            vec2 offset = iridiumShadowDiskSample(sampleIndex,
+                filterSamples, rotation) * penumbraRadius * texel;
+            visibility += iridiumDirectionalShadowBilinearCompare(layer,
+                clamp(uv + offset, vec2(0.0), vec2(1.0)),
+                uv, referenceDepth, depthGradient,
+                maximumPlaneCorrection);
+        }
+        return visibility / float(filterSamples);
+    }
+
+    return iridiumDirectionalShadowHardFilter(layer, uv, texel,
+        referenceDepth, depthGradient, maximumPlaneCorrection);
+}
+
+float iridiumDirectionalShadowVisibility(uint lightSlot,
+    IridiumDirectionalShadowReceiver receiver, vec3 surfaceToLight,
+    float viewDepth) {
+    uint shadowIndex = iridiumDirectionalShadowOwner(lightSlot);
+    if (shadowIndex == 2u) return 1.0;
+    if (viewDepth > iridiumShadowSplitFar[shadowIndex].w) return 1.0;
+    uint cascade = iridiumDirectionalShadowCascade(shadowIndex, viewDepth);
+    if ((iridiumShadowMetadata[shadowIndex].y & (1u << cascade)) == 0u)
+        return 1.0;
+    float visibility = iridiumSampleDirectionalShadowCascade(shadowIndex,
+        cascade, receiver, surfaceToLight);
+    if (cascade == 3u ||
+        (iridiumShadowMetadata[shadowIndex].y &
+            (1u << (cascade + 1u))) == 0u)
+        return visibility;
+    float splitNear = cascade == 0u ? 0.0 :
+        iridiumShadowSplitFar[shadowIndex][cascade - 1u];
+    float blendWidth = (iridiumShadowSplitFar[shadowIndex][cascade] -
+        splitNear) * 0.1;
+    float blend = smoothstep(iridiumShadowSplitFar[shadowIndex][cascade] -
+        blendWidth, iridiumShadowSplitFar[shadowIndex][cascade], viewDepth);
+    if (blend <= 0.0) return visibility;
+    float nextVisibility = iridiumSampleDirectionalShadowCascade(shadowIndex,
+        cascade + 1u, receiver, surfaceToLight);
+    return mix(visibility, nextVisibility, blend);
+}
+
+#endif

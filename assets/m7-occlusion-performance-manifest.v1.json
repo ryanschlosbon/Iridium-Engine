@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "fixtures": [
+    {
+      "id": "m7_occlusion_dense_depth_stack_v1",
+      "revision": 1,
+      "required": true,
+      "source_asset": "models/alfa_romeo/alfa_romeo.gltf",
+      "environment": {
+        "kind": "procedural_constant",
+        "constant_linear_rgb": [0.035, 0.04, 0.05]
+      },
+      "camera": {
+        "id": "m7_occlusion_dense_depth_stack_camera_v1",
+        "position": [0.0, 1.2, 150.0],
+        "target": [0.0, 0.65, 0.0],
+        "up": [0.0, 1.0, 0.0],
+        "vertical_fov_degrees": 42.0,
+        "near": 0.1,
+        "far": 400.0
+      },
+      "scene_factory": {
+        "kind": "instanced_grid",
+        "instance_grid": [1, 1, 64],
+        "instance_spacing": [0.0, 0.0, 4.0],
+        "instance_scale": [1.0, 1.0, 1.0],
+        "instance_scale_override": {
+          "instance_index": 63,
+          "scale": [3.0, 3.0, 3.0]
+        }
+      },
+      "output_label": "m7_occlusion_dense_depth_stack",
+      "warmup_frames": 100,
+      "measured_frames": 500,
+      "content_files": [
+        {
+          "path": "models/alfa_romeo/alfa_romeo.gltf",
+          "sha256": "96f80eb8b302219aaec343920431877386cebb0ea5bf1a4a6df6e97b38456816"
+        },
+        {
+          "path": "models/alfa_romeo/alfa_romeo.gltf.iridium.meta",
+          "sha256": "4102702841eb79a375961f1ed13683fbdb54cf1c2f90f60d79c59a572ec5d169"
+        }
+      ],
+      "expected_behavior": [
+        "All 64 instances form a deep view-aligned stack; the nearest instance is deliberately enlarged while the farther occludees retain ordinary scale.",
+        "After one fail-visible frame, the nearest opaque surfaces should conservatively reject most farther opaque commands.",
+        "The query-only and rejection variants must preserve identical scene output while the rejection variant measurably reduces submitted opaque work."
+      ],
+      "unavailable_capabilities": [
+        "production Hi-Z command rejection"
+      ]
+    }
+  ]
+}
