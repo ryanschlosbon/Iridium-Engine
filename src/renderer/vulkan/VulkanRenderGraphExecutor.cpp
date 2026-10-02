@@ -96,7 +96,28 @@ namespace {
         return info;
     }
 
+    class VulkanCommandBarrierSink final : public VulkanBarrierSink {
+    public:
+        void pipelineBarrier(VkCommandBuffer commandBuffer,
+            VkPipelineStageFlags sourceStages, VkPipelineStageFlags destinationStages,
+            std::span<const VkBufferMemoryBarrier> buffers,
+            std::span<const VkImageMemoryBarrier> images) override {
+            vkCmdPipelineBarrier(commandBuffer, sourceStages, destinationStages, 0,
+                0, nullptr, static_cast<uint32_t>(buffers.size()), buffers.data(),
+                static_cast<uint32_t>(images.size()), images.data());
+        }
+        void pipelineBarrier2(VkCommandBuffer commandBuffer,
+            const VkDependencyInfo& dependency) override {
+            vkCmdPipelineBarrier2(commandBuffer, &dependency);
+        }
+    };
+
 } // namespace
+
+VulkanBarrierSink& vulkanCommandBarrierSink() noexcept {
+    static VulkanCommandBarrierSink sink;
+    return sink;
+}
 
 VulkanGraphAccessInfo getVulkanGraphAccessInfo(RenderGraph::Access access,
     RenderGraph::ResourceType type) {
@@ -443,6 +464,19 @@ void VulkanRenderGraphExecutor::rebuild(RenderGraph::CompiledGraph graph) {
     barriers_ = std::move(candidateBarriers);
     topologyHash_ = hash;
     ++rebuildCount_;
+
+    // The name maps view strings owned by the cached plan, so they are rebuilt
+    // whenever the bound plan changes. Duplicate names resolve to the first
+    // entry, as the former linear searches did.
+    graph_ = cache_.find(topologyHash_);
+    passNames_.clear();
+    resourceNames_.clear();
+    passNames_.reserve(graph_->passes().size());
+    resourceNames_.reserve(graph_->resources().size());
+    for (uint32_t index = 0; index < graph_->passes().size(); ++index)
+        passNames_.try_emplace(graph_->passes()[index].name, index);
+    for (uint32_t index = 0; index < graph_->resources().size(); ++index)
+        resourceNames_.try_emplace(graph_->resources()[index].name, index);
 }
 
 void VulkanRenderGraphExecutor::onFrameFenceCompleted(uint32_t frameIndex) {
@@ -450,8 +484,51 @@ void VulkanRenderGraphExecutor::onFrameFenceCompleted(uint32_t frameIndex) {
     frameRetired_.at(frameIndex) = true;
 }
 
+RenderGraph::PassId VulkanRenderGraphExecutor::findPass(
+    std::string_view name) const noexcept {
+    const auto found = passNames_.find(name);
+    return found == passNames_.end() ? RenderGraph::PassId{}
+                                     : RenderGraph::PassId{ found->second };
+}
+
+RenderGraph::GraphResourceId VulkanRenderGraphExecutor::findResource(
+    std::string_view name) const noexcept {
+    const auto found = resourceNames_.find(name);
+    return found == resourceNames_.end() ? RenderGraph::GraphResourceId{}
+                                         : RenderGraph::GraphResourceId{ found->second };
+}
+
+RenderGraph::PassId VulkanRenderGraphExecutor::passId(std::string_view name) const {
+    const RenderGraph::PassId id = findPass(name);
+    if (!id.isValid())
+        throw std::out_of_range("Render-graph pass was not found");
+    return id;
+}
+
+RenderGraph::GraphResourceId VulkanRenderGraphExecutor::resourceId(
+    std::string_view name) const {
+    const RenderGraph::GraphResourceId id = findResource(name);
+    if (!id.isValid())
+        throw std::out_of_range("Render-graph resource was not found");
+    return id;
+}
+
+const RenderGraph::CompiledGraph& VulkanRenderGraphExecutor::boundGraph() const {
+    if (graph_ == nullptr) {
+        throw std::logic_error("Render-graph compiled plan is unavailable");
+    }
+    return *graph_;
+}
+
 void VulkanRenderGraphExecutor::bindExternalBuffer(uint32_t frameIndex,
     std::string_view logicalName, VkBuffer buffer, VkDeviceSize size,
+    RenderGraph::Access initialAccess) {
+    bindExternalBuffer(frameIndex, findResource(logicalName), buffer, size,
+        initialAccess);
+}
+
+void VulkanRenderGraphExecutor::bindExternalBuffer(uint32_t frameIndex,
+    RenderGraph::GraphResourceId id, VkBuffer buffer, VkDeviceSize size,
     RenderGraph::Access initialAccess) {
     if (initialAccess == RenderGraph::Access::ColorAttachment ||
         initialAccess == RenderGraph::Access::DepthAttachmentWrite ||
@@ -459,18 +536,17 @@ void VulkanRenderGraphExecutor::bindExternalBuffer(uint32_t frameIndex,
         initialAccess == RenderGraph::Access::SampledRead || initialAccess == RenderGraph::Access::Present)
         throw std::invalid_argument("External graph buffer cannot have image-only access");
     (void)getVulkanGraphAccessInfo(initialAccess, RenderGraph::ResourceType::Buffer);
-    const auto* graph = cache_.find(topologyHash_);
-    if (!graph || !buffer || frameIndex >= externalBuffers_.size() ||
+    if (graph_ == nullptr || !buffer || frameIndex >= externalBuffers_.size() ||
         !frameRetired_[frameIndex] || executingFrame_ == frameIndex)
         throw std::invalid_argument("External graph buffer binding requires a retired frame slot");
-    const auto found = std::ranges::find_if(graph->resources(), [&](const auto& value) {
-        return value.name == logicalName;
-    });
-    if (found == graph->resources().end() || !found->desc.imported ||
-        found->desc.type != RenderGraph::ResourceType::Buffer ||
-        found->physicalSlot != RenderGraph::InvalidIndex || size < found->desc.buffer.size)
+    if (id.logical >= graph_->resources().size())
         throw std::invalid_argument("External graph buffer binding is incompatible with the declared resource");
-    const auto index = static_cast<uint32_t>(found - graph->resources().begin());
+    const RenderGraph::CompiledResource& found = graph_->resources()[id.logical];
+    if (!found.desc.imported ||
+        found.desc.type != RenderGraph::ResourceType::Buffer ||
+        found.physicalSlot != RenderGraph::InvalidIndex || size < found.desc.buffer.size)
+        throw std::invalid_argument("External graph buffer binding is incompatible with the declared resource");
+    const uint32_t index = id.logical;
     for (uint32_t slot = 0; slot < externalBuffers_.size(); ++slot)
         for (uint32_t resource = 0; resource < externalBuffers_[slot].size(); ++resource)
             if ((slot != frameIndex || resource != index) &&
@@ -511,11 +587,11 @@ const RenderGraph::CompiledGraph& VulkanRenderGraphExecutor::executingGraph() co
     if (executingFrame_ == RenderGraph::InvalidIndex) {
         throw std::logic_error("Render-graph frame execution is not active");
     }
-    const RenderGraph::CompiledGraph* graph = cache_.find(topologyHash_);
-    if (graph == nullptr) {
-        throw std::logic_error("Render-graph compiled plan is unavailable");
-    }
-    return *graph;
+    return boundGraph();
+}
+
+void VulkanRenderGraphExecutor::setBarrierSink(VulkanBarrierSink* sink) noexcept {
+    sink_ = sink != nullptr ? sink : &vulkanCommandBarrierSink();
 }
 
 void VulkanRenderGraphExecutor::transitionPhysicalResource(
@@ -554,8 +630,8 @@ void VulkanRenderGraphExecutor::transitionPhysicalResource(
         barrier.subresourceRange.levelCount = physical.image.mipLevels;
         barrier.subresourceRange.baseArrayLayer = 0;
         barrier.subresourceRange.layerCount = physical.image.arrayLayers;
-        vkCmdPipelineBarrier(commandBuffer, before.stages, after.stages, 0,
-            0, nullptr, 0, nullptr, 1, &barrier);
+        sink_->pipelineBarrier(commandBuffer, before.stages, after.stages,
+            {}, std::span(&barrier, 1));
     }
     else {
         VkBufferMemoryBarrier barrier{ VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER };
@@ -566,22 +642,16 @@ void VulkanRenderGraphExecutor::transitionPhysicalResource(
         barrier.buffer = physical.buffer.buffer;
         barrier.offset = 0;
         barrier.size = physical.buffer.size;
-        vkCmdPipelineBarrier(commandBuffer, before.stages, after.stages, 0,
-            0, nullptr, 1, &barrier, 0, nullptr);
+        sink_->pipelineBarrier(commandBuffer, before.stages, after.stages,
+            std::span(&barrier, 1), {});
     }
     current = access;
 }
 
-void VulkanRenderGraphExecutor::beginPass(VkCommandBuffer commandBuffer,
-    std::string_view passName) {
-    if (commandBuffer == VK_NULL_HANDLE)
-        throw std::invalid_argument("Render-graph pass requires a command buffer");
-    const RenderGraph::CompiledGraph& graph = executingGraph();
-    if (nextPass_ >= graph.passes().size() ||
-        graph.passes()[nextPass_].name != passName) {
-        throw std::logic_error("Render-graph pass order does not match the compiled plan");
-    }
-    const RenderGraph::CompiledPass& pass = graph.passes()[nextPass_];
+void VulkanRenderGraphExecutor::beginPassAt(VkCommandBuffer commandBuffer,
+    uint32_t passOrder) {
+    const RenderGraph::CompiledGraph& graph = *graph_;
+    const RenderGraph::CompiledPass& pass = graph.passes()[passOrder];
     for (uint32_t index = 0; index < pass.usageCount; ++index) {
         const RenderGraph::CompiledUsage& usage =
             graph.usages()[pass.firstUsage + index];
@@ -599,8 +669,8 @@ void VulkanRenderGraphExecutor::beginPass(VkCommandBuffer commandBuffer,
                     barrier.srcAccessMask = before.access; barrier.dstAccessMask = after.access;
                     barrier.srcQueueFamilyIndex = barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
                     barrier.buffer = binding.buffer; barrier.size = resource.desc.buffer.size;
-                    vkCmdPipelineBarrier(commandBuffer, before.stages, after.stages, 0,
-                        0, nullptr, 1, &barrier, 0, nullptr);
+                    sink_->pipelineBarrier(commandBuffer, before.stages, after.stages,
+                        std::span(&barrier, 1), {});
                 }
                 binding.access = usage.access;
             }
@@ -608,6 +678,37 @@ void VulkanRenderGraphExecutor::beginPass(VkCommandBuffer commandBuffer,
         }
         transitionPhysicalResource(commandBuffer, resource.physicalSlot,
             usage.access);
+    }
+    ++nextPass_;
+}
+
+void VulkanRenderGraphExecutor::beginPass(VkCommandBuffer commandBuffer,
+    RenderGraph::PassId pass) {
+    if (commandBuffer == VK_NULL_HANDLE)
+        throw std::invalid_argument("Render-graph pass requires a command buffer");
+    const RenderGraph::CompiledGraph& graph = executingGraph();
+    if (nextPass_ >= graph.passes().size() || pass.order != nextPass_) {
+        throw std::logic_error("Render-graph pass order does not match the compiled plan");
+    }
+    beginPassAt(commandBuffer, pass.order);
+}
+
+void VulkanRenderGraphExecutor::beginPass(VkCommandBuffer commandBuffer,
+    std::string_view passName) {
+    if (commandBuffer == VK_NULL_HANDLE)
+        throw std::invalid_argument("Render-graph pass requires a command buffer");
+    const RenderGraph::CompiledGraph& graph = executingGraph();
+    if (nextPass_ >= graph.passes().size() ||
+        graph.passes()[nextPass_].name != passName) {
+        throw std::logic_error("Render-graph pass order does not match the compiled plan");
+    }
+    beginPassAt(commandBuffer, nextPass_);
+}
+
+void VulkanRenderGraphExecutor::skipPass(RenderGraph::PassId pass) {
+    const RenderGraph::CompiledGraph& graph = executingGraph();
+    if (nextPass_ >= graph.passes().size() || pass.order != nextPass_) {
+        throw std::logic_error("Render-graph skipped pass is out of order");
     }
     ++nextPass_;
 }
@@ -632,24 +733,33 @@ void VulkanRenderGraphExecutor::finishFrameExecution() {
 
 void VulkanRenderGraphExecutor::transitionImage(VkCommandBuffer commandBuffer,
     std::string_view logicalName, RenderGraph::Access access) {
+    (void)executingGraph();
+    const RenderGraph::GraphResourceId id = findResource(logicalName);
+    if (!id.isValid())
+        throw std::out_of_range("Render-graph transition resource was not found");
+    transitionImage(commandBuffer, id, access);
+}
+
+void VulkanRenderGraphExecutor::transitionImage(VkCommandBuffer commandBuffer,
+    RenderGraph::GraphResourceId id, RenderGraph::Access access) {
     const RenderGraph::CompiledGraph& graph = executingGraph();
-    const auto found = std::find_if(graph.resources().begin(), graph.resources().end(),
-        [logicalName](const RenderGraph::CompiledResource& resource) {
-            return resource.name == logicalName;
-        });
-    if (found == graph.resources().end() ||
-        found->physicalSlot == RenderGraph::InvalidIndex) {
+    if (id.logical >= graph.resources().size() ||
+        graph.resources()[id.logical].physicalSlot == RenderGraph::InvalidIndex) {
         throw std::out_of_range("Render-graph transition resource was not found");
     }
-    if (found->desc.type != RenderGraph::ResourceType::Image) {
+    const RenderGraph::CompiledResource& found = graph.resources()[id.logical];
+    if (found.desc.type != RenderGraph::ResourceType::Image) {
         throw std::logic_error("Named image transition expected an image resource");
     }
-    transitionPhysicalResource(commandBuffer, found->physicalSlot, access);
+    transitionPhysicalResource(commandBuffer, found.physicalSlot, access);
 }
 
 void VulkanRenderGraphExecutor::cleanupAfterDeviceIdle() noexcept {
     resources_.cleanupAfterDeviceIdle();
     cache_.clear();
+    graph_ = nullptr;
+    passNames_.clear();
+    resourceNames_.clear();
     barriers_.clear();
     frameAccess_.clear();
     externalBuffers_.clear(); externalBufferTracked_.clear(); frameRetired_.clear();
@@ -680,44 +790,52 @@ VulkanGraphStats VulkanRenderGraphExecutor::stats() const noexcept {
 
 const VulkanImageResource& VulkanRenderGraphExecutor::imageResource(
     uint32_t frameIndex, std::string_view logicalName) const {
-    const RenderGraph::CompiledGraph* graph = cache_.find(topologyHash_);
-    if (graph == nullptr) {
-        throw std::logic_error("Render-graph compiled plan is unavailable");
-    }
-    const auto found = std::find_if(graph->resources().begin(),
-        graph->resources().end(), [logicalName](const RenderGraph::CompiledResource& resource) {
-            return resource.name == logicalName;
-        });
-    if (found == graph->resources().end() ||
-        found->desc.type != RenderGraph::ResourceType::Image ||
-        found->physicalSlot == RenderGraph::InvalidIndex) {
+    (void)boundGraph();
+    const RenderGraph::GraphResourceId id = findResource(logicalName);
+    if (!id.isValid())
+        throw std::out_of_range("Render-graph image resource was not found");
+    return image(frameIndex, id);
+}
+
+const VulkanBufferResource& VulkanRenderGraphExecutor::bufferResource(
+    uint32_t frameIndex, std::string_view logicalName) const {
+    (void)boundGraph();
+    const RenderGraph::GraphResourceId id = findResource(logicalName);
+    if (!id.isValid())
+        throw std::out_of_range("Render-graph buffer resource was not found");
+    return buffer(frameIndex, id);
+}
+
+const VulkanImageResource& VulkanRenderGraphExecutor::image(uint32_t frameIndex,
+    RenderGraph::GraphResourceId id) const {
+    const RenderGraph::CompiledGraph& graph = boundGraph();
+    if (id.logical >= graph.resources().size())
+        throw std::out_of_range("Render-graph image resource was not found");
+    const RenderGraph::CompiledResource& found = graph.resources()[id.logical];
+    if (found.desc.type != RenderGraph::ResourceType::Image ||
+        found.physicalSlot == RenderGraph::InvalidIndex) {
         throw std::out_of_range("Render-graph image resource was not found");
     }
     const VulkanGraphPhysicalResource& physical = resources_.resource(
-        frameIndex, found->physicalSlot);
+        frameIndex, found.physicalSlot);
     if (physical.type != RenderGraph::ResourceType::Image || !physical.image.isValid()) {
         throw std::logic_error("Render-graph physical image is invalid");
     }
     return physical.image;
 }
 
-const VulkanBufferResource& VulkanRenderGraphExecutor::bufferResource(
-    uint32_t frameIndex, std::string_view logicalName) const {
-    const RenderGraph::CompiledGraph* graph = cache_.find(topologyHash_);
-    if (graph == nullptr) {
-        throw std::logic_error("Render-graph compiled plan is unavailable");
-    }
-    const auto found = std::find_if(graph->resources().begin(),
-        graph->resources().end(), [logicalName](const RenderGraph::CompiledResource& resource) {
-            return resource.name == logicalName;
-        });
-    if (found == graph->resources().end() ||
-        found->desc.type != RenderGraph::ResourceType::Buffer ||
-        found->physicalSlot == RenderGraph::InvalidIndex) {
+const VulkanBufferResource& VulkanRenderGraphExecutor::buffer(uint32_t frameIndex,
+    RenderGraph::GraphResourceId id) const {
+    const RenderGraph::CompiledGraph& graph = boundGraph();
+    if (id.logical >= graph.resources().size())
+        throw std::out_of_range("Render-graph buffer resource was not found");
+    const RenderGraph::CompiledResource& found = graph.resources()[id.logical];
+    if (found.desc.type != RenderGraph::ResourceType::Buffer ||
+        found.physicalSlot == RenderGraph::InvalidIndex) {
         throw std::out_of_range("Render-graph buffer resource was not found");
     }
     const VulkanGraphPhysicalResource& physical = resources_.resource(
-        frameIndex, found->physicalSlot);
+        frameIndex, found.physicalSlot);
     if (physical.type != RenderGraph::ResourceType::Buffer ||
         !physical.buffer.isValid()) {
         throw std::logic_error("Render-graph physical buffer is invalid");

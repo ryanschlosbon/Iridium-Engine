@@ -35,6 +35,30 @@ namespace Iridium::RenderGraph {
         friend constexpr bool operator==(PassHandle, PassHandle) = default;
     };
 
+    // M7R R3b: execution-time identities in a compiled graph. A PassId is the
+    // compiled (execution) order index; a GraphResourceId is the logical
+    // resource index. Both are resolved once per rebuild and are only valid for
+    // the compiled graph they were resolved against.
+    struct PassId {
+        uint32_t order = InvalidIndex;
+
+        [[nodiscard]] constexpr bool isValid() const noexcept {
+            return order != InvalidIndex;
+        }
+
+        friend constexpr bool operator==(PassId, PassId) = default;
+    };
+
+    struct GraphResourceId {
+        uint32_t logical = InvalidIndex;
+
+        [[nodiscard]] constexpr bool isValid() const noexcept {
+            return logical != InvalidIndex;
+        }
+
+        friend constexpr bool operator==(GraphResourceId, GraphResourceId) = default;
+    };
+
     enum class ResourceType : uint8_t {
         Image,
         Buffer,

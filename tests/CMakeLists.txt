@@ -259,6 +259,14 @@ iridium_add_test(VulkanRenderGraphExecutorTests
         SOURCES renderer/VulkanRenderGraphExecutorTests.cpp
         LIBS iridium_vulkan)
 
+# M7R R3b: index addressing, barrier batching/equivalence, callback registry,
+# History lifetime and external bindings, recorded through a barrier sink
+# against fake resources (no device). Allocation-profiled for steady frames.
+iridium_add_test(VulkanRenderGraphExecutionTests
+        SOURCES renderer/VulkanRenderGraphExecutionTests.cpp
+        LIBS iridium_vulkan
+        ALLOCATION_PROFILE)
+
 iridium_add_test(VulkanOutputTransportTests
         SOURCES renderer/VulkanOutputTransportTests.cpp
         LIBS iridium_vulkan)

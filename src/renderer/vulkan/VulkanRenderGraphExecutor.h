@@ -6,8 +6,12 @@
 #include <vulkan/vulkan.h>
 
 #include <cstdint>
+#include <functional>
 #include <optional>
+#include <span>
+#include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 namespace Iridium {
@@ -112,6 +116,23 @@ namespace Iridium {
         uint64_t cacheMissCount = 0;
     };
 
+    // M7R R3b: the executor records every graph barrier through this seam.
+    // The default sink forwards to vkCmdPipelineBarrier/vkCmdPipelineBarrier2;
+    // tests inject a recording sink to compare emitted dependencies without a
+    // device. This is a Vulkan-side recording seam, not an RHI hook.
+    class VulkanBarrierSink {
+    public:
+        virtual ~VulkanBarrierSink() = default;
+        virtual void pipelineBarrier(VkCommandBuffer commandBuffer,
+            VkPipelineStageFlags sourceStages, VkPipelineStageFlags destinationStages,
+            std::span<const VkBufferMemoryBarrier> buffers,
+            std::span<const VkImageMemoryBarrier> images) = 0;
+        virtual void pipelineBarrier2(VkCommandBuffer commandBuffer,
+            const VkDependencyInfo& dependency) = 0;
+    };
+
+    [[nodiscard]] VulkanBarrierSink& vulkanCommandBarrierSink() noexcept;
+
     class VulkanRenderGraphExecutor final {
     public:
         VulkanRenderGraphExecutor() = default;
@@ -130,12 +151,37 @@ namespace Iridium {
         void bindExternalBuffer(uint32_t frameIndex, std::string_view logicalName,
             VkBuffer buffer, VkDeviceSize size,
             RenderGraph::Access initialAccess = RenderGraph::Access::Undefined);
+        void bindExternalBuffer(uint32_t frameIndex, RenderGraph::GraphResourceId id,
+            VkBuffer buffer, VkDeviceSize size,
+            RenderGraph::Access initialAccess = RenderGraph::Access::Undefined);
+
+        // Ids are resolved per rebuild through O(1) name maps over strings the
+        // compiled graph owns; find* return an invalid id for unknown names and
+        // passId/resourceId throw std::out_of_range.
+        [[nodiscard]] RenderGraph::PassId findPass(std::string_view name) const noexcept;
+        [[nodiscard]] RenderGraph::GraphResourceId findResource(
+            std::string_view name) const noexcept;
+        [[nodiscard]] RenderGraph::PassId passId(std::string_view name) const;
+        [[nodiscard]] RenderGraph::GraphResourceId resourceId(std::string_view name) const;
+
+        // Primary, index-addressed execution. The pass must be the next pass in
+        // compiled order.
+        void beginPass(VkCommandBuffer commandBuffer, RenderGraph::PassId pass);
+        void skipPass(RenderGraph::PassId pass);
+        // Transitional string forms (until the R3b.4 call-site conversion).
+        // They keep the sequential cursor check: the name must match the next
+        // pass in compiled order.
         void beginPass(VkCommandBuffer commandBuffer, std::string_view passName);
         void skipPass(std::string_view passName);
         void finishFrameExecution();
         void transitionImage(VkCommandBuffer commandBuffer,
+            RenderGraph::GraphResourceId id, RenderGraph::Access access);
+        void transitionImage(VkCommandBuffer commandBuffer,
             std::string_view logicalName, RenderGraph::Access access);
         void cleanupAfterDeviceIdle() noexcept;
+
+        // nullptr restores the Vulkan command sink.
+        void setBarrierSink(VulkanBarrierSink* sink) noexcept;
 
         [[nodiscard]] const std::vector<VulkanGraphBarrierIntent>& barriers() const noexcept {
             return barriers_;
@@ -145,8 +191,31 @@ namespace Iridium {
             uint32_t frameIndex, std::string_view logicalName) const;
         [[nodiscard]] const VulkanBufferResource& bufferResource(
             uint32_t frameIndex, std::string_view logicalName) const;
+        [[nodiscard]] const VulkanImageResource& image(uint32_t frameIndex,
+            RenderGraph::GraphResourceId id) const;
+        [[nodiscard]] const VulkanBufferResource& buffer(uint32_t frameIndex,
+            RenderGraph::GraphResourceId id) const;
+        // The compiled plan currently bound (nullptr before the first rebuild).
+        [[nodiscard]] const RenderGraph::CompiledGraph* compiledGraph() const noexcept {
+            return graph_;
+        }
 
     private:
+        struct TransparentStringHash {
+            using is_transparent = void;
+            [[nodiscard]] size_t operator()(std::string_view value) const noexcept {
+                return std::hash<std::string_view>{}(value);
+            }
+            [[nodiscard]] size_t operator()(const std::string& value) const noexcept {
+                return std::hash<std::string_view>{}(value);
+            }
+            [[nodiscard]] size_t operator()(const char* value) const noexcept {
+                return std::hash<std::string_view>{}(value);
+            }
+        };
+        using NameMap = std::unordered_map<std::string_view, uint32_t,
+            TransparentStringHash, std::equal_to<>>;
+
         std::optional<VulkanAllocatorGraphResourceFactory> allocatorFactory_;
         VulkanGraphResourcePool resources_;
         RenderGraph::CompiledGraphCache cache_;
@@ -168,8 +237,15 @@ namespace Iridium {
         std::vector<std::vector<ExternalBufferBinding>> externalBuffers_;
         std::vector<bool> externalBufferTracked_;
         std::vector<bool> frameRetired_;
+        // Points into cache_; refreshed on every rebuild.
+        const RenderGraph::CompiledGraph* graph_ = nullptr;
+        NameMap passNames_;
+        NameMap resourceNames_;
+        VulkanBarrierSink* sink_ = &vulkanCommandBarrierSink();
 
         [[nodiscard]] const RenderGraph::CompiledGraph& executingGraph() const;
+        [[nodiscard]] const RenderGraph::CompiledGraph& boundGraph() const;
+        void beginPassAt(VkCommandBuffer commandBuffer, uint32_t passOrder);
         void transitionPhysicalResource(VkCommandBuffer commandBuffer,
             uint32_t physicalSlot, RenderGraph::Access access);
     };
