@@ -1,7 +1,7 @@
 #pragma once
 
-#include "scene/SceneEntityUuid.h"
-#include "scene/components/ReflectionProbeComponent.h"
+#include "core/types/SceneEntityUuid.h"
+#include "core/types/ReflectionProbeModes.h"
 
 #include <glm/glm.hpp>
 

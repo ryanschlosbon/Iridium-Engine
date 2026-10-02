@@ -1,7 +1,7 @@
 #pragma once
 
 #include "VulkanResourceAllocator.h"
-#include "renderer/lighting/ReflectionProbeCapture.h"
+#include "renderer/rhi/ReflectionProbeCapture.h"
 
 #include <vulkan/vulkan.h>
 

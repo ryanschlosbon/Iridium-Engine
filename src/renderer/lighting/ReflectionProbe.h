@@ -1,7 +1,7 @@
 #pragma once
 
 #include "renderer/rhi/ReflectionProbeTypes.h"
-#include "scene/SceneEntityUuid.h"
+#include "core/types/SceneEntityUuid.h"
 #include "scene/SceneWorld.h"
 #include "scene/components/ReflectionProbeComponent.h"
 

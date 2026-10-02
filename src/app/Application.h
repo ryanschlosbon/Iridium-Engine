@@ -12,7 +12,7 @@
 #include <map>
 
 // --- ENGINE SUBSYSTEMS ---
-#include "core/ApplicationConfig.h"
+#include "app/ApplicationConfig.h"
 #include "core/EngineLog.h"
 #include "profiling/CpuProfiler.h"
 #include "assets/AssetManager.h"  
@@ -28,18 +28,18 @@
 #include "editor/EditorTransactionService.h"
 #include "editor/EditorSystem.h"
 #include "editor/ViewportRenderExtent.h"
-#include "ecs/systems/TransformSystem.h"
+#include "scene/systems/TransformSystem.h"
 
 // --- THE NEW RENDERING ARCHITECTURE ---
 #include "renderer/rhi/IRenderBackend.h"
 #include "renderer/rhi/DrawPacket.h"
 #include "benchmarks/BenchmarkManifest.h"
-#include "renderer/rhi/FrameCapture.h"
+#include "core/types/FrameCapture.h"
 #include "renderer/rhi/RenderBackendRuntimeInfo.h"
 #include "renderer/lighting/LightExtractor.h"
 #include "editor/EditorViewCadence.h"
 #include "renderer/lighting/ReflectionProbe.h"
-#include "renderer/lighting/ReflectionProbeCapture.h"
+#include "renderer/rhi/ReflectionProbeCapture.h"
 #include "renderer/lighting/DirectionalShadow.h"
 #include "renderer/lighting/LocalShadow.h"
 #include "renderer/scene/GpuScenePublisher.h"

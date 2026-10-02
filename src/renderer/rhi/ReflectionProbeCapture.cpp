@@ -1,4 +1,4 @@
-#include "renderer/lighting/ReflectionProbeCapture.h"
+#include "renderer/rhi/ReflectionProbeCapture.h"
 
 #include <algorithm>
 #include <bit>

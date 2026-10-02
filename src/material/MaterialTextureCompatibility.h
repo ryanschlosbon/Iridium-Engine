@@ -1,7 +1,7 @@
 #pragma once
 
 #include "material/SourceMaterial.h"
-#include "renderer/rhi/TextureTypes.h"
+#include "core/types/TextureTypes.h"
 
 #include <cstddef>
 #include <cstdint>

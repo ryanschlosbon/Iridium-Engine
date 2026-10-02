@@ -1,5 +1,5 @@
-#include "core/Application.h"
-#include "core/ApplicationConfig.h"
+#include "app/Application.h"
+#include "app/ApplicationConfig.h"
 #include <cstdlib>
 #include <iostream>
 #include <stdexcept>

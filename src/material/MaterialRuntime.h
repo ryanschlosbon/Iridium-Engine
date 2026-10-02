@@ -1,7 +1,7 @@
 #pragma once
 
 #include "material/MaterialCompiler.h"
-#include "renderer/rhi/RenderHandles.h"
+#include "core/types/RenderHandles.h"
 
 #include <array>
 #include <cstddef>

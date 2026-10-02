@@ -1,4 +1,4 @@
-#include "assets/AssetGuid.h"
+#include "core/types/AssetGuid.h"
 
 #include <algorithm>
 #include <array>

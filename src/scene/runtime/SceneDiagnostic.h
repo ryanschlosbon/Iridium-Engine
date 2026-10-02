@@ -1,6 +1,6 @@
 #pragma once
 
-#include "scene/SceneEntityUuid.h"
+#include "core/types/SceneEntityUuid.h"
 #include "scene/runtime/ComponentIdentity.h"
 
 #include <cstdint>

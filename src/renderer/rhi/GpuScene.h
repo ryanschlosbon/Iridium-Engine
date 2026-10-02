@@ -1,8 +1,8 @@
 #pragma once
 
-#include "RenderHandles.h"
-#include "assets/AssetGuid.h"
-#include "scene/SceneEntityUuid.h"
+#include "core/types/RenderHandles.h"
+#include "core/types/AssetGuid.h"
+#include "core/types/SceneEntityUuid.h"
 
 #include <glm/glm.hpp>
 

@@ -1,9 +1,9 @@
 #pragma once
 
-#include "assets/AssetGuid.h"
+#include "core/types/AssetGuid.h"
 #include "assets/cooker/CookTypes.h"
 #include "ecs/Entity.h"
-#include "scene/SceneEntityUuid.h"
+#include "core/types/SceneEntityUuid.h"
 #include "scene/runtime/ComponentIdentity.h"
 #include "scene/runtime/SceneReferenceState.h"
 

@@ -1,8 +1,8 @@
 #pragma once
-#include "assets/AssetGuid.h"
+#include "core/types/AssetGuid.h"
 #include "material/TransparencyPolicy.h"
-#include "RenderHandles.h"
-#include "scene/SceneEntityUuid.h"
+#include "core/types/RenderHandles.h"
+#include "core/types/SceneEntityUuid.h"
 #include <algorithm>
 #include <compare>
 #include <cmath>

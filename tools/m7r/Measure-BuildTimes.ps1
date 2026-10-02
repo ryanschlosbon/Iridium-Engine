@@ -42,13 +42,15 @@ try {
     }
     $results += Measure-Step 'no-op build' { cmake --build $buildDir }
     $touches = [ordered]@{
-        'touch Application.cpp'      = 'src/core/Application.cpp'
-        'touch rhi/Mesh.h'           = 'src/renderer/rhi/Mesh.h'
-        'touch shadow_filter.glsl'   = 'assets/shaders/include/shadow_filter.glsl'
-        'touch cluster_count.comp'   = 'assets/shaders/cluster_count.comp'
+        'touch Application.cpp'      = @('src/app/Application.cpp', 'src/core/Application.cpp')
+        'touch rhi/Mesh.h'           = @('src/renderer/rhi/Mesh.h')
+        'touch shadow_filter.glsl'   = @('assets/shaders/include/shadow_filter.glsl')
+        'touch cluster_count.comp'   = @('assets/shaders/cluster_count.comp')
     }
     foreach ($name in $touches.Keys) {
-        (Get-Item $touches[$name]).LastWriteTime = Get-Date
+        # First existing candidate, so the same script measures pre- and post-R1 layouts.
+        $file = $touches[$name] | Where-Object { Test-Path $_ } | Select-Object -First 1
+        (Get-Item $file).LastWriteTime = Get-Date
         $results += Measure-Step $name { cmake --build $buildDir }
     }
     $report = [pscustomobject]@{

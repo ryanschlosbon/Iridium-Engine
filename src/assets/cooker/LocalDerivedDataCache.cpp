@@ -1,6 +1,6 @@
 #include "assets/cooker/LocalDerivedDataCache.h"
 
-#include "assets/AssetGuid.h"
+#include "core/types/AssetGuid.h"
 
 #include <algorithm>
 #include <fstream>

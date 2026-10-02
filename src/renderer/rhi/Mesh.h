@@ -5,7 +5,7 @@
 #include <vector>
 #include <string>
 #include <glm/glm.hpp>
-#include "assets/AssetGuid.h"
+#include "core/types/AssetGuid.h"
 #include "PipelineTypes.h"
 
 namespace Iridium {

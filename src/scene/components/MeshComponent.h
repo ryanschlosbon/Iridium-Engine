@@ -3,7 +3,7 @@
 #include <memory>
 #include <vector>
 #include <string>
-#include "assets/AssetGuid.h"
+#include "core/types/AssetGuid.h"
 
 namespace Iridium {
     struct ModelAsset;

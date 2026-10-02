@@ -6,9 +6,9 @@
 #include <string>
 #include <string_view>
 #include <optional>
-#include "assets/AssetGuid.h"
+#include "core/types/AssetGuid.h"
 #include "renderer/rhi/RenderDebugView.h"
-#include "renderer/rhi/FrameCapture.h"
+#include "core/types/FrameCapture.h"
 #include "renderer/rhi/GBufferLayout.h"
 #include "renderer/rhi/RenderBackendConfig.h"
 #include "renderer/rhi/ReflectionProbeSettings.h"

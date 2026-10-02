@@ -157,7 +157,7 @@ namespace {
         CHECK(shared.find("0.6130974024") != std::string::npos);
         CHECK(shared.find("1.705050992697") != std::string::npos);
         const std::string application = readText(
-            std::filesystem::path(PROJECT_ROOT_DIR) / "src/core/Application.cpp");
+            std::filesystem::path(PROJECT_ROOT_DIR) / "src/app/Application.cpp");
         const std::string backend = readText(
             std::filesystem::path(PROJECT_ROOT_DIR) /
             "src/renderer/vulkan/VulkanVertexBackend.cpp");

@@ -1,4 +1,4 @@
-#include "core/ApplicationConfig.h"
+#include "app/ApplicationConfig.h"
 
 #include <array>
 #include <exception>

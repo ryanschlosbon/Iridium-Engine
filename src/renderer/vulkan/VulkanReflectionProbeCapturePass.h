@@ -2,7 +2,7 @@
 
 #include "VulkanReflectionProbeCaptureTargets.h"
 #include "VulkanResourceAllocator.h"
-#include "renderer/lighting/ReflectionProbeCapture.h"
+#include "renderer/rhi/ReflectionProbeCapture.h"
 #include "renderer/rhi/Mesh.h"
 
 #include <vulkan/vulkan.h>

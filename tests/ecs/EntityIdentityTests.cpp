@@ -1,6 +1,6 @@
 #include "ecs/Registry.h"
-#include "ecs/systems/TransformSystem.h"
-#include "scene/SceneEntityUuid.h"
+#include "scene/systems/TransformSystem.h"
+#include "core/types/SceneEntityUuid.h"
 #include "scene/SceneIdentityMap.h"
 #include "scene/SceneWorld.h"
 #include "scene/components/RelationshipComponent.h"

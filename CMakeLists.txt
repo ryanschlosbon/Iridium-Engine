@@ -232,8 +232,8 @@ target_include_directories(IridiumRenderGraph PUBLIC src)
 # catalog/importer library lets production scene loading validate artifacts without
 # acquiring JSON, SQLite, glTF, or editor dependencies.
 add_library(IridiumCookedArtifact STATIC
-        "src/assets/AssetGuid.h"
-        "src/assets/AssetGuid.cpp"
+        "src/core/types/AssetGuid.h"
+        "src/core/types/AssetGuid.cpp"
         "src/assets/cooker/CookTypes.h"
         "src/assets/cooker/CookTypes.cpp"
         "src/assets/cooker/CookedArtifact.h"
@@ -252,8 +252,8 @@ endif()
 # live in a separate authoring target so production runtime metadata cannot acquire
 # a source JSON dependency through transitive linkage.
 add_library(IridiumSceneRuntime STATIC
-        "src/scene/SceneEntityUuid.h"
-        "src/scene/SceneEntityUuid.cpp"
+        "src/core/types/SceneEntityUuid.h"
+        "src/core/types/SceneEntityUuid.cpp"
         "src/scene/SceneIdentityMap.h"
         "src/scene/SceneIdentityMap.cpp"
         "src/scene/SceneWorld.h"
@@ -293,8 +293,8 @@ add_library(IridiumLighting STATIC
         "src/renderer/lighting/LocalShadow.cpp"
         "src/renderer/lighting/ReflectionProbe.h"
         "src/renderer/lighting/ReflectionProbe.cpp"
-        "src/renderer/lighting/ReflectionProbeCapture.h"
-        "src/renderer/lighting/ReflectionProbeCapture.cpp"
+        "src/renderer/rhi/ReflectionProbeCapture.h"
+        "src/renderer/rhi/ReflectionProbeCapture.cpp"
         "src/renderer/lighting/ClusteredReflectionProbes.h"
         "src/renderer/lighting/ClusteredReflectionProbes.cpp"
 )
@@ -486,7 +486,7 @@ endif()
 # Added ${SPV_FILES} so CMake knows to build shaders before the app
 add_executable(IridiumEngine
         ${SPV_FILES}
-        src/main.cpp
+        src/app/main.cpp
         "src/renderer/vulkan/VkContext.h"
         "src/renderer/vulkan/VkContext.cpp"
         "src/renderer/vulkan/VkSwapchain.h"
@@ -500,7 +500,7 @@ add_executable(IridiumEngine
         "src/assets/AssetManager.h"
         "src/assets/AssetManager.cpp"
         "src/ecs/Entity.h"
-        "src/scene/Scene.h"
+       
         "src/scene/Components.h"
         "src/scene/components/NameComponent.h"
         "src/scene/components/TransformComponent.h"
@@ -528,15 +528,15 @@ add_executable(IridiumEngine
         "src/editor/EditorAssetDocumentService.cpp"
         "src/editor/EditorOrbitCamera.h"
         "src/editor/EditorOrbitCamera.cpp"
-        "src/ecs/systems/TransformSystem.cpp"
-        "src/ecs/systems/TransformSystem.h"
+        "src/scene/systems/TransformSystem.cpp"
+        "src/scene/systems/TransformSystem.h"
         "src/scene/components/RelationshipComponent.h"
         "src/vendor/imguizmo/ImGuizmo.cpp"
         "src/vendor/simdjson/simdjson.cpp"
         "src/vendor/fastgltf/src/fastgltf.cpp"
         "src/vendor/fastgltf/src/base64.cpp"
         "src/vendor/fastgltf/src/io.cpp"
- "src/scene/components/LightComponent.h" "src/editor/Reflection.h" "src/editor/ComponentCollectionUI.h" "src/editor/ViewportLayout.h" "src/editor/ViewportLayout.cpp" "src/utils/DeletionQueue.h" "src/core/Application.h" "src/core/Application.cpp" "src/editor/panels/EditorPanel.h" "src/editor/panels/core/SceneHierarchyPanel.h" "src/editor/panels/core/SceneHierarchyPanel.cpp" "src/editor/panels/core/InspectorPanel.h" "src/editor/panels/core/InspectorPanel.cpp"     "src/editor/EditorUIState.h" "src/editor/panels/menus/MenuBarPanel.h" "src/editor/panels/menus/MenuBarPanel.cpp" "src/editor/panels/windows/ProjectSettingsPanel.h" "src/editor/panels/windows/ProjectSettingsPanel.cpp" "src/renderer/vulkan/DescriptorAllocator.h" "src/renderer/vulkan/DescriptorAllocator.cpp" "src/renderer/vulkan/VkUIRenderPass.h" "src/renderer/vulkan/VkUIRenderPass.cpp" "src/editor/panels/core/ViewPortPanel.h" "src/editor/panels/core/ViewPortPanel.cpp" "src/renderer/vulkan/VkLightingPipeline.h" "src/renderer/vulkan/VkLightingPipeline.cpp" "src/renderer/vulkan/VkForwardRenderPass.cpp" "src/renderer/vulkan/VkForwardRenderPass.h" "src/renderer/vulkan/GlassDepthRenderPass.h" "src/renderer/vulkan/GlassDepthRenderPass.cpp" "src/renderer/vulkan/GlassDepthPipeline.h" "src/renderer/vulkan/GlassDepthPipeline.cpp" "src/renderer/rhi/IRenderBackend.h" "src/renderer/rhi/RenderBackendFactory.h" "src/renderer/rhi/RenderBackendFactory.cpp" "src/renderer/rhi/DrawPacket.h" "src/renderer/rhi/RenderHandles.h" "src/renderer/rhi/ResourcePool.h" "src/renderer/rhi/RhiResourceTypes.h" "src/renderer/vulkan/VulkanResourceAllocator.h" "src/renderer/vulkan/VulkanResourceState.h" "src/renderer/vulkan/VulkanResourceState.cpp" "src/renderer/vulkan/VulkanCommandList.h" "src/renderer/vulkan/VulkanUploadContext.h" "src/renderer/vulkan/VulkanIndexedTextureTable.h" "src/renderer/vulkan/VulkanIndexedTextureTable.cpp" "src/renderer/vulkan/VulkanVertexBackend.h" "src/renderer/vulkan/VulkanVertexBackend.cpp" "src/renderer/vulkan/VulkanVertexUtils.h" "src/renderer/vulkan/VulkanMeshLayouts.h" "src/renderer/vulkan/VulkanMeshLayouts.cpp" "src/renderer/rhi/PipelineTypes.h" "src/renderer/rhi/TextureTypes.h" "src/renderer/vulkan/VulkanPipelineLibrary.h" "src/renderer/vulkan/VulkanPipelineLibrary.cpp")
+ "src/scene/components/LightComponent.h" "src/editor/Reflection.h" "src/editor/ComponentCollectionUI.h" "src/editor/ViewportLayout.h" "src/editor/ViewportLayout.cpp" "src/utils/DeletionQueue.h" "src/app/Application.h" "src/app/Application.cpp" "src/editor/panels/EditorPanel.h" "src/editor/panels/core/SceneHierarchyPanel.h" "src/editor/panels/core/SceneHierarchyPanel.cpp" "src/editor/panels/core/InspectorPanel.h" "src/editor/panels/core/InspectorPanel.cpp"     "src/editor/EditorUIState.h" "src/editor/panels/menus/MenuBarPanel.h" "src/editor/panels/menus/MenuBarPanel.cpp" "src/editor/panels/windows/ProjectSettingsPanel.h" "src/editor/panels/windows/ProjectSettingsPanel.cpp" "src/renderer/vulkan/DescriptorAllocator.h" "src/renderer/vulkan/DescriptorAllocator.cpp" "src/renderer/vulkan/VkUIRenderPass.h" "src/renderer/vulkan/VkUIRenderPass.cpp" "src/editor/panels/core/ViewPortPanel.h" "src/editor/panels/core/ViewPortPanel.cpp" "src/renderer/vulkan/VkLightingPipeline.h" "src/renderer/vulkan/VkLightingPipeline.cpp" "src/renderer/vulkan/VkForwardRenderPass.cpp" "src/renderer/vulkan/VkForwardRenderPass.h" "src/renderer/vulkan/GlassDepthRenderPass.h" "src/renderer/vulkan/GlassDepthRenderPass.cpp" "src/renderer/vulkan/GlassDepthPipeline.h" "src/renderer/vulkan/GlassDepthPipeline.cpp" "src/renderer/rhi/IRenderBackend.h" "src/renderer/rhi/RenderBackendFactory.h" "src/renderer/vulkan/RenderBackendFactory.cpp" "src/renderer/rhi/DrawPacket.h" "src/core/types/RenderHandles.h" "src/renderer/rhi/ResourcePool.h" "src/renderer/rhi/RhiResourceTypes.h" "src/renderer/vulkan/VulkanResourceAllocator.h" "src/renderer/vulkan/VulkanResourceState.h" "src/renderer/vulkan/VulkanResourceState.cpp" "src/renderer/vulkan/VulkanCommandList.h" "src/renderer/vulkan/VulkanUploadContext.h" "src/renderer/vulkan/VulkanIndexedTextureTable.h" "src/renderer/vulkan/VulkanIndexedTextureTable.cpp" "src/renderer/vulkan/VulkanVertexBackend.h" "src/renderer/vulkan/VulkanVertexBackend.cpp" "src/renderer/vulkan/VulkanVertexUtils.h" "src/renderer/vulkan/VulkanMeshLayouts.h" "src/renderer/vulkan/VulkanMeshLayouts.cpp" "src/renderer/rhi/PipelineTypes.h" "src/core/types/TextureTypes.h" "src/renderer/vulkan/VulkanPipelineLibrary.h" "src/renderer/vulkan/VulkanPipelineLibrary.cpp")
 
 target_sources(IridiumEngine PRIVATE
         "src/renderer/rhi/GpuScene.cpp"
@@ -571,8 +571,8 @@ target_sources(IridiumEngine PRIVATE
         "src/editor/EditorPropertyDrawer.cpp"
         "src/platform/SystemProfile.h"
         "src/platform/SystemProfile.cpp"
-        "src/core/ApplicationConfig.h"
-        "src/core/ApplicationConfig.cpp"
+        "src/app/ApplicationConfig.h"
+        "src/app/ApplicationConfig.cpp"
         "src/profiling/CpuProfiler.h"
         "src/profiling/CpuProfiler.cpp"
         "src/profiling/GpuTimestamp.h"
@@ -598,7 +598,7 @@ target_sources(IridiumEngine PRIVATE
         "src/material/MaterialTextureCompatibility.h"
         "src/material/MaterialTextureCompatibility.cpp"
         "src/renderer/rhi/RenderDebugView.h"
-        "src/renderer/rhi/FrameCapture.h"
+        "src/core/types/FrameCapture.h"
         "src/renderer/color/SceneColor.h"
         "src/renderer/color/SceneColor.cpp"
         "src/renderer/color/OutputTransformConfig.h"
@@ -946,7 +946,7 @@ if(BUILD_TESTING)
 
     add_executable(LightExtractorTests
             "tests/renderer/LightExtractorTests.cpp"
-            "src/ecs/systems/TransformSystem.cpp"
+            "src/scene/systems/TransformSystem.cpp"
     )
     target_include_directories(LightExtractorTests PRIVATE src)
     target_link_libraries(LightExtractorTests PRIVATE
@@ -984,7 +984,7 @@ if(BUILD_TESTING)
             "tests/renderer/GpuSceneTests.cpp"
             "src/renderer/rhi/GpuScene.cpp"
             "src/renderer/scene/GpuScenePublisher.cpp"
-            "src/scene/SceneEntityUuid.cpp"
+            "src/core/types/SceneEntityUuid.cpp"
     )
     target_include_directories(GpuSceneTests PRIVATE src)
     target_link_libraries(GpuSceneTests PRIVATE
@@ -1228,8 +1228,8 @@ if(BUILD_TESTING)
 
     add_executable(ApplicationConfigTests
             "tests/core/ApplicationConfigTests.cpp"
-            "src/core/ApplicationConfig.cpp"
-            "src/assets/AssetGuid.cpp"
+            "src/app/ApplicationConfig.cpp"
+            "src/core/types/AssetGuid.cpp"
     )
 
     target_include_directories(ApplicationConfigTests PRIVATE src)
@@ -1388,7 +1388,7 @@ if(BUILD_TESTING)
 
     add_executable(LightExtractorBenchmark
             "tools/LightExtractorBenchmark.cpp"
-            "src/ecs/systems/TransformSystem.cpp"
+            "src/scene/systems/TransformSystem.cpp"
             "src/profiling/CpuAllocationProfile.cpp"
     )
     target_include_directories(LightExtractorBenchmark PRIVATE src)
@@ -1713,7 +1713,7 @@ if(BUILD_TESTING)
 
     add_executable(TransformSystemTests
             "tests/ecs/TransformSystemTests.cpp"
-            "src/ecs/systems/TransformSystem.cpp"
+            "src/scene/systems/TransformSystem.cpp"
             "src/vendor/imgui/imgui.cpp"
             "src/vendor/imgui/imgui_draw.cpp"
             "src/vendor/imgui/imgui_tables.cpp"
@@ -1731,7 +1731,7 @@ if(BUILD_TESTING)
 
     add_executable(EntityIdentityTests
             "tests/ecs/EntityIdentityTests.cpp"
-            "src/ecs/systems/TransformSystem.cpp"
+            "src/scene/systems/TransformSystem.cpp"
             "src/vendor/imgui/imgui.cpp"
             "src/vendor/imgui/imgui_draw.cpp"
             "src/vendor/imgui/imgui_tables.cpp"

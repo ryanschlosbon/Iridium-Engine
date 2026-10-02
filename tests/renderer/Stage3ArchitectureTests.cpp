@@ -2277,7 +2277,7 @@ namespace {
             std::string::npos);
         CHECK(instanceBatch.find("std::vector<SubMeshBounds> subMeshBounds") !=
             std::string::npos);
-        const std::string application = readSource("src/core/Application.cpp");
+        const std::string application = readSource("src/app/Application.cpp");
         CHECK(application.find(
             "packet.firstInstanceTransform = instanceBatch") !=
             std::string::npos);
@@ -2356,7 +2356,7 @@ namespace {
             return std::string{ std::istreambuf_iterator<char>(input),
                 std::istreambuf_iterator<char>() };
         };
-        const std::string application = readSource("src/core/Application.cpp");
+        const std::string application = readSource("src/app/Application.cpp");
         const size_t prepare = application.find(
             "renderBackend->prepareFrameTopology(");
         const size_t sceneStart = application.find(
@@ -2687,7 +2687,7 @@ namespace {
             std::string::npos);
 
         const std::string transformSystem = readSource(
-            "src/ecs/systems/TransformSystem.cpp");
+            "src/scene/systems/TransformSystem.cpp");
         CHECK(transformSystem.find(
             "sortEntitiesByDepth(registry, sortedEntitiesScratch_)") !=
             std::string::npos);
@@ -2698,7 +2698,7 @@ namespace {
         CHECK(localShadows.find("#include <unordered_set>") ==
             std::string::npos);
         const std::string probeCapture = readSource(
-            "src/renderer/lighting/ReflectionProbeCapture.cpp");
+            "src/renderer/rhi/ReflectionProbeCapture.cpp");
         CHECK(probeCapture.find("#include <unordered_set>") ==
             std::string::npos);
 

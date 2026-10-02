@@ -1,5 +1,5 @@
 #include "renderer/lighting/ReflectionProbe.h"
-#include "renderer/lighting/ReflectionProbeCapture.h"
+#include "renderer/rhi/ReflectionProbeCapture.h"
 #include "renderer/lighting/ClusteredReflectionProbes.h"
 #include "scene/components/TransformComponent.h"
 

@@ -1,4 +1,4 @@
-#include "scene/SceneEntityUuid.h"
+#include "core/types/SceneEntityUuid.h"
 
 #include <algorithm>
 #include <array>
