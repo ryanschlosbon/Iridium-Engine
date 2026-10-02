@@ -89,6 +89,29 @@ iridium_add_test(ApplicationCliParityTests
                 core/FrozenApplicationConfigParser.cpp
         LIBS iridium_app)
 
+# --- app / qualification harness (M7R R2.6) ---------------------------------------
+# The Application's IFrameObserver hook order on a real device, without the
+# qualification library. Application.h defines GLM_FORCE_DEPTH_ZERO_TO_ONE before
+# its first GLM include, so this cannot use a PCH that contains GLM.
+if(TARGET iridium_shaders)
+    iridium_add_test(ApplicationObserverTests
+            SOURCES app/ApplicationObserverTests.cpp
+            LIBS iridium_app
+            ALLOCATION_PROFILE
+            NO_PCH
+            LABELS vulkan)
+    add_dependencies(ApplicationObserverTests iridium_shaders)
+endif()
+
+# The harness against a device-free backend: run policy, capture/readback request
+# points, lost requests, validator sequences and probe-resource ownership.
+if(TARGET iridium_qualification)
+    iridium_add_test(QualificationHarnessTests
+            SOURCES qualification/QualificationHarnessTests.cpp
+            LIBS iridium_qualification
+            NO_PCH)
+endif()
+
 iridium_add_test(TransformSystemTests
         SOURCES ecs/TransformSystemTests.cpp
         LIBS iridium_scene iridium_vendor_imgui)
