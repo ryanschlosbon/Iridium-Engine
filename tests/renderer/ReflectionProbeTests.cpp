@@ -6,9 +6,7 @@
 #include <cmath>
 #include <bit>
 #include <cstdio>
-#include <fstream>
 #include <iostream>
-#include <iterator>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -98,25 +96,8 @@ namespace {
         CHECK(offsetof(PackedGpuReflectionProbe, positionIntensity) == 80);
         CHECK(offsetof(PackedGpuReflectionProbe, metadata) == 96);
         CHECK(sizeof(PackedGpuReflectionProbeClusterParameters) == 256);
-        std::ifstream shader(std::string(PROJECT_ROOT_DIR) +
-            "/assets/shaders/include/reflection_probe_records.glsl",
-            std::ios::binary);
-        const std::string source((std::istreambuf_iterator<char>(shader)),
-            std::istreambuf_iterator<char>());
-        CHECK(source.find("mat4 worldToProbe;") <
-            source.find("vec4 influence;"));
-        CHECK(source.find("vec4 influence;") <
-            source.find("vec4 positionIntensity;"));
-        CHECK(source.find("vec4 positionIntensity;") <
-            source.find("uvec4 metadata;"));
-        std::ifstream clusterShader(std::string(PROJECT_ROOT_DIR) +
-            "/assets/shaders/reflection_probe_cluster.comp",
-            std::ios::binary);
-        const std::string clusterSource((std::istreambuf_iterator<char>(
-            clusterShader)), std::istreambuf_iterator<char>());
-        CHECK(clusterSource.find("local_size_x = 64") != std::string::npos);
-        CHECK(clusterSource.find("probeClusterHeaders") != std::string::npos);
-        CHECK(clusterSource.find("maximumPerCluster") != std::string::npos);
+        // The GLSL mirror, cluster-parameter block and cluster kernel shape are
+        // checked against compiled SPIR-V in ShaderAbiContractTests.
         return true;
     }
 

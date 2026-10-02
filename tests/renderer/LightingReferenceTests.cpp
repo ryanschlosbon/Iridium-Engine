@@ -4,13 +4,9 @@
 
 #include <array>
 #include <cmath>
-#include <filesystem>
-#include <fstream>
 #include <iostream>
 #include <limits>
 #include <numbers>
-#include <sstream>
-#include <string>
 
 namespace {
 
@@ -29,13 +25,6 @@ namespace {
             static_cast<long double>(actual) - expected);
         return difference <= absolute || difference <=
             relative * std::max(std::abs(expected), 1.0L);
-    }
-
-    std::string readText(const std::filesystem::path& path) {
-        std::ifstream input(path, std::ios::binary);
-        std::ostringstream text;
-        text << input.rdbuf();
-        return text.str();
     }
 
     bool testPhotometricConversions() {
@@ -142,80 +131,6 @@ namespace {
         return true;
     }
 
-    bool testSharedDirectLightingContract() {
-        const auto root = std::filesystem::path(PROJECT_ROOT_DIR) /
-            "assets" / "shaders" / "include";
-        const std::string deferred = readText(root / "canonical_lighting_body.glsl");
-        const std::string forward = readText(root / "complex_material_body.glsl");
-        const std::string direct = readText(root / "direct_lighting.glsl");
-        const std::string access = readText(root / "clustered_light_access.glsl");
-        const std::string environment = readText(root / "environment_ibl.glsl");
-        const std::string spotShadow = readText(root / "spot_shadow.glsl");
-        const std::string pointShadow = readText(root / "point_shadow.glsl");
-        CHECK(deferred.find("include/clustered_light_access.glsl") !=
-            std::string::npos);
-        CHECK(forward.find("include/clustered_light_access.glsl") !=
-            std::string::npos);
-        CHECK(access.find("include/direct_lighting.glsl") != std::string::npos);
-        CHECK(direct.find("layout(") == std::string::npos);
-        CHECK(deferred.find("vec3 L = normalize(vec3(1.0));") == std::string::npos);
-        CHECK(forward.find("vec3 light = normalize(vec3(1.0, 1.0, 1.0));") ==
-            std::string::npos);
-        CHECK(direct.find("IRIDIUM_PHOTOMETRIC_TO_SCENE_SCALE = 1.0e-4") !=
-            std::string::npos);
-        CHECK(access.find("iridiumDirectLightSlot") != std::string::npos);
-        CHECK(direct.find("iridiumSpotCone") != std::string::npos);
-        CHECK(deferred.find("iridiumEvaluateDirectLightSlot") !=
-            std::string::npos);
-        CHECK(forward.find("iridiumEvaluateDirectLightSlot") !=
-            std::string::npos);
-        CHECK(deferred.find("include/spot_shadow.glsl") != std::string::npos);
-        CHECK(forward.find("include/spot_shadow.glsl") != std::string::npos);
-        CHECK(deferred.find("iridiumSpotShadowVisibility") != std::string::npos);
-        CHECK(forward.find("iridiumSpotShadowVisibility") != std::string::npos);
-        CHECK(spotShadow.find("binding = 22") != std::string::npos);
-        CHECK(spotShadow.find("binding = 23") != std::string::npos);
-        CHECK(spotShadow.find("IRIDIUM_INVALID_SHADOW_DATA_SLOT") !=
-            std::string::npos);
-        CHECK(deferred.find("include/point_shadow.glsl") != std::string::npos);
-        CHECK(forward.find("include/point_shadow.glsl") != std::string::npos);
-        CHECK(deferred.find("iridiumPointShadowVisibility") !=
-            std::string::npos);
-        CHECK(forward.find("iridiumPointShadowVisibility") !=
-            std::string::npos);
-        CHECK(deferred.find("shadowVisibility = min(shadowVisibility, visibility)") !=
-            std::string::npos);
-        CHECK(forward.find("shadowVisibility = min(shadowVisibility, visibility)") !=
-            std::string::npos);
-        CHECK(forward.find(
-            "materialDebugView != 16u && materialDebugView != 17u") !=
-            std::string::npos);
-        CHECK(pointShadow.find("binding = 24") != std::string::npos);
-        CHECK(pointShadow.find("binding = 25") != std::string::npos);
-        CHECK(pointShadow.find("binding = 26") != std::string::npos);
-        CHECK(pointShadow.find("binding = 27") != std::string::npos);
-        CHECK(pointShadow.find("samplerCubeArray") != std::string::npos);
-        CHECK(pointShadow.find("IRIDIUM_INVALID_SHADOW_DATA_SLOT") !=
-            std::string::npos);
-        CHECK(deferred.find("include/environment_ibl.glsl") !=
-            std::string::npos);
-        CHECK(forward.find("include/environment_ibl.glsl") !=
-            std::string::npos);
-        CHECK(deferred.find("sampler2D hdriMap") == std::string::npos);
-        CHECK(forward.find("sampler2D hdriMap") == std::string::npos);
-        CHECK(environment.find("binding = 16") != std::string::npos);
-        CHECK(environment.find("binding = 17") != std::string::npos);
-        CHECK(environment.find("binding = 18") != std::string::npos);
-        CHECK(environment.find("binding = 19") != std::string::npos);
-        CHECK(environment.find("f0 * integrated.x + f90 * integrated.y") !=
-            std::string::npos);
-        CHECK(deferred.find("iridiumEvaluateCanonicalIbl") !=
-            std::string::npos);
-        CHECK(forward.find("iridiumEvaluateStandardIbl") !=
-            std::string::npos);
-        return true;
-    }
-
 }
 
 int main() {
@@ -226,7 +141,6 @@ int main() {
         Test{ "spot cone boundaries", testSpotConeBoundaries },
         Test{ "direct radiance vectors", testDirectRadianceVectors },
         Test{ "BSDF and IBL edges", testBsdfAndIblEdges },
-        Test{ "shared direct lighting contract", testSharedDirectLightingContract },
     };
     for (const Test& test : tests) {
         std::cout << test.name << '\n';

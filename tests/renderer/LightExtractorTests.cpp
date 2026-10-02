@@ -8,9 +8,7 @@
 #include <array>
 #include <bit>
 #include <cmath>
-#include <fstream>
 #include <iostream>
-#include <iterator>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -67,18 +65,8 @@ namespace {
         CHECK(offsetof(Iridium::PackedGpuLight, colorIntensity) == 32);
         CHECK(offsetof(Iridium::PackedGpuLight, shapeMetadata) == 48);
 
-        std::ifstream shader(std::string(PROJECT_ROOT_DIR) +
-            "/assets/shaders/include/lighting_records.glsl",
-            std::ios::binary);
-        const std::string shaderSource((std::istreambuf_iterator<char>(shader)),
-            std::istreambuf_iterator<char>());
-        CHECK(!shaderSource.empty());
-        const size_t position = shaderSource.find("vec4 positionRange;");
-        const size_t direction = shaderSource.find("vec4 directionOuterCos;");
-        const size_t color = shaderSource.find("vec4 colorIntensity;");
-        const size_t shaderMetadata = shaderSource.find("vec4 shapeMetadata;");
-        CHECK(position < direction && direction < color &&
-            color < shaderMetadata);
+        // The GLSL mirror is checked against compiled SPIR-V member offsets in
+        // ShaderAbiContractTests.
 
         Iridium::SceneWorld world;
         addLight(world, 3, LightType::Spot, 2);
