@@ -441,6 +441,8 @@ namespace Iridium {
             }
         }
         if (fenceCount != 0) {
+            // M7R telemetry: counts frames that drain every in-flight frame.
+            CpuScope drainScope(cpuProfiler_, "cpu.renderer.drain_all_frames");
             const VkResult result = vkWaitForFences(device_, fenceCount,
                 fences.data(), VK_TRUE, UINT64_MAX);
             if (result != VK_SUCCESS) {
