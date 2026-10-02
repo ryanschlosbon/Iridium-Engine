@@ -32,9 +32,11 @@ try {
             $captureDir = Join-Path $outDir "$($fixture.Key)/$point"
             New-Item -ItemType Directory -Force $captureDir | Out-Null
             $log = Join-Path $outDir "$($fixture.Key)__$point.log"
-            $artifact = Get-M7RModelArtifact $root $fixture.Model
+            # Absolute paths: an engine built elsewhere resolves relative paths
+            # against its own compiled-in project root.
+            $artifact = Join-Path $root (Get-M7RModelArtifact $root $fixture.Model)
             $arguments = @(
-                '--benchmark', $fixture.Id, '--benchmark-manifest', $fixture.Manifest,
+                '--benchmark', $fixture.Id, '--benchmark-manifest', (Join-Path $root $fixture.Manifest),
                 '--cooked-model-artifact', $artifact,
                 '--window-size', '3840x2160', '--hidden-window', '--borderless-window',
                 '--output-transport', 'sdr',

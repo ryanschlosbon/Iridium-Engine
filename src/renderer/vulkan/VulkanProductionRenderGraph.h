@@ -95,6 +95,12 @@ namespace Iridium {
         bool depthPyramid = false;
         // M7.8 virtual-shadow working-set bytes; zero omits the VSM passes.
         uint64_t virtualShadowWorkingSetBytes = 0;
+        // Copies the 64-byte cluster diagnostics for CPU telemetry; only needed
+        // when frame counters are collected.
+        bool clusterTelemetryReadback = true;
+        // Declares the scene depth as a transfer source of the VSM request
+        // readback so the depth qualification oracle can copy it.
+        bool virtualShadowDepthSnapshot = true;
     };
 
     [[nodiscard]] RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(

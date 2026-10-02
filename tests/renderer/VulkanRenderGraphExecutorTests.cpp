@@ -1059,6 +1059,49 @@ namespace {
         return true;
     }
 
+    // M7R R2.3: telemetry/qualification-only graph work is declared only when
+    // its consumer is active; defaults reproduce the production graph.
+    bool testOptionalTelemetryAndQualificationReadbacks() {
+        const auto build = [](VulkanProductionGraphFeatures features) {
+            return buildVulkanProductionRenderGraph({127, 73},
+                VK_FORMAT_B8G8R8A8_SRGB, VK_FORMAT_B8G8R8A8_SRGB, false,
+                GBufferLayout::CanonicalReference, {}, 4096, 8192, true, {},
+                features);
+        };
+        const auto hasPass = [](const RenderGraph::CompiledGraph& graph,
+            std::string_view name) {
+            return std::ranges::any_of(graph.passes(),
+                [name](const auto& pass) { return pass.name == name; });
+        };
+        const auto hasResource = [](const RenderGraph::CompiledGraph& graph,
+            std::string_view name) {
+            return std::ranges::any_of(graph.resources(),
+                [name](const auto& resource) { return resource.name == name; });
+        };
+        const auto defaults = build({});
+        CHECK(hasPass(defaults, "lighting.cluster.readback"));
+        CHECK(hasResource(defaults, "lighting.cluster.diagnostics-readback"));
+        const auto noTelemetry = build({ .clusterTelemetryReadback = false });
+        CHECK(!hasPass(noTelemetry, "lighting.cluster.readback"));
+        CHECK(!hasResource(noTelemetry, "lighting.cluster.diagnostics-readback"));
+        CHECK(noTelemetry.passes().size() + 1 == defaults.passes().size());
+
+        const auto depthUsages = [](const RenderGraph::CompiledGraph& graph) {
+            const auto depth = std::ranges::find_if(graph.resources(),
+                [](const auto& resource) { return resource.name == "depth.opaque"; });
+            return depth == graph.resources().end() ? 0u : depth->usages;
+        };
+        const auto transferSource = RenderGraph::usageBit(
+            RenderGraph::Access::TransferSource);
+        const auto vsmOracle = build({ .virtualShadowWorkingSetBytes = 8'192 });
+        const auto vsmNoOracle = build({ .virtualShadowWorkingSetBytes = 8'192,
+            .virtualShadowDepthSnapshot = false });
+        CHECK(hasPass(vsmNoOracle, "shadow.virtual.request-readback"));
+        CHECK((depthUsages(vsmOracle) & transferSource) != 0);
+        CHECK((depthUsages(vsmNoOracle) & transferSource) == 0);
+        return true;
+    }
+
     bool testExternalBufferBindingAndUploadTopology() {
         const auto normal = buildVulkanProductionRenderGraph({127, 73}, VK_FORMAT_B8G8R8A8_SRGB);
         const auto upload = buildVulkanProductionRenderGraph({127, 73}, VK_FORMAT_B8G8R8A8_SRGB,
@@ -1134,6 +1177,7 @@ int main() {
         { "external buffer binding and clip upload topology", testExternalBufferBindingAndUploadTopology },
         { "access and format mappings", testAccessAndFormatMappings },
         { "optional occlusion depth pyramid", testOptionalOcclusionDepthPyramid },
+        { "optional telemetry and qualification readbacks", testOptionalTelemetryAndQualificationReadbacks },
         { "production topology contract", testProductionTopologyContract },
         { "HDR10 topology contract", testHdr10TopologyContract },
         { "scene and presentation extent separation",

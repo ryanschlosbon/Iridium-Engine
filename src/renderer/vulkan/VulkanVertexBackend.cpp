@@ -1793,6 +1793,10 @@ namespace Iridium {
             .depthPyramid = depthPyramidEnabled_,
             .virtualShadowWorkingSetBytes = virtualShadowResources_.initialized()
                 ? virtualShadowResources_.info().workingSetLayout.totalBytes : 0,
+            // The CPU profiler's enabled state is fixed for the process.
+            .clusterTelemetryReadback =
+                cpuProfiler_ != nullptr && cpuProfiler_->isEnabled(),
+            .virtualShadowDepthSnapshot = virtualShadowDepthQualificationOracle_,
         };
     }
 
@@ -9859,15 +9863,17 @@ VkDeviceSize offset = geometry->vertexOffset;
                 currentCmd, renderGraph_, frameIndex,
                 static_cast<uint32_t>(dimensions.clusterCount()),
                 lights.stats.activeLightCount);
-            renderGraph_.beginPass(currentCmd, "lighting.cluster.readback");
-            const VulkanBufferResource& diagnostics =
-                renderGraph_.bufferResource(frameIndex,
-                    kClusterDiagnosticResourceName);
-            const VkBufferCopy copy{ 0, 0, 64 };
-            vkCmdCopyBuffer(currentCmd, diagnostics.buffer,
-                clusterDiagnosticReadbackBuffers_[frameIndex].buffer,
-                1, &copy);
-            clusterDiagnosticReadbackPending_[frameIndex] = true;
+            if (productionGraphFeatures().clusterTelemetryReadback) {
+                renderGraph_.beginPass(currentCmd, "lighting.cluster.readback");
+                const VulkanBufferResource& diagnostics =
+                    renderGraph_.bufferResource(frameIndex,
+                        kClusterDiagnosticResourceName);
+                const VkBufferCopy copy{ 0, 0, 64 };
+                vkCmdCopyBuffer(currentCmd, diagnostics.buffer,
+                    clusterDiagnosticReadbackBuffers_[frameIndex].buffer,
+                    1, &copy);
+                clusterDiagnosticReadbackPending_[frameIndex] = true;
+            }
             submittedClusterCounts_[frameIndex] =
                 static_cast<uint32_t>(dimensions.clusterCount());
             scheduler.endGpuRange(clusterGpuRange);

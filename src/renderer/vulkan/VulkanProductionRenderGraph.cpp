@@ -182,12 +182,15 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
             sizeof(uint32_t))));
     RenderGraph::ResourceHandle clusterDiagnostics = graph.createResource(
         kClusterDiagnosticResourceName, bufferDesc(64, 16));
-    RenderGraph::ResourceDesc clusterReadbackDesc = bufferDesc(64, 16);
-    clusterReadbackDesc.lifetime = RenderGraph::ResourceLifetime::External;
-    clusterReadbackDesc.imported = true;
-    clusterReadbackDesc.initialAccess = Access::TransferDestination;
-    RenderGraph::ResourceHandle clusterReadback = graph.createResource(
-        "lighting.cluster.diagnostics-readback", clusterReadbackDesc);
+    RenderGraph::ResourceHandle clusterReadback{};
+    if (features.clusterTelemetryReadback) {
+        RenderGraph::ResourceDesc clusterReadbackDesc = bufferDesc(64, 16);
+        clusterReadbackDesc.lifetime = RenderGraph::ResourceLifetime::External;
+        clusterReadbackDesc.imported = true;
+        clusterReadbackDesc.initialAccess = Access::TransferDestination;
+        clusterReadback = graph.createResource(
+            "lighting.cluster.diagnostics-readback", clusterReadbackDesc);
+    }
     RenderGraph::ResourceHandle clusterCounts = graph.createResource(
         kClusterCountResourceName,
         bufferDesc(checkedBufferBytes(clusterCount, sizeof(uint32_t))));
@@ -464,11 +467,14 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
     graph.read(clusterFinalize, clusterCounts, Access::StorageRead);
     graph.read(clusterFinalize, clusterIndirect, Access::IndirectRead);
 
-    const RenderGraph::PassHandle clusterReadbackPass = graph.addPass(
-        "lighting.cluster.readback", RenderGraph::QueueClass::Transfer);
-    graph.read(clusterReadbackPass, clusterDiagnostics, Access::TransferSource);
-    clusterReadback = graph.write(clusterReadbackPass, clusterReadback,
-        Access::TransferDestination);
+    if (features.clusterTelemetryReadback) {
+        const RenderGraph::PassHandle clusterReadbackPass = graph.addPass(
+            "lighting.cluster.readback", RenderGraph::QueueClass::Transfer);
+        graph.read(clusterReadbackPass, clusterDiagnostics,
+            Access::TransferSource);
+        clusterReadback = graph.write(clusterReadbackPass, clusterReadback,
+            Access::TransferDestination);
+    }
 
     const auto readClusterProduct = [&](RenderGraph::PassHandle pass) {
         graph.read(pass, directionalShadow, Access::SampledRead);
@@ -507,7 +513,8 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
         const auto readback = graph.addPass("shadow.virtual.request-readback", RenderGraph::QueueClass::Transfer);
         graph.read(readback, virtualWorking, Access::TransferSource);
         // Explicit qualification can copy the exact depth consumed above.
-        graph.read(readback, depth, Access::TransferSource);
+        if (features.virtualShadowDepthSnapshot)
+            graph.read(readback, depth, Access::TransferSource);
         graph.exportResource(virtualWorking, Access::TransferSource);
     }
     if (transparencyPyramids) {
