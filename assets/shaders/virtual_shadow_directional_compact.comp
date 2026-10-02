@@ -1,0 +1,140 @@
+#version 450
+
+// Deterministic bounded reference compactor. This deliberately runs as one
+// invocation so it can freeze ordering/overflow semantics before the production
+// parallel hash/radix implementation replaces it.
+layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+struct ClipLevel {
+    mat4 worldToShadowClip;
+    ivec4 page;
+    ivec4 state;
+};
+struct Mark {
+    ivec4 page;
+    uvec4 metadata;
+};
+struct Request {
+    ivec4 address;
+    uvec4 metadata; // Samples, signed-priority bits, layers, selected level.
+};
+
+layout(std430, set = 0, binding = 0) readonly buffer ClipLevels {
+    ClipLevel values[];
+} levels;
+layout(std430, set = 0, binding = 1) readonly buffer Marks {
+    Mark values[];
+} marks;
+layout(std430, set = 0, binding = 2) buffer ScratchRequests {
+    Request values[];
+} scratchRequests;
+layout(std430, set = 0, binding = 3) writeonly buffer OutputRequests {
+    Request values[];
+} outputRequests;
+layout(std430, set = 0, binding = 4) writeonly buffer Telemetry {
+    uvec4 counts; // Unique, output, overflow, dropped samples.
+    uvec4 errors; // ABI mismatch, invalid level, reserved.
+} telemetry;
+
+layout(push_constant) uniform Parameters {
+    uint markCount;
+    uint levelCount;
+    uint maximumOutputRequests;
+    uint abiVersion;
+} parameters;
+
+uint saturatingAdd(uint left, uint right) {
+    return right > 0xffffffffu - left ? 0xffffffffu : left + right;
+}
+
+bool addressLess(ivec4 left, ivec4 right) {
+    if (left.x != right.x) return left.x < right.x;
+    if (left.y != right.y) return left.y < right.y;
+    // Match VirtualShadowPageAddress field order: page X/Y, mip, then level.
+    if (left.w != right.w) return left.w < right.w;
+    return left.z < right.z;
+}
+
+bool better(Request candidate, Request current) {
+    int candidatePriority = int(candidate.metadata.y);
+    int currentPriority = int(current.metadata.y);
+    if (candidatePriority != currentPriority)
+        return candidatePriority > currentPriority;
+    if (candidate.metadata.x != current.metadata.x)
+        return candidate.metadata.x > current.metadata.x;
+    return addressLess(candidate.address, current.address);
+}
+
+void main() {
+    uint uniqueCount = 0u;
+    uint abiMismatches = 0u;
+    uint invalidLevels = 0u;
+    for (uint markIndex = 0u; markIndex < parameters.markCount; ++markIndex) {
+        Mark mark = marks.values[markIndex];
+        if (mark.page.w != 1) continue; // Only mapped marks compact.
+        if (mark.metadata.y != parameters.abiVersion) {
+            ++abiMismatches;
+            continue;
+        }
+        int selectedIndex = mark.page.z;
+        if (selectedIndex < 0 || uint(selectedIndex) >= parameters.levelCount) {
+            ++invalidLevels;
+            continue;
+        }
+        ClipLevel level = levels.values[selectedIndex];
+        ivec4 address = ivec4(mark.page.xy,
+            int(uint(level.page.w) & 0xffu),
+            int((uint(level.page.w) >> 8u) & 0xffffu));
+        uint existing = uniqueCount;
+        for (uint index = 0u; index < uniqueCount; ++index) {
+            if (all(equal(scratchRequests.values[index].address, address))) {
+                existing = index;
+                break;
+            }
+        }
+        if (existing == uniqueCount) {
+            Request request;
+            request.address = address;
+            request.metadata = uvec4(mark.metadata.x, uint(level.state.x),
+                uint(level.state.y), uint(selectedIndex));
+            scratchRequests.values[uniqueCount++] = request;
+        }
+        else {
+            Request request = scratchRequests.values[existing];
+            request.metadata.x = saturatingAdd(request.metadata.x,
+                mark.metadata.x);
+            request.metadata.y = uint(max(int(request.metadata.y),
+                level.state.x));
+            request.metadata.z |= uint(level.state.y);
+            scratchRequests.values[existing] = request;
+        }
+    }
+
+    uint outputCount = min(uniqueCount, parameters.maximumOutputRequests);
+    for (uint outputIndex = 0u; outputIndex < outputCount; ++outputIndex) {
+        uint bestIndex = 0xffffffffu;
+        Request best;
+        for (uint index = 0u; index < uniqueCount; ++index) {
+            Request candidate = scratchRequests.values[index];
+            if ((candidate.metadata.w & 0x80000000u) != 0u) continue;
+            if (bestIndex == 0xffffffffu || better(candidate, best)) {
+                bestIndex = index;
+                best = candidate;
+            }
+        }
+        best.metadata.w &= 0x7fffffffu;
+        outputRequests.values[outputIndex] = best;
+        scratchRequests.values[bestIndex].metadata.w |= 0x80000000u;
+    }
+
+    uint droppedSamples = 0u;
+    for (uint index = 0u; index < uniqueCount; ++index) {
+        Request request = scratchRequests.values[index];
+        if ((request.metadata.w & 0x80000000u) == 0u)
+            droppedSamples = saturatingAdd(droppedSamples,
+                request.metadata.x);
+    }
+    telemetry.counts = uvec4(uniqueCount, outputCount,
+        uniqueCount - outputCount, droppedSamples);
+    telemetry.errors = uvec4(abiMismatches, invalidLevels, 0u, 0u);
+}

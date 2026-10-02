@@ -1,0 +1,107 @@
+#version 450
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+struct ClipLevel {
+    mat4 worldToShadowClip;
+    ivec4 page;  // Signed origin XY, virtual resolution, packed level/mip.
+    ivec4 state; // Priority, required layers, reserved.
+};
+
+struct Receiver {
+    vec4 worldPosition;
+    uvec4 metadata; // Receiver samples, reserved.
+};
+
+struct Mark {
+    ivec4 page;     // Signed world page XY, selected level index, status.
+    uvec4 metadata; // Receiver samples, ABI, reserved.
+};
+
+layout(std430, set = 0, binding = 0) readonly buffer ClipLevels {
+    ClipLevel values[];
+} levels;
+layout(std430, set = 0, binding = 1) readonly buffer Receivers {
+    Receiver values[];
+} receivers;
+layout(std430, set = 0, binding = 2) writeonly buffer Marks {
+    Mark values[];
+} marks;
+
+layout(push_constant) uniform Parameters {
+    uint receiverCount;
+    uint levelCount;
+    uint pageSizeTexels;
+    uint guardBandPages;
+    uint coarsestLevel;
+    uint abiVersion;
+} parameters;
+
+bool finiteValue(float value) {
+    return !isnan(value) && !isinf(value);
+}
+
+void main() {
+    uint receiverIndex = gl_GlobalInvocationID.x;
+    if (receiverIndex >= parameters.receiverCount) return;
+
+    Receiver receiver = receivers.values[receiverIndex];
+    Mark result;
+    result.page = ivec4(0, 0, -1, 0); // Unmapped.
+    result.metadata = uvec4(receiver.metadata.x, parameters.abiVersion, 0u, 0u);
+    if (receiver.metadata.x == 0u) {
+        marks.values[receiverIndex] = result;
+        return;
+    }
+    if (!finiteValue(receiver.worldPosition.x) ||
+        !finiteValue(receiver.worldPosition.y) ||
+        !finiteValue(receiver.worldPosition.z)) {
+        result.page.w = 2; // InvalidReceiver.
+        marks.values[receiverIndex] = result;
+        return;
+    }
+
+    int selectedIndex = -1;
+    uint selectedLevel = 0xffffffffu;
+    vec3 selectedNdc = vec3(0.0);
+    for (uint index = 0u; index < parameters.levelCount; ++index) {
+        ClipLevel level = levels.values[index];
+        vec4 clip = level.worldToShadowClip * receiver.worldPosition;
+        if (!finiteValue(clip.x) || !finiteValue(clip.y) ||
+            !finiteValue(clip.z) || !finiteValue(clip.w) ||
+            abs(clip.w) <= 1e-7)
+            continue;
+        vec3 ndc = clip.xyz / clip.w;
+        uint levelIndex = uint(level.page.w) & 0xffu;
+        float guard = levelIndex == parameters.coarsestLevel ? 0.0 :
+            2.0 * float(parameters.guardBandPages * parameters.pageSizeTexels) /
+                float(uint(level.page.z));
+        if (ndc.x < -1.0 + guard || ndc.x > 1.0 - guard ||
+            ndc.y < -1.0 + guard || ndc.y > 1.0 - guard ||
+            ndc.z < 0.0 || ndc.z > 1.0)
+            continue;
+        if (selectedIndex < 0 || levelIndex < selectedLevel) {
+            selectedIndex = int(index);
+            selectedLevel = levelIndex;
+            selectedNdc = ndc;
+        }
+    }
+    if (selectedIndex < 0) {
+        marks.values[receiverIndex] = result;
+        return;
+    }
+
+    ClipLevel selected = levels.values[selectedIndex];
+    uint pagesPerAxis = uint(selected.page.z) / parameters.pageSizeTexels;
+    uvec2 localPage = min(uvec2((selectedNdc.xy + 1.0) * 0.5 *
+        float(pagesPerAxis)), uvec2(pagesPerAxis - 1u));
+    if (selected.page.x > 2147483647 - int(localPage.x) ||
+        selected.page.y > 2147483647 - int(localPage.y)) {
+        result.page.w = 3; // AddressOverflow.
+        marks.values[receiverIndex] = result;
+        return;
+    }
+    result.page = ivec4(selected.page.xy + ivec2(localPage),
+        selectedIndex, 1); // Mapped.
+    marks.values[receiverIndex] = result;
+}

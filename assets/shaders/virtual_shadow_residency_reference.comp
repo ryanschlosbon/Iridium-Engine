@@ -1,0 +1,115 @@
+#version 450
+// Deterministic GPU reference allocator. Serial arbitration is deliberately a
+// qualification baseline, not a production scalability claim. Inputs are unique
+// requests in CPU-oracle priority/coverage/full-address order, not marking order.
+layout(local_size_x = 1) in;
+struct Key { uvec4 owner; uvec4 page; uvec2 revision; uint descriptor; uint abi; };
+struct Request { Key key; uvec2 staticRevision; uvec2 dynamicRevision; uint samples; int priority; uint layers; uint reserved; };
+struct Resident { Key key; uvec2 staticRevision; uvec2 dynamicRevision; uvec2 used; uvec2 rendered; uint physical; int priority; uint valid; uint reserved; };
+struct Mapping { Key key; uvec2 staticRevision; uvec2 dynamicRevision; uint physical; uint samples; uint state; uint fallback; uint layers; uint updates; uint reserved0; uint reserved1; };
+layout(std430, binding=0) readonly buffer Requests { Request values[]; } requests;
+layout(std430, binding=1) buffer Residency { Resident values[]; } residency;
+layout(std430, binding=2) writeonly buffer Mappings { Mapping values[]; } mappings;
+layout(std430, binding=3) buffer Telemetry { uint values[12]; } telemetry;
+layout(push_constant) uniform Parameters { uint count; uint capacity; uint budget; uint flags; uvec2 frame; } parameters;
+bool equalKey(Key a, Key b) {
+    return all(equal(a.owner,b.owner)) && all(equal(a.page,b.page)) && all(equal(a.revision,b.revision)) && a.descriptor==b.descriptor && a.abi==b.abi;
+}
+bool less64(uvec2 a,uvec2 b) { return a.y!=b.y ? a.y<b.y : a.x<b.x; }
+bool lessSigned64(uvec2 a,uvec2 b) {
+    return a.y!=b.y ? int(a.y)<int(b.y) : a.x<b.x;
+}
+bool lessKey(Key a,Key b) {
+    // UUID comparison is byte-lexicographic, NOT little-endian word order.
+    for(uint i=0u;i<16u;++i) {
+        uint x=(a.owner[i/4u]>>((i%4u)*8u))&255u;
+        uint y=(b.owner[i/4u]>>((i%4u)*8u))&255u;
+        if(x!=y) return x<y;
+    }
+    if(any(notEqual(a.revision,b.revision))) return less64(a.revision,b.revision);
+    if(any(notEqual(a.page.xy,b.page.xy))) return lessSigned64(a.page.xy,b.page.xy);
+    if(any(notEqual(a.page.zw,b.page.zw))) return lessSigned64(a.page.zw,b.page.zw);
+    if((a.descriptor&65535u)!=(b.descriptor&65535u)) return (a.descriptor&65535u)<(b.descriptor&65535u);
+    if(((a.descriptor>>16)&255u)!=((b.descriptor>>16)&255u)) return ((a.descriptor>>16)&255u)<((b.descriptor>>16)&255u);
+    return (a.descriptor>>24)<(b.descriptor>>24);
+}
+bool precedes(Request a,Request b) {
+    if(a.priority!=b.priority) return a.priority>b.priority;
+    if(a.samples!=b.samples) return a.samples>b.samples;
+    return lessKey(a.key,b.key);
+}
+bool validKey(Key key) {
+    uint kind=key.descriptor>>24, face=(key.descriptor>>16)&255u;
+    uint version=(key.owner.y>>20)&15u;
+    return key.abi==1u && any(notEqual(key.owner,uvec4(0))) && (version==5u || version==7u) &&
+        (key.owner.z&192u)==128u && any(notEqual(key.revision,uvec2(0))) && kind<=2u &&
+        (kind!=2u || face<6u) && (kind!=1u || face==0u);
+}
+bool requested(Key key) {
+    for(uint i=0u;i<parameters.count;++i) if(equalKey(key,requests.values[i].key)) return true;
+    return false;
+}
+void main() {
+    for(uint i=0u;i<12u;++i) telemetry.values[i]=0u;
+    // Bound this serial qualification baseline; it is never the production
+    // 16K-page allocator. Keep in sync with the RHI reference capacity contract.
+    if(parameters.capacity==0u || parameters.capacity>256u || parameters.count>256u || parameters.capacity>residency.values.length() ||
+       parameters.count>requests.values.length() || parameters.count>mappings.values.length() ||
+       parameters.budget==0u || parameters.budget>parameters.capacity || (parameters.flags&~3u)!=0u) {
+        telemetry.values[8]=1u; return;
+    }
+    // Fail before modifying residency if duplicate or malformed input is found.
+    for(uint i=0u;i<parameters.count;++i) {
+        Request r=requests.values[i];
+        if(!validKey(r.key) || r.samples==0u || r.layers==0u || r.layers>3u || r.reserved!=0u) {telemetry.values[8]=1u;return;}
+        if(i!=0u && !precedes(requests.values[i-1u],r)) {telemetry.values[8]=1u;return;}
+        for(uint j=0u;j<i;++j) if(equalKey(r.key,requests.values[j].key)) {telemetry.values[8]=1u;return;}
+    }
+    for(uint i=0u;i<parameters.capacity;++i) {
+        Resident r=residency.values[i]; if(r.key.abi==0u) continue;
+        if(!validKey(r.key) || r.physical!=i || r.valid>3u || r.reserved!=0u) {telemetry.values[8]=1u;return;}
+        for(uint j=0u;j<i;++j) if(equalKey(r.key,residency.values[j].key)) {telemetry.values[8]=1u;return;}
+    }
+    telemetry.values[0]=parameters.count;
+    uint remaining=parameters.budget;
+    for(uint i=0u;i<parameters.count;++i) {
+        Request r=requests.values[i];
+        Mapping m; m.key=r.key; m.staticRevision=r.staticRevision; m.dynamicRevision=r.dynamicRevision;
+        m.physical=0xffffffffu; m.samples=r.samples; m.state=0u; m.fallback=(parameters.flags>>1)&1u;
+        m.layers=r.layers; m.updates=0u; m.reserved0=m.reserved1=0u;
+        uint found=0xffffffffu;
+        for(uint p=0u;p<parameters.capacity;++p) if(equalKey(r.key,residency.values[p].key)) {found=p;break;}
+        if(found!=0xffffffffu) {
+            Resident current=residency.values[found]; current.used=parameters.frame; current.priority=r.priority; m.physical=found;
+            uint updates=r.layers&~current.valid;
+            if((r.layers&1u)!=0u && ((parameters.flags&1u)==0u || any(notEqual(r.staticRevision,current.staticRevision)))) updates|=1u;
+            if((r.layers&2u)!=0u && any(notEqual(r.dynamicRevision,current.dynamicRevision))) updates|=2u;
+            m.updates=updates;
+            if(updates==0u) {m.state=1u;++telemetry.values[1];}
+            else {
+                current.valid&=~updates;
+                if(remaining!=0u) {--remaining; m.state=2u; ++telemetry.values[4]; current.staticRevision=r.staticRevision;current.dynamicRevision=r.dynamicRevision;}
+                else {++telemetry.values[5];++telemetry.values[6];}
+            }
+            residency.values[found]=current; mappings.values[i]=m; continue;
+        }
+        if(remaining==0u) {++telemetry.values[5];++telemetry.values[6];mappings.values[i]=m;continue;}
+        uint slot=0xffffffffu;
+        for(uint p=0u;p<parameters.capacity;++p) if(residency.values[p].key.abi==0u) {slot=p;break;}
+        if(slot!=0xffffffffu) ++telemetry.values[2];
+        else {
+            for(uint p=0u;p<parameters.capacity;++p) {
+                Resident candidate=residency.values[p]; if(requested(candidate.key)) continue;
+                if(slot==0xffffffffu) {slot=p;continue;}
+                Resident victim=residency.values[slot];
+                if(candidate.priority<victim.priority || (candidate.priority==victim.priority &&
+                    (less64(candidate.used,victim.used) || (all(equal(candidate.used,victim.used)) && p<slot)))) slot=p;
+            }
+            if(slot==0xffffffffu) {++telemetry.values[5];++telemetry.values[7];mappings.values[i]=m;continue;}
+            ++telemetry.values[3];
+        }
+        Resident next; next.key=r.key;next.staticRevision=r.staticRevision;next.dynamicRevision=r.dynamicRevision;
+        next.used=parameters.frame;next.rendered=uvec2(0);next.physical=slot;next.priority=r.priority;next.valid=0u;next.reserved=0u;
+        residency.values[slot]=next; --remaining;++telemetry.values[4];m.physical=slot;m.state=2u;m.updates=r.layers;mappings.values[i]=m;
+    }
+}

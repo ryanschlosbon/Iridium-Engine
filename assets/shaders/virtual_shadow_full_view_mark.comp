@@ -1,0 +1,70 @@
+#version 450
+layout(local_size_x = 64) in;
+struct ClipLevel { mat4 worldToShadowClip; ivec4 page; ivec4 state; };
+struct Mark { ivec4 page; uvec4 metadata; };
+layout(set = 0, binding = 0) uniform sampler2D sceneDepth;
+layout(std430, set = 0, binding = 1) readonly buffer Levels { ClipLevel values[]; } levels;
+layout(std430, set = 0, binding = 2) buffer Marks { Mark values[]; } marks;
+layout(push_constant) uniform Parameters {
+    mat4 inverseViewProjection;
+    uvec4 source; // Width, height, level count, page size.
+    uvec4 policy; // Guard pages, coarsest level, reverse depth, stage (clear/mark).
+} parameters;
+bool finiteValue(float x) { return !isnan(x) && !isinf(x); }
+void main() {
+    uint index = gl_GlobalInvocationID.x + gl_GlobalInvocationID.y * gl_NumWorkGroups.x * 64u;
+    if (parameters.policy.w == 0u) {
+        uint offset = 0u;
+        for (uint i = 0u; i < parameters.source.z; ++i) {
+            ClipLevel level = levels.values[i];
+            uint axis = uint(level.page.z) / parameters.source.w;
+            uint count = axis * axis;
+            if (index >= offset && index - offset < count) {
+                uint local = index - offset;
+                marks.values[index].page = ivec4(level.page.xy +
+                    ivec2(local % axis, local / axis), int(i), 0);
+                marks.values[index].metadata = uvec4(0u, 2u, 0u, 0u);
+                return;
+            }
+            offset += count;
+        }
+        return;
+    }
+    if (index >= parameters.source.x * parameters.source.y) return;
+    uvec2 pixel = uvec2(index % parameters.source.x, index / parameters.source.x);
+    float depth = texelFetch(sceneDepth, ivec2(pixel), 0).r;
+    if (!finiteValue(depth) || depth < 0.0 || depth > 1.0 ||
+        depth == (parameters.policy.z == 0u ? 1.0 : 0.0)) return;
+    vec2 ndc = (vec2(pixel) + 0.5) / vec2(parameters.source.xy) * 2.0 - 1.0;
+    vec4 world = parameters.inverseViewProjection * vec4(ndc, depth, 1.0);
+    if (!finiteValue(world.w) || abs(world.w) <= 1e-7) return;
+    world = vec4(world.xyz / world.w, 1.0);
+    if (!finiteValue(world.x) || !finiteValue(world.y) || !finiteValue(world.z)) return;
+    uint offset = 0u, selected = 0xffffffffu, selectedCell = 0u;
+    for (uint i = 0u; i < parameters.source.z; ++i) {
+        ClipLevel level = levels.values[i];
+        uint axis = uint(level.page.z) / parameters.source.w;
+        uint ordinal = uint(level.page.w) & 0xffu;
+        vec4 clip = level.worldToShadowClip * world;
+        if (finiteValue(clip.x) && finiteValue(clip.y) && finiteValue(clip.z) &&
+            finiteValue(clip.w) && abs(clip.w) > 1e-7) {
+            vec3 point = clip.xyz / clip.w;
+            float guard = ordinal == parameters.policy.y ? 0.0 :
+                2.0 * float(parameters.policy.x * parameters.source.w) / float(uint(level.page.z));
+            if (point.x >= -1.0 + guard && point.x <= 1.0 - guard &&
+                point.y >= -1.0 + guard && point.y <= 1.0 - guard &&
+                point.z >= 0.0 && point.z <= 1.0 && ordinal < selected) {
+                uvec2 local = min(uvec2((point.xy + 1.0) * 0.5 * float(axis)), uvec2(axis - 1u));
+                selected = ordinal;
+                selectedCell = offset + local.y * axis + local.x;
+            }
+        }
+        offset += axis * axis;
+    }
+    if (selected != 0xffffffffu) {
+        // One sample per source pixel; the host bounds pixels to UINT32_MAX,
+        // so a cell's exact coverage cannot overflow. No spin-lock is needed.
+        atomicAdd(marks.values[selectedCell].metadata.x, 1u);
+        atomicExchange(marks.values[selectedCell].page.w, 1);
+    }
+}
