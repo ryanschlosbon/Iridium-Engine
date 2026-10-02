@@ -95,6 +95,10 @@ namespace Iridium {
         uint32_t ordinary2AtlasHeight = 0;
         bool gpuLightRecordsAvailable = false;
         uint32_t maxGpuLightRecords = 0;
+        bool multiDrawIndirectAvailable = false;
+        bool drawIndirectFirstInstanceAvailable = false;
+        bool drawIndirectCountAvailable = false;
+        uint32_t maxDrawIndirectCount = 0;
         uint32_t gpuLightCapacity = 0;
         uint32_t gpuLightActiveCount = 0;
         uint64_t gpuLightUploadBytes = 0;

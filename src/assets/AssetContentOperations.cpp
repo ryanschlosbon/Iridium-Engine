@@ -646,6 +646,45 @@ namespace Iridium {
     }
 
     AssetContentMutationResult
+        AssetContentOperations::moveFolder(
+            std::string_view rootId,
+            const std::filesystem::path& directory,
+            const std::filesystem::path& destinationDirectory) const {
+        try {
+            const AssetRoot* assetRoot = root(rootId);
+            if (!assetRoot || directory.empty()) {
+                throw std::runtime_error(
+                    "Project asset root folders cannot be moved.");
+            }
+            const std::filesystem::path source = resolve(
+                *assetRoot, directory);
+            const std::filesystem::path destinationParent = resolve(
+                *assetRoot, destinationDirectory, true);
+            if (!std::filesystem::is_directory(source) ||
+                !std::filesystem::is_directory(destinationParent)) {
+                throw std::runtime_error(
+                    "Folder move source or destination no longer exists.");
+            }
+            const std::filesystem::path destination =
+                destinationParent / source.filename();
+            if (source == destination) {
+                return { .path = destination, .previousPath = source };
+            }
+            if (inside(source, destinationParent) ||
+                std::filesystem::exists(destination)) {
+                throw std::runtime_error(
+                    "A folder cannot move into itself or replace an existing folder.");
+            }
+            validateFolderMoveDependencies(source);
+            std::filesystem::rename(source, destination);
+            return { .path = destination, .previousPath = source };
+        }
+        catch (const std::exception& exception) {
+            return failure(exception);
+        }
+    }
+
+    AssetContentMutationResult
         AssetContentOperations::moveAsset(
             const AssetCatalogRecord& rootRecord,
             const std::filesystem::path&

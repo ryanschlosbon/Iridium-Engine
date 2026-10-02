@@ -70,10 +70,33 @@ namespace Iridium {
         case Color::OutputTransport::Hdr10Pq:
             found = findCandidate(availableFormats, Hdr10Candidates, result.surfaceFormat);
             break;
+        case Color::OutputTransport::Automatic:
+            // Windows desktop composition is most predictable through scRGB.
+            // Prefer HDR10 only when extended-linear output is unavailable.
+            if (findCandidate(availableFormats, ScRgbCandidates,
+                    result.surfaceFormat)) {
+                result.effective = Color::OutputTransport::ScRgb;
+                result.diagnostic = "Automatic output selected Windows HDR (scRGB)";
+                found = true;
+            }
+            else if (findCandidate(availableFormats, Hdr10Candidates,
+                    result.surfaceFormat)) {
+                result.effective = Color::OutputTransport::Hdr10Pq;
+                result.diagnostic = "Automatic output selected HDR10/PQ";
+                found = true;
+            }
+            else if (findCandidate(availableFormats, SdrCandidates,
+                    result.surfaceFormat)) {
+                result.effective = Color::OutputTransport::SdrSrgb;
+                result.diagnostic = "Automatic output selected Windows SDR; no HDR surface is available";
+                found = true;
+            }
+            break;
         }
 
         if (!found) {
             if (requested == Color::OutputTransport::SdrSrgb ||
+                requested == Color::OutputTransport::Automatic ||
                 !findSdrFallback(availableFormats, result.surfaceFormat)) {
                 throw std::runtime_error(
                     "required SDR Rec.709/sRGB surface format is unavailable");
@@ -89,8 +112,10 @@ namespace Iridium {
             result.effective == Color::OutputTransport::Hdr10Pq && hdrMetadataSupported;
         if (result.effective == Color::OutputTransport::Hdr10Pq &&
             !hdrMetadataSupported) {
-            result.diagnostic =
+            const char* suffix =
                 "HDR10/PQ selected without VK_EXT_hdr_metadata; static display metadata is unavailable";
+            if (result.diagnostic.empty()) result.diagnostic = suffix;
+            else result.diagnostic += std::string("; ") + suffix;
         }
         return result;
     }

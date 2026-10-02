@@ -35,7 +35,7 @@
         },
         {
           "path": "ordinary2_closed_tetrahedron.gltf.iridium.meta",
-          "sha256": "f33ad04102d048af6645fe74261cfc7c3326f917ba9c244ad67b79f0416b0f91"
+          "sha256": "3407e0624055ad5597cab4a7693ee419f81e23c44bca866f886c0f09973fb966"
         }
       ],
       "expected_behavior": [
@@ -82,7 +82,7 @@
         },
         {
           "path": "ordinary2_closed_tetrahedron.gltf.iridium.meta",
-          "sha256": "f33ad04102d048af6645fe74261cfc7c3326f917ba9c244ad67b79f0416b0f91"
+          "sha256": "3407e0624055ad5597cab4a7693ee419f81e23c44bca866f886c0f09973fb966"
         }
       ],
       "expected_behavior": [
@@ -129,7 +129,7 @@
         },
         {
           "path": "ordinary2_closed_tetrahedron.gltf.iridium.meta",
-          "sha256": "f33ad04102d048af6645fe74261cfc7c3326f917ba9c244ad67b79f0416b0f91"
+          "sha256": "3407e0624055ad5597cab4a7693ee419f81e23c44bca866f886c0f09973fb966"
         }
       ],
       "expected_behavior": [
@@ -175,7 +175,7 @@
         },
         {
           "path": "ordinary2_invalid_open_tetrahedron.gltf.iridium.meta",
-          "sha256": "58f9330e92acf14cc8cb03a88c83ba3ff737fb1afe46ec957c4011875fdc731f"
+          "sha256": "c42142d219233fee065e38c633f550574c146f28d5c4a527b81a9da9aebe6808"
         }
       ],
       "expected_behavior": [
@@ -223,7 +223,7 @@
         },
         {
           "path": "hero4_nested_tetrahedra.gltf.iridium.meta",
-          "sha256": "d97895f58d87dbffff6a176313ff7bab681bc887b6ab7a521711d70d366e28c7"
+          "sha256": "8c3700e75f8891fe56da77661afcf9c3c46a65033d452111cfec4f60dce6ca57"
         }
       ],
       "expected_behavior": [
@@ -267,7 +267,7 @@
         },
         {
           "path": "hero4_crossing_tetrahedra.gltf.iridium.meta",
-          "sha256": "66bf856b3241792ea25af9af0d72b41745d25c4fbf7f2714652a9929f6cdcbce"
+          "sha256": "a5c3c76e63733b7a01015e9b3cbfe7f6a12087604991c068959fd7ec56d5cfb2"
         }
       ],
       "expected_behavior": [
@@ -311,7 +311,7 @@
         },
         {
           "path": "cinematic8_nested_tetrahedra.gltf.iridium.meta",
-          "sha256": "f570c23e91dad2e2ea009258603fb4ab4f85379f18fb0dc8e0a3bcef050edc58"
+          "sha256": "649d2dab041b6c9a0768cf1519fe4e189c4d17f2aba97c21798cf95a14b0e623"
         }
       ],
       "expected_behavior": [
@@ -355,7 +355,7 @@
       },
       {
         "path": "cinematic8_overflow_tetrahedra.gltf.iridium.meta",
-        "sha256": "2fc61f1d6030f2bf2a82e61eeab5c3a30e2f3099d6ebb0066ca1ce0c635ec8e2"
+        "sha256": "c4b75943de75107e6309171359249013277f3627ce5c5c064b787488b4a84020"
       }
     ],
     "expected_behavior": [
@@ -399,7 +399,7 @@
       },
       {
         "path": "hero4_early_termination_tetrahedra.gltf.iridium.meta",
-        "sha256": "f5bc60d01dc82725e1fbda9f9709b22b3ad927f21ef873785b2d27268f617c13"
+        "sha256": "8d516361cf52040bfd3ee8d40172ee399d02c2e906afd4f6931f5983d43a3cd2"
       }
     ],
     "expected_behavior": [
@@ -442,7 +442,7 @@
           "sha256": "04fb7bebca8c8c9027f1f522de491f9212eb6c85c5b58be0e866afb36dabbe0d"
         },
         {
-          "path": "cinematic8_nested_tetrahedra.mixed-deep.iridium.meta",
+          "path": "cinematic8_nested_tetrahedra.mixed-deep.metadata-fixture.json",
           "sha256": "720eedbd7d32286dd7e19e55495678efc069fd3705dbbf5e55bd6c275c394887"
         }
       ],
@@ -450,6 +450,185 @@
         "The two outer shells execute as Hero4 while the two inner shells execute as Cinematic8.",
         "Both tier atlases remain independent, but one scene-resolve pass consumes accepted packets in global transparent order.",
         "Descriptor tier switches remain Vulkan-valid and accepted packets never double-render through compatibility forward."
+      ],
+      "unavailable_capabilities": []
+    },
+    {
+      "id": "weighted_oit_particles_v1",
+      "revision": 1,
+      "required": true,
+      "source_asset": "weighted_oit_particles.gltf",
+      "environment": {
+        "kind": "procedural_constant",
+        "constant_linear_rgb": [0.04, 0.05, 0.08]
+      },
+      "camera": {
+        "id": "m6_transparency_lab_front_v1",
+        "position": [0.0, 0.0, 3.0],
+        "target": [0.0, 0.0, 0.09],
+        "up": [0.0, 1.0, 0.0],
+        "vertical_fov_degrees": 45.0,
+        "near": 0.05,
+        "far": 20.0
+      },
+      "scene_factory": {
+        "kind": "instanced_grid",
+        "instance_grid": [8, 8, 4],
+        "instance_spacing": [0.17, 0.17, 0.06],
+        "instance_scale": [1.0, 1.0, 1.0]
+      },
+      "output_label": "weighted_oit_particles_scene_linear_ap1",
+      "warmup_frames": 8,
+      "measured_frames": 8,
+      "content_files": [
+        {
+          "path": "weighted_oit_particles.gltf",
+          "sha256": "b3ad75cdcc70683da3d8cfc54740af28711d34d51b488287b728278a32659b68"
+        },
+        {
+          "path": "weighted_oit_particles.gltf.iridium.meta",
+          "sha256": "406250d489ae2c21108aea8fd9f135539b66b78be91f3d0c1b4907e27a7f580d"
+        }
+      ],
+      "expected_behavior": [
+        "All 256 explicit particles route through one resident instanced WeightedOIT accumulation draw and one resolve without sorted fallback after prewarm.",
+        "The bounded scene-linear HDR accumulation remains finite under overlapping alpha and emissive-16 fragments.",
+        "WeightedOIT does not activate refraction pyramids or any layered-glass atlas.",
+        "Seeds 0 through 63 produce distinct allocation-free draw orders whose scene-linear captures remain within the frozen FP16 error envelope."
+      ],
+      "unavailable_capabilities": []
+    },
+    {
+      "id": "weighted_oit_particles_4096_v1",
+      "revision": 1,
+      "required": true,
+      "source_asset": "weighted_oit_particles.gltf",
+      "environment": {
+        "kind": "procedural_constant",
+        "constant_linear_rgb": [0.04, 0.05, 0.08]
+      },
+      "camera": {
+        "id": "m6_transparency_lab_front_v1",
+        "position": [0.0, 0.0, 3.0],
+        "target": [0.0, 0.0, 0.09],
+        "up": [0.0, 1.0, 0.0],
+        "vertical_fov_degrees": 45.0,
+        "near": 0.05,
+        "far": 20.0
+      },
+      "scene_factory": {
+        "kind": "instanced_grid",
+        "instance_submission": "render_batch",
+        "instance_grid": [16, 16, 16],
+        "instance_spacing": [0.085, 0.085, 0.015],
+        "instance_scale": [0.5, 0.5, 0.5]
+      },
+      "output_label": "weighted_oit_particles_4096_scene_linear_ap1",
+      "warmup_frames": 8,
+      "measured_frames": 8,
+      "content_files": [
+        {
+          "path": "weighted_oit_particles.gltf",
+          "sha256": "b3ad75cdcc70683da3d8cfc54740af28711d34d51b488287b728278a32659b68"
+        },
+        {
+          "path": "weighted_oit_particles.gltf.iridium.meta",
+          "sha256": "406250d489ae2c21108aea8fd9f135539b66b78be91f3d0c1b4907e27a7f580d"
+        }
+      ],
+      "expected_behavior": [
+        "All 4096 explicit particles collapse into one instanced accumulation draw with 16 depth layers and no sorted fallback.",
+        "The transform stream uploads exactly 262144 bytes per populated frame and remains allocation-free after topology prewarm.",
+        "WeightedOIT remains finite at the 16x target-overdraw tier without refraction or layered storage."
+      ],
+      "unavailable_capabilities": []
+    },
+    {
+      "id": "weighted_oit_particles_65536_v1",
+      "revision": 1,
+      "required": true,
+      "source_asset": "weighted_oit_particles.gltf",
+      "environment": {
+        "kind": "procedural_constant",
+        "constant_linear_rgb": [0.04, 0.05, 0.08]
+      },
+      "camera": {
+        "id": "m6_transparency_lab_front_v1",
+        "position": [0.0, 0.0, 3.0],
+        "target": [0.0, 0.0, 0.09],
+        "up": [0.0, 1.0, 0.0],
+        "vertical_fov_degrees": 45.0,
+        "near": 0.05,
+        "far": 20.0
+      },
+      "scene_factory": {
+        "kind": "instanced_grid",
+        "instance_submission": "render_batch",
+        "instance_grid": [32, 32, 64],
+        "instance_spacing": [0.0425, 0.0425, 0.00375],
+        "instance_scale": [0.25, 0.25, 0.25]
+      },
+      "output_label": "weighted_oit_particles_65536_scene_linear_ap1",
+      "warmup_frames": 8,
+      "measured_frames": 8,
+      "content_files": [
+        {
+          "path": "weighted_oit_particles.gltf",
+          "sha256": "b3ad75cdcc70683da3d8cfc54740af28711d34d51b488287b728278a32659b68"
+        },
+        {
+          "path": "weighted_oit_particles.gltf.iridium.meta",
+          "sha256": "406250d489ae2c21108aea8fd9f135539b66b78be91f3d0c1b4907e27a7f580d"
+        }
+      ],
+      "expected_behavior": [
+        "All 65536 explicit particles collapse into one instanced accumulation draw at the production stream bound with 64 depth layers and no sorted fallback.",
+        "The transform stream uploads exactly 4194304 bytes per populated frame with two frame-context buffers resident only while WeightedOIT topology is active.",
+        "WeightedOIT remains finite at the 64x target-overdraw tier and reports zero capacity fallback."
+      ],
+      "unavailable_capabilities": []
+    },
+    {
+      "id": "weighted_oit_particles_hdr256_v1",
+      "revision": 1,
+      "required": true,
+      "source_asset": "weighted_oit_particles_hdr256.gltf",
+      "environment": {
+        "kind": "procedural_constant",
+        "constant_linear_rgb": [0.04, 0.05, 0.08]
+      },
+      "camera": {
+        "id": "m6_transparency_lab_front_v1",
+        "position": [0.0, 0.0, 3.0],
+        "target": [0.0, 0.0, 0.09],
+        "up": [0.0, 1.0, 0.0],
+        "vertical_fov_degrees": 45.0,
+        "near": 0.05,
+        "far": 20.0
+      },
+      "scene_factory": {
+        "kind": "instanced_grid",
+        "instance_grid": [8, 8, 4],
+        "instance_spacing": [0.17, 0.17, 0.06],
+        "instance_scale": [1.0, 1.0, 1.0]
+      },
+      "output_label": "weighted_oit_particles_hdr256_scene_linear_ap1",
+      "warmup_frames": 8,
+      "measured_frames": 1,
+      "content_files": [
+        {
+          "path": "weighted_oit_particles_hdr256.gltf",
+          "sha256": "60d886c4674041ae96cb55e1c07bab29f542cf0c9fc8207c0e9ec8423c5649bf"
+        },
+        {
+          "path": "weighted_oit_particles_hdr256.gltf.iridium.meta",
+          "sha256": "4bb44d24080a2963b96d9025c50c53e9e3206988ed359d7e59df551796482255"
+        }
+      ],
+      "expected_behavior": [
+        "All 256 explicit particles route through resident WeightedOIT accumulation and one resolve without sorted fallback after prewarm.",
+        "The scene-linear emissive-256 boundary remains finite under overlapping alpha and the bounded per-fragment radiance policy.",
+        "The readback reaches the shader's declared bounded-radiance regime without activating refraction or layered storage."
       ],
       "unavailable_capabilities": []
     }

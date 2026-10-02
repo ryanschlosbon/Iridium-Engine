@@ -1,5 +1,6 @@
 #pragma once
 #include "../EditorPanel.h"
+#include <imgui.h>
 
 struct EditorOutputSettings;
 namespace Iridium { struct ProjectShadowSettings; }
@@ -12,7 +13,8 @@ public:
         Iridium::ProjectShadowSettings* shadowSettingsPtr,
         bool* shadowSettingsChangedPtr,
         Iridium::ProjectReflectionProbeSettings* reflectionProbeSettingsPtr,
-        bool* reflectionProbeSettingsChangedPtr);
+        bool* reflectionProbeSettingsChangedPtr,
+        int* layeredInterfaceOverridePtr);
 
     void OnImGuiRender(Registry& registry, Iridium::AssetManager* assetManager) override;
 
@@ -23,4 +25,7 @@ private:
     bool* shadowSettingsChanged;
     Iridium::ProjectReflectionProbeSettings* reflectionProbeSettings;
     bool* reflectionProbeSettingsChanged;
+    int* layeredInterfaceOverride;
+    int selectedCategory_ = 0;
+    ImGuiTextFilter search_;
 };

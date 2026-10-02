@@ -691,7 +691,9 @@ namespace Iridium {
                 if (recipe.metallicFactor > 0.0f)
                     addDiagnostic(result, MaterialCompileSeverity::Warning,
                         "MATERIAL_TRANSMISSION_METALLIC_SUPPRESSED",
-                        "metallic content suppresses the dielectric portion available to transmission");
+                        "metallic content suppresses dielectric transmission; glTF defaults an omitted "
+                        "metallicFactor to 1. For a glass lens, author metallicFactor = 0 "
+                        "and check the metallic-roughness texture rather than increasing transparency quality");
             }
 
             const SourceMaterialExtension* volume = findSourceExtension(source, "KHR_materials_volume");

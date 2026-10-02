@@ -41,6 +41,10 @@ namespace Iridium {
             std::string_view rootId,
             const std::filesystem::path& directory,
             std::string_view name) const;
+        [[nodiscard]] AssetContentMutationResult moveFolder(
+            std::string_view rootId,
+            const std::filesystem::path& directory,
+            const std::filesystem::path& destinationDirectory) const;
         [[nodiscard]] AssetContentMutationResult deleteFolder(
             std::string_view rootId,
             const std::filesystem::path& directory) const;

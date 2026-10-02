@@ -41,7 +41,8 @@ namespace Iridium {
             ::DescriptorAllocator& descriptors,
             VkDescriptorSetLayout materialLayout,
             VkDescriptorSetLayout samplerLayout,
-            VkDescriptorSetLayout sceneLayout);
+            VkDescriptorSetLayout sceneLayout,
+            VkDescriptorSetLayout gpuSceneLayout);
         void cleanup() noexcept;
 
         [[nodiscard]] VkRenderPass renderPass() const noexcept {
@@ -50,8 +51,14 @@ namespace Iridium {
         [[nodiscard]] VkPipelineLayout graphicsLayout() const noexcept {
             return graphicsLayout_;
         }
+        [[nodiscard]] VkPipelineLayout gpuSceneGraphicsLayout() const noexcept {
+            return gpuSceneGraphicsLayout_;
+        }
+        [[nodiscard]] VkDescriptorSetLayout captureSetLayout() const noexcept {
+            return captureLayout_;
+        }
         [[nodiscard]] VkPipeline pipeline(bool alphaMasked,
-            bool doubleSided) const noexcept;
+            bool doubleSided, bool gpuScene = false) const noexcept;
         [[nodiscard]] VkSampler sampler() const noexcept { return sampler_; }
 
         void writeFace(uint32_t frameIndex, uint32_t recordIndex,
@@ -65,6 +72,9 @@ namespace Iridium {
         void bindFaceDescriptors(VkCommandBuffer commandBuffer,
             uint32_t frameIndex, uint32_t recordIndex,
             VkDescriptorSet sceneDescriptor) const;
+        void bindFaceComputeDescriptor(VkCommandBuffer commandBuffer,
+            VkPipelineLayout pipelineLayout, uint32_t frameIndex,
+            uint32_t recordIndex) const;
         void endFace(VkCommandBuffer commandBuffer) const;
 
         [[nodiscard]] std::vector<VkDescriptorSet> recordPrefilter(
@@ -81,7 +91,7 @@ namespace Iridium {
         [[nodiscard]] VkShaderModule createShaderModule(
             const char* relativePath) const;
         [[nodiscard]] VkPipeline createGraphicsPipeline(bool sky,
-            bool alphaMasked, bool doubleSided) const;
+            bool alphaMasked, bool doubleSided, bool gpuScene = false) const;
         [[nodiscard]] VkDeviceSize dynamicOffset(
             uint32_t recordIndex) const;
 
@@ -91,8 +101,10 @@ namespace Iridium {
         VkRenderPass renderPass_ = VK_NULL_HANDLE;
         VkDescriptorSetLayout captureLayout_ = VK_NULL_HANDLE;
         VkPipelineLayout graphicsLayout_ = VK_NULL_HANDLE;
+        VkPipelineLayout gpuSceneGraphicsLayout_ = VK_NULL_HANDLE;
         VkPipeline skyPipeline_ = VK_NULL_HANDLE;
         std::array<VkPipeline, 4> pipelines_{};
+        std::array<VkPipeline, 4> gpuScenePipelines_{};
         VkDescriptorSetLayout filterLayout_ = VK_NULL_HANDLE;
         VkPipelineLayout filterPipelineLayout_ = VK_NULL_HANDLE;
         VkPipeline filterPipeline_ = VK_NULL_HANDLE;

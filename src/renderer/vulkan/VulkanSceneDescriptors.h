@@ -63,7 +63,7 @@ namespace Iridium {
         // the most recent environment descriptor is reapplied automatically.
         void rebuild(const VulkanFrameTargets& frameTargets);
         void setEnvironmentImages(
-            const VulkanEnvironmentImageDescriptors& environment);
+            const VulkanEnvironmentImageDescriptors& environment, uint32_t frame = UINT32_MAX);
         void setDirectionalShadow(
             const VulkanDirectionalShadowDescriptors& shadow);
         void setSpotShadow(const VulkanSpotShadowDescriptors& shadow);

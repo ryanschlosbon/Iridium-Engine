@@ -3,7 +3,10 @@
 #include "renderer/vulkan/VulkanFrameTargets.h"
 #include "utils/File.h"
 
+#include <algorithm>
 #include <array>
+#include <cmath>
+#include <cstddef>
 #include <stdexcept>
 #include <string>
 
@@ -12,14 +15,18 @@ namespace Iridium {
     namespace {
 
         struct OutputPushConstants {
+            alignas(16) glm::mat4 inverseViewProjection{ 1.0f };
+            alignas(16) glm::vec4 gridPlane{};
+            alignas(16) glm::vec4 gridAxisU{};
+            alignas(16) glm::vec4 gridSettings{};
             float manualExposureEv = 0.0f;
-            uint32_t outputOperator = 0;
-            uint32_t outputTransport = 0;
             float paperWhiteNits = 203.0f;
             float peakNits = 1000.0f;
-            uint32_t selectionActive = 0;
+            uint32_t packedModes = 0;
         };
-        static_assert(sizeof(OutputPushConstants) == 24);
+        static_assert(sizeof(OutputPushConstants) == 128);
+        static_assert(offsetof(OutputPushConstants, gridPlane) == 64);
+        static_assert(offsetof(OutputPushConstants, manualExposureEv) == 112);
 
         [[nodiscard]] VkShaderModule createShaderModule(VkDevice device,
             const std::vector<char>& code) {
@@ -85,7 +92,7 @@ namespace Iridium {
                 throw std::runtime_error("Failed to create output render pass.");
             }
 
-            std::array<VkDescriptorSetLayoutBinding, 3> bindings{};
+            std::array<VkDescriptorSetLayoutBinding, 4> bindings{};
             for (uint32_t index = 0; index < bindings.size(); ++index) {
                 bindings[index].binding = index;
                 bindings[index].descriptorType =
@@ -216,7 +223,11 @@ namespace Iridium {
                     frameTargets.sampler(),
                     frameTargets.get(index).emissive.view,
                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
-                std::array<VkWriteDescriptorSet, 3> writes{};
+                const VkDescriptorImageInfo opaqueDepth{
+                    frameTargets.sampler(),
+                    frameTargets.get(index).depth.view,
+                    VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL };
+                std::array<VkWriteDescriptorSet, 4> writes{};
                 writes[0] = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
                 writes[0].dstSet = set;
                 writes[0].dstBinding = 0;
@@ -231,16 +242,23 @@ namespace Iridium {
                 writes[1].descriptorType =
                     VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
                 writes[1].pImageInfo = &selectionMask;
-                uint32_t writeCount = 2;
+                writes[2] = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
+                writes[2].dstSet = set;
+                writes[2].dstBinding = 3;
+                writes[2].descriptorCount = 1;
+                writes[2].descriptorType =
+                    VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                writes[2].pImageInfo = &opaqueDepth;
+                uint32_t writeCount = 3;
                 if (lutView != VK_NULL_HANDLE && lutSampler != VK_NULL_HANDLE) {
-                    writes[2] = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
-                    writes[2].dstSet = set;
-                    writes[2].dstBinding = 1;
-                    writes[2].descriptorCount = 1;
-                    writes[2].descriptorType =
+                    writes[3] = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
+                    writes[3].dstSet = set;
+                    writes[3].dstBinding = 1;
+                    writes[3].descriptorCount = 1;
+                    writes[3].descriptorType =
                         VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                    writes[2].pImageInfo = &lut;
-                    writeCount = 3;
+                    writes[3].pImageInfo = &lut;
+                    writeCount = 4;
                 }
                 vkUpdateDescriptorSets(device_, writeCount, writes.data(), 0, nullptr);
             }
@@ -262,7 +280,8 @@ namespace Iridium {
         VkFramebuffer framebuffer, VkExtent2D extent,
         float manualExposureEv, uint32_t outputOperator,
         uint32_t outputTransport, float paperWhiteNits,
-        float peakNits, bool selectionActive) const {
+        float peakNits, bool selectionActive,
+        const ViewportGridOverlay& gridOverlay) const {
         if (frameIndex >= descriptorSets_.size()) {
             throw std::out_of_range("Output descriptor frame index is out of range.");
         }
@@ -277,9 +296,37 @@ namespace Iridium {
         vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_);
         vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
             pipelineLayout_, 0, 1, &descriptorSets_[frameIndex], 0, nullptr);
-        const OutputPushConstants push{ manualExposureEv, outputOperator,
-            outputTransport, paperWhiteNits, peakNits,
-            selectionActive ? 1u : 0u };
+        OutputPushConstants push{};
+        push.inverseViewProjection = gridOverlay.inverseViewProjection;
+        glm::vec3 axisU = gridOverlay.axisU;
+        glm::vec3 axisV = gridOverlay.axisV;
+        const float axisULength = glm::length(axisU);
+        const float axisVLength = glm::length(axisV);
+        if (!std::isfinite(axisULength) || axisULength <= 1.0e-6f ||
+            !std::isfinite(axisVLength) || axisVLength <= 1.0e-6f) {
+            axisU = { 1.0f, 0.0f, 0.0f };
+            axisV = { 0.0f, 0.0f, 1.0f };
+        }
+        else {
+            axisU /= axisULength;
+            axisV = glm::normalize(axisV - axisU * glm::dot(axisU, axisV));
+        }
+        const glm::vec3 normal = glm::normalize(glm::cross(axisU, axisV));
+        push.gridPlane = glm::vec4(normal,
+            -glm::dot(normal, gridOverlay.origin));
+        push.gridAxisU = glm::vec4(axisU, 0.0f);
+        push.gridSettings = glm::vec4(
+            glm::dot(gridOverlay.origin, axisU),
+            glm::dot(gridOverlay.origin, axisV),
+            (std::max)(gridOverlay.baseSpacingMeters, 1.0e-6f),
+            std::clamp(gridOverlay.opacity, 0.0f, 1.0f));
+        push.manualExposureEv = manualExposureEv;
+        push.paperWhiteNits = paperWhiteNits;
+        push.peakNits = peakNits;
+        push.packedModes = (outputOperator & 0x3u) |
+            ((outputTransport & 0x3u) << 2u) |
+            (selectionActive ? 1u << 4u : 0u) |
+            (gridOverlay.visible ? 1u << 5u : 0u);
         vkCmdPushConstants(commandBuffer, pipelineLayout_,
             VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), &push);
         const VkViewport viewport{ 0.0f, 0.0f, static_cast<float>(extent.width),

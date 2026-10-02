@@ -70,6 +70,44 @@ namespace Iridium {
             return value;
         }
 
+        BenchmarkLightType readLightType(const Json& value,
+            const std::string& fixtureId) {
+            const std::string type = lowercase(value.get<std::string>());
+            if (type == "directional") return BenchmarkLightType::Directional;
+            if (type == "point") return BenchmarkLightType::Point;
+            if (type == "spot") return BenchmarkLightType::Spot;
+            throw std::runtime_error("Unsupported benchmark light type in fixture: " +
+                fixtureId);
+        }
+
+        BenchmarkShadowQuality readShadowQuality(const Json& value,
+            const std::string& fixtureId) {
+            const std::string quality = lowercase(value.get<std::string>());
+            if (quality == "low") return BenchmarkShadowQuality::Low;
+            if (quality == "medium") return BenchmarkShadowQuality::Medium;
+            if (quality == "high") return BenchmarkShadowQuality::High;
+            if (quality == "ultra") return BenchmarkShadowQuality::Ultra;
+            throw std::runtime_error(
+                "Unsupported benchmark shadow quality in fixture: " + fixtureId);
+        }
+
+        BenchmarkReflectionProbeUpdateMode readReflectionProbeUpdateMode(
+            const Json& value, const std::string& fixtureId) {
+            const std::string mode = lowercase(value.get<std::string>());
+            if (mode == "on_demand")
+                return BenchmarkReflectionProbeUpdateMode::OnDemand;
+            if (mode == "realtime")
+                return BenchmarkReflectionProbeUpdateMode::Realtime;
+            throw std::runtime_error(
+                "Unsupported benchmark reflection-probe update mode in fixture: " +
+                fixtureId);
+        }
+
+        bool supportedReflectionProbeResolution(uint32_t value) noexcept {
+            return value == 128u || value == 256u || value == 512u ||
+                value == 1'024u || value == 2'048u || value == 4'096u;
+        }
+
     } // namespace
 
     BenchmarkManifest loadBenchmarkManifest(const std::filesystem::path& path,
@@ -150,6 +188,19 @@ namespace Iridium {
                 factory.value("instance_scale",
                     Json::array({ 1.0, 1.0, 1.0 })),
                 "scene_factory.instance_scale");
+            const std::string instanceSubmission = factory.value(
+                "instance_submission", "entities");
+            if (instanceSubmission == "entities") {
+                fixture.sceneFactory.renderInstanceBatch = false;
+            }
+            else if (instanceSubmission == "render_batch") {
+                fixture.sceneFactory.renderInstanceBatch = true;
+            }
+            else {
+                throw std::runtime_error(
+                    "Unsupported benchmark instance submission: " +
+                    fixture.id);
+            }
             if (!finiteVec3(fixture.sceneFactory.instanceSpacing) ||
                 !finiteVec3(fixture.sceneFactory.instanceScale) ||
                 std::abs(fixture.sceneFactory.instanceScale.x) <= 1.0e-7f ||
@@ -163,6 +214,28 @@ namespace Iridium {
             if (instanceCount == 0) {
                 throw std::runtime_error("Benchmark instance count is out of range: " + fixture.id);
             }
+            if (factory.contains("instance_scale_override")) {
+                const Json& scaleOverride = factory.at(
+                    "instance_scale_override");
+                fixture.sceneFactory.instanceScaleOverrideEnabled = true;
+                fixture.sceneFactory.instanceScaleOverrideIndex =
+                    scaleOverride.at("instance_index").get<size_t>();
+                fixture.sceneFactory.instanceScaleOverride = readVec3(
+                    scaleOverride.at("scale"),
+                    "scene_factory.instance_scale_override.scale");
+                const glm::vec3& scale =
+                    fixture.sceneFactory.instanceScaleOverride;
+                if (fixture.sceneFactory.instanceScaleOverrideIndex >=
+                        instanceCount ||
+                    !finiteVec3(scale) ||
+                    std::abs(scale.x) <= 1.0e-7f ||
+                    std::abs(scale.y) <= 1.0e-7f ||
+                    std::abs(scale.z) <= 1.0e-7f) {
+                    throw std::runtime_error(
+                        "Invalid benchmark instance-scale override: " +
+                        fixture.id);
+                }
+            }
             if (factory.contains("object_motion")) {
                 const Json& motion = factory.at("object_motion");
                 fixture.sceneFactory.animateInstances = motion.value("enabled", false);
@@ -173,6 +246,47 @@ namespace Iridium {
                         fixture.sceneFactory.motionPeriodFrames == 0)) {
                     throw std::runtime_error("Benchmark motion period must be nonzero: " + fixture.id);
                 }
+                if (motion.contains("step")) {
+                    const Json& step = motion.at("step");
+                    fixture.sceneFactory.objectStepEnabled = true;
+                    fixture.sceneFactory.objectStepInstanceIndex =
+                        step.at("instance_index").get<size_t>();
+                    fixture.sceneFactory.objectStepFrame =
+                        step.at("frame").get<uint64_t>();
+                    fixture.sceneFactory.objectStepOffset = readVec3(
+                        step.at("offset"), "object_motion.step.offset");
+                    if (fixture.sceneFactory.objectStepInstanceIndex >= instanceCount ||
+                        !finiteVec3(fixture.sceneFactory.objectStepOffset)) {
+                        throw std::runtime_error(
+                            "Invalid benchmark object-motion step: " + fixture.id);
+                    }
+                }
+            }
+            if (factory.contains("object_visibility")) {
+                const Json& visibility = factory.at("object_visibility");
+                const Json& step = visibility.at("step");
+                fixture.sceneFactory.objectVisibilityStepEnabled = true;
+                fixture.sceneFactory.objectVisibilityStepInstanceIndex =
+                    step.at("instance_index").get<size_t>();
+                fixture.sceneFactory.objectVisibilityStepFrame =
+                    step.at("frame").get<uint64_t>();
+                fixture.sceneFactory.objectVisibilityAfterStep =
+                    step.at("enabled").get<bool>();
+                if (fixture.sceneFactory.objectVisibilityStepInstanceIndex >=
+                        instanceCount) {
+                    throw std::runtime_error(
+                        "Invalid benchmark object-visibility step: " +
+                        fixture.id);
+                }
+            }
+            if (fixture.sceneFactory.renderInstanceBatch &&
+                (fixture.sceneFactory.animateInstances ||
+                    fixture.sceneFactory.objectStepEnabled ||
+                    fixture.sceneFactory.objectVisibilityStepEnabled ||
+                    fixture.sceneFactory.instanceScaleOverrideEnabled)) {
+                throw std::runtime_error(
+                    "Render-batch benchmark per-instance overrides are not implemented: " +
+                    fixture.id);
             }
             if (factory.contains("camera_motion")) {
                 const Json& motion = factory.at("camera_motion");
@@ -182,6 +296,15 @@ namespace Iridium {
                 if (!finiteVec3(fixture.sceneFactory.cameraVelocityPerFrame)) {
                     throw std::runtime_error("Benchmark camera velocity must be finite: " +
                         fixture.id);
+                }
+                if (motion.contains("oscillation")) {
+                    const Json& oscillation = motion.at("oscillation");
+                    fixture.sceneFactory.cameraOscillationAmplitude = readVec3(
+                        oscillation.at("amplitude"), "camera_motion.oscillation.amplitude");
+                    fixture.sceneFactory.cameraOscillationPeriodFrames = oscillation.at("period_frames").get<uint64_t>();
+                    if (!finiteVec3(fixture.sceneFactory.cameraOscillationAmplitude) ||
+                        fixture.sceneFactory.cameraOscillationPeriodFrames == 0)
+                        throw std::runtime_error("Invalid benchmark camera oscillation: " + fixture.id);
                 }
                 if (motion.contains("cut")) {
                     const Json& cut = motion.at("cut");
@@ -198,6 +321,107 @@ namespace Iridium {
                         throw std::runtime_error("Invalid benchmark camera cut: " + fixture.id);
                     }
                 }
+            }
+
+            if (source.contains("lights")) {
+                const Json& lights = source.at("lights");
+                if (!lights.is_array() || lights.size() > 256u) {
+                    throw std::runtime_error(
+                        "Benchmark lights must be an array of at most 256 entries: " +
+                        fixture.id);
+                }
+                fixture.lights.reserve(lights.size());
+                for (const Json& lightSource : lights) {
+                    BenchmarkLight light{};
+                    light.type = readLightType(lightSource.at("type"), fixture.id);
+                    light.position = readVec3(lightSource.at("position"),
+                        "lights.position");
+                    light.rotationDegrees = readVec3(
+                        lightSource.at("rotation_degrees"),
+                        "lights.rotation_degrees");
+                    light.colorLinearRec709 = readVec3(
+                        lightSource.at("color_linear_rec709"),
+                        "lights.color_linear_rec709");
+                    light.illuminanceLux = lightSource.value(
+                        "illuminance_lux", 100'000.0f);
+                    light.luminousIntensityCandela = lightSource.value(
+                        "luminous_intensity_candela", 10'000.0f);
+                    light.rangeMeters = lightSource.value("range_meters", 10.0f);
+                    light.sourceRadiusMeters = lightSource.value(
+                        "source_radius_meters", 0.05f);
+                    light.innerConeDegrees = lightSource.value(
+                        "inner_cone_degrees", 12.5f);
+                    light.outerConeDegrees = lightSource.value(
+                        "outer_cone_degrees", 45.0f);
+                    light.castsShadows = lightSource.value("casts_shadows", true);
+                    light.shadowQuality = readShadowQuality(
+                        lightSource.value("shadow_quality", Json("high")),
+                        fixture.id);
+                    light.priority = lightSource.value("priority", int32_t{ 0 });
+
+                    if (!finiteVec3(light.position) ||
+                        !finiteVec3(light.rotationDegrees) ||
+                        !finiteVec3(light.colorLinearRec709) ||
+                        glm::any(glm::lessThan(light.colorLinearRec709,
+                            glm::vec3(0.0f))) ||
+                        !std::isfinite(light.illuminanceLux) ||
+                        !std::isfinite(light.luminousIntensityCandela) ||
+                        !std::isfinite(light.rangeMeters) ||
+                        !std::isfinite(light.sourceRadiusMeters) ||
+                        !std::isfinite(light.innerConeDegrees) ||
+                        !std::isfinite(light.outerConeDegrees) ||
+                        light.illuminanceLux < 0.0f ||
+                        light.luminousIntensityCandela < 0.0f ||
+                        light.rangeMeters <= 0.0f ||
+                        light.sourceRadiusMeters < 0.0f ||
+                        light.innerConeDegrees <= 0.0f ||
+                        light.innerConeDegrees > light.outerConeDegrees ||
+                        light.outerConeDegrees >= 180.0f) {
+                        throw std::runtime_error(
+                            "Invalid benchmark light parameters in fixture: " +
+                            fixture.id);
+                    }
+                    fixture.lights.push_back(light);
+                }
+            }
+
+            if (source.contains("reflection_probe_capture")) {
+                const Json& probeSource =
+                    source.at("reflection_probe_capture");
+                const std::string owner = lowercase(
+                    probeSource.value("owner", "standalone"));
+                if (owner != "standalone") {
+                    throw std::runtime_error(
+                        "Benchmark reflection-probe capture owner must be standalone: " +
+                        fixture.id);
+                }
+                BenchmarkReflectionProbeCapture probe{};
+                probe.position = readVec3(probeSource.at("position"),
+                    "reflection_probe_capture.position");
+                probe.updateMode = readReflectionProbeUpdateMode(
+                    probeSource.value("update_mode", Json("on_demand")),
+                    fixture.id);
+                probe.resolution = probeSource.value(
+                    "resolution", uint32_t{ 512 });
+                probe.nearPlane = probeSource.value("near", 0.1f);
+                probe.farPlane = probeSource.value("far", 100.0f);
+                probe.influenceRadiusMeters = probeSource.value(
+                    "influence_radius_meters", 1'000.0f);
+                probe.priority = probeSource.value("priority", int32_t{ 2 });
+                probe.captureSky = probeSource.value("capture_sky", true);
+                if (!finiteVec3(probe.position) ||
+                    !supportedReflectionProbeResolution(probe.resolution) ||
+                    !std::isfinite(probe.nearPlane) ||
+                    !std::isfinite(probe.farPlane) ||
+                    !std::isfinite(probe.influenceRadiusMeters) ||
+                    probe.nearPlane <= 0.0f ||
+                    probe.farPlane <= probe.nearPlane ||
+                    probe.influenceRadiusMeters <= 0.0f) {
+                    throw std::runtime_error(
+                        "Invalid benchmark reflection-probe capture: " +
+                        fixture.id);
+                }
+                fixture.reflectionProbeCapture = probe;
             }
 
             fixture.outputLabel = source.at("output_label").get<std::string>();
@@ -286,8 +510,14 @@ namespace Iridium {
             pose.target = fixture.sceneFactory.cameraCutTarget;
             segmentFrame = frameIndex - fixture.sceneFactory.cameraCutFrame;
         }
-        const glm::vec3 offset = fixture.sceneFactory.cameraVelocityPerFrame *
+        glm::vec3 offset = fixture.sceneFactory.cameraVelocityPerFrame *
             static_cast<float>(segmentFrame);
+        if (fixture.sceneFactory.cameraOscillationPeriodFrames != 0) {
+            const double phase = 2.0 * std::numbers::pi * static_cast<double>(
+                segmentFrame % fixture.sceneFactory.cameraOscillationPeriodFrames) /
+                static_cast<double>(fixture.sceneFactory.cameraOscillationPeriodFrames);
+            offset += fixture.sceneFactory.cameraOscillationAmplitude * static_cast<float>(std::sin(phase));
+        }
         pose.position += offset;
         pose.target += offset;
         return pose;
@@ -302,6 +532,19 @@ namespace Iridium {
             static_cast<double>(instanceIndex % 17) * 3.0;
         return factory.motionAmplitude *
             static_cast<float>(std::sin(phase * turnsPerFrame));
+    }
+
+    glm::vec3 evaluateBenchmarkInstanceOffset(const BenchmarkSceneFactory& factory,
+        uint64_t frameIndex, size_t instanceIndex) noexcept {
+        glm::vec3 offset(0.0f);
+        offset.y = evaluateBenchmarkInstanceYOffset(factory, frameIndex,
+            instanceIndex);
+        if (factory.objectStepEnabled &&
+            instanceIndex == factory.objectStepInstanceIndex &&
+            frameIndex >= factory.objectStepFrame) {
+            offset += factory.objectStepOffset;
+        }
+        return offset;
     }
 
     uint64_t benchmarkInstanceCount(glm::uvec3 grid) noexcept {

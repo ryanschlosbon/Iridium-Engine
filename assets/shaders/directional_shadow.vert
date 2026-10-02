@@ -14,6 +14,9 @@ layout(std140, set = 0, binding = 0) uniform DirectionalShadowData {
     vec4 splitFar[2];
     uvec4 metadata[2];
     vec4 texelWorldSize[2];
+    vec4 depthSpanMeters[2];
+    vec4 filterParameters[2];
+    uvec4 filterMetadata[2];
     vec4 biasParameters;
 } shadowData;
 

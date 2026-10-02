@@ -25,11 +25,20 @@ namespace Iridium {
             return "image.shadow.directional";
         case ProfileMemoryCategory::ShadowLocal:
             return "image.shadow.local";
+        case ProfileMemoryCategory::VirtualShadowPageTable:
+            return "buffer.shadow.virtual.page_table";
+        case ProfileMemoryCategory::VirtualShadowPhysicalPool:
+            return "image.shadow.virtual.physical_pool";
+        case ProfileMemoryCategory::VirtualShadowWorkingSet:
+            return "buffer.shadow.virtual.working_set";
         case ProfileMemoryCategory::ExternalSwapchain: return "external.swapchain";
         case ProfileMemoryCategory::RenderGraphTransient:
             return "render_graph.transient";
+        case ProfileMemoryCategory::RenderGraphHistory:
+            return "render_graph.history";
         case ProfileMemoryCategory::MaterialGpu: return "buffer.material_gpu";
         case ProfileMemoryCategory::LightGpu: return "buffer.light_gpu";
+        case ProfileMemoryCategory::GpuScene: return "buffer.gpu_scene";
         case ProfileMemoryCategory::OtherUnclassified: return "other.unclassified";
         case ProfileMemoryCategory::Count: break;
         }
@@ -46,6 +55,8 @@ namespace Iridium {
             return "external.swapchain";
         case ProfileMemoryCategory::RenderGraphTransient:
             return "frame_context.graph";
+        case ProfileMemoryCategory::RenderGraphHistory:
+            return "view_history";
         default:
             return "persistent";
         }

@@ -118,11 +118,13 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(VkExtent2D extent,
     uint32_t directionalShadowResolution,
     uint32_t spotShadowAtlasResolution,
     bool transparencyPyramids,
-    VulkanLayeredGraphConfig layered) {
+    VulkanLayeredGraphConfig layered,
+    bool legacyTransparency, bool depthPyramid, uint64_t virtualShadowWorkingSetBytes) {
     return buildVulkanProductionRenderGraph(extent, extent,
         swapchainFormat, outputFormat, hdr10Composition, gBufferLayout,
         clusterConfig, directionalShadowResolution,
-        spotShadowAtlasResolution, transparencyPyramids, layered);
+        spotShadowAtlasResolution, transparencyPyramids, layered,
+        legacyTransparency, depthPyramid, virtualShadowWorkingSetBytes);
 }
 
 RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
@@ -132,7 +134,8 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
     uint32_t directionalShadowResolution,
     uint32_t spotShadowAtlasResolution,
     bool transparencyPyramids,
-    VulkanLayeredGraphConfig layered) {
+    VulkanLayeredGraphConfig layered,
+    bool legacyTransparency, bool depthPyramid, uint64_t virtualShadowWorkingSetBytes) {
     if (sceneExtent.width == 0 || sceneExtent.height == 0 ||
         presentationExtent.width == 0 || presentationExtent.height == 0) {
         throw std::invalid_argument("Production render graph requires a non-empty extent");
@@ -245,6 +248,10 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
         imageDesc(RenderGraph::Format::Rgba16Float, sceneExtent));
     RenderGraph::ResourceHandle refractionColor{};
     RenderGraph::ResourceHandle refractionDepth{};
+    if (depthPyramid) {
+        if (sceneExtent.width > 65535 || sceneExtent.height > 65535)
+            throw std::invalid_argument("Depth pyramid extent exceeds integer reduction range");
+    }
     if (transparencyPyramids) {
         RenderGraph::ResourceDesc colorPyramid = imageDesc(
             RenderGraph::Format::Rgba16Float, sceneExtent);
@@ -257,8 +264,11 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
         refractionDepth = graph.createResource("depth.refraction-nearest-pyramid",
             depthPyramid);
     }
-    RenderGraph::ResourceHandle glassDepth = graph.createResource("depth.glass",
-        imageDesc(RenderGraph::Format::D32Float, sceneExtent));
+    RenderGraph::ResourceHandle glassDepth{};
+    if (legacyTransparency) {
+        glassDepth = graph.createResource("depth.glass",
+            imageDesc(RenderGraph::Format::D32Float, sceneExtent));
+    }
     RenderGraph::ResourceHandle layeredEntryDepth{};
     RenderGraph::ResourceHandle layeredEntryIdentity{};
     RenderGraph::ResourceHandle layeredExitDepth{};
@@ -335,6 +345,16 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
         TransparencyQuality::Hero4, "hero4");
     DeepLayeredTierResources cinematic8 = createDeepLayeredTier(
         TransparencyQuality::Cinematic8, "cinematic8");
+    RenderGraph::ResourceHandle weightedOitAccumulation{};
+    RenderGraph::ResourceHandle weightedOitRevealage{};
+    if (layered.weightedOit) {
+        weightedOitAccumulation = graph.createResource(
+            "transparency.oit.accumulation",
+            imageDesc(RenderGraph::Format::Rgba16Float, sceneExtent));
+        weightedOitRevealage = graph.createResource(
+            "transparency.oit.revealage",
+            imageDesc(RenderGraph::Format::R16Float, sceneExtent));
+    }
     RenderGraph::ResourceHandle output = graph.createResource("output.display",
         imageDesc(toGraphFormat(outputFormat), sceneExtent));
     RenderGraph::ResourceHandle uiComposition{};
@@ -351,6 +371,15 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
     RenderGraph::ResourceHandle swapchain = graph.createResource(
         "swapchain", swapchainDesc);
 
+    RenderGraph::ResourceHandle virtualWorking{};
+    if (virtualShadowWorkingSetBytes) {
+        auto desc = bufferDesc(virtualShadowWorkingSetBytes, 16);
+        desc.lifetime = RenderGraph::ResourceLifetime::External;
+        desc.imported = true; desc.initialAccess = Access::TransferDestination;
+        virtualWorking = graph.createResource("shadow.virtual.working-set", desc);
+        const auto upload = graph.addPass("shadow.virtual.clip-upload");
+        virtualWorking = graph.write(upload, virtualWorking, Access::TransferDestination);
+    }
     const RenderGraph::PassHandle directionalShadowPass = graph.addPass(
         "shadow.directional");
     directionalShadow = graph.write(directionalShadowPass,
@@ -474,6 +503,16 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
     litScene = graph.write(opaqueForward, litScene,
         Access::ColorAttachment, LoadOp::Load);
 
+    if (virtualShadowWorkingSetBytes) {
+        const auto mark = graph.addPass("shadow.virtual.depth-mark", RenderGraph::QueueClass::Compute);
+        graph.read(mark, depth, Access::SampledRead);
+        virtualWorking = graph.write(mark, virtualWorking, Access::StorageReadWrite);
+        const auto readback = graph.addPass("shadow.virtual.request-readback", RenderGraph::QueueClass::Transfer);
+        graph.read(readback, virtualWorking, Access::TransferSource);
+        // Explicit qualification can copy the exact depth consumed above.
+        graph.read(readback, depth, Access::TransferSource);
+        graph.exportResource(virtualWorking, Access::TransferSource);
+    }
     if (transparencyPyramids) {
         const RenderGraph::PassHandle pyramidBuild =
             graph.addPass("transparent.refraction-pyramids",
@@ -486,8 +525,21 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
             Access::StorageReadWrite);
     }
 
+    RenderGraph::PassHandle depthPyramidValidation{};
+    if (depthPyramid) {
+        const auto build = graph.addPass("depth.occlusion-pyramid.build", RenderGraph::QueueClass::Compute);
+        graph.read(build, depth, Access::SampledRead);
+        depthPyramidValidation = graph.addPass(
+            "depth.occlusion-pyramid.validation-readback-hook",
+            RenderGraph::QueueClass::Transfer);
+        graph.read(depthPyramidValidation, depth, Access::TransferSource);
+        graph.addDependency(build, depthPyramidValidation);
+    }
+
     const RenderGraph::PassHandle sortedTransparency =
         graph.addPass("transparent.sorted.forward");
+    if (depthPyramidValidation.isValid())
+        graph.addDependency(depthPyramidValidation, sortedTransparency);
     readClusterProduct(sortedTransparency);
     graph.read(sortedTransparency, depth, Access::DepthAttachmentRead);
     litScene = graph.write(sortedTransparency, litScene,
@@ -666,41 +718,83 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
             Access::ColorAttachment, LoadOp::Load);
     }
 
-    const RenderGraph::PassHandle backgroundDepth =
-        graph.addPass("transparent.background.depth");
-    glassDepth = graph.write(backgroundDepth, glassDepth,
-        Access::DepthAttachmentWrite, LoadOp::Clear);
+    if (legacyTransparency) {
+        const RenderGraph::PassHandle backgroundDepth =
+            graph.addPass("transparent.background.depth");
+        glassDepth = graph.write(backgroundDepth, glassDepth,
+            Access::DepthAttachmentWrite, LoadOp::Clear);
 
-    const RenderGraph::PassHandle backgroundForward =
-        graph.addPass("transparent.background.forward");
-    readClusterProduct(backgroundForward);
-    if (transparencyPyramids) {
-        graph.read(backgroundForward, refractionColor, Access::SampledRead);
-        graph.read(backgroundForward, refractionDepth, Access::SampledRead);
+        const RenderGraph::PassHandle backgroundForward =
+            graph.addPass("transparent.background.forward");
+        readClusterProduct(backgroundForward);
+        if (transparencyPyramids) {
+            graph.read(backgroundForward, refractionColor, Access::SampledRead);
+            graph.read(backgroundForward, refractionDepth, Access::SampledRead);
+        }
+        depth = graph.write(backgroundForward, depth,
+            Access::DepthAttachmentWrite, LoadOp::Load);
+        graph.read(backgroundForward, glassDepth, Access::SampledRead);
+        litScene = graph.write(backgroundForward, litScene,
+            Access::ColorAttachment, LoadOp::Load);
+
+        const RenderGraph::PassHandle foregroundDepth =
+            graph.addPass("transparent.foreground.depth");
+        glassDepth = graph.write(foregroundDepth, glassDepth,
+            Access::DepthAttachmentWrite, LoadOp::Clear);
+
+        const RenderGraph::PassHandle foregroundForward =
+            graph.addPass("transparent.foreground.forward");
+        readClusterProduct(foregroundForward);
+        if (transparencyPyramids) {
+            graph.read(foregroundForward, refractionColor, Access::SampledRead);
+            graph.read(foregroundForward, refractionDepth, Access::SampledRead);
+        }
+        depth = graph.write(foregroundForward, depth,
+            Access::DepthAttachmentWrite, LoadOp::Load);
+        graph.read(foregroundForward, glassDepth, Access::SampledRead);
+        litScene = graph.write(foregroundForward, litScene,
+            Access::ColorAttachment, LoadOp::Load);
     }
-    depth = graph.write(backgroundForward, depth,
-        Access::DepthAttachmentWrite, LoadOp::Load);
-    graph.read(backgroundForward, glassDepth, Access::SampledRead);
-    litScene = graph.write(backgroundForward, litScene,
-        Access::ColorAttachment, LoadOp::Load);
-
-    const RenderGraph::PassHandle foregroundDepth =
-        graph.addPass("transparent.foreground.depth");
-    glassDepth = graph.write(foregroundDepth, glassDepth,
-        Access::DepthAttachmentWrite, LoadOp::Clear);
-
-    const RenderGraph::PassHandle foregroundForward =
-        graph.addPass("transparent.foreground.forward");
-    readClusterProduct(foregroundForward);
-    if (transparencyPyramids) {
-        graph.read(foregroundForward, refractionColor, Access::SampledRead);
-        graph.read(foregroundForward, refractionDepth, Access::SampledRead);
+    else {
+        // A classified packet which misses a bounded specialist path retains
+        // one local forward fallback. It never reconstructs the retired
+        // two-bucket glass-depth approximation.
+        const RenderGraph::PassHandle compatibilityForward =
+            graph.addPass("transparent.compatibility.forward");
+        readClusterProduct(compatibilityForward);
+        if (transparencyPyramids) {
+            graph.read(compatibilityForward, refractionColor,
+                Access::SampledRead);
+            graph.read(compatibilityForward, refractionDepth,
+                Access::SampledRead);
+        }
+        depth = graph.write(compatibilityForward, depth,
+            Access::DepthAttachmentWrite, LoadOp::Load);
+        litScene = graph.write(compatibilityForward, litScene,
+            Access::ColorAttachment, LoadOp::Load);
     }
-    depth = graph.write(foregroundForward, depth,
-        Access::DepthAttachmentWrite, LoadOp::Load);
-    graph.read(foregroundForward, glassDepth, Access::SampledRead);
-    litScene = graph.write(foregroundForward, litScene,
-        Access::ColorAttachment, LoadOp::Load);
+
+    if (layered.weightedOit) {
+        // Explicit approximate work accumulates into independent FP16 color
+        // and revealage products while testing the opaque depth read-only.
+        // Resolve then publishes one premultiplied source-over operator into
+        // the shared scene-referred HDR target.
+        const RenderGraph::PassHandle accumulation = graph.addPass(
+            "transparent.oit.accumulate");
+        readClusterProduct(accumulation);
+        graph.read(accumulation, depth, Access::DepthAttachmentRead);
+        weightedOitAccumulation = graph.write(accumulation,
+            weightedOitAccumulation, Access::ColorAttachment, LoadOp::Clear);
+        weightedOitRevealage = graph.write(accumulation,
+            weightedOitRevealage, Access::ColorAttachment, LoadOp::Clear);
+
+        const RenderGraph::PassHandle resolve = graph.addPass(
+            "transparent.oit.resolve");
+        graph.read(resolve, weightedOitAccumulation, Access::SampledRead);
+        graph.read(resolve, weightedOitRevealage, Access::SampledRead);
+        litScene = graph.write(resolve, litScene,
+            Access::ColorAttachment, LoadOp::Load);
+    }
 
     const RenderGraph::PassHandle bloomHook = graph.addPass("bloom-hook");
     graph.read(bloomHook, litScene, Access::SampledRead);
@@ -709,6 +803,7 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
         graph.addPass("output-transform");
     graph.read(outputTransform, litScene, Access::SampledRead);
     graph.read(outputTransform, emissive, Access::SampledRead);
+    graph.read(outputTransform, depth, Access::SampledRead);
     output = graph.write(outputTransform, output,
         Access::ColorAttachment, LoadOp::Clear);
 

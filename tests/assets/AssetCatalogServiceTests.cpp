@@ -499,22 +499,36 @@ namespace {
             .sourcePath ==
                 "Cars/sports_car.gltf");
 
+        (void)service.requestCreateFolder(
+            "project", {}, "Library");
+        results = waitForResult(service);
+        CHECK(results.size() == 1);
+        CHECK(results[0].succeeded);
+        (void)service.requestMoveFolder(
+            "project", "Cars", "Library");
+        results = waitForResult(service);
+        CHECK(results.size() == 1);
+        CHECK(results[0].succeeded);
+        CHECK(catalog->recordsForGuid(guid)[0]
+            .sourcePath ==
+                "Library/Cars/sports_car.gltf");
+
         (void)service.requestDeleteAsset(guid);
         results = waitForResult(service);
         CHECK(results.size() == 1);
         CHECK(results[0].succeeded);
         CHECK(catalog->recordsForGuid(guid).empty());
         CHECK(!std::filesystem::exists(
-            temporary.path / "Cars" /
+            temporary.path / "Library" / "Cars" /
                 "sports_car.gltf"));
 
         (void)service.requestDeleteFolder(
-            "project", "Cars");
+            "project", "Library");
         results = waitForResult(service);
         CHECK(results.size() == 1);
         CHECK(results[0].succeeded);
         CHECK(!std::filesystem::exists(
-            temporary.path / "Cars"));
+            temporary.path / "Library"));
         return true;
     }
 

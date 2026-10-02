@@ -187,7 +187,7 @@ namespace {
             .plan = buildDirectionalShadowCascades(camera,
                 glm::normalize(glm::vec3(0.4f, -1.0f, 0.2f))),
             .lightRevision = 10,
-            .casterRevision = 20,
+            .casterRevisions = { 20, 20, 20, 20 },
             .pipelineRevision = 1,
         };
         auto schedule = cache.schedule(input, 2);
@@ -291,7 +291,7 @@ namespace {
             },
             .plan = buildDirectionalShadowCascades(camera, lightDirection),
             .lightRevision = 1,
-            .casterRevision = 2,
+            .casterRevisions = { 2, 2, 2, 2 },
             .pipelineRevision = 3,
         };
         DirectionalShadowCache cache;
@@ -304,9 +304,10 @@ namespace {
         CHECK(schedule.cacheHitCount == 4u);
         cache.markRendered(0u);
 
-        ++input.casterRevision;
+        ++input.casterRevisions[2];
         schedule = cache.schedule(input, 4);
-        CHECK(schedule.dirtyMask == 0xfu);
+        CHECK(schedule.dirtyMask == 0x4u);
+        CHECK(schedule.casterInvalidatedCount == 1u);
         cache.markRendered(schedule.updateMask);
 
         ++input.lightRevision;
@@ -373,6 +374,68 @@ namespace {
         CHECK(!low.contactHardening);
         CHECK(low.blockerSearchSamples == 0);
         CHECK(low.filterSamples == 9);
+
+        ProjectShadowSettings cinematicSettings{};
+        cinematicSettings.qualityProfile = ShadowQualityProfile::Cinematic;
+        const ShadowFilterProfile cinematic = effectiveShadowFilterProfile(
+            cinematicSettings,
+            static_cast<uint32_t>(ShadowQualityProfile::Ultra));
+        CHECK(cinematic.blockerSearchSamples == 32);
+        CHECK(cinematic.filterSamples == 64);
+        const ShadowFilterProfile highLight = effectiveShadowFilterProfile(
+            cinematicSettings,
+            static_cast<uint32_t>(ShadowQualityProfile::High));
+        CHECK(highLight.blockerSearchSamples == 12);
+        CHECK(highLight.filterSamples == 24);
+        return true;
+    }
+
+    bool receiverPlaneBiasIsAnalyticBoundedAndFailSafe() {
+        const glm::vec2 gradient =
+            directionalShadowReceiverPlaneDepthGradient(
+                { 2.0f, 0.0f }, { 0.0f, 4.0f }, 6.0f, 8.0f);
+        CHECK(glm::length(gradient - glm::vec2(3.0f, 2.0f)) < 1.0e-6f);
+        CHECK(std::abs(directionalShadowReceiverPlaneReferenceDepth(
+            0.5f, gradient, { 0.1f, -0.2f }, 1.0f) - 0.4f) < 1.0e-6f);
+        CHECK(std::abs(directionalShadowReceiverPlaneReferenceDepth(
+            0.5f, gradient, { 0.1f, -0.2f }, 0.05f) - 0.45f) < 1.0e-6f);
+        CHECK(directionalShadowReceiverPlaneDepthGradient(
+            { 1.0f, 1.0f }, { 2.0f, 2.0f }, 1.0f, 2.0f) == glm::vec2{});
+        CHECK(directionalShadowReceiverPlaneReferenceDepth(
+            0.5f, gradient, { 1.0f, 1.0f }, 0.0f) == 0.5f);
+        return true;
+    }
+
+    bool casterSetsAreConservativePerCascadeAndFailVisible() {
+        const DirectionalShadowCamera camera{
+            .position = { 0.0f, 1.0f, 4.0f },
+            .forward = { 0.0f, 0.0f, -1.0f },
+            .up = { 0.0f, 1.0f, 0.0f },
+            .verticalFovRadians = glm::radians(60.0f),
+            .aspectRatio = 16.0f / 9.0f,
+            .nearPlane = 0.1f,
+            .farPlane = 300.0f,
+        };
+        const DirectionalShadowCascadePlan plan =
+            buildDirectionalShadowCascades(camera,
+                glm::normalize(glm::vec3(0.4f, -1.0f, 0.2f)));
+        for (uint32_t cascade = 0;
+            cascade < kDirectionalShadowCascadeCount; ++cascade) {
+            const uint32_t bit = 1u << cascade;
+            const glm::vec4 insideHomogeneous = glm::inverse(
+                plan.cascades[cascade].worldToShadowClip) *
+                glm::vec4(0.0f, 0.0f, 0.5f, 1.0f);
+            const glm::vec3 inside = glm::vec3(insideHomogeneous) /
+                insideHomogeneous.w;
+            CHECK(directionalShadowCasterCascadeMask(
+                plan, inside, 0.01f, bit) == bit);
+            CHECK(directionalShadowCasterCascadeMask(
+                plan, { 1.0e6f, 1.0e6f, 1.0e6f }, 0.01f, bit) == 0u);
+        }
+        CHECK(directionalShadowCasterCascadeMask(
+            plan, { 1.0e6f, 1.0e6f, 1.0e6f }, -1.0f, 0xfu) == 0xfu);
+        CHECK(directionalShadowCasterCascadeMask(
+            plan, {}, 1.0f, 0xffffu) <= 0xfu);
         return true;
     }
 
@@ -420,6 +483,10 @@ int main() {
             cacheKeysDistinguishCastersCameraLightAndOwnerNotReceivers },
         { "contact hardening uses physical emitter extent",
             contactHardeningUsesPhysicalEmitterExtent },
+        { "receiver plane bias is analytic bounded and fail safe",
+            receiverPlaneBiasIsAnalyticBoundedAndFailSafe },
+        { "caster sets are conservative per cascade and fail visible",
+            casterSetsAreConservativePerCascadeAndFailVisible },
         { "future visibility contracts keep deterministic fallbacks",
             futureVisibilityContractsKeepDeterministicFallbacks },
     };

@@ -83,6 +83,8 @@ namespace {
         CHECK(staged.staging->world->registry().getComponent<MeshComponent>(root)
             .requestedAssetGuid.toString() ==
                 "01890f4c-0000-7000-8000-000000000001");
+        CHECK(staged.staging->world->registry().getComponent<MeshComponent>(root)
+            .maximumLodLevel == MeshComponent::MaximumLodLevel);
         const auto& sourceSky = staged.staging->world->registry()
             .getComponent<Iridium::SkyComponent>(root);
         CHECK(sourceSky.mode == Iridium::SkyMode::Hdri);
@@ -144,6 +146,18 @@ namespace {
         return true;
     }
 
+    bool invalidMeshLodPolicyIsRejected() {
+        auto registries = Iridium::createCoreSceneRegistryBundle();
+        const std::string input = R"json({"format":"iridium.scene",
+          "schemaVersion":1,"name":"Rejected LOD","entities":[{
+          "uuid":"019fb7d3-0300-7000-8000-000000000001","components":[{
+          "id":"iridium.component.mesh","version":2,"data":{
+          "maximumLodLevel":16}}]}]})json";
+        CHECK(!Iridium::readSourceSceneSchema1(input,
+            registries.runtime, registries.source));
+        return true;
+    }
+
     bool invalidReflectionProbeDomainIsRejected() {
         auto registries = Iridium::createCoreSceneRegistryBundle();
         const std::string input = R"json({"format":"iridium.scene",
@@ -199,7 +213,8 @@ namespace {
                "diffuseIntensity":2.0,"specularIntensity":0.25,
                "applyLightmaps":true,"applyProbeVolumes":false,
                "applyVisibility":true}},
-              {"id":"iridium.component.mesh","version":1,"data":{"enabled":true,
+              {"id":"iridium.component.mesh","version":2,"data":{"enabled":true,
+               "maximumLodLevel":0,
                "model":{"assetGuid":"01890f4c-0000-7000-8000-000000000001"},
                "materialOverrides":[{"source":{"subassetGuid":"01890f4c-0000-7000-8000-000000000002"},
                "replacement":{"subassetGuid":"01890f4c-0000-7000-8000-000000000003"}}]}}
@@ -247,6 +262,11 @@ namespace {
         };
         const auto compiled = Iridium::compileCookedScene(*staged.staging,
             registries.runtime, registries.source, std::move(cook));
+        if (!compiled) {
+            for (const auto& diagnostic : compiled.diagnostics) {
+                std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
+            }
+        }
         CHECK(compiled);
         const auto blob = Iridium::serializeCookedArtifact(*compiled.artifact);
         auto loaded = Iridium::stageCookedScene(blob.bytes, registries.runtime, {
@@ -277,6 +297,8 @@ namespace {
             .getComponent<RelationshipComponent>(child).siblingOrder == 4);
         CHECK(loaded.staging->world->registry().getComponent<MeshComponent>(root)
             .materialOverrides.size() == 1);
+        CHECK(loaded.staging->world->registry().getComponent<MeshComponent>(root)
+            .maximumLodLevel == 0);
         const auto& cookedSky = loaded.staging->world->registry()
             .getComponent<Iridium::SkyComponent>(root);
         CHECK(cookedSky.mode == Iridium::SkyMode::Hdri);
@@ -360,6 +382,8 @@ int main() {
         std::pair{ "core stable-reference round trip",
             completeCoreRoundTripUsesStableReferences },
         std::pair{ "removed path rejection", removedPathFieldIsRejected },
+        std::pair{ "invalid mesh LOD policy rejection",
+            invalidMeshLodPolicyIsRejected },
         std::pair{ "invalid reflection probe rejection",
             invalidReflectionProbeDomainIsRejected },
         std::pair{ "invalid baked lighting rejection",

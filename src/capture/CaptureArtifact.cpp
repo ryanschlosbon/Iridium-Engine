@@ -7,6 +7,10 @@
 #include <nlohmann/json.hpp>
 
 #include <cctype>
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstring>
 #include <fstream>
 #include <stdexcept>
 #include <string_view>
@@ -44,6 +48,54 @@ namespace Iridium {
                     "Refusing to overwrite an existing capture artifact: " +
                     paths.image.parent_path().generic_string());
             }
+        }
+
+        // Called only after the image writer has validated dimensions and storage.
+        // Ignore alpha and row padding: an opaque black render is still black.
+        [[nodiscard]] nlohmann::json captureSignal(const FrameCapture& capture) {
+            const bool floating = capture.pixelFormat == FrameCapturePixelFormat::Rgba32Float;
+            const bool bgra = capture.pixelFormat == FrameCapturePixelFormat::Bgra8Srgb;
+            const size_t pixelBytes = floating ? 4 * sizeof(float) : 4;
+            uint64_t finitePixels = 0, nonzeroPixels = 0;
+            std::array<double, 3> minimum{}, maximum{};
+            for (uint32_t y = 0; y < capture.height; ++y) {
+                const auto* row = capture.pixels.data() + size_t(y) * capture.rowPitchBytes;
+                for (uint32_t x = 0; x < capture.width; ++x) {
+                    const auto* pixel = row + size_t(x) * pixelBytes;
+                    std::array<double, 3> rgb{};
+                    for (size_t channel = 0; channel < 3; ++channel) {
+                        if (floating) {
+                            float value;
+                            std::memcpy(&value, pixel + channel * sizeof(float), sizeof(float));
+                            rgb[channel] = value;
+                        } else {
+                            rgb[channel] = std::to_integer<uint8_t>(
+                                pixel[bgra ? 2 - channel : channel]) / 255.0;
+                        }
+                    }
+                    if (!std::ranges::all_of(rgb, [](double value) { return std::isfinite(value); }))
+                        continue;
+                    for (size_t channel = 0; channel < 3; ++channel) {
+                        minimum[channel] = finitePixels ? std::min(minimum[channel], rgb[channel]) : rgb[channel];
+                        maximum[channel] = finitePixels ? std::max(maximum[channel], rgb[channel]) : rgb[channel];
+                    }
+                    ++finitePixels;
+                    nonzeroPixels += std::ranges::any_of(rgb, [](double value) { return value != 0.0; });
+                }
+            }
+            double range = 0.0;
+            for (size_t channel = 0; channel < 3; ++channel)
+                range = std::max(range, maximum[channel] - minimum[channel]);
+            const uint64_t pixelCount = uint64_t(capture.width) * capture.height;
+            return {
+                { "sample_domain", floating ? "source_linear_rgb" : "encoded_rgb_normalized_0_1" },
+                { "pixel_count", pixelCount }, { "finite_rgb_pixels", finitePixels },
+                { "nonzero_finite_rgb_pixels", nonzeroPixels },
+                { "finite_pixel_rgb_min", finitePixels ? nlohmann::json(minimum) : nlohmann::json(nullptr) },
+                { "finite_pixel_rgb_max", finitePixels ? nlohmann::json(maximum) : nlohmann::json(nullptr) },
+                { "maximum_spatial_channel_range", range },
+                { "has_finite_spatial_signal", finitePixels == pixelCount && range > 0.0 },
+            };
         }
 
     } // namespace
@@ -105,6 +157,12 @@ namespace Iridium {
         try {
         if (sceneLinear || displayLinearHdr) writeFrameCapturePfm(temporary.image, capture);
         else writeFrameCaptureTga(temporary.image, capture);
+        nlohmann::json signal = captureSignal(capture);
+        if (metadata.requireSpatialSignal &&
+            !signal.at("has_finite_spatial_signal").get<bool>()) {
+            throw std::runtime_error(
+                "Capture signal check failed: RGB image is constant or contains nonfinite pixels.");
+        }
         paths.imageSha256 = sha256File(temporary.image);
 
         nlohmann::json contentHashes = nlohmann::json::array();
@@ -124,10 +182,12 @@ namespace Iridium {
                 { "height", capture.height },
                 { "row_pitch_bytes", (sceneLinear || displayLinearHdr) ? capture.width * 3u * 4u :
                     capture.width * 4u },
-                { "source_pixel_format", frameCapturePixelFormatName(capture.pixelFormat) }
+                { "source_pixel_format", frameCapturePixelFormatName(capture.pixelFormat) },
+                { "signal", std::move(signal) }
             } },
             { "capture", {
                 { "capture_id", capture.captureId },
+                { "spatial_signal_required", metadata.requireSpatialSignal },
                 { "point", sceneLinear ?
                     "post_transparency_pre_output_scene_color" :
                     (modernFinal ? "post_output_transform_pre_ui_display_color" :
@@ -259,6 +319,12 @@ namespace Iridium {
                     metadata.directionalShadowSourceAngularDiameterDegrees },
                 { "maximum_penumbra_texels",
                     metadata.directionalShadowMaximumPenumbraTexels },
+                { "receiver_depth_bias_texels",
+                    metadata.directionalShadowReceiverDepthBiasTexels },
+                { "receiver_plane_clamp_texels",
+                    metadata.directionalShadowReceiverPlaneClampTexels },
+                { "normal_offset_texels",
+                    metadata.directionalShadowNormalOffsetTexels },
                 { "blocker_search_samples",
                     metadata.directionalShadowBlockerSearchSamples },
                 { "filter_samples",

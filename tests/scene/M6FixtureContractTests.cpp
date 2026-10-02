@@ -103,6 +103,43 @@ namespace {
         }
         CHECK(actualCases == requiredCases);
 
+        const auto weightedFixture = std::ranges::find_if(
+            matrix.at("cases"), [](const Json& value) {
+                return value.at("id") == "weighted_oit_particles_v1";
+            });
+        CHECK(weightedFixture != matrix.at("cases").end());
+        CHECK(weightedFixture->at("availability") ==
+            "runtime_available_high_overdraw_qualified_debug");
+        const Json& weightedRuntime = weightedFixture->at(
+            "runtime_fixture");
+        CHECK(weightedRuntime.at("active_particle_count") == 256);
+        CHECK(weightedRuntime.at("instance_grid") ==
+            Json::array({ 8, 8, 4 }));
+        CHECK(weightedRuntime.at("target_overdraw") == 4);
+        CHECK(weightedRuntime.at("active_hdr_emissive_value") == 16.0);
+        CHECK(weightedRuntime.at("qualified_draw_order_permutations") == 64);
+        CHECK(weightedRuntime.at("remaining_draw_order_permutations") == 0);
+        CHECK(weightedRuntime.at("draw_order_error_thresholds").at(
+            "maximum_absolute_ap1") == 0.0625);
+        const Json& hdr256Fixture = weightedRuntime.at(
+            "hdr256_boundary_fixture");
+        CHECK(hdr256Fixture.at("id") ==
+            "weighted_oit_particles_hdr256_v1");
+        CHECK(hdr256Fixture.at("hdr_emissive_value") == 256.0);
+        CHECK(std::filesystem::exists(root() / hdr256Fixture.at(
+            "source").get<std::string>()));
+        CHECK(std::filesystem::exists(root() / hdr256Fixture.at(
+            "metadata").get<std::string>()));
+        CHECK(weightedRuntime.at("qualified_particle_counts") ==
+            Json::array({ 256, 4'096, 65'536 }));
+        CHECK(weightedRuntime.at("render_batch_particle_counts") ==
+            Json::array({ 4'096, 65'536 }));
+        CHECK(weightedRuntime.at("remaining_particle_counts").empty());
+        CHECK(std::filesystem::exists(root() / weightedRuntime.at(
+            "source").get<std::string>()));
+        CHECK(std::filesystem::exists(root() / weightedRuntime.at(
+            "metadata").get<std::string>()));
+
         std::set<std::string> requiredAxes;
         for (const Json& axis : matrix.at("required_axes")) {
             CHECK(requiredAxes.insert(axis.get<std::string>()).second);
@@ -123,6 +160,15 @@ namespace {
 
         CHECK(matrix.at("reference_artifacts").at("transport_math") ==
             "reference-transport.v1.json");
+        return true;
+    }
+
+    bool metadataFixturesCannotMasqueradeAsLiveSidecars() {
+        const auto fixtureDirectory = root() / "assets" / "benchmarks" / "m6";
+        CHECK(!std::filesystem::exists(fixtureDirectory /
+            "cinematic8_nested_tetrahedra.mixed-deep.iridium.meta"));
+        CHECK(std::filesystem::is_regular_file(fixtureDirectory /
+            "cinematic8_nested_tetrahedra.mixed-deep.metadata-fixture.json"));
         return true;
     }
 
@@ -228,9 +274,14 @@ namespace {
             CHECK(runs.insert(run.at("id").get<std::string>()).second);
             CHECK(!run.at("required_artifacts").empty());
         }
-        CHECK(runs.size() == 12);
+        CHECK(runs.size() == 15);
         CHECK(runs.contains("m6_5_debug_populated_resize_validation_v1"));
         CHECK(runs.contains("m6_5_release_4k_populated_five_process_v1"));
+        CHECK(runs.contains("m6_7_debug_256_particle_validation_v1"));
+        CHECK(runs.contains(
+            "m6_7_debug_order64_scene_linear_validation_v1"));
+        CHECK(runs.contains(
+            "m6_7_release_4k_representative_five_process_v1"));
         CHECK(manifest.at("required_counters").size() >= 15);
         CHECK(manifest.at("required_gpu_ranges").size() >= 12);
         CHECK(manifest.at("current_source_baseline_before_fixture_correction")
@@ -849,7 +900,7 @@ namespace {
             "ordinary2_closed_tetrahedron.gltf.iridium.meta");
         CHECK(fixtureMetadata.at("assetGuid") ==
             liveCapture.at("asset_guid"));
-        CHECK(fixtureMetadata.at("importer").at("version") == 6);
+        CHECK(fixtureMetadata.at("importer").at("version") == 7);
         CHECK(fixtureMetadata.at("settings").at("values").at(
             "transparency_execution_mode") == "classified");
         CHECK(std::filesystem::exists(root() / "assets" / "benchmarks" /
@@ -864,7 +915,7 @@ namespace {
         CHECK(layeredTiers.at("status") ==
             "hero4_cinematic8_scene_resolve_and_residual_active");
         CHECK(layeredTiers.at("current_fixture_manifest_sha256") ==
-            "273afc1f3a839bd69a636b6432c2b91fcd23444ea7183164f3362de43bc651d6");
+            "b35393928d741e3339be760dd67661feca32c17b7f862e9f8b6240a3e99a1cf4");
         CHECK(layeredTiers.at("runtime_rendering_changed") == true);
         CHECK(layeredTiers.at("hero4_runtime_enabled") == true);
         CHECK(layeredTiers.at("cinematic8_runtime_enabled") == true);
@@ -997,7 +1048,7 @@ namespace {
         CHECK(deepLocalComposition.at("fragment_shader_sha256") ==
             "f53e8a2d0418643251c77b3fe518666ba7f0d0afdd1b567dfe080acae6ba98cb");
         CHECK(deepLocalComposition.at("shared_material_body_sha256") ==
-            "6cd9e77f0e304b5534537995e66ea44941f2ff427188193ebfc1ca672908fa7e");
+            "33b1d19df9cbd98e19028f7b4775b7a599f6d0122c32f61f747bac2a432da20c");
         CHECK(deepLocalComposition.at("descriptor_capacity_interfaces") == 8);
         CHECK(deepLocalComposition.at("hero4_published_interfaces") == 4);
         CHECK(deepLocalComposition.at("cinematic8_published_interfaces") == 8);
@@ -1167,7 +1218,7 @@ namespace {
         const Json& weightedOit = manifest.at(
             "m6_7_weighted_oit_candidate");
         CHECK(weightedOit.at("status") ==
-            "backend_neutral_reference_contract");
+            "complete_all_weighted_oit_gates_passed");
         CHECK(weightedOit.at("explicit_only") == true);
         CHECK(weightedOit.at("opaque_depth_access") == "read_only");
         CHECK(weightedOit.at("accumulation").at(
@@ -1176,12 +1227,459 @@ namespace {
             "revealage_format") == "R16_FLOAT");
         CHECK(weightedOit.at("accumulation").at(
             "qualified_maximum_fragments_per_pixel") == 4'096);
+        CHECK(weightedOit.at("accumulation").at(
+            "refraction_transport_compiled_out") == true);
         CHECK(weightedOit.at(
             "native_4k_logical_bytes_per_frame_context") == 82'944'000);
         CHECK(weightedOit.at("owned_depth_bytes") == 0);
-        CHECK(weightedOit.at("visible_rendering_changed") == false);
+        CHECK(weightedOit.at("graph_activation") ==
+            "conditional_live_residency_active");
+        CHECK(weightedOit.at("graph_pass_order") ==
+            "after_foreground_forward_before_bloom");
+        CHECK(weightedOit.at("frame_context_targets_acquired") == true);
+        CHECK(weightedOit.at("live_routing") ==
+            "explicit_weighted_oit_uses_active_accumulation_and_resolve_when_resident_with_sorted_premultiplied_first_demand_fallback");
+        CHECK(weightedOit.at("refraction_pyramids_required") == false);
+        CHECK(weightedOit.at("visible_rendering_changed") == true);
+        CHECK(weightedOit.at(
+            "default_scene_visible_rendering_changed") == false);
         CHECK(weightedOit.at("default_graph_memory_delta_bytes") == 0);
-        CHECK(weightedOit.at("open_gates").size() == 4);
+        const Json& defaultSmoke = weightedOit.at(
+            "default_native_4k_release_smoke");
+        CHECK(defaultSmoke.at("passed") == true);
+        CHECK(defaultSmoke.at("measured_frames") == 300);
+        CHECK(defaultSmoke.at("oit_resident_max") == 0);
+        CHECK(defaultSmoke.at("oit_packets_max") == 0);
+        CHECK(defaultSmoke.at("oit_accumulation_draws_max") == 0);
+        CHECK(defaultSmoke.at("dropped_events") == 0);
+        CHECK(defaultSmoke.at("dropped_gpu_ranges") == 0);
+        CHECK(defaultSmoke.at("dropped_counters") == 0);
+        const Json& weightedFixture = weightedOit.at("runtime_fixture");
+        CHECK(weightedFixture.at("instances") == 256);
+        CHECK(weightedFixture.at("importer_version") == 6);
+        CHECK(Iridium::sha256File(root() / weightedFixture.at(
+            "source").get<std::string>()) ==
+            weightedFixture.at("source_sha256").get<std::string>());
+        CHECK(Iridium::sha256File(root() / weightedFixture.at(
+            "metadata").get<std::string>()) ==
+            weightedFixture.at("metadata_sha256").get<std::string>());
+        const Json& hdr256Fixture = weightedOit.at(
+            "hdr256_boundary_runtime_fixture");
+        CHECK(hdr256Fixture.at("instances") == 256);
+        CHECK(hdr256Fixture.at("importer_version") == 6);
+        CHECK(hdr256Fixture.at("emissive_strength") == 256.0);
+        CHECK(hdr256Fixture.at("cook_diagnostic_count") == 0);
+        CHECK(hdr256Fixture.at("gpu_upload_bytes") == 1'168);
+        CHECK(Iridium::sha256File(root() / hdr256Fixture.at(
+            "source").get<std::string>()) ==
+            hdr256Fixture.at("source_sha256").get<std::string>());
+        CHECK(Iridium::sha256File(root() / hdr256Fixture.at(
+            "metadata").get<std::string>()) ==
+            hdr256Fixture.at("metadata_sha256").get<std::string>());
+        const Json& populatedDebug = weightedOit.at(
+            "populated_debug_validation");
+        CHECK(populatedDebug.at("passed") == true);
+        CHECK(populatedDebug.at("validation") == true);
+        CHECK(populatedDebug.at("weighted_oit_packets_per_frame") == 256);
+        CHECK(populatedDebug.at("accumulation_draws_per_frame") == 256);
+        CHECK(populatedDebug.at("resolve_draws_per_frame") == 1);
+        CHECK(populatedDebug.at("sorted_fallback_draws_per_frame") == 0);
+        CHECK(populatedDebug.at("compatibility_forward_draws_per_frame") == 0);
+        CHECK(populatedDebug.at("refraction_pyramids_resident") == false);
+        CHECK(populatedDebug.at("validation_message_count") == 0);
+        CHECK(populatedDebug.at("dropped_events") == 0);
+        CHECK(populatedDebug.at("dropped_gpu_ranges") == 0);
+        CHECK(populatedDebug.at("dropped_counters") == 0);
+        const Json& sceneLinear = weightedOit.at(
+            "scene_linear_hdr16_debug_capture");
+        CHECK(sceneLinear.at("passed") == true);
+        CHECK(sceneLinear.at("validation") == true);
+        CHECK(sceneLinear.at("color_domain") ==
+            "scene_linear_acescg_ap1_pre_output");
+        CHECK(sceneLinear.at("source_emissive_strength") == 16.0);
+        CHECK(sceneLinear.at("pixel_count") == 921'600);
+        CHECK(sceneLinear.at("finite_pixel_count") == 921'600);
+        CHECK(sceneLinear.at("nonfinite_pixel_count") == 0);
+        CHECK(sceneLinear.at("active_pixel_count") == 142'884);
+        CHECK(sceneLinear.at("maximum_component") > 1.0);
+        CHECK(sceneLinear.at("weighted_oit_packets") == 256);
+        CHECK(sceneLinear.at("accumulation_draws") == 256);
+        CHECK(sceneLinear.at("resolve_draws") == 1);
+        CHECK(sceneLinear.at("sorted_fallback_draws") == 0);
+        CHECK(sceneLinear.at("validation_message_count") == 0);
+        CHECK(sceneLinear.at("dropped_events") == 0);
+        CHECK(sceneLinear.at("dropped_gpu_ranges") == 0);
+        CHECK(sceneLinear.at("dropped_counters") == 0);
+        const Json& sceneLinearHdr256 = weightedOit.at(
+            "scene_linear_hdr256_debug_capture");
+        CHECK(sceneLinearHdr256.at("passed") == true);
+        CHECK(sceneLinearHdr256.at("validation") == true);
+        CHECK(sceneLinearHdr256.at("source_emissive_strength") == 256.0);
+        CHECK(sceneLinearHdr256.at("pixel_count") == 921'600);
+        CHECK(sceneLinearHdr256.at("finite_pixel_count") == 921'600);
+        CHECK(sceneLinearHdr256.at("nonfinite_pixel_count") == 0);
+        CHECK(sceneLinearHdr256.at("active_pixel_count") == 142'884);
+        CHECK(sceneLinearHdr256.at("fp16_limit_pixel_count") == 0);
+        CHECK(sceneLinearHdr256.at("maximum_component") == 163.5);
+        CHECK(sceneLinearHdr256.at("weighted_oit_packets") == 256);
+        CHECK(sceneLinearHdr256.at("accumulation_draws") == 256);
+        CHECK(sceneLinearHdr256.at("resolve_draws") == 1);
+        CHECK(sceneLinearHdr256.at("sorted_fallback_draws") == 0);
+        CHECK(sceneLinearHdr256.at("compatibility_forward_draws") == 0);
+        CHECK(sceneLinearHdr256.at("oit_resident") == true);
+        CHECK(sceneLinearHdr256.at("refraction_pyramids_resident") == false);
+        CHECK(sceneLinearHdr256.at("validation_message_count") == 0);
+        CHECK(sceneLinearHdr256.at("dropped_events") == 0);
+        CHECK(sceneLinearHdr256.at("dropped_gpu_ranges") == 0);
+        CHECK(sceneLinearHdr256.at("dropped_counters") == 0);
+        const Json& order64 = weightedOit.at(
+            "draw_order_64_process_debug_qualification");
+        CHECK(order64.at("passed") == true);
+        CHECK(order64.at("independent_processes") == 64);
+        CHECK(order64.at("unique_capture_hashes") == 64);
+        CHECK(order64.at("all_pixels_finite") == true);
+        CHECK(order64.at("active_masks_identical") == true);
+        CHECK(order64.at("exact_order_seed_counter_each_process") == true);
+        CHECK(order64.at("weighted_oit_packets_each_process") == 256);
+        CHECK(order64.at("accumulation_draws_each_process") == 256);
+        CHECK(order64.at("resolve_draws_each_process") == 1);
+        CHECK(order64.at("sorted_fallback_draws_each_process") == 0);
+        CHECK(order64.at("refraction_pyramids_resident_each_process") == false);
+        CHECK(order64.at("validation_message_count") == 0);
+        CHECK(order64.at("profiler_overflow_count") == 0);
+        CHECK(order64.at("maximum_absolute_ap1").get<double>() <=
+            order64.at("acceptance_thresholds").at(
+                "maximum_absolute_ap1").get<double>());
+        CHECK(order64.at("worst_rmse_ap1").get<double>() <=
+            order64.at("acceptance_thresholds").at(
+                "rmse_ap1").get<double>());
+        CHECK(order64.at("maximum_relative_floor_1e_4").get<double>() <=
+            order64.at("acceptance_thresholds").at(
+                "maximum_relative_floor_1e_4").get<double>());
+        const Json& highOverdraw = weightedOit.at(
+            "high_overdraw_instance_stream_debug_qualification");
+        CHECK(highOverdraw.at("passed") == true);
+        CHECK(highOverdraw.at("tiers").size() == 2);
+        CHECK(highOverdraw.at("tiers").at(0).at("instances") == 4'096);
+        CHECK(highOverdraw.at("tiers").at(0).at("packets") == 1);
+        CHECK(highOverdraw.at("tiers").at(0).at(
+            "instance_upload_bytes") == 262'144);
+        CHECK(highOverdraw.at("tiers").at(1).at("instances") == 65'536);
+        CHECK(highOverdraw.at("tiers").at(1).at("packets") == 1);
+        CHECK(highOverdraw.at("tiers").at(1).at(
+            "instance_upload_bytes") == 4'194'304);
+        CHECK(highOverdraw.at("capacity_fallback_packets") == 0);
+        CHECK(highOverdraw.at("sorted_fallback_packets") == 0);
+        CHECK(highOverdraw.at("all_values_finite") == true);
+        CHECK(highOverdraw.at("explicit_packet_baseline_comparison").at(
+            "inside_frozen_draw_order_thresholds") == true);
+        const Json& weightedLifecycle = weightedOit.at(
+            "resize_output_lifecycle_debug_qualification");
+        CHECK(weightedLifecycle.at("passed") == true);
+        CHECK(weightedLifecycle.at("resize_sequence") == Json::array({
+            Json::array({ 960, 540 }), Json::array({ 1600, 900 }),
+            Json::array({ 1280, 720 }) }));
+        CHECK(weightedLifecycle.at("render_graph_rebuild_delta") == 3);
+        CHECK(weightedLifecycle.at(
+            "restored_capture_byte_identical_to_pre_resize") == true);
+        CHECK(weightedLifecycle.at("output_processes").size() == 3);
+        CHECK(weightedLifecycle.at("output_processes").at(0).at("effective") ==
+            "sdr_srgb");
+        CHECK(weightedLifecycle.at("output_processes").at(1).at("effective") ==
+            "scrgb_linear");
+        CHECK(weightedLifecycle.at("output_processes").at(2).at("effective") ==
+            "hdr10_pq");
+        CHECK(weightedLifecycle.at(
+            "sorted_fallback_packets_each_output_process") == 0);
+        const Json& weightedNative4k = weightedOit.at(
+            "representative_native_4k_release_qualification");
+        CHECK(weightedNative4k.at("passed") == true);
+        CHECK(weightedNative4k.at("independent_processes") == 5);
+        CHECK(weightedNative4k.at("measured_frames_total") == 50'000);
+        CHECK(weightedNative4k.at("profiles").size() == 5);
+        CHECK(weightedNative4k.at(
+            "gpu_frame_median_of_medians_ns") == 3'182'048);
+        CHECK(weightedNative4k.at(
+            "fragment_invocations_each_frame") == 18'053'612);
+        CHECK(weightedNative4k.at("accumulation_draws_each_frame") == 1);
+        CHECK(weightedNative4k.at("resolve_draws_each_frame") == 1);
+        CHECK(weightedNative4k.at(
+            "sorted_fallback_packets_each_frame") == 0);
+        CHECK(weightedNative4k.at("dropped_frames") == 0);
+        CHECK(weightedNative4k.at("profiler_overflow_count") == 0);
+        const Json& populated4k = weightedOit.at(
+            "populated_native_4k_release_baseline");
+        CHECK(populated4k.at("passed") == true);
+        CHECK(populated4k.at("measured_frames") == 300);
+        CHECK(populated4k.at("gpu_frame_median_ns").get<uint64_t>() <
+            10'000'000u);
+        CHECK(populated4k.at("weighted_oit_packets_per_frame") == 256);
+        CHECK(populated4k.at("sorted_fallback_draws_per_frame") == 0);
+        CHECK(populated4k.at("refraction_pyramids_resident") == false);
+        CHECK(populated4k.at("dropped_frames") == 0);
+        CHECK(weightedOit.at("tests").size() == 8);
+        CHECK(weightedOit.at("open_gates").empty());
+        const Json& diagnostics = manifest.at(
+            "m6_8_diagnostics_candidate");
+        CHECK(diagnostics.at("status") ==
+            "allocation_gate_validated");
+        CHECK(diagnostics.at("runtime_final_rendering_changed") == false);
+        const Json& policyDiagnostics = diagnostics.at(
+            "backend_neutral_policy_diagnostics");
+        CHECK(policyDiagnostics.at("derived_fields").size() == 7);
+        CHECK(policyDiagnostics.at("topology_states").size() == 4);
+        CHECK(policyDiagnostics.at("fallback_states").size() == 6);
+        const Json& authoring = diagnostics.at(
+            "artist_authoring_presentation");
+        CHECK(authoring.at("override_expands_full_policy") == true);
+        CHECK(authoring.at(
+            "missing_cooked_result_collapses_controls") == false);
+        CHECK(authoring.at(
+            "transparent_primitives_and_materials_preserve_full_workflow") ==
+            true);
+        const Json& profilerPresentation = diagnostics.at(
+            "profiler_presentation");
+        CHECK(profilerPresentation.at("counter_groups").size() == 6);
+        CHECK(profilerPresentation.at("nonzero_risk_terms").size() == 6);
+        CHECK(profilerPresentation.at("active_gpu_range_prefix") ==
+            "gpu.transparency.");
+        CHECK(profilerPresentation.at("gpu_ranges_are_dynamic") == true);
+        CHECK(profilerPresentation.at("counter_capacity") == 256);
+        CHECK(profilerPresentation.at("overflow_is_visible") == true);
+        const Json& assetTransactions = diagnostics.at(
+            "asset_settings_transactions");
+        CHECK(assetTransactions.at("scene_document_state_unchanged") == true);
+        CHECK(assetTransactions.at(
+            "history_advances_after_successful_catalog_job_only") == true);
+        CHECK(assetTransactions.at(
+            "failed_job_preserves_history_cursor") == true);
+        CHECK(assetTransactions.at(
+            "external_settings_divergence_is_rejected") == true);
+        CHECK(assetTransactions.at("apply_undo_redo_each_recook") == true);
+        CHECK(assetTransactions.at(
+            "stable_root_and_primitive_guids_preserved") == true);
+        const Json& allocationHardening = diagnostics.at(
+            "steady_allocation_hardening");
+        CHECK(allocationHardening.at("inherited_baseline").at(
+            "calls_per_frame") == 17);
+        CHECK(allocationHardening.at("inherited_baseline").at(
+            "requested_bytes_per_frame") == 5216);
+        CHECK(allocationHardening.at("graph_resources_changed") == false);
+        CHECK(allocationHardening.at("descriptors_changed") == false);
+        CHECK(allocationHardening.at("rendering_changed") == false);
+        const Json& allocationQualification = allocationHardening.at(
+            "release_qualification");
+        CHECK(allocationQualification.at("resolution") ==
+            Json::array({ 1280, 720 }));
+        CHECK(allocationQualification.at("warmup_frames") == 20);
+        CHECK(allocationQualification.at("measured_frames_per_fixture") ==
+            32);
+        CHECK(allocationQualification.at("total_measured_frames") == 96);
+        CHECK(allocationQualification.at("maximum_calls_per_frame") == 0);
+        CHECK(allocationQualification.at(
+            "maximum_requested_bytes_per_frame") == 0);
+        CHECK(allocationQualification.at("passed") == true);
+        for (const char* fixture : {
+                 "ordinary2", "cinematic8", "weighted_oit" }) {
+            const Json& fixtureResult = allocationQualification.at(
+                "fixtures").at(fixture);
+            CHECK(fixtureResult.at("maximum_calls_per_frame") == 0);
+            CHECK(fixtureResult.at(
+                "maximum_requested_bytes_per_frame") == 0);
+            CHECK(fixtureResult.at("profile_sha256").get<std::string>().size()
+                == 64);
+        }
+        const Json& allocationValidation = allocationHardening.at(
+            "validation_capture");
+        CHECK(allocationValidation.at("capture_sha256") ==
+            allocationValidation.at("pre_hardening_capture_sha256"));
+        CHECK(allocationValidation.at(
+            "readback_saturated_residual_pixels") == 650);
+        CHECK(allocationValidation.at("validation_message_count") == 0);
+        CHECK(allocationValidation.at("passed") == true);
+        CHECK(allocationHardening.at(
+            "capture_and_readback_allocations_excluded_from_steady_gate") ==
+            true);
+        const Json& debugTransport = diagnostics.at(
+            "debug_view_transport");
+        CHECK(debugTransport.at("debug_bits") ==
+            Json::array({ 8, 15 }));
+        CHECK(debugTransport.at("refraction_residency_bit") == 0);
+        CHECK(debugTransport.at("deep_local_debug_bits") ==
+            Json::array({ 24, 31 }));
+        CHECK(debugTransport.at("deep_scene_resolve_tier_bit") == 0);
+        CHECK(debugTransport.at(
+            "view_and_work_fields_non_overlapping") == true);
+        const Json& debugViews = diagnostics.at("debug_views");
+        const Json& ordinaryClass = debugViews.at(
+            "transparency-class").at("ordinary2_validation");
+        CHECK(ordinaryClass.at("paired_pixels") == 5888);
+        CHECK(ordinaryClass.at("orange_layered_pixels") == 5888);
+        CHECK(ordinaryClass.at("local_color_invalid_pixels") == 0);
+        CHECK(ordinaryClass.at("validation_passed") == true);
+        const Json& weightedClass = debugViews.at(
+            "transparency-class").at("weighted_oit_validation");
+        CHECK(weightedClass.at("purple_weighted_oit_pixels") == 142884);
+        CHECK(weightedClass.at("validation_passed") == true);
+        const Json& fallbackView = debugViews.at(
+            "transparency-fallback").at(
+                "invalid_layered_validation");
+        CHECK(fallbackView.at("fallback_thin_glass_submeshes") == 1);
+        CHECK(fallbackView.at("fallback_flagged_submeshes") == 1);
+        CHECK(fallbackView.at("magenta_fallback_pixels") == 5888);
+        CHECK(fallbackView.at("ordinary2_atlas_resident") == false);
+        CHECK(fallbackView.at("validation_passed") == true);
+        const Json& intervalView = debugViews.at(
+            "transparency-interval").at("ordinary2_validation");
+        CHECK(intervalView.at("measured_interval_pixels") == 5888);
+        CHECK(intervalView.at("passed") == true);
+        const Json& mipView = debugViews.at(
+            "transparency-pyramid-mip").at("ordinary2_validation");
+        CHECK(mipView.at("selected_mip_pixels") == 5888);
+        CHECK(mipView.at("offscreen_or_foreground_rejected_pixels") == 0);
+        CHECK(mipView.at("passed") == true);
+        const Json& layersView = debugViews.at("transparency-layers");
+        CHECK(layersView.at("ordinary2_validation").at(
+            "cyan_two_interface_pixels") == 5888);
+        CHECK(layersView.at("cinematic8_validation").at(
+            "pink_eight_interface_pixels") == 15042);
+        const Json& overflowView = debugViews.at("transparency-overflow");
+        const Json& cinematicOverflow = overflowView.at(
+            "cinematic8_validation");
+        CHECK(cinematicOverflow.at("accepted_pixels") == 12572);
+        CHECK(cinematicOverflow.at("exact_capacity_pixels") == 1820);
+        CHECK(cinematicOverflow.at("residual_tail_pixels") == 650);
+        CHECK(cinematicOverflow.at(
+            "readback_saturated_residual_pixels") == 650);
+        CHECK(cinematicOverflow.at("passed") == true);
+        const Json& weightedOverflow = overflowView.at(
+            "weighted_oit_validation");
+        CHECK(weightedOverflow.at("within_fp16_envelope_pixels") == 142884);
+        CHECK(weightedOverflow.at("saturation_risk_pixels") == 0);
+        CHECK(weightedOverflow.at("passed") == true);
+        const Json& finalRegression = diagnostics.at(
+            "final_render_regression");
+        CHECK(finalRegression.at("capture_sha256") ==
+            finalRegression.at("pre_debug_baseline_sha256"));
+        CHECK(finalRegression.at("byte_identical") == true);
+        CHECK(finalRegression.at("validation_message_count") == 0);
+        CHECK(finalRegression.at("passed") == true);
+        CHECK(diagnostics.at("remaining_gates").empty());
+        const Json& cutover = manifest.at("m6_9_cutover_candidate");
+        CHECK(cutover.at("status") == "complete");
+        CHECK(cutover.at("runtime_final_rendering_changed") == false);
+        const Json& productionDefault = cutover.at("production_default");
+        CHECK(productionDefault.at("new_import_execution_mode") ==
+            "classified");
+        CHECK(productionDefault.at(
+            "unknown_current_execution_mode_fallback") == "classified");
+        CHECK(productionDefault.at("schema_1_migration_execution_mode") ==
+            "legacy_two_bucket");
+        CHECK(productionDefault.at(
+            "explicit_legacy_comparison_preserved") == true);
+        CHECK(productionDefault.at(
+            "artist_execution_selector_exposed") == false);
+        CHECK(productionDefault.at(
+            "production_runtime_honors_serialized_execution_mode") == false);
+        CHECK(productionDefault.at("runtime_record_defaults").size() == 5);
+        const Json& developerOverride = cutover.at(
+            "developer_runtime_override");
+        CHECK(developerOverride.at("option") ==
+            "--developer-legacy-transparency");
+        CHECK(developerOverride.at("default_runtime_execution_mode") ==
+            "classified");
+        CHECK(developerOverride.at("override_runtime_execution_mode") ==
+            "legacy_two_bucket");
+        CHECK(developerOverride.at("artist_controls_removed") == true);
+        CHECK(developerOverride.at(
+            "classified_ordinary2_accepted_packets") == 1);
+        CHECK(developerOverride.at(
+            "classified_compatibility_forward_draws") == 0);
+        CHECK(developerOverride.at("legacy_foreground_packets") == 1);
+        CHECK(developerOverride.at("legacy_depth_draws") == 1);
+        CHECK(developerOverride.at("legacy_forward_draws") == 1);
+        CHECK(developerOverride.at(
+            "legacy_ordinary2_accepted_packets") == 0);
+        CHECK(developerOverride.at("same_cooked_artifact") == true);
+        CHECK(developerOverride.at("distinct_capture_hashes") == true);
+        CHECK(developerOverride.at("validation_message_count") == 0);
+        CHECK(developerOverride.at("passed") == true);
+        const Json& graphCutover = cutover.at(
+            "production_graph_cutover");
+        CHECK(graphCutover.at(
+            "default_legacy_glass_depth_resource_present") == false);
+        CHECK(graphCutover.at(
+            "default_legacy_background_depth_pass_present") == false);
+        CHECK(graphCutover.at(
+            "default_legacy_foreground_forward_pass_present") == false);
+        CHECK(graphCutover.at(
+            "developer_override_materializes_legacy_graph") == true);
+        CHECK(graphCutover.at("unpopulated_default_graph_passes") == 19);
+        CHECK(graphCutover.at(
+            "unpopulated_default_graph_logical_resources") == 26);
+        CHECK(graphCutover.at("legacy_graph_passes") == 22);
+        CHECK(graphCutover.at("legacy_graph_logical_resources") == 27);
+        CHECK(graphCutover.at("requested_byte_reduction") == 7372800);
+        CHECK(graphCutover.at("committed_byte_reduction") == 7864320);
+        CHECK(graphCutover.at(
+            "classified_capture_byte_identical_to_pre_cutover") == true);
+        CHECK(graphCutover.at("fallback_forward_draws") == 1);
+        CHECK(graphCutover.at("fallback_depth_draws") == 0);
+        CHECK(graphCutover.at("fallback_legacy_bucket_packets") == 0);
+        CHECK(graphCutover.at("fallback_validation_passed") == true);
+        CHECK(graphCutover.at("validation_message_count") == 0);
+        CHECK(graphCutover.at("passed") == true);
+        const Json& importSmoke = cutover.at("fresh_source_import_smoke");
+        CHECK(importSmoke.at("normalized_execution_mode") == "classified");
+        CHECK(importSmoke.at("cook_diagnostic_count") == 0);
+        CHECK(importSmoke.at("inspected_execution_mode") == "classified");
+        CHECK(importSmoke.at("passed") == true);
+        const Json& cutoverValidation = cutover.at(
+            "ordinary2_vulkan_validation");
+        CHECK(cutoverValidation.at("validation_enabled") == true);
+        CHECK(cutoverValidation.at("validation_message_count") == 0);
+        CHECK(cutoverValidation.at("paired_pixels") == 5888);
+        CHECK(cutoverValidation.at("accepted_packets") == 1);
+        CHECK(cutoverValidation.at("entry_draws") == 1);
+        CHECK(cutoverValidation.at("exit_draws") == 1);
+        CHECK(cutoverValidation.at("local_composition_draws") == 1);
+        CHECK(cutoverValidation.at("scene_resolve_draws") == 1);
+        CHECK(cutoverValidation.at("compatibility_forward_draws") == 0);
+        CHECK(cutoverValidation.at("legacy_background_packets") == 0);
+        CHECK(cutoverValidation.at("legacy_foreground_packets") == 0);
+        CHECK(cutoverValidation.at("passed") == true);
+        const Json& finalQualification = cutover.at(
+            "final_production_qualification");
+        CHECK(finalQualification.at("passed") == true);
+        CHECK(finalQualification.at("test_count_each_build") == 71);
+        CHECK(finalQualification.at("vulkan_validation_message_count") == 0);
+        CHECK(finalQualification.at("matched_alfa_visual").at(
+            "byte_identical") == true);
+        CHECK(finalQualification.at("lifecycle").at("passed") == true);
+        CHECK(finalQualification.at("output_transports").size() == 3);
+        const Json& finalOrdinary = finalQualification.at(
+            "ordinary2_native_4k_release");
+        CHECK(finalOrdinary.at("independent_processes") == 5);
+        CHECK(finalOrdinary.at("measured_frames_total") == 50000);
+        CHECK(finalOrdinary.at("ordinary2_accepted_packets_per_frame") == 8);
+        CHECK(finalOrdinary.at("compatibility_forward_draws_per_frame") == 0);
+        CHECK(finalOrdinary.at("legacy_bucket_packets_per_frame") == 0);
+        CHECK(finalOrdinary.at(
+            "maximum_cpp_allocation_calls_retained_frame") == 0);
+        CHECK(finalOrdinary.at("dropped_or_overflow_events") == 0);
+        const Json& finalDomains = finalQualification.at(
+            "separate_native_4k_domains");
+        CHECK(finalDomains.at("cinematic8").at(
+            "compatibility_forward_draws_per_frame") == 0);
+        CHECK(finalDomains.at("weighted_oit").at(
+            "accumulation_draws_per_frame") == 1);
+        CHECK(finalDomains.at("weighted_oit").at(
+            "compatibility_forward_draws_per_frame") == 0);
+        CHECK(finalQualification.at("matched_m6_0_alfa_performance").at(
+            "dropped_or_overflow_events") == 0);
+        CHECK(finalQualification.at("periodic_title_allocation_removed").at(
+            "after_calls") == 0);
+        CHECK(cutover.at("remaining_gates").empty());
         return true;
     }
 
@@ -1191,6 +1689,8 @@ int main() {
     struct Test { const char* name; bool (*run)(); };
     constexpr std::array tests{
         Test{ "fixture matrix", fixtureMatrixIsCompleteAndDeterministic },
+        Test{ "metadata fixtures are not live sidecars",
+            metadataFixturesCannotMasqueradeAsLiveSidecars },
         Test{ "transport reference", transportReferenceIsAnalyticAndFinite },
         Test{ "run contract", runContractIsExplicitAndLocalInputsAreVerifiedWhenPresent },
     };

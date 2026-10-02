@@ -3,6 +3,9 @@
 #include "editor/ViewportLayout.h"
 #include "editor/ViewportPlacement.h"
 #include "editor/ViewportRenderExtent.h"
+#include "editor/ViewportPicking.h"
+#include "editor/EditorTransformSettings.h"
+#include "editor/EditorShortcut.h"
 #include "ecs/Registry.h"
 #include "scene/Components.h"
 
@@ -10,6 +13,7 @@
 
 #include <cmath>
 #include <iostream>
+#include <memory>
 
 namespace {
 
@@ -81,9 +85,71 @@ int main() {
     CHECK(close(center->x, 0.0f));
     CHECK(close(center->y, 0.0f));
     CHECK(close(center->z, 0.0f));
+    const glm::mat4 horizontalView = glm::lookAt(
+        glm::vec3(0.0f, 4.0f, 5.0f),
+        glm::vec3(0.0f, 4.0f, 0.0f),
+        glm::vec3(0.0f, 1.0f, 0.0f));
+    const auto horizontalFallback =
+        Iridium::viewportDropWorldPosition(
+            800.0f, 450.0f,
+            1600.0f, 900.0f,
+            horizontalView, projection);
+    CHECK(horizontalFallback.has_value());
+    CHECK(close(horizontalFallback->y, 0.0f));
     CHECK(!Iridium::viewportDropWorldPosition(
         0.0f, 0.0f, 0.0f, 900.0f,
         view, projection));
+
+    CHECK(close(Iridium::metresPerUnit(
+        Iridium::EditorLengthUnit::Millimetres), 0.001f));
+    CHECK(close(Iridium::metresPerUnit(
+        Iridium::EditorLengthUnit::Centimetres), 0.01f));
+    Iridium::EditorTransformSettings transformSettings;
+    CHECK(transformSettings.gridVisible);
+    CHECK(transformSettings.gridFollowsTranslation);
+    CHECK(Iridium::ToggleViewportGrid.group ==
+        Iridium::EditorShortcutGroup::Viewport);
+    CHECK(Iridium::ToggleViewportGrid.chord ==
+        (ImGuiMod_Alt | ImGuiKey_G));
+    transformSettings.worldUnit = Iridium::EditorLengthUnit::Centimetres;
+    transformSettings.gridStepInWorldUnits = 10.0f;
+    transformSettings.translationSnapInWorldUnits = 2.5f;
+    CHECK(close(transformSettings.gridStepMeters(), 0.1f));
+    CHECK(close(transformSettings.translationSnapMeters(), 0.025f));
+    CHECK(close(transformSettings.effectiveTranslationSnapMeters(), 0.1f));
+    transformSettings.translationSnapUsesGridStep = false;
+    CHECK(close(transformSettings.effectiveTranslationSnapMeters(), 0.025f));
+    CHECK(!Iridium::transformSnapActive(false, false, false));
+    CHECK(Iridium::transformSnapActive(true, false, false));
+    CHECK(Iridium::transformSnapActive(false, true, false));
+    CHECK(!Iridium::transformSnapActive(true, true, true));
+    CHECK(close(Iridium::adaptiveGridSpacingMeters(0.5f, 1.0f), 0.01f));
+    CHECK(close(Iridium::adaptiveGridSpacingMeters(80.0f, 1.0f), 10.0f));
+
+    Registry pickingRegistry;
+    const Entity nearEntity = pickingRegistry.createEntity();
+    const Entity farEntity = pickingRegistry.createEntity();
+    auto modelAsset = std::make_shared<Iridium::ModelAsset>();
+    modelAsset->subMeshes.push_back({
+        .boundsMin = glm::vec3(-0.5f),
+        .boundsMax = glm::vec3(0.5f),
+    });
+    pickingRegistry.addComponent<TransformComponent>(nearEntity);
+    pickingRegistry.addComponent<MeshComponent>(nearEntity).model = modelAsset;
+    auto& farTransform = pickingRegistry.addComponent<TransformComponent>(
+        farEntity);
+    farTransform.worldMatrix = glm::translate(glm::mat4(1.0f),
+        glm::vec3(0.0f, 0.0f, -3.0f));
+    pickingRegistry.addComponent<MeshComponent>(farEntity).model = modelAsset;
+    const glm::mat4 pickView = glm::lookAt(glm::vec3(0.0f, 0.0f, 5.0f),
+        glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+    glm::mat4 pickProjection = glm::perspective(glm::radians(60.0f),
+        16.0f / 9.0f, 0.1f, 100.0f);
+    pickProjection[1][1] *= -1.0f;
+    CHECK(Iridium::pickViewportEntity(pickingRegistry, 800.0f, 450.0f,
+        1600.0f, 900.0f, pickView, pickProjection) == nearEntity);
+    CHECK(Iridium::pickViewportEntity(pickingRegistry, 0.0f, 0.0f,
+        1600.0f, 900.0f, pickView, pickProjection) == NULL_ENTITY);
 
     const Iridium::RenderExtent dpiExtent =
         Iridium::viewportPixelExtent(

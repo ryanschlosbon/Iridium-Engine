@@ -1,4 +1,7 @@
 #include "editor/panels/windows/AssetBrowserPanel.h"
+#include "editor/TransparencyAuthoringPresentation.h"
+#include "editor/MaterialParameterEditor.h"
+#include "material/TransparencyDiagnostics.h"
 
 #include "assets/AssetCatalogService.h"
 #include "assets/AssetManager.h"
@@ -17,11 +20,15 @@
 #include <cstddef>
 #include <cfloat>
 #include <filesystem>
+#include <fstream>
 #include <cstring>
 #include <map>
 #include <span>
+#include <stdexcept>
+#include <utility>
 
 #include <imgui.h>
+#include <imgui_internal.h>
 
 namespace {
 
@@ -48,6 +55,33 @@ namespace {
             }
         }
         return nullptr;
+    }
+
+    void applyFolderOrder(
+        std::vector<Iridium::AssetBrowserFolder>& folders,
+        const std::map<std::string, std::vector<std::string>>& order,
+        std::string_view parent = {}) {
+        const auto found = order.find(std::string(parent));
+        if (found != order.end()) {
+            const auto rank = [&found](std::string_view path) {
+                const auto position = std::ranges::find(found->second, path);
+                return position == found->second.end()
+                    ? found->second.size()
+                    : static_cast<size_t>(std::distance(
+                        found->second.begin(), position));
+            };
+            std::ranges::stable_sort(folders,
+                [&rank](const Iridium::AssetBrowserFolder& lhs,
+                    const Iridium::AssetBrowserFolder& rhs) {
+                    const size_t lhsRank = rank(lhs.path);
+                    const size_t rhsRank = rank(rhs.path);
+                    return lhsRank != rhsRank ? lhsRank < rhsRank
+                        : lhs.name < rhs.name;
+                });
+        }
+        for (auto& folder : folders) {
+            applyFolderOrder(folder.children, order, folder.path);
+        }
     }
 
     const char* runtimeStateName(
@@ -191,7 +225,9 @@ namespace {
 
     bool drawTransparencyPolicyEditor(
         nlohmann::json& settings,
-        const Iridium::AssetCatalogRecord& target) {
+        const Iridium::AssetCatalogRecord& target,
+        const Iridium::CompiledTransparencyPolicy*
+            cookedPolicy) {
         if (!settings.contains("transparency_policies") ||
             !settings["transparency_policies"].is_object()) {
             settings["transparency_policies"] = nlohmann::json::object();
@@ -200,6 +236,10 @@ namespace {
         const std::string targetGuid = target.guid.toString();
         bool overrideEnabled = policies.contains(targetGuid) &&
             policies[targetGuid].is_object();
+        const Iridium::TransparencyAuthoringPresentation presentation =
+            Iridium::describeTransparencyAuthoring(
+                target.assetType == "iridium.model-primitive",
+                cookedPolicy, overrideEnabled);
         bool changed = false;
 
         ImGui::SeparatorText("Transparency policy");
@@ -222,7 +262,17 @@ namespace {
                 "Material policy applies to its primitives unless a primitive override exists.");
         }
 
-        if (ImGui::Checkbox("Override inherited transparency policy",
+        if (presentation.cookedOpaquePrimitive) {
+            ImGui::TextDisabled(
+                "Cooked result: Opaque (transparency options collapsed).");
+            ImGui::TextDisabled(
+                "This primitive has no detected transparent material behavior.");
+        }
+
+        const char* overrideLabel = presentation.cookedOpaquePrimitive
+            ? "Override opaque primitive transparency"
+            : "Override inherited transparency policy";
+        if (ImGui::Checkbox(overrideLabel,
                 &overrideEnabled)) {
             if (overrideEnabled) {
                 policies[targetGuid] = {
@@ -238,8 +288,24 @@ namespace {
             }
             changed = true;
         }
-        itemTooltip(
-            "Leave this off for the safe inherited defaults: Auto classification, Ordinary2 layered quality, priority zero, and zero fabricated thin-sheet thickness.");
+        if (presentation.cookedOpaquePrimitive) {
+            itemTooltip(
+                "Advanced escape hatch for intentional art direction. Enabling it reveals the full policy editor, but routing alone cannot add alpha, transmission, or repair the source material.");
+            if (!overrideEnabled) return changed;
+            ImGui::TextColored(ImVec4(1.0f, 0.72f, 0.25f, 1.0f),
+                "Opaque override active: choose an explicit class below to force transparent routing.");
+        }
+        else {
+            itemTooltip(
+                "Leave this off for the safe inherited defaults: Auto classification, Ordinary2 layered quality, priority zero, and zero fabricated thin-sheet thickness.");
+        }
+
+        if (target.assetType == "iridium.model-primitive" && overrideEnabled) {
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.85f, 0.2f, 1.0f));
+            ImGui::TextWrapped("This primitive's transparency policy overrides its material's policy. "
+                "Disable the override above to inherit the material policy.");
+            ImGui::PopStyleColor();
+        }
 
         nlohmann::json inheritedPolicy{
             { "class", "auto" },
@@ -444,7 +510,21 @@ AssetBrowserPanel::AssetBrowserPanel(bool* open, Entity* selectedEntity,
       modelPreparationService_(modelPreparationService),
       thumbnailService_(thumbnailService),
       runtimeService_(runtimeService),
-      assetDocuments_(assetDocuments) {}
+      assetDocuments_(assetDocuments),
+      settingsTransactions_(
+          [catalogService](Iridium::AssetGuid rootGuid,
+              nlohmann::json settings) {
+              if (!catalogService) {
+                  throw std::runtime_error(
+                      "Asset catalog service is unavailable");
+              }
+              return catalogService->requestUpdateSettings(
+                  rootGuid, std::move(settings));
+          }) {
+    folderOrderPath_ = std::filesystem::path(PROJECT_ROOT_DIR) /
+        "out" / "editor" / "asset-browser-folder-order.json";
+    loadFolderOrder();
+}
 
 void AssetBrowserPanel::openInAssetViewer(
     const Iridium::AssetBrowserItem& item) {
@@ -512,6 +592,96 @@ void AssetBrowserPanel::requestAssetMove(
         root->guid, destinationDirectory);
     actionDiagnostic_ =
         "Asset move queued.";
+}
+
+void AssetBrowserPanel::requestFolderMove(
+    std::string_view sourceDirectory,
+    const std::filesystem::path& destinationDirectory) {
+    if (!catalogService_ || sourceDirectory.empty()) {
+        actionDiagnostic_ = "Folder move is unavailable.";
+        return;
+    }
+    (void)catalogService_->requestMoveFolder("project",
+        std::filesystem::path(sourceDirectory), destinationDirectory);
+    actionDiagnostic_ = "Folder move queued.";
+}
+
+void AssetBrowserPanel::loadFolderOrder() {
+    folderOrder_.clear();
+    std::ifstream input(folderOrderPath_, std::ios::binary);
+    if (!input) return;
+    const nlohmann::json document = nlohmann::json::parse(input, nullptr, false);
+    if (!document.is_object() || document.value("schemaVersion", 0) != 1 ||
+        !document.contains("parents") || !document["parents"].is_object()) {
+        return;
+    }
+    for (const auto& [parent, children] : document["parents"].items()) {
+        if (!children.is_array()) continue;
+        std::vector<std::string> paths;
+        for (const auto& child : children) {
+            if (child.is_string()) paths.push_back(child.get<std::string>());
+        }
+        folderOrder_.insert_or_assign(parent, std::move(paths));
+    }
+}
+
+void AssetBrowserPanel::saveFolderOrder() {
+    try {
+        std::filesystem::create_directories(folderOrderPath_.parent_path());
+        nlohmann::json document{
+            { "schemaVersion", 1 },
+            { "parents", folderOrder_ },
+        };
+        std::ofstream output(folderOrderPath_,
+            std::ios::binary | std::ios::trunc);
+        if (!output) throw std::runtime_error("Could not open folder order file");
+        output << document.dump(2) << '\n';
+        if (!output) throw std::runtime_error("Could not write folder order file");
+    }
+    catch (const std::exception& exception) {
+        actionDiagnostic_ = "Folder order could not be saved: " +
+            std::string(exception.what());
+    }
+}
+
+void AssetBrowserPanel::rebuildOrderedFolders() {
+    orderedFolders_ = folders_;
+    applyFolderOrder(orderedFolders_, folderOrder_);
+}
+
+void AssetBrowserPanel::reorderFolderBefore(
+    std::string_view sourcePath, std::string_view targetPath) {
+    if (sourcePath.empty() || targetPath.empty() || sourcePath == targetPath) {
+        return;
+    }
+    const std::string sourceParent = std::filesystem::path(sourcePath)
+        .parent_path().generic_string();
+    const std::string targetParent = std::filesystem::path(targetPath)
+        .parent_path().generic_string();
+    if (sourceParent != targetParent) {
+        actionDiagnostic_ =
+            "Drop onto the folder to move it; reorder slots only accept siblings.";
+        return;
+    }
+    const auto* parentFolder = sourceParent.empty()
+        ? nullptr : findFolder(folders_, sourceParent);
+    const auto siblings = parentFolder
+        ? std::span<const Iridium::AssetBrowserFolder>(parentFolder->children)
+        : std::span<const Iridium::AssetBrowserFolder>(folders_);
+    std::vector<std::string> order;
+    order.reserve(siblings.size());
+    for (const auto& sibling : siblings) order.push_back(sibling.path);
+    const auto source = std::ranges::find(order, sourcePath);
+    const auto target = std::ranges::find(order, targetPath);
+    if (source == order.end() || target == order.end()) return;
+    const std::string moved = *source;
+    order.erase(source);
+    const auto targetAfterErase = std::ranges::find(order, targetPath);
+    order.insert(targetAfterErase, moved);
+    folderOrder_.insert_or_assign(sourceParent, std::move(order));
+    rebuildOrderedFolders();
+    saveFolderOrder();
+    actionDiagnostic_ = "Custom folder order saved.";
 }
 
 void AssetBrowserPanel::refreshDecorations() {
@@ -669,11 +839,19 @@ void AssetBrowserPanel::drawItem(Registry& registry,
     if (kind == AssetDragKind::Model &&
         !item.record.parentGuid) {
         ImGui::SameLine();
+        const bool expanded = drawerItem_ &&
+            drawerItem_->record.guid == item.record.guid;
         if (ImGui::ArrowButton(
-                "asset-drawer-toggle",
-                ImGuiDir_Right)) {
-            drawerItem_ = item;
-            drawerPending_ = true;
+            "asset-drawer-toggle",
+                expanded ? ImGuiDir_Down : ImGuiDir_Right)) {
+            if (expanded) {
+                drawerItem_.reset();
+                invalidateDrawerCache();
+            }
+            else drawerItem_ = item;
+        }
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) {
+            ImGui::SetTooltip("Expand model materials and primitives in the horizontal strip.");
         }
     }
     if (grid) {
@@ -716,11 +894,13 @@ void AssetBrowserPanel::rebuildFolders() {
             catalog_->sourceDirectories())
         : std::vector<
             Iridium::AssetBrowserFolder>{};
+    rebuildOrderedFolders();
 }
 
 void AssetBrowserPanel::drawDrawerRecord(
     const Iridium::AssetCatalogRecord& record,
-    Iridium::AssetManager* assetManager) {
+    Iridium::AssetManager* assetManager,
+    Iridium::AssetBrowserDrawerSection section) {
     using namespace Iridium;
     ImGui::PushID(
         record.guid.toString().c_str());
@@ -728,13 +908,19 @@ void AssetBrowserPanel::drawDrawerRecord(
         ? assetManager->getEditorThumbnail(
             record.guid)
         : nullptr;
+    ImGui::BeginChild("model-content-card", ImVec2(132.0f, 154.0f),
+        ImGuiChildFlags_Borders, ImGuiWindowFlags_NoScrollbar);
+    bool selected = false;
     if (thumbnail) {
-        ImGui::Image(
+        selected = ImGui::ImageButton("##content-thumbnail",
             ImTextureRef(
                 reinterpret_cast<ImTextureID>(
                     thumbnail)),
-            ImVec2(44.0f, 44.0f));
-        ImGui::SameLine();
+            ImVec2(104.0f, 96.0f));
+    }
+    else {
+        selected = ImGui::Button(record.assetType.c_str(),
+            ImVec2(104.0f, 96.0f));
     }
     const std::string label =
         record.sourceKey.empty()
@@ -742,14 +928,19 @@ void AssetBrowserPanel::drawDrawerRecord(
         : std::filesystem::path(
             record.sourceKey)
             .filename().string();
-    if (ImGui::Selectable(
-            label.c_str(), false,
-            ImGuiSelectableFlags_None,
-            ImVec2(220.0f, 44.0f))) {
+    if (selected) {
         selectItem({
             .record = record,
         });
     }
+    if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+        openInAssetViewer({.record = record});
+    ImGui::TextWrapped("%s", label.c_str());
+    ImGui::TextDisabled("%s", section ==
+            AssetBrowserDrawerSection::TransparentPrimitive
+        ? "Transparent Primitive"
+        : record.assetType == "iridium.model-primitive"
+            ? "Primitive" : "Material");
     const AssetDragKind kind =
         assetDragKindForType(
             record.assetType);
@@ -773,6 +964,7 @@ void AssetBrowserPanel::drawDrawerRecord(
             record.assetType.c_str());
         ImGui::EndDragDropSource();
     }
+    ImGui::EndChild();
     ImGui::PopID();
 }
 
@@ -784,138 +976,159 @@ void AssetBrowserPanel::drawAssetDrawer(
             "Catalog unavailable.");
         return;
     }
-    const std::vector<Iridium::AssetCatalogRecord>
-        records =
-            catalog_->recordsForSourceRoot(
-                root.record.guid);
-    std::map<Iridium::AssetGuid,
-        Iridium::AssetCatalogRecord>
-        byGuid;
-    for (const auto& record : records) {
-        byGuid.emplace(record.guid, record);
-    }
-    const Iridium::AssetThumbnailSourceDetail
-        detail = thumbnailService_
-        ? thumbnailService_->sourceDetail(
-            root.record.guid)
-        : Iridium::
-            AssetThumbnailSourceDetail{};
+    ensureDrawerCache(root.record.guid, assetManager);
     ImGui::TextUnformatted(
         root.record.displayName.c_str());
-    ImGui::TextDisabled(
-        "Imported materials, textures, and model primitives");
-    ImGui::Separator();
-    if (!detail.available) {
-        ImGui::TextDisabled(
-            "Preparing associations...");
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Close subcar")) {
+        drawerItem_.reset();
+        invalidateDrawerCache();
         return;
     }
-    size_t materialCount = 0;
-    for (const Iridium::
-            AssetThumbnailAssociation&
-            association :
-        detail.associations) {
-        if (association.parentGuid !=
-            root.record.guid) {
-            continue;
-        }
-        const auto material =
-            byGuid.find(
-                association.childGuid);
-        if (material == byGuid.end() ||
-            material->second.assetType !=
-                "iridium.material") {
-            continue;
-        }
-        ++materialCount;
-        ImGui::PushID(
-            material->first
-                .toString().c_str());
-        const std::string label =
-            std::filesystem::path(
-                material->second.sourceKey)
-                .filename().string();
-        const bool open =
-            ImGui::TreeNodeEx(
-                label.c_str(),
-                ImGuiTreeNodeFlags_OpenOnArrow |
-                ImGuiTreeNodeFlags_SpanAvailWidth);
-        if (ImGui::IsItemClicked() &&
-            !ImGui::IsItemToggledOpen()) {
-            selectItem({
-                .record =
-                    material->second,
-            });
-        }
-        const Iridium::AssetBrowserItem
-            materialItem{
-                .record =
-                    material->second,
-            };
-        if (materialItem.assignable() &&
-            ImGui::BeginDragDropSource()) {
-            const auto payload =
-                Iridium::encodeAssetDragPayload({
-                    .guid = material->first,
-                    .kind = Iridium::
-                        AssetDragKind::Material,
+    ImGui::TextDisabled(
+        "Selectable materials and model primitives - Shift+wheel or drag the scrollbar to browse");
+    ImGui::Separator();
+    drawerVisibleDemandGuids_.clear();
+    if (drawerCacheContents_.empty()) {
+        ImGui::TextDisabled("No imported materials or model primitives.");
+        return;
+    }
+    if (ImGui::BeginChild("model-contents-horizontal",
+            ImVec2(0.0f, 174.0f), ImGuiChildFlags_None,
+            ImGuiWindowFlags_HorizontalScrollbar)) {
+        static constexpr std::array sections{
+            Iridium::AssetBrowserDrawerSection::Material,
+            Iridium::AssetBrowserDrawerSection::ModelPrimitive,
+            Iridium::AssetBrowserDrawerSection::TransparentPrimitive,
+        };
+        bool drewSection = false;
+        const float visibleMinX = ImGui::GetWindowPos().x;
+        const float visibleMaxX = visibleMinX + ImGui::GetWindowSize().x;
+        for (const Iridium::AssetBrowserDrawerSection section : sections) {
+            const bool sectionPresent = std::ranges::any_of(drawerCacheContents_,
+                [section](const DrawerCachedRecord& content) {
+                    return content.section == section;
                 });
-            ImGui::SetDragDropPayload(
-                Iridium::
-                    kAssetBrowserDragPayloadType
-                        .data(),
-                &payload, sizeof(payload));
-            ImGui::TextUnformatted(
-                label.c_str());
-            ImGui::EndDragDropSource();
-        }
-        if (open) {
-            size_t textureCount = 0;
-            for (const Iridium::
-                    AssetThumbnailAssociation&
-                    textureAssociation :
-                detail.associations) {
-                if (textureAssociation
-                        .parentGuid !=
-                    material->first) {
-                    continue;
-                }
-                const auto texture =
-                    byGuid.find(
-                        textureAssociation
-                            .childGuid);
-                if (texture == byGuid.end() ||
-                    texture->second.assetType !=
-                        "iridium.texture") {
-                    continue;
-                }
-                ++textureCount;
-                drawDrawerRecord(
-                    texture->second,
-                    assetManager);
+            if (!sectionPresent) continue;
+            if (drewSection) {
+                ImGui::SameLine();
+                ImGui::Dummy(ImVec2(8.0f, 0.0f));
+                ImGui::SameLine();
             }
-            if (textureCount == 0) {
-                ImGui::TextDisabled(
-                    "No textures");
+            ImGui::BeginGroup();
+            ImGui::TextDisabled("%s",
+                Iridium::assetBrowserDrawerSectionLabel(section).data());
+            bool drewRecord = false;
+            for (const DrawerCachedRecord& content : drawerCacheContents_) {
+                if (content.section != section) continue;
+                if (drewRecord) ImGui::SameLine();
+                const float cardMinX = ImGui::GetCursorScreenPos().x;
+                const float cardMaxX = cardMinX + 132.0f;
+                if (cardMaxX >= visibleMinX && cardMinX <= visibleMaxX) {
+                    drawerVisibleDemandGuids_.push_back(content.record.guid);
+                    drawDrawerRecord(content.record, assetManager, section);
+                }
+                else {
+                    // Retain horizontal layout while avoiding child windows,
+                    // image commands and thumbnail lookups for clipped cards.
+                    ImGui::Dummy(ImVec2(132.0f, 154.0f));
+                }
+                drewRecord = true;
             }
-            ImGui::TreePop();
+            ImGui::EndGroup();
+            drewSection = true;
         }
-        ImGui::PopID();
     }
-    if (materialCount == 0) {
-        ImGui::TextDisabled(
-            "No imported materials.");
+    ImGui::EndChild();
+}
+
+void AssetBrowserPanel::invalidateDrawerCache() {
+    drawerCacheRoot_.reset();
+    drawerCacheRecords_.clear();
+    drawerCacheContents_.clear();
+    drawerCacheDetail_ = {};
+    drawerVisibleDemandGuids_.clear();
+    drawerCacheClassified_ = false;
+    drawerCacheNextDetailProbeFrame_ = 0;
+}
+
+void AssetBrowserPanel::ensureDrawerCache(
+    Iridium::AssetGuid rootGuid,
+    Iridium::AssetManager* assetManager) {
+    using namespace Iridium;
+    bool sortNeeded = false;
+    if (drawerCacheRoot_ != std::optional(rootGuid)) {
+        invalidateDrawerCache();
+        drawerCacheRoot_ = rootGuid;
+        drawerCacheRecords_ = catalog_
+            ? catalog_->recordsForSourceRoot(rootGuid)
+            : std::vector<AssetCatalogRecord>{};
+        for (const AssetCatalogRecord& record : drawerCacheRecords_) {
+            if (record.assetType == "iridium.material" ||
+                record.assetType == "iridium.model-primitive") {
+                drawerCacheContents_.push_back({
+                    .record = record,
+                    .section = assetBrowserDrawerSection(record, false),
+                });
+            }
+        }
+        sortNeeded = true;
     }
-    ImGui::SeparatorText("Model primitives");
-    size_t primitiveCount = 0;
-    for (const auto& [guid, record] : byGuid) {
-        (void)guid;
-        if (record.assetType != "iridium.model-primitive") continue;
-        ++primitiveCount;
-        drawDrawerRecord(record, assetManager);
+
+    if (thumbnailService_ &&
+        ImGui::GetFrameCount() >= drawerCacheNextDetailProbeFrame_) {
+        drawerCacheNextDetailProbeFrame_ = ImGui::GetFrameCount() + 30;
+        AssetThumbnailSourceDetail detail =
+            thumbnailService_->sourceDetail(rootGuid);
+        if ((detail.available || !detail.diagnostic.empty()) &&
+            (detail.sourceCookKey != drawerCacheDetail_.sourceCookKey ||
+                detail.transparencyDetails !=
+                    drawerCacheDetail_.transparencyDetails ||
+                detail.diagnostic != drawerCacheDetail_.diagnostic)) {
+            drawerCacheDetail_ = std::move(detail);
+            drawerCacheClassified_ = false;
+        }
     }
-    if (primitiveCount == 0) {
-        ImGui::TextDisabled("No imported model primitives.");
+    if (!drawerCacheClassified_) {
+        const std::shared_ptr<ModelAsset> runtimeModel = assetManager
+            ? assetManager->findCookedModel(rootGuid) : nullptr;
+        if (drawerCacheDetail_.available ||
+            !drawerCacheDetail_.diagnostic.empty() || runtimeModel) {
+            const auto transparentPolicy = [](const CompiledTransparencyPolicy& policy) {
+                return policy.resolvedClass != TransparencyClass::None &&
+                    policy.resolvedClass != TransparencyClass::AlphaClip;
+            };
+            for (DrawerCachedRecord& content : drawerCacheContents_) {
+                bool transparent = false;
+                if (content.record.assetType == "iridium.model-primitive") {
+                    const auto detail = std::ranges::find_if(
+                        drawerCacheDetail_.transparencyDetails,
+                        [&](const AssetThumbnailTransparencyDetail& value) {
+                            return value.assetGuid == content.record.guid;
+                        });
+                    if (detail != drawerCacheDetail_.transparencyDetails.end()) {
+                        transparent = transparentPolicy(detail->policy);
+                    }
+                    else if (runtimeModel) {
+                        transparent = std::ranges::any_of(runtimeModel->subMeshes,
+                            [&](const SubMesh& primitive) {
+                                return primitive.sourcePrimitiveGuid == content.record.guid &&
+                                    transparentPolicy(primitive.transparency);
+                            });
+                    }
+                }
+                content.section = assetBrowserDrawerSection(content.record, transparent);
+            }
+            drawerCacheClassified_ = true;
+            sortNeeded = true;
+        }
+    }
+    if (sortNeeded) {
+        std::ranges::sort(drawerCacheContents_,
+            [](const DrawerCachedRecord& lhs, const DrawerCachedRecord& rhs) {
+                if (lhs.section != rhs.section) return lhs.section < rhs.section;
+                return lhs.record.sourceKey < rhs.record.sourceKey;
+            });
     }
 }
 
@@ -924,6 +1137,21 @@ void AssetBrowserPanel::drawFolders(
         Iridium::AssetBrowserFolder> folders) {
     for (const Iridium::AssetBrowserFolder&
         folder : folders) {
+        ImGui::PushID(folder.path.c_str());
+        ImGui::InvisibleButton("folder-order-before",
+            ImVec2(-FLT_MIN, 4.0f));
+        if (ImGui::BeginDragDropTarget()) {
+            if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(
+                    Iridium::kAssetBrowserFolderDragPayloadType.data())) {
+                const auto source = Iridium::decodeAssetFolderDragPayload(
+                    payload->DataType,
+                    std::span(static_cast<const std::byte*>(payload->Data),
+                        static_cast<size_t>(payload->DataSize)));
+                if (source) pendingFolderReorder_ =
+                    std::pair<std::string, std::string>{ *source, folder.path };
+            }
+            ImGui::EndDragDropTarget();
+        }
         ImGuiTreeNodeFlags flags =
             ImGuiTreeNodeFlags_OpenOnArrow |
             ImGuiTreeNodeFlags_SpanAvailWidth;
@@ -946,6 +1174,14 @@ void AssetBrowserPanel::drawFolders(
             !ImGui::IsItemToggledOpen()) {
             model_.setDirectory(
                 folder.path);
+        }
+        if (ImGui::BeginDragDropSource()) {
+            ImGui::SetDragDropPayload(
+                Iridium::kAssetBrowserFolderDragPayloadType.data(),
+                folder.path.c_str(), folder.path.size() + 1);
+            ImGui::Text("Move folder: %s", folder.name.c_str());
+            ImGui::TextDisabled("Drop onto a folder to nest it, or between siblings to reorder the tree.");
+            ImGui::EndDragDropSource();
         }
         if (ImGui::BeginPopupContextItem(
                 ("folder-context##" +
@@ -987,6 +1223,15 @@ void AssetBrowserPanel::drawFolders(
         if (ImGui::BeginDragDropTarget()) {
             if (const ImGuiPayload* payload =
                     ImGui::AcceptDragDropPayload(
+                        Iridium::kAssetBrowserFolderDragPayloadType.data())) {
+                const auto source = Iridium::decodeAssetFolderDragPayload(
+                    payload->DataType,
+                    std::span(static_cast<const std::byte*>(payload->Data),
+                        static_cast<size_t>(payload->DataSize)));
+                if (source) requestFolderMove(*source, folder.path);
+            }
+            if (const ImGuiPayload* payload =
+                    ImGui::AcceptDragDropPayload(
                         Iridium::
                             kAssetBrowserDragPayloadType
                                 .data())) {
@@ -1014,6 +1259,7 @@ void AssetBrowserPanel::drawFolders(
             drawFolders(folder.children);
             ImGui::TreePop();
         }
+        ImGui::PopID();
     }
 }
 
@@ -1060,6 +1306,13 @@ void AssetBrowserPanel::drawFolderItem(
         model_.setDirectory(
             folder.path);
     }
+    if (ImGui::BeginDragDropSource()) {
+        ImGui::SetDragDropPayload(
+            Iridium::kAssetBrowserFolderDragPayloadType.data(),
+            folder.path.c_str(), folder.path.size() + 1);
+        ImGui::Text("Move folder: %s", folder.name.c_str());
+        ImGui::EndDragDropSource();
+    }
     if (ImGui::BeginPopupContextItem(
             "folder-item-context")) {
         if (ImGui::MenuItem("Open")) {
@@ -1089,6 +1342,15 @@ void AssetBrowserPanel::drawFolderItem(
         ImGui::EndPopup();
     }
     if (ImGui::BeginDragDropTarget()) {
+        if (const ImGuiPayload* payload =
+                ImGui::AcceptDragDropPayload(
+                    Iridium::kAssetBrowserFolderDragPayloadType.data())) {
+            const auto source = Iridium::decodeAssetFolderDragPayload(
+                payload->DataType,
+                std::span(static_cast<const std::byte*>(payload->Data),
+                    static_cast<size_t>(payload->DataSize)));
+            if (source) requestFolderMove(*source, folder.path);
+        }
         if (const ImGuiPayload* payload =
                 ImGui::AcceptDragDropPayload(
                     Iridium::
@@ -1542,9 +1804,104 @@ void AssetBrowserPanel::drawResults(
             total));
 }
 
+void AssetBrowserPanel::renderAssetParameters(Iridium::AssetGuid guid,
+    Iridium::AssetManager* assetManager) {
+    if (!catalog_) return;
+    const auto records = catalog_->recordsForGuid(guid);
+    if (records.empty()) return;
+    const Iridium::AssetBrowserItem item{.record = records.front()};
+    const auto* document = assetDocuments_ ? assetDocuments_->active() : nullptr;
+    if (!document) return;
+    if (thumbnailService_ && detailDemandAsset_ != std::optional(guid)) {
+        thumbnailService_->setDetailDemand(catalog_->recordsForSourceRoot(document->presentationAssetGuid), guid);
+        detailDemandAsset_ = guid;
+    }
+    std::erase_if(viewerDrafts_, [&](const auto& entry) { return !assetDocuments_->find(entry.first); });
+    auto& draft = viewerDrafts_[document->assetGuid];
+    if (draft.sessionSerial != document->sessionSerial) {
+        draft = {};
+        draft.sessionSerial = document->sessionSerial;
+    }
+    const auto swapDraft = [&] {
+        std::swap(settingsGuid_, draft.guid);
+        std::swap(settingsSource_, draft.source);
+        std::swap(settingsDraft_, draft.settings);
+        std::swap(settingsDirty_, draft.dirty);
+        std::swap(actionDiagnostic_, draft.diagnostic);
+    };
+    swapDraft();
+    drawDetails(&item, assetManager);
+    if (settingsGuid_ && assetManager && !detailCache_.materialSources.empty()) {
+        if (draft.historySource != settingsSource_) {
+            const auto published = nlohmann::json::parse(settingsSource_, nullptr, false);
+            if (published.is_object()) draft.history.reset(published);
+            draft.historySource = settingsSource_;
+        }
+        draft.history.observe(settingsDraft_, ImGui::GetActiveID(),
+            ImGui::GetCurrentContext()->ActiveIdIsJustActivated);
+        ImGui::SeparatorText("Unapplied edit history");
+        ImGui::BeginDisabled(!draft.history.canUndo() || settingsTransactions_.pending());
+        if (ImGui::Button("Undo draft edit")) {
+            if (auto value = draft.history.undo()) {
+                settingsDraft_ = std::move(*value);
+                settingsDirty_ = settingsDraft_ != nlohmann::json::parse(settingsSource_);
+            }
+        }
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!draft.history.canRedo() || settingsTransactions_.pending());
+        if (ImGui::Button("Redo draft edit")) {
+            if (auto value = draft.history.redo()) {
+                settingsDraft_ = std::move(*value);
+                settingsDirty_ = settingsDraft_ != nlohmann::json::parse(settingsSource_);
+            }
+        }
+        ImGui::EndDisabled();
+        if (ImGui::Button("Revert unapplied viewer edits")) {
+            settingsSource_ = detailCache_.settingsJson;
+            settingsDraft_ = nlohmann::json::parse(settingsSource_, nullptr, false);
+            settingsDirty_ = false;
+            draft.history.reset(settingsDraft_);
+            draft.historySource = settingsSource_;
+        }
+        ImGui::TextWrapped("Parameters and route-preserving policy values preview privately. Changing coverage or transparency class requires Apply. Closing this document discards unapplied edits.");
+        if (settingsDraft_.is_object())
+            assetManager->requestMaterialPreview(document->assetGuid, *settingsGuid_,
+                detailCache_.materialSources, settingsDraft_, detailCache_.sourceCookKey,
+                nlohmann::json::parse(detailCache_.settingsJson));
+        const auto diagnostic = assetManager->materialPreviewDiagnostic(document->assetGuid);
+        if (!diagnostic.empty()) ImGui::TextWrapped("%s", diagnostic.c_str());
+        if (const auto preview = assetManager->findMaterialPreview(document->assetGuid)) {
+            std::optional<Iridium::CompiledTransparencyPolicy> displayed;
+            bool mixed = false;
+            for (const auto& part : preview->subMeshes) {
+                const auto partGuid = item.record.assetType == "iridium.material"
+                    ? part.materialGuid : part.sourcePrimitiveGuid;
+                if (partGuid != guid) continue;
+                if (!displayed) displayed = part.transparency;
+                else mixed |= *displayed != part.transparency;
+            }
+            if (displayed) {
+                ImGui::SeparatorText("Live preview policy");
+                if (mixed) ImGui::TextWrapped("Rendered pieces use different policies; showing the first piece below.");
+                ImGui::Text("Class: %s | quality: %s",
+                    Iridium::transparencyClassName(displayed->resolvedClass).data(),
+                    Iridium::transparencyQualityName(displayed->quality).data());
+                ImGui::Text("Priority: %d | thin-sheet thickness: %.4g m",
+                    displayed->priority, displayed->thinSheetThicknessMeters);
+            }
+        }
+    }
+    swapDraft();
+}
+
 void AssetBrowserPanel::syncSettingsDraft(
     Iridium::AssetGuid rootGuid,
     std::string_view settingsJson) {
+    if (settingsGuid_ == std::optional(rootGuid) && settingsDirty_ && settingsSource_ != settingsJson) {
+        actionDiagnostic_ = "Published settings changed while this draft was edited. Draft retained; Revert to reload published settings before applying.";
+        return;
+    }
     if (settingsGuid_ ==
             std::optional(rootGuid) &&
         settingsSource_ == settingsJson) {
@@ -1566,7 +1923,9 @@ void AssetBrowserPanel::syncSettingsDraft(
 
 void AssetBrowserPanel::drawSettingsEditor(
     const Iridium::AssetBrowserItem& selected,
-    Iridium::AssetGuid rootGuid) {
+    Iridium::AssetGuid rootGuid,
+    const Iridium::CompiledTransparencyPolicy*
+        cookedTransparencyPolicy) {
     bool changed = false;
     if (selected.record.parentGuid) {
         ImGui::TextDisabled(
@@ -1574,6 +1933,18 @@ void AssetBrowserPanel::drawSettingsEditor(
     }
     if (selected.record.importerId ==
         "iridium.gltf-model") {
+        if (selected.record.assetType == "iridium.material") {
+            ImGui::BeginDisabled(selected.record.importerVersion < 8);
+            if (selected.record.importerVersion < 8)
+                ImGui::TextWrapped("Material authoring requires importer 8. This asset uses the frozen legacy importer.");
+            const auto source = detailCache_.materialSourceValues.find(selected.record.guid);
+            if (source != detailCache_.materialSourceValues.end())
+                changed |= Iridium::drawMaterialParameterEditor(settingsDraft_,
+                    selected.record.guid.toString(), source->second);
+            else ImGui::TextDisabled("Preparing source material parameters...");
+            ImGui::EndDisabled();
+        }
+        if (!selected.record.parentGuid) {
         changed |= jsonBoolControl(
             "Generate missing tangents",
             settingsDraft_,
@@ -1615,24 +1986,15 @@ void AssetBrowserPanel::drawSettingsEditor(
         }
         ImGui::TextDisabled(
             "Uniformly bakes source units into render, bounds, and RT geometry.");
-        static constexpr const char* transparencyExecutionLabels[]{
-            "Classified hybrid (recommended)",
-            "Legacy two-bucket (comparison only)",
-        };
-        static constexpr const char* transparencyExecutionValues[]{
-            "classified", "legacy_two_bucket",
-        };
-        changed |= jsonStringControl(
-            "Transparency renderer", settingsDraft_,
-            "transparency_execution_mode",
-            transparencyExecutionLabels,
-            transparencyExecutionValues, 1u);
+        ImGui::TextUnformatted("Transparency renderer");
+        ImGui::SameLine();
+        ImGui::TextDisabled("Classified hybrid (production)");
         itemTooltip(
-            "Classified hybrid uses Alpha Clip, Sorted Surface, Thin Glass, Layered Glass, and future Weighted OIT according to each stable material/primitive policy. Legacy two-bucket is retained only for qualification and rollback comparisons.");
+            "Classified hybrid uses Alpha Clip, Sorted Surface, Thin Glass, Layered Glass, and Weighted OIT according to each stable material/primitive policy. Runtime architecture is no longer an artist import setting.");
         if (settingsDraft_.value("transparency_execution_mode",
-                std::string("legacy_two_bucket")) == "legacy_two_bucket") {
+                std::string("classified")) == "legacy_two_bucket") {
             ImGui::TextColored(ImVec4(1.0f, 0.72f, 0.25f, 1.0f),
-                "Legacy comparison mode does not exercise the authored M6 class and layer policy.");
+                "Historical legacy metadata is ignored by production runtime. Use --developer-legacy-transparency for an explicit developer A/B run.");
         }
         bool required = true;
         ImGui::BeginDisabled();
@@ -1645,9 +2007,14 @@ void AssetBrowserPanel::drawSettingsEditor(
         ImGui::EndDisabled();
         ImGui::TextDisabled(
             "The disabled settings are required by the M3 geometry contract.");
+        }
         if (transparencyPolicyTarget(selected.record.assetType)) {
+            ImGui::TextWrapped(selected.record.assetType == "iridium.material"
+                ? "Material transport defaults are inherited by primitives unless a primitive has its own policy override."
+                : "Primitive transport override: topology and layer budget apply to this geometry. Edit its material for color, metallic, roughness or transmission.");
             changed |= drawTransparencyPolicyEditor(
-                settingsDraft_, selected.record);
+                settingsDraft_, selected.record,
+                cookedTransparencyPolicy);
         }
         else {
             ImGui::SeparatorText("Transparency policy");
@@ -1836,27 +2203,70 @@ void AssetBrowserPanel::drawSettingsEditor(
     settingsDirty_ =
         settingsDirty_ || changed;
 
+    const nlohmann::json publishedSettings =
+        nlohmann::json::parse(settingsSource_, nullptr, false);
+    const bool publishedSettingsAvailable = publishedSettings.is_object();
+    const bool settingsJobBlocked = !catalogService_ ||
+        catalogService_->busy() || settingsTransactions_.pending();
+
+    ImGui::SeparatorText("Asset settings history");
+    const bool canUndoSettings = !settingsDirty_ &&
+        publishedSettingsAvailable && !settingsJobBlocked &&
+        settingsTransactions_.canUndo(rootGuid);
+    const bool canRedoSettings = !settingsDirty_ &&
+        publishedSettingsAvailable && !settingsJobBlocked &&
+        settingsTransactions_.canRedo(rootGuid);
+    ImGui::BeginDisabled(!canUndoSettings);
+    if (ImGui::Button("Undo settings")) {
+        const auto result = settingsTransactions_.requestUndo(
+            rootGuid, publishedSettings);
+        actionDiagnostic_ = result
+            ? "Settings undo queued; the previous cook will be restored."
+            : "Settings undo failed: " + result.diagnostic;
+    }
+    ImGui::EndDisabled();
+    itemTooltip(
+        "Restores the previous successfully cooked settings document and reimports the asset. History advances only after that cook succeeds.");
+    ImGui::SameLine();
+    ImGui::BeginDisabled(!canRedoSettings);
+    if (ImGui::Button("Redo settings")) {
+        const auto result = settingsTransactions_.requestRedo(
+            rootGuid, publishedSettings);
+        actionDiagnostic_ = result
+            ? "Settings redo queued; the later cook will be restored."
+            : "Settings redo failed: " + result.diagnostic;
+    }
+    ImGui::EndDisabled();
+    itemTooltip(
+        "Reapplies the next successfully cooked settings document. External settings changes invalidate divergent history instead of being overwritten.");
+    ImGui::TextDisabled(
+        "Undo/redo is scoped to this source asset and never dirties scene history.");
+
     ImGui::BeginDisabled(
-        !settingsDirty_ ||
-        !catalogService_ ||
-        catalogService_->busy());
+        !settingsDirty_ || !publishedSettingsAvailable ||
+        settingsJobBlocked);
     if (ImGui::Button(
             "Apply and reimport")) {
-        try {
-            (void)catalogService_
-                ->requestUpdateSettings(
-                    rootGuid,
-                    settingsDraft_);
-            actionDiagnostic_ =
-                "Settings update queued.";
+        const auto result = settingsTransactions_.requestApply(
+            rootGuid,
+            selected.record.assetType == "iridium.material"
+                ? "Edit material parameters and policy"
+                : transparencyPolicyTarget(selected.record.assetType)
+                ? "Edit transparency policy"
+                : "Edit import settings",
+            publishedSettings,
+            settingsDraft_);
+        if (result) {
+            actionDiagnostic_ = result.outcome == Iridium::
+                    EditorAssetSettingsTransactionOutcome::NoChange
+                ? "Settings already match the published cook."
+                : "Settings update queued.";
             settingsDirty_ = false;
         }
-        catch (const std::exception&
-            exception) {
+        else {
             actionDiagnostic_ =
                 "Settings update failed: " +
-                std::string(
-                    exception.what());
+                result.diagnostic;
         }
     }
     ImGui::EndDisabled();
@@ -2030,6 +2440,8 @@ void AssetBrowserPanel::drawDetails(
                     ->sourceDetail(rootGuid);
         }
         if (detailCache_.available) {
+            const Iridium::CompiledTransparencyPolicy*
+                cookedTransparencyPolicy = nullptr;
             const auto transparency =
                 std::ranges::find_if(
                     detailCache_.transparencyDetails,
@@ -2040,6 +2452,11 @@ void AssetBrowserPanel::drawDetails(
                     });
             if (transparency !=
                     detailCache_.transparencyDetails.end()) {
+                cookedTransparencyPolicy = &transparency->policy;
+                const Iridium::TransparencyDiagnosticSummary
+                    transparencyDiagnostics =
+                        Iridium::describeTransparencyPolicy(
+                            transparency->policy);
                 ImGui::SeparatorText("Cooked transparency result");
                 ImGui::Text("Requested: %s",
                     Iridium::transparencyClassName(
@@ -2051,6 +2468,15 @@ void AssetBrowserPanel::drawDetails(
                         transparency->policy.quality).data());
                 ImGui::Text("Runtime pieces: %u",
                     transparency->runtimePrimitiveCount);
+                ImGui::Text("Route: %s",
+                    Iridium::transparencyExecutionRouteName(
+                        transparency->policy.resolvedClass).data());
+                ImGui::Text("Topology: %s",
+                    Iridium::transparencyTopologyDiagnosticName(
+                        transparencyDiagnostics.topology).data());
+                itemTooltip(
+                    Iridium::transparencyTopologyDiagnosticDescription(
+                        transparencyDiagnostics.topology).data());
                 if (!transparency->uniformPolicy) {
                     ImGui::TextColored(
                         ImVec4(1.0f, 0.72f, 0.25f, 1.0f),
@@ -2061,6 +2487,18 @@ void AssetBrowserPanel::drawDetails(
                     ImGui::TextColored(
                         ImVec4(1.0f, 0.72f, 0.25f, 1.0f),
                         "Requested class was incompatible; the safe resolved class is active.");
+                    ImGui::TextWrapped("Reason: %s",
+                        Iridium::transparencyFallbackReasonDescription(
+                            transparencyDiagnostics.fallback).data());
+                }
+                else {
+                    ImGui::TextDisabled(
+                        "No compatibility fallback is active.");
+                }
+                if (transparencyDiagnostics.policySanitized) {
+                    ImGui::TextColored(
+                        ImVec4(1.0f, 0.72f, 0.25f, 1.0f),
+                        "Authored policy values were sanitized during cook.");
                 }
             }
             syncSettingsDraft(
@@ -2070,9 +2508,10 @@ void AssetBrowserPanel::drawDetails(
                     "Import settings",
                     ImGuiTreeNodeFlags_DefaultOpen)) {
                 drawSettingsEditor(
-                    *selected, rootGuid);
+                    *selected, rootGuid,
+                    cookedTransparencyPolicy);
             }
-            if (ImGui::CollapsingHeader(
+            if (!selected->record.parentGuid && ImGui::CollapsingHeader(
                     "Dependencies")) {
                 if (detailCache_
                         .dependencies.empty()) {
@@ -2186,6 +2625,14 @@ void AssetBrowserPanel::OnImGuiRender(Registry& registry,
     if (catalogService_) {
         for (const Iridium::AssetCatalogJobResult& result :
             catalogService_->takeResults()) {
+            const Iridium::EditorAssetSettingsTransactionResult
+                settingsTransaction = settingsTransactions_.complete(
+                    result.serial, result.succeeded,
+                    result.diagnostic);
+            const bool matchedSettingsTransaction =
+                settingsTransaction.outcome != Iridium::
+                    EditorAssetSettingsTransactionOutcome::
+                        IgnoredCompletion;
             if (result.succeeded) {
                 foldersInitialized_ = false;
                 thumbnailDemandAssets_.clear();
@@ -2201,6 +2648,7 @@ void AssetBrowserPanel::OnImGuiRender(Registry& registry,
                 detailDemandAsset_.reset();
                 detailCacheRoot_.reset();
                 detailCache_ = {};
+                invalidateDrawerCache();
                 model_.invalidate();
                 if (result.kind ==
                     Iridium::AssetCatalogJobKind::Import) {
@@ -2218,8 +2666,22 @@ void AssetBrowserPanel::OnImGuiRender(Registry& registry,
                 else if (result.kind ==
                     Iridium::AssetCatalogJobKind::
                         UpdateSettings) {
-                    actionDiagnostic_ =
-                        "Import settings applied; model recook and live publication queued.";
+                    if (matchedSettingsTransaction &&
+                        settingsTransaction.action == Iridium::
+                            EditorAssetSettingsTransactionAction::Undo) {
+                        actionDiagnostic_ =
+                            "Asset settings undo cooked successfully; live publication queued.";
+                    }
+                    else if (matchedSettingsTransaction &&
+                        settingsTransaction.action == Iridium::
+                            EditorAssetSettingsTransactionAction::Redo) {
+                        actionDiagnostic_ =
+                            "Asset settings redo cooked successfully; live publication queued.";
+                    }
+                    else {
+                        actionDiagnostic_ =
+                            "Import settings applied; model recook and live publication queued.";
+                    }
                     if (result.assetGuid &&
                         thumbnailService_) {
                         thumbnailService_->invalidate(
@@ -2276,6 +2738,13 @@ void AssetBrowserPanel::OnImGuiRender(Registry& registry,
                 }
             }
             else {
+                if (matchedSettingsTransaction &&
+                    settingsTransaction.action == Iridium::
+                        EditorAssetSettingsTransactionAction::Apply &&
+                    settingsGuid_ == std::optional(
+                        settingsTransaction.rootGuid)) {
+                    settingsDirty_ = true;
+                }
                 actionDiagnostic_ =
                     result.cancelled
                     ? "Asset catalog operation cancelled."
@@ -2423,60 +2892,46 @@ void AssetBrowserPanel::OnImGuiRender(Registry& registry,
     Iridium::AssetBrowserPage& page =
         model_.refresh();
     if (thumbnailService_) {
-        std::map<Iridium::AssetGuid,
-            Iridium::AssetCatalogRecord>
-            demandByGuid;
+        std::vector<Iridium::AssetGuid> demandedAssets;
+        demandedAssets.reserve(page.items.size() +
+            drawerVisibleDemandGuids_.size() + 1u);
         for (const Iridium::AssetBrowserItem&
             item : page.items) {
-            demandByGuid.insert_or_assign(
-                item.record.guid,
-                item.record);
+            demandedAssets.push_back(item.record.guid);
         }
         if (inspectedItem_) {
-            demandByGuid.insert_or_assign(
-                inspectedItem_->record.guid,
-                inspectedItem_->record);
+            demandedAssets.push_back(inspectedItem_->record.guid);
         }
-        const bool drawerVisible =
-            drawerItem_ &&
-            (drawerPending_ ||
-                ImGui::IsPopupOpen(
-                    "asset-contents-drawer"));
+        const bool drawerVisible = drawerItem_.has_value();
         if (drawerVisible && catalog_) {
-            const auto drawerRecords =
-                catalog_->recordsForSourceRoot(
-                    drawerItem_->record.guid);
-            for (const auto& record :
-                drawerRecords) {
-                if (record.guid ==
-                        drawerItem_->record.guid ||
-                    record.assetType ==
-                        "iridium.material" ||
-                    record.assetType ==
-                        "iridium.model-primitive" ||
-                    record.assetType ==
-                        "iridium.texture") {
-                    demandByGuid.insert_or_assign(
-                        record.guid, record);
-                }
-            }
+            ensureDrawerCache(drawerItem_->record.guid, assetManager);
+            demandedAssets.insert(demandedAssets.end(),
+                drawerVisibleDemandGuids_.begin(),
+                drawerVisibleDemandGuids_.end());
         }
-        std::vector<Iridium::AssetGuid>
-            demandedAssets;
-        std::vector<
-            Iridium::AssetCatalogRecord>
-            visibleRecords;
-        demandedAssets.reserve(
-            demandByGuid.size());
-        visibleRecords.reserve(
-            demandByGuid.size());
-        for (const auto& [guid, record] :
-            demandByGuid) {
-            demandedAssets.push_back(guid);
-            visibleRecords.push_back(record);
-        }
+        std::ranges::sort(demandedAssets);
+        const auto uniqueEnd = std::ranges::unique(demandedAssets).begin();
+        demandedAssets.erase(uniqueEnd, demandedAssets.end());
         if (demandedAssets !=
             thumbnailDemandAssets_) {
+            std::map<Iridium::AssetGuid, Iridium::AssetCatalogRecord> demandByGuid;
+            for (const Iridium::AssetBrowserItem& item : page.items)
+                demandByGuid.insert_or_assign(item.record.guid, item.record);
+            if (inspectedItem_)
+                demandByGuid.insert_or_assign(inspectedItem_->record.guid,
+                    inspectedItem_->record);
+            if (drawerVisible) {
+                for (const auto& record : drawerCacheRecords_) {
+                    if (std::ranges::binary_search(demandedAssets, record.guid))
+                        demandByGuid.insert_or_assign(record.guid, record);
+                }
+            }
+            std::vector<Iridium::AssetCatalogRecord> visibleRecords;
+            visibleRecords.reserve(demandByGuid.size());
+            for (const auto& [guid, record] : demandByGuid) {
+                (void)guid;
+                visibleRecords.push_back(record);
+            }
             thumbnailService_->setDemand(
                 visibleRecords);
             thumbnailDemandAssets_ =
@@ -2549,7 +3004,11 @@ void AssetBrowserPanel::OnImGuiRender(Registry& registry,
         ? &*inspectedItem_
         : nullptr;
     if (thumbnailService_) {
-        if (selected && catalog_) {
+        if (assetDocuments_ && assetDocuments_->active()) {
+            // The floating viewer owns the detail worker's demand while open;
+            // keep browser selection independent without cancelling that work.
+        }
+        else if (selected && catalog_) {
             if (detailDemandAsset_ !=
                     std::optional(
                         selected->record.guid)) {
@@ -2616,6 +3075,15 @@ void AssetBrowserPanel::OnImGuiRender(Registry& registry,
             if (ImGui::BeginDragDropTarget()) {
                 if (const ImGuiPayload* payload =
                         ImGui::AcceptDragDropPayload(
+                            Iridium::kAssetBrowserFolderDragPayloadType.data())) {
+                    const auto source = Iridium::decodeAssetFolderDragPayload(
+                        payload->DataType,
+                        std::span(static_cast<const std::byte*>(payload->Data),
+                            static_cast<size_t>(payload->DataSize)));
+                    if (source) requestFolderMove(*source, {});
+                }
+                if (const ImGuiPayload* payload =
+                        ImGui::AcceptDragDropPayload(
                             Iridium::
                                 kAssetBrowserDragPayloadType
                                     .data())) {
@@ -2637,7 +3105,7 @@ void AssetBrowserPanel::OnImGuiRender(Registry& registry,
                 }
                 ImGui::EndDragDropTarget();
             }
-            drawFolders(folders_);
+            drawFolders(orderedFolders_);
             }
             ImGui::EndChild();
             if (!actionDiagnostic_.empty()) {
@@ -2716,7 +3184,7 @@ void AssetBrowserPanel::OnImGuiRender(Registry& registry,
                     *model_.directory()
                 : "All Assets";
             if (model_.directory()) {
-                if (ImGui::Button("Up")) {
+                if (ImGui::Button("Up", ImVec2(72.0f, 0.0f))) {
                     const std::string parent =
                         std::filesystem::path(
                             *model_.directory())
@@ -2745,6 +3213,11 @@ void AssetBrowserPanel::OnImGuiRender(Registry& registry,
                 ImGui::TextDisabled(
                     "  |  %s",
                     actionDiagnostic_.c_str());
+            }
+            if (drawerItem_) {
+                ImGui::Separator();
+                drawAssetDrawer(*drawerItem_, assetManager);
+                ImGui::Separator();
             }
             drawResults(
                 registry, assetManager,
@@ -2790,21 +3263,10 @@ void AssetBrowserPanel::OnImGuiRender(Registry& registry,
             selected, assetManager);
         ImGui::EndPopup();
     }
-    if (drawerPending_) {
-        ImGui::OpenPopup(
-            "asset-contents-drawer");
-        drawerPending_ = false;
-    }
-    ImGui::SetNextWindowSize(
-        ImVec2(360.0f, 520.0f),
-        ImGuiCond_Appearing);
-    if (ImGui::BeginPopup(
-            "asset-contents-drawer")) {
-        if (drawerItem_) {
-            drawAssetDrawer(
-                *drawerItem_, assetManager);
-        }
-        ImGui::EndPopup();
+    if (pendingFolderReorder_) {
+        const auto [source, target] = std::move(*pendingFolderReorder_);
+        pendingFolderReorder_.reset();
+        reorderFolderBefore(source, target);
     }
     drawContentDialog();
     ImGui::End();

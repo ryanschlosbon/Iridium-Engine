@@ -13,7 +13,11 @@
 #include "editor/ViewportRenderExtent.h"
 #include "editor/EditorSceneActions.h"
 #include "editor/EditorSceneCommandService.h"
+#include "editor/EditorSelectionState.h"
+#include "editor/EditorShortcut.h"
+#include "editor/EditorTransformSettings.h"
 #include "editor/EditorTransactionService.h"
+#include "editor/ViewportPicking.h"
 #include "profiling/CpuProfiler.h"
 #include "assets/AssetBrowserModel.h"
 #include "assets/AssetManager.h"
@@ -60,6 +64,53 @@ namespace {
             };
             return true;
         }
+
+        [[nodiscard]] bool projectSegment(glm::vec3 worldA,
+            glm::vec3 worldB, ImVec2& screenA, ImVec2& screenB) const {
+            const glm::vec4 clipA = viewProjection * glm::vec4(worldA, 1.0f);
+            const glm::vec4 clipB = viewProjection * glm::vec4(worldB, 1.0f);
+            float minimumT = 0.0f;
+            float maximumT = 1.0f;
+            constexpr std::array<glm::vec4, 6> ClipPlanes{{
+                { 1.0f, 0.0f, 0.0f, 1.0f },
+                { -1.0f, 0.0f, 0.0f, 1.0f },
+                { 0.0f, 1.0f, 0.0f, 1.0f },
+                { 0.0f, -1.0f, 0.0f, 1.0f },
+                { 0.0f, 0.0f, 1.0f, 0.0f },
+                { 0.0f, 0.0f, -1.0f, 1.0f },
+            }};
+            for (const glm::vec4& plane : ClipPlanes) {
+                const float first = glm::dot(clipA, plane);
+                const float second = glm::dot(clipB, plane);
+                if (first < 0.0f && second < 0.0f) return false;
+                if ((first < 0.0f) != (second < 0.0f)) {
+                    const float crossing = first / (first - second);
+                    if (first < 0.0f) minimumT = (std::max)(minimumT, crossing);
+                    else maximumT = (std::min)(maximumT, crossing);
+                    if (minimumT > maximumT) return false;
+                }
+            }
+            const glm::vec4 clippedA = glm::mix(clipA, clipB, minimumT);
+            const glm::vec4 clippedB = glm::mix(clipA, clipB, maximumT);
+            if (clippedA.w <= 1.0e-5f || clippedB.w <= 1.0e-5f) return false;
+            const glm::vec2 ndcA = glm::vec2(clippedA) / clippedA.w;
+            const glm::vec2 ndcB = glm::vec2(clippedB) / clippedB.w;
+            screenA = {
+                minimum.x + (ndcA.x * 0.5f + 0.5f) * size.x,
+                minimum.y + (ndcA.y * 0.5f + 0.5f) * size.y,
+            };
+            screenB = {
+                minimum.x + (ndcB.x * 0.5f + 0.5f) * size.x,
+                minimum.y + (ndcB.y * 0.5f + 0.5f) * size.y,
+            };
+            return true;
+        }
+    };
+
+    struct WorldGridPlane {
+        glm::vec3 origin{};
+        glm::vec3 axisU{ 1.0f, 0.0f, 0.0f };
+        glm::vec3 axisV{ 0.0f, 0.0f, 1.0f };
     };
 
     [[nodiscard]] glm::vec3 normalizedAxis(const glm::mat4& transform,
@@ -70,11 +121,59 @@ namespace {
             ? axis / std::sqrt(lengthSquared) : fallback;
     }
 
+    [[nodiscard]] WorldGridPlane translationGridPlane(
+        const glm::mat4& transform, glm::vec3 worldDelta,
+        glm::vec3 cameraForward, bool localSpace) {
+        std::array<glm::vec3, 3> axes{
+            glm::vec3(1.0f, 0.0f, 0.0f),
+            glm::vec3(0.0f, 1.0f, 0.0f),
+            glm::vec3(0.0f, 0.0f, 1.0f),
+        };
+        if (localSpace) {
+            axes[0] = normalizedAxis(transform, 0, axes[0]);
+            axes[1] = normalizedAxis(transform, 1, axes[1]);
+            axes[2] = normalizedAxis(transform, 2, axes[2]);
+        }
+        std::array<float, 3> contribution{
+            std::abs(glm::dot(worldDelta, axes[0])),
+            std::abs(glm::dot(worldDelta, axes[1])),
+            std::abs(glm::dot(worldDelta, axes[2])),
+        };
+        size_t primary = 0;
+        if (contribution[1] > contribution[primary]) primary = 1;
+        if (contribution[2] > contribution[primary]) primary = 2;
+        size_t secondary = primary == 0 ? 1 : 0;
+        for (size_t axis = 0; axis < axes.size(); ++axis) {
+            if (axis != primary && contribution[axis] >
+                    contribution[secondary]) {
+                secondary = axis;
+            }
+        }
+        if (contribution[secondary] <= contribution[primary] * 0.18f) {
+            float bestFacing = -1.0f;
+            for (size_t candidate = 0; candidate < axes.size(); ++candidate) {
+                if (candidate == primary) continue;
+                const float facing = std::abs(glm::dot(glm::normalize(
+                    glm::cross(axes[primary], axes[candidate])),
+                    cameraForward));
+                if (facing > bestFacing) {
+                    bestFacing = facing;
+                    secondary = candidate;
+                }
+            }
+        }
+        return {
+            .origin = glm::vec3(transform[3]),
+            .axisU = axes[primary],
+            .axisV = axes[secondary],
+        };
+    }
+
     void drawWorldLine(ImDrawList& drawList,
         const ViewportProjection& projection, glm::vec3 first,
         glm::vec3 second, ImU32 color, float thickness = 1.5f) {
         ImVec2 a{}, b{};
-        if (projection.project(first, a) && projection.project(second, b)) {
+        if (projection.projectSegment(first, second, a, b)) {
             drawList.AddLine(a, b, color, thickness);
         }
     }
@@ -276,28 +375,167 @@ namespace {
 
 }
 
+bool ViewportPanel::drawTransformSettingsPanel(
+    const ImVec2& imageMin, const ImVec2& imageSize,
+    ImGuizmo::OPERATION currentGizmoOperation,
+    Iridium::EditorTransformSettings& settings) {
+    if (!transformSettingsPanelOpen_ || imageSize.x < 260.0f ||
+        imageSize.y < 300.0f) {
+        return false;
+    }
+
+    const ImVec2 panelSize{
+        (std::min)(330.0f, imageSize.x - 24.0f),
+        (std::min)(440.0f, imageSize.y - 24.0f),
+    };
+    ImGui::SetCursorScreenPos(ImVec2(
+        imageMin.x + imageSize.x - panelSize.x - 12.0f,
+        imageMin.y + imageSize.y - panelSize.y - 12.0f));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg,
+        ImVec4(0.055f, 0.065f, 0.080f, 0.94f));
+    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 5.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10.0f, 8.0f));
+    const bool visible = ImGui::BeginChild("viewport-transform-settings",
+        panelSize, ImGuiChildFlags_Borders,
+        ImGuiWindowFlags_NoSavedSettings);
+    const bool hovered = ImGui::IsWindowHovered(
+        ImGuiHoveredFlags_ChildWindows);
+    if (visible) {
+        ImGui::TextUnformatted("Grid / Snap Settings");
+        ImGui::SameLine();
+        const float closeWidth = ImGui::CalcTextSize("Close").x +
+            ImGui::GetStyle().FramePadding.x * 2.0f;
+        ImGui::SetCursorPosX((std::max)(ImGui::GetCursorPosX(),
+            ImGui::GetWindowWidth() - closeWidth - 10.0f));
+        if (ImGui::SmallButton("Close")) {
+            transformSettingsPanelOpen_ = false;
+        }
+        ImGui::Separator();
+
+        const int activeSection = currentGizmoOperation == ImGuizmo::ROTATE
+            ? 1 : currentGizmoOperation == ImGuizmo::SCALE ? 2 : 0;
+        const bool scrollToActive =
+            transformSettingsPanelSection_ != activeSection;
+        const float globalRegionHeight = 178.0f;
+        const float toolRegionHeight = (std::max)(100.0f,
+            panelSize.y - globalRegionHeight - 52.0f);
+        if (ImGui::BeginChild("transform-tool-options",
+                ImVec2(0.0f, toolRegionHeight),
+                ImGuiChildFlags_None)) {
+            ImGui::SeparatorText("Move");
+            if (scrollToActive && activeSection == 0) {
+                ImGui::SetScrollHereY(0.0f);
+            }
+            ImGui::Checkbox("Automatic translation snap",
+                &settings.translationSnapEnabled);
+            ImGui::Checkbox("Use world grid step",
+                &settings.translationSnapUsesGridStep);
+            ImGui::BeginDisabled(settings.translationSnapUsesGridStep);
+            ImGui::SetNextItemWidth(150.0f);
+            ImGui::DragFloat("Translation step",
+                &settings.translationSnapInWorldUnits,
+                0.01f, 0.000001f, FLT_MAX, "%.6g",
+                ImGuiSliderFlags_AlwaysClamp);
+            ImGui::SameLine();
+            ImGui::TextDisabled("%s",
+                Iridium::lengthUnitSymbol(settings.worldUnit).data());
+            ImGui::EndDisabled();
+
+            ImGui::SeparatorText("Rotate");
+            if (scrollToActive && activeSection == 1) {
+                ImGui::SetScrollHereY(0.0f);
+            }
+            ImGui::Checkbox("Automatic rotation snap",
+                &settings.rotationSnapEnabled);
+            ImGui::SetNextItemWidth(150.0f);
+            ImGui::DragFloat("Rotation step (degrees)",
+                &settings.rotationSnapDegrees,
+                0.25f, 0.001f, 360.0f, "%.4g",
+                ImGuiSliderFlags_AlwaysClamp);
+
+            ImGui::SeparatorText("Scale");
+            if (scrollToActive && activeSection == 2) {
+                ImGui::SetScrollHereY(0.0f);
+            }
+            ImGui::Checkbox("Automatic scale snap",
+                &settings.scaleSnapEnabled);
+            ImGui::SetNextItemWidth(150.0f);
+            ImGui::DragFloat("Scale step", &settings.scaleSnapIncrement,
+                0.01f, 0.000001f, FLT_MAX, "%.6g",
+                ImGuiSliderFlags_AlwaysClamp);
+        }
+        ImGui::EndChild();
+        transformSettingsPanelSection_ = activeSection;
+
+        ImGui::SeparatorText("Global Grid / Snap");
+        ImGui::Checkbox("Show world grid", &settings.gridVisible);
+        ImGui::SameLine();
+        ImGui::Checkbox("Follow move plane", &settings.gridFollowsTranslation);
+        const char* unitLabels[] = { "mm", "cm", "m", "km" };
+        int unit = static_cast<int>(settings.worldUnit);
+        ImGui::SetNextItemWidth(72.0f);
+        if (ImGui::Combo("World unit", &unit, unitLabels,
+                IM_ARRAYSIZE(unitLabels))) {
+            settings.worldUnit =
+                static_cast<Iridium::EditorLengthUnit>(unit);
+        }
+        ImGui::SetNextItemWidth(150.0f);
+        ImGui::DragFloat("World grid step",
+            &settings.gridStepInWorldUnits,
+            0.01f, 0.000001f, FLT_MAX, "%.6g",
+            ImGuiSliderFlags_AlwaysClamp);
+        ImGui::SameLine();
+        ImGui::TextDisabled("%s",
+            Iridium::lengthUnitSymbol(settings.worldUnit).data());
+        ImGui::TextDisabled("Shift: temporary snap   Ctrl: free transform");
+    }
+    ImGui::EndChild();
+    ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor();
+    return hovered;
+}
+
 void ViewportPanel::render(void* sceneTextureID, void* glassDepthTextureID,
     int& currentRenderMode, ImGuizmo::OPERATION& currentGizmoOperation,
     const glm::mat4& view, const glm::mat4& proj,
     TransformComponent* selectedTransform,
     float sceneAspect,
     Registry& registry,
-    Entity* selectedEntity,
+    Iridium::EditorSelectionState* selection,
     Iridium::AssetManager* assetManager,
     Iridium::EditorTransactionService* transactionService,
     Iridium::EditorSceneCommandService* sceneCommands,
-    Iridium::CpuProfiler* cpuProfiler) {
+    Iridium::CpuProfiler* cpuProfiler,
+    Iridium::EditorTransformSettings* transformSettings) {
 
+    Entity* selectedEntity = selection ? &selection->primary : nullptr;
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{ 0, 0 });
 
     // Using "Scene Viewport" as the consistent window name
-    ImGui::Begin("Scene Viewport");
+    isVisible = ImGui::Begin("Scene Viewport");
+    if (!isVisible) {
+        isHovered = isFocused = false;
+        ImGui::End();
+        ImGui::PopStyleVar();
+        return;
+    }
 
     if (ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows) && ImGui::IsMouseDown(ImGuiMouseButton_Right)) {
         ImGui::SetWindowFocus();
     }
 
-    isFocused = ImGui::IsWindowFocused();
+    isFocused = ImGui::IsWindowFocused(
+        ImGuiFocusedFlags_RootAndChildWindows);
+
+    if (transformSettings && isFocused &&
+        !ImGui::GetIO().WantTextInput &&
+        !ImGui::IsAnyItemActive() &&
+        !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId) &&
+        !ImGuizmo::IsUsing() &&
+        ImGui::Shortcut(Iridium::ToggleViewportGrid.chord,
+            ImGuiInputFlags_RouteFocused)) {
+        transformSettings->gridVisible = !transformSettings->gridVisible;
+    }
 
     // ========================================================
     // 1. THE INTEGRATED TOOLBAR
@@ -326,6 +564,42 @@ void ViewportPanel::render(void* sceneTextureID, void* glassDepthTextureID,
     if (ImGui::Button("Scale")) currentGizmoOperation = ImGuizmo::SCALE;
     if (isScaleActive) ImGui::PopStyleColor();
 
+    if (transformSettings) {
+        ImGui::SameLine();
+        if (ImGui::Button(transformSettings->transformSpace ==
+                Iridium::EditorTransformSpace::World ? "World" : "Local")) {
+            transformSettings->transformSpace =
+                transformSettings->transformSpace ==
+                    Iridium::EditorTransformSpace::World
+                ? Iridium::EditorTransformSpace::Local
+                : Iridium::EditorTransformSpace::World;
+        }
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) {
+            ImGui::SetTooltip("World axes stay fixed. Local axes follow the selected entity's pivot orientation.");
+        }
+        ImGui::SameLine();
+        ImGui::Checkbox("Grid", &transformSettings->gridVisible);
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) {
+            ImGui::SetTooltip("Toggle the world grid (%s).",
+                Iridium::ToggleViewportGrid.label.data());
+        }
+        ImGui::SameLine();
+        const bool settingsPanelWasOpen = transformSettingsPanelOpen_;
+        if (settingsPanelWasOpen) {
+            ImGui::PushStyleColor(ImGuiCol_Button,
+                ImVec4(0.18f, 0.42f, 0.56f, 1.0f));
+        }
+        if (ImGui::Button("Grid / Snap")) {
+            transformSettingsPanelOpen_ = !transformSettingsPanelOpen_;
+        }
+        if (settingsPanelWasOpen) {
+            ImGui::PopStyleColor();
+        }
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) {
+            ImGui::SetTooltip("Open or close the viewport grid and snapping settings panel.");
+        }
+    }
+
     ImGui::SameLine();
     ImGui::Text("  |  View Mode:");
     ImGui::SameLine();
@@ -338,7 +612,10 @@ void ViewportPanel::render(void* sceneTextureID, void* glassDepthTextureID,
         "RGB F0 (canonical)", "F90 (canonical)", "Material ID (canonical)",
         "Material Flags (canonical)", "Closure Class (canonical)",
         "Cluster Occupancy", "Cluster Overflow", "Direct Lighting",
-        "Shadow Cascade", "Shadow Visibility"
+        "Shadow Cascade", "Shadow Visibility", "Transparency Class",
+        "Transparency Fallback", "Transparency Interval",
+        "Transparency Pyramid Mip", "Transparency Layers",
+        "Transparency Overflow"
     };
     ImGui::SetNextItemWidth(180);
     ImGui::Combo("##renderMode", &currentRenderMode, items, IM_ARRAYSIZE(items));
@@ -396,11 +673,15 @@ void ViewportPanel::render(void* sceneTextureID, void* glassDepthTextureID,
     }
 
 
+    bool viewportClicked = false;
+    bool transformSettingsPanelHovered = false;
     // Drawing the viewport image using the API-agnostic handle
     if (viewportWidth > 0.0f && viewportHeight > 0.0f) {
         ImGui::SetCursorScreenPos(screenPos);
         ImGui::Image((ImTextureID)textureToDraw,
             imageSize);
+        viewportClicked = ImGui::IsItemClicked(
+            ImGuiMouseButton_Left);
         if (ImGui::BeginDragDropTarget()) {
             if (const ImGuiPayload* payload =
                     ImGui::AcceptDragDropPayload(
@@ -468,15 +749,26 @@ void ViewportPanel::render(void* sceneTextureID, void* glassDepthTextureID,
                                     viewportHeight,
                                     view, proj);
                         if (sceneCommands) {
+                            glm::vec3 groundedPosition =
+                                position.value_or(glm::vec3{});
+                            // Iridium is Y-up; viewport model drops always land
+                            // on the world XZ ground plane.
+                            groundedPosition.y = 0.0f;
                             (void)sceneCommands->createModel(
                                 decoded->guid, "Model",
-                                position.value_or(glm::vec3{}));
+                                groundedPosition);
                         }
                     }
                 }
             }
             ImGui::EndDragDropTarget();
         }
+    }
+
+    if (transformSettings) {
+        transformSettingsPanelHovered = drawTransformSettingsPanel(
+            screenPos, imageSize, currentGizmoOperation,
+            *transformSettings);
     }
 
     // ========================================================
@@ -497,23 +789,79 @@ void ViewportPanel::render(void* sceneTextureID, void* glassDepthTextureID,
             ImGuizmo::SetOrthographic(false);
             ImGuizmo::SetDrawlist();
 
-            ImVec2 imgMin = ImGui::GetItemRectMin();
-            ImVec2 imgMax = ImGui::GetItemRectMax();
+            const ImVec2 imgMin = screenPos;
+            const ImVec2 imgMax{
+                screenPos.x + imageSize.x,
+                screenPos.y + imageSize.y,
+            };
             ImGuizmo::SetRect(imgMin.x, imgMin.y,
                 imgMax.x - imgMin.x, imgMax.y - imgMin.y);
 
             // Fix: Use the actual worldMatrix from your component
             glm::mat4 transformMatrix = selectedTransform->worldMatrix;
+            const glm::mat4 gridReferenceTransform = transformMatrix;
 
             // Vulkan flip for ImGuizmo compatibility
             glm::mat4 correctedProj = proj;
             correctedProj[1][1] *= -1;
 
+            float snap[3]{};
+            const float* activeSnap = nullptr;
+            const ImGuiIO& io = ImGui::GetIO();
+            if (transformSettings && !io.KeyCtrl) {
+                if ((currentGizmoOperation == ImGuizmo::TRANSLATE ||
+                        currentGizmoOperation == ImGuizmo::UNIVERSAL) &&
+                    Iridium::transformSnapActive(
+                        transformSettings->translationSnapEnabled,
+                        io.KeyShift, io.KeyCtrl)) {
+                    snap[0] = snap[1] = snap[2] =
+                        transformSettings->effectiveTranslationSnapMeters();
+                    activeSnap = snap;
+                }
+                else if (currentGizmoOperation == ImGuizmo::ROTATE &&
+                    Iridium::transformSnapActive(
+                        transformSettings->rotationSnapEnabled,
+                        io.KeyShift, io.KeyCtrl)) {
+                    snap[0] = transformSettings->rotationSnapDegrees;
+                    activeSnap = snap;
+                }
+                else if (currentGizmoOperation == ImGuizmo::SCALE &&
+                    Iridium::transformSnapActive(
+                        transformSettings->scaleSnapEnabled,
+                        io.KeyShift, io.KeyCtrl)) {
+                    snap[0] = transformSettings->scaleSnapIncrement;
+                    activeSnap = snap;
+                }
+            }
             const bool manipulated = ImGuizmo::Manipulate(
                 glm::value_ptr(view), glm::value_ptr(correctedProj),
-                currentGizmoOperation, ImGuizmo::LOCAL,
-                glm::value_ptr(transformMatrix));
+                currentGizmoOperation,
+                transformSettings && transformSettings->transformSpace ==
+                    Iridium::EditorTransformSpace::World
+                    ? ImGuizmo::WORLD : ImGuizmo::LOCAL,
+                glm::value_ptr(transformMatrix), nullptr, activeSnap);
             if (manipulated) {
+                if (transformSettings &&
+                    transformSettings->gridFollowsTranslation &&
+                    (currentGizmoOperation == ImGuizmo::TRANSLATE ||
+                        currentGizmoOperation == ImGuizmo::UNIVERSAL) &&
+                    !translationGridActive_) {
+                    const glm::vec3 worldDelta = glm::vec3(transformMatrix[3]) -
+                        glm::vec3(gridReferenceTransform[3]);
+                    if (glm::dot(worldDelta, worldDelta) > 1.0e-12f) {
+                        const glm::vec3 cameraForward = -glm::normalize(
+                            glm::vec3(glm::inverse(view)[2]));
+                        const WorldGridPlane activePlane =
+                            translationGridPlane(gridReferenceTransform,
+                                worldDelta, cameraForward,
+                                transformSettings->transformSpace ==
+                                    Iridium::EditorTransformSpace::Local);
+                        translationGridOrigin_ = activePlane.origin;
+                        translationGridAxisU_ = activePlane.axisU;
+                        translationGridAxisV_ = activePlane.axisV;
+                        translationGridActive_ = true;
+                    }
+                }
                 if (!gizmoEditActive_) {
                     gizmoEditActive_ = true;
                     gizmoEntity_ = selectedEntity
@@ -566,12 +914,45 @@ void ViewportPanel::render(void* sceneTextureID, void* glassDepthTextureID,
         }
     }
 
+    if (viewportClicked && !transformSettingsPanelHovered &&
+        !ImGuizmo::IsOver() &&
+        !ImGuizmo::IsUsing() && selection) {
+        selection->selectExclusive(Iridium::pickViewportEntity(registry,
+            mouseX, mouseY, viewportWidth, viewportHeight, view, proj));
+    }
+
     ImGui::End();
     ImGui::PopStyleVar();
 }
 
+Iridium::ViewportGridOverlay ViewportPanel::gridOverlay(
+    const glm::mat4& view, const glm::mat4& projection,
+    const Iridium::EditorTransformSettings& settings) const noexcept {
+    WorldGridPlane plane;
+    if (settings.gridFollowsTranslation && translationGridActive_) {
+        plane = {
+            .origin = translationGridOrigin_,
+            .axisU = translationGridAxisU_,
+            .axisV = translationGridAxisV_,
+        };
+    }
+    plane.axisU = glm::normalize(plane.axisU);
+    plane.axisV = glm::normalize(plane.axisV - plane.axisU *
+        glm::dot(plane.axisV, plane.axisU));
+    return {
+        .inverseViewProjection = glm::inverse(projection * view),
+        .origin = plane.origin,
+        .axisU = plane.axisU,
+        .axisV = plane.axisV,
+        .baseSpacingMeters = settings.gridStepMeters(),
+        .opacity = 1.0f,
+        .visible = settings.gridVisible,
+    };
+}
+
 void ViewportPanel::commitGizmoEdit(Registry& registry,
     Iridium::EditorTransactionService* transactionService) {
+    translationGridActive_ = false;
     if (!gizmoEditActive_) return;
     const Entity entity = gizmoEntity_;
     const GizmoTransformSnapshot before = gizmoBefore_;

@@ -34,9 +34,11 @@ void VulkanPointShadowPools::init(VkDevice device,
     VulkanResourceAllocator& allocator, VulkanUploadContext& uploads,
     ::DescriptorAllocator& descriptors, VkDescriptorSetLayout materialLayout,
     VkDescriptorSetLayout samplerLayout,
+    VkDescriptorSetLayout gpuSceneLayout,
     std::array<uint32_t, 3> capacities) {
     if (device_ != VK_NULL_HANDLE || device == VK_NULL_HANDLE ||
         materialLayout == VK_NULL_HANDLE || samplerLayout == VK_NULL_HANDLE ||
+        gpuSceneLayout == VK_NULL_HANDLE ||
         std::ranges::any_of(capacities,
             [](uint32_t value) { return value == 0u; }))
         throw std::invalid_argument("Invalid point shadow pool initialization");
@@ -151,7 +153,7 @@ void VulkanPointShadowPools::init(VkDevice device,
 
         const VkDescriptorSetLayoutBinding shadowBinding{ 0,
             VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1,
-            VK_SHADER_STAGE_VERTEX_BIT, nullptr };
+            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_COMPUTE_BIT, nullptr };
         VkDescriptorSetLayoutCreateInfo setLayout{
             VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
         setLayout.bindingCount = 1;
@@ -159,8 +161,8 @@ void VulkanPointShadowPools::init(VkDevice device,
         requireSuccess(vkCreateDescriptorSetLayout(device_, &setLayout,
             nullptr, &renderSetLayout_),
             "vkCreateDescriptorSetLayout(point shadow)");
-        const std::array<VkDescriptorSetLayout, 3> layouts{
-            renderSetLayout_, materialLayout, samplerLayout };
+        const std::array<VkDescriptorSetLayout, 4> layouts{
+            renderSetLayout_, materialLayout, samplerLayout, gpuSceneLayout };
         const VkPushConstantRange push{
             VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
             0, sizeof(CanonicalMeshPushConstants) };
@@ -175,7 +177,7 @@ void VulkanPointShadowPools::init(VkDevice device,
             "vkCreatePipelineLayout(point shadow)");
         for (uint32_t index = 0; index < pipelines_.size(); ++index)
             pipelines_[index] = createPipeline((index & 1u) != 0,
-                (index & 2u) != 0);
+                (index & 2u) != 0, (index & 4u) != 0);
 
         for (uint32_t frame = 0; frame < frameBuffers_.size(); ++frame) {
             frameBuffers_[frame] = allocator.createBuffer(
@@ -326,8 +328,9 @@ void VulkanPointShadowPools::endFace(VkCommandBuffer commandBuffer) const {
 }
 
 VkPipeline VulkanPointShadowPools::pipeline(bool alphaMasked,
-    bool doubleSided) const noexcept {
-    return pipelines_[(doubleSided ? 2u : 0u) | (alphaMasked ? 1u : 0u)];
+    bool doubleSided, bool gpuSceneIndirect) const noexcept {
+    return pipelines_[(gpuSceneIndirect ? 4u : 0u) |
+        (doubleSided ? 2u : 0u) | (alphaMasked ? 1u : 0u)];
 }
 
 VkDescriptorSet VulkanPointShadowPools::renderDescriptor(
@@ -367,14 +370,22 @@ VkShaderModule VulkanPointShadowPools::createShaderModule(
 }
 
 VkPipeline VulkanPointShadowPools::createPipeline(bool alphaMasked,
-    bool doubleSided) {
+    bool doubleSided, bool gpuSceneIndirect) {
     VkShaderModule vertex = createShaderModule(
-        "assets/shaders/point_shadow_vert.spv");
+        alphaMasked
+            ? (gpuSceneIndirect
+                ? "assets/shaders/point_shadow_gpu_scene_vert.spv"
+                : "assets/shaders/point_shadow_vert.spv")
+            : (gpuSceneIndirect
+                ? "assets/shaders/point_shadow_gpu_scene_opaque_vert.spv"
+                : "assets/shaders/point_shadow_opaque_vert.spv"));
     VkShaderModule fragment = VK_NULL_HANDLE;
     try {
         if (alphaMasked)
             fragment = createShaderModule(
-                "assets/shaders/directional_shadow_mask_frag.spv");
+                gpuSceneIndirect
+                    ? "assets/shaders/directional_shadow_gpu_scene_mask_frag.spv"
+                    : "assets/shaders/directional_shadow_mask_frag.spv");
         std::array<VkPipelineShaderStageCreateInfo, 2> stages{};
         stages[0] = { VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
             nullptr, 0, VK_SHADER_STAGE_VERTEX_BIT, vertex, "main", nullptr };
@@ -392,8 +403,8 @@ VkPipeline VulkanPointShadowPools::createPipeline(bool alphaMasked,
             VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO };
         vertexInput.vertexBindingDescriptionCount = 1;
         vertexInput.pVertexBindingDescriptions = &binding;
-        vertexInput.vertexAttributeDescriptionCount =
-            static_cast<uint32_t>(attributes.size());
+        vertexInput.vertexAttributeDescriptionCount = alphaMasked
+            ? static_cast<uint32_t>(attributes.size()) : 1u;
         vertexInput.pVertexAttributeDescriptions = attributes.data();
         VkPipelineInputAssemblyStateCreateInfo assembly{
             VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO };

@@ -22,6 +22,7 @@ namespace Iridium {
 
         VkDescriptorSetLayout getGlobalSetLayout() const noexcept { return globalSetLayout_; }
         VkDescriptorSetLayout getMaterialSetLayout() const noexcept { return materialSetLayout_; }
+        VkDescriptorSetLayout getGpuSceneSetLayout() const noexcept { return gpuSceneSetLayout_; }
         VkPipelineLayout getGBufferPipelineLayout() const noexcept { return gBufferPipelineLayout_; }
         VkPipelineLayout getForwardPipelineLayout() const noexcept { return forwardPipelineLayout_; }
 
@@ -30,6 +31,7 @@ namespace Iridium {
         VkDescriptorSetLayout globalSetLayout_ = VK_NULL_HANDLE;
         VkDescriptorSetLayout materialSetLayout_ = VK_NULL_HANDLE;
         VkDescriptorSetLayout samplerSetLayout_ = VK_NULL_HANDLE;
+        VkDescriptorSetLayout gpuSceneSetLayout_ = VK_NULL_HANDLE;
         VkPipelineLayout gBufferPipelineLayout_ = VK_NULL_HANDLE;
         VkPipelineLayout forwardPipelineLayout_ = VK_NULL_HANDLE;
     };

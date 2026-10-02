@@ -3,6 +3,7 @@
 #include "renderer/lighting/ClusteredLighting.h"
 #include "renderer/rhi/ShadowTypes.h"
 #include "renderer/transparency/TransparencyPyramidResidency.h"
+#include "renderer/transparency/WeightedOit.h"
 
 #include <cstdint>
 #include <array>
@@ -66,6 +67,39 @@ namespace {
         size_t failureAtCreateCount = std::numeric_limits<size_t>::max();
     };
 
+    bool testOptionalOcclusionDepthPyramid() {
+        const auto makeGraph = [](VkExtent2D extent, bool enabled) {
+            return buildVulkanProductionRenderGraph(extent,
+                VK_FORMAT_B8G8R8A8_SRGB, VK_FORMAT_B8G8R8A8_SRGB, false,
+                GBufferLayout::CanonicalReference, {}, 4096, 8192, false,
+                {}, false, enabled);
+        };
+        const auto disabled = makeGraph({127, 73}, false);
+        CHECK(std::ranges::none_of(disabled.resources(), [](const auto& resource) {
+            return resource.name == "depth.occlusion-pyramid";
+        }));
+        const auto enabled = makeGraph({127, 73}, true);
+        CHECK(enabled.resources().size() == disabled.resources().size());
+        CHECK(enabled.passes().size() == disabled.passes().size() + 2);
+        CHECK(std::ranges::none_of(enabled.resources(), [](const auto& resource) {
+            return resource.name == "depth.occlusion-pyramid";
+        }));
+        const auto pass = [&](std::string_view name) {
+            return std::ranges::find_if(enabled.passes(), [&](const auto& value) {
+                return value.name == name;
+            });
+        };
+        CHECK(pass("depth.occlusion-pyramid.build") <
+            pass("depth.occlusion-pyramid.validation-readback-hook"));
+        CHECK(pass("depth.occlusion-pyramid.validation-readback-hook") <
+            pass("transparent.sorted.forward"));
+        bool rejected = false;
+        try { (void)makeGraph({65536, 1}, true); }
+        catch (const std::invalid_argument&) { rejected = true; }
+        CHECK(rejected);
+        return true;
+    }
+
     bool testAccessAndFormatMappings() {
         const VulkanGraphAccessInfo color = getVulkanGraphAccessInfo(
             RenderGraph::Access::ColorAttachment,
@@ -102,6 +136,7 @@ namespace {
             RenderGraph::Format::Bgra8Srgb,
             RenderGraph::Format::Rgb10A2Unorm,
             RenderGraph::Format::Rgba16Float,
+            RenderGraph::Format::R16Float,
             RenderGraph::Format::R32Uint,
             RenderGraph::Format::R32Float,
             RenderGraph::Format::D32Float,
@@ -115,8 +150,8 @@ namespace {
     bool testProductionTopologyContract() {
         const RenderGraph::CompiledGraph graph = buildVulkanProductionRenderGraph(
             { 3840, 2160 }, VK_FORMAT_B8G8R8A8_SRGB);
-        CHECK(graph.passes().size() == 22);
-        CHECK(graph.resources().size() == 27);
+        CHECK(graph.passes().size() == 19);
+        CHECK(graph.resources().size() == 26);
         CHECK(!graph.transitions().empty());
         CHECK(graph.passes().front().name == "shadow.directional");
         CHECK(graph.passes().back().name == "ui-present");
@@ -130,8 +165,8 @@ namespace {
         CHECK(graph.passes()[12].name == "transparent.refraction-pyramids");
         CHECK(graph.passes()[12].queue == RenderGraph::QueueClass::Compute);
         CHECK(graph.passes()[13].name == "transparent.sorted.forward");
-        CHECK(graph.passes()[14].name == "transparent.background.depth");
-        CHECK(graph.passes()[16].name == "transparent.foreground.depth");
+        CHECK(graph.passes()[14].name ==
+            "transparent.compatibility.forward");
         bool sortedReadsDepth = false;
         bool sortedLoadsSceneColor = false;
         const RenderGraph::CompiledPass& sortedPass = graph.passes()[13];
@@ -245,6 +280,14 @@ namespace {
             "scene.refraction-color-pyramid");
         const auto depthPyramid = findResource(
             "depth.refraction-nearest-pyramid");
+        CHECK(findResource("depth.glass") == graph.resources().end());
+        CHECK(std::ranges::none_of(graph.passes(),
+            [](const RenderGraph::CompiledPass& pass) {
+                return pass.name == "transparent.background.depth" ||
+                    pass.name == "transparent.background.forward" ||
+                    pass.name == "transparent.foreground.depth" ||
+                    pass.name == "transparent.foreground.forward";
+            }));
         CHECK(colorPyramid != graph.resources().end());
         CHECK(depthPyramid != graph.resources().end());
         CHECK(colorPyramid->desc.image.format ==
@@ -269,6 +312,27 @@ namespace {
         CHECK(output->desc.image.format == RenderGraph::Format::Bgra8Srgb);
         CHECK((output->usages & RenderGraph::usageBit(
             RenderGraph::Access::TransferSource)) != 0);
+
+        const RenderGraph::CompiledGraph legacy =
+            buildVulkanProductionRenderGraph({ 3840, 2160 },
+                VK_FORMAT_B8G8R8A8_SRGB,
+                VK_FORMAT_B8G8R8A8_SRGB, false,
+                GBufferLayout::CanonicalReference, {}, 4096, 8192, true,
+                {}, true);
+        CHECK(legacy.passes().size() == 22);
+        CHECK(legacy.resources().size() == 27);
+        CHECK(std::ranges::any_of(legacy.resources(),
+            [](const RenderGraph::CompiledResource& resource) {
+                return resource.name == "depth.glass";
+            }));
+        CHECK(std::ranges::any_of(legacy.passes(),
+            [](const RenderGraph::CompiledPass& pass) {
+                return pass.name == "transparent.background.depth";
+            }));
+        CHECK(std::ranges::none_of(legacy.passes(),
+            [](const RenderGraph::CompiledPass& pass) {
+                return pass.name == "transparent.compatibility.forward";
+            }));
         return true;
     }
 
@@ -276,9 +340,9 @@ namespace {
         const RenderGraph::CompiledGraph graph = buildVulkanProductionRenderGraph(
             { 3840, 2160 }, VK_FORMAT_A2B10G10R10_UNORM_PACK32,
             VK_FORMAT_R16G16B16A16_SFLOAT, true);
-        CHECK(graph.passes().size() == 23);
-        CHECK(graph.resources().size() == 28);
-        CHECK(graph.passes()[21].name == "ui-compose");
+        CHECK(graph.passes().size() == 20);
+        CHECK(graph.resources().size() == 27);
+        CHECK(graph.passes()[18].name == "ui-compose");
         CHECK(graph.passes().back().name == "hdr10-encode-present");
         const auto composition = std::find_if(graph.resources().begin(),
             graph.resources().end(), [](const RenderGraph::CompiledResource& resource) {
@@ -318,13 +382,14 @@ namespace {
                  "gbuffer.f0-roughness", "gbuffer.material-flags",
                  "depth.opaque", "scene.color",
                  "scene.refraction-color-pyramid",
-                 "depth.refraction-nearest-pyramid", "depth.glass",
+                 "depth.refraction-nearest-pyramid",
                  "output.display" }) {
             const auto resource = findResource(sdr, name);
             CHECK(resource != sdr.resources().end());
             CHECK(hasExtent(*resource, sceneExtent));
         }
         const auto sdrSwapchain = findResource(sdr, "swapchain");
+        CHECK(findResource(sdr, "depth.glass") == sdr.resources().end());
         CHECK(sdrSwapchain != sdr.resources().end());
         CHECK(hasExtent(*sdrSwapchain, presentationExtent));
 
@@ -677,6 +742,93 @@ namespace {
         return true;
     }
 
+    bool testConditionalWeightedOitTopology() {
+        constexpr VkExtent2D sceneExtent{ 1920, 1080 };
+        const RenderGraph::CompiledGraph disabled =
+            buildVulkanProductionRenderGraph(sceneExtent,
+                VK_FORMAT_B8G8R8A8_SRGB);
+        const RenderGraph::CompiledGraph enabled =
+            buildVulkanProductionRenderGraph(sceneExtent,
+                VK_FORMAT_B8G8R8A8_SRGB,
+                VK_FORMAT_B8G8R8A8_SRGB, false,
+                GBufferLayout::CanonicalReference, {}, 4096, 8192, true,
+                VulkanLayeredGraphConfig{ {}, {}, {}, true });
+
+        const auto findResource = [](const RenderGraph::CompiledGraph& graph,
+                std::string_view name) {
+            return std::find_if(graph.resources().begin(), graph.resources().end(),
+                [name](const RenderGraph::CompiledResource& resource) {
+                    return resource.name == name;
+                });
+        };
+        const auto findPass = [](const RenderGraph::CompiledGraph& graph,
+                std::string_view name) {
+            return std::find_if(graph.passes().begin(), graph.passes().end(),
+                [name](const RenderGraph::CompiledPass& pass) {
+                    return pass.name == name;
+                });
+        };
+
+        CHECK(findResource(disabled, "transparency.oit.accumulation") ==
+            disabled.resources().end());
+        CHECK(findResource(disabled, "transparency.oit.revealage") ==
+            disabled.resources().end());
+        CHECK(findPass(disabled, "transparent.oit.accumulate") ==
+            disabled.passes().end());
+        CHECK(findPass(disabled, "transparent.oit.resolve") ==
+            disabled.passes().end());
+
+        const auto accumulation = findResource(enabled,
+            "transparency.oit.accumulation");
+        const auto revealage = findResource(enabled,
+            "transparency.oit.revealage");
+        CHECK(accumulation != enabled.resources().end());
+        CHECK(revealage != enabled.resources().end());
+        CHECK(accumulation->desc.image.extent.width == sceneExtent.width);
+        CHECK(accumulation->desc.image.extent.height == sceneExtent.height);
+        CHECK(revealage->desc.image.extent.width == sceneExtent.width);
+        CHECK(revealage->desc.image.extent.height == sceneExtent.height);
+        CHECK(accumulation->desc.image.format ==
+            RenderGraph::Format::Rgba16Float);
+        CHECK(revealage->desc.image.format == RenderGraph::Format::R16Float);
+        for (const RenderGraph::CompiledResource* resource :
+                { &*accumulation, &*revealage }) {
+            CHECK((resource->usages & RenderGraph::usageBit(
+                RenderGraph::Access::ColorAttachment)) != 0u);
+            CHECK((resource->usages & RenderGraph::usageBit(
+                RenderGraph::Access::SampledRead)) != 0u);
+        }
+
+        const auto accumulatePass = findPass(enabled,
+            "transparent.oit.accumulate");
+        const auto resolvePass = findPass(enabled,
+            "transparent.oit.resolve");
+        CHECK(accumulatePass != enabled.passes().end());
+        CHECK(resolvePass != enabled.passes().end());
+        CHECK(accumulatePass < resolvePass);
+        const auto bloom = findPass(enabled, "bloom-hook");
+        CHECK(bloom != enabled.passes().end());
+        CHECK(resolvePass < bloom);
+
+        bool readsOpaqueDepth = false;
+        for (uint32_t i = accumulatePass->firstUsage;
+            i < accumulatePass->firstUsage + accumulatePass->usageCount; ++i) {
+            const RenderGraph::CompiledUsage& usage = enabled.usages()[i];
+            if (usage.access == RenderGraph::Access::DepthAttachmentRead) {
+                readsOpaqueDepth = true;
+                CHECK(!usage.write);
+            }
+        }
+        CHECK(readsOpaqueDepth);
+        CHECK(enabled.resources().size() == disabled.resources().size() + 2u);
+        CHECK(enabled.passes().size() == disabled.passes().size() + 2u);
+        CHECK(enabled.topologyHash() != disabled.topologyHash());
+        CHECK(weightedOitLogicalStorageBytes(sceneExtent.width,
+            sceneExtent.height) == 20'736'000u);
+        CHECK(weightedOitLogicalStorageBytes(3840u, 2160u) == 82'944'000u);
+        return true;
+    }
+
     bool testTransparencyPyramidResidencyPolicy() {
         TransparencyPyramidResidency residency(3);
         CHECK(!residency.enabled());
@@ -812,9 +964,9 @@ namespace {
 
         const VulkanGraphStats stats = executor.stats();
         CHECK(stats.enabled);
-        CHECK(stats.passCount == 22);
-        CHECK(stats.logicalResourceCount == 27);
-        CHECK(stats.physicalSlotCount == 20);
+        CHECK(stats.passCount == 19);
+        CHECK(stats.logicalResourceCount == 26);
+        CHECK(stats.physicalSlotCount == 19);
         CHECK(stats.barrierCount == transitionCount);
         CHECK(stats.frameCount == 2);
         CHECK(stats.rebuildCount == 1);
@@ -849,10 +1001,7 @@ namespace {
             "forward-opaque",
             "transparent.refraction-pyramids",
             "transparent.sorted.forward",
-            "transparent.background.depth",
-            "transparent.background.forward",
-            "transparent.foreground.depth",
-            "transparent.foreground.forward",
+            "transparent.compatibility.forward",
             "bloom-hook",
             "output-transform",
             "final-capture-hook",
@@ -915,6 +1064,70 @@ namespace {
         return true;
     }
 
+    bool testExternalBufferBindingAndUploadTopology() {
+        const auto normal = buildVulkanProductionRenderGraph({127, 73}, VK_FORMAT_B8G8R8A8_SRGB);
+        const auto upload = buildVulkanProductionRenderGraph({127, 73}, VK_FORMAT_B8G8R8A8_SRGB,
+            VK_FORMAT_B8G8R8A8_SRGB, false, GBufferLayout::CanonicalReference, {},
+            4096, 8192, true, {}, false, false, 8'192);
+        CHECK(upload.passes().size() == normal.passes().size() + 3);
+        CHECK(upload.resources().size() == normal.resources().size() + 1);
+        CHECK(upload.physicalSlots().size() == normal.physicalSlots().size());
+        CHECK(upload.passes().front().name == "shadow.virtual.clip-upload");
+        const auto passIndex = [&](std::string_view name) {
+            for (uint32_t i = 0; i < upload.passes().size(); ++i)
+                if (upload.passes()[i].name == name) return i;
+            return RenderGraph::InvalidIndex;
+        };
+        const auto hasUsage = [&](std::string_view pass, std::string_view resource, RenderGraph::Access access) {
+            for (const auto& usage : upload.usages())
+                if (usage.passOrderIndex == passIndex(pass) &&
+                    upload.resources()[usage.logicalResourceIndex].name == resource && usage.access == access)
+                    return true;
+            return false;
+        };
+        CHECK(passIndex("forward-opaque") < passIndex("shadow.virtual.depth-mark"));
+        CHECK(passIndex("shadow.virtual.depth-mark") < passIndex("shadow.virtual.request-readback"));
+        CHECK(hasUsage("shadow.virtual.depth-mark", "depth.opaque", RenderGraph::Access::SampledRead));
+        CHECK(hasUsage("shadow.virtual.depth-mark", "shadow.virtual.working-set", RenderGraph::Access::StorageReadWrite));
+        CHECK(hasUsage("shadow.virtual.request-readback", "depth.opaque", RenderGraph::Access::TransferSource));
+        CHECK(hasUsage("shadow.virtual.request-readback", "shadow.virtual.working-set", RenderGraph::Access::TransferSource));
+        RenderGraph::RenderGraphBuilder builder;
+        RenderGraph::ResourceDesc desc{};
+        desc.type = RenderGraph::ResourceType::Buffer;
+        desc.lifetime = RenderGraph::ResourceLifetime::External; desc.imported = true;
+        desc.buffer.size = 256; desc.initialAccess = RenderGraph::Access::TransferDestination;
+        auto buffer = builder.createResource("external", desc);
+        buffer = builder.write(builder.addPass("upload"), buffer, RenderGraph::Access::TransferDestination);
+        const auto compiled = builder.compile(); CHECK(compiled.succeeded());
+        FakeResourceFactory factory;
+        VulkanRenderGraphExecutor executor; executor.init(factory, 2); executor.rebuild(*compiled.graph);
+        const auto handle = reinterpret_cast<VkBuffer>(uintptr_t{123});
+        const auto other = reinterpret_cast<VkBuffer>(uintptr_t{456});
+        const auto rejects = [&](uint32_t slot, std::string_view name, VkBuffer value, uint64_t bytes) {
+            try { executor.bindExternalBuffer(slot, name, value, bytes); }
+            catch (const std::invalid_argument&) { return true; }
+            return false;
+        };
+        CHECK(rejects(0, "external", VK_NULL_HANDLE, 256));
+        CHECK(rejects(2, "external", handle, 256));
+        CHECK(rejects(0, "unknown", handle, 256));
+        CHECK(rejects(0, "external", handle, 255));
+        executor.bindExternalBuffer(0, "external", handle, 256);
+        CHECK(executor.validateFrame(0)); CHECK(!executor.validateFrame(1));
+        CHECK(rejects(1, "external", handle, 256));
+        executor.bindExternalBuffer(1, "external", other, 256);
+        CHECK(executor.validateFrame(1));
+        executor.beginFrameExecution(0);
+        CHECK(rejects(0, "external", handle, 256));
+        executor.skipPass("upload"); executor.finishFrameExecution();
+        CHECK(rejects(0, "external", handle, 256));
+        executor.onFrameFenceCompleted(0);
+        executor.bindExternalBuffer(0, "external", handle, 256);
+        executor.cleanupAfterDeviceIdle();
+        CHECK(factory.createCount == 0 && factory.destroyCount == 0);
+        return true;
+    }
+
 } // namespace
 
 int main() {
@@ -923,7 +1136,9 @@ int main() {
         bool (*function)();
     };
     constexpr TestCase tests[] = {
+        { "external buffer binding and clip upload topology", testExternalBufferBindingAndUploadTopology },
         { "access and format mappings", testAccessAndFormatMappings },
+        { "optional occlusion depth pyramid", testOptionalOcclusionDepthPyramid },
         { "production topology contract", testProductionTopologyContract },
         { "HDR10 topology contract", testHdr10TopologyContract },
         { "scene and presentation extent separation",
@@ -934,6 +1149,8 @@ int main() {
             testConditionalOrdinary2Topology },
         { "conditional deep layered topology",
             testConditionalDeepLayeredTopology },
+        { "conditional WeightedOIT topology",
+            testConditionalWeightedOitTopology },
         { "transparency pyramid residency policy",
             testTransparencyPyramidResidencyPolicy },
         { "fence-scoped retirement and cleanup", testFenceScopedRetirementAndCleanup },

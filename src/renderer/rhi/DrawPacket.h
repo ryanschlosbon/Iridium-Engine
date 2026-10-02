@@ -14,6 +14,11 @@
 
 namespace Iridium {
 
+    enum DrawPacketExecutionFlag : uint8_t {
+        DrawPacketGpuScenePrimitive = 1u << 0u,
+        DrawPacketCpuVisibilityOracle = 1u << 1u,
+    };
+
     struct TransparentWorkIdentity {
         SceneEntityUuid owner;
         AssetGuid sourcePrimitiveGuid;
@@ -74,14 +79,34 @@ namespace Iridium {
         glm::vec3 boundsMaxWorld{};    // Offsets 204 - 216
         CompiledTransparencyPolicy transparency; // Offsets 216 - 228
         TransparencyExecutionMode transparencyExecutionMode =
-            TransparencyExecutionMode::LegacyTwoBucket; // Offset 228
+            TransparencyExecutionMode::Classified; // Offset 228
         uint8_t coverage = 0;          // Offset 229
-        uint8_t _padding[2]{};         // Offsets 230 - 232
+        uint8_t executionFlags = 0;   // Offset 230
+        // Selection-pass feedback bits: selected outline (1), hover tint (2).
+        // Zero preserves the legacy selection-queue outline behavior.
+        uint8_t selectionFeedback = 0; // Offset 231
+        // Optional range into the backend-neutral transform stream submitted
+        // with the forward queues. A count of one with an empty stream uses
+        // worldTransform, preserving all existing packet producers.
+        uint32_t firstInstanceTransform = UINT32_MAX; // Offsets 232 - 236
+        uint32_t instanceCount = 1;     // Offsets 236 - 240
     };
 
     static_assert(sizeof(DrawPacket) == 240);
     static_assert(alignof(DrawPacket) == 16);
     static_assert(std::is_trivially_copyable_v<DrawPacket>);
+
+    [[nodiscard]] constexpr bool hasGpuScenePrimitive(
+        const DrawPacket& packet) noexcept {
+        return (packet.executionFlags & DrawPacketGpuScenePrimitive) != 0u &&
+            packet.firstInstanceTransform != UINT32_MAX;
+    }
+
+    [[nodiscard]] constexpr bool cpuVisibilityOracleVisible(
+        const DrawPacket& packet) noexcept {
+        return (packet.executionFlags &
+            DrawPacketCpuVisibilityOracle) != 0u;
+    }
 
     [[nodiscard]] constexpr TransparentWorkIdentity transparentWorkIdentity(
         const DrawPacket& packet) noexcept {
@@ -91,6 +116,14 @@ namespace Iridium {
             .primitiveGuid = packet.primitiveGuid,
             .materialGuid = packet.materialGuid,
         };
+    }
+
+    [[nodiscard]] constexpr bool isWeightedOitPacket(
+        const DrawPacket& packet) noexcept {
+        return packet.transparencyExecutionMode ==
+                TransparencyExecutionMode::Classified &&
+            packet.transparency.resolvedClass ==
+                TransparencyClass::WeightedOit;
     }
 
     [[nodiscard]] inline bool prepareTransparentWorkInterval(

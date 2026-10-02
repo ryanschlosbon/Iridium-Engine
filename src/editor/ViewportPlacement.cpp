@@ -61,11 +61,17 @@ namespace Iridium {
                 direction.y;
             if (std::isfinite(distance) &&
                 distance >= 0.0f) {
-                return origin +
-                    direction * distance;
+                glm::vec3 position = origin + direction * distance;
+                position.y = groundPlaneY;
+                return position;
             }
         }
-        return origin + direction * 5.0f;
+        // A ray parallel to the ground (or aimed above the horizon) has no
+        // forward plane intersection. Keep its useful horizontal projection,
+        // but never leak camera height into an asset drop.
+        glm::vec3 position = origin + direction * 5.0f;
+        position.y = groundPlaneY;
+        return position;
     }
 
 } // namespace Iridium

@@ -184,6 +184,9 @@ namespace Iridium {
     // throwing for malformed source data. File I/O failures are diagnostics too.
     [[nodiscard]] SourceMaterialDocument importGltfSourceMaterials(
         const std::filesystem::path& path);
+    // In-memory authoring front end; sourcePath is diagnostic context only.
+    [[nodiscard]] SourceMaterialDocument importGltfSourceMaterialsJson(
+        std::string_view json, const std::filesystem::path& sourcePath = {});
 
     [[nodiscard]] const SourceTextureUse* findSourceTexture(
         const SourceMaterial& material, SourceTextureSemantic semantic) noexcept;

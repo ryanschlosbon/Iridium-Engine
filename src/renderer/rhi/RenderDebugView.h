@@ -25,6 +25,12 @@ namespace Iridium {
         DirectLighting = 15,
         ShadowCascade = 16,
         ShadowVisibility = 17,
+        TransparencyClass = 18,
+        TransparencyFallback = 19,
+        TransparencyInterval = 20,
+        TransparencyPyramidMip = 21,
+        TransparencyLayers = 22,
+        TransparencyOverflow = 23,
     };
 
     [[nodiscard]] constexpr std::string_view renderDebugViewName(RenderDebugView view) noexcept {
@@ -47,6 +53,12 @@ namespace Iridium {
         case RenderDebugView::DirectLighting: return "direct-lighting";
         case RenderDebugView::ShadowCascade: return "shadow-cascade";
         case RenderDebugView::ShadowVisibility: return "shadow-visibility";
+        case RenderDebugView::TransparencyClass: return "transparency-class";
+        case RenderDebugView::TransparencyFallback: return "transparency-fallback";
+        case RenderDebugView::TransparencyInterval: return "transparency-interval";
+        case RenderDebugView::TransparencyPyramidMip: return "transparency-pyramid-mip";
+        case RenderDebugView::TransparencyLayers: return "transparency-layers";
+        case RenderDebugView::TransparencyOverflow: return "transparency-overflow";
         }
         return "unknown";
     }
@@ -77,6 +89,18 @@ namespace Iridium {
             return RenderDebugView::ShadowCascade;
         if (name == "shadow-visibility" || name == "shadows")
             return RenderDebugView::ShadowVisibility;
+        if (name == "transparency" || name == "transparency-class")
+            return RenderDebugView::TransparencyClass;
+        if (name == "transparency-fallback" || name == "transparency-fallbacks")
+            return RenderDebugView::TransparencyFallback;
+        if (name == "transparency-interval" || name == "transparency-intervals")
+            return RenderDebugView::TransparencyInterval;
+        if (name == "transparency-pyramid-mip" || name == "transparency-mip")
+            return RenderDebugView::TransparencyPyramidMip;
+        if (name == "transparency-layers" || name == "transparency-layer-count")
+            return RenderDebugView::TransparencyLayers;
+        if (name == "transparency-overflow")
+            return RenderDebugView::TransparencyOverflow;
         return std::nullopt;
     }
 
@@ -119,6 +143,18 @@ namespace Iridium {
             return "directional shadow cascade selection; red, green, blue, then yellow, with black for an unpublished cascade";
         case RenderDebugView::ShadowVisibility:
             return "minimum filtered visibility across contributing directional, spot, and point shadows; black blocked through white visible";
+        case RenderDebugView::TransparencyClass:
+            return "resolved transparency execution class: gray opaque, green alpha clip, cyan sorted surface, blue thin glass, orange layered glass, and purple weighted OIT";
+        case RenderDebugView::TransparencyFallback:
+            return "compiled transparency policy state: magenta compatibility fallback, amber sanitized policy, and dark green accepted policy";
+        case RenderDebugView::TransparencyInterval:
+            return "measured or authored optical interval: black means unavailable, blue is thin, cyan-to-yellow is thicker, and red approaches the authored cap";
+        case RenderDebugView::TransparencyPyramidMip:
+            return "actual rough-refraction pyramid selection: blue-to-yellow is low-to-high mip, red is off-screen, amber is foreground rejection, and cyan is residual mip zero";
+        case RenderDebugView::TransparencyLayers:
+            return "retained transparency capacity: gray single surface, cyan Ordinary2, orange Hero4, pink Cinematic8, and purple weighted OIT";
+        case RenderDebugView::TransparencyOverflow:
+            return "pixel-local bounded-layer state: dark green accepted, amber saturated retained prefix, and magenta residual-tail composition";
         }
         return "unknown debug-view semantics";
     }

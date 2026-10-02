@@ -55,6 +55,7 @@ namespace Iridium {
         std::array<bool, LayeredResidualQuerySlotCount>
             layeredResidualQueryResultsPending{};
         bool fenceInFlight = false;
+        uint64_t submissionSerial = 0;
     };
 
     struct VulkanFrameBegin {
@@ -110,6 +111,12 @@ namespace Iridium {
         }
 
         [[nodiscard]] uint32_t currentFrameIndex() const noexcept { return currentFrame_; }
+        [[nodiscard]] uint64_t lastSubmittedSerial() const noexcept {
+            return lastSubmittedSerial_;
+        }
+        [[nodiscard]] uint64_t completedSerial() const noexcept {
+            return completedSerial_;
+        }
         [[nodiscard]] VkCommandBuffer currentCommandBuffer() const noexcept {
             return frames_[currentFrame_].commandBuffer;
         }
@@ -124,6 +131,8 @@ namespace Iridium {
         std::vector<VkFence> imagesInFlight_;
         std::vector<VkSemaphore> renderFinishedPerImage_;
         uint32_t currentFrame_ = 0;
+        uint64_t lastSubmittedSerial_ = 0;
+        uint64_t completedSerial_ = 0;
         bool acquireSuboptimal_ = false;
         CpuProfiler* cpuProfiler_ = nullptr;
         VulkanGpuRangeToken frameGpuRange_{};

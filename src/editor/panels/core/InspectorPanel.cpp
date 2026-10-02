@@ -9,6 +9,7 @@
 #include "editor/EditorSceneActions.h"
 #include "editor/EditorSceneCommandService.h"
 #include "editor/EditorTransactionService.h"
+#include "editor/EditorTransformSettings.h"
 #include "editor/EditorMeshTransaction.h"
 #include "editor/EditorPropertyDrawer.h"
 #include "editor/Reflection.h"
@@ -19,6 +20,8 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <cctype>
+#include <cfloat>
 #include <cstring>
 #include <map>
 #include <span>
@@ -32,6 +35,34 @@ namespace {
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) {
             ImGui::SetTooltip("%s", text);
         }
+    }
+
+    [[nodiscard]] bool containsCaseInsensitive(
+        std::string_view text, std::string_view query) {
+        if (query.empty()) return true;
+        return std::search(text.begin(), text.end(), query.begin(), query.end(),
+            [](char lhs, char rhs) {
+                return std::tolower(static_cast<unsigned char>(lhs)) ==
+                    std::tolower(static_cast<unsigned char>(rhs));
+            }) != text.end();
+    }
+
+    [[nodiscard]] bool componentMatches(
+        const Iridium::EditorComponentDescriptor& descriptor,
+        std::string_view query) {
+        if (containsCaseInsensitive(descriptor.displayName, query)) return true;
+        return std::ranges::any_of(descriptor.properties,
+            [query](const Iridium::EditorPropertyDescriptor& property) {
+                return containsCaseInsensitive(property.displayName, query);
+            });
+    }
+
+    bool dragPositiveUnbounded(const char* label, float& value,
+        float speedScale = 0.01f) {
+        const float speed = (std::max)(0.001f,
+            std::abs(value) * speedScale);
+        return ImGui::DragFloat(label, &value, speed, 0.0f, FLT_MAX,
+            "%.6g", ImGuiSliderFlags_AlwaysClamp);
     }
 
     void commitMeshAuthoringEdit(
@@ -84,16 +115,20 @@ InspectorPanel::InspectorPanel(
     Iridium::EditorTransactionService*
         transactionService,
     Iridium::EditorSceneCommandService*
-        sceneCommands)
+        sceneCommands,
+    Iridium::EditorTransformSettings*
+        transformSettings)
     : selectedEntity(&selection->primary),
       selection_(selection),
       assetCatalog_(assetCatalog),
       thumbnailService_(thumbnailService),
       transactionService_(transactionService),
-      sceneCommands_(sceneCommands) {
-    if (!selection_ || !transactionService_ || !sceneCommands_) {
+      sceneCommands_(sceneCommands),
+      transformSettings_(transformSettings) {
+    if (!selection_ || !transactionService_ || !sceneCommands_ ||
+        !transformSettings_) {
         throw std::invalid_argument(
-            "InspectorPanel requires selection, transaction, and scene command services");
+            "InspectorPanel requires selection, transaction, scene command, and transform settings services");
     }
     auto core = Iridium::createCoreEditorComponentRegistry();
     if (!core) {
@@ -354,10 +389,18 @@ void InspectorPanel::drawTransformComponent(
         uniformScaleEntity = entity;
         uniformScale = false;
     }
-    bool changed = recordEditActivity(Reflection::DrawField(
-        "Position", transform.position));
+    const float metresPerDisplayUnit = Iridium::metresPerUnit(
+        transformSettings_->worldUnit);
+    glm::vec3 displayPosition = transform.position / metresPerDisplayUnit;
+    const std::string positionLabel = "Position (" + std::string(
+        Iridium::lengthUnitSymbol(transformSettings_->worldUnit)) + ")";
+    bool changed = false;
+    if (Reflection::DrawField(positionLabel.c_str(), displayPosition)) {
+        transform.position = displayPosition * metresPerDisplayUnit;
+        changed |= recordEditActivity(true);
+    }
     changed |= recordEditActivity(Reflection::DrawField(
-        "Rotation", transform.rotation));
+        "Rotation (degrees)", transform.rotation));
     const bool uniformChanged = ImGui::Checkbox(
         "Uniform scale", &uniformScale);
     if (uniformChanged && uniformScale) {
@@ -450,14 +493,25 @@ void InspectorPanel::drawLightComponent(
         changed |= recordEditActivity(true);
     }
     if (light.type == LightType::Directional) {
-        if (ImGui::DragFloat("Illuminance (lux)", &light.illuminanceLux,
-                0.02f, 0.0f, 10'000'000.0f, "%.4g",
-                ImGuiSliderFlags_Logarithmic | ImGuiSliderFlags_AlwaysClamp))
+        float displayedIntensity = directionalIntensityKilolux_
+            ? light.illuminanceLux / 1000.0f : light.illuminanceLux;
+        ImGui::SetNextItemWidth(-56.0f);
+        if (dragPositiveUnbounded("##directional-intensity",
+                displayedIntensity)) {
+            light.illuminanceLux = directionalIntensityKilolux_
+                ? displayedIntensity * 1000.0f : displayedIntensity;
             changed |= recordEditActivity(true);
-        if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("Physical illuminance at the surface. Typical sun: "
-                "100,000 lx; overcast daylight: about 20,000 lx.");
         }
+        ImGui::SameLine();
+        if (ImGui::Button(directionalIntensityKilolux_ ? "klx" : "lx",
+                ImVec2(46.0f, 0.0f))) {
+            directionalIntensityKilolux_ = !directionalIntensityKilolux_;
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Switch between lux and kilolux display. The stored physical value remains lux and has no editor cap.");
+        }
+        ImGui::TextDisabled("Illuminance (%s)",
+            directionalIntensityKilolux_ ? "klx" : "lx");
         Reflection::ExplainTextEntry();
         if (ImGui::Button("Moon 0.25 lx")) {
             light.illuminanceLux = 0.25f;
@@ -475,15 +529,35 @@ void InspectorPanel::drawLightComponent(
         }
     }
     else {
-        if (ImGui::DragFloat("Luminous intensity (cd)",
-                &light.luminousIntensityCandela, 0.02f, 0.0f,
-                1'000'000'000.0f, "%.4g",
-                ImGuiSliderFlags_Logarithmic | ImGuiSliderFlags_AlwaysClamp))
+        float displayedIntensity = localIntensityLumens_
+            ? (light.type == LightType::Spot
+                ? Iridium::spotLumensFromCandela(
+                    light.luminousIntensityCandela,
+                    light.innerConeDegrees, light.outerConeDegrees)
+                : Iridium::pointLumensFromCandela(
+                    light.luminousIntensityCandela))
+            : light.luminousIntensityCandela;
+        ImGui::SetNextItemWidth(-56.0f);
+        if (dragPositiveUnbounded("##local-light-intensity",
+                displayedIntensity)) {
+            light.luminousIntensityCandela = localIntensityLumens_
+                ? (light.type == LightType::Spot
+                    ? Iridium::spotCandelaFromLumens(displayedIntensity,
+                        light.innerConeDegrees, light.outerConeDegrees)
+                    : Iridium::pointCandelaFromLumens(displayedIntensity))
+                : displayedIntensity;
             changed |= recordEditActivity(true);
-        if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("Physical luminous intensity. Apparent brightness "
-                "also depends on inverse-square distance, exposure, color, and range.");
         }
+        ImGui::SameLine();
+        if (ImGui::Button(localIntensityLumens_ ? "lm" : "cd",
+                ImVec2(46.0f, 0.0f))) {
+            localIntensityLumens_ = !localIntensityLumens_;
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Switch between luminous intensity (candela) and equivalent emitted flux (lumens). The stored candela value has no editor cap.");
+        }
+        ImGui::TextDisabled("Intensity (%s) - uncapped",
+            localIntensityLumens_ ? "lm" : "cd");
         Reflection::ExplainTextEntry();
         if (ImGui::Button("Bulb 80 cd")) {
             light.luminousIntensityCandela = 80.0f;
@@ -516,11 +590,22 @@ void InspectorPanel::drawLightComponent(
     changed |= recordEditActivity(
         Reflection::DrawField("Priority", light.priority));
     if (light.type != LightType::Directional) {
-        changed |= recordEditActivity(
-            Reflection::DrawField("Range (m)", light.rangeMeters, 0.0f, 1000.0f));
-        changed |= recordEditActivity(
-            Reflection::DrawField("Source radius (m)",
-                light.sourceRadiusMeters, 0.0f, 50.0f));
+        const float metresPerDisplayUnit = Iridium::metresPerUnit(
+            transformSettings_->worldUnit);
+        float range = light.rangeMeters / metresPerDisplayUnit;
+        const std::string rangeLabel = "Range (" + std::string(
+            Iridium::lengthUnitSymbol(transformSettings_->worldUnit)) + ")";
+        if (dragPositiveUnbounded(rangeLabel.c_str(), range)) {
+            light.rangeMeters = range * metresPerDisplayUnit;
+            changed |= recordEditActivity(true);
+        }
+        float radius = light.sourceRadiusMeters / metresPerDisplayUnit;
+        const std::string radiusLabel = "Source radius (" + std::string(
+            Iridium::lengthUnitSymbol(transformSettings_->worldUnit)) + ")";
+        if (dragPositiveUnbounded(radiusLabel.c_str(), radius)) {
+            light.sourceRadiusMeters = radius * metresPerDisplayUnit;
+            changed |= recordEditActivity(true);
+        }
         if (ImGui::IsItemHovered()) {
             ImGui::SetTooltip("Controls physically sized contact-hardening: smaller "
                 "values make sharper shadows; larger values widen distant penumbrae.");
@@ -1245,6 +1330,20 @@ void InspectorPanel::drawMeshComponent(
         commitMeshAuthoringEdit(transactionService_, registry,
             selection_->selected(), selectedEntityValue, mesh, enabledBefore,
             Iridium::captureEditorMeshAuthoringState(mesh), "Set Mesh Enabled");
+    }
+    const Iridium::EditorMeshAuthoringState lodBefore =
+        Iridium::captureEditorMeshAuthoringState(mesh);
+    if (Reflection::DrawField("Maximum LOD Level", mesh.maximumLodLevel, 0,
+            MeshComponent::MaximumLodLevel)) {
+        commitMeshAuthoringEdit(transactionService_, registry,
+            selection_->selected(), selectedEntityValue, mesh, lodBefore,
+            Iridium::captureEditorMeshAuthoringState(mesh),
+            "Set Mesh Maximum LOD");
+    }
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) {
+        ImGui::SetTooltip(
+            "0 pins full-detail LOD0 for hero content. 15 allows the project and "
+            "device policy to use every available LOD.");
     }
     ImGui::SeparatorText("Model");
     const Iridium::AssetGuid
@@ -2019,6 +2118,18 @@ void InspectorPanel::OnImGuiRender(
         ImGui::PopStyleColor();
         ImGui::Separator();
 
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        ImGui::InputTextWithHint("##component-search",
+            "Search components or properties...",
+            componentSearch_.data(), componentSearch_.size());
+        const std::string_view componentQuery(componentSearch_.data());
+        if (!componentQuery.empty()) {
+            ImGui::TextDisabled("Showing matching components");
+        }
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+
         MeshComponent* selectedMesh = nullptr;
         auto* meshPool =
             registry.getPool<MeshComponent>();
@@ -2073,6 +2184,7 @@ void InspectorPanel::OnImGuiRender(
         for (const auto& descriptor :
             componentRegistry_.descriptors()) {
             if (!descriptor.visible ||
+                !componentMatches(descriptor, componentQuery) ||
                 !descriptor.has(
                     registry, *selectedEntity)) {
                 continue;
@@ -2087,7 +2199,10 @@ void InspectorPanel::OnImGuiRender(
 
             if (!ImGui::CollapsingHeader(
                     name.c_str(),
-                    ImGuiTreeNodeFlags_DefaultOpen)) {
+                    componentQuery.empty()
+                        ? ImGuiTreeNodeFlags_DefaultOpen
+                        : ImGuiTreeNodeFlags_DefaultOpen |
+                            ImGuiTreeNodeFlags_Leaf)) {
                 continue;
             }
             ImGui::Indent();

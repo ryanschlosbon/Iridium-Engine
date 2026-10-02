@@ -24,6 +24,8 @@ namespace Iridium {
                 return "Rename folder";
             case AssetCatalogJobKind::DeleteFolder:
                 return "Delete folder";
+            case AssetCatalogJobKind::MoveFolder:
+                return "Move folder";
             case AssetCatalogJobKind::MoveAsset:
                 return "Move asset";
             case AssetCatalogJobKind::RenameAsset:
@@ -213,6 +215,18 @@ namespace Iridium {
         return enqueue({
             .kind = AssetCatalogJobKind::DeleteFolder,
             .sourcePath = std::move(directory),
+            .rootId = std::move(rootId),
+        });
+    }
+
+    uint64_t AssetCatalogService::requestMoveFolder(
+        std::string rootId,
+        std::filesystem::path directory,
+        std::filesystem::path destinationDirectory) {
+        return enqueue({
+            .kind = AssetCatalogJobKind::MoveFolder,
+            .sourcePath = std::move(directory),
+            .destinationPath = std::move(destinationDirectory),
             .rootId = std::move(rootId),
         });
     }
@@ -461,6 +475,16 @@ namespace Iridium {
                 }
                 result.sourcePath =
                     mutation.previousPath;
+            }
+            else if (job.kind ==
+                AssetCatalogJobKind::MoveFolder) {
+                const AssetContentMutationResult mutation =
+                    contentOperations_.moveFolder(job.rootId,
+                        job.sourcePath, job.destinationPath);
+                if (!mutation.succeeded()) {
+                    throw std::runtime_error(mutation.diagnostic);
+                }
+                result.sourcePath = mutation.path;
             }
             else if (job.kind ==
                 AssetCatalogJobKind::MoveAsset) {

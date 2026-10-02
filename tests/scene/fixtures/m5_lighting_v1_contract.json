@@ -39,5 +39,13 @@
     "cookKey": "5a4ceaa4938de6a9f3fa6d49a64485be3536aabb1dec05b595e316ec474852b0",
     "artifactSha256": "8bf1243a2b4103b86acc130a9b3176ee279970ca510fcf8c13b006f7a82c9fec",
     "artifactBytes": 2196
+  },
+  "m7_5Supersession": {
+    "contract": "M7.5-mesh-maximum-lod-policy",
+    "canonicalSha256": "27361a36120b21c3fa170cb13660eb2f2fdd2a705cfb442b9311d57cf4028a36",
+    "runtimeComponentManifestSha256": "acc8e9e400c669c80f2281e80913a2208d186ba4826a99b5597636f5d7dfcc3d",
+    "cookKey": "8c5863cf7ef68a694b00c1677671e107558315cb3dc5078a8b12e8525e0d29b6",
+    "artifactSha256": "8023225908880e422bd6bfe07bcdc7b56c3d853cc93c1951d5f6e4c7f7b536ff",
+    "artifactBytes": 2196
   }
 }

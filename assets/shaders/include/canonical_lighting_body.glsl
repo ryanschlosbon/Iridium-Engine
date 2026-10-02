@@ -117,6 +117,16 @@ void main() {
             outColor = vec4(overflow ? vec3(1.0, 0.0, 0.8) :
                 vec3(0.0, 0.15, 0.0), 1.0);
         }
+        else if (push.debugView.x == 18) {
+            uint featureFlags = (materialFlags >> 20u) & 0x3ffu;
+            bool alphaClip = (featureFlags & (1u << 3u)) != 0u;
+            outColor = vec4(alphaClip
+                ? vec3(0.15, 0.85, 0.25) : vec3(0.12), 1.0);
+        }
+        else if (push.debugView.x == 19)
+            outColor = vec4(0.05, 0.30, 0.08, 1.0);
+        else if (push.debugView.x >= 20 && push.debugView.x <= 23)
+            outColor = vec4(0.01, 0.01, 0.01, 1.0);
         else outColor = vec4(vec3(rawDepth), 1.0);
         return;
     }
@@ -143,6 +153,18 @@ void main() {
     }
     vec3 direct = vec3(0.0);
     float shadowVisibility = 1.0;
+    vec3 shadowWorldDx = dFdx(fragPos);
+    vec3 shadowWorldDy = dFdy(fragPos);
+    vec3 shadowGeometricNormal = cross(shadowWorldDx, shadowWorldDy);
+    float shadowGeometricLengthSquared = dot(shadowGeometricNormal,
+        shadowGeometricNormal);
+    shadowGeometricNormal = shadowGeometricLengthSquared > 1.0e-16
+        ? shadowGeometricNormal * inversesqrt(shadowGeometricLengthSquared) : N;
+    if (dot(shadowGeometricNormal, N) < 0.0)
+        shadowGeometricNormal = -shadowGeometricNormal;
+    IridiumDirectionalShadowReceiver shadowReceiver =
+        IridiumDirectionalShadowReceiver(fragPos, N, shadowGeometricNormal,
+            shadowWorldDx, shadowWorldDy);
     IridiumDirectLightRange lightRange = iridiumDirectLightRange(
         fragPos, uvec2(gl_FragCoord.xy));
     uint directLightCount = iridiumDirectLightCount(lightRange);
@@ -153,7 +175,7 @@ void main() {
         float noL = max(dot(N, light.direction), 0.0);
         if (noL > 0.0) {
             float visibility = iridiumDirectionalShadowVisibility(lightSlot,
-                fragPos, N, light.direction, viewDepth);
+                shadowReceiver, light.direction, viewDepth);
             PackedGpuLight lightRecord = iridiumLights[lightSlot];
             if ((floatBitsToUint(lightRecord.shapeMetadata.z) & 3u) ==
                 IRIDIUM_LIGHT_TYPE_SPOT)

@@ -285,6 +285,36 @@ void MaterialDiagnosticsPanel::OnImGuiRender(Registry& registry,
             compiled.value("texture_operations", Json::array()).size());
     }
 
+    if (ImGui::CollapsingHeader("Transparency routing",
+            ImGuiTreeNodeFlags_DefaultOpen)) {
+        const Json& sourcePolicy = source.at("transparency_policy");
+        const Json& transparency = compiled.at("transparency");
+        property("Source request", sourcePolicy, "requested_class");
+        property("Resolved class", transparency, "resolved_class");
+        property("Execution route", transparency, "execution_route");
+        property("Layer budget", transparency, "quality");
+        property("Priority", transparency, "priority");
+        property("Thin-sheet thickness (m)", transparency,
+            "thin_sheet_thickness_m");
+        property("Topology", transparency, "topology_status");
+        property("Fallback", transparency, "fallback_reason");
+        if (transparency.value("fallback_applied", false)) {
+            ImGui::TextColored(ImVec4(1.0f, 0.72f, 0.25f, 1.0f),
+                "Safe fallback is active");
+        }
+        else {
+            ImGui::TextDisabled("Requested policy is active without fallback.");
+        }
+        ImGui::TextWrapped("Topology: %s",
+            transparency.value("topology_explanation", "Unavailable.").c_str());
+        ImGui::TextWrapped("Fallback: %s",
+            transparency.value("fallback_explanation", "Unavailable.").c_str());
+        if (transparency.value("policy_sanitized", false)) {
+            ImGui::TextColored(ImVec4(1.0f, 0.72f, 0.25f, 1.0f),
+                "One or more authored policy values were sanitized.");
+        }
+    }
+
     if (ImGui::CollapsingHeader("Material instance", ImGuiTreeNodeFlags_DefaultOpen)) {
         property("Revision", instance, "revision");
         property("Override mask", instance, "override_mask");

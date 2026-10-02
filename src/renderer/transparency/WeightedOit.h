@@ -6,8 +6,16 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <numeric>
 
 namespace Iridium {
+
+    inline constexpr uint32_t kWeightedOitMaximumInstanceCount = 65'536u;
+
+    [[nodiscard]] constexpr uint64_t weightedOitInstanceStreamBytes(
+        uint32_t instanceCount) noexcept {
+        return static_cast<uint64_t>(instanceCount) * sizeof(glm::mat4);
+    }
 
     // M6.7 uses an intentionally conservative absolute scale for FP16 weighted
     // accumulation. The scale cancels during resolve, while keeping the
@@ -19,6 +27,32 @@ namespace Iridium {
     inline constexpr float WeightedOitMaximumPremultipliedRadiance = 128.0f;
     inline constexpr uint32_t WeightedOitQualifiedMaximumFragments = 4096u;
     inline constexpr double WeightedOitMaximumFiniteHalf = 65504.0;
+
+    // Seed zero preserves the production queue order. Nonzero seeds provide a
+    // deterministic, allocation-free affine permutation for benchmark and GPU
+    // qualification runs. The stride is always coprime with the packet count,
+    // so every queue element is visited exactly once.
+    [[nodiscard]] inline uint32_t weightedOitPermutationIndex(
+        uint32_t ordinal, uint32_t count, uint64_t seed) noexcept {
+        if (count == 0u) return 0u;
+        ordinal %= count;
+        if (seed == 0u || count == 1u) return ordinal;
+
+        uint64_t mixed = seed + 0x9e3779b97f4a7c15ull;
+        mixed = (mixed ^ (mixed >> 30u)) * 0xbf58476d1ce4e5b9ull;
+        mixed = (mixed ^ (mixed >> 27u)) * 0x94d049bb133111ebull;
+        mixed ^= mixed >> 31u;
+
+        const uint32_t offset = static_cast<uint32_t>(seed % count);
+        uint32_t stride = static_cast<uint32_t>((mixed >> 32u) % count);
+        if (stride == 0u) stride = 1u;
+        while (std::gcd(stride, count) != 1u) {
+            ++stride;
+            if (stride == count) stride = 1u;
+        }
+        return static_cast<uint32_t>((static_cast<uint64_t>(ordinal) *
+            stride + offset) % count);
+    }
 
     struct WeightedOitContribution {
         glm::vec3 premultipliedRadiance{ 0.0f };

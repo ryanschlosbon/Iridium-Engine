@@ -1,4 +1,5 @@
 #include "VkForwardRenderPass.h"
+#include "VkContext.h"
 #include <stdexcept>
 #include <array>
 
@@ -43,10 +44,10 @@ void VkForwardRenderPass::createRenderPass(VkFormat colorFormat,
     // writes; keeping the attachment writable lets opaque forward geometry
     // establish correct visibility for every later forward draw.
     depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
-    // Read-only describes this subpass, not the lifetime of the attachment.
-    // Main depth is consumed again by the retained compatibility transparency
-    // passes, so discarding it here would make their subsequent LOAD undefined.
-    depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    // Preserve depth for subsequent consumers without introducing a STORE write
+    // behind the render graph's DepthRead contract. NONE is core Vulkan 1.3;
+    // unlike DONT_CARE it does not discard the unchanged read-only contents.
+    depthAttachment.storeOp = depthStoreOperation(depthReadOnly);
     depthAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
     depthAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
 

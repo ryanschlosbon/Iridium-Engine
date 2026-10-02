@@ -65,7 +65,7 @@ int main(int argc, char** argv) {
         registry.registerImporter(std::make_shared<TextFixtureImporter>());
         registry.registerImporter(std::make_shared<TextureImporter>());
         registry.registerImporter(std::make_shared<EnvironmentImporter>());
-        registry.registerImporter(std::make_shared<GltfModelImporter>());
+        registerGltfModelImporters(registry);
         const ImporterSelection selection =
             registry.selectAutomatic(source.filename(), bytes);
         if (!selection.valid()) {

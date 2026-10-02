@@ -1,5 +1,6 @@
 #include "assets/model/ModelProduct.h"
 
+#include "renderer/rhi/GeometryArena.h"
 #include "utils/Sha256.h"
 
 #include <algorithm>
@@ -29,10 +30,23 @@ namespace Iridium {
             std::byte{ 'I' }, std::byte{ 'R' }, std::byte{ 'M' }, std::byte{ 'T' },
             std::byte{ 'E' }, std::byte{ 'X' }, std::byte{ '0' }, std::byte{ '1' },
         };
+        constexpr std::array<std::byte, 8> kIndexArenaMagic{
+            std::byte{ 'I' }, std::byte{ 'R' }, std::byte{ 'I' }, std::byte{ 'D' },
+            std::byte{ 'X' }, std::byte{ 'A' }, std::byte{ 'R' }, std::byte{ '1' },
+        };
+        constexpr std::array<std::byte, 8> kLodMagic{
+            std::byte{ 'I' }, std::byte{ 'R' }, std::byte{ 'M' }, std::byte{ 'L' },
+            std::byte{ 'O' }, std::byte{ 'D' }, std::byte{ '0' }, std::byte{ '1' },
+        };
         constexpr uint32_t kManifestHeaderSize = 72;
         constexpr uint32_t kPrimitiveRecordSize = 208;
         constexpr uint32_t kMaterialSectionSchemaVersion = 3;
         constexpr uint32_t kTextureViewSectionSchemaVersion = 1;
+        constexpr uint32_t kIndexArenaHeaderSize = 40;
+        constexpr uint32_t kIndexArenaPrimitiveRecordSize = 48;
+        constexpr uint32_t kLodHeaderSize = 32;
+        constexpr uint32_t kLodChainRecordSize = 16;
+        constexpr uint32_t kLodLevelRecordSize = 8;
 
         template <typename Integer>
         void appendInteger(std::vector<std::byte>& output, Integer value) {
@@ -196,6 +210,223 @@ namespace Iridium {
             for (float value : vertex.texCoord1) appendFloat(output, value);
         }
 
+        GeometryArenaBuildResult buildModelGeometryArena(
+            const CookedModelProductData& data) {
+            std::vector<GeometryArenaPrimitiveInput> primitives;
+            primitives.reserve(data.manifest.primitives.size());
+            for (const CookedModelPrimitive& primitive :
+                    data.manifest.primitives) {
+                primitives.push_back({
+                    .identity = { primitive.sourcePrimitiveGuid,
+                        primitive.primitiveGuid },
+                    .firstVertex = primitive.firstVertex,
+                    .vertexCount = primitive.vertexCount,
+                    .firstIndex = primitive.firstIndex,
+                    .indexCount = primitive.indexCount,
+                });
+            }
+            return buildGeometryArena(GeometryArenaAbiVersion,
+                data.vertices.size(), data.indices, primitives);
+        }
+
+        std::vector<std::byte> serializeModelIndexArena(
+            const GeometryArenaData& arena) {
+            if (arena.primitives.size() >
+                    std::numeric_limits<uint32_t>::max()) {
+                throw std::invalid_argument(
+                    "Geometry arena primitive count exceeds schema limits.");
+            }
+            const uint64_t recordBytes = static_cast<uint64_t>(
+                arena.primitives.size()) * kIndexArenaPrimitiveRecordSize;
+            if (recordBytes > std::numeric_limits<size_t>::max() -
+                    kIndexArenaHeaderSize) {
+                throw std::invalid_argument(
+                    "Geometry arena records exceed addressable memory.");
+            }
+            std::vector<std::byte> output(
+                kIndexArenaHeaderSize + static_cast<size_t>(recordBytes),
+                std::byte{ 0 });
+            std::copy(kIndexArenaMagic.begin(), kIndexArenaMagic.end(),
+                output.begin());
+            writeInteger<uint32_t>(output, 8, arena.abiVersion);
+            writeInteger<uint32_t>(output, 12,
+                kIndexArenaPrimitiveRecordSize);
+            writeInteger<uint32_t>(output, 16,
+                static_cast<uint32_t>(arena.primitives.size()));
+            writeInteger<uint64_t>(output, 24, arena.uint16Indices.size());
+            writeInteger<uint64_t>(output, 32, arena.uint32Indices.size());
+            for (size_t index = 0; index < arena.primitives.size(); ++index) {
+                const GeometryArenaPrimitiveRange& primitive =
+                    arena.primitives[index];
+                const size_t record = kIndexArenaHeaderSize +
+                    index * kIndexArenaPrimitiveRecordSize;
+                writeGuid(output, record,
+                    primitive.identity.sourcePrimitiveGuid);
+                writeGuid(output, record + 16,
+                    primitive.identity.primitiveGuid);
+                writeInteger<uint32_t>(output, record + 32,
+                    static_cast<uint32_t>(primitive.indexStream));
+                writeInteger<uint32_t>(output, record + 36,
+                    primitive.firstIndex);
+                writeInteger<uint32_t>(output, record + 40,
+                    primitive.indexCount);
+                writeInteger<int32_t>(output, record + 44,
+                    primitive.vertexOffset);
+            }
+            for (uint16_t value : arena.uint16Indices)
+                appendInteger<uint16_t>(output, value);
+            for (uint32_t value : arena.uint32Indices)
+                appendInteger<uint32_t>(output, value);
+            return output;
+        }
+
+        std::optional<std::vector<uint32_t>> readModelIndexArena(
+            std::span<const std::byte> bytes,
+            CookedModelManifest& manifest,
+            std::vector<CookDiagnostic>& diagnostics) {
+            uint32_t abiVersion = 0;
+            uint32_t recordSize = 0;
+            uint32_t primitiveCount = 0;
+            uint64_t uint16Count = 0;
+            uint64_t uint32Count = 0;
+            if (bytes.size() < kIndexArenaHeaderSize ||
+                !std::equal(kIndexArenaMagic.begin(), kIndexArenaMagic.end(),
+                    bytes.begin()) ||
+                !readInteger(bytes, 8, abiVersion) ||
+                !readInteger(bytes, 12, recordSize) ||
+                !readInteger(bytes, 16, primitiveCount) ||
+                !readInteger(bytes, 24, uint16Count) ||
+                !readInteger(bytes, 32, uint32Count) ||
+                abiVersion != GeometryArenaAbiVersion ||
+                recordSize != kIndexArenaPrimitiveRecordSize ||
+                primitiveCount != manifest.primitives.size()) {
+                addError(diagnostics, "MODEL_INDEX_ARENA_HEADER", "/indices",
+                    "Cooked geometry-arena index header is unsupported.");
+                return std::nullopt;
+            }
+            const uint64_t recordsEnd = kIndexArenaHeaderSize +
+                static_cast<uint64_t>(primitiveCount) * recordSize;
+            if (recordsEnd > bytes.size()) {
+                addError(diagnostics, "MODEL_INDEX_ARENA_BOUNDS", "/indices",
+                    "Cooked geometry-arena index payload is out of bounds.");
+                return std::nullopt;
+            }
+            uint64_t remaining = bytes.size() - recordsEnd;
+            if (uint16Count > remaining / sizeof(uint16_t)) {
+                addError(diagnostics, "MODEL_INDEX_ARENA_BOUNDS", "/indices",
+                    "Cooked geometry-arena UInt16 stream is out of bounds.");
+                return std::nullopt;
+            }
+            remaining -= uint16Count * sizeof(uint16_t);
+            if (uint32Count > remaining / sizeof(uint32_t) ||
+                uint32Count * sizeof(uint32_t) != remaining) {
+                addError(diagnostics, "MODEL_INDEX_ARENA_BOUNDS", "/indices",
+                    "Cooked geometry-arena UInt32 stream is out of bounds.");
+                return std::nullopt;
+            }
+
+            GeometryArenaData arena;
+            arena.primitives.reserve(primitiveCount);
+            for (uint32_t index = 0; index < primitiveCount; ++index) {
+                const size_t record = kIndexArenaHeaderSize +
+                    static_cast<size_t>(index) * recordSize;
+                uint32_t stream = 0;
+                GeometryArenaPrimitiveRange primitive{
+                    .identity = { readGuid(bytes, record),
+                        readGuid(bytes, record + 16) },
+                };
+                if (!readInteger(bytes, record + 32, stream) ||
+                    !readInteger(bytes, record + 36, primitive.firstIndex) ||
+                    !readInteger(bytes, record + 40, primitive.indexCount) ||
+                    !readInteger(bytes, record + 44, primitive.vertexOffset) ||
+                    stream > static_cast<uint32_t>(
+                        GeometryArenaIndexStream::UInt32) ||
+                    (index != 0 && !(arena.primitives.back().identity <
+                        primitive.identity))) {
+                    addError(diagnostics, "MODEL_INDEX_ARENA_RECORD",
+                        "/indices", "Cooked geometry-arena primitive record "
+                        "is invalid or not in stable identity order.");
+                    return std::nullopt;
+                }
+                primitive.indexStream = static_cast<
+                    GeometryArenaIndexStream>(stream);
+                arena.primitives.push_back(primitive);
+            }
+            size_t offset = static_cast<size_t>(recordsEnd);
+            arena.uint16Indices.resize(static_cast<size_t>(uint16Count));
+            for (uint16_t& value : arena.uint16Indices) {
+                if (!readInteger(bytes, offset, value)) return std::nullopt;
+                offset += sizeof(uint16_t);
+            }
+            arena.uint32Indices.resize(static_cast<size_t>(uint32Count));
+            for (uint32_t& value : arena.uint32Indices) {
+                if (!readInteger(bytes, offset, value)) return std::nullopt;
+                offset += sizeof(uint32_t);
+            }
+
+            std::vector<uint32_t> indices(
+                static_cast<size_t>(manifest.indexCount));
+            std::vector<bool> used(arena.primitives.size(), false);
+            for (CookedModelPrimitive& primitive : manifest.primitives) {
+                const GeometryArenaPrimitiveIdentity identity{
+                    primitive.sourcePrimitiveGuid, primitive.primitiveGuid };
+                const auto found = std::ranges::lower_bound(
+                    arena.primitives, identity, {},
+                    &GeometryArenaPrimitiveRange::identity);
+                if (found == arena.primitives.end() ||
+                    found->identity != identity ||
+                    found->indexCount != primitive.indexCount ||
+                    found->vertexOffset < 0 ||
+                    static_cast<uint64_t>(found->vertexOffset) !=
+                        primitive.firstVertex ||
+                    !validRange(primitive.firstIndex, primitive.indexCount,
+                        indices.size())) {
+                    addError(diagnostics, "MODEL_INDEX_ARENA_MAPPING",
+                        "/indices", "Cooked geometry-arena ranges do not map "
+                        "exactly to the model manifest.");
+                    return std::nullopt;
+                }
+                const size_t arenaIndex = static_cast<size_t>(
+                    found - arena.primitives.begin());
+                used[arenaIndex] = true;
+                primitive.indexFormat = found->indexStream ==
+                        GeometryArenaIndexStream::UInt16
+                    ? ModelIndexFormat::UInt16 : ModelIndexFormat::UInt32;
+                const uint64_t streamSize = found->indexStream ==
+                        GeometryArenaIndexStream::UInt16
+                    ? arena.uint16Indices.size() : arena.uint32Indices.size();
+                if (!validRange(found->firstIndex, found->indexCount,
+                        streamSize)) {
+                    addError(diagnostics, "MODEL_INDEX_ARENA_RANGE",
+                        "/indices", "Cooked geometry-arena index range is "
+                        "out of bounds.");
+                    return std::nullopt;
+                }
+                for (uint32_t item = 0; item < found->indexCount; ++item) {
+                    const uint32_t local = found->indexStream ==
+                            GeometryArenaIndexStream::UInt16
+                        ? arena.uint16Indices[found->firstIndex + item]
+                        : arena.uint32Indices[found->firstIndex + item];
+                    const uint64_t global = primitive.firstVertex + local;
+                    if (global > std::numeric_limits<uint32_t>::max() ||
+                        local >= primitive.vertexCount) {
+                        addError(diagnostics, "MODEL_INDEX_ARENA_VALUE",
+                            "/indices", "Cooked geometry-arena local index is "
+                            "outside its primitive vertex range.");
+                        return std::nullopt;
+                    }
+                    indices[static_cast<size_t>(primitive.firstIndex + item)] =
+                        static_cast<uint32_t>(global);
+                }
+            }
+            if (!std::ranges::all_of(used, [](bool value) { return value; })) {
+                addError(diagnostics, "MODEL_INDEX_ARENA_MAPPING", "/indices",
+                    "Cooked geometry arena contains an unmapped primitive.");
+                return std::nullopt;
+            }
+            return indices;
+        }
+
     } // namespace
 
     bool CookedModelMaterial::operator==(
@@ -342,7 +573,9 @@ namespace Iridium {
             !readInteger(bytes, 56, result.vertexStride) ||
             !readInteger(bytes, 60, transparencyExecutionMode) ||
             !readInteger(bytes, 64, stringTableOffset) ||
-            schema != kCookedModelSchemaVersion ||
+            (schema != kCookedModelSchemaVersion &&
+                schema != kPreviousCookedModelSchemaVersion &&
+                schema != kLegacyCookedModelSchemaVersion) ||
             headerSize != kManifestHeaderSize ||
             recordSize != kPrimitiveRecordSize ||
             transparencyExecutionMode > static_cast<uint32_t>(
@@ -867,6 +1100,62 @@ namespace Iridium {
         return output;
     }
 
+    std::vector<std::byte> serializeModelLodChains(
+        std::span<const CookedModelLodChain> chains) {
+        if (chains.size() > std::numeric_limits<uint32_t>::max()) {
+            throw std::invalid_argument(
+                "Cooked model LOD chain count exceeds schema limits.");
+        }
+        uint64_t levelCount = 0;
+        for (const CookedModelLodChain& chain : chains) {
+            levelCount += chain.levels.size();
+            if (levelCount > std::numeric_limits<uint32_t>::max()) {
+                throw std::invalid_argument(
+                    "Cooked model LOD level count exceeds schema limits.");
+            }
+        }
+        const uint64_t byteCount = kLodHeaderSize +
+            static_cast<uint64_t>(chains.size()) * kLodChainRecordSize +
+            levelCount * kLodLevelRecordSize;
+        if (byteCount > std::numeric_limits<size_t>::max()) {
+            throw std::invalid_argument(
+                "Cooked model LOD section exceeds addressable memory.");
+        }
+        std::vector<std::byte> output(static_cast<size_t>(byteCount),
+            std::byte{ 0 });
+        std::copy(kLodMagic.begin(), kLodMagic.end(), output.begin());
+        writeInteger<uint32_t>(output, 8,
+            kCookedModelLodSectionSchemaVersion);
+        writeInteger<uint32_t>(output, 12, kLodChainRecordSize);
+        writeInteger<uint32_t>(output, 16, kLodLevelRecordSize);
+        writeInteger<uint32_t>(output, 20,
+            static_cast<uint32_t>(chains.size()));
+        writeInteger<uint32_t>(output, 24,
+            static_cast<uint32_t>(levelCount));
+        uint32_t firstLevel = 0;
+        const size_t levelTable = kLodHeaderSize +
+            chains.size() * kLodChainRecordSize;
+        for (size_t chainIndex = 0; chainIndex < chains.size(); ++chainIndex) {
+            const CookedModelLodChain& chain = chains[chainIndex];
+            const size_t record = kLodHeaderSize +
+                chainIndex * kLodChainRecordSize;
+            writeInteger<uint32_t>(output, record,
+                chain.basePrimitiveIndex);
+            writeInteger<uint32_t>(output, record + 4, firstLevel);
+            writeInteger<uint32_t>(output, record + 8,
+                static_cast<uint32_t>(chain.levels.size()));
+            for (const CookedModelLodLevel& level : chain.levels) {
+                const size_t levelRecord = levelTable +
+                    static_cast<size_t>(firstLevel) * kLodLevelRecordSize;
+                writeInteger<uint32_t>(output, levelRecord,
+                    level.primitiveIndex);
+                writeFloat(output, levelRecord + 4, level.geometricError);
+                ++firstLevel;
+            }
+        }
+        return output;
+    }
+
     std::optional<std::vector<CookedModelVertex>> readModelVertices(
         std::span<const std::byte> bytes,
         std::vector<CookDiagnostic>& diagnostics) {
@@ -941,6 +1230,95 @@ namespace Iridium {
             }
         }
         return result;
+    }
+
+    std::optional<std::vector<CookedModelLodChain>> readModelLodChains(
+        std::span<const std::byte> bytes,
+        std::vector<CookDiagnostic>& diagnostics) {
+        uint32_t schema = 0;
+        uint32_t chainRecordSize = 0;
+        uint32_t levelRecordSize = 0;
+        uint32_t chainCount = 0;
+        uint32_t levelCount = 0;
+        if (bytes.size() < kLodHeaderSize ||
+            !std::equal(kLodMagic.begin(), kLodMagic.end(), bytes.begin()) ||
+            !readInteger(bytes, 8, schema) ||
+            !readInteger(bytes, 12, chainRecordSize) ||
+            !readInteger(bytes, 16, levelRecordSize) ||
+            !readInteger(bytes, 20, chainCount) ||
+            !readInteger(bytes, 24, levelCount) ||
+            schema != kCookedModelLodSectionSchemaVersion ||
+            chainRecordSize != kLodChainRecordSize ||
+            levelRecordSize != kLodLevelRecordSize) {
+            addError(diagnostics, "MODEL_LOD_HEADER", "/lod_chains",
+                "Cooked model LOD section header is unsupported.");
+            return std::nullopt;
+        }
+        const uint64_t levelTable = kLodHeaderSize +
+            static_cast<uint64_t>(chainCount) * chainRecordSize;
+        const uint64_t expectedSize = levelTable +
+            static_cast<uint64_t>(levelCount) * levelRecordSize;
+        if (expectedSize != bytes.size()) {
+            addError(diagnostics, "MODEL_LOD_BOUNDS", "/lod_chains",
+                "Cooked model LOD tables are out of bounds.");
+            return std::nullopt;
+        }
+        std::vector<CookedModelLodChain> result;
+        result.reserve(chainCount);
+        uint32_t expectedFirstLevel = 0;
+        for (uint32_t chainIndex = 0; chainIndex < chainCount; ++chainIndex) {
+            const size_t record = kLodHeaderSize +
+                static_cast<size_t>(chainIndex) * chainRecordSize;
+            CookedModelLodChain chain;
+            uint32_t firstLevel = 0;
+            uint32_t count = 0;
+            if (!readInteger(bytes, record, chain.basePrimitiveIndex) ||
+                !readInteger(bytes, record + 4, firstLevel) ||
+                !readInteger(bytes, record + 8, count) ||
+                firstLevel != expectedFirstLevel || firstLevel > levelCount ||
+                count > levelCount - firstLevel) {
+                addError(diagnostics, "MODEL_LOD_CHAIN_RECORD",
+                    "/lod_chains/" + std::to_string(chainIndex),
+                    "Cooked model LOD chain record is invalid.");
+                return std::nullopt;
+            }
+            chain.levels.reserve(count);
+            for (uint32_t levelIndex = 0; levelIndex < count; ++levelIndex) {
+                const size_t levelRecord = static_cast<size_t>(levelTable) +
+                    static_cast<size_t>(firstLevel + levelIndex) * levelRecordSize;
+                CookedModelLodLevel level;
+                if (!readInteger(bytes, levelRecord, level.primitiveIndex) ||
+                    !readFloat(bytes, levelRecord + 4,
+                        level.geometricError)) {
+                    addError(diagnostics, "MODEL_LOD_LEVEL_RECORD",
+                        "/lod_chains/" + std::to_string(chainIndex) +
+                            "/levels/" + std::to_string(levelIndex),
+                        "Cooked model LOD level record is truncated.");
+                    return std::nullopt;
+                }
+                chain.levels.push_back(level);
+            }
+            expectedFirstLevel += count;
+            result.push_back(std::move(chain));
+        }
+        if (expectedFirstLevel != levelCount) {
+            addError(diagnostics, "MODEL_LOD_LEVEL_COVERAGE", "/lod_chains",
+                "Cooked model LOD chains do not cover the level table.");
+            return std::nullopt;
+        }
+        return result;
+    }
+
+    std::vector<bool> makeCookedModelLodChildMask(const CookedModelProductData& data) {
+        std::vector<bool> children(data.manifest.primitives.size(), false);
+        for (const CookedModelLodChain& chain : data.lodChains) {
+            for (size_t index = 1; index < chain.levels.size(); ++index) {
+                if (chain.levels[index].primitiveIndex >= children.size())
+                    throw std::invalid_argument("LOD child index is out of range.");
+                children[chain.levels[index].primitiveIndex] = true;
+            }
+        }
+        return children;
     }
 
     std::vector<CookDiagnostic> validateModelProduct(
@@ -1195,6 +1573,12 @@ namespace Iridium {
                 addError(diagnostics, "MODEL_PRIMITIVE_FLAGS", field,
                     "Primitive enum, attribute, or feature flags are invalid.");
             }
+            if (primitive.lodSection != kNoModelSection &&
+                primitive.lodSection != kCookedModelLodSection) {
+                addError(diagnostics, "MODEL_LOD_SECTION_REFERENCE",
+                    field + "/lod_section",
+                    "Primitive references an unknown cooked LOD section.");
+            }
             if ((primitive.attributeMask & ModelAttributePosition) == 0) {
                 addError(diagnostics, "MODEL_POSITION_REQUIRED",
                     field + "/attribute_mask",
@@ -1283,22 +1667,139 @@ namespace Iridium {
                 }
             }
         }
+
+        std::vector<int64_t> lodMembership(manifest.primitives.size(), -1);
+        uint32_t previousBase = 0;
+        bool havePreviousBase = false;
+        for (size_t chainIndex = 0; chainIndex < data.lodChains.size();
+                ++chainIndex) {
+            const CookedModelLodChain& chain = data.lodChains[chainIndex];
+            const std::string field =
+                "/lod_chains/" + std::to_string(chainIndex);
+            if (chain.basePrimitiveIndex >= manifest.primitives.size() ||
+                (havePreviousBase && chain.basePrimitiveIndex <= previousBase) ||
+                chain.levels.size() < 2u) {
+                addError(diagnostics, "MODEL_LOD_CHAIN", field,
+                    "LOD chains require a unique increasing base primitive and at least two levels.");
+                continue;
+            }
+            havePreviousBase = true;
+            previousBase = chain.basePrimitiveIndex;
+            const CookedModelPrimitive& base =
+                manifest.primitives[chain.basePrimitiveIndex];
+            float previousError = -1.0f;
+            uint64_t previousIndexCount = 0;
+            for (size_t levelIndex = 0; levelIndex < chain.levels.size();
+                    ++levelIndex) {
+                const CookedModelLodLevel& level = chain.levels[levelIndex];
+                const std::string levelField = field + "/levels/" +
+                    std::to_string(levelIndex);
+                if (level.primitiveIndex >= manifest.primitives.size() ||
+                    !std::isfinite(level.geometricError) ||
+                    level.geometricError < 0.0f ||
+                    level.geometricError < previousError ||
+                    (levelIndex == 0u &&
+                        (level.primitiveIndex != chain.basePrimitiveIndex ||
+                            level.geometricError != 0.0f))) {
+                    addError(diagnostics, "MODEL_LOD_LEVEL", levelField,
+                        "LOD levels must be in range, finest-to-coarsest, begin at the base primitive, and have monotonic finite error.");
+                    continue;
+                }
+                if (lodMembership[level.primitiveIndex] != -1) {
+                    addError(diagnostics, "MODEL_LOD_LEVEL_OWNERSHIP",
+                        levelField,
+                        "A primitive may belong to exactly one LOD chain level.");
+                    continue;
+                }
+                lodMembership[level.primitiveIndex] =
+                    static_cast<int64_t>(chainIndex);
+                const CookedModelPrimitive& primitive =
+                    manifest.primitives[level.primitiveIndex];
+                if (primitive.lodSection != kCookedModelLodSection ||
+                    primitive.sourcePrimitiveGuid != base.sourcePrimitiveGuid ||
+                    primitive.sourceNode != base.sourceNode ||
+                    primitive.sourceMesh != base.sourceMesh ||
+                    primitive.sourcePrimitive != base.sourcePrimitive ||
+                    primitive.materialGuid != base.materialGuid ||
+                    primitive.topology != base.topology ||
+                    primitive.winding != base.winding ||
+                    primitive.coverage != base.coverage ||
+                    primitive.attributeMask != base.attributeMask ||
+                    primitive.flags != base.flags ||
+                    primitive.transparency != base.transparency ||
+                    primitive.bounds != base.bounds) {
+                    addError(diagnostics, "MODEL_LOD_SEMANTICS", levelField,
+                        "LOD children must preserve source, material, raster, transparency, attribute, and conservative-bound semantics.");
+                }
+                if (levelIndex != 0u &&
+                    primitive.indexCount >= previousIndexCount) {
+                    addError(diagnostics, "MODEL_LOD_REDUCTION", levelField,
+                        "Every coarser LOD must contain fewer indices than the preceding level.");
+                }
+                previousError = level.geometricError;
+                previousIndexCount = primitive.indexCount;
+            }
+        }
+        for (size_t primitiveIndex = 0;
+                primitiveIndex < manifest.primitives.size(); ++primitiveIndex) {
+            const bool referencesLod = manifest.primitives[primitiveIndex].
+                lodSection == kCookedModelLodSection;
+            if (referencesLod != (lodMembership[primitiveIndex] != -1)) {
+                addError(diagnostics, "MODEL_LOD_LEVEL_COVERAGE",
+                    "/primitives/" + std::to_string(primitiveIndex) +
+                        "/lod_section",
+                    "Every primitive that references the LOD section must occur in exactly one chain, and every chain level must reference it.");
+            }
+        }
         return diagnostics;
     }
 
-    CookProduct makeCookedModelProduct(const CookedModelProductData& data) {
+    CookProduct makeCookedModelProduct(const CookedModelProductData& data,
+        uint32_t outputSchemaVersion) {
         CookProduct product{
             .artifactType = "iridium.model",
-            .artifactSchemaVersion = kCookedModelSchemaVersion,
+            .artifactSchemaVersion = outputSchemaVersion,
             .diagnostics = validateModelProduct(data),
         };
+        if ((outputSchemaVersion != kCookedModelSchemaVersion &&
+                outputSchemaVersion != kPreviousCookedModelSchemaVersion) ||
+            (outputSchemaVersion == kPreviousCookedModelSchemaVersion &&
+                !data.lodChains.empty())) {
+            addError(product.diagnostics, "MODEL_OUTPUT_SCHEMA", "/schema",
+                "Only schemas 6 and 7 can be written; LOD chains require schema 7.");
+        }
         if (hasCookErrors(product.diagnostics)) return product;
+        GeometryArenaBuildResult arena = buildModelGeometryArena(data);
+        if (!arena.valid()) {
+            addError(product.diagnostics, "MODEL_INDEX_ARENA_BUILD", "/indices",
+                "Canonical raster indices cannot be packed into geometry arena "
+                "ABI " + std::to_string(GeometryArenaAbiVersion) + ".");
+            return product;
+        }
+        CookedModelManifest packedManifest = data.manifest;
+        packedManifest.schemaVersion = outputSchemaVersion;
+        for (CookedModelPrimitive& primitive : packedManifest.primitives) {
+            const GeometryArenaPrimitiveIdentity identity{
+                primitive.sourcePrimitiveGuid, primitive.primitiveGuid };
+            const auto found = std::ranges::lower_bound(
+                arena.data->primitives, identity, {},
+                &GeometryArenaPrimitiveRange::identity);
+            if (found == arena.data->primitives.end() ||
+                    found->identity != identity) {
+                addError(product.diagnostics, "MODEL_INDEX_ARENA_MAPPING",
+                    "/indices", "Packed primitive identity is missing.");
+                return product;
+            }
+            primitive.indexFormat = found->indexStream ==
+                    GeometryArenaIndexStream::UInt16
+                ? ModelIndexFormat::UInt16 : ModelIndexFormat::UInt32;
+        }
         product.sections = {
             {
                 .id = kCookedModelManifestSection,
-                .schemaVersion = kCookedModelSchemaVersion,
+                .schemaVersion = outputSchemaVersion,
                 .alignment = 8,
-                .bytes = serializeModelManifest(data.manifest),
+                .bytes = serializeModelManifest(packedManifest),
             },
             {
                 .id = kCookedModelMaterialSection,
@@ -1323,9 +1824,9 @@ namespace Iridium {
             },
             {
                 .id = kCookedModelIndexSection,
-                .schemaVersion = 1,
+                .schemaVersion = kCookedModelIndexSectionSchemaVersion,
                 .alignment = 4,
-                .bytes = serializeModelIndices(data.indices),
+                .bytes = serializeModelIndexArena(*arena.data),
             },
             {
                 .id = kCookedModelRtPositionSection,
@@ -1340,14 +1841,27 @@ namespace Iridium {
                 .bytes = serializeModelIndices(data.rtIndices),
             },
         };
+        if (!data.lodChains.empty()) {
+            product.sections.push_back({
+                .id = kCookedModelLodSection,
+                .schemaVersion = kCookedModelLodSectionSchemaVersion,
+                .alignment = 8,
+                .bytes = serializeModelLodChains(data.lodChains),
+            });
+        }
         return product;
     }
 
     CookedModelReadResult readCookedModelProduct(
         const CookedArtifact& artifact) {
         CookedModelReadResult result;
+        const bool legacyArtifact = artifact.artifactSchemaVersion ==
+            kLegacyCookedModelSchemaVersion;
+        const bool previousArtifact = artifact.artifactSchemaVersion ==
+            kPreviousCookedModelSchemaVersion;
         if (artifact.artifactType != "iridium.model" ||
-            artifact.artifactSchemaVersion != kCookedModelSchemaVersion) {
+            (!legacyArtifact && !previousArtifact && artifact.artifactSchemaVersion !=
+                kCookedModelSchemaVersion)) {
             addError(result.diagnostics, "MODEL_ARTIFACT_TYPE", "/",
                 "Cooked artifact is not a supported model product.");
             return result;
@@ -1373,6 +1887,7 @@ namespace Iridium {
             section(kCookedModelRtPositionSection);
         const CookSection* rtIndexSection =
             section(kCookedModelRtIndexSection);
+        const CookSection* lodSection = section(kCookedModelLodSection);
         if (!manifestSection || !materialSection ||
             !textureViewSection ||
             !vertexSection || !indexSection ||
@@ -1381,15 +1896,20 @@ namespace Iridium {
                 "Cooked model artifact is missing a required typed section.");
             return result;
         }
-        if (manifestSection->schemaVersion != kCookedModelSchemaVersion ||
+        if (manifestSection->schemaVersion !=
+                artifact.artifactSchemaVersion ||
             materialSection->schemaVersion !=
                 kMaterialSectionSchemaVersion ||
             textureViewSection->schemaVersion !=
                 kTextureViewSectionSchemaVersion ||
             vertexSection->schemaVersion != 1 ||
-            indexSection->schemaVersion != 1 ||
+            indexSection->schemaVersion != (legacyArtifact ? 1u :
+                kCookedModelIndexSectionSchemaVersion) ||
             rtPositionSection->schemaVersion != 1 ||
-            rtIndexSection->schemaVersion != 1) {
+            rtIndexSection->schemaVersion != 1 ||
+            ((legacyArtifact || previousArtifact) && lodSection) ||
+            (lodSection && lodSection->schemaVersion !=
+                kCookedModelLodSectionSchemaVersion)) {
             addError(result.diagnostics, "MODEL_SECTION_SCHEMA", "/",
                 "Cooked model section schema is unsupported.");
             return result;
@@ -1397,6 +1917,11 @@ namespace Iridium {
 
         auto manifest =
             readModelManifest(manifestSection->bytes, result.diagnostics);
+        if (manifest && manifest->schemaVersion != artifact.artifactSchemaVersion) {
+            addError(result.diagnostics, "MODEL_MANIFEST_ARTIFACT_SCHEMA", "/schema",
+                "Model manifest schema must match its artifact and section schema.");
+            return result;
+        }
         auto materials =
             readModelMaterials(materialSection->bytes,
                 result.diagnostics);
@@ -1405,15 +1930,25 @@ namespace Iridium {
                 result.diagnostics);
         auto vertices =
             readModelVertices(vertexSection->bytes, result.diagnostics);
-        auto indices =
-            readModelIndices(indexSection->bytes, result.diagnostics);
+        std::optional<std::vector<uint32_t>> indices;
+        if (manifest) {
+            indices = legacyArtifact
+                ? readModelIndices(indexSection->bytes, result.diagnostics)
+                : readModelIndexArena(indexSection->bytes, *manifest,
+                    result.diagnostics);
+        }
         auto rtPositions =
             readModelRtPositions(rtPositionSection->bytes, result.diagnostics);
         auto rtIndices = readModelIndices(
             rtIndexSection->bytes, result.diagnostics, "/rt_indices");
+        std::optional<std::vector<CookedModelLodChain>> lodChains =
+            lodSection
+                ? readModelLodChains(lodSection->bytes, result.diagnostics)
+                : std::optional<std::vector<CookedModelLodChain>>(
+                    std::vector<CookedModelLodChain>{});
         if (!manifest || !materials || !textureViews ||
             !vertices || !indices || !rtPositions ||
-            !rtIndices || hasCookErrors(result.diagnostics)) {
+            !rtIndices || !lodChains || hasCookErrors(result.diagnostics)) {
             return result;
         }
         CookedModelProductData data{
@@ -1424,7 +1959,30 @@ namespace Iridium {
             .indices = std::move(*indices),
             .rtPositions = std::move(*rtPositions),
             .rtIndices = std::move(*rtIndices),
+            .lodChains = std::move(*lodChains),
         };
+        if (legacyArtifact || previousArtifact)
+            data.manifest.schemaVersion = kCookedModelSchemaVersion;
+        if (legacyArtifact) {
+            GeometryArenaBuildResult migrated = buildModelGeometryArena(data);
+            if (!migrated.valid()) {
+                addError(result.diagnostics, "MODEL_INDEX_ARENA_MIGRATION",
+                    "/indices", "Legacy schema-5 raster indices cannot migrate "
+                    "to the current geometry-arena ABI.");
+                return result;
+            }
+            for (CookedModelPrimitive& primitive :
+                    data.manifest.primitives) {
+                const GeometryArenaPrimitiveIdentity identity{
+                    primitive.sourcePrimitiveGuid, primitive.primitiveGuid };
+                const auto found = std::ranges::lower_bound(
+                    migrated.data->primitives, identity, {},
+                    &GeometryArenaPrimitiveRange::identity);
+                primitive.indexFormat = found->indexStream ==
+                        GeometryArenaIndexStream::UInt16
+                    ? ModelIndexFormat::UInt16 : ModelIndexFormat::UInt32;
+            }
+        }
         std::vector<CookDiagnostic> validation =
             validateModelProduct(data);
         result.diagnostics.insert(result.diagnostics.end(),

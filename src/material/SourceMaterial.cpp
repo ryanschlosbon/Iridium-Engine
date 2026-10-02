@@ -458,7 +458,34 @@ namespace Iridium {
         });
     }
 
+    static SourceMaterialDocument importGltfSourceMaterialRoot(const Json& root,
+        const std::filesystem::path& path);
+
     SourceMaterialDocument importGltfSourceMaterials(const std::filesystem::path& path) {
+        try {
+            return importGltfSourceMaterialRoot(readRoot(path), path);
+        } catch (const std::exception& exception) {
+            std::vector<SourceMaterialDiagnostic> diagnostics;
+            diagnostic(diagnostics, SourceDiagnosticSeverity::Error,
+                "GLTF_SOURCE_INVALID", "/", exception.what());
+            return SourceMaterialDocument(path, {}, std::move(diagnostics), {}, {});
+        }
+    }
+
+    SourceMaterialDocument importGltfSourceMaterialsJson(
+        std::string_view json, const std::filesystem::path& path) {
+        try {
+            return importGltfSourceMaterialRoot(Json::parse(json), path);
+        } catch (const std::exception& exception) {
+            std::vector<SourceMaterialDiagnostic> diagnostics;
+            diagnostic(diagnostics, SourceDiagnosticSeverity::Error,
+                "GLTF_SOURCE_INVALID", "/", exception.what());
+            return SourceMaterialDocument(path, {}, std::move(diagnostics), {}, {});
+        }
+    }
+
+    static SourceMaterialDocument importGltfSourceMaterialRoot(const Json& root,
+        const std::filesystem::path& path) {
         std::vector<SourceMaterial> materials;
         std::vector<SourceMaterialDiagnostic> diagnostics;
         std::vector<std::string> used;
@@ -466,7 +493,6 @@ namespace Iridium {
         std::vector<SourceMaterialVariant> variants;
         std::vector<SourceMaterialVariantMapping> variantMappings;
         try {
-            const Json root = readRoot(path);
             if (!root.is_object()) throw std::runtime_error("glTF root must be an object");
             if (!root.contains("asset") || root.at("asset").value("version", "") != "2.0")
                 diagnostic(diagnostics, SourceDiagnosticSeverity::Error, "GLTF_VERSION", "/asset/version",

@@ -151,6 +151,11 @@ namespace Iridium {
                     vkDestroyPipeline(device_, record->pipeline, nullptr);
                     record->pipeline = VK_NULL_HANDLE;
                 }
+                if (record->gpuSceneIndirectPipeline != VK_NULL_HANDLE) {
+                    vkDestroyPipeline(device_,
+                        record->gpuSceneIndirectPipeline, nullptr);
+                    record->gpuSceneIndirectPipeline = VK_NULL_HANDLE;
+                }
             }
             pipelineRecords_.free(handle);
         }
@@ -175,6 +180,16 @@ namespace Iridium {
         const VulkanPipelineTarget& target = getTarget(desc.renderPass);
         VulkanPipelineRecord record{};
         record.pipeline = createPipeline(desc, target);
+        if (desc.renderPass == RenderPassClass::GBuffer) {
+            try {
+                record.gpuSceneIndirectPipeline = createPipeline(desc, target,
+                    "assets/shaders/gpu_scene_material_vert.spv");
+            }
+            catch (...) {
+                vkDestroyPipeline(device_, record.pipeline, nullptr);
+                throw;
+            }
+        }
         record.pipelineLayout = target.pipelineLayout;
         record.renderPass = desc.renderPass;
 
@@ -183,6 +198,9 @@ namespace Iridium {
             pipelineMap_.emplace(desc, handle);
         } catch (...) {
             vkDestroyPipeline(device_, record.pipeline, nullptr);
+            if (record.gpuSceneIndirectPipeline != VK_NULL_HANDLE)
+                vkDestroyPipeline(device_,
+                    record.gpuSceneIndirectPipeline, nullptr);
             pipelineRecords_.free(handle);
             throw;
         }
@@ -194,7 +212,7 @@ namespace Iridium {
     }
 
     VkPipeline VulkanPipelineLibrary::createPipeline(const PipelineStateDesc& desc,
-        const VulkanPipelineTarget& target) {
+        const VulkanPipelineTarget& target, const char* vertexShaderPath) {
         const char* fragmentShaderPath = nullptr;
         switch (desc.shaderProgram) {
         case ShaderProgram::CanonicalPbrGBuffer:
@@ -217,7 +235,6 @@ namespace Iridium {
             break;
         }
 
-        const char* vertexShaderPath = "assets/shaders/canonical_material_vert.spv";
         const std::vector<char> vertexShaderCode = readFile(
             std::string(PROJECT_ROOT_DIR) + vertexShaderPath);
         const std::vector<char> fragmentShaderCode = readFile(std::string(PROJECT_ROOT_DIR) + fragmentShaderPath);

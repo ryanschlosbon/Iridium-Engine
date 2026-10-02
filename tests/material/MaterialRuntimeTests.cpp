@@ -448,6 +448,14 @@ namespace {
         CHECK(document.at("compiled").at("texture_operations").size() == 3);
         CHECK(document.at("compiled").at("transparency")
             .at("resolved_class") == "none");
+        CHECK(document.at("compiled").at("transparency")
+            .at("execution_route") == "opaque");
+        CHECK(document.at("compiled").at("transparency")
+            .at("topology_status") == "not-required");
+        CHECK(document.at("compiled").at("transparency")
+            .at("fallback_reason") == "none");
+        CHECK(document.at("compiled").at("transparency")
+            .at("fallback_applied") == false);
         CHECK(document.at("instance").at("overrides").at(0) == "metallic");
         CHECK(document.at("instance").at("texture_bindings").at(0).at("sampler_index") == 4);
         CHECK(document.at("packed").at("byte_size") == sizeof(PackedGpuMaterial));

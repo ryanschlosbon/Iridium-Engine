@@ -1,8 +1,11 @@
 #include "assets/cooker/CookedArtifact.h"
+#include "assets/model/ModelLodGenerator.h"
 #include "assets/model/ModelProduct.h"
+#include "assets/model/ModelRuntimeProduct.h"
 #include "material/MaterialCompiler.h"
 #include "material/SourceMaterial.h"
 #include "renderer/rhi/Mesh.h"
+#include "utils/Sha256.h"
 
 #include <algorithm>
 #include <array>
@@ -57,17 +60,61 @@ namespace {
         return "invalid";
     }
 
+    const char* lodTopologyFailureName(size_t index) {
+        switch (static_cast<ModelLodTopologyFailure>(index)) {
+        case ModelLodTopologyFailure::MixedComponentTriangle:
+            return "mixed_component_triangle";
+        case ModelLodTopologyFailure::NonManifoldEdge:
+            return "nonmanifold_edge";
+        case ModelLodTopologyFailure::InconsistentEdgeOrientation:
+            return "inconsistent_edge_orientation";
+        case ModelLodTopologyFailure::BoundaryDegree:
+            return "boundary_degree";
+        case ModelLodTopologyFailure::VertexLinkDegree:
+            return "vertex_link_degree";
+        case ModelLodTopologyFailure::VertexLinkDisconnected:
+            return "vertex_link_disconnected";
+        case ModelLodTopologyFailure::DisconnectedComponent:
+            return "disconnected_component";
+        case ModelLodTopologyFailure::Count: break;
+        }
+        return "invalid";
+    }
+
+    const char* lodLevelOutcomeName(size_t index) {
+        switch (static_cast<ModelLodLevelOutcome>(index)) {
+        case ModelLodLevelOutcome::NotAttempted: return "not_attempted";
+        case ModelLodLevelOutcome::Accepted: return "accepted";
+        case ModelLodLevelOutcome::OrientationRejected:
+            return "orientation_rejected";
+        case ModelLodLevelOutcome::NoReduction: return "no_reduction";
+        case ModelLodLevelOutcome::BelowMinimumReduction:
+            return "below_minimum_reduction";
+        case ModelLodLevelOutcome::CorrespondenceRejected:
+            return "correspondence_rejected";
+        case ModelLodLevelOutcome::ReducedTopologyInvalid:
+            return "reduced_topology_invalid";
+        case ModelLodLevelOutcome::TopologySignatureMismatch:
+            return "topology_signature_mismatch";
+        case ModelLodLevelOutcome::Count: break;
+        }
+        return "invalid";
+    }
+
 } // namespace
 
 int main(int argc, char** argv) {
     if (argc != 2 && argc != 4) {
         std::cerr << "Usage: IridiumInspectCookedModel "
-            "<artifact> [--material-index N | --verify-source gltf]\n";
+            "<artifact> [--material-index N | --verify-source gltf | "
+            "--lod-generation-analysis locked|boundary|boundary-fans|"
+            "transactional|topology-transactional]\n";
         return 1;
     }
     try {
         std::optional<uint32_t> selectedIndex;
         std::optional<std::filesystem::path> verificationSource;
+        std::optional<std::string> lodGenerationAnalysisMode;
         if (argc == 4) {
             const std::string_view option(argv[2]);
             if (option == "--material-index") {
@@ -76,6 +123,16 @@ int main(int argc, char** argv) {
             }
             else if (option == "--verify-source") {
                 verificationSource = argv[3];
+            }
+            else if (option == "--lod-generation-analysis") {
+                const std::string_view mode(argv[3]);
+                if (mode != "locked" && mode != "boundary" &&
+                    mode != "boundary-fans" && mode != "transactional" &&
+                    mode != "topology-transactional")
+                    throw std::runtime_error(
+                        "LOD generation analysis mode must be locked, boundary, "
+                        "boundary-fans, transactional, or topology-transactional.");
+                lodGenerationAnalysisMode = mode;
             }
             else {
                 throw std::runtime_error(
@@ -96,6 +153,12 @@ int main(int argc, char** argv) {
             throw std::runtime_error(
                 "Typed cooked model validation failed.");
         }
+        const RuntimeModelCpuResult runtime =
+            makeRuntimeModelCpuData(*model.data, false);
+        if (!runtime.valid()) {
+            throw std::runtime_error(
+                "Runtime geometry-arena conversion failed.");
+        }
         uint64_t texturePayloadBytes = 0;
         for (const CookedModelTextureView&
                 view : model.data->textureViews) {
@@ -105,8 +168,7 @@ int main(int argc, char** argv) {
         const uint64_t gpuUploadBytes =
             model.data->vertices.size() *
                 sizeof(Vertex) +
-            model.data->indices.size() *
-                sizeof(uint32_t) +
+            runtime.data->geometryArena.stats.arenaIndexBytes +
             model.data->materials.size() *
                 sizeof(PackedGpuMaterial) +
             texturePayloadBytes;
@@ -151,8 +213,20 @@ int main(int argc, char** argv) {
                 model.data->textureViews.size() },
             { "primitives",
                 model.data->manifest.primitives.size() },
+            { "canonicalPrimitives", runtime.data->primitives.size() },
+            { "lodChainCount", model.data->lodChains.size() },
             { "vertices", model.data->vertices.size() },
             { "indices", model.data->indices.size() },
+            { "sourceIndexBytes",
+                runtime.data->geometryArena.stats.sourceIndexBytes },
+            { "arenaIndexBytes",
+                runtime.data->geometryArena.stats.arenaIndexBytes },
+            { "arenaSavedIndexBytes",
+                runtime.data->geometryArena.stats.savedIndexBytes },
+            { "arenaUInt16Indices",
+                runtime.data->geometryArena.stats.uint16IndexCount },
+            { "arenaUInt32Indices",
+                runtime.data->geometryArena.stats.uint32IndexCount },
             { "texturePayloadBytes",
                 texturePayloadBytes },
             { "gpuUploadBytes",
@@ -160,6 +234,289 @@ int main(int argc, char** argv) {
             { "boundsMin", boundsMin },
             { "boundsMax", boundsMax },
         };
+        const std::vector<bool> lodChildMask =
+            makeCookedModelLodChildMask(*model.data);
+        uint64_t canonicalTriangles = 0;
+        uint64_t opaqueTrianglePrimitives = 0;
+        uint64_t opaqueTriangles = 0;
+        uint64_t nonOpaquePrimitives = 0;
+        uint64_t nonOpaqueTriangles = 0;
+        uint64_t nonTrianglePrimitives = 0;
+        uint64_t generatedBasePrimitives = 0;
+        uint64_t generatedBaseTriangles = 0;
+        uint64_t unchainedOpaquePrimitives = 0;
+        uint64_t unchainedOpaqueTriangles = 0;
+        uint64_t unchainedBelowMinimumPrimitives = 0;
+        uint64_t unchainedBelowMinimumTriangles = 0;
+        uint64_t unchainedAtLeastMinimumPrimitives = 0;
+        uint64_t unchainedAtLeastMinimumTriangles = 0;
+        std::array<uint64_t, 4> opaquePrimitiveBins{};
+        std::array<uint64_t, 4> opaqueTriangleBins{};
+        for (size_t primitiveIndex = 0;
+                primitiveIndex < model.data->manifest.primitives.size();
+                ++primitiveIndex) {
+            if (lodChildMask[primitiveIndex]) continue;
+            const CookedModelPrimitive& primitive =
+                model.data->manifest.primitives[primitiveIndex];
+            const uint64_t triangles = primitive.indexCount / 3u;
+            canonicalTriangles += triangles;
+            if (primitive.topology != ModelPrimitiveTopology::Triangles) {
+                ++nonTrianglePrimitives;
+                continue;
+            }
+            if (primitive.coverage != ModelCoverage::Opaque) {
+                ++nonOpaquePrimitives;
+                nonOpaqueTriangles += triangles;
+                continue;
+            }
+            ++opaqueTrianglePrimitives;
+            opaqueTriangles += triangles;
+            const size_t bin = triangles < 64u ? 0u :
+                triangles < 256u ? 1u : triangles < 1024u ? 2u : 3u;
+            ++opaquePrimitiveBins[bin];
+            opaqueTriangleBins[bin] += triangles;
+            if (primitive.lodSection != kNoModelSection) {
+                ++generatedBasePrimitives;
+                generatedBaseTriangles += triangles;
+                continue;
+            }
+            ++unchainedOpaquePrimitives;
+            unchainedOpaqueTriangles += triangles;
+            if (triangles < 64u) {
+                ++unchainedBelowMinimumPrimitives;
+                unchainedBelowMinimumTriangles += triangles;
+            }
+            else {
+                ++unchainedAtLeastMinimumPrimitives;
+                unchainedAtLeastMinimumTriangles += triangles;
+            }
+        }
+        output["lodCoverage"] = {
+            { "canonicalTriangles", canonicalTriangles },
+            { "opaqueTrianglePrimitives", opaqueTrianglePrimitives },
+            { "opaqueTriangles", opaqueTriangles },
+            { "nonOpaquePrimitives", nonOpaquePrimitives },
+            { "nonOpaqueTriangles", nonOpaqueTriangles },
+            { "nonTrianglePrimitives", nonTrianglePrimitives },
+            { "generatedBasePrimitives", generatedBasePrimitives },
+            { "generatedBaseTriangles", generatedBaseTriangles },
+            { "unchainedOpaquePrimitives", unchainedOpaquePrimitives },
+            { "unchainedOpaqueTriangles", unchainedOpaqueTriangles },
+            { "unchainedBelowMinimumPrimitives",
+                unchainedBelowMinimumPrimitives },
+            { "unchainedBelowMinimumTriangles", unchainedBelowMinimumTriangles },
+            { "unchainedAtLeastMinimumPrimitives",
+                unchainedAtLeastMinimumPrimitives },
+            { "unchainedAtLeastMinimumTriangles", unchainedAtLeastMinimumTriangles },
+            { "opaqueTriangleBins", {
+                { "lt64", {
+                    { "primitives", opaquePrimitiveBins[0] },
+                    { "triangles", opaqueTriangleBins[0] } } },
+                { "64to255", {
+                    { "primitives", opaquePrimitiveBins[1] },
+                    { "triangles", opaqueTriangleBins[1] } } },
+                { "256to1023", {
+                    { "primitives", opaquePrimitiveBins[2] },
+                    { "triangles", opaqueTriangleBins[2] } } },
+                { "ge1024", {
+                    { "primitives", opaquePrimitiveBins[3] },
+                    { "triangles", opaqueTriangleBins[3] } } },
+            } },
+        };
+        if (lodGenerationAnalysisMode) {
+            CookedModelProductData analysisProduct = *model.data;
+            analysisProduct.manifest.primitives.resize(
+                runtime.data->primitives.size());
+            uint64_t canonicalVertexEnd = 0;
+            uint64_t canonicalIndexEnd = 0;
+            for (CookedModelPrimitive& primitive :
+                    analysisProduct.manifest.primitives) {
+                canonicalVertexEnd = std::max(canonicalVertexEnd,
+                    primitive.firstVertex + primitive.vertexCount);
+                canonicalIndexEnd = std::max(canonicalIndexEnd,
+                    primitive.firstIndex + primitive.indexCount);
+                primitive.lodSection = kNoModelSection;
+            }
+            analysisProduct.vertices.resize(
+                static_cast<size_t>(canonicalVertexEnd));
+            analysisProduct.indices.resize(
+                static_cast<size_t>(canonicalIndexEnd));
+            analysisProduct.lodChains.clear();
+            ModelLodGenerationSettings analysisSettings;
+            analysisSettings.allowBoundaryEdgeCollapse =
+                *lodGenerationAnalysisMode != "locked";
+            analysisSettings.splitNonManifoldBoundaryFans =
+                *lodGenerationAnalysisMode == "boundary-fans" ||
+                *lodGenerationAnalysisMode == "transactional" ||
+                *lodGenerationAnalysisMode == "topology-transactional";
+            analysisSettings.preventOrientationChangingMerges =
+                *lodGenerationAnalysisMode == "transactional" ||
+                *lodGenerationAnalysisMode == "topology-transactional";
+            analysisSettings.preventTopologyChangingMerges =
+                *lodGenerationAnalysisMode == "topology-transactional";
+            ModelLodGenerationStatistics statistics;
+            const size_t generatedChains = appendGeneratedModelLods(
+                analysisProduct, analysisSettings, {}, &statistics);
+            Json topologyFailures = Json::object();
+            Json reducedTopologyFailures = Json::object();
+            for (size_t index = 0;
+                    index < ModelLodTopologyFailureCount; ++index) {
+                topologyFailures[lodTopologyFailureName(index)] = {
+                    { "primitives",
+                        statistics.sourceTopologyFailurePrimitiveCounts[index] },
+                    { "triangles",
+                        statistics.sourceTopologyFailureTriangleCounts[index] },
+                };
+                reducedTopologyFailures[lodTopologyFailureName(index)] =
+                    statistics.reducedTopologyFailureLevelCounts[index];
+            }
+            Json levelOutcomes = Json::array();
+            for (size_t budget = 0; budget < ModelLodBudgetCount; ++budget) {
+                Json outcomes = Json::object();
+                for (size_t outcome = 0;
+                        outcome < ModelLodLevelOutcomeCount; ++outcome) {
+                    outcomes[lodLevelOutcomeName(outcome)] = {
+                        { "primitives",
+                            statistics.levelOutcomeCounts[budget][outcome] },
+                        { "triangles",
+                            statistics.levelOutcomeTriangleCounts[budget][outcome] },
+                    };
+                }
+                levelOutcomes.push_back({
+                    { "budgetIndex", budget },
+                    { "relativeError",
+                        analysisSettings.maximumRelativeErrors[budget] },
+                    { "outcomes", std::move(outcomes) },
+                });
+            }
+            Json noAcceptedTerminalOutcomes = Json::object();
+            for (size_t outcome = 0;
+                    outcome < ModelLodLevelOutcomeCount; ++outcome) {
+                noAcceptedTerminalOutcomes[lodLevelOutcomeName(outcome)] = {
+                    { "primitives", statistics
+                        .noAcceptedTerminalOutcomePrimitiveCounts[outcome] },
+                    { "triangles", statistics
+                        .noAcceptedTerminalOutcomeTriangleCounts[outcome] },
+                };
+            }
+            output["lodGenerationAnalysis"] = {
+                { "mode", *lodGenerationAnalysisMode },
+                { "generatedChains", generatedChains },
+                { "canonicalPrimitives", statistics.canonicalPrimitiveCount },
+                { "canonicalTriangles", statistics.canonicalTriangleCount },
+                { "skippedNonOpaquePrimitives",
+                    statistics.skippedNonOpaquePrimitiveCount },
+                { "skippedNonTrianglePrimitives",
+                    statistics.skippedNonTrianglePrimitiveCount },
+                { "attemptedPrimitives", statistics.attemptedPrimitiveCount },
+                { "attemptedTriangles", statistics.attemptedTriangleCount },
+                { "belowMinimumPrimitives",
+                    statistics.belowMinimumPrimitiveCount },
+                { "belowMinimumTriangles",
+                    statistics.belowMinimumTriangleCount },
+                { "invalidExtentPrimitives",
+                    statistics.invalidExtentPrimitiveCount },
+                { "invalidExtentTriangles",
+                    statistics.invalidExtentTriangleCount },
+                { "degenerateSourcePrimitives",
+                    statistics.degenerateSourcePrimitiveCount },
+                { "degenerateSourceTriangles",
+                    statistics.degenerateSourceTriangleCount },
+                { "invalidSourceTopologyPrimitives",
+                    statistics.invalidSourceTopologyPrimitiveCount },
+                { "invalidSourceTopologyTriangles",
+                    statistics.invalidSourceTopologyTriangleCount },
+                { "sourceTopologyFailures", std::move(topologyFailures) },
+                { "splitBoundaryFanVertices",
+                    statistics.splitBoundaryFanVertexCount },
+                { "duplicatedBoundaryFanVertices",
+                    statistics.duplicatedBoundaryFanVertexCount },
+                { "noAcceptedLevelPrimitives",
+                    statistics.noAcceptedLevelPrimitiveCount },
+                { "noAcceptedLevelTriangles",
+                    statistics.noAcceptedLevelTriangleCount },
+                { "noAcceptedTerminalOutcomes",
+                    std::move(noAcceptedTerminalOutcomes) },
+                { "generatedBaseTriangles",
+                    statistics.generatedBaseTriangleCount },
+                { "generatedLevels", statistics.generatedLevelCount },
+                { "levelOutcomes", std::move(levelOutcomes) },
+                { "edgeConsiderations", statistics.edgeConsiderationCount },
+                { "acceptedMerges", statistics.acceptedMergeCount },
+                { "orientationRejectedMerges",
+                    statistics.orientationRejectedEdgeCount },
+                { "correspondenceRejectedMerges",
+                    statistics.correspondenceRejectedEdgeCount },
+                { "topologyRejectedMerges",
+                    statistics.topologyRejectedEdgeCount },
+                { "boundaryRejectedEdges",
+                    statistics.boundaryRejectedEdgeCount },
+                { "attributeRejectedEdges",
+                    statistics.attributeRejectedEdgeCount },
+                { "budgetRejectedEdges", statistics.budgetRejectedEdgeCount },
+                { "orientationRejectedLevels",
+                    statistics.orientationRejectedLevelCount },
+                { "noReductionLevels", statistics.noReductionLevelCount },
+                { "belowMinimumReductionLevels",
+                    statistics.belowMinimumReductionLevelCount },
+                { "correspondenceRejectedLevels",
+                    statistics.correspondenceRejectedLevelCount },
+                { "topologyRejectedLevels",
+                    statistics.topologyRejectedLevelCount },
+                { "reducedTopologyInvalidLevels",
+                    statistics.reducedTopologyInvalidLevelCount },
+                { "topologySignatureMismatchLevels",
+                    statistics.topologySignatureMismatchLevelCount },
+                { "topologyComponentMismatchLevels",
+                    statistics.topologyComponentMismatchLevelCount },
+                { "topologyEulerMismatchLevels",
+                    statistics.topologyEulerMismatchLevelCount },
+                { "topologyBoundaryMismatchLevels",
+                    statistics.topologyBoundaryMismatchLevelCount },
+                { "reducedTopologyFailures",
+                    std::move(reducedTopologyFailures) },
+            };
+        }
+        output["sections"] = Json::array();
+        for (const CookSection& section : artifact.artifact->sections) {
+            output["sections"].push_back({
+                { "id", section.id }, { "schema", section.schemaVersion },
+                { "bytes", section.bytes.size() },
+                { "sha256", sha256(section.bytes) },
+            });
+        }
+        output["textureViewProducts"] = Json::array();
+        for (const CookedModelTextureView& view : model.data->textureViews) {
+            output["textureViewProducts"].push_back({
+                { "sourceImageIndex", view.sourceImageIndex },
+                { "textureGuid", view.textureGuid.toString() },
+                { "viewKey", view.viewKey },
+                { "manifestSha256", sha256(serializeTextureManifest(view.manifest)) },
+                { "payloadSha256", sha256(view.payload) },
+            });
+        }
+        output["lodChains"] = Json::array();
+        for (const CookedModelLodChain& chain : model.data->lodChains) {
+            const CookedModelPrimitive& base =
+                model.data->manifest.primitives[chain.basePrimitiveIndex];
+            Json levels = Json::array();
+            for (const CookedModelLodLevel& level : chain.levels) {
+                const CookedModelPrimitive& primitive =
+                    model.data->manifest.primitives[level.primitiveIndex];
+                levels.push_back({
+                    { "primitiveGuid", primitive.primitiveGuid.toString() },
+                    { "geometricError", level.geometricError },
+                    { "triangles", primitive.indexCount / 3u },
+                    { "vertices", primitive.vertexCount },
+                });
+            }
+            output["lodChains"].push_back({
+                { "sourcePrimitiveGuid", base.sourcePrimitiveGuid.toString() },
+                { "basePrimitiveGuid", base.primitiveGuid.toString() },
+                { "materialGuid", base.materialGuid.toString() },
+                { "levels", std::move(levels) },
+            });
+        }
         if (selectedIndex) {
             const auto found = std::ranges::find_if(
                 model.data->materials,

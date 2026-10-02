@@ -207,6 +207,8 @@ namespace Iridium {
             presentQueue_ = VK_NULL_HANDLE;
             graphicsFamily_ = 0;
             currentFrame_ = 0;
+            lastSubmittedSerial_ = 0;
+            completedSerial_ = 0;
             acquireSuboptimal_ = false;
             cpuProfiler_ = nullptr;
             frameGpuRange_ = {};
@@ -243,6 +245,7 @@ namespace Iridium {
             throwVkError("vkWaitForFences", result);
         }
         frame.fenceInFlight = false;
+        completedSerial_ = (std::max)(completedSerial_, frame.submissionSerial);
         collectGpuResults(frame);
         frame.deferredDeletes.flush();
 
@@ -366,6 +369,7 @@ namespace Iridium {
                 throwVkError("vkQueueSubmit", result);
             }
             frame.fenceInFlight = true;
+            frame.submissionSerial = ++lastSubmittedSerial_;
             imagesInFlight_[imageIndex] = frame.inFlight;
             frame.gpuResultsPending = frame.profileFrameId != 0 &&
                 frame.timestampQueryCount != 0;
@@ -445,6 +449,8 @@ namespace Iridium {
         }
         for (VulkanFrameContext& frame : frames_) {
             frame.fenceInFlight = false;
+            completedSerial_ = (std::max)(completedSerial_,
+                frame.submissionSerial);
             collectGpuResults(frame);
         }
     }
@@ -729,6 +735,8 @@ namespace Iridium {
             imagesInFlight_.clear();
             renderFinishedPerImage_.clear();
             cpuProfiler_ = nullptr;
+            lastSubmittedSerial_ = 0;
+            completedSerial_ = 0;
             frameGpuRange_ = {};
             timestampPeriodNanoseconds_ = 0.0;
             timestampValidBits_ = 0;
@@ -755,6 +763,8 @@ namespace Iridium {
         presentQueue_ = VK_NULL_HANDLE;
         graphicsFamily_ = 0;
         currentFrame_ = 0;
+        lastSubmittedSerial_ = 0;
+        completedSerial_ = 0;
         acquireSuboptimal_ = false;
         cpuProfiler_ = nullptr;
         frameGpuRange_ = {};

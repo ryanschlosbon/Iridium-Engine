@@ -366,6 +366,7 @@ namespace {
         const auto before = Iridium::captureEditorMeshAuthoringState(mesh);
         auto after = before;
         after.modelGuid = newModel;
+        after.maximumLodLevel = 0;
         after.materialOverrides = {{ sourceMaterial, replacementMaterial }};
         Iridium::EditorTransaction assign;
         assign.label = "Assign Model and Material";
@@ -375,6 +376,7 @@ namespace {
         CHECK(history.execute(std::move(assign)));
         const auto assignedState = document.currentState();
         CHECK(mesh.requestedAssetGuid == newModel);
+        CHECK(mesh.maximumLodLevel == 0);
         CHECK(mesh.materialOverrides == after.materialOverrides);
 
         // Pending and failed runtime states are diagnostics, not authoring edits.
@@ -394,12 +396,14 @@ namespace {
         CHECK(document.currentState() == assignedState);
         CHECK(history.undo());
         CHECK(mesh.requestedAssetGuid == oldModel);
+        CHECK(mesh.maximumLodLevel == MeshComponent::MaximumLodLevel);
         CHECK(mesh.materialOverrides == before.materialOverrides);
 
         // Redo is valid while the old asset request is pending.
         mesh.assetResolutionDiagnostic = "old model pending";
         CHECK(history.redo());
         CHECK(mesh.requestedAssetGuid == newModel);
+        CHECK(mesh.maximumLodLevel == 0);
         CHECK(mesh.materialOverrides == after.materialOverrides);
 
         // Eviction after publication likewise cannot alter history or dirtiness.

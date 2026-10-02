@@ -1,4 +1,5 @@
 #include "material/MaterialCompiler.h"
+#include "material/TransparencyDiagnostics.h"
 
 #include "renderer/color/SceneColor.h"
 
@@ -291,6 +292,24 @@ namespace {
         return true;
     }
 
+    bool testTransmissiveLensMetallicDefault() {
+        // Exported Porsche lamp materials omitted metallicFactor. Transmission
+        // must not silently change the glTF default; authoring must correct it.
+        SourceMaterial lens;
+        lens.extensions.push_back(extension("KHR_materials_transmission", {
+            { "transmissionFactor", 1.0f } }));
+        CHECK(near(lens.metallicRoughness.metallicFactor.value, 1.0f));
+        const auto metallic = compileSourceMaterial(lens);
+        CHECK(metallic.succeeded());
+        CHECK(hasDiagnostic(metallic, "MATERIAL_TRANSMISSION_METALLIC_SUPPRESSED"));
+        lens.metallicRoughness.metallicFactor = { 0.0f, SourceValueOrigin::Authored };
+        const auto dielectricLens = compileSourceMaterial(lens);
+        CHECK(dielectricLens.succeeded());
+        CHECK(!hasDiagnostic(dielectricLens, "MATERIAL_TRANSMISSION_METALLIC_SUPPRESSED"));
+        CHECK(metallic.material->contentHash != dielectricLens.material->contentHash);
+        return true;
+    }
+
     bool testInvalidAndDeterministicHash() {
         SourceMaterial invalid = dielectric(glm::vec3(0.5f));
         invalid.metallicRoughness.roughnessFactor.value = std::numeric_limits<float>::quiet_NaN();
@@ -433,6 +452,79 @@ namespace {
         return true;
     }
 
+    bool testTransparencyDiagnosticSummaries() {
+        CompiledTransparencyPolicy ordinary{
+            .requestedClass = TransparencyClass::SortedSurface,
+            .resolvedClass = TransparencyClass::SortedSurface,
+            .quality = TransparencyQuality::Ordinary2,
+            .flags = CompiledTransparencyExplicitClass,
+        };
+        const TransparencyDiagnosticSummary ordinarySummary =
+            describeTransparencyPolicy(ordinary);
+        CHECK(ordinarySummary.explicitClass);
+        CHECK(!ordinarySummary.fallbackApplied);
+        CHECK(ordinarySummary.topology ==
+            TransparencyTopologyDiagnostic::NotRequired);
+        CHECK(ordinarySummary.fallback == TransparencyFallbackReason::None);
+        CHECK(transparencyExecutionRouteName(ordinary.resolvedClass) ==
+            "sorted-premultiplied");
+
+        CompiledTransparencyPolicy invalidLayered{
+            .requestedClass = TransparencyClass::LayeredGlass,
+            .resolvedClass = TransparencyClass::ThinGlass,
+            .quality = TransparencyQuality::Hero4,
+            .flags = static_cast<uint8_t>(
+                CompiledTransparencyExplicitClass |
+                CompiledTransparencyFallbackApplied |
+                CompiledTransparencyTopologyRequired),
+        };
+        const TransparencyDiagnosticSummary invalidLayeredSummary =
+            describeTransparencyPolicy(invalidLayered);
+        CHECK(invalidLayeredSummary.topology ==
+            TransparencyTopologyDiagnostic::InvalidOrUnavailable);
+        CHECK(invalidLayeredSummary.fallback ==
+            TransparencyFallbackReason::LayeredTopology);
+        CHECK(transparencyTopologyDiagnosticName(
+            invalidLayeredSummary.topology) == "invalid-or-unavailable");
+        CHECK(transparencyFallbackReasonName(
+            invalidLayeredSummary.fallback) == "layered-topology");
+
+        CompiledTransparencyPolicy validLayered{
+            .requestedClass = TransparencyClass::Auto,
+            .resolvedClass = TransparencyClass::LayeredGlass,
+            .quality = TransparencyQuality::Cinematic8,
+        };
+        const TransparencyDiagnosticSummary validLayeredSummary =
+            describeTransparencyPolicy(validLayered);
+        CHECK(validLayeredSummary.topology ==
+            TransparencyTopologyDiagnostic::ValidatedClosed);
+        CHECK(transparencyExecutionRouteName(validLayered.resolvedClass) ==
+            "bounded-layered-glass");
+
+        CompiledTransparencyPolicy pendingTopology{
+            .requestedClass = TransparencyClass::Auto,
+            .resolvedClass = TransparencyClass::ThinGlass,
+            .flags = CompiledTransparencyTopologyRequired,
+        };
+        CHECK(describeTransparencyPolicy(pendingTopology).topology ==
+            TransparencyTopologyDiagnostic::RequiredUnverified);
+
+        CompiledTransparencyPolicy oitFallback{
+            .requestedClass = TransparencyClass::WeightedOit,
+            .resolvedClass = TransparencyClass::SortedSurface,
+            .flags = static_cast<uint8_t>(
+                CompiledTransparencyExplicitClass |
+                CompiledTransparencyFallbackApplied |
+                CompiledTransparencyPolicySanitized),
+        };
+        const TransparencyDiagnosticSummary oitSummary =
+            describeTransparencyPolicy(oitFallback);
+        CHECK(oitSummary.policySanitized);
+        CHECK(oitSummary.fallback ==
+            TransparencyFallbackReason::WeightedOitTransportIncompatible);
+        return true;
+    }
+
     bool testOptionalCarClassificationSnapshot() {
         const std::filesystem::path path = std::filesystem::path(PROJECT_ROOT_DIR) /
             "assets" / "models" / "alfa_romeo" / "scene.gltf";
@@ -510,7 +602,9 @@ int main() {
         { "classification and dormant lobes", testClassificationAndDormantLobes },
         { "conflict and unsupported policy", testConflictAndUnsupportedPolicy },
         { "invalid input and deterministic hash", testInvalidAndDeterministicHash },
+        { "transmissive lens metallic default", testTransmissiveLensMetallicDefault },
         { "versioned transparency policy resolution", testVersionedTransparencyPolicyResolution },
+        { "transparency diagnostic summaries", testTransparencyDiagnosticSummaries },
         { "tracked fixture classification", testTrackedFixtureClassification },
         { "optional Alfa classification snapshot", testOptionalCarClassificationSnapshot },
     };

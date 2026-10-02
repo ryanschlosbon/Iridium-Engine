@@ -72,7 +72,11 @@ layout(std430, set = 1, binding = 21) readonly buffer MaterialTable {
 layout(set = IRIDIUM_SCENE_SET, binding = 0) uniform sampler2D gDepth;
 layout(set = IRIDIUM_SCENE_SET, binding = 1) uniform sampler2D gNormalRoughMetal;
 layout(set = IRIDIUM_SCENE_SET, binding = 2) uniform sampler2D gAlbedoEmissive;
-#ifndef IRIDIUM_OPAQUE_FORWARD
+#if !defined(IRIDIUM_OPAQUE_FORWARD) && !defined(IRIDIUM_WEIGHTED_OIT)
+#define IRIDIUM_REFRACTION_TRANSPORT 1
+#endif
+
+#ifdef IRIDIUM_REFRACTION_TRANSPORT
 layout(set = IRIDIUM_SCENE_SET, binding = 4) uniform sampler2D
     refractionColorPyramid;
 layout(set = IRIDIUM_SCENE_SET, binding = 5) uniform sampler2D
@@ -105,6 +109,9 @@ layout(set = 4, binding = 1) uniform usampler2D
 #endif
 
 layout(location = 0) out vec4 outColor;
+#ifdef IRIDIUM_WEIGHTED_OIT
+layout(location = 1) out float outRevealage;
+#endif
 
 layout(push_constant) uniform CanonicalPushConstants {
     mat4 renderMatrix;
@@ -113,6 +120,110 @@ layout(push_constant) uniform CanonicalPushConstants {
     uint padding1;
     uint padding2;
 } push;
+
+const uint IRIDIUM_VIEW_DEBUG_SHIFT = 8u;
+
+uint iridiumMaterialDebugView() {
+#if defined(IRIDIUM_LAYERED_DEEP_COMPOSITION) || \
+    defined(IRIDIUM_LAYERED_DEEP_RESIDUAL)
+    // Deep local composition has an independent atlas pass. Carry the view in
+    // the otherwise unused high byte beside interface index/count so it cannot
+    // alias the 13-bit stable work identity in padding0.
+    return (push.padding1 >> 24u) & 0xffu;
+#else
+    return (ubo.renderInfo.w >> IRIDIUM_VIEW_DEBUG_SHIFT) & 0xffu;
+#endif
+}
+
+vec3 iridiumTransparencyClassDebugColor(uint resolvedClass) {
+    if (resolvedClass == 2u) return vec3(0.15, 0.85, 0.25);
+    if (resolvedClass == 3u) return vec3(0.05, 0.85, 0.90);
+    if (resolvedClass == 4u) return vec3(0.10, 0.35, 1.00);
+    if (resolvedClass == 5u) return vec3(1.00, 0.40, 0.05);
+    if (resolvedClass == 6u) return vec3(0.70, 0.15, 1.00);
+    if (resolvedClass == 1u) return vec3(0.12);
+    return vec3(1.0, 0.0, 0.0);
+}
+
+vec3 iridiumTransparencyFallbackDebugColor(uint policyWord) {
+    uint flags = (policyWord >> 24u) & 0xffu;
+    if ((flags & (1u << 1u)) != 0u)
+        return vec3(1.0, 0.0, 1.0);
+    if ((flags & (1u << 3u)) != 0u)
+        return vec3(1.0, 0.55, 0.0);
+    return vec3(0.05, 0.30, 0.08);
+}
+
+vec3 iridiumTransparencyIntervalDebugColor(float intervalMeters,
+    float authoredLimitMeters) {
+    if (intervalMeters < 0.0 || isnan(intervalMeters) || isinf(intervalMeters))
+        return vec3(0.01);
+    float normalized = authoredLimitMeters > 1.0e-7
+        ? clamp(intervalMeters / authoredLimitMeters, 0.0, 1.0)
+        : intervalMeters / (intervalMeters + 0.10);
+    if (normalized < 0.5)
+        return mix(vec3(0.02, 0.12, 0.75), vec3(0.0, 0.95, 1.0),
+            normalized * 2.0);
+    return mix(vec3(0.0, 0.95, 1.0), vec3(1.0, 0.10, 0.02),
+        (normalized - 0.5) * 2.0);
+}
+
+vec3 iridiumTransparencyPyramidMipDebugColor(float selectedMip,
+    uint mipLevels, uint state) {
+    if (state == 1u) return vec3(1.0, 0.05, 0.02);
+    if (state == 2u) return vec3(1.0, 0.55, 0.0);
+    if (state == 4u) return vec3(0.0, 0.95, 1.0);
+    if (state != 3u || selectedMip < 0.0 || mipLevels == 0u)
+        return vec3(0.01);
+    float normalized = mipLevels > 1u
+        ? clamp(selectedMip / float(mipLevels - 1u), 0.0, 1.0) : 0.0;
+    return mix(vec3(0.05, 0.20, 1.0), vec3(1.0, 0.95, 0.05),
+        normalized);
+}
+
+vec3 iridiumTransparencyLayerDebugColor(uint retainedLayers,
+    bool weightedOit) {
+    if (weightedOit) return vec3(0.70, 0.15, 1.00);
+    if (retainedLayers >= 8u) return vec3(1.00, 0.15, 0.60);
+    if (retainedLayers >= 4u) return vec3(1.00, 0.40, 0.05);
+    if (retainedLayers >= 2u) return vec3(0.05, 0.85, 0.90);
+    return vec3(0.25);
+}
+
+vec3 iridiumTransparencyOverflowDebugColor(bool saturated,
+    bool residualTail) {
+    if (residualTail) return vec3(1.0, 0.0, 1.0);
+    if (saturated) return vec3(1.0, 0.55, 0.0);
+    return vec3(0.05, 0.30, 0.08);
+}
+
+void iridiumWriteMaterialOutput(vec4 value, bool premultiplied) {
+#ifdef IRIDIUM_WEIGHTED_OIT
+    float coverage = value.a;
+    if (isnan(coverage) || isinf(coverage)) coverage = 0.0;
+    coverage = clamp(coverage, 0.0, 1.0);
+    vec3 radiance = value.rgb;
+    if (any(isnan(radiance)) || any(isinf(radiance)))
+        radiance = vec3(0.0);
+    if (!premultiplied) radiance *= coverage;
+    radiance = clamp(radiance, vec3(0.0), vec3(128.0));
+    float nearPlane = max(ubo.depthRange.x, 0.0);
+    float farPlane = max(ubo.depthRange.y, nearPlane + 1.0e-6);
+    float viewDepth = -(ubo.view * vec4(fragWorldPos, 1.0)).z;
+    float normalizedDepth = clamp((viewDepth - nearPlane) /
+        (farPlane - nearPlane), 0.0, 1.0);
+    float depthWeight = 1.0 /
+        (1.0 + 8.0 * normalizedDepth * normalizedDepth);
+    float weight = coverage > 0.0
+        ? clamp(coverage * depthWeight * (1.0 / 16.0),
+            1.0 / 4096.0, 1.0 / 16.0)
+        : 0.0;
+    outColor = vec4(radiance * weight, coverage * weight);
+    outRevealage = coverage;
+#else
+    outColor = value;
+#endif
+}
 
 #ifdef IRIDIUM_LAYERED_LOCAL_COMPOSITION
 const uint IRIDIUM_LAYERED_ORIENTATION_BIT = 0x80000000u;
@@ -269,6 +380,37 @@ bool iridiumLayeredDeepWorkOpenAtCapacity() {
     return balance > 0;
 }
 
+bool iridiumLayeredDeepReachedCapacity() {
+    ivec2 atlasPixel = iridiumLayeredAtlasPixel();
+    ivec2 atlasExtent = textureSize(layeredInterfaceDepth[0], 0);
+    if (any(lessThan(atlasPixel, ivec2(0))) ||
+        any(greaterThanEqual(atlasPixel, atlasExtent)))
+        return false;
+    uint interfaceCount = iridiumLayeredDeepInterfaceCount();
+    if (interfaceCount < 2u || interfaceCount > 8u)
+        return false;
+    uint finalIdentity = texelFetch(
+        layeredInterfaceIdentity[interfaceCount - 1u], atlasPixel, 0).r;
+    return (finalIdentity & IRIDIUM_LAYERED_DEEP_WORK_MASK) != 0u;
+}
+
+bool iridiumLayeredDeepAnyWorkOpenAtCapacity() {
+    if (!iridiumLayeredDeepReachedCapacity())
+        return false;
+    ivec2 atlasPixel = iridiumLayeredAtlasPixel();
+    uint interfaceCount = iridiumLayeredDeepInterfaceCount();
+    int balance = 0;
+    for (uint candidate = 0u; candidate < interfaceCount; ++candidate) {
+        uint identity = texelFetch(
+            layeredInterfaceIdentity[candidate], atlasPixel, 0).r;
+        if ((identity & IRIDIUM_LAYERED_DEEP_WORK_MASK) == 0u)
+            continue;
+        balance += (identity & IRIDIUM_LAYERED_ORIENTATION_BIT) == 0u
+            ? 1 : -1;
+    }
+    return balance > 0;
+}
+
 bool iridiumLayeredDeepResidualEntryIsValid() {
     ivec2 atlasPixel = iridiumLayeredAtlasPixel();
     ivec2 atlasExtent = textureSize(layeredInterfaceDepth[0], 0);
@@ -361,6 +503,12 @@ vec4 materialSampleOrOne(PackedMaterial material, uint semantic) {
 void main() {
     PackedMaterial material = materials[push.materialIndex];
     if (material.schemaVersion != MATERIAL_SCHEMA_VERSION) discard;
+    uint materialDebugView = iridiumMaterialDebugView();
+    float transparencyDebugIntervalMeters = -1.0;
+    float transparencyDebugIntervalLimitMeters = 0.0;
+    float transparencyDebugSelectedMip = -1.0;
+    uint transparencyDebugMipLevels = 0u;
+    uint transparencyDebugPyramidState = 0u;
     bool layeredNonRefractiveResidual = false;
 #ifdef IRIDIUM_LAYERED_ORDINARY2_COMPOSITION
     uint resolvedTransparencyClass =
@@ -444,6 +592,7 @@ void main() {
         handedness = -handedness;
     MaterialTangentFrame frame = materialBuildTangentFrame(fragNormal,
         fragTangent.xyz, handedness, material.doubleSided != 0u, gl_FrontFacing);
+    vec3 shadowGeometricNormal = normalize(frame.normal);
     if (packedMaterialHasTexture(material, 2u)) {
         vec3 encodedNormal =
             sampleMaterialTexture(material, 2u).rgb;
@@ -465,47 +614,103 @@ void main() {
         emissive *= sampleMaterialTexture(material, 4u).rgb;
     emissive = linearSrgbToAcesCg(emissive);
 
+    if (materialDebugView == 18u) {
+        uint resolvedClass =
+            (material.transparencyPolicy >> 8u) & 0xffu;
+        iridiumWriteMaterialOutput(vec4(
+            iridiumTransparencyClassDebugColor(resolvedClass), 1.0), false);
+        return;
+    }
+    if (materialDebugView == 19u) {
+        iridiumWriteMaterialOutput(vec4(
+            iridiumTransparencyFallbackDebugColor(
+                material.transparencyPolicy), 1.0), false);
+        return;
+    }
+    if (materialDebugView == 22u) {
+        uint retainedLayers = 1u;
+        uint resolvedClass =
+            (material.transparencyPolicy >> 8u) & 0xffu;
+#if defined(IRIDIUM_LAYERED_ORDINARY2_COMPOSITION)
+        retainedLayers = 2u;
+#elif defined(IRIDIUM_LAYERED_DEEP_COMPOSITION) || \
+    defined(IRIDIUM_LAYERED_DEEP_RESIDUAL)
+        retainedLayers = iridiumLayeredDeepInterfaceCount();
+#endif
+        iridiumWriteMaterialOutput(vec4(
+            iridiumTransparencyLayerDebugColor(retainedLayers,
+                resolvedClass == 6u), 1.0), false);
+        return;
+    }
+    if (materialDebugView == 23u) {
+#ifndef IRIDIUM_WEIGHTED_OIT
+        bool saturated = false;
+        bool residualTail = false;
+#if defined(IRIDIUM_LAYERED_DEEP_COMPOSITION)
+        saturated = iridiumLayeredDeepReachedCapacity();
+        residualTail = iridiumLayeredDeepAnyWorkOpenAtCapacity();
+#elif defined(IRIDIUM_LAYERED_DEEP_RESIDUAL)
+        saturated = true;
+        residualTail = true;
+#endif
+        iridiumWriteMaterialOutput(vec4(
+            iridiumTransparencyOverflowDebugColor(
+                saturated, residualTail), 1.0), false);
+        return;
+#endif
+    }
+
 #ifndef IRIDIUM_LAYERED_LOCAL_COMPOSITION
-    if (push.padding0 != 0u && push.padding0 != 15u &&
-        push.padding0 != 16u && push.padding0 != 17u) {
-        if (push.padding0 == 1u) outColor = vec4(baseColor, 1.0);
-        else if (push.padding0 == 2u)
-            outColor = vec4(frame.normal * 0.5 + 0.5, 1.0);
-        else if (push.padding0 == 3u)
-            outColor = vec4(vec3(roughness), 1.0);
-        else if (push.padding0 == 4u)
-            outColor = vec4(vec3(metallic), 1.0);
-        else if (push.padding0 == 5u) outColor = vec4(emissive, 1.0);
-        else if (push.padding0 == 7u) outColor = vec4(vec3(ao), 1.0);
-        else if (push.padding0 == 8u) outColor = vec4(f0, 1.0);
-        else if (push.padding0 == 9u) outColor = vec4(f90, 1.0);
-        else if (push.padding0 == 10u ||
-            push.padding0 == 11u || push.padding0 == 12u) {
+    if (materialDebugView != 0u && materialDebugView != 15u &&
+        materialDebugView != 16u && materialDebugView != 17u &&
+        materialDebugView != 20u && materialDebugView != 21u &&
+        materialDebugView != 23u) {
+        if (materialDebugView == 1u)
+            iridiumWriteMaterialOutput(vec4(baseColor, 1.0), false);
+        else if (materialDebugView == 2u)
+            iridiumWriteMaterialOutput(
+                vec4(frame.normal * 0.5 + 0.5, 1.0), false);
+        else if (materialDebugView == 3u)
+            iridiumWriteMaterialOutput(vec4(vec3(roughness), 1.0), false);
+        else if (materialDebugView == 4u)
+            iridiumWriteMaterialOutput(vec4(vec3(metallic), 1.0), false);
+        else if (materialDebugView == 5u)
+            iridiumWriteMaterialOutput(vec4(emissive, 1.0), false);
+        else if (materialDebugView == 7u)
+            iridiumWriteMaterialOutput(vec4(vec3(ao), 1.0), false);
+        else if (materialDebugView == 8u)
+            iridiumWriteMaterialOutput(vec4(f0, 1.0), false);
+        else if (materialDebugView == 9u)
+            iridiumWriteMaterialOutput(vec4(f90, 1.0), false);
+        else if (materialDebugView == 10u ||
+            materialDebugView == 11u || materialDebugView == 12u) {
             uint value = push.materialIndex;
-            if (push.padding0 == 11u) value = material.featureFlags;
-            else if (push.padding0 == 12u) value = material.closureClass;
+            if (materialDebugView == 11u) value = material.featureFlags;
+            else if (materialDebugView == 12u) value = material.closureClass;
             uint hash = value * 1664525u + 1013904223u;
-            outColor = vec4(vec3(float(hash & 255u),
+            iridiumWriteMaterialOutput(vec4(vec3(float(hash & 255u),
                 float((hash >> 8u) & 255u),
-                float((hash >> 16u) & 255u)) / 255.0, 1.0);
+                float((hash >> 16u) & 255u)) / 255.0, 1.0), false);
         }
-        else outColor = vec4(vec3(gl_FragCoord.z), 1.0);
+        else iridiumWriteMaterialOutput(
+            vec4(vec3(gl_FragCoord.z), 1.0), false);
         return;
     }
 #endif
 
     float shadowViewDepth = -(ubo.view * vec4(fragWorldPos, 1.0)).z;
-    if (push.padding0 == 16u) {
-        outColor = vec4(iridiumDirectionalShadowCascadeDebug(
-            shadowViewDepth), alpha);
+    if (materialDebugView == 16u) {
+        iridiumWriteMaterialOutput(vec4(
+            iridiumDirectionalShadowCascadeDebug(shadowViewDepth), alpha),
+            false);
         return;
     }
 
     if (material.closureClass == 3u) {
-        outColor = push.padding0 == 15u
+        iridiumWriteMaterialOutput(materialDebugView == 15u
             ? vec4(0.0, 0.0, 0.0, alpha)
-            : push.padding0 == 17u ? vec4(1.0, 1.0, 1.0, alpha)
-            : vec4(baseColor, alpha);
+            : materialDebugView == 17u ? vec4(1.0, 1.0, 1.0, alpha)
+            : vec4(baseColor, alpha), false);
         return;
     }
 
@@ -520,7 +725,7 @@ void main() {
     vec4 directLobeData[8];
     vec3 directLobeNormals[8];
 
-#ifndef IRIDIUM_OPAQUE_FORWARD
+#ifdef IRIDIUM_REFRACTION_TRANSPORT
     float transmission = 0.0;
     float transmissionIor = ior;
     float transmissionSpecularWeight = specularWeight;
@@ -587,7 +792,7 @@ void main() {
                 max(dot(frame.normal, view), 0.0));
             directLobeData[index] = vec4(mix(f0, tint, factor), 0.0);
         }
-#ifndef IRIDIUM_OPAQUE_FORWARD
+#ifdef IRIDIUM_REFRACTION_TRANSPORT
         else if (lobe.type == 4u) {
             transmission = clamp(lobe.parameters[0] *
                 materialSampleOrOne(material, 17u).r, 0.0, 1.0);
@@ -653,6 +858,9 @@ void main() {
     result += iblLobes;
     vec3 directContribution = vec3(0.0);
     float shadowVisibility = 1.0;
+    IridiumDirectionalShadowReceiver shadowReceiver =
+        IridiumDirectionalShadowReceiver(fragWorldPos, frame.normal,
+            shadowGeometricNormal, dFdx(fragWorldPos), dFdy(fragWorldPos));
 
     IridiumDirectLightRange lightRange = iridiumDirectLightRange(
         fragWorldPos, IRIDIUM_MATERIAL_SCENE_PIXEL);
@@ -664,7 +872,7 @@ void main() {
             frame.normal);
         vec3 light = directLight.direction;
         float visibility = iridiumDirectionalShadowVisibility(lightSlot,
-            fragWorldPos, frame.normal, light, shadowViewDepth);
+            shadowReceiver, light, shadowViewDepth);
         PackedGpuLight lightRecord = iridiumLights[lightSlot];
         if ((floatBitsToUint(lightRecord.shapeMetadata.z) & 3u) ==
             IRIDIUM_LIGHT_TYPE_SPOT)
@@ -727,7 +935,7 @@ void main() {
                         frame.normal, view, light)) * radiance * noL *
                     baseLayerAttenuation;
             }
-#ifndef IRIDIUM_OPAQUE_FORWARD
+#ifdef IRIDIUM_REFRACTION_TRANSPORT
             else if (lobeType == 7u && diffuseTransmission > 0.0) {
                 directContribution += diffuseTransmissionColor * baseColor *
                     diffuseTransmission / MATERIAL_PI * radiance *
@@ -737,18 +945,20 @@ void main() {
 #endif
         }
     }
-    if (push.padding0 == 17u) {
-        outColor = vec4(vec3(shadowVisibility), alpha);
+    if (materialDebugView == 17u) {
+        iridiumWriteMaterialOutput(
+            vec4(vec3(shadowVisibility), alpha), false);
         return;
     }
-    if (push.padding0 == 15u) {
-        outColor = vec4(max(directContribution, vec3(0.0)), alpha);
+    if (materialDebugView == 15u) {
+        iridiumWriteMaterialOutput(
+            vec4(max(directContribution, vec3(0.0)), alpha), false);
         return;
     }
     result += directContribution;
     float outputAlpha = alpha;
 
-#ifndef IRIDIUM_OPAQUE_FORWARD
+#ifdef IRIDIUM_REFRACTION_TRANSPORT
 
     if (transmission > 0.0) {
         uvec2 refractionExtent = uvec2(textureSize(
@@ -762,6 +972,7 @@ void main() {
         // maximum cap; zero means no cap rather than zero absorption.
         float opticalPathMeters =
             iridiumLayeredOrdinary2PathMeters(volumeThickness);
+        float opticalIntervalLimitMeters = volumeThickness;
 #elif defined(IRIDIUM_LAYERED_DEEP_COMPOSITION) || \
     defined(IRIDIUM_LAYERED_DEEP_RESIDUAL)
         // Each accepted entry uses the matching later exit from the bounded
@@ -776,6 +987,8 @@ void main() {
             ? iridiumThinSheetPathLength(residualSheetMeters,
                 worldThicknessScale, dot(geometricNormal, view))
             : iridiumLayeredDeepPathMeters(volumeThickness);
+        float opticalIntervalLimitMeters = layeredNonRefractiveResidual
+            ? residualSheetMeters : volumeThickness;
 #else
         float worldThicknessScale = ubo.worldUnits.x /
             max(length(fragNormal), 1.0e-7);
@@ -789,7 +1002,10 @@ void main() {
         float opticalPathMeters = iridiumThinSheetPathLength(
             sheetThicknessMeters, worldThicknessScale,
             dot(geometricNormal, view));
+        float opticalIntervalLimitMeters = sheetThicknessMeters;
 #endif
+        transparencyDebugIntervalMeters = opticalPathMeters;
+        transparencyDebugIntervalLimitMeters = opticalIntervalLimitMeters;
         // The shared transport helper sanitizes every sampled/authored input
         // before evaluating the per-channel extinction coefficients.
         vec3 attenuation = iridiumBeerLambert(attenuationColor,
@@ -847,17 +1063,23 @@ void main() {
                 sceneTransmission = texelFetch(refractionColorPyramid,
                     ivec2(IRIDIUM_MATERIAL_SCENE_PIXEL), 0).rgb;
                 sceneConfidence = 1.0;
+                transparencyDebugSelectedMip = 0.0;
+                transparencyDebugMipLevels = uint(textureQueryLevels(
+                    refractionColorPyramid));
+                transparencyDebugPyramidState = 4u;
             }
             else if ((ubo.renderInfo.w &
                     IRIDIUM_VIEW_REFRACTION_PYRAMIDS_AVAILABLE) != 0u) {
                 uint pyramidLevels = uint(textureQueryLevels(
                     refractionColorPyramid));
+                transparencyDebugMipLevels = pyramidLevels;
                 IridiumRefractionProjection refraction =
                     iridiumProjectTransparencyRay(fragWorldPos,
                         transmittedDirection, opticalPathMeters,
                         ubo.worldUnits.x, roughness, 1.0 /
                         max(transmissionIor, IRIDIUM_TRANSPARENCY_MIN_IOR),
                         ubo.view, ubo.proj, refractionExtent, pyramidLevels);
+                transparencyDebugPyramidState = 1u;
                 if (refraction.onScreen) {
                     float selectedLod = refraction.lod;
                     float nearestDepth = textureLod(refractionDepthPyramid,
@@ -873,6 +1095,8 @@ void main() {
                         foregroundLeak = nearestDepth + depthTolerance <
                             refraction.expectedViewDepthMeters;
                     }
+                    transparencyDebugSelectedMip = selectedLod;
+                    transparencyDebugPyramidState = foregroundLeak ? 2u : 3u;
                     if (!foregroundLeak) {
                         sceneTransmission = textureLod(
                             refractionColorPyramid,
@@ -920,6 +1144,21 @@ void main() {
     }
 #endif
 
+    if (materialDebugView == 20u) {
+        result = iridiumTransparencyIntervalDebugColor(
+            transparencyDebugIntervalMeters,
+            transparencyDebugIntervalLimitMeters);
+        emissive = vec3(0.0);
+        outputAlpha = 1.0;
+    }
+    else if (materialDebugView == 21u) {
+        result = iridiumTransparencyPyramidMipDebugColor(
+            transparencyDebugSelectedMip, transparencyDebugMipLevels,
+            transparencyDebugPyramidState);
+        emissive = vec3(0.0);
+        outputAlpha = 1.0;
+    }
+
     vec3 outputColor = max(result + emissive, vec3(0.0));
 #if defined(IRIDIUM_LAYERED_DEEP_COMPOSITION) || \
     defined(IRIDIUM_LAYERED_DEEP_RESIDUAL)
@@ -934,5 +1173,6 @@ void main() {
     if ((material.featureFlags & (1u << 19u)) != 0u)
         outputColor *= outputAlpha;
 #endif
-    outColor = vec4(outputColor, outputAlpha);
+    iridiumWriteMaterialOutput(vec4(outputColor, outputAlpha),
+        (material.featureFlags & (1u << 19u)) != 0u);
 }

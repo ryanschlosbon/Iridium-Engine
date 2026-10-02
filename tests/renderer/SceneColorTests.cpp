@@ -147,8 +147,13 @@ namespace {
         CHECK(ui.find("decodeSrgb(sampled.rgb)") == std::string::npos);
         CHECK(output.find("acesCgToLinearSrgb") != std::string::npos);
         CHECK(output.find("2.51") != std::string::npos);
-        CHECK(output.find("push.selectionActive == 0u") != std::string::npos);
+        CHECK(output.find("if (!selectionActive())") != std::string::npos);
         CHECK(output.find("selectionMask") != std::string::npos);
+        CHECK(output.find("selectionFeedbackAt(center) & 1u") != std::string::npos);
+        CHECK(output.find("selectionFeedbackAt(ivec2(gl_FragCoord.xy)) & 2u") != std::string::npos);
+        CHECK(output.find("mix(outputValue, feedbackColor, 0.18)") != std::string::npos);
+        CHECK(output.find("opaqueDepth") != std::string::npos);
+        CHECK(output.find("applyViewportGrid") != std::string::npos);
         CHECK(shared.find("0.6130974024") != std::string::npos);
         CHECK(shared.find("1.705050992697") != std::string::npos);
         const std::string application = readText(
@@ -160,12 +165,14 @@ namespace {
             std::filesystem::path(PROJECT_ROOT_DIR) /
             "src/editor/panels/windows/ProjectSettingsPanel.cpp");
         CHECK(application.find("setOutputSettings") != std::string::npos);
+        CHECK(application.find("(previewHovered ? 2u : 0u)") != std::string::npos);
+        CHECK(backend.find("push.padding[0] = packet.selectionFeedback") != std::string::npos);
         CHECK(backend.find("ImGui_ImplVulkan_SetDisplayColorConfiguration") !=
             std::string::npos);
         CHECK(settings.find("UI / paper white (nits)") != std::string::npos);
         CHECK(settings.find("currently outputting SDR") != std::string::npos);
         CHECK(selectionMask.find("outDiffuseAo = vec4(0.0);") != std::string::npos);
-        CHECK(selectionMask.find("outEmissive = vec4(0.0, 0.0, 0.0, -1.0)") !=
+        CHECK(selectionMask.find("outEmissive = vec4(0.0, 0.0, 0.0, -float(push.feedback))") !=
             std::string::npos);
         const size_t framePasses = application.find("// Pass 3:");
         const size_t sceneCapture = application.find("captureCurrentFrame", framePasses);

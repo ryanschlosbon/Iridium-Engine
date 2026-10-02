@@ -7,7 +7,6 @@
 #include <bit>
 #include <cmath>
 #include <stdexcept>
-#include <unordered_set>
 
 namespace Iridium {
 namespace {
@@ -15,23 +14,31 @@ namespace {
     struct RankedRequest {
         LocalShadowRequest request;
         uint32_t resolution = 0;
+        bool accepted = false;
     };
 
     std::vector<RankedRequest> validateAndRank(
         std::span<const LocalShadowRequest> requests, LocalShadowKind kind) {
         std::vector<RankedRequest> ranked;
         ranked.reserve(requests.size());
-        std::unordered_set<SceneEntityUuid, SceneEntityUuidHash> owners;
         for (const LocalShadowRequest& request : requests) {
             if (request.kind != kind) continue;
             if (request.owner.isNil() || request.quality > 3u ||
                 !std::isfinite(request.conservativeContribution) ||
-                request.conservativeContribution < 0.0f ||
-                !owners.insert(request.owner).second)
+                request.conservativeContribution < 0.0f)
                 throw std::invalid_argument("Local shadow request is invalid.");
             ranked.push_back({ request,
                 localShadowResolution(kind, request.quality) });
         }
+        std::sort(ranked.begin(), ranked.end(),
+            [](const RankedRequest& left, const RankedRequest& right) {
+                return left.request.owner < right.request.owner;
+            });
+        if (std::adjacent_find(ranked.begin(), ranked.end(),
+                [](const RankedRequest& left, const RankedRequest& right) {
+                    return left.request.owner == right.request.owner;
+                }) != ranked.end())
+            throw std::invalid_argument("Local shadow request is invalid.");
         std::sort(ranked.begin(), ranked.end(),
             [](const RankedRequest& left, const RankedRequest& right) {
                 return localShadowRequestPrecedes(left.request, right.request);
@@ -166,16 +173,20 @@ LocalShadowAllocationStats StableSpotShadowAtlas::reconcile(
             ideal.push_back(tile);
     }
 
-    std::unordered_set<SceneEntityUuid, SceneEntityUuidHash> accepted;
-    for (const SpotShadowTile& tile : ideal) accepted.insert(tile.owner);
+    const auto accepted = [&](SceneEntityUuid owner) {
+        return std::ranges::any_of(ideal,
+            [owner](const SpotShadowTile& tile) {
+                return tile.owner == owner;
+            });
+    };
     for (const SpotShadowTile& old : allocations_)
-        if (!accepted.contains(old.owner)) ++stats.evicted;
+        if (!accepted(old.owner)) ++stats.evicted;
 
     // Preserve compatible locations where possible, then place the rest by rank.
     std::vector<SpotShadowTile> next;
     next.reserve(ideal.size());
     for (const RankedRequest& candidate : ranked) {
-        if (!accepted.contains(candidate.request.owner)) continue;
+        if (!accepted(candidate.request.owner)) continue;
         const auto old = std::find_if(allocations_.begin(), allocations_.end(),
             [&](const SpotShadowTile& tile) {
                 return tile.owner == candidate.request.owner &&
@@ -193,7 +204,7 @@ LocalShadowAllocationStats StableSpotShadowAtlas::reconcile(
         }
     }
     for (const RankedRequest& candidate : ranked) {
-        if (!accepted.contains(candidate.request.owner)) continue;
+        if (!accepted(candidate.request.owner)) continue;
         if (std::any_of(next.begin(), next.end(), [&](const SpotShadowTile& tile) {
                 return tile.owner == candidate.request.owner;
             })) continue;
@@ -250,25 +261,30 @@ StablePointShadowPools::StablePointShadowPools(PointShadowPoolConfig config)
 
 LocalShadowAllocationStats StablePointShadowPools::reconcile(
     std::span<const LocalShadowRequest> requests) {
-    const std::vector<RankedRequest> ranked = validateAndRank(
+    std::vector<RankedRequest> ranked = validateAndRank(
         requests, LocalShadowKind::Point);
     LocalShadowAllocationStats stats;
     stats.requested = static_cast<uint32_t>(ranked.size());
     std::array<uint32_t, 3> acceptedPerPool{};
-    std::unordered_set<SceneEntityUuid, SceneEntityUuidHash> accepted;
-    for (const RankedRequest& candidate : ranked) {
+    for (RankedRequest& candidate : ranked) {
         const uint32_t pool = pointPoolIndex(candidate.resolution);
         if (acceptedPerPool[pool] >= config_.cubeCapacity[pool]) continue;
         ++acceptedPerPool[pool];
-        accepted.insert(candidate.request.owner);
+        candidate.accepted = true;
     }
+    const auto accepted = [&](SceneEntityUuid owner) {
+        return std::ranges::any_of(ranked,
+            [owner](const RankedRequest& candidate) {
+                return candidate.accepted && candidate.request.owner == owner;
+            });
+    };
     for (const PointShadowSlot& old : allocations_)
-        if (!accepted.contains(old.owner)) ++stats.evicted;
+        if (!accepted(old.owner)) ++stats.evicted;
 
     std::vector<PointShadowSlot> next;
-    next.reserve(accepted.size());
+    next.reserve(ranked.size());
     for (const RankedRequest& candidate : ranked) {
-        if (!accepted.contains(candidate.request.owner)) continue;
+        if (!candidate.accepted) continue;
         const auto old = std::find_if(allocations_.begin(), allocations_.end(),
             [&](const PointShadowSlot& slot) {
                 return slot.owner == candidate.request.owner &&
@@ -281,7 +297,7 @@ LocalShadowAllocationStats StablePointShadowPools::reconcile(
         ++stats.reused;
     }
     for (const RankedRequest& candidate : ranked) {
-        if (!accepted.contains(candidate.request.owner) ||
+        if (!candidate.accepted ||
             std::any_of(next.begin(), next.end(), [&](const PointShadowSlot& slot) {
                 return slot.owner == candidate.request.owner;
             })) continue;
@@ -387,28 +403,47 @@ const LocalShadowSchedule& LocalShadowCacheScheduler::schedule(
         throw std::logic_error(
             "Local shadow schedule must be completed before rescheduling.");
     std::vector<LocalShadowCacheInput> ranked(inputs.begin(), inputs.end());
-    std::unordered_set<SceneEntityUuid, SceneEntityUuidHash> owners;
     for (LocalShadowCacheInput& input : ranked) {
         if (input.request.owner.isNil() || input.request.quality > 3u ||
             input.resolution != localShadowResolution(
                 input.request.kind, input.request.quality) ||
             input.allocationRevision == 0u || input.lightRevision == 0u ||
             input.projectionRevision == 0u || input.pipelineRevision == 0u ||
-            !owners.insert(input.request.owner).second)
+            !std::isfinite(input.request.conservativeContribution))
             throw std::invalid_argument("Local shadow cache input is invalid.");
+    }
+    std::sort(ranked.begin(), ranked.end(),
+        [](const LocalShadowCacheInput& left,
+            const LocalShadowCacheInput& right) {
+            return left.request.owner < right.request.owner;
+        });
+    if (std::adjacent_find(ranked.begin(), ranked.end(),
+            [](const LocalShadowCacheInput& left,
+                const LocalShadowCacheInput& right) {
+                return left.request.owner == right.request.owner;
+            }) != ranked.end())
+        throw std::invalid_argument("Local shadow cache input is invalid.");
+
+    const auto hasOwner = [&](SceneEntityUuid owner) {
+        const auto found = std::lower_bound(ranked.begin(), ranked.end(), owner,
+            [](const LocalShadowCacheInput& input, SceneEntityUuid value) {
+                return input.request.owner < value;
+            });
+        return found != ranked.end() && found->request.owner == owner;
+    };
+
+    // Allocator eviction/removal also retires the corresponding history while
+    // requests remain owner-sorted for an allocation-free binary lookup.
+    for (size_t index = stateOwners_.size(); index-- > 0;) {
+        if (hasOwner(stateOwners_[index])) continue;
+        stateOwners_.erase(stateOwners_.begin() + index);
+        states_.erase(states_.begin() + index);
     }
     std::sort(ranked.begin(), ranked.end(),
         [](const LocalShadowCacheInput& left,
             const LocalShadowCacheInput& right) {
             return localShadowRequestPrecedes(left.request, right.request);
         });
-
-    // Allocator eviction/removal also retires the corresponding history.
-    for (size_t index = stateOwners_.size(); index-- > 0;) {
-        if (owners.contains(stateOwners_[index])) continue;
-        stateOwners_.erase(stateOwners_.begin() + index);
-        states_.erase(states_.begin() + index);
-    }
 
     currentSchedule_.emplace();
     LocalShadowSchedule& result = *currentSchedule_;

@@ -11,6 +11,7 @@ namespace Iridium {
 
     struct EditorMeshAuthoringState {
         bool enabled = true;
+        int32_t maximumLodLevel = MeshComponent::MaximumLodLevel;
         AssetGuid modelGuid;
         AssetGuid rawRequestedModelGuid;
         std::vector<MeshComponent::MaterialOverride> materialOverrides;

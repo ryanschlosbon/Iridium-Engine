@@ -1,4 +1,6 @@
 #include "assets/thumbnail/AssetThumbnailService.h"
+#include "material/MaterialAuthoringPatch.h"
+#include "material/MaterialAuthoringPatch.h"
 #include "core/EngineLog.h"
 
 #include "assets/cooker/AssetCooker.h"
@@ -167,6 +169,14 @@ namespace Iridium {
         rebuildDemandLocked();
     }
 
+    void AssetThumbnailService::setViewerDemand(std::span<const AssetCatalogRecord> records) {
+        auto grouped = groupDemand(records);
+        std::lock_guard lock(mutex_);
+        if (shutdown_) return;
+        viewerDemandByRoot_ = std::move(grouped);
+        rebuildDemandLocked();
+    }
+
     void AssetThumbnailService::
         setDetailDemand(
             std::span<const
@@ -233,11 +243,19 @@ namespace Iridium {
         rebuildDemandLocked() {
         demandByRoot_ =
             visibleDemandByRoot_;
-        for (const auto& [rootGuid, job] :
-            pinnedDemandByRoot_) {
-            demandByRoot_.insert_or_assign(
-                rootGuid, job);
-        }
+        const auto merge = [&](const auto& demand) {
+            for (const auto& [rootGuid, job] : demand) {
+                auto [entry, added] = demandByRoot_.try_emplace(rootGuid, job);
+                if (added) continue;
+                for (const auto& record : job.records) {
+                    if (std::ranges::none_of(entry->second.records, [&](const auto& existing) {
+                        return existing.guid == record.guid;
+                    })) entry->second.records.push_back(record);
+                }
+            }
+        };
+        merge(pinnedDemandByRoot_);
+        merge(viewerDemandByRoot_);
         demandedAssets_.clear();
         for (const auto& [rootGuid, job] :
             demandByRoot_) {
@@ -495,6 +513,7 @@ namespace Iridium {
             demandByRoot_.clear();
             visibleDemandByRoot_.clear();
             pinnedDemandByRoot_.clear();
+            viewerDemandByRoot_.clear();
             demandedAssets_.clear();
         }
         worker_.request_stop();
@@ -614,6 +633,7 @@ namespace Iridium {
                 throw std::runtime_error(
                     "Thumbnail artifact validation failed.");
             }
+            result.sourceCookKey = artifact.artifact->cookKey;
             result.dependencies =
                 artifact.artifact->dependencies;
             result.thumbnails.reserve(
@@ -667,6 +687,17 @@ namespace Iridium {
                         return lhs.childGuid <
                             rhs.childGuid;
                     });
+                const auto sourceMaterials = importGltfSourceMaterials(sourcePath);
+                for (const auto& material : product.data->materials) {
+                    if (material.sourceKey == "materials/default") continue;
+                    const auto index = material.compiled.sourceMaterialIndex;
+                    if (!sourceMaterials.hasErrors() && index < sourceMaterials.materials().size()) {
+                        result.materialSourceValues.emplace(material.materialGuid,
+                            materialAuthoringSourceValues(sourceMaterials.materials()[index]));
+                        result.materialSources.emplace(material.materialGuid, sourceMaterials.materials()[index]);
+                    }
+                }
+                const auto lodChildren = makeCookedModelLodChildMask(*product.data);
                 result.transparencyDetails.reserve(
                     product.data->materials.size() +
                     product.data->manifest.primitives.size());
@@ -678,15 +709,20 @@ namespace Iridium {
                         .runtimePrimitiveCount = static_cast<uint32_t>(
                             std::ranges::count_if(
                                 product.data->manifest.primitives,
-                                [&material](const CookedModelPrimitive& primitive) {
-                                    return primitive.materialGuid ==
+                                [&](const CookedModelPrimitive& primitive) {
+                                    const size_t index = static_cast<size_t>(
+                                        &primitive - product.data->manifest.primitives.data());
+                                    return !lodChildren[index] && primitive.materialGuid ==
                                         material.materialGuid;
                                 })),
                     });
                 }
                 std::map<AssetGuid, size_t> sourcePrimitiveDetails;
-                for (const CookedModelPrimitive& primitive :
-                        product.data->manifest.primitives) {
+                for (size_t index = 0;
+                        index < product.data->manifest.primitives.size(); ++index) {
+                    if (lodChildren[index]) continue;
+                    const CookedModelPrimitive& primitive =
+                        product.data->manifest.primitives[index];
                     const auto [found, inserted] =
                         sourcePrimitiveDetails.emplace(
                             primitive.sourcePrimitiveGuid,
@@ -997,8 +1033,11 @@ namespace Iridium {
                     job.rootAssetGuid] = {
                     .available =
                         result.diagnostic.empty(),
+                    .sourceCookKey = result.sourceCookKey,
                     .settingsJson =
                         result.settingsJson,
+                    .materialSourceValues = result.materialSourceValues,
+                    .materialSources = result.materialSources,
                     .dependencies =
                         result.dependencies,
                     .associations =

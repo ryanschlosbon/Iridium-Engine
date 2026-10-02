@@ -17,6 +17,7 @@ namespace Iridium {
                 : mesh.model ? mesh.model->assetGuid : AssetGuid{};
         return {
             .enabled = mesh.enabled,
+            .maximumLodLevel = mesh.maximumLodLevel,
             .modelGuid = modelGuid,
             .rawRequestedModelGuid = mesh.requestedAssetGuid,
             .materialOverrides = mesh.materialOverrides,
@@ -26,13 +27,16 @@ namespace Iridium {
     bool sameEditorMeshAuthoringState(
         const EditorMeshAuthoringState& lhs,
         const EditorMeshAuthoringState& rhs) noexcept {
-        return lhs.enabled == rhs.enabled && lhs.modelGuid == rhs.modelGuid &&
+        return lhs.enabled == rhs.enabled &&
+            lhs.maximumLodLevel == rhs.maximumLodLevel &&
+            lhs.modelGuid == rhs.modelGuid &&
             lhs.materialOverrides == rhs.materialOverrides;
     }
 
     void restoreRawEditorMeshAuthoringState(MeshComponent& mesh,
         const EditorMeshAuthoringState& state) {
         mesh.enabled = state.enabled;
+        mesh.maximumLodLevel = state.maximumLodLevel;
         mesh.requestedAssetGuid = state.rawRequestedModelGuid;
         mesh.materialOverrides = state.materialOverrides;
         mesh.requestedMaterialAssetRoots.clear();
@@ -67,6 +71,7 @@ namespace Iridium {
                         "Mesh authoring state changed outside transaction history");
                 }
                 current.enabled = replacement.enabled;
+                current.maximumLodLevel = replacement.maximumLodLevel;
                 current.requestedAssetGuid = replacement.modelGuid;
                 if (replacement.modelGuid.isNil()) {
                     current.model.reset();

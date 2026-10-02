@@ -59,6 +59,7 @@ namespace Iridium::RenderGraph {
         Bgra8Srgb,
         Rgb10A2Unorm,
         Rgba16Float,
+        R16Float,
         Rg16Snorm,
         R11G11B10Float,
         R16Uint,

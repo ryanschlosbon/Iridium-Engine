@@ -5,6 +5,7 @@
 #include "renderer/rhi/RhiResourceTypes.h"
 #include "renderer/rhi/MaterialTableCapacity.h"
 #include "renderer/rhi/Ordinary2CaptureValidation.h"
+#include "renderer/rhi/RenderDebugView.h"
 #include "renderer/transparency/LayeredAtlas.h"
 #include "renderer/transparency/LayeredGlass.h"
 #include "renderer/transparency/Ordinary2Atlas.h"
@@ -13,6 +14,7 @@
 #include "renderer/vulkan/VulkanPipelineLibrary.h"
 #include "renderer/vulkan/VulkanResourceState.h"
 #include "renderer/vulkan/VulkanGBufferLayout.h"
+#include "renderer/vulkan/VkForwardRenderPass.h"
 #include "profiling/CpuAllocationProfile.h"
 
 #include <algorithm>
@@ -26,6 +28,7 @@
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <set>
 #include <string_view>
 #include <type_traits>
 #include <utility>
@@ -57,6 +60,12 @@ namespace {
         MoveOnlyPayload(MoveOnlyPayload&&) noexcept = default;
         MoveOnlyPayload& operator=(MoveOnlyPayload&&) noexcept = default;
     };
+
+    bool testForwardDepthStoreContract() {
+        CHECK(VkForwardRenderPass::depthStoreOperation(true) == VK_ATTACHMENT_STORE_OP_NONE);
+        CHECK(VkForwardRenderPass::depthStoreOperation(false) == VK_ATTACHMENT_STORE_OP_STORE);
+        return true;
+    }
 
     bool testRenderHandleAndResourcePool() {
         ResourcePool<int, GeometryHandle> pool(1);
@@ -240,7 +249,7 @@ namespace {
             { ResourceState::VertexBuffer, VK_PIPELINE_STAGE_VERTEX_INPUT_BIT, VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT, VK_IMAGE_LAYOUT_UNDEFINED },
             { ResourceState::IndexBuffer, VK_PIPELINE_STAGE_VERTEX_INPUT_BIT, VK_ACCESS_INDEX_READ_BIT, VK_IMAGE_LAYOUT_UNDEFINED },
             { ResourceState::ConstantBuffer, VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_UNIFORM_READ_BIT, VK_IMAGE_LAYOUT_UNDEFINED },
-            { ResourceState::ShaderResource, VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
+            { ResourceState::ShaderResource, VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
             { ResourceState::ColorAttachment, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL },
             { ResourceState::DepthWrite, VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT, VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL },
             { ResourceState::DepthRead, VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_SHADER_READ_BIT, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL },
@@ -546,6 +555,136 @@ namespace {
         CHECK(bind != std::string::npos);
         CHECK(clear < rebuild);
         CHECK(rebuild < bind);
+        return true;
+    }
+
+    bool testReflectionProbeDeviceCommandContract() {
+        const auto readSource = [](const char* relative) {
+            std::ifstream input(std::filesystem::path(PROJECT_ROOT_DIR) /
+                relative, std::ios::binary);
+            return std::string(std::istreambuf_iterator<char>(input),
+                std::istreambuf_iterator<char>());
+        };
+        const std::string shader = readSource(
+            "assets/shaders/reflection_probe_capture_compact.comp");
+        CHECK(shader.find(
+            "primitive.binding.x == parameters.excludedInstanceIndex") !=
+            std::string::npos);
+        CHECK(shader.find("(instance.state.w & 8u) == 0u") !=
+            std::string::npos);
+        CHECK(shader.find("(primitive.state.w & 8u) == 0u") !=
+            std::string::npos);
+        CHECK(shader.find("atomicAdd(") != std::string::npos);
+        CHECK(shader.find("candidate.primitiveIndex)") !=
+            std::string::npos);
+        CHECK(shader.find("uint selectedGeometry(") != std::string::npos);
+        CHECK(shader.find("float(capture.metadata.z) * 0.5") !=
+            std::string::npos);
+        CHECK(shader.find("candidate.maximumLod") != std::string::npos);
+
+        const std::string backend = readSource(
+            "src/renderer/vulkan/VulkanVertexBackend.cpp");
+        CHECK(backend.find("vkCmdDrawIndexedIndirectCount(currentCmd,\n"
+            "                            reflectionProbeIndirectCommandBuffers_") !=
+            std::string::npos);
+        CHECK(backend.find(
+            "probe.capture.indirect.device_commands") != std::string::npos);
+        CHECK(backend.find(
+            "reflection-probe device commands disagree with the CPU visibility/LOD oracle") !=
+            std::string::npos);
+        CHECK(backend.find(
+            "probe.capture.lod.mismatched_command_regions") !=
+            std::string::npos);
+        return true;
+    }
+
+    bool testDirectionalShadowDeviceLodContract() {
+        const auto readSource = [](const char* relative) {
+            std::ifstream input(std::filesystem::path(PROJECT_ROOT_DIR) /
+                relative, std::ios::binary);
+            return std::string(std::istreambuf_iterator<char>(input),
+                std::istreambuf_iterator<char>());
+        };
+        const std::string shader = readSource(
+            "assets/shaders/directional_shadow_compact.comp");
+        CHECK(shader.find("uint selectedGeometry(") != std::string::npos);
+        CHECK(shader.find("shadowData.texelWorldSize[shadowIndex][cascadeIndex]") !=
+            std::string::npos);
+        CHECK(shader.find("candidate.maximumLod") != std::string::npos);
+        CHECK(shader.find("errorTexels <= parameters.lodErrorTexels") !=
+            std::string::npos);
+
+        const std::string backend = readSource(
+            "src/renderer/vulkan/VulkanVertexBackend.cpp");
+        CHECK(backend.find("selectGpuSceneDensityLodGeometry(") !=
+            std::string::npos);
+        CHECK(backend.find(
+            "shadow.directional.lod.mismatched_command_regions") !=
+            std::string::npos);
+        CHECK(backend.find(
+            "directional-shadow device commands disagree with the CPU visibility/LOD oracle") !=
+            std::string::npos);
+        return true;
+    }
+
+    bool testPointShadowDeviceLodContract() {
+        const auto readSource = [](const char* relative) {
+            std::ifstream input(std::filesystem::path(PROJECT_ROOT_DIR) /
+                relative, std::ios::binary);
+            return std::string(std::istreambuf_iterator<char>(input),
+                std::istreambuf_iterator<char>());
+        };
+        const std::string shader = readSource(
+            "assets/shaders/point_shadow_compact.comp");
+        CHECK(shader.find("uint selectedGeometry(") != std::string::npos);
+        CHECK(shader.find("shadowData.entries[entry].lightPositionFar.xyz") !=
+            std::string::npos);
+        CHECK(shader.find("float(parameters.faceResolution) * 0.5") !=
+            std::string::npos);
+        CHECK(shader.find("candidate.maximumLod") != std::string::npos);
+
+        const std::string backend = readSource(
+            "src/renderer/vulkan/VulkanVertexBackend.cpp");
+        CHECK(backend.find("selectGpuSceneRadialLodGeometry(\n"
+            "                                        scene.geometries") !=
+            std::string::npos);
+        CHECK(backend.find(
+            "shadow.point.lod.mismatched_command_regions") !=
+            std::string::npos);
+        CHECK(backend.find(
+            "point-shadow device commands disagree with the CPU visibility/LOD oracle") !=
+            std::string::npos);
+        return true;
+    }
+
+    bool testSpotShadowDeviceLodContract() {
+        const auto readSource = [](const char* relative) {
+            std::ifstream input(std::filesystem::path(PROJECT_ROOT_DIR) /
+                relative, std::ios::binary);
+            return std::string(std::istreambuf_iterator<char>(input),
+                std::istreambuf_iterator<char>());
+        };
+        const std::string shader = readSource(
+            "assets/shaders/spot_shadow_compact.comp");
+        CHECK(shader.find("uint selectedGeometry(") != std::string::npos);
+        CHECK(shader.find(
+            "shadowData.entries[parameters.shadowDataSlot].worldToShadowClip * world") !=
+            std::string::npos);
+        CHECK(shader.find(
+            "shadowData.entries[parameters.shadowDataSlot].metadata.z") !=
+            std::string::npos);
+        CHECK(shader.find("candidate.maximumLod") != std::string::npos);
+
+        const std::string backend = readSource(
+            "src/renderer/vulkan/VulkanVertexBackend.cpp");
+        CHECK(backend.find("selectGpuSceneLodGeometry(scene.geometries,") !=
+            std::string::npos);
+        CHECK(backend.find(
+            "shadow.spot.lod.mismatched_command_regions") !=
+            std::string::npos);
+        CHECK(backend.find(
+            "spot-shadow device commands disagree with the CPU visibility/LOD oracle") !=
+            std::string::npos);
         return true;
     }
 
@@ -1788,7 +1927,7 @@ namespace {
         CHECK(resolveShader.find(
             "(entryIdentity & workMask) != expectedEntryIdentity") !=
             std::string::npos);
-        CHECK(resolveShader.find("push.padding0 != 0u") !=
+        CHECK(resolveShader.find("(push.padding0 & 1u) != 0u") !=
             std::string::npos);
         CHECK(backend.find(
             "void VulkanVertexBackend::recordOrdinary2SceneResolve(") !=
@@ -1984,6 +2123,21 @@ namespace {
             std::string::npos);
         CHECK(targets.find("destroyDeepLayeredTier(target.cinematic8)") !=
             std::string::npos);
+        CHECK(targets.find("if (layered.weightedOit)") !=
+            std::string::npos);
+        CHECK(targets.find("transparency.oit.accumulation") !=
+            std::string::npos);
+        CHECK(targets.find("transparency.oit.revealage") !=
+            std::string::npos);
+        CHECK(targets.find("weightedOitAccumulationFramebuffer") !=
+            std::string::npos);
+        CHECK(targets.find("weightedOitResolveFramebuffer") !=
+            std::string::npos);
+        CHECK(targets.find(
+            "vkCreateFramebuffer(WeightedOIT accumulation)") !=
+            std::string::npos);
+        CHECK(targets.find("vkCreateFramebuffer(WeightedOIT resolve)") !=
+            std::string::npos);
 
         const std::string targetHeader = readSource(
             "src/renderer/vulkan/VulkanFrameTargets.h");
@@ -1994,6 +2148,69 @@ namespace {
         CHECK(targetHeader.find("DeepLayeredTier hero4") !=
             std::string::npos);
         CHECK(targetHeader.find("DeepLayeredTier cinematic8") !=
+            std::string::npos);
+        CHECK(targetHeader.find("weightedOitAccumulation") !=
+            std::string::npos);
+        CHECK(targetHeader.find("weightedOitRevealage") !=
+            std::string::npos);
+        CHECK(targetHeader.find("weightedOitAccumulationFramebuffer") !=
+            std::string::npos);
+        CHECK(targetHeader.find("weightedOitResolveFramebuffer") !=
+            std::string::npos);
+
+        const std::string weightedPass = readSource(
+            "src/renderer/vulkan/VulkanWeightedOitPass.cpp");
+        CHECK(weightedPass.find("VK_FORMAT_R16G16B16A16_SFLOAT") !=
+            std::string::npos);
+        CHECK(weightedPass.find("VK_FORMAT_R16_SFLOAT") !=
+            std::string::npos);
+        CHECK(weightedPass.find("VK_BLEND_FACTOR_ONE_MINUS_SRC_COLOR") !=
+            std::string::npos);
+        CHECK(weightedPass.find("depthStencil.depthWriteEnable = VK_FALSE") !=
+            std::string::npos);
+        CHECK(weightedPass.find("VK_COMPARE_OP_LESS_OR_EQUAL") !=
+            std::string::npos);
+        CHECK(weightedPass.find("VK_CULL_MODE_NONE") !=
+            std::string::npos);
+        CHECK(weightedPass.find("weighted_oit_material_indexed_frag.spv") !=
+            std::string::npos);
+        CHECK(weightedPass.find("weighted_oit_resolve_frag.spv") !=
+            std::string::npos);
+        CHECK(weightedPass.find("target.weightedOitAccumulation.view") !=
+            std::string::npos);
+        CHECK(weightedPass.find("target.weightedOitRevealage.view") !=
+            std::string::npos);
+
+        const std::string weightedMaterial = readSource(
+            "assets/shaders/weighted_oit_material_indexed.frag");
+        const std::string complexMaterialBody = readSource(
+            "assets/shaders/include/complex_material_body.glsl");
+        const std::string weightedResolve = readSource(
+            "assets/shaders/weighted_oit_resolve.frag");
+        const std::string weightedInstancedVertex = readSource(
+            "assets/shaders/weighted_oit_instanced.vert");
+        CHECK(weightedMaterial.find("IRIDIUM_WEIGHTED_OIT") !=
+            std::string::npos);
+        CHECK(complexMaterialBody.find(
+            "#if !defined(IRIDIUM_OPAQUE_FORWARD) && !defined(IRIDIUM_WEIGHTED_OIT)") !=
+            std::string::npos);
+        CHECK(complexMaterialBody.find(
+            "#define IRIDIUM_REFRACTION_TRANSPORT 1") !=
+            std::string::npos);
+        CHECK(complexMaterialBody.find(
+            "#ifdef IRIDIUM_REFRACTION_TRANSPORT") !=
+            std::string::npos);
+        CHECK(weightedResolve.find("1.0 - revealage") !=
+            std::string::npos);
+        CHECK(weightedResolve.find("accumulation.rgb / accumulation.a") !=
+            std::string::npos);
+        CHECK(weightedResolve.find("push.debugView == 23u") !=
+            std::string::npos);
+        CHECK(weightedResolve.find("accumulation.a / 256.0") !=
+            std::string::npos);
+        CHECK(weightedInstancedVertex.find("VK_VERTEX_INPUT_RATE_INSTANCE") ==
+            std::string::npos);
+        CHECK(weightedInstancedVertex.find("inInstanceMatrix3") !=
             std::string::npos);
 
         const std::string backend = readSource(
@@ -2023,6 +2240,63 @@ namespace {
         CHECK(clear != std::string::npos);
         CHECK(cleanup != std::string::npos);
         CHECK(clear < cleanup);
+        CHECK(backend.find("weightedOit_.rebuildDescriptors(frameTargets)") !=
+            std::string::npos);
+        CHECK(backend.find(
+            "renderGraph_.beginPass(currentCmd,\n                \"transparent.oit.accumulate\")") !=
+            std::string::npos);
+        CHECK(backend.find(
+            "gpu.transparency.oit.accumulate") != std::string::npos);
+        CHECK(backend.find("weightedOit_.accumulationPipeline()") !=
+            std::string::npos);
+        CHECK(backend.find("weightedOit_.resolvePipeline()") !=
+            std::string::npos);
+        CHECK(backend.find("resolveDebugView") != std::string::npos);
+        CHECK(backend.find("weightedOitPermutationIndex(") !=
+            std::string::npos);
+        CHECK(backend.find("transparent.oit.order_seed") !=
+            std::string::npos);
+        CHECK(backend.find("weightedOitExecutionEnabled ? 0u : ") !=
+            std::string::npos);
+        CHECK(backend.find("setWeightedOitInstanceCapacity(") !=
+            std::string::npos);
+        CHECK(backend.find("VK_VERTEX_INPUT_RATE_INSTANCE") ==
+            std::string::npos);
+        CHECK(backend.find("batchInstanceCount") != std::string::npos);
+        CHECK(backend.find("batchFirstInstance") != std::string::npos);
+        CHECK(backend.find("packet.firstInstanceTransform") !=
+            std::string::npos);
+        CHECK(backend.find("packet.instanceCount") != std::string::npos);
+        CHECK(backend.find("instanceTransforms.size()") !=
+            std::string::npos);
+        CHECK(backend.find("transparent.oit.instance_upload_bytes") !=
+            std::string::npos);
+        const std::string instanceBatch = readSource(
+            "src/scene/components/RenderInstanceBatchComponent.h");
+        CHECK(instanceBatch.find("std::vector<glm::mat4> localTransforms") !=
+            std::string::npos);
+        CHECK(instanceBatch.find("std::vector<SubMeshBounds> subMeshBounds") !=
+            std::string::npos);
+        const std::string application = readSource("src/core/Application.cpp");
+        CHECK(application.find(
+            "packet.firstInstanceTransform = instanceBatch") !=
+            std::string::npos);
+        CHECK(application.find(
+            "? firstInstanceTransform : UINT32_MAX") !=
+            std::string::npos);
+        const std::string weightedPassSource = readSource(
+            "src/renderer/vulkan/VulkanWeightedOitPass.cpp");
+        CHECK(weightedPassSource.find("VK_VERTEX_INPUT_RATE_INSTANCE") !=
+            std::string::npos);
+        CHECK(weightedPassSource.find("weighted_oit_instanced_vert.spv") !=
+            std::string::npos);
+        const size_t weightedClear = backend.find(
+            "weightedOit_.clearDescriptors()");
+        const size_t weightedTargetCleanup = backend.find(
+            "frameTargets.cleanup()", weightedClear);
+        CHECK(weightedClear != std::string::npos);
+        CHECK(weightedTargetCleanup != std::string::npos);
+        CHECK(weightedClear < weightedTargetCleanup);
         return true;
     }
 
@@ -2048,6 +2322,11 @@ namespace {
         model.subMeshes.front().transparency.resolvedClass =
             TransparencyClass::SortedSurface;
         CHECK(!modelRequiresRefractionPyramids(model));
+        CHECK(!modelRequiresWeightedOit(model));
+        model.subMeshes.front().transparency.resolvedClass =
+            TransparencyClass::WeightedOit;
+        CHECK(!modelRequiresRefractionPyramids(model));
+        CHECK(modelRequiresWeightedOit(model));
         model.subMeshes.front().transparency.resolvedClass =
             TransparencyClass::LayeredGlass;
         CHECK(modelRequiresRefractionPyramids(model));
@@ -2068,6 +2347,7 @@ namespace {
         model.subMeshes.front().materialIndex = 99;
         CHECK(!modelRequiresRefractionPyramids(model));
         CHECK(!modelRequiresOrdinary2LayeredInterfaces(model));
+        CHECK(!modelRequiresWeightedOit(model));
 
         const auto readSource = [](const char* relative) {
             const std::filesystem::path path =
@@ -2104,6 +2384,12 @@ namespace {
             std::string::npos);
         CHECK(application.find(".cinematic8LayeredInterfaces = mainModel") !=
             std::string::npos);
+        CHECK(application.find(".weightedOit = mainModel") !=
+            std::string::npos);
+        CHECK(application.find("isWeightedOitPacket(packet)))") !=
+            std::string::npos);
+        CHECK(application.find("transparent.class.weighted_oit") !=
+            std::string::npos);
 
         const std::string backend = readSource(
             "src/renderer/vulkan/VulkanVertexBackend.cpp");
@@ -2124,6 +2410,10 @@ namespace {
         CHECK(function.find("requirements.hero4LayeredInterfaces") !=
             std::string::npos);
         CHECK(function.find("requirements.cinematic8LayeredInterfaces") !=
+            std::string::npos);
+        CHECK(function.find("requirements.weightedOit") !=
+            std::string::npos);
+        CHECK(function.find("weightedOitResidency_.observe") !=
             std::string::npos);
         CHECK(function.find("layeredAtlasCapacityExtent(") !=
             std::string::npos);
@@ -2157,6 +2447,18 @@ namespace {
     }
 
     bool testWeightedOitBoundedReferenceContract() {
+        DrawPacket packet{};
+        CHECK(sizeof(packet) == 240u);
+        CHECK(packet.firstInstanceTransform == UINT32_MAX);
+        CHECK(packet.instanceCount == 1u);
+        packet.transparencyExecutionMode =
+            TransparencyExecutionMode::Classified;
+        packet.transparency.resolvedClass = TransparencyClass::WeightedOit;
+        CHECK(isWeightedOitPacket(packet));
+        packet.transparencyExecutionMode =
+            TransparencyExecutionMode::LegacyTwoBucket;
+        CHECK(!isWeightedOitPacket(packet));
+
         CHECK(weightedOitWeight(0.0f, 0.0f) == 0.0f);
         const float nearWeight = weightedOitWeight(1.0f, 0.0f);
         const float farWeight = weightedOitWeight(1.0f, 1.0f);
@@ -2169,6 +2471,9 @@ namespace {
         CHECK(sanitized);
         CHECK(weightedOitLogicalStorageBytes(3840u, 2160u) ==
             82'944'000u);
+        CHECK(kWeightedOitMaximumInstanceCount == 65'536u);
+        CHECK(weightedOitInstanceStreamBytes(
+            kWeightedOitMaximumInstanceCount) == 4'194'304u);
 
         WeightedOitAccumulator empty{};
         const WeightedOitResolveResult emptyResult =
@@ -2208,6 +2513,41 @@ namespace {
         CHECK(glm::all(glm::lessThan(glm::abs(forward.premultipliedRadiance -
             reverse.premultipliedRadiance), glm::vec3(1.0e-6f))));
 
+        constexpr uint32_t PermutationPacketCount = 256u;
+        std::set<std::array<uint32_t, PermutationPacketCount>> orders;
+        WeightedOitResolveResult permutationReference{};
+        for (uint64_t seed = 1u; seed <= 64u; ++seed) {
+            std::array<uint32_t, PermutationPacketCount> order{};
+            std::array<bool, PermutationPacketCount> seen{};
+            WeightedOitAccumulator accumulator{};
+            for (uint32_t ordinal = 0u;
+                ordinal < PermutationPacketCount; ++ordinal) {
+                const uint32_t index = weightedOitPermutationIndex(
+                    ordinal, PermutationPacketCount, seed);
+                CHECK(index < PermutationPacketCount);
+                CHECK(!seen[index]);
+                seen[index] = true;
+                order[ordinal] = index;
+                accumulateWeightedOit(accumulator,
+                    contributions[index % contributions.size()]);
+            }
+            CHECK(std::ranges::all_of(seen,
+                [](bool value) { return value; }));
+            CHECK(orders.insert(order).second);
+            const WeightedOitResolveResult result =
+                resolveWeightedOit(accumulator);
+            CHECK(result.finite);
+            if (seed == 1u) permutationReference = result;
+            CHECK(std::abs(result.coverage - permutationReference.coverage) <
+                1.0e-6f);
+            CHECK(glm::all(glm::lessThan(glm::abs(
+                result.premultipliedRadiance -
+                    permutationReference.premultipliedRadiance),
+                glm::vec3(1.0e-5f))));
+        }
+        CHECK(weightedOitPermutationIndex(17u, 256u, 0u) == 17u);
+        CHECK(orders.size() == 64u);
+
         WeightedOitAccumulator qualifiedMaximum{};
         for (uint32_t index = 0u;
             index < WeightedOitQualifiedMaximumFragments; ++index) {
@@ -2241,6 +2581,10 @@ namespace {
     }
 
     bool testArtistFacingTransparencyPolicyControls() {
+        CHECK(DrawPacket{}.transparencyExecutionMode ==
+            TransparencyExecutionMode::Classified);
+        CHECK(ModelAsset{}.transparencyExecutionMode ==
+            TransparencyExecutionMode::Classified);
         const std::filesystem::path panelPath =
             std::filesystem::path(PROJECT_ROOT_DIR) /
             "src/editor/panels/windows/AssetBrowserPanel.cpp";
@@ -2249,7 +2593,11 @@ namespace {
         const std::string source{ std::istreambuf_iterator<char>(input),
             std::istreambuf_iterator<char>() };
         CHECK(source.find("Transparency renderer") != std::string::npos);
-        CHECK(source.find("Classified hybrid (recommended)") !=
+        CHECK(source.find("Classified hybrid (production)") !=
+            std::string::npos);
+        CHECK(source.find("--developer-legacy-transparency") !=
+            std::string::npos);
+        CHECK(source.find("transparencyExecutionValues") ==
             std::string::npos);
         CHECK(source.find("Override inherited transparency policy") !=
             std::string::npos);
@@ -2276,6 +2624,141 @@ namespace {
         return true;
     }
 
+    bool testTransparencyDeepDebugViewContract() {
+        CHECK(parseRenderDebugView("transparency-interval") ==
+            RenderDebugView::TransparencyInterval);
+        CHECK(parseRenderDebugView("transparency-pyramid-mip") ==
+            RenderDebugView::TransparencyPyramidMip);
+        CHECK(parseRenderDebugView("transparency-layers") ==
+            RenderDebugView::TransparencyLayers);
+        CHECK(parseRenderDebugView("transparency-overflow") ==
+            RenderDebugView::TransparencyOverflow);
+        CHECK(renderDebugViewName(RenderDebugView::TransparencyInterval) ==
+            "transparency-interval");
+        CHECK(renderDebugViewDescription(
+            RenderDebugView::TransparencyPyramidMip).find("actual") !=
+            std::string_view::npos);
+
+        const auto readSource = [](const char* relative) {
+            const std::filesystem::path path =
+                std::filesystem::path(PROJECT_ROOT_DIR) / relative;
+            std::ifstream input(path, std::ios::binary);
+            return std::string{ std::istreambuf_iterator<char>(input),
+                std::istreambuf_iterator<char>() };
+        };
+        const std::string materialBody = readSource(
+            "assets/shaders/include/complex_material_body.glsl");
+        CHECK(!materialBody.empty());
+        CHECK(materialBody.find(
+            "iridiumTransparencyIntervalDebugColor") != std::string::npos);
+        CHECK(materialBody.find(
+            "transparencyDebugSelectedMip = selectedLod") !=
+            std::string::npos);
+        CHECK(materialBody.find(
+            "retainedLayers = iridiumLayeredDeepInterfaceCount()") !=
+            std::string::npos);
+        CHECK(materialBody.find(
+            "saturated = iridiumLayeredDeepReachedCapacity()") !=
+            std::string::npos);
+        CHECK(materialBody.find(
+            "residualTail = iridiumLayeredDeepAnyWorkOpenAtCapacity()") !=
+            std::string::npos);
+        CHECK(materialBody.find("residualTail = true") !=
+            std::string::npos);
+        CHECK(materialBody.find("return (push.padding1 >> 24u) & 0xffu") !=
+            std::string::npos);
+
+        const std::string backend = readSource(
+            "src/renderer/vulkan/VulkanVertexBackend.cpp");
+        CHECK(backend.find(
+            "static_cast<uint32_t>(debugView_) << 24u") !=
+            std::string::npos);
+        CHECK(backend.find("Hero4TerminationPassNames") !=
+            std::string::npos);
+        CHECK(backend.find("Cinematic8TerminationPassNames") !=
+            std::string::npos);
+        CHECK(backend.find(
+            "const std::string passName = std::string(\n"
+            "            \"transparent.layered.\")") ==
+            std::string::npos);
+        CHECK(backend.find("spotShadowMappingScratch_.assign") !=
+            std::string::npos);
+        CHECK(backend.find("pointShadowMappingScratch_.assign") !=
+            std::string::npos);
+
+        const std::string transformSystem = readSource(
+            "src/ecs/systems/TransformSystem.cpp");
+        CHECK(transformSystem.find(
+            "sortEntitiesByDepth(registry, sortedEntitiesScratch_)") !=
+            std::string::npos);
+        CHECK(transformSystem.find("std::vector<Entity> sortedEntities;") ==
+            std::string::npos);
+        const std::string localShadows = readSource(
+            "src/renderer/lighting/LocalShadow.cpp");
+        CHECK(localShadows.find("#include <unordered_set>") ==
+            std::string::npos);
+        const std::string probeCapture = readSource(
+            "src/renderer/lighting/ReflectionProbeCapture.cpp");
+        CHECK(probeCapture.find("#include <unordered_set>") ==
+            std::string::npos);
+
+        const std::string canonicalBody = readSource(
+            "assets/shaders/include/canonical_lighting_body.glsl");
+        CHECK(canonicalBody.find(
+            "push.debugView.x >= 20 && push.debugView.x <= 23") !=
+            std::string::npos);
+        const std::string viewport = readSource(
+            "src/editor/panels/core/ViewPortPanel.cpp");
+        CHECK(viewport.find("Transparency Interval") != std::string::npos);
+        CHECK(viewport.find("Transparency Pyramid Mip") !=
+            std::string::npos);
+        CHECK(viewport.find("Transparency Layers") != std::string::npos);
+        CHECK(viewport.find("Transparency Overflow") != std::string::npos);
+        const std::string sceneResolve = readSource(
+            "assets/shaders/layered_scene_resolve.frag");
+        CHECK(sceneResolve.find("(push.padding0 & 1u) != 0u") !=
+            std::string::npos);
+        CHECK(sceneResolve.find("iridiumLayeredRetainedCountColor") !=
+            std::string::npos);
+        return true;
+    }
+
+    bool testOpaqueShadowPositionOnlyFetchContract() {
+        const auto readSource = [](const char* relative) {
+            const std::filesystem::path path =
+                std::filesystem::path(PROJECT_ROOT_DIR) / relative;
+            std::ifstream input(path, std::ios::binary);
+            return std::string{ std::istreambuf_iterator<char>(input),
+                std::istreambuf_iterator<char>() };
+        };
+        for (const char* shader : {
+                "assets/shaders/directional_shadow_opaque.vert",
+                "assets/shaders/directional_shadow_gpu_scene_opaque.vert",
+                "assets/shaders/spot_shadow_opaque.vert",
+                "assets/shaders/spot_shadow_gpu_scene_opaque.vert",
+                "assets/shaders/point_shadow_opaque.vert",
+                "assets/shaders/point_shadow_gpu_scene_opaque.vert" }) {
+            const std::string source = readSource(shader);
+            CHECK(!source.empty());
+            CHECK(source.find(
+                "layout(location = 0) in vec3 inPosition") !=
+                std::string::npos);
+            CHECK(source.find("inColor") == std::string::npos);
+            CHECK(source.find("inTexCoord") == std::string::npos);
+        }
+        for (const char* implementation : {
+                "src/renderer/vulkan/VulkanDirectionalShadowMap.cpp",
+                "src/renderer/vulkan/VulkanSpotShadowAtlas.cpp",
+                "src/renderer/vulkan/VulkanPointShadowPools.cpp" }) {
+            const std::string source = readSource(implementation);
+            CHECK(source.find("_opaque_vert.spv") != std::string::npos);
+            CHECK(source.find("alphaMasked\n"
+                "            ? static_cast<uint32_t>(attributes.size()) : 1u") !=
+                std::string::npos);
+        }
+        return true;
+    }
+
 } // namespace
 
 int main() {
@@ -2292,6 +2775,7 @@ int main() {
         { "PipelineStateDesc", testPipelineStateDescHash },
         { "render queue depth coverage", testRenderQueueDepthCoverage },
         { "ResourceState mapping", testResourceStateMapping },
+        { "read-only forward depth has no store write", testForwardDepthStoreContract },
         { "VulkanCommandList invalid wrapper", testInvalidCommandList },
         { "GBuffer candidate contracts", testGBufferCandidateContracts },
         { "packed GBuffer numeric bounds", testPackedGBufferNumericBounds },
@@ -2327,8 +2811,20 @@ int main() {
             testWeightedOitBoundedReferenceContract },
         { "artist-facing transparency policy controls",
             testArtistFacingTransparencyPolicyControls },
+        { "transparency deep debug-view contract",
+            testTransparencyDeepDebugViewContract },
         { "swapchain rebuild clustered descriptor lifecycle",
             testSwapchainRebuildRetiresClusterDescriptors },
+        { "reflection-probe device command contract",
+            testReflectionProbeDeviceCommandContract },
+        { "directional-shadow device LOD contract",
+            testDirectionalShadowDeviceLodContract },
+        { "point-shadow device LOD contract",
+            testPointShadowDeviceLodContract },
+        { "spot-shadow device LOD contract",
+            testSpotShadowDeviceLodContract },
+        { "opaque shadows fetch position only",
+            testOpaqueShadowPositionOnlyFetchContract },
     };
 
     size_t failures = 0;

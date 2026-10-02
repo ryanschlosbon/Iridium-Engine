@@ -15,8 +15,21 @@ namespace Iridium {
         Orthographic = 1,
     };
 
+    // CPU-side temporal ownership, deliberately separate from the shader UBO.
+    // Callers change identity when switching views, and resetRevision on cuts.
+    struct ViewHistoryContext {
+        uint64_t identity = 1;
+        uint64_t resetRevision = 0;
+        auto operator<=>(const ViewHistoryContext&) const = default;
+    };
+
     inline constexpr uint32_t ViewTransportRefractionPyramidsAvailable =
         1u << 0u;
+    inline constexpr uint32_t ViewTransportDebugViewShift = 8u;
+    inline constexpr uint32_t ViewTransportDebugViewMask =
+        0xffu << ViewTransportDebugViewShift;
+    static_assert((ViewTransportDebugViewMask &
+        ViewTransportRefractionPyramidsAvailable) == 0u);
 
     struct ViewTransportRecord {
         alignas(16) glm::mat4 view{ 1.0f };
@@ -63,6 +76,11 @@ namespace Iridium {
     }
 
     struct SubMesh {
+        // Optional M7.3 per-primitive arena range. Legacy geometry falls back
+        // to ModelAsset::geometry.
+        GeometryHandle geometry;
+        uint8_t indexFormat = 1; // 0 = UInt16, 1 = UInt32
+        int32_t vertexOffset = 0;
         uint32_t indexStart = 0;
         uint32_t indexCount = 0;
         int materialIndex = -1;
@@ -80,6 +98,21 @@ namespace Iridium {
         glm::vec3 boundsMax{ 0.0f };
         glm::vec3 boundsSphereCenter{ 0.0f };
         float boundsSphereRadius = 0.0f;
+    };
+
+    struct ModelLodLevel {
+        float geometricError = 0.0f;
+        SubMesh subMesh;
+    };
+
+    struct ModelLodChain {
+        AssetGuid sourcePrimitiveGuid;
+        AssetGuid basePrimitiveGuid;
+        // Runtime-only physical residency provenance. Level zero remains the
+        // stable canonical primitive identity even when its draw range has been
+        // rebound to this coarser cooked level.
+        uint32_t residentBaseLevel = 0;
+        std::vector<ModelLodLevel> levels;
     };
 
     // The Vertex is Plain Old Data (POD)
@@ -128,13 +161,27 @@ namespace Iridium {
         AssetGuid assetGuid;
         std::string artifactCookKey;
         TransparencyExecutionMode transparencyExecutionMode =
-            TransparencyExecutionMode::LegacyTwoBucket;
+            TransparencyExecutionMode::Classified;
 
         // The single ticket to the GPU buffers
         GeometryHandle geometry;
+        std::vector<GeometryHandle> geometryArena;
 
         uint32_t totalIndices = 0;
+        uint64_t sourceIndexBytes = 0;
+        uint64_t arenaIndexBytes = 0;
+        uint64_t arenaSavedIndexBytes = 0;
+        uint64_t arenaUInt16IndexCount = 0;
+        uint64_t arenaUInt32IndexCount = 0;
+        uint32_t lodResidentBaseLevel = 0;
+        uint32_t lodFallbackChainCount = 0;
+        uint32_t lodWithheldPrimitiveRangeCount = 0;
+        uint64_t lodWithheldIndexBytes = 0;
         std::vector<SubMesh> subMeshes;
+        // Optional finest-to-coarsest cooked chains. Level zero aliases the
+        // canonical submesh identity; coarser levels own distinct geometry
+        // identities but inherit its material and consumer semantics.
+        std::vector<ModelLodChain> lodChains;
 
         // Material bindings carry material, PSO, queue, and opaque-sort identity together.
         std::vector<MaterialBinding> materials;
@@ -150,7 +197,7 @@ namespace Iridium {
     };
 
     // Matches Application's classified queue routing without constructing draw
-    // packets. A classified SortedSurface uses only the sorted forward pass;
+    // packets. SortedSurface and WeightedOIT do not consume refraction products;
     // every other transparent route currently consumes the shared refraction
     // pyramids. Invalid material indices cannot produce a draw and are ignored.
     [[nodiscard]] inline bool modelRequiresRefractionPyramids(
@@ -167,8 +214,10 @@ namespace Iridium {
             }
             if (model.transparencyExecutionMode ==
                     TransparencyExecutionMode::Classified &&
-                subMesh.transparency.resolvedClass ==
-                    TransparencyClass::SortedSurface) {
+                (subMesh.transparency.resolvedClass ==
+                        TransparencyClass::SortedSurface ||
+                    subMesh.transparency.resolvedClass ==
+                        TransparencyClass::WeightedOit)) {
                 continue;
             }
             return true;
@@ -215,6 +264,28 @@ namespace Iridium {
         const ModelAsset& model) noexcept {
         return modelRequiresLayeredInterfaces(model,
             TransparencyQuality::Cinematic8);
+    }
+
+    [[nodiscard]] inline bool modelRequiresWeightedOit(
+        const ModelAsset& model) noexcept {
+        if (model.transparencyExecutionMode !=
+                TransparencyExecutionMode::Classified) {
+            return false;
+        }
+        for (const SubMesh& subMesh : model.subMeshes) {
+            if (subMesh.materialIndex < 0 ||
+                static_cast<size_t>(subMesh.materialIndex) >=
+                    model.materials.size()) {
+                continue;
+            }
+            if (model.materials[static_cast<size_t>(subMesh.materialIndex)].
+                    renderQueue == RenderQueue::Transparent &&
+                subMesh.transparency.resolvedClass ==
+                    TransparencyClass::WeightedOit) {
+                return true;
+            }
+        }
+        return false;
     }
 
 } // namespace Iridium

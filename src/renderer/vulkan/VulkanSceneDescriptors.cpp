@@ -203,7 +203,7 @@ namespace Iridium {
     }
 
     void VulkanSceneDescriptors::setEnvironmentImages(
-        const VulkanEnvironmentImageDescriptors& environment) {
+        const VulkanEnvironmentImageDescriptors& environment, uint32_t frame) {
         const auto valid = [](const VkDescriptorImageInfo& image) {
             return image.imageView != VK_NULL_HANDLE &&
                 image.sampler != VK_NULL_HANDLE &&
@@ -219,7 +219,9 @@ namespace Iridium {
         }
         environmentImages_ = environment;
         hasEnvironmentImages_ = true;
-        for (VkDescriptorSet set : sets_) {
+        for (uint32_t index = 0; index < sets_.size(); ++index) {
+            if (frame != UINT32_MAX && index != frame) continue;
+            const VkDescriptorSet set = sets_[index];
             std::array<VkWriteDescriptorSet, 4> writes{
                 imageWrite(set, 16, environmentImages_.irradiance),
                 imageWrite(set, 17, environmentImages_.prefilteredRadiance),

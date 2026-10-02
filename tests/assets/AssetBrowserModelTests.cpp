@@ -1,5 +1,6 @@
 #include "assets/AssetBrowserModel.h"
 #include "assets/SqliteAssetCatalog.h"
+#include "editor/TransparencyAuthoringPresentation.h"
 
 #include <array>
 #include <cstring>
@@ -267,6 +268,62 @@ namespace {
         return true;
     }
 
+    bool testOpaquePrimitiveTransparencyPresentation() {
+        CompiledTransparencyPolicy opaque{};
+        opaque.resolvedClass = TransparencyClass::None;
+        const TransparencyAuthoringPresentation collapsed =
+            describeTransparencyAuthoring(true, &opaque, false);
+        CHECK(collapsed.cookedOpaquePrimitive);
+        CHECK(collapsed.controlsCollapsed);
+
+        const TransparencyAuthoringPresentation overridden =
+            describeTransparencyAuthoring(true, &opaque, true);
+        CHECK(overridden.cookedOpaquePrimitive);
+        CHECK(!overridden.controlsCollapsed);
+
+        CompiledTransparencyPolicy transparent{};
+        transparent.resolvedClass = TransparencyClass::ThinGlass;
+        const TransparencyAuthoringPresentation expanded =
+            describeTransparencyAuthoring(true, &transparent, false);
+        CHECK(!expanded.cookedOpaquePrimitive);
+        CHECK(!expanded.controlsCollapsed);
+
+        const TransparencyAuthoringPresentation material =
+            describeTransparencyAuthoring(false, &opaque, false);
+        CHECK(!material.cookedOpaquePrimitive);
+        CHECK(!material.controlsCollapsed);
+
+        const TransparencyAuthoringPresentation pending =
+            describeTransparencyAuthoring(true, nullptr, false);
+        CHECK(!pending.cookedOpaquePrimitive);
+        CHECK(!pending.controlsCollapsed);
+        return true;
+    }
+
+    bool testDrawerTransparencySections() {
+        AssetCatalogRecord material{
+            .assetType = "iridium.material",
+        };
+        AssetCatalogRecord primitive{
+            .assetType = "iridium.model-primitive",
+        };
+        AssetCatalogRecord texture{
+            .assetType = "iridium.texture",
+        };
+        CHECK(assetBrowserDrawerSection(material, true) ==
+            AssetBrowserDrawerSection::Material);
+        CHECK(assetBrowserDrawerSection(primitive, false) ==
+            AssetBrowserDrawerSection::ModelPrimitive);
+        CHECK(assetBrowserDrawerSection(primitive, true) ==
+            AssetBrowserDrawerSection::TransparentPrimitive);
+        CHECK(assetBrowserDrawerSection(texture, true) ==
+            AssetBrowserDrawerSection::Unsupported);
+        CHECK(assetBrowserDrawerSectionLabel(
+            AssetBrowserDrawerSection::TransparentPrimitive) ==
+            "Transparent Primitive");
+        return true;
+    }
+
     bool testTypedGuidPayload() {
         const AssetDragPayload expected{
             .guid = guid(300, 7),
@@ -322,6 +379,17 @@ namespace {
         CHECK(!decodeAssetDragPayload(
             kAssetBrowserDragPayloadType,
             std::as_bytes(std::span(&bytes, 1))));
+        const std::string folder = "Vehicles/Hero";
+        std::vector<std::byte> folderBytes(folder.size() + 1);
+        std::memcpy(folderBytes.data(), folder.c_str(), folderBytes.size());
+        CHECK(decodeAssetFolderDragPayload(
+            kAssetBrowserFolderDragPayloadType, folderBytes) == folder);
+        CHECK(!decodeAssetFolderDragPayload("WRONG", folderBytes));
+        const std::string escape = "../Outside";
+        folderBytes.resize(escape.size() + 1);
+        std::memcpy(folderBytes.data(), escape.c_str(), folderBytes.size());
+        CHECK(!decodeAssetFolderDragPayload(
+            kAssetBrowserFolderDragPayloadType, folderBytes));
         return true;
     }
 
@@ -416,6 +484,10 @@ int main() {
         { "paging and layout", testPagingAndLayout },
         { "transparency policy targets are discoverable",
             testTransparencyPolicyTargetsAreDiscoverable },
+        { "opaque primitive transparency presentation",
+            testOpaquePrimitiveTransparencyPresentation },
+        { "drawer transparency sections",
+            testDrawerTransparencySections },
         { "typed GUID payload", testTypedGuidPayload },
         { "folders and directory filtering",
             testFoldersAndDirectoryFiltering },

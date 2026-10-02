@@ -63,7 +63,8 @@ namespace {
             CHECK(runtime.registry.descriptors()[index].cookedSectionId.toString() ==
                 sections[index]);
             CHECK(runtime.registry.descriptors()[index].currentCookedVersion ==
-                (ids[index] == "iridium.component.light" ? 2u : 1u));
+                (ids[index] == "iridium.component.light" ||
+                 ids[index] == "iridium.component.mesh" ? 2u : 1u));
         }
         CHECK(source.registry.codecs().size() == 8);
         CHECK(source.registry.codecs()[0].componentId.value() ==
@@ -71,6 +72,10 @@ namespace {
         CHECK(source.registry.codecs()[4].componentId.value() ==
             "iridium.component.light");
         CHECK(source.registry.codecs()[4].currentSourceVersion == 2);
+        CHECK(source.registry.sourceName(
+            *Iridium::ComponentTypeId::parse("iridium.component.mesh"),
+            *Iridium::PropertyId::parse("maximum_lod_level")) ==
+            "maximumLodLevel");
         CHECK(source.registry.sourceName(
             *Iridium::ComponentTypeId::parse("iridium.component.mesh"),
             *Iridium::PropertyId::parse("material_overrides")) ==
@@ -93,12 +98,14 @@ namespace {
         CHECK((std::get<std::array<float, 3>>(
             transform->properties[2].defaultValue)[0] == 1.0f));
         const auto* mesh = runtime.registry.find(id("iridium.component.mesh"));
-        CHECK(mesh && mesh->properties.size() == 3);
+        CHECK(mesh && mesh->properties.size() == 4);
         CHECK(mesh->properties[1].id.value() == "model");
         CHECK(mesh->properties[1].nullable);
         CHECK(mesh->properties[1].referenceKind ==
             Iridium::PropertyReferenceKind::Asset);
-        CHECK(mesh->properties[2].collectionOrdering ==
+        CHECK(mesh->properties[2].id.value() == "maximum_lod_level");
+        CHECK(std::get<int32_t>(mesh->properties[2].defaultValue) == 15);
+        CHECK(mesh->properties[3].collectionOrdering ==
             Iridium::CollectionOrdering::SourceSubassetGuid);
         const auto* relationship = runtime.registry.find(id(
             "iridium.component.relationship"));

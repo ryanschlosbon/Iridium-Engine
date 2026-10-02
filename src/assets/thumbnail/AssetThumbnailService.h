@@ -4,6 +4,7 @@
 #include "assets/AssetImport.h"
 #include "assets/cooker/LocalDerivedDataCache.h"
 #include "assets/thumbnail/AssetThumbnail.h"
+#include "material/SourceMaterial.h"
 
 #include <condition_variable>
 #include <deque>
@@ -37,8 +38,11 @@ namespace Iridium {
 
     struct PreparedAssetThumbnailBatch {
         AssetGuid rootAssetGuid;
+        std::string sourceCookKey;
         std::vector<AssetThumbnailPixels> thumbnails;
         std::string settingsJson;
+        std::map<AssetGuid, nlohmann::json> materialSourceValues;
+        std::map<AssetGuid, SourceMaterial> materialSources;
         std::vector<AssetDependency> dependencies;
         std::vector<AssetThumbnailAssociation>
             associations;
@@ -74,7 +78,10 @@ namespace Iridium {
 
     struct AssetThumbnailSourceDetail {
         bool available = false;
+        std::string sourceCookKey;
         std::string settingsJson;
+        std::map<AssetGuid, nlohmann::json> materialSourceValues;
+        std::map<AssetGuid, SourceMaterial> materialSources;
         std::vector<AssetDependency> dependencies;
         std::vector<AssetThumbnailAssociation>
             associations;
@@ -111,6 +118,7 @@ namespace Iridium {
         // even when their browser tile is outside the current page.
         void setPinnedDemand(
             std::span<const AssetCatalogRecord> records);
+        void setViewerDemand(std::span<const AssetCatalogRecord> records);
         // Keeps at most one selected record in a separate high-resolution
         // preview lane. It never raises the browser-grid thumbnail extent.
         void setDetailDemand(
@@ -177,6 +185,7 @@ namespace Iridium {
             visibleDemandByRoot_;
         std::map<AssetGuid, Job>
             pinnedDemandByRoot_;
+        std::map<AssetGuid, Job> viewerDemandByRoot_;
         std::optional<Job> detailDemand_;
         std::optional<AssetGuid>
             detailAsset_;

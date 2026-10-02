@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <iostream>
+#include <limits>
 #include <string>
 #include <utility>
 #include <vector>
@@ -362,6 +363,9 @@ namespace {
         CHECK(descriptors[1].visible && descriptors[1].required);
         CHECK(descriptors[2].visible && descriptors[2].required);
         CHECK(descriptors[3].addable && !descriptors[3].required);
+        CHECK(descriptors[3].properties.size() == 4);
+        CHECK(descriptors[3].properties[2].id.value() ==
+            "maximum_lod_level");
         CHECK(descriptors[4].addable && !descriptors[4].required);
         CHECK(descriptors[4].properties.size() == 11);
         CHECK(descriptors[4].properties[1].displayName ==
@@ -370,6 +374,14 @@ namespace {
             "Illuminance (lux)");
         CHECK(descriptors[4].properties[3].displayName ==
             "Luminous intensity (cd)");
+        CHECK(descriptors[4].properties[2].maximum ==
+            std::numeric_limits<float>::max());
+        CHECK(descriptors[4].properties[3].maximum ==
+            std::numeric_limits<float>::max());
+        CHECK(descriptors[4].properties[4].maximum ==
+            std::numeric_limits<float>::max());
+        CHECK(descriptors[4].properties[5].maximum ==
+            std::numeric_limits<float>::max());
         CHECK(descriptors[4].properties[9].enumLabels ==
             std::vector<std::string>({ "Low", "Medium", "High", "Ultra" }));
         CHECK(descriptors[4].properties[10].id.value() == "priority");

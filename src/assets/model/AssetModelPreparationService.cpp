@@ -22,9 +22,17 @@ namespace Iridium {
                 product.textureViews) {
                 gpuBytes += view.payload.size();
             }
+            uint64_t lodLevelCount = 0;
+            uint64_t lodChildCount = 0;
+            for (const CookedModelLodChain& chain : product.lodChains) {
+                lodLevelCount += chain.levels.size();
+                lodChildCount += chain.levels.empty() ? 0u : chain.levels.size() - 1u;
+            }
             const uint64_t cpuBytes =
                 sizeof(ModelAsset) +
-                product.manifest.primitives.size() * sizeof(SubMesh) +
+                (product.manifest.primitives.size() - lodChildCount) * sizeof(SubMesh) +
+                product.lodChains.size() * sizeof(ModelLodChain) +
+                lodLevelCount * sizeof(ModelLodLevel) +
                 product.materials.size() * sizeof(MaterialBinding);
             return { cpuBytes, gpuBytes };
         }

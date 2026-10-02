@@ -7,7 +7,9 @@ namespace Iridium {
     struct EditorOrbitCameraState {
         glm::vec3 target{ 0.0f };
         float yawDegrees = -45.0f;
-        float pitchDegrees = 20.0f;
+        // forward points from the eye to the target: negative pitch puts the
+        // default eye above the model, not underneath its floor.
+        float pitchDegrees = -20.0f;
         float distance = 3.0f;
         float verticalFovDegrees = 45.0f;
         float nearPlane = 0.01f;
@@ -36,6 +38,11 @@ namespace Iridium {
     private:
         [[nodiscard]] glm::vec3 forward() const noexcept;
         EditorOrbitCameraState state_;
+        glm::vec3 boundsMinimum_{};
+        glm::vec3 boundsMaximum_{};
+        bool hasBounds_ = false;
+        [[nodiscard]] float surfaceDistance() const noexcept;
+        void updateClipPlanes() noexcept;
     };
 
 } // namespace Iridium

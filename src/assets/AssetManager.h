@@ -11,11 +11,13 @@
 #include <optional>
 #include <span>
 #include <vector>
+#include <nlohmann/json.hpp>
 #include "renderer/rhi/Mesh.h"
 #include "renderer/rhi/IRenderBackend.h"
 #include "assets/cooker/CookedArtifact.h"
 #include "assets/environment/EnvironmentProduct.h"
 #include "assets/model/ModelRuntimeProduct.h"
+#include "assets/model/MaterialPreviewCompileQueue.h"
 #include "assets/MaterialProvenance.h"
 #include "material/MaterialTextureCompatibility.h"
 
@@ -36,14 +38,16 @@ namespace Iridium {
         AssetGuid materialGuid;
         CompiledTransparencyPolicy transparency;
         TransparencyExecutionMode transparencyExecutionMode =
-            TransparencyExecutionMode::LegacyTwoBucket;
+            TransparencyExecutionMode::Classified;
         MaterialBinding binding;
     };
 
     class AssetManager {
     public:
-        // The AssetManager now only takes a pointer to the abstract interface.
-        explicit AssetManager(IRenderBackend* renderBackend);
+        explicit AssetManager(IRenderBackend* renderBackend,
+            TransparencyExecutionMode runtimeTransparencyExecutionMode =
+                TransparencyExecutionMode::Classified,
+            uint32_t minimumResidentLodLevel = 0);
         ~AssetManager();
 
         std::shared_ptr<ModelAsset> loadModelFromCookedArtifact(
@@ -82,6 +86,15 @@ namespace Iridium {
         void releaseEnvironment(EnvironmentLightingHandles lighting);
         [[nodiscard]] std::shared_ptr<ModelAsset>
             findCookedModel(AssetGuid assetGuid) const;
+        // Preview requests are consumed before beginFrame, never while UI command
+        // buffers are being recorded. Shared imported materials remain immutable.
+        void requestMaterialPreview(AssetGuid document, AssetGuid root,
+            const std::map<AssetGuid, SourceMaterial>& sources,
+            const nlohmann::json& settings, std::string_view sourceCookKey,
+            const nlohmann::json& publishedSettings);
+        void processMaterialPreviews(std::span<const AssetGuid> openDocuments);
+        [[nodiscard]] std::shared_ptr<ModelAsset> findMaterialPreview(AssetGuid document) const;
+        [[nodiscard]] std::string materialPreviewDiagnostic(AssetGuid document) const;
         [[nodiscard]] std::optional<MaterialBinding>
             findCookedMaterial(
                 AssetGuid materialGuid) const;
@@ -114,6 +127,35 @@ namespace Iridium {
 
     private:
         IRenderBackend* renderBackend;
+        struct PreviewInputs {
+            CookedModelProductData product; // Material/primitive metadata only; no geometry copies.
+            std::vector<RuntimeTextureViewBinding> views;
+            RuntimeMaterialFallbacks fallbacks;
+            std::string cookKey;
+        };
+        struct MaterialPreview {
+            AssetGuid root;
+            std::map<AssetGuid, SourceMaterial> sources;
+            nlohmann::json settings;
+            nlohmann::json publishedSettings;
+            std::string sourceCookKey;
+            std::string cookKey;
+            std::string diagnostic;
+            bool pending = true;
+            uint64_t requestSerial = 0;
+            std::map<AssetGuid, CompiledTransparencyPolicy> preparedPrimitivePolicies;
+            std::map<AssetGuid, CompiledTransparencyPolicy> publishedPrimitivePolicies;
+            std::shared_ptr<ModelAsset> model;
+            std::vector<MaterialBinding> ownedBindings;
+            std::vector<CanonicalMaterialAsset> canonicalAssets;
+        };
+        std::map<AssetGuid, PreviewInputs> previewInputs_;
+        std::map<AssetGuid, MaterialPreview> materialPreviews_;
+        MaterialPreviewCompileQueue previewCompiler_;
+        uint64_t previewRequestSerial_ = 0;
+        TransparencyExecutionMode runtimeTransparencyExecutionMode_ =
+            TransparencyExecutionMode::Classified;
+        uint32_t minimumResidentLodLevel_ = 0;
 
         std::unordered_map<AssetGuid, std::shared_ptr<ModelAsset>, AssetGuidHash>
             cookedModelCache;
@@ -160,6 +202,8 @@ namespace Iridium {
         TextureHandle createDefaultPbrTexture();
 
         void uploadToGPU(ModelAsset* asset, const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices);
+        void uploadArenaToGPU(ModelAsset* asset,
+            const RuntimeModelCpuData& geometry);
     };
 
 } // namespace Iridium

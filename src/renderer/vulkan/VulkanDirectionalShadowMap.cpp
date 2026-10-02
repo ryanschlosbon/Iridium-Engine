@@ -24,9 +24,11 @@ namespace {
 void VulkanDirectionalShadowMap::init(VkDevice device,
     VulkanResourceAllocator& allocator, VulkanUploadContext& uploads,
     ::DescriptorAllocator& descriptors, VkDescriptorSetLayout materialLayout,
-    VkDescriptorSetLayout samplerLayout, uint32_t resolution) {
+    VkDescriptorSetLayout samplerLayout, VkDescriptorSetLayout gpuSceneLayout,
+    uint32_t resolution) {
     if (device_ != VK_NULL_HANDLE || device == VK_NULL_HANDLE || resolution == 0 ||
-        materialLayout == VK_NULL_HANDLE || samplerLayout == VK_NULL_HANDLE)
+        materialLayout == VK_NULL_HANDLE || samplerLayout == VK_NULL_HANDLE ||
+        gpuSceneLayout == VK_NULL_HANDLE)
         throw std::invalid_argument("Invalid directional shadow initialization");
     device_ = device;
     allocator_ = &allocator;
@@ -124,7 +126,8 @@ void VulkanDirectionalShadowMap::init(VkDevice device,
         shadowBinding.binding = 0;
         shadowBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         shadowBinding.descriptorCount = 1;
-        shadowBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+        shadowBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT |
+            VK_SHADER_STAGE_COMPUTE_BIT;
         VkDescriptorSetLayoutCreateInfo setLayout{
             VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
         setLayout.bindingCount = 1;
@@ -132,8 +135,8 @@ void VulkanDirectionalShadowMap::init(VkDevice device,
         requireSuccess(vkCreateDescriptorSetLayout(device_, &setLayout, nullptr,
             &renderSetLayout_), "vkCreateDescriptorSetLayout(directional shadow)");
 
-        const std::array<VkDescriptorSetLayout, 3> layouts{
-            renderSetLayout_, materialLayout, samplerLayout };
+        const std::array<VkDescriptorSetLayout, 4> layouts{
+            renderSetLayout_, materialLayout, samplerLayout, gpuSceneLayout };
         VkPushConstantRange push{};
         push.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
         push.size = sizeof(CanonicalMeshPushConstants);
@@ -148,7 +151,7 @@ void VulkanDirectionalShadowMap::init(VkDevice device,
 
         for (uint32_t index = 0; index < pipelines_.size(); ++index)
             pipelines_[index] = createPipeline((index & 1u) != 0,
-                (index & 2u) != 0);
+                (index & 2u) != 0, (index & 4u) != 0);
 
         for (uint32_t frame = 0; frame < frameBuffers_.size(); ++frame) {
             frameBuffers_[frame] = allocator.createBuffer(
@@ -252,7 +255,8 @@ void VulkanDirectionalShadowMap::updateFrame(uint32_t frameIndex,
             packet.sourceAngularDiameterDegrees * 0.5f);
         data.filterParameters[packet.shadowIndex] = glm::vec4(
             std::tan(angularRadiusRadians),
-            packet.filterProfile.maximumPenumbraTexels, 0.0f, 0.0f);
+            packet.filterProfile.maximumPenumbraTexels,
+            packet.receiverPlaneClampTexels, 0.0f);
         data.filterMetadata[packet.shadowIndex] = glm::uvec4(
             packet.filterProfile.blockerSearchSamples,
             packet.filterProfile.filterSamples,
@@ -260,6 +264,8 @@ void VulkanDirectionalShadowMap::updateFrame(uint32_t frameIndex,
         data.metadata[packet.shadowIndex] = glm::uvec4(
             packet.selection.lightSlot, packet.sampleableMask, firstLayer,
             packet.sampleableMask != 0u);
+        data.biasParameters.z = packet.receiverDepthBiasTexels;
+        data.biasParameters.w = packet.normalOffsetTexels;
     }
     allocator_->write(frameBuffers_[frameIndex], 0,
         std::as_bytes(std::span{ &data, size_t{ 1 } }));
@@ -294,8 +300,9 @@ void VulkanDirectionalShadowMap::endCascade(VkCommandBuffer commandBuffer) const
 }
 
 VkPipeline VulkanDirectionalShadowMap::pipeline(bool alphaMasked,
-    bool doubleSided) const noexcept {
-    return pipelines_[(doubleSided ? 2u : 0u) | (alphaMasked ? 1u : 0u)];
+    bool doubleSided, bool gpuSceneIndirect) const noexcept {
+    return pipelines_[(gpuSceneIndirect ? 4u : 0u) |
+        (doubleSided ? 2u : 0u) | (alphaMasked ? 1u : 0u)];
 }
 
 VkDescriptorSet VulkanDirectionalShadowMap::renderDescriptor(
@@ -331,14 +338,22 @@ VkShaderModule VulkanDirectionalShadowMap::createShaderModule(
 }
 
 VkPipeline VulkanDirectionalShadowMap::createPipeline(bool alphaMasked,
-    bool doubleSided) {
+    bool doubleSided, bool gpuSceneIndirect) {
     VkShaderModule vertex = createShaderModule(
-        "assets/shaders/directional_shadow_vert.spv");
+        alphaMasked
+            ? (gpuSceneIndirect
+                ? "assets/shaders/directional_shadow_gpu_scene_vert.spv"
+                : "assets/shaders/directional_shadow_vert.spv")
+            : (gpuSceneIndirect
+                ? "assets/shaders/directional_shadow_gpu_scene_opaque_vert.spv"
+                : "assets/shaders/directional_shadow_opaque_vert.spv"));
     VkShaderModule fragment = VK_NULL_HANDLE;
     try {
         if (alphaMasked)
             fragment = createShaderModule(
-                "assets/shaders/directional_shadow_mask_frag.spv");
+                gpuSceneIndirect
+                    ? "assets/shaders/directional_shadow_gpu_scene_mask_frag.spv"
+                    : "assets/shaders/directional_shadow_mask_frag.spv");
         std::array<VkPipelineShaderStageCreateInfo, 2> stages{};
         stages[0] = { VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
             nullptr, 0, VK_SHADER_STAGE_VERTEX_BIT, vertex, "main", nullptr };
@@ -357,8 +372,8 @@ VkPipeline VulkanDirectionalShadowMap::createPipeline(bool alphaMasked,
             VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO };
         vertexInput.vertexBindingDescriptionCount = 1;
         vertexInput.pVertexBindingDescriptions = &binding;
-        vertexInput.vertexAttributeDescriptionCount =
-            static_cast<uint32_t>(attributes.size());
+        vertexInput.vertexAttributeDescriptionCount = alphaMasked
+            ? static_cast<uint32_t>(attributes.size()) : 1u;
         vertexInput.pVertexAttributeDescriptions = attributes.data();
         VkPipelineInputAssemblyStateCreateInfo assembly{
             VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO };

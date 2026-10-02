@@ -1,4 +1,5 @@
 #include "ProfilerPanel.h"
+#include "profiling/TransparencyProfilePresentation.h"
 
 #include <imgui.h>
 
@@ -57,6 +58,7 @@ namespace {
         switch (unit) {
         case Iridium::ProfileCounterUnit::Count: return "count";
         case Iridium::ProfileCounterUnit::Bytes: return "bytes";
+        case Iridium::ProfileCounterUnit::Millionths: return "millionths";
         }
         return "count";
     }
@@ -243,6 +245,112 @@ void ProfilerPanel::OnImGuiRender(Registry& registry,
             }
             ImGui::EndTable();
         }
+    }
+
+    ImGui::SeparatorText("Transparency diagnostics");
+    uint32_t transparencyCounterCount = 0;
+    uint32_t activeRiskCount = 0;
+    for (const Iridium::FrameProfileCounter& counter : frame->counters) {
+        if (counter.name == nullptr ||
+            Iridium::transparencyProfileGroup(counter.name) ==
+                Iridium::TransparencyProfileGroup::None) {
+            continue;
+        }
+        ++transparencyCounterCount;
+        if (counter.value != 0 &&
+            Iridium::isTransparencyRiskCounter(counter.name)) {
+            ++activeRiskCount;
+        }
+    }
+    if (activeRiskCount == 0) {
+        ImGui::Text("%u counters | no active fallback, rejection, or overflow signals",
+            transparencyCounterCount);
+    }
+    else {
+        ImGui::TextColored(ImVec4(1.0f, 0.72f, 0.25f, 1.0f),
+            "%u counters | %u active fallback/rejection/overflow signals",
+            transparencyCounterCount, activeRiskCount);
+    }
+    ImGui::TextDisabled(
+        "Nonzero warning rows indicate bounded fallback or degraded work, not necessarily a renderer failure.");
+    if (ImGui::BeginTable("Transparency counters", 5,
+        ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
+        ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable,
+        ImVec2(0.0f, 280.0f))) {
+        ImGui::TableSetupColumn("Group");
+        ImGui::TableSetupColumn("Counter");
+        ImGui::TableSetupColumn("Value");
+        ImGui::TableSetupColumn("Status");
+        ImGui::TableSetupColumn("Unit");
+        ImGui::TableHeadersRow();
+        for (const Iridium::FrameProfileCounter& counter : frame->counters) {
+            if (counter.name == nullptr) continue;
+            const Iridium::TransparencyProfileGroup group =
+                Iridium::transparencyProfileGroup(counter.name);
+            if (group == Iridium::TransparencyProfileGroup::None) continue;
+            const bool warning = counter.value != 0 &&
+                Iridium::isTransparencyRiskCounter(counter.name);
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::TextUnformatted(
+                Iridium::transparencyProfileGroupName(group).data());
+            ImGui::TableSetColumnIndex(1);
+            if (warning) {
+                ImGui::TextColored(ImVec4(1.0f, 0.72f, 0.25f, 1.0f),
+                    "%s", counter.name);
+            }
+            else {
+                ImGui::TextUnformatted(counter.name);
+            }
+            ImGui::TableSetColumnIndex(2);
+            if (counter.unit == Iridium::ProfileCounterUnit::Bytes) {
+                ImGui::Text("%llu (%.2f MiB)",
+                    static_cast<unsigned long long>(counter.value),
+                    mebibytes(counter.value));
+            }
+            else if (counter.unit ==
+                    Iridium::ProfileCounterUnit::Millionths) {
+                ImGui::Text("%.6f", static_cast<double>(counter.value) /
+                    1'000'000.0);
+            }
+            else {
+                ImGui::Text("%llu",
+                    static_cast<unsigned long long>(counter.value));
+            }
+            ImGui::TableSetColumnIndex(3);
+            ImGui::TextUnformatted(statusName(counter.status));
+            ImGui::TableSetColumnIndex(4);
+            ImGui::TextUnformatted(unitName(counter.unit));
+        }
+        ImGui::EndTable();
+    }
+
+    ImGui::TextDisabled("Active transparency GPU ranges (fence-delayed current frame)");
+    if (gpuFrame == nullptr) {
+        ImGui::TextUnformatted("GPU timestamps disabled or awaiting results.");
+    }
+    else if (ImGui::BeginTable("Transparency GPU ranges", 3,
+        ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
+        ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable,
+        ImVec2(0.0f, 220.0f))) {
+        ImGui::TableSetupColumn("Range");
+        ImGui::TableSetupColumn("Current ms");
+        ImGui::TableSetupColumn("Status");
+        ImGui::TableHeadersRow();
+        for (const Iridium::GpuProfileRange& range : gpuFrame->gpuRanges) {
+            if (range.name == nullptr ||
+                !Iridium::isTransparencyGpuRange(range.name)) {
+                continue;
+            }
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::TextUnformatted(range.name);
+            ImGui::TableSetColumnIndex(1);
+            ImGui::Text("%.4f", milliseconds(range.durationNanoseconds));
+            ImGui::TableSetColumnIndex(2);
+            ImGui::TextUnformatted(range.available ? "available" : "unavailable");
+        }
+        ImGui::EndTable();
     }
 
     ImGui::SeparatorText("Latest counters");

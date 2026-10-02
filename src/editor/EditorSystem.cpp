@@ -40,10 +40,12 @@ void EditorSystem::setDebugView(Iridium::RenderDebugView view) {
 }
 
 Iridium::RenderDebugView EditorSystem::getDebugView() const {
-    if (currentRenderMode < 3) {
+    const int mode = renderingAssetView ? assetViewerPanel_.debugRenderMode : currentRenderMode;
+    if (mode == 2 && retainedSceneTexture) return Iridium::RenderDebugView::Depth;
+    if (mode < 3) {
         return Iridium::RenderDebugView::Final;
     }
-    return static_cast<Iridium::RenderDebugView>(currentRenderMode - 2);
+    return static_cast<Iridium::RenderDebugView>(mode - 2);
 }
 
 void EditorSystem::init(GLFWwindow* window, Iridium::CpuProfiler* cpuProfiler,
@@ -94,28 +96,58 @@ void EditorSystem::init(GLFWwindow* window, Iridium::CpuProfiler* cpuProfiler,
         &selection_, transactionService, sceneCommands_.get()));
     panels.push_back(std::make_unique<InspectorPanel>(
         &selection_, assetCatalog,
-        assetThumbnailService, transactionService, sceneCommands_.get()));
+        assetThumbnailService, transactionService, sceneCommands_.get(),
+        &transformSettings_));
     panels.push_back(std::make_unique<MenuBarPanel>(
         &selection_.primary, &uiState, sceneDocumentService,
         transactionService, sceneCommands_.get()));
     panels.push_back(std::make_unique<ProfilerPanel>(&uiState.showProfiler, cpuProfiler));
     panels.push_back(std::make_unique<MaterialDiagnosticsPanel>(
         &uiState.showMaterialDiagnostics, &selection_.primary));
-    panels.push_back(std::make_unique<AssetBrowserPanel>(
+    auto assetBrowserPanel = std::make_unique<AssetBrowserPanel>(
         &uiState.showAssetBrowser, &selection_.primary, &uiState,
         assetCatalog,
         assetCatalogService,
         assetModelPreparationService,
         assetThumbnailService,
         assetRuntimeService,
-        &assetDocuments_));
+        &assetDocuments_);
+    assetViewerPanel_.drawAssetParameters = [panel = assetBrowserPanel.get()](
+        Iridium::AssetGuid guid, Iridium::AssetManager* manager) {
+        panel->renderAssetParameters(guid, manager);
+    };
+    assetViewerPanel_.lookupParts = [assetCatalog](Iridium::AssetGuid root) {
+        return assetCatalog ? assetCatalog->recordsForSourceRoot(root) : std::vector<Iridium::AssetCatalogRecord>{};
+    };
+    assetViewerPanel_.lookupEnvironments = [assetCatalog] {
+        std::vector<Iridium::AssetCatalogRecord> records;
+        if (!assetCatalog) return records;
+        Iridium::AssetCatalogQuery query;
+        query.assetType = "iridium.environment";
+        query.status = Iridium::AssetCatalogStatus::Ready;
+        query.includeSubassets = false;
+        query.limit = 256;
+        query.calculateTotalMatches = false;
+        for (;;) {
+            auto page = assetCatalog->query(query);
+            for (auto& record : page.records) if (record.assetRoot == "project") records.push_back(std::move(record));
+            if (page.records.size() < query.limit) break;
+            query.offset += query.limit;
+        }
+        return records;
+    };
+    assetViewerPanel_.demandThumbnails = [assetThumbnailService](std::span<const Iridium::AssetCatalogRecord> records) {
+        if (assetThumbnailService) assetThumbnailService->setViewerDemand(records);
+    };
+    panels.push_back(std::move(assetBrowserPanel));
     panels.push_back(std::make_unique<ConsolePanel>(
         &uiState.showConsole, engineLog));
     panels.push_back(std::make_unique<ProjectSettingsPanel>(
         &uiState.showProjectSettings, &uiState.outputSettings,
         &uiState.shadowSettings, &uiState.shadowSettingsChanged,
         &uiState.reflectionProbeSettings,
-        &uiState.reflectionProbeSettingsChanged));
+        &uiState.reflectionProbeSettingsChanged,
+        &uiState.layeredInterfaceOverride));
 }
 
 bool EditorSystem::consumeOutputSettings(EditorOutputSettings& settings) {
@@ -124,6 +156,17 @@ bool EditorSystem::consumeOutputSettings(EditorOutputSettings& settings) {
     settings = uiState.outputSettings;
     settings.changed = false;
     return true;
+}
+
+void EditorSystem::setOutputTransportStatus(
+    Iridium::Color::OutputTransport requested,
+    Iridium::Color::OutputTransport effective,
+    const std::array<bool, 3>& supported,
+    std::string diagnostic) {
+    uiState.outputSettings.transport = requested;
+    uiState.outputSettings.effectiveTransport = effective;
+    uiState.outputSettings.supportedTransports = supported;
+    uiState.outputSettings.transportDiagnostic = std::move(diagnostic);
 }
 
 bool EditorSystem::consumeShadowSettings(
@@ -214,13 +257,9 @@ void EditorSystem::update(Registry& registry, Iridium::AssetManager* assetManage
 
     // One expensive scene target is shared between the scene and the active asset
     // document. Asset previewing never inserts an entity into the scene Registry.
-    if (assetDocuments_.active()) {
-        assetViewerPanel_.render(sceneTextureID, glassDepthTextureID,
-            currentRenderMode, sceneAspect, assetManager);
-    }
-    else {
-        viewportPanel.render(sceneTextureID,
-            glassDepthTextureID,
+    {
+        viewportPanel.render(retainedSceneTexture ? retainedSceneTexture : sceneTextureID,
+            retainedSceneTexture ? retainedSceneTexture : glassDepthTextureID,
             currentRenderMode,
             currentGizmoOperation,
             view,
@@ -228,11 +267,20 @@ void EditorSystem::update(Registry& registry, Iridium::AssetManager* assetManage
             selectedTransform,
             sceneAspect,
             registry,
-            &selection_.primary,
+            &selection_,
             assetManager,
             transactionService_,
             sceneCommands_.get(),
-            cpuProfiler_);
+            cpuProfiler_,
+            &transformSettings_);
+    }
+    if (assetDocuments_.active()) {
+        assetViewerPanel_.render(retainedAssetTexture ? retainedAssetTexture : sceneTextureID,
+            retainedAssetTexture ? retainedAssetTexture : glassDepthTextureID,
+            assetViewerPanel_.debugRenderMode, sceneAspect, assetManager);
+    } else {
+        assetViewerPanel_.isFocused = false;
+        assetViewerPanel_.isHovered = false;
     }
 
 }
@@ -255,6 +303,12 @@ void EditorSystem::drawColorValidationOverlay() const {
         overlay->AddRectFilled(ImVec2(left, minimum.y + 34.0f),
             ImVec2(left + 38.0f, minimum.y + 80.0f), patches[index]);
     }
+}
+
+Iridium::ViewportGridOverlay EditorSystem::viewportGridOverlay(
+    const glm::mat4& view, const glm::mat4& projection) const noexcept {
+    if (renderingAssetView) return {};
+    return viewportPanel.gridOverlay(view, projection, transformSettings_);
 }
 
 // } // namespace Iridium

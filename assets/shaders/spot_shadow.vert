@@ -14,6 +14,8 @@ struct SpotShadowEntry {
     vec4 atlasScaleBias;
     uvec4 metadata;
     vec4 biasParameters;
+    vec4 projectionParameters;
+    uvec4 filterMetadata;
 };
 
 layout(std140, set = 0, binding = 0) uniform SpotShadowData {

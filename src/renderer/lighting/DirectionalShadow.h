@@ -16,7 +16,7 @@ namespace Iridium {
         DirectionalShadowSelection selection;
         DirectionalShadowCascadePlan plan;
         uint64_t lightRevision = 0;
-        uint64_t casterRevision = 0;
+        std::array<uint64_t, kDirectionalShadowCascadeCount> casterRevisions{};
         uint64_t pipelineRevision = 1;
     };
 
@@ -26,6 +26,7 @@ namespace Iridium {
         uint32_t sampleableMask = 0;
         uint32_t cacheHitCount = 0;
         uint32_t invalidatedCount = 0;
+        uint32_t casterInvalidatedCount = 0;
         uint32_t deferredCount = 0;
     };
 
@@ -68,10 +69,21 @@ namespace Iridium {
     [[nodiscard]] DirectionalShadowCascadeBlend directionalShadowCascadeBlend(
         const DirectionalShadowCascadePlan& plan, float viewDepth,
         uint32_t sampleableMask) noexcept;
+    // Returns the subset of candidate cascades whose conservative clip
+    // volumes intersect the caster sphere. Unknown bounds remain visible.
+    [[nodiscard]] uint32_t directionalShadowCasterCascadeMask(
+        const DirectionalShadowCascadePlan& plan, glm::vec3 center,
+        float radius, uint32_t candidateMask) noexcept;
     [[nodiscard]] float directionalShadowTentWeight(
         int32_t x, int32_t y) noexcept;
     [[nodiscard]] glm::vec3 directionalShadowNormalOffset(
         glm::vec3 worldPosition, glm::vec3 surfaceNormal,
         float worldUnitsPerTexel, float scale) noexcept;
+    [[nodiscard]] glm::vec2 directionalShadowReceiverPlaneDepthGradient(
+        glm::vec2 shadowUvDx, glm::vec2 shadowUvDy,
+        float shadowDepthDx, float shadowDepthDy) noexcept;
+    [[nodiscard]] float directionalShadowReceiverPlaneReferenceDepth(
+        float referenceDepth, glm::vec2 depthGradient,
+        glm::vec2 sampleUvOffset, float maximumCorrection) noexcept;
 
 } // namespace Iridium

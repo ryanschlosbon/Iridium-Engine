@@ -289,6 +289,32 @@ namespace {
         return true;
     }
 
+    bool viewerDemandDoesNotReplaceOtherConsumers() {
+        TemporaryDirectory temporary;
+        copyFixture(temporary.path);
+        AssetThumbnailService service(temporary.path, temporary.path / "ddc", target());
+        const auto root = rootRecord();
+        auto material = root;
+        material.guid = createAssetGuidV7();
+        material.parentGuid = root.guid;
+        material.assetType = "iridium.material";
+        material.sourceKey = "materials/0";
+        service.setDemand(std::span(&root, 1));
+        service.setViewerDemand(std::span(&material, 1));
+        CHECK(service.isDemanded(root.guid));
+        CHECK(service.isDemanded(material.guid));
+        service.setPinnedDemand(std::span(&root, 1));
+        service.setDemand({});
+        CHECK(service.isDemanded(root.guid));
+        CHECK(service.isDemanded(material.guid));
+        service.setViewerDemand({});
+        CHECK(service.isDemanded(root.guid));
+        CHECK(!service.isDemanded(material.guid));
+        service.setPinnedDemand({});
+        CHECK(service.stats().demandedAssets == 0);
+        return true;
+    }
+
     bool selectedDetailUsesBoundedHighResolutionLane() {
         TemporaryDirectory temporary;
         copyFixture(temporary.path);
@@ -535,6 +561,7 @@ int main() {
         bool (*function)();
     };
     const std::vector<Test> tests{
+        { "viewer thumbnail demand is independently merged", viewerDemandDoesNotReplaceOtherConsumers },
         { "visible cooked thumbnails",
             producesVisibleCookedThumbnails },
         { "visibility cancellation",

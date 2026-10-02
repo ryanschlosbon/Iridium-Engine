@@ -43,8 +43,10 @@ namespace {
             std::string_view("--validate-ordinary2-capture"),
             std::string_view("--validate-ordinary2-fallback"),
             std::string_view("--validate-ordinary2-resize"),
+            std::string_view("--validate-weighted-oit-resize"),
             std::string_view("--validate-deep-layered-capture"),
             std::string_view("--validate-deep-layered-lifecycle"),
+            std::string_view("--validate-output-transport-switch"),
             std::string_view("--deep-layered-validation-quality"),
             std::string_view("cinematic8"),
             std::string_view("--validate-texture-table-scale"),
@@ -66,8 +68,10 @@ namespace {
         CHECK(config.validateOrdinary2Capture);
         CHECK(config.validateOrdinary2Fallback);
         CHECK(config.validateOrdinary2Resize);
+        CHECK(config.validateWeightedOitResize);
         CHECK(config.validateDeepLayeredCapture);
         CHECK(config.validateDeepLayeredLifecycle);
+        CHECK(config.validateOutputTransportSwitch);
         CHECK(config.deepLayeredCaptureQuality ==
             TransparencyQuality::Cinematic8);
         CHECK(config.validateTextureTableScale == 8192);
@@ -84,6 +88,15 @@ namespace {
         CHECK(defaultConfig.gBufferLayout == GBufferLayout::CanonicalReference);
         CHECK(defaultConfig.clusterTileSize == 32);
         CHECK(defaultConfig.clusterDepthSlices == 24);
+        CHECK(defaultConfig.shadowSettings.directionalMaximumDistanceMeters ==
+            250.0f);
+        CHECK(defaultConfig.shadowSettings.directionalReceiverDepthBiasTexels ==
+            1.25f);
+        CHECK(defaultConfig.shadowSettings.directionalReceiverPlaneClampTexels ==
+            2.0f);
+        CHECK(defaultConfig.shadowSettings.directionalNormalOffsetTexels ==
+            0.5f);
+        CHECK(!defaultConfig.developerLegacyTransparency);
         CHECK(rejects(std::array{ std::string_view("--render-graph") }));
         CHECK(rejects(std::array{ std::string_view("--render-graph-shadow") }));
         CHECK(rejects(std::array{ std::string_view("--canonical-materials") }));
@@ -128,17 +141,28 @@ namespace {
             std::string_view("1"),
             std::string_view("--shadow-directional-source-diameter"),
             std::string_view("1.25"),
+            std::string_view("--shadow-directional-distance"),
+            std::string_view("325"),
+            std::string_view("--shadow-directional-receiver-bias"),
+            std::string_view("1.75"),
+            std::string_view("--shadow-directional-receiver-plane-clamp"),
+            std::string_view("2.5"),
+            std::string_view("--shadow-directional-normal-offset"),
+            std::string_view("0.75"),
             std::string_view("--shadow-filter"),
             std::string_view("fixed"),
             std::string_view("--shadow-spot-atlas-resolution"),
             std::string_view("8192"),
             std::string_view("--benchmark-disable-local-shadows"),
+            std::string_view("--developer-legacy-transparency"),
             std::string_view("--debug-view"),
             std::string_view("cluster-occupancy"),
             std::string_view("--benchmark"),
             std::string_view("material_lab_v1"),
             std::string_view("--benchmark-manifest"),
             std::string_view("assets/benchmarks/m0/manifest.v1.json"),
+            std::string_view("--weighted-oit-order-seed"),
+            std::string_view("63"),
             std::string_view("--cooked-model-artifact"),
             std::string_view("out/ddc/model.irartifact"),
             std::string_view("--cooked-environment-artifact"),
@@ -168,6 +192,10 @@ namespace {
         CHECK(config.manualExposureEv == -2.5);
         CHECK(config.outputOperator == OutputTransformOperator::Aces2);
 		CHECK(config.outputTransport == Color::OutputTransport::ScRgb);
+		const ApplicationConfig automatic = parseApplicationConfig(
+			std::array{ std::string_view("--output-transport"),
+				std::string_view("auto") });
+		CHECK(automatic.outputTransport == Color::OutputTransport::Automatic);
         CHECK(config.paperWhiteNits == 250.0);
         CHECK(config.peakNits == 1200.0);
         CHECK(config.clusterTileSize == 32);
@@ -177,13 +205,22 @@ namespace {
         CHECK(config.shadowSettings.maximumDirectionalLights == 1);
         CHECK(config.shadowSettings.directionalSourceAngularDiameterDegrees ==
             1.25f);
+        CHECK(config.shadowSettings.directionalMaximumDistanceMeters ==
+            325.0f);
+        CHECK(config.shadowSettings.directionalReceiverDepthBiasTexels ==
+            1.75f);
+        CHECK(config.shadowSettings.directionalReceiverPlaneClampTexels ==
+            2.5f);
+        CHECK(config.shadowSettings.directionalNormalOffsetTexels == 0.75f);
         CHECK(config.shadowSettings.filterMode == ShadowFilterMode::FixedPcf);
         CHECK(config.shadowSettings.spotAtlasResolution == 8192);
         CHECK(config.disableBenchmarkLocalShadows);
+        CHECK(config.developerLegacyTransparency);
         CHECK(config.debugView == RenderDebugView::ClusterOccupancy);
         CHECK(config.benchmarkId == "material_lab_v1");
         CHECK(config.benchmarkManifest.generic_string() ==
             "assets/benchmarks/m0/manifest.v1.json");
+        CHECK(config.weightedOitOrderSeed == 63u);
         CHECK(config.cookedModelArtifact.generic_string() ==
             "out/ddc/model.irartifact");
         CHECK(config.cookedEnvironmentArtifact.generic_string() ==
@@ -194,6 +231,121 @@ namespace {
         CHECK(config.captureFrameIndex == 0);
         CHECK(config.captureDirectory.generic_string() == "out/captures/run-a");
         CHECK(config.capturePoint == FrameCapturePoint::FinalOutput);
+        CHECK(!config.requireCaptureSignal);
+        CHECK(!config.forceDirectGBufferReference);
+        CHECK(!config.forceDirectShadowReference);
+        CHECK(!config.forceDirectProbeCaptureReference);
+        CHECK(config.experimentalShadowLodErrorTexels == 0.0f);
+        CHECK(config.shadowLodMaximumLevel == 15u);
+        CHECK(config.experimentalGpuLodErrorPixels == 0.0f);
+        CHECK(config.gpuLodMaximumLevel == 15u);
+        CHECK(config.gpuLodHysteresisFraction == 0.15f);
+        CHECK(!config.gpuLodQualificationOracle);
+        CHECK(config.experimentalProbeLodErrorPixels == 0.0f);
+        CHECK(config.probeLodMaximumLevel == 15u);
+        CHECK(!config.probeLodQualificationOracle);
+        CHECK(config.gpuLodMinimumResidentLevel == 0u);
+        CHECK(parseApplicationConfig(std::array{
+            std::string_view("--gpu-lod-hysteresis-fraction"), std::string_view("0") }).gpuLodHysteresisFraction == 0);
+        for (const auto value : { "-0.1", "0.51", "nan", "inf" })
+            CHECK(rejects(std::array{ std::string_view("--gpu-lod-hysteresis-fraction"), std::string_view(value) }));
+        const auto lod = parseApplicationConfig(std::array{
+            std::string_view("--experimental-gpu-lod-error-pixels"), std::string_view("2.5"),
+            std::string_view("--gpu-lod-max-level"), std::string_view("0") });
+        CHECK(lod.experimentalGpuLodErrorPixels == 2.5f && lod.gpuLodMaximumLevel == 0u);
+        for (const auto value : { "nan", "inf", "0", "-1", "65", "2px" })
+            CHECK(rejects(std::array{ std::string_view("--experimental-gpu-lod-error-pixels"), std::string_view(value) }));
+        CHECK(rejects(std::array{ std::string_view("--gpu-lod-max-level"), std::string_view("16") }));
+        CHECK(rejects(std::array{ std::string_view("--experimental-gpu-lod-error-pixels") }));
+        CHECK(parseApplicationConfig(std::array{
+            std::string_view("--reference-direct-gbuffer") }).forceDirectGBufferReference);
+        CHECK(parseApplicationConfig(std::array{
+            std::string_view("--reference-direct-shadows") }).
+                forceDirectShadowReference);
+        CHECK(parseApplicationConfig(std::array{
+            std::string_view("--reference-direct-probe-capture") }).
+                forceDirectProbeCaptureReference);
+        CHECK(!ApplicationConfig{}.shadowIndirectQualificationOracle);
+        CHECK(parseApplicationConfig(std::array{
+            std::string_view("--shadow-indirect-qualification-oracle") }).
+            shadowIndirectQualificationOracle);
+        const auto shadowLod = parseApplicationConfig(std::array{
+            std::string_view("--experimental-shadow-lod-error-texels"), std::string_view("1.5"),
+            std::string_view("--shadow-lod-max-level"), std::string_view("2") });
+        CHECK(shadowLod.experimentalShadowLodErrorTexels == 1.5f);
+        CHECK(shadowLod.shadowLodMaximumLevel == 2u);
+        for (const auto value : { "nan", "inf", "0", "-1", "65", "2px" })
+            CHECK(rejects(std::array{ std::string_view("--experimental-shadow-lod-error-texels"), std::string_view(value) }));
+        CHECK(rejects(std::array{ std::string_view("--shadow-lod-max-level"), std::string_view("16") }));
+        CHECK(parseApplicationConfig(std::array{
+            std::string_view("--gpu-lod-qualification-oracle") }).gpuLodQualificationOracle);
+        const auto probeLod = parseApplicationConfig(std::array{
+            std::string_view("--experimental-probe-lod-error-pixels"), std::string_view("3.5"),
+            std::string_view("--probe-lod-max-level"), std::string_view("2"),
+            std::string_view("--probe-lod-qualification-oracle") });
+        CHECK(probeLod.experimentalProbeLodErrorPixels == 3.5f);
+        CHECK(probeLod.probeLodMaximumLevel == 2u);
+        CHECK(probeLod.probeLodQualificationOracle);
+        for (const auto value : { "nan", "inf", "0", "-1", "65", "2px" })
+            CHECK(rejects(std::array{ std::string_view("--experimental-probe-lod-error-pixels"), std::string_view(value) }));
+        CHECK(rejects(std::array{ std::string_view("--probe-lod-max-level"), std::string_view("16") }));
+        CHECK(rejects(std::array{ std::string_view("--experimental-probe-lod-error-pixels") }));
+        CHECK(!ApplicationConfig{}.experimentalDepthPyramid);
+        CHECK(!ApplicationConfig{}.experimentalVirtualShadowResources);
+        CHECK(!ApplicationConfig{}.virtualShadowDepthQualificationOracle);
+        const auto virtualDepthOracle = parseApplicationConfig(std::array{
+            std::string_view("--virtual-shadow-depth-qualification-oracle") });
+        CHECK(virtualDepthOracle.experimentalVirtualShadowResources);
+        CHECK(virtualDepthOracle.virtualShadowDepthQualificationOracle);
+        CHECK(!ApplicationConfig{}.experimentalDepthOcclusionQuery);
+        CHECK(!ApplicationConfig{}.experimentalDepthOcclusionRejection);
+        CHECK(!ApplicationConfig{}.depthOcclusionQualificationOracle);
+        CHECK(parseApplicationConfig(std::array{
+            std::string_view("--experimental-depth-pyramid") }).experimentalDepthPyramid);
+        CHECK(parseApplicationConfig(std::array{
+            std::string_view("--experimental-virtual-shadow-resources") }).
+            experimentalVirtualShadowResources);
+        const auto depthValidation = parseApplicationConfig(std::array{
+            std::string_view("--validate-depth-pyramid-capture") });
+        CHECK(depthValidation.experimentalDepthPyramid);
+        CHECK(depthValidation.validateDepthPyramidCapture);
+        const auto depthResize = parseApplicationConfig(std::array{
+            std::string_view("--validate-depth-pyramid-resize") });
+        CHECK(depthResize.experimentalDepthPyramid);
+        CHECK(depthResize.validateDepthPyramidResize);
+        const auto depthQuery = parseApplicationConfig(std::array{
+            std::string_view("--experimental-depth-occlusion-query") });
+        CHECK(depthQuery.experimentalDepthPyramid);
+        CHECK(depthQuery.experimentalDepthOcclusionQuery);
+        CHECK(!depthQuery.experimentalDepthOcclusionRejection);
+        const auto depthRejection = parseApplicationConfig(std::array{
+            std::string_view("--experimental-depth-occlusion-rejection") });
+        CHECK(depthRejection.experimentalDepthPyramid);
+        CHECK(depthRejection.experimentalDepthOcclusionQuery);
+        CHECK(depthRejection.experimentalDepthOcclusionRejection);
+        CHECK(parseApplicationConfig(std::array{
+            std::string_view("--depth-occlusion-qualification-oracle") }).
+            depthOcclusionQualificationOracle);
+        CHECK(applicationUsage().find("--experimental-depth-pyramid") != std::string_view::npos);
+        CHECK(applicationUsage().find("--experimental-virtual-shadow-resources") != std::string_view::npos);
+        CHECK(applicationUsage().find("--virtual-shadow-depth-qualification-oracle") != std::string_view::npos);
+        CHECK(applicationUsage().find("--experimental-depth-occlusion-query") != std::string_view::npos);
+        CHECK(applicationUsage().find("--experimental-depth-occlusion-rejection") != std::string_view::npos);
+        CHECK(applicationUsage().find("--depth-occlusion-qualification-oracle") != std::string_view::npos);
+        CHECK(applicationUsage().find("--validate-depth-pyramid-capture") != std::string_view::npos);
+        CHECK(applicationUsage().find("--validate-depth-pyramid-resize") != std::string_view::npos);
+        CHECK(parseApplicationConfig(std::array{
+            std::string_view("--gpu-lod-minimum-resident-level"),
+            std::string_view("2") }).gpuLodMinimumResidentLevel == 2u);
+        CHECK(rejects(std::array{
+            std::string_view("--gpu-lod-minimum-resident-level"),
+            std::string_view("16") }));
+        CHECK(rejects(std::array{
+            std::string_view("--gpu-lod-minimum-resident-level") }));
+        CHECK(parseApplicationConfig(std::array{
+            std::string_view("--capture-frame"), std::string_view("0"),
+            std::string_view("--capture-directory"), std::string_view("out/captures"),
+            std::string_view("--require-capture-signal") }).requireCaptureSignal);
         return true;
     }
 
@@ -211,12 +363,20 @@ namespace {
             std::string::npos);
         CHECK(applicationUsage().find("--capture-frame") != std::string::npos);
         CHECK(applicationUsage().find("--capture-point") != std::string::npos);
+        CHECK(applicationUsage().find("--gpu-lod-qualification-oracle") !=
+            std::string::npos);
+        CHECK(applicationUsage().find("--shadow-indirect-qualification-oracle") !=
+            std::string::npos);
+        CHECK(applicationUsage().find("--reference-direct-shadows") !=
+            std::string::npos);
         CHECK(applicationUsage().find("--cache-state") != std::string::npos);
         CHECK(applicationUsage().find("--render-graph-shadow") == std::string::npos);
         CHECK(applicationUsage().find("--canonical-materials") == std::string::npos);
         CHECK(applicationUsage().find("--show-material-diagnostics") != std::string::npos);
         CHECK(applicationUsage().find("--select-benchmark-entity") != std::string::npos);
         CHECK(applicationUsage().find("--benchmark-disable-local-shadows") !=
+            std::string::npos);
+        CHECK(applicationUsage().find("--developer-legacy-transparency") !=
             std::string::npos);
         CHECK(applicationUsage().find("--wireframe") != std::string::npos);
         CHECK(applicationUsage().find("--gbuffer-layout") != std::string::npos);
@@ -230,6 +390,8 @@ namespace {
         CHECK(applicationUsage().find("--validate-ordinary2-fallback") !=
             std::string::npos);
         CHECK(applicationUsage().find("--validate-ordinary2-resize") !=
+            std::string::npos);
+        CHECK(applicationUsage().find("--validate-weighted-oit-resize") !=
             std::string::npos);
         CHECK(applicationUsage().find("--validate-deep-layered-capture") !=
             std::string::npos);
@@ -249,6 +411,14 @@ namespace {
         CHECK(applicationUsage().find("--shadow-directional-resolution") !=
             std::string::npos);
         CHECK(applicationUsage().find("--shadow-directional-lights") !=
+            std::string::npos);
+        CHECK(applicationUsage().find("--shadow-directional-distance") !=
+            std::string::npos);
+        CHECK(applicationUsage().find("--shadow-directional-receiver-bias") !=
+            std::string::npos);
+        CHECK(applicationUsage().find(
+            "--shadow-directional-receiver-plane-clamp") != std::string::npos);
+        CHECK(applicationUsage().find("--shadow-directional-normal-offset") !=
             std::string::npos);
         CHECK(applicationUsage().find("--shadow-spot-atlas-resolution") !=
             std::string::npos);
@@ -285,6 +455,19 @@ namespace {
             std::string_view("--shadow-directional-source-diameter"),
             std::string_view("5.1") }));
         CHECK(rejects(std::array{
+            std::string_view("--shadow-directional-distance"),
+            std::string_view("0") }));
+        CHECK(rejects(std::array{
+            std::string_view("--shadow-directional-distance") }));
+        CHECK(rejects(std::array{
+            std::string_view("--shadow-directional-receiver-bias"),
+            std::string_view("8.1") }));
+        CHECK(rejects(std::array{
+            std::string_view("--shadow-directional-receiver-plane-clamp"),
+            std::string_view("-0.1") }));
+        CHECK(rejects(std::array{
+            std::string_view("--shadow-directional-normal-offset") }));
+        CHECK(rejects(std::array{
             std::string_view("--shadow-filter"),
             std::string_view("variance") }));
         CHECK(rejects(std::array{
@@ -313,8 +496,37 @@ namespace {
             std::string_view("--debug-view"),
             std::string_view("direct-lighting") }).debugView ==
             RenderDebugView::DirectLighting);
+        CHECK(parseApplicationConfig(std::array{
+            std::string_view("--debug-view"),
+            std::string_view("transparency-class") }).debugView ==
+            RenderDebugView::TransparencyClass);
+        CHECK(parseApplicationConfig(std::array{
+            std::string_view("--debug-view"),
+            std::string_view("transparency-fallback") }).debugView ==
+            RenderDebugView::TransparencyFallback);
+        CHECK(parseApplicationConfig(std::array{
+            std::string_view("--debug-view"),
+            std::string_view("transparency-interval") }).debugView ==
+            RenderDebugView::TransparencyInterval);
+        CHECK(parseApplicationConfig(std::array{
+            std::string_view("--debug-view"),
+            std::string_view("transparency-pyramid-mip") }).debugView ==
+            RenderDebugView::TransparencyPyramidMip);
+        CHECK(parseApplicationConfig(std::array{
+            std::string_view("--debug-view"),
+            std::string_view("transparency-layers") }).debugView ==
+            RenderDebugView::TransparencyLayers);
+        CHECK(parseApplicationConfig(std::array{
+            std::string_view("--debug-view"),
+            std::string_view("transparency-overflow") }).debugView ==
+            RenderDebugView::TransparencyOverflow);
         CHECK(rejects(std::array{ std::string_view("--benchmark") }));
         CHECK(rejects(std::array{ std::string_view("--benchmark-manifest") }));
+        CHECK(rejects(std::array{
+            std::string_view("--weighted-oit-order-seed") }));
+        CHECK(rejects(std::array{
+            std::string_view("--weighted-oit-order-seed"),
+            std::string_view("-1") }));
         CHECK(rejects(std::array{
             std::string_view("--cooked-model-artifact") }));
         CHECK(rejects(std::array{
@@ -328,6 +540,7 @@ namespace {
             std::string_view("--open-asset-viewer"),
             std::string_view("00000000-0000-0000-0000-000000000000") }));
         CHECK(rejects(std::array{ std::string_view("--capture-frame") }));
+        CHECK(rejects(std::array{ std::string_view("--require-capture-signal") }));
         CHECK(rejects(std::array{
             std::string_view("--capture-frame"), std::string_view("0") }));
         CHECK(rejects(std::array{

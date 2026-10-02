@@ -20,10 +20,12 @@ void TransformSystem::sortEntitiesByDepth(
         });
 }
 
-uint64_t TransformSystem::update(Registry& registry) {
+uint64_t TransformSystem::update(Registry& registry,
+    std::vector<Entity>* changedEntities) {
     auto* transforms = registry.getPool<TransformComponent>();
     auto* relationships = registry.getPool<RelationshipComponent>();
     uint64_t changedTransformCount = 0;
+    if (changedEntities) changedEntities->clear();
 
     for (Entity entity : transforms->entities) {
         if (relationships->has(entity)) continue;
@@ -32,12 +34,12 @@ uint64_t TransformSystem::update(Registry& registry) {
             transform.updateLocalMatrix();
             transform.worldMatrix = transform.localMatrix;
             ++changedTransformCount;
+            if (changedEntities) changedEntities->push_back(entity);
         }
     }
 
-    std::vector<Entity> sortedEntities;
-    sortEntitiesByDepth(registry, sortedEntities);
-    for (Entity entity : sortedEntities) {
+    sortEntitiesByDepth(registry, sortedEntitiesScratch_);
+    for (Entity entity : sortedEntitiesScratch_) {
         if (!transforms->has(entity)) continue;
         auto& transform = transforms->get(entity);
         auto& relationship = relationships->get(entity);
@@ -56,6 +58,7 @@ uint64_t TransformSystem::update(Registry& registry) {
                 transform.localMatrix
             : transform.localMatrix;
         ++changedTransformCount;
+        if (changedEntities) changedEntities->push_back(entity);
     }
 
     for (Entity entity : transforms->entities) {

@@ -16,7 +16,10 @@
 
 namespace Iridium {
 
-    inline constexpr uint32_t kCookedModelSchemaVersion = 5;
+    inline constexpr uint32_t kCookedModelSchemaVersion = 7;
+    inline constexpr uint32_t kPreviousCookedModelSchemaVersion = 6;
+    inline constexpr uint32_t kLegacyCookedModelSchemaVersion = 5;
+    inline constexpr uint32_t kCookedModelIndexSectionSchemaVersion = 2;
     inline constexpr uint32_t kCookedModelManifestSection = 0x4d444d31;   // MDM1
     inline constexpr uint32_t kCookedModelMaterialSection = 0x4d544c31;   // MTL1
     inline constexpr uint32_t kCookedModelTextureViewSection = 0x4d545831; // MTX1
@@ -24,6 +27,8 @@ namespace Iridium {
     inline constexpr uint32_t kCookedModelIndexSection = 0x4d444931;      // MDI1
     inline constexpr uint32_t kCookedModelRtPositionSection = 0x4d445031; // MDP1
     inline constexpr uint32_t kCookedModelRtIndexSection = 0x4d445231;    // MDR1
+    inline constexpr uint32_t kCookedModelLodSection = 0x4d444c31;        // MDL1
+    inline constexpr uint32_t kCookedModelLodSectionSchemaVersion = 1;
     inline constexpr uint32_t kNoModelSection = std::numeric_limits<uint32_t>::max();
     inline constexpr uint32_t kCookedModelVertexStride = 72;
 
@@ -132,10 +137,27 @@ namespace Iridium {
         uint64_t rtPositionCount = 0;
         uint64_t rtIndexCount = 0;
         TransparencyExecutionMode transparencyExecutionMode =
-            TransparencyExecutionMode::LegacyTwoBucket;
+            TransparencyExecutionMode::Classified;
         std::vector<CookedModelPrimitive> primitives;
 
         bool operator==(const CookedModelManifest&) const = default;
+    };
+
+    struct CookedModelLodLevel {
+        // Index into CookedModelManifest::primitives. Level zero names the
+        // canonical base primitive; later levels name distinct stable child
+        // primitives and inherit the base material/consumer semantics.
+        uint32_t primitiveIndex = 0;
+        float geometricError = 0.0f;
+
+        bool operator==(const CookedModelLodLevel&) const = default;
+    };
+
+    struct CookedModelLodChain {
+        uint32_t basePrimitiveIndex = 0;
+        std::vector<CookedModelLodLevel> levels;
+
+        bool operator==(const CookedModelLodChain&) const = default;
     };
 
     struct CookedModelTextureBinding {
@@ -174,6 +196,7 @@ namespace Iridium {
         std::vector<uint32_t> indices;
         std::vector<std::array<float, 3>> rtPositions;
         std::vector<uint32_t> rtIndices;
+        std::vector<CookedModelLodChain> lodChains;
 
         bool operator==(const CookedModelProductData&) const = default;
     };
@@ -214,6 +237,8 @@ namespace Iridium {
         std::span<const uint32_t> indices);
     [[nodiscard]] std::vector<std::byte> serializeModelRtPositions(
         std::span<const std::array<float, 3>> positions);
+    [[nodiscard]] std::vector<std::byte> serializeModelLodChains(
+        std::span<const CookedModelLodChain> chains);
     [[nodiscard]] std::optional<std::vector<CookedModelVertex>> readModelVertices(
         std::span<const std::byte> bytes,
         std::vector<CookDiagnostic>& diagnostics);
@@ -225,10 +250,19 @@ namespace Iridium {
         readModelRtPositions(
             std::span<const std::byte> bytes,
             std::vector<CookDiagnostic>& diagnostics);
+    [[nodiscard]] std::optional<std::vector<CookedModelLodChain>>
+        readModelLodChains(
+            std::span<const std::byte> bytes,
+            std::vector<CookDiagnostic>& diagnostics);
+    // Canonical consumers (including thumbnails) draw LOD0 only; alternate
+    // children are consumed exclusively through their explicit chain.
+    [[nodiscard]] std::vector<bool> makeCookedModelLodChildMask(
+        const CookedModelProductData& data);
     [[nodiscard]] std::vector<CookDiagnostic> validateModelProduct(
         const CookedModelProductData& data);
     [[nodiscard]] CookProduct makeCookedModelProduct(
-        const CookedModelProductData& data);
+        const CookedModelProductData& data,
+        uint32_t outputSchemaVersion = kCookedModelSchemaVersion);
     [[nodiscard]] CookedModelReadResult readCookedModelProduct(
         const CookedArtifact& artifact);
 

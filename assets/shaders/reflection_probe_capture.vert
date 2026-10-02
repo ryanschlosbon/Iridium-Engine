@@ -13,6 +13,7 @@ layout(location = 2) out vec3 fragNormal;
 layout(location = 3) out vec3 fragWorldPos;
 layout(location = 4) out vec4 fragTangent;
 layout(location = 5) out vec2 fragTexCoord1;
+layout(location = 6) flat out uint fragMaterialIndex;
 
 layout(std140, set = 0, binding = 0) uniform CaptureFaceData {
     mat4 worldToClip;
@@ -39,4 +40,5 @@ void main() {
     fragNormal = normalMatrix * inNormal;
     fragTangent = vec4(mat3(push.renderMatrix) * inTangent.xyz, inTangent.w);
     fragWorldPos = worldPosition.xyz;
+    fragMaterialIndex = push.materialIndex;
 }

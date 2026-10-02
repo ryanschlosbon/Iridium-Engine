@@ -256,7 +256,7 @@
     {
       "id": "weighted_oit_particles_v1",
       "fixture_guid": "019ff600-0000-7000-8000-000000000008",
-      "availability": "contract_frozen_fixture_pending",
+      "availability": "runtime_available_high_overdraw_qualified_debug",
       "active_from": "M6.7",
       "camera": "m6_transparency_lab_front_v1",
       "classes": ["WeightedOIT"],
@@ -266,6 +266,31 @@
         "overdraw_targets": [1, 4, 16, 64],
         "draw_order_permutations": 64,
         "hdr_emissive_values": [0.0, 1.0, 16.0, 256.0]
+      },
+      "runtime_fixture": {
+        "benchmark_manifest": "assets/benchmarks/m6/ordinary2-runtime-manifest.v1.json",
+        "source": "assets/benchmarks/m6/weighted_oit_particles.gltf",
+        "metadata": "assets/benchmarks/m6/weighted_oit_particles.gltf.iridium.meta",
+        "active_particle_count": 256,
+        "instance_grid": [8, 8, 4],
+        "target_overdraw": 4,
+        "active_hdr_emissive_value": 16.0,
+        "qualified_draw_order_permutations": 64,
+        "qualified_particle_counts": [256, 4096, 65536],
+        "render_batch_particle_counts": [4096, 65536],
+        "draw_order_error_thresholds": {
+          "maximum_absolute_ap1": 0.0625,
+          "rmse_ap1": 0.002,
+          "maximum_relative_floor_1e_4": 0.005
+        },
+        "hdr256_boundary_fixture": {
+          "id": "weighted_oit_particles_hdr256_v1",
+          "source": "assets/benchmarks/m6/weighted_oit_particles_hdr256.gltf",
+          "metadata": "assets/benchmarks/m6/weighted_oit_particles_hdr256.gltf.iridium.meta",
+          "hdr_emissive_value": 256.0
+        },
+        "remaining_particle_counts": [],
+        "remaining_draw_order_permutations": 0
       },
       "expected_behavior": [
         "Draw-order permutations stay within the frozen reference error threshold.",

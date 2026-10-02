@@ -53,7 +53,7 @@ namespace {
             "m4_acceptance_contract.json";
         const nlohmann::json contract = nlohmann::json::parse(
             readText(contractPath));
-        const nlohmann::json& current = contract.at("m5_10Supersession");
+        const nlohmann::json& current = contract.at("m7_5Supersession");
         bool contractMatches = true;
         const auto compareContract = [&contractMatches, &current](
             std::string_view field, const auto& actual) {

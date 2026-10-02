@@ -93,7 +93,8 @@ namespace Iridium {
 
     RuntimeModelCpuResult makeRuntimeModelCpuData(
         const CookedModelProductData& product,
-        bool validateProduct) {
+        bool validateProduct,
+        std::optional<TransparencyExecutionMode> executionModeOverride) {
         RuntimeModelCpuResult result;
         if (validateProduct) {
             result.diagnostics =
@@ -109,9 +110,36 @@ namespace Iridium {
 
         RuntimeModelCpuData runtime;
         runtime.transparencyExecutionMode =
-            product.manifest.transparencyExecutionMode;
+            executionModeOverride.value_or(
+                product.manifest.transparencyExecutionMode);
         runtime.vertices.reserve(product.vertices.size());
         runtime.indices = product.indices;
+        std::vector<GeometryArenaPrimitiveInput> arenaPrimitives;
+        arenaPrimitives.reserve(product.manifest.primitives.size());
+        for (const CookedModelPrimitive& primitive :
+            product.manifest.primitives) {
+            arenaPrimitives.push_back({
+                .identity = {
+                    primitive.sourcePrimitiveGuid,
+                    primitive.primitiveGuid,
+                },
+                .firstVertex = primitive.firstVertex,
+                .vertexCount = primitive.vertexCount,
+                .firstIndex = primitive.firstIndex,
+                .indexCount = primitive.indexCount,
+            });
+        }
+        GeometryArenaBuildResult arena = buildGeometryArena(
+            GeometryArenaAbiVersion, product.vertices.size(), product.indices,
+            arenaPrimitives);
+        if (!arena.valid()) {
+            error(result.diagnostics, "MODEL_RUNTIME_GEOMETRY_ARENA", "/indices",
+                "Cooked raster streams cannot be represented by the current "
+                "versioned geometry-arena ABI (error " +
+                std::to_string(static_cast<uint32_t>(arena.error)) + ").");
+            return result;
+        }
+        runtime.geometryArena = std::move(*arena.data);
         runtime.primitives.reserve(product.manifest.primitives.size());
         for (const CookedModelVertex& source : product.vertices) {
             runtime.vertices.push_back({
@@ -174,10 +202,244 @@ namespace Iridium {
                 .boundsSphereRadius = source.bounds.sphereRadius,
             });
         }
+        if (hasCookErrors(result.diagnostics)) return result;
+        if (!product.lodChains.empty()) {
+            std::vector<SubMesh> allPrimitives =
+                std::move(runtime.primitives);
+            std::vector<bool> lodChildren(allPrimitives.size(), false);
+            runtime.lodChains.reserve(product.lodChains.size());
+            for (const CookedModelLodChain& cookedChain :
+                    product.lodChains) {
+                if (cookedChain.basePrimitiveIndex >= allPrimitives.size() ||
+                    std::ranges::any_of(cookedChain.levels,
+                        [&allPrimitives](const CookedModelLodLevel& level) {
+                            return level.primitiveIndex >= allPrimitives.size();
+                        })) {
+                    error(result.diagnostics, "MODEL_RUNTIME_LOD_RANGE",
+                        "/lod_chains", "LOD primitive index is out of range.");
+                    return result;
+                }
+                const SubMesh& base =
+                    allPrimitives[cookedChain.basePrimitiveIndex];
+                ModelLodChain chain{
+                    .sourcePrimitiveGuid = base.sourcePrimitiveGuid,
+                    .basePrimitiveGuid = base.primitiveGuid,
+                };
+                chain.levels.reserve(cookedChain.levels.size());
+                for (size_t levelIndex = 0;
+                        levelIndex < cookedChain.levels.size(); ++levelIndex) {
+                    const CookedModelLodLevel& cookedLevel =
+                        cookedChain.levels[levelIndex];
+                    if (levelIndex != 0u)
+                        lodChildren[cookedLevel.primitiveIndex] = true;
+                    chain.levels.push_back({
+                        .geometricError = cookedLevel.geometricError,
+                        .subMesh = allPrimitives[
+                            cookedLevel.primitiveIndex],
+                    });
+                }
+                runtime.lodChains.push_back(std::move(chain));
+            }
+            runtime.primitives.reserve(allPrimitives.size());
+            for (size_t primitiveIndex = 0;
+                    primitiveIndex < allPrimitives.size(); ++primitiveIndex) {
+                if (!lodChildren[primitiveIndex])
+                    runtime.primitives.push_back(
+                        std::move(allPrimitives[primitiveIndex]));
+            }
+        }
         if (!hasCookErrors(result.diagnostics)) {
             result.data = std::move(runtime);
         }
         return result;
+    }
+
+    RuntimeModelLodResidencyStats applyRuntimeModelLodResidencyFloor(
+        RuntimeModelCpuData& model, uint32_t minimumLodLevel) {
+        if (minimumLodLevel >= MaximumGpuSceneLodLevels) {
+            throw std::invalid_argument(
+                "Runtime model LOD residency floor exceeds the GPU-scene ABI");
+        }
+
+        RuntimeModelLodResidencyStats stats{
+            .requestedMinimumLevel = minimumLodLevel,
+            .originalIndexBytes = model.geometryArena.uint16Indices.size() *
+                    sizeof(uint16_t) +
+                model.geometryArena.uint32Indices.size() * sizeof(uint32_t),
+        };
+        if (minimumLodLevel == 0u || model.lodChains.empty()) {
+            stats.residentIndexBytes = stats.originalIndexBytes;
+            return stats;
+        }
+
+        using Identity = GeometryArenaPrimitiveIdentity;
+        const auto identityOf = [](const SubMesh& primitive) {
+            return Identity{ primitive.sourcePrimitiveGuid,
+                primitive.primitiveGuid };
+        };
+        std::map<Identity, const GeometryArenaPrimitiveRange*> sourceRanges;
+        for (const GeometryArenaPrimitiveRange& range :
+                model.geometryArena.primitives) {
+            if (!sourceRanges.emplace(range.identity, &range).second) {
+                throw std::logic_error(
+                    "Runtime geometry arena contains duplicate primitive identity");
+            }
+        }
+
+        std::set<Identity> chainIdentities;
+        for (const ModelLodChain& chain : model.lodChains) {
+            if (chain.levels.empty() ||
+                chain.levels.front().subMesh.primitiveGuid !=
+                    chain.basePrimitiveGuid) {
+                throw std::logic_error(
+                    "Runtime LOD chain lacks its canonical level zero");
+            }
+            for (const ModelLodLevel& level : chain.levels) {
+                const Identity identity = identityOf(level.subMesh);
+                if (!sourceRanges.contains(identity) ||
+                    !chainIdentities.insert(identity).second) {
+                    throw std::logic_error(
+                        "Runtime LOD chain does not map uniquely to its arena");
+                }
+            }
+        }
+
+        // Map retained stable identities to the source payload whose index range
+        // will actually be uploaded. The canonical identity maps to the first
+        // retained coarse payload; the discarded child's identity is not kept.
+        std::map<Identity, Identity> retainedPayloads;
+        for (const GeometryArenaPrimitiveRange& range :
+                model.geometryArena.primitives) {
+            if (!chainIdentities.contains(range.identity))
+                retainedPayloads.emplace(range.identity, range.identity);
+        }
+
+        std::vector<ModelLodChain> residentChains;
+        residentChains.reserve(model.lodChains.size());
+        std::vector<SubMesh> residentPrimitives = model.primitives;
+        for (const ModelLodChain& sourceChain : model.lodChains) {
+            const uint32_t applied = (std::min)(minimumLodLevel,
+                static_cast<uint32_t>(sourceChain.levels.size() - 1u));
+            stats.maximumAppliedLevel = (std::max)(
+                stats.maximumAppliedLevel, applied);
+            if (applied != 0u) ++stats.fallbackChainCount;
+            stats.withheldPrimitiveRangeCount += applied;
+
+            const Identity baseIdentity = identityOf(
+                sourceChain.levels.front().subMesh);
+            const Identity residentIdentity = identityOf(
+                sourceChain.levels[applied].subMesh);
+            retainedPayloads.emplace(baseIdentity, residentIdentity);
+            for (size_t level = static_cast<size_t>(applied) + 1u;
+                    level < sourceChain.levels.size(); ++level) {
+                const Identity identity = identityOf(
+                    sourceChain.levels[level].subMesh);
+                retainedPayloads.emplace(identity, identity);
+            }
+
+            ModelLodChain residentChain{
+                .sourcePrimitiveGuid = sourceChain.sourcePrimitiveGuid,
+                .basePrimitiveGuid = sourceChain.basePrimitiveGuid,
+                .residentBaseLevel = applied,
+            };
+            ModelLodLevel canonical = sourceChain.levels.front();
+            canonical.subMesh.indexCount =
+                sourceChain.levels[applied].subMesh.indexCount;
+            canonical.subMesh.geometry = {};
+            residentChain.levels.push_back(std::move(canonical));
+            for (size_t level = static_cast<size_t>(applied) + 1u;
+                    level < sourceChain.levels.size(); ++level) {
+                residentChain.levels.push_back(sourceChain.levels[level]);
+            }
+            residentChains.push_back(std::move(residentChain));
+
+            const auto primitive = std::ranges::find(
+                residentPrimitives, sourceChain.basePrimitiveGuid,
+                &SubMesh::primitiveGuid);
+            if (primitive == residentPrimitives.end()) {
+                throw std::logic_error(
+                    "Runtime LOD canonical primitive is absent");
+            }
+            primitive->indexCount = sourceChain.levels[applied].subMesh.indexCount;
+            primitive->geometry = {};
+        }
+
+        GeometryArenaData residentArena = model.geometryArena;
+        residentArena.primitives.clear();
+        residentArena.uint16Indices.clear();
+        residentArena.uint32Indices.clear();
+        residentArena.primitives.reserve(retainedPayloads.size());
+        for (const auto& [retainedIdentity, payloadIdentity] :
+                retainedPayloads) {
+            const auto source = sourceRanges.find(payloadIdentity);
+            if (source == sourceRanges.end()) {
+                throw std::logic_error(
+                    "Runtime LOD resident payload is absent from its arena");
+            }
+            GeometryArenaPrimitiveRange range = *source->second;
+            range.identity = retainedIdentity;
+            if (range.indexStream == GeometryArenaIndexStream::UInt16) {
+                const uint64_t end = static_cast<uint64_t>(range.firstIndex) +
+                    range.indexCount;
+                if (end > model.geometryArena.uint16Indices.size()) {
+                    throw std::logic_error(
+                        "Runtime UInt16 LOD range exceeds its arena stream");
+                }
+                range.firstIndex = static_cast<uint32_t>(
+                    residentArena.uint16Indices.size());
+                residentArena.uint16Indices.insert(
+                    residentArena.uint16Indices.end(),
+                    model.geometryArena.uint16Indices.begin() +
+                        source->second->firstIndex,
+                    model.geometryArena.uint16Indices.begin() + end);
+            } else {
+                const uint64_t end = static_cast<uint64_t>(range.firstIndex) +
+                    range.indexCount;
+                if (end > model.geometryArena.uint32Indices.size()) {
+                    throw std::logic_error(
+                        "Runtime UInt32 LOD range exceeds its arena stream");
+                }
+                range.firstIndex = static_cast<uint32_t>(
+                    residentArena.uint32Indices.size());
+                residentArena.uint32Indices.insert(
+                    residentArena.uint32Indices.end(),
+                    model.geometryArena.uint32Indices.begin() +
+                        source->second->firstIndex,
+                    model.geometryArena.uint32Indices.begin() + end);
+            }
+            residentArena.primitives.push_back(range);
+        }
+
+        residentArena.stats.arenaIndexBytes =
+            residentArena.uint16Indices.size() * sizeof(uint16_t) +
+            residentArena.uint32Indices.size() * sizeof(uint32_t);
+        residentArena.stats.savedIndexBytes =
+            residentArena.stats.sourceIndexBytes >=
+                    residentArena.stats.arenaIndexBytes
+                ? residentArena.stats.sourceIndexBytes -
+                    residentArena.stats.arenaIndexBytes
+                : 0u;
+        residentArena.stats.uint16IndexCount =
+            residentArena.uint16Indices.size();
+        residentArena.stats.uint32IndexCount =
+            residentArena.uint32Indices.size();
+        residentArena.stats.uint16PrimitiveCount = static_cast<uint32_t>(
+            std::ranges::count(residentArena.primitives,
+                GeometryArenaIndexStream::UInt16,
+                &GeometryArenaPrimitiveRange::indexStream));
+        residentArena.stats.uint32PrimitiveCount = static_cast<uint32_t>(
+            residentArena.primitives.size() -
+            residentArena.stats.uint16PrimitiveCount);
+
+        stats.residentIndexBytes = residentArena.stats.arenaIndexBytes;
+        if (stats.residentIndexBytes > stats.originalIndexBytes) {
+            throw std::logic_error(
+                "Runtime LOD residency floor increased physical index bytes");
+        }
+        model.primitives = std::move(residentPrimitives);
+        model.lodChains = std::move(residentChains);
+        model.geometryArena = std::move(residentArena);
+        return stats;
     }
 
     RuntimeCanonicalMaterialResult
@@ -186,8 +448,12 @@ namespace Iridium {
             std::span<const RuntimeTextureViewBinding>
                 textureViews,
             const RuntimeMaterialFallbacks& fallbacks,
-            bool validateProduct) {
+            bool validateProduct,
+            std::optional<TransparencyExecutionMode> executionModeOverride) {
         RuntimeCanonicalMaterialResult result;
+        const TransparencyExecutionMode executionMode =
+            executionModeOverride.value_or(
+                product.manifest.transparencyExecutionMode);
         if (validateProduct) {
             std::vector<CookDiagnostic>
                 productDiagnostics =
@@ -349,8 +615,7 @@ namespace Iridium {
                     binding.sampler.getGeneration();
             }
             std::vector<CompiledTransparencyPolicy> policies;
-            if (product.manifest.transparencyExecutionMode ==
-                    TransparencyExecutionMode::Classified) {
+            if (executionMode == TransparencyExecutionMode::Classified) {
                 for (const CookedModelPrimitive& primitive :
                         product.manifest.primitives) {
                     if (primitive.materialGuid == source.materialGuid &&
@@ -399,8 +664,7 @@ namespace Iridium {
                 }
                 CanonicalMaterialAsset variant = canonical;
                 variant.packed = *packed.material;
-                if (product.manifest.transparencyExecutionMode ==
-                        TransparencyExecutionMode::Classified &&
+                if (executionMode == TransparencyExecutionMode::Classified &&
                     policy.resolvedClass >=
                         TransparencyClass::SortedSurface &&
                     policy.resolvedClass <=
@@ -409,7 +673,7 @@ namespace Iridium {
                         MaterialFeatureClassifiedTransparencyExecution;
                 }
                 variant.pipelineState = pipelineFor(*compiled,
-                    product.manifest.transparencyExecutionMode);
+                    executionMode);
                 result.materials.push_back({
                     .materialGuid = source.materialGuid,
                     .transparency = policy,
@@ -463,9 +727,8 @@ namespace Iridium {
             int index = -1;
         };
         std::vector<RuntimeIndex> runtimeIndices;
-        for (size_t index = 0;
-            index < resolved.geometry.primitives.size(); ++index) {
-            SubMesh& primitive = resolved.geometry.primitives[index];
+        const auto resolvePrimitive = [&](SubMesh& primitive,
+                std::string field) {
             const auto matchesPolicy = [&](const auto& candidate) {
                 return candidate.materialGuid == primitive.materialGuid &&
                     (!classified || candidate.transparency ==
@@ -478,19 +741,18 @@ namespace Iridium {
                 if (material == bindings.end()) {
                     error(result.diagnostics,
                         "MODEL_RUNTIME_MATERIAL_MISSING",
-                        "/primitives/" + std::to_string(index) +
-                            "/material_guid",
+                        std::move(field) + "/material_guid",
                         classified
                             ? "Cooked model references an unresolved material GUID/policy variant."
                             : "Cooked model references an unresolved material GUID.");
-                    continue;
+                    return;
                 }
                 if (resolved.materials.size() >
                     static_cast<size_t>(std::numeric_limits<int>::max())) {
                     error(result.diagnostics,
                         "MODEL_RUNTIME_MATERIAL_LIMIT", "/materials",
                         "Runtime material binding count exceeds index limits.");
-                    break;
+                    return;
                 }
                 const int materialIndex =
                     static_cast<int>(resolved.materials.size());
@@ -503,6 +765,21 @@ namespace Iridium {
                 runtime = std::prev(runtimeIndices.end());
             }
             primitive.materialIndex = runtime->index;
+        };
+        for (size_t index = 0;
+            index < resolved.geometry.primitives.size(); ++index) {
+            resolvePrimitive(resolved.geometry.primitives[index],
+                "/primitives/" + std::to_string(index));
+        }
+        for (size_t chainIndex = 0;
+                chainIndex < resolved.geometry.lodChains.size(); ++chainIndex) {
+            ModelLodChain& chain = resolved.geometry.lodChains[chainIndex];
+            for (size_t levelIndex = 0;
+                    levelIndex < chain.levels.size(); ++levelIndex) {
+                resolvePrimitive(chain.levels[levelIndex].subMesh,
+                    "/lod_chains/" + std::to_string(chainIndex) +
+                        "/levels/" + std::to_string(levelIndex));
+            }
         }
         if (!hasCookErrors(result.diagnostics)) {
             result.data = std::move(resolved);

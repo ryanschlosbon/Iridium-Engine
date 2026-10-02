@@ -78,6 +78,7 @@ namespace Iridium {
         uint32_t frameContextCount,
         bool hdr10Composition,
         bool transparencyPyramids,
+        bool legacyTransparency,
         const VulkanLayeredGraphConfig& layered,
         const VulkanRenderGraphExecutor& graphResources) {
         if (device == VK_NULL_HANDLE || swapchain.getSwapchain() == VK_NULL_HANDLE ||
@@ -93,9 +94,13 @@ namespace Iridium {
         if (renderPasses.gBuffer == VK_NULL_HANDLE || renderPasses.lighting == VK_NULL_HANDLE ||
             renderPasses.forward == VK_NULL_HANDLE ||
             renderPasses.transparent == VK_NULL_HANDLE ||
-            renderPasses.glassDepth == VK_NULL_HANDLE ||
             renderPasses.output == VK_NULL_HANDLE || renderPasses.ui == VK_NULL_HANDLE) {
             throw std::invalid_argument("VulkanFrameTargets requires all render passes.");
+        }
+        if (legacyTransparency &&
+            renderPasses.glassDepth == VK_NULL_HANDLE) {
+            throw std::invalid_argument(
+                "VulkanFrameTargets requires the legacy glass-depth render pass when enabled.");
         }
         const VkExtent2D ordinary2AtlasExtent = layered.atlasExtent(
             TransparencyQuality::Ordinary2);
@@ -117,6 +122,12 @@ namespace Iridium {
                 renderPasses.layeredLocalComposition == VK_NULL_HANDLE)) {
             throw std::invalid_argument(
                 "VulkanFrameTargets requires complete layered render passes.");
+        }
+        if (layered.weightedOit &&
+            (renderPasses.weightedOitAccumulation == VK_NULL_HANDLE ||
+                renderPasses.weightedOitResolve == VK_NULL_HANDLE)) {
+            throw std::invalid_argument(
+                "VulkanFrameTargets requires complete WeightedOIT render passes.");
         }
         if (device_ != VK_NULL_HANDLE || sampler_ != VK_NULL_HANDLE ||
             integerSampler_ != VK_NULL_HANDLE ||
@@ -151,7 +162,10 @@ namespace Iridium {
                     target.refractionDepthPyramid = graphResources.imageResource(
                         frameIndex, "depth.refraction-nearest-pyramid");
                 }
-                target.glassDepth = graphResources.imageResource(frameIndex, "depth.glass");
+                if (legacyTransparency) {
+                    target.glassDepth = graphResources.imageResource(
+                        frameIndex, "depth.glass");
+                }
                 if (ordinary2) {
                     target.layeredEntryDepth = graphResources.imageResource(
                         frameIndex, "depth.layered.entry");
@@ -197,6 +211,14 @@ namespace Iridium {
                     target.hero4);
                 acquireDeepLayeredTier(TransparencyQuality::Cinematic8,
                     "cinematic8", target.cinematic8);
+                if (layered.weightedOit) {
+                    target.weightedOitAccumulation =
+                        graphResources.imageResource(frameIndex,
+                            "transparency.oit.accumulation");
+                    target.weightedOitRevealage =
+                        graphResources.imageResource(frameIndex,
+                            "transparency.oit.revealage");
+                }
                 target.output = graphResources.imageResource(frameIndex, "output.display");
             }
             if (hdr10Composition) {
@@ -316,9 +338,30 @@ namespace Iridium {
                     target.transparentFramebuffer,
                     "vkCreateFramebuffer(transparent)");
 
-                const std::array<VkImageView, 1> glassDepthAttachments = { target.glassDepth.view };
-                createFramebuffer(renderPasses.glassDepth, glassDepthAttachments,
-                    target.glassDepthFramebuffer, "vkCreateFramebuffer(glassDepth)");
+                if (legacyTransparency) {
+                    const std::array<VkImageView, 1> glassDepthAttachments = {
+                        target.glassDepth.view };
+                    createFramebuffer(renderPasses.glassDepth,
+                        glassDepthAttachments, target.glassDepthFramebuffer,
+                        "vkCreateFramebuffer(glassDepth)");
+                }
+
+                if (layered.weightedOit) {
+                    const std::array<VkImageView, 3> accumulationAttachments{
+                        target.weightedOitAccumulation.view,
+                        target.weightedOitRevealage.view,
+                        target.depth.view };
+                    createFramebuffer(renderPasses.weightedOitAccumulation,
+                        accumulationAttachments,
+                        target.weightedOitAccumulationFramebuffer,
+                        "vkCreateFramebuffer(WeightedOIT accumulation)");
+                    const std::array<VkImageView, 1> resolveAttachments{
+                        target.litScene.view };
+                    createFramebuffer(renderPasses.weightedOitResolve,
+                        resolveAttachments,
+                        target.weightedOitResolveFramebuffer,
+                        "vkCreateFramebuffer(WeightedOIT resolve)");
+                }
 
                 if (ordinary2) {
                     const auto createLayeredFramebuffer = [&](VkImageView identity,
@@ -515,6 +558,16 @@ namespace Iridium {
             };
             destroyDeepLayeredTier(target.cinematic8);
             destroyDeepLayeredTier(target.hero4);
+            if (target.weightedOitResolveFramebuffer != VK_NULL_HANDLE) {
+                vkDestroyFramebuffer(device_,
+                    target.weightedOitResolveFramebuffer, nullptr);
+                target.weightedOitResolveFramebuffer = VK_NULL_HANDLE;
+            }
+            if (target.weightedOitAccumulationFramebuffer != VK_NULL_HANDLE) {
+                vkDestroyFramebuffer(device_,
+                    target.weightedOitAccumulationFramebuffer, nullptr);
+                target.weightedOitAccumulationFramebuffer = VK_NULL_HANDLE;
+            }
             if (target.layeredLocalCompositionFramebuffer !=
                     VK_NULL_HANDLE) {
                 vkDestroyFramebuffer(device_,

@@ -14,6 +14,7 @@ namespace Iridium {
         VkExtent2D ordinary2AtlasExtent{};
         VkExtent2D hero4AtlasExtent{};
         VkExtent2D cinematic8AtlasExtent{};
+        bool weightedOit = false;
 
         [[nodiscard]] constexpr VkExtent2D atlasExtent(
             TransparencyQuality quality) const noexcept {
@@ -97,7 +98,9 @@ namespace Iridium {
         uint32_t directionalShadowResolution = 4096,
         uint32_t spotShadowAtlasResolution = 8192,
         bool transparencyPyramids = true,
-        VulkanLayeredGraphConfig layered = {});
+        VulkanLayeredGraphConfig layered = {},
+        bool legacyTransparency = false, bool depthPyramid = false,
+        uint64_t virtualShadowWorkingSetBytes = 0);
     [[nodiscard]] RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
         VkExtent2D sceneExtent, VkExtent2D presentationExtent,
         VkFormat swapchainFormat,
@@ -108,6 +111,8 @@ namespace Iridium {
         uint32_t directionalShadowResolution = 4096,
         uint32_t spotShadowAtlasResolution = 8192,
         bool transparencyPyramids = true,
-        VulkanLayeredGraphConfig layered = {});
+        VulkanLayeredGraphConfig layered = {},
+        bool legacyTransparency = false, bool depthPyramid = false,
+        uint64_t virtualShadowWorkingSetBytes = 0);
 
 } // namespace Iridium

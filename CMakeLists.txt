@@ -198,6 +198,24 @@ else()
 
         list(APPEND SPV_FILES ${OUTPUT_FILE})
     endforeach()
+
+    # M7.6 qualified Hi-Z compaction uses the same source contract with one
+    # additional read-only result binding. Keep the default shader unchanged.
+    set(GPU_SCENE_OCCLUSION_COMPACT_OUTPUT
+            "${SHADER_SOURCE_DIR}/gpu_scene_frustum_occlusion_compact_comp.spv")
+    add_custom_command(
+            OUTPUT ${GPU_SCENE_OCCLUSION_COMPACT_OUTPUT}
+            COMMAND ${GLSLC_COMPILER} -DIRIDIUM_GPU_SCENE_OCCLUSION=1
+                    -I "${SHADER_SOURCE_DIR}"
+                    "${SHADER_SOURCE_DIR}/gpu_scene_frustum_compact.comp"
+                    -o ${GPU_SCENE_OCCLUSION_COMPACT_OUTPUT}
+            DEPENDS "${SHADER_SOURCE_DIR}/gpu_scene_frustum_compact.comp"
+                    ${SHADER_INCLUDE_FILES}
+            COMMENT "Compiling qualified GPU-scene Hi-Z compact variant..."
+            VERBATIM
+    )
+    list(APPEND SPV_FILES ${GPU_SCENE_OCCLUSION_COMPACT_OUTPUT})
+
 endif()
 
 # --- BUILD TARGET ---
@@ -269,6 +287,8 @@ add_library(IridiumLighting STATIC
         "src/renderer/lighting/ClusteredLighting.cpp"
         "src/renderer/lighting/DirectionalShadow.h"
         "src/renderer/lighting/DirectionalShadow.cpp"
+        "src/renderer/rhi/VirtualShadowMap.h"
+        "src/renderer/rhi/VirtualShadowMap.cpp"
         "src/renderer/lighting/LocalShadow.h"
         "src/renderer/lighting/LocalShadow.cpp"
         "src/renderer/lighting/ReflectionProbe.h"
@@ -400,10 +420,13 @@ add_library(IridiumAssetCore STATIC
         "src/assets/material/CompiledMaterialProduct.cpp"
         "src/assets/model/ModelProduct.h"
         "src/assets/model/ModelProduct.cpp"
+        "src/assets/model/ModelLodGenerator.h"
+        "src/assets/model/ModelLodGenerator.cpp"
         "src/assets/model/GltfModelImporter.h"
         "src/assets/model/GltfModelImporter.cpp"
         "src/assets/model/ModelRuntimeProduct.h"
         "src/assets/model/ModelRuntimeProduct.cpp"
+        "src/renderer/rhi/GeometryArena.cpp"
         "src/assets/model/AssetModelPreparationService.h"
         "src/assets/model/AssetModelPreparationService.cpp"
         "src/assets/thumbnail/AssetThumbnail.h"
@@ -491,6 +514,7 @@ add_executable(IridiumEngine
         "src/editor/EditorSceneDocumentActions.cpp"
         "src/editor/ViewportPlacement.h"
         "src/editor/ViewportPlacement.cpp"
+        "src/editor/EditorShortcut.h"
         "src/vendor/imgui/imgui.cpp"
         "src/vendor/imgui/imgui_demo.cpp"
         "src/vendor/imgui/imgui_draw.cpp"
@@ -515,6 +539,12 @@ add_executable(IridiumEngine
  "src/scene/components/LightComponent.h" "src/editor/Reflection.h" "src/editor/ComponentCollectionUI.h" "src/editor/ViewportLayout.h" "src/editor/ViewportLayout.cpp" "src/utils/DeletionQueue.h" "src/core/Application.h" "src/core/Application.cpp" "src/editor/panels/EditorPanel.h" "src/editor/panels/core/SceneHierarchyPanel.h" "src/editor/panels/core/SceneHierarchyPanel.cpp" "src/editor/panels/core/InspectorPanel.h" "src/editor/panels/core/InspectorPanel.cpp"     "src/editor/EditorUIState.h" "src/editor/panels/menus/MenuBarPanel.h" "src/editor/panels/menus/MenuBarPanel.cpp" "src/editor/panels/windows/ProjectSettingsPanel.h" "src/editor/panels/windows/ProjectSettingsPanel.cpp" "src/renderer/vulkan/DescriptorAllocator.h" "src/renderer/vulkan/DescriptorAllocator.cpp" "src/renderer/vulkan/VkUIRenderPass.h" "src/renderer/vulkan/VkUIRenderPass.cpp" "src/editor/panels/core/ViewPortPanel.h" "src/editor/panels/core/ViewPortPanel.cpp" "src/renderer/vulkan/VkLightingPipeline.h" "src/renderer/vulkan/VkLightingPipeline.cpp" "src/renderer/vulkan/VkForwardRenderPass.cpp" "src/renderer/vulkan/VkForwardRenderPass.h" "src/renderer/vulkan/GlassDepthRenderPass.h" "src/renderer/vulkan/GlassDepthRenderPass.cpp" "src/renderer/vulkan/GlassDepthPipeline.h" "src/renderer/vulkan/GlassDepthPipeline.cpp" "src/renderer/rhi/IRenderBackend.h" "src/renderer/rhi/RenderBackendFactory.h" "src/renderer/rhi/RenderBackendFactory.cpp" "src/renderer/rhi/DrawPacket.h" "src/renderer/rhi/RenderHandles.h" "src/renderer/rhi/ResourcePool.h" "src/renderer/rhi/RhiResourceTypes.h" "src/renderer/vulkan/VulkanResourceAllocator.h" "src/renderer/vulkan/VulkanResourceState.h" "src/renderer/vulkan/VulkanResourceState.cpp" "src/renderer/vulkan/VulkanCommandList.h" "src/renderer/vulkan/VulkanUploadContext.h" "src/renderer/vulkan/VulkanIndexedTextureTable.h" "src/renderer/vulkan/VulkanIndexedTextureTable.cpp" "src/renderer/vulkan/VulkanVertexBackend.h" "src/renderer/vulkan/VulkanVertexBackend.cpp" "src/renderer/vulkan/VulkanVertexUtils.h" "src/renderer/vulkan/VulkanMeshLayouts.h" "src/renderer/vulkan/VulkanMeshLayouts.cpp" "src/renderer/rhi/PipelineTypes.h" "src/renderer/rhi/TextureTypes.h" "src/renderer/vulkan/VulkanPipelineLibrary.h" "src/renderer/vulkan/VulkanPipelineLibrary.cpp")
 
 target_sources(IridiumEngine PRIVATE
+        "src/renderer/rhi/GpuScene.cpp"
+        "src/renderer/rhi/GpuSceneIndirect.cpp"
+        "src/renderer/rhi/GpuSceneLod.cpp"
+        "src/renderer/rhi/GpuSceneVisibility.cpp"
+        "src/renderer/rhi/DepthPyramid.cpp"
+        "src/renderer/scene/GpuScenePublisher.cpp"
         "src/platform/FileDialog.h"
         "src/editor/EditorComponentRegistry.h"
         "src/editor/EditorComponentRegistry.cpp"
@@ -524,6 +554,8 @@ target_sources(IridiumEngine PRIVATE
         "src/editor/CoreEditorComponentRegistry.cpp"
         "src/editor/EditorTransactionService.h"
         "src/editor/EditorTransactionService.cpp"
+        "src/editor/EditorAssetSettingsTransactionService.h"
+        "src/editor/EditorAssetSettingsTransactionService.cpp"
         "src/editor/EditorSceneHierarchy.h"
         "src/editor/EditorSceneHierarchy.cpp"
         "src/editor/EditorSceneCommandService.h"
@@ -616,6 +648,8 @@ target_sources(IridiumEngine PRIVATE
         "src/renderer/vulkan/VulkanFrameScheduler.cpp"
         "src/renderer/vulkan/VulkanFrameTargets.h"
         "src/renderer/vulkan/VulkanFrameTargets.cpp"
+        "src/renderer/vulkan/VulkanWeightedOitPass.h"
+        "src/renderer/vulkan/VulkanWeightedOitPass.cpp"
         "src/renderer/vulkan/VulkanSceneDescriptors.h"
         "src/renderer/vulkan/VulkanSceneDescriptors.cpp"
         "src/renderer/vulkan/VulkanDirectionalShadowMap.h"
@@ -624,12 +658,21 @@ target_sources(IridiumEngine PRIVATE
         "src/renderer/vulkan/VulkanSpotShadowAtlas.cpp"
         "src/renderer/vulkan/VulkanPointShadowPools.h"
         "src/renderer/vulkan/VulkanPointShadowPools.cpp"
+        "src/renderer/vulkan/VulkanVirtualShadowResources.h"
+        "src/renderer/vulkan/VulkanVirtualShadowResources.cpp"
+        "src/renderer/vulkan/VulkanVirtualShadowMarkingPass.h"
+        "src/renderer/vulkan/VulkanVirtualShadowMarkingPass.cpp"
+        "src/renderer/vulkan/VulkanVirtualShadowDepthReceiverPass.h"
+        "src/renderer/vulkan/VulkanVirtualShadowDepthReceiverPass.cpp"
+        "src/renderer/vulkan/VulkanVirtualShadowFullViewPass.h"
+        "src/renderer/vulkan/VulkanVirtualShadowFullViewPass.cpp"
         "src/renderer/vulkan/VulkanRenderGraphExecutor.h"
         "src/renderer/vulkan/VulkanRenderGraphExecutor.cpp"
         "src/renderer/vulkan/VulkanProductionRenderGraph.h"
         "src/renderer/vulkan/VulkanProductionRenderGraph.cpp"
         "src/renderer/vulkan/VulkanTransparencyPyramid.h"
         "src/renderer/vulkan/VulkanTransparencyPyramid.cpp"
+        "src/renderer/vulkan/VulkanDepthPyramid.cpp"
         "src/renderer/vulkan/VulkanLayeredInterfaceCapturePass.h"
         "src/renderer/vulkan/VulkanLayeredInterfaceCapturePass.cpp"
         "src/renderer/vulkan/VulkanLayeredLocalCompositionPass.h"
@@ -929,6 +972,91 @@ if(BUILD_TESTING)
             glm::glm)
     add_test(NAME DirectionalShadowTests COMMAND DirectionalShadowTests)
 
+    add_executable(VirtualShadowMapTests
+            "tests/renderer/VirtualShadowMapTests.cpp"
+    )
+    target_include_directories(VirtualShadowMapTests PRIVATE src)
+    target_link_libraries(VirtualShadowMapTests PRIVATE
+            IridiumLighting)
+    add_test(NAME VirtualShadowMapTests COMMAND VirtualShadowMapTests)
+
+    add_executable(GpuSceneTests
+            "tests/renderer/GpuSceneTests.cpp"
+            "src/renderer/rhi/GpuScene.cpp"
+            "src/renderer/scene/GpuScenePublisher.cpp"
+            "src/scene/SceneEntityUuid.cpp"
+    )
+    target_include_directories(GpuSceneTests PRIVATE src)
+    target_link_libraries(GpuSceneTests PRIVATE
+            IridiumAssetCore
+            glm::glm)
+    add_test(NAME GpuSceneTests COMMAND GpuSceneTests)
+
+    add_executable(GpuSceneVisibilityTests
+            "tests/renderer/GpuSceneVisibilityTests.cpp"
+            "src/renderer/rhi/GpuScene.cpp"
+            "src/renderer/rhi/GpuSceneVisibility.cpp")
+    target_include_directories(GpuSceneVisibilityTests PRIVATE src)
+    target_link_libraries(GpuSceneVisibilityTests PRIVATE glm::glm)
+    add_test(NAME GpuSceneVisibilityTests COMMAND GpuSceneVisibilityTests)
+
+    add_executable(DepthPyramidTests
+            "tests/renderer/DepthPyramidTests.cpp"
+            "src/renderer/rhi/DepthPyramid.cpp")
+    target_include_directories(DepthPyramidTests PRIVATE src)
+    add_test(NAME DepthPyramidTests COMMAND DepthPyramidTests)
+
+    # Explicit hardware qualification; not part of portable CTest runs.
+    if (GLSLC_COMPILER)
+        add_executable(VulkanDepthPyramidTests
+                "tests/renderer/VulkanDepthPyramidTests.cpp"
+                "src/renderer/rhi/DepthPyramid.cpp"
+                "${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders/depth_pyramid_comp.spv"
+                "${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders/depth_pyramid_query_comp.spv")
+        target_include_directories(VulkanDepthPyramidTests PRIVATE src)
+        target_link_libraries(VulkanDepthPyramidTests PRIVATE Vulkan::Vulkan)
+
+        add_executable(VulkanVirtualShadowMarkingTests
+                "tests/renderer/VulkanVirtualShadowMarkingTests.cpp"
+                "src/renderer/vulkan/VulkanVirtualShadowMarkingPass.cpp"
+                "src/renderer/vulkan/VulkanVirtualShadowDepthReceiverPass.cpp"
+                "src/renderer/vulkan/VulkanVirtualShadowFullViewPass.cpp"
+                "${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders/virtual_shadow_residency_reference_comp.spv"
+                "${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders/virtual_shadow_full_view_mark_comp.spv"
+                "${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders/virtual_shadow_depth_receivers_comp.spv"
+                "${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders/virtual_shadow_directional_mark_comp.spv"
+                "${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders/virtual_shadow_directional_compact_comp.spv"
+                "${CMAKE_CURRENT_SOURCE_DIR}/assets/shaders/virtual_shadow_directional_compact_parallel_comp.spv")
+        target_include_directories(VulkanVirtualShadowMarkingTests PRIVATE src)
+        target_link_libraries(VulkanVirtualShadowMarkingTests PRIVATE
+                IridiumLighting
+                Vulkan::Vulkan
+                glm::glm)
+        target_compile_definitions(VulkanVirtualShadowMarkingTests PRIVATE
+                PROJECT_ROOT_DIR="${CMAKE_SOURCE_DIR}")
+    endif()
+
+    add_executable(GpuSceneIndirectTests
+            "tests/renderer/GpuSceneIndirectTests.cpp"
+            "src/renderer/rhi/GpuSceneIndirect.cpp")
+    target_include_directories(GpuSceneIndirectTests PRIVATE src)
+    target_link_libraries(GpuSceneIndirectTests PRIVATE glm::glm)
+    add_test(NAME GpuSceneIndirectTests COMMAND GpuSceneIndirectTests)
+
+    add_executable(GpuSceneLodTests
+            "tests/renderer/GpuSceneLodTests.cpp"
+            "src/renderer/rhi/GpuSceneLod.cpp")
+    target_include_directories(GpuSceneLodTests PRIVATE src)
+    target_link_libraries(GpuSceneLodTests PRIVATE glm::glm)
+    add_test(NAME GpuSceneLodTests COMMAND GpuSceneLodTests)
+
+    add_executable(GeometryArenaTests
+            "tests/renderer/GeometryArenaTests.cpp"
+    )
+    target_include_directories(GeometryArenaTests PRIVATE src)
+    target_link_libraries(GeometryArenaTests PRIVATE IridiumAssetCore)
+    add_test(NAME GeometryArenaTests COMMAND GeometryArenaTests)
+
     add_executable(LocalShadowTests
             "tests/renderer/LocalShadowTests.cpp"
     )
@@ -1031,6 +1159,22 @@ if(BUILD_TESTING)
     add_test(NAME EditorAssetDocumentServiceTests
             COMMAND EditorAssetDocumentServiceTests)
 
+    add_executable(EditorAssetSettingsTransactionServiceTests
+            "tests/editor/EditorAssetSettingsTransactionServiceTests.cpp"
+            "src/editor/EditorAssetSettingsTransactionService.cpp"
+    )
+    target_include_directories(
+            EditorAssetSettingsTransactionServiceTests PRIVATE src)
+    target_link_libraries(
+            EditorAssetSettingsTransactionServiceTests PRIVATE
+            IridiumAssetCore)
+    target_compile_definitions(
+            EditorAssetSettingsTransactionServiceTests PRIVATE
+            PROJECT_ROOT_DIR="${CMAKE_SOURCE_DIR}"
+    )
+    add_test(NAME EditorAssetSettingsTransactionServiceTests
+            COMMAND EditorAssetSettingsTransactionServiceTests)
+
     add_executable(Stage3ArchitectureTests
             "tests/renderer/Stage3ArchitectureTests.cpp"
             "src/renderer/vulkan/VulkanResourceState.cpp"
@@ -1089,6 +1233,7 @@ if(BUILD_TESTING)
     )
 
     target_include_directories(ApplicationConfigTests PRIVATE src)
+    target_link_libraries(ApplicationConfigTests PRIVATE glm::glm)
     if(WIN32)
         target_link_libraries(ApplicationConfigTests PRIVATE Bcrypt)
     endif()

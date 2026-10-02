@@ -37,10 +37,13 @@
 #include "renderer/rhi/FrameCapture.h"
 #include "renderer/rhi/RenderBackendRuntimeInfo.h"
 #include "renderer/lighting/LightExtractor.h"
+#include "editor/EditorViewCadence.h"
 #include "renderer/lighting/ReflectionProbe.h"
 #include "renderer/lighting/ReflectionProbeCapture.h"
 #include "renderer/lighting/DirectionalShadow.h"
 #include "renderer/lighting/LocalShadow.h"
+#include "renderer/scene/GpuScenePublisher.h"
+#include "renderer/rhi/GpuSceneVisibility.h"
 
 namespace Iridium {
 
@@ -85,7 +88,33 @@ namespace Iridium {
         std::vector<float> transparentIntervalNearScratch;
         std::vector<uint32_t> transparentIntervalFenwickScratch;
         std::vector<DrawPacket> selectionQueue;
+        // Dense GPU-scene primitive references are the production shadow path;
+        // shadowCasterQueue contains compatibility packets only.
         std::vector<DrawPacket> shadowCasterQueue;
+        std::vector<DrawPacket> probeCasterQueue_;
+        // Backend-neutral, frame-local transforms referenced by DrawPacket
+        // instance ranges. Existing single-instance packets leave this empty.
+        std::vector<glm::mat4> forwardInstanceTransforms_;
+        std::vector<Entity> changedTransformEntities_;
+        std::unique_ptr<GpuScenePublisher> gpuScenePublisher_;
+        std::vector<GpuSceneObservedInstance> gpuSceneObservations_;
+        struct GpuSceneObservationMetadata {
+            SceneEntityUuid owner;
+            const ModelAsset* model = nullptr;
+            GeometryHandle geometry;
+            std::string cookKey;
+            uint64_t materialOverrideSignature = 0;
+            uint64_t observationRevision = 0;
+            glm::vec3 localMinimum{ 0.0f };
+            glm::vec3 localMaximum{ 0.0f };
+            uint32_t baseConsumerMask = 0;
+            bool valid = false;
+        };
+        std::vector<GpuSceneObservationMetadata>
+            gpuSceneObservationMetadata_;
+        const GpuScenePackedTables* gpuSceneFrame_ = nullptr;
+        GpuSceneVisibilityResult gpuSceneVisibility_;
+        uint32_t gpuSceneDirectFallbackCount_ = 0;
 
         // --- SUBSYSTEMS ---
         std::unique_ptr<AssetManager> assetManager;
@@ -106,6 +135,9 @@ namespace Iridium {
         uint64_t thumbnailUploadsTotal_ = 0;
         uint64_t thumbnailUploadBytesTotal_ = 0;
         SceneWorld sceneWorld_;
+        SceneWorld previewLightingWorld_;
+        Entity previewSun_ = NULL_ENTITY;
+        EditorViewScheduler editorViewScheduler_;
         LightExtractor lightExtractor_;
         ReflectionProbePublisher reflectionProbePublisher_;
         ReflectionProbeCaptureScheduler reflectionProbeCaptureScheduler_;
@@ -138,8 +170,14 @@ namespace Iridium {
         std::string activeEnvironmentSourcePrimaries_;
         float activeEnvironmentRadianceScale_ = 0.0f;
         EnvironmentLightingHandles environmentLighting_;
+        EnvironmentLightingSettings sceneEnvironmentSettings_;
+        std::optional<float> appliedViewExposureEv_;
         std::map<AssetGuid, LoadedEnvironmentAsset> loadedEnvironments_;
         TextureHandle outputTransformLut; // Pinned application-owned ACES 2 LUT.
+        Color::OutputTransport outputTransformLutTransport_ =
+            Color::OutputTransport::SdrSrgb;
+        std::optional<Color::OutputTransport> pendingOutputTransport_;
+        uint32_t outputTransportValidationStep_ = 0;
         TextureHandle residencyProbeTexture_{};
         TextureHandle residencyReplacementTexture_{};
         uint32_t residencyRetiredIndex_ = UINT32_MAX;
@@ -175,6 +213,22 @@ namespace Iridium {
             uint32_t failures = 0;
             std::string lastDiagnostic;
         } ordinary2ResizeValidation_;
+        struct WeightedOitResizeValidationState {
+            RenderExtent originalExtent{};
+            uint64_t initialRenderGraphRebuildCount = 0;
+            uint32_t requests = 0;
+            uint32_t successes = 0;
+            uint32_t failures = 0;
+            std::string lastDiagnostic;
+        } weightedOitResizeValidation_;
+        struct DepthPyramidResizeValidationState {
+            RenderExtent originalExtent{};
+            uint64_t initialRenderGraphRebuildCount = 0;
+            uint32_t requests = 0;
+            uint32_t successes = 0;
+            uint32_t failures = 0;
+            std::string lastDiagnostic;
+        } depthPyramidResizeValidation_;
         struct DeepLayeredLifecycleValidationState {
             enum class Phase : uint8_t {
                 Initial,
@@ -215,6 +269,8 @@ namespace Iridium {
         float cameraFarPlane_ = 100.0f;
         AssetGuid framedPreviewDocumentGuid_;
         std::string framedPreviewCookKey_;
+        uint64_t framedPreviewRevision_ = 0;
+        uint64_t framedPreviewSession_ = 0;
 
         // --- MOUSE STATE ---
         float lastX = 1280 / 2.0f;
@@ -232,10 +288,11 @@ namespace Iridium {
         void drawFrame(std::optional<uint64_t> captureFrameIndex,
             uint64_t applicationFrameIndex,
             bool validateOrdinary2Capture,
-            bool validateDeepLayeredCapture);
+            bool validateDeepLayeredCapture,
+            bool validateDepthPyramidCapture);
+        void prepareGpuScenePublication(Entity selectedEntity);
 
         void processInput(GLFWwindow* window);
-        void selectEntityAtMouse(double mouseX, double mouseY);
         // Failed requests are reported once and cleared; callers must explicitly retry.
         void ProcessMeshSwaps();
         [[nodiscard]] std::shared_ptr<ModelAsset>
@@ -243,8 +300,12 @@ namespace Iridium {
         void configureCookedModelHotReload();
         void configureCookedEnvironmentHotReload();
         void recreateSwapchain();
+        void replaceOutputTransformLut(Color::OutputTransport effectiveTransport);
+        void publishOutputTransportStatus();
         void updateBenchmarkState(uint64_t frameIndex);
         void updateOrdinary2ResizeValidation(uint64_t measuredFrameIndex);
+        void updateWeightedOitResizeValidation(uint64_t measuredFrameIndex);
+        void updateDepthPyramidResizeValidation(uint64_t measuredFrameIndex);
         [[nodiscard]] bool updateDeepLayeredLifecycleValidation(
             uint64_t measuredFrameIndex);
         void updateTextureResidencyChurn(uint64_t frameIndex);

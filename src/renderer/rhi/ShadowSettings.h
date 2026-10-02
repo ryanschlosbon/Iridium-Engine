@@ -51,9 +51,18 @@ namespace Iridium {
             kDirectionalShadowLightCapacity;
         uint32_t maximumCascadeUpdatesPerLight =
             kDirectionalShadowCascadeCount;
+        // Project/profile-owned camera-relative coverage. The active camera far
+        // plane may shorten it, but cannot silently expand it and dilute every
+        // cascade's texel density.
+        float directionalMaximumDistanceMeters = 250.0f;
         float directionalSplitLambda = 0.85f;
         float directionalGuardBandFraction = 0.05f;
         float directionalDepthPaddingMeters = 100.0f;
+        // Receiver terms remain expressed in the active cascade's world texel
+        // footprint so changing resolution or coverage preserves their scale.
+        float directionalReceiverDepthBiasTexels = 1.25f;
+        float directionalReceiverPlaneClampTexels = 2.0f;
+        float directionalNormalOffsetTexels = 0.5f;
         uint32_t spotAtlasResolution = 8192;
         uint64_t maximumSpotRenderedTexelsPerFrame =
             16ull * 1024ull * 1024ull;
@@ -88,10 +97,20 @@ namespace Iridium {
         uint32_t lightQuality) noexcept {
         const uint32_t projectQuality = static_cast<uint32_t>(
             settings.qualityProfile);
+        const uint32_t maximumAuthoredLightQuality = static_cast<uint32_t>(
+            ShadowQualityProfile::Ultra);
+        // Light components currently author Low..Ultra. An Ultra light opts in
+        // to a Cinematic project ceiling instead of making that ceiling
+        // unreachable through an artificial second Ultra clamp.
+        const uint32_t lightCeiling =
+            projectQuality == static_cast<uint32_t>(
+                ShadowQualityProfile::Cinematic) &&
+                lightQuality >= maximumAuthoredLightQuality
+            ? static_cast<uint32_t>(ShadowQualityProfile::Cinematic)
+            : (std::min)(lightQuality, maximumAuthoredLightQuality);
         const ShadowQualityProfile effectiveQuality =
             static_cast<ShadowQualityProfile>((std::min)(projectQuality,
-                (std::min)(lightQuality,
-                    static_cast<uint32_t>(ShadowQualityProfile::Ultra))));
+                lightCeiling));
         ShadowFilterProfile profile = shadowFilterProfile(effectiveQuality);
         profile.maximumPenumbraTexels = (std::min)(
             profile.maximumPenumbraTexels,

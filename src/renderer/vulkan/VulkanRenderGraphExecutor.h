@@ -125,6 +125,11 @@ namespace Iridium {
         void onFrameFenceCompleted(uint32_t frameIndex);
         [[nodiscard]] bool validateFrame(uint32_t frameIndex) noexcept;
         void beginFrameExecution(uint32_t frameIndex);
+        // Non-owning, opt-in synchronization for persistent per-slot buffers.
+        // Bind only after the slot fence retires; handles must be slot-distinct.
+        void bindExternalBuffer(uint32_t frameIndex, std::string_view logicalName,
+            VkBuffer buffer, VkDeviceSize size,
+            RenderGraph::Access initialAccess = RenderGraph::Access::Undefined);
         void beginPass(VkCommandBuffer commandBuffer, std::string_view passName);
         void skipPass(std::string_view passName);
         void finishFrameExecution();
@@ -155,6 +160,14 @@ namespace Iridium {
         std::vector<std::vector<RenderGraph::Access>> frameAccess_;
         uint32_t executingFrame_ = RenderGraph::InvalidIndex;
         uint32_t nextPass_ = 0;
+        struct ExternalBufferBinding {
+            VkBuffer buffer = VK_NULL_HANDLE;
+            VkDeviceSize size = 0;
+            RenderGraph::Access access = RenderGraph::Access::Undefined;
+        };
+        std::vector<std::vector<ExternalBufferBinding>> externalBuffers_;
+        std::vector<bool> externalBufferTracked_;
+        std::vector<bool> frameRetired_;
 
         [[nodiscard]] const RenderGraph::CompiledGraph& executingGraph() const;
         void transitionPhysicalResource(VkCommandBuffer commandBuffer,

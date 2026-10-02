@@ -119,11 +119,17 @@ namespace Iridium {
             else if (argument == "--validate-ordinary2-resize") {
                 config.validateOrdinary2Resize = true;
             }
+            else if (argument == "--validate-weighted-oit-resize") {
+                config.validateWeightedOitResize = true;
+            }
             else if (argument == "--validate-deep-layered-capture") {
                 config.validateDeepLayeredCapture = true;
             }
             else if (argument == "--validate-deep-layered-lifecycle") {
                 config.validateDeepLayeredLifecycle = true;
+            }
+            else if (argument == "--validate-output-transport-switch") {
+                config.validateOutputTransportSwitch = true;
             }
             else if (argument == "--deep-layered-validation-quality") {
                 if (++index >= arguments.size()) {
@@ -269,6 +275,42 @@ namespace Iridium {
                     static_cast<float>(parseFiniteRange(arguments[index],
                         "--shadow-directional-source-diameter", 0.0, 5.0));
             }
+            else if (argument == "--shadow-directional-distance") {
+                if (++index >= arguments.size()) {
+                    throw std::invalid_argument(
+                        "--shadow-directional-distance requires metres in [1, 100000]");
+                }
+                config.shadowSettings.directionalMaximumDistanceMeters =
+                    static_cast<float>(parseFiniteRange(arguments[index],
+                        "--shadow-directional-distance", 1.0, 100'000.0));
+            }
+            else if (argument == "--shadow-directional-receiver-bias") {
+                if (++index >= arguments.size()) {
+                    throw std::invalid_argument(
+                        "--shadow-directional-receiver-bias requires shadow texels in [0, 8]");
+                }
+                config.shadowSettings.directionalReceiverDepthBiasTexels =
+                    static_cast<float>(parseFiniteRange(arguments[index],
+                        "--shadow-directional-receiver-bias", 0.0, 8.0));
+            }
+            else if (argument == "--shadow-directional-receiver-plane-clamp") {
+                if (++index >= arguments.size()) {
+                    throw std::invalid_argument(
+                        "--shadow-directional-receiver-plane-clamp requires shadow texels in [0, 8]");
+                }
+                config.shadowSettings.directionalReceiverPlaneClampTexels =
+                    static_cast<float>(parseFiniteRange(arguments[index],
+                        "--shadow-directional-receiver-plane-clamp", 0.0, 8.0));
+            }
+            else if (argument == "--shadow-directional-normal-offset") {
+                if (++index >= arguments.size()) {
+                    throw std::invalid_argument(
+                        "--shadow-directional-normal-offset requires shadow texels in [0, 4]");
+                }
+                config.shadowSettings.directionalNormalOffsetTexels =
+                    static_cast<float>(parseFiniteRange(arguments[index],
+                        "--shadow-directional-normal-offset", 0.0, 4.0));
+            }
             else if (argument == "--shadow-filter") {
                 if (++index >= arguments.size()) {
                     throw std::invalid_argument(
@@ -304,6 +346,9 @@ namespace Iridium {
             }
             else if (argument == "--benchmark-disable-local-shadows") {
                 config.disableBenchmarkLocalShadows = true;
+            }
+            else if (argument == "--developer-legacy-transparency") {
+                config.developerLegacyTransparency = true;
             }
             else if (argument == "--gbuffer-layout") {
                 if (++index >= arguments.size()) {
@@ -362,9 +407,12 @@ namespace Iridium {
 			else if (argument == "--output-transport") {
 				if (++index >= arguments.size()) {
 					throw std::invalid_argument(
-						"--output-transport requires sdr, scrgb, or hdr10");
+						"--output-transport requires auto, sdr, scrgb, or hdr10");
 				}
-				if (arguments[index] == "sdr") {
+				if (arguments[index] == "auto") {
+					config.outputTransport = Color::OutputTransport::Automatic;
+				}
+				else if (arguments[index] == "sdr") {
 					config.outputTransport = Color::OutputTransport::SdrSrgb;
 				}
 				else if (arguments[index] == "scrgb") {
@@ -375,7 +423,7 @@ namespace Iridium {
 				}
 				else {
 					throw std::invalid_argument(
-						"--output-transport requires sdr, scrgb, or hdr10");
+						"--output-transport requires auto, sdr, scrgb, or hdr10");
 				}
 			}
             else if (argument == "--paper-white-nits") {
@@ -416,6 +464,14 @@ namespace Iridium {
                 }
                 config.benchmarkManifest = std::string(arguments[index]);
             }
+            else if (argument == "--weighted-oit-order-seed") {
+                if (++index >= arguments.size()) {
+                    throw std::invalid_argument(
+                        "--weighted-oit-order-seed requires an unsigned integer");
+                }
+                config.weightedOitOrderSeed = parseUnsigned(
+                    arguments[index], "--weighted-oit-order-seed");
+            }
             else if (argument == "--cooked-model-artifact") {
                 if (++index >= arguments.size() || arguments[index].empty()) {
                     throw std::invalid_argument(
@@ -443,6 +499,115 @@ namespace Iridium {
                     throw std::invalid_argument(
                         "--open-asset-viewer requires a non-nil asset GUID");
                 }
+            }
+            else if (argument == "--reference-direct-gbuffer") {
+                config.forceDirectGBufferReference = true;
+            }
+            else if (argument == "--reference-direct-shadows") {
+                config.forceDirectShadowReference = true;
+            }
+            else if (argument == "--reference-direct-probe-capture") {
+                config.forceDirectProbeCaptureReference = true;
+            }
+            else if (argument == "--shadow-indirect-qualification-oracle") {
+                config.shadowIndirectQualificationOracle = true;
+            }
+            else if (argument == "--experimental-shadow-lod-error-texels") {
+                if (++index >= arguments.size()) throw std::invalid_argument(
+                    "--experimental-shadow-lod-error-texels requires a texel threshold");
+                config.experimentalShadowLodErrorTexels = static_cast<float>(parseFiniteRange(
+                    arguments[index], "--experimental-shadow-lod-error-texels", 0.01, 64.0));
+            }
+            else if (argument == "--shadow-lod-max-level") {
+                if (++index >= arguments.size()) throw std::invalid_argument(
+                    "--shadow-lod-max-level requires 0..15 (zero pins LOD0)");
+                const uint64_t level = parseUnsigned(arguments[index],
+                    "--shadow-lod-max-level");
+                if (level > 15u) throw std::invalid_argument(
+                    "--shadow-lod-max-level requires 0..15");
+                config.shadowLodMaximumLevel = static_cast<uint32_t>(level);
+            }
+            else if (argument == "--experimental-gpu-lod-error-pixels") {
+                if (++index >= arguments.size()) throw std::invalid_argument(
+                    "--experimental-gpu-lod-error-pixels requires a pixel threshold");
+                config.experimentalGpuLodErrorPixels = static_cast<float>(parseFiniteRange(
+                    arguments[index], "--experimental-gpu-lod-error-pixels", 0.01, 64.0));
+            }
+            else if (argument == "--gpu-lod-hysteresis-fraction") {
+                if (++index >= arguments.size()) throw std::invalid_argument(
+                    "--gpu-lod-hysteresis-fraction requires 0..0.5");
+                config.gpuLodHysteresisFraction = static_cast<float>(parseFiniteRange(
+                    arguments[index], "--gpu-lod-hysteresis-fraction", 0.0, 0.5));
+            }
+            else if (argument == "--gpu-lod-max-level") {
+                if (++index >= arguments.size()) throw std::invalid_argument(
+                    "--gpu-lod-max-level requires 0..15 (zero pins LOD0)");
+                const uint64_t level = parseUnsigned(arguments[index], "--gpu-lod-max-level");
+                if (level > 15u) throw std::invalid_argument("--gpu-lod-max-level requires 0..15");
+                config.gpuLodMaximumLevel = static_cast<uint32_t>(level);
+            }
+            else if (argument == "--experimental-depth-pyramid") {
+                config.experimentalDepthPyramid = true;
+            }
+            else if (argument == "--experimental-virtual-shadow-resources") {
+                config.experimentalVirtualShadowResources = true;
+            }
+            else if (argument == "--virtual-shadow-depth-qualification-oracle") {
+                config.experimentalVirtualShadowResources = true;
+                config.virtualShadowDepthQualificationOracle = true;
+            }
+            else if (argument == "--experimental-depth-occlusion-query") {
+                config.experimentalDepthPyramid = true;
+                config.experimentalDepthOcclusionQuery = true;
+            }
+            else if (argument == "--experimental-depth-occlusion-rejection") {
+                config.experimentalDepthPyramid = true;
+                config.experimentalDepthOcclusionQuery = true;
+                config.experimentalDepthOcclusionRejection = true;
+            }
+            else if (argument == "--depth-occlusion-qualification-oracle") {
+                config.depthOcclusionQualificationOracle = true;
+            }
+            else if (argument == "--validate-depth-pyramid-capture") {
+                config.experimentalDepthPyramid = true;
+                config.validateDepthPyramidCapture = true;
+            }
+            else if (argument == "--validate-depth-pyramid-resize") {
+                config.experimentalDepthPyramid = true;
+                config.validateDepthPyramidResize = true;
+            }
+            else if (argument == "--gpu-lod-qualification-oracle") {
+                config.gpuLodQualificationOracle = true;
+            }
+            else if (argument == "--experimental-probe-lod-error-pixels") {
+                if (++index >= arguments.size()) throw std::invalid_argument(
+                    "--experimental-probe-lod-error-pixels requires a pixel threshold");
+                config.experimentalProbeLodErrorPixels = static_cast<float>(parseFiniteRange(
+                    arguments[index], "--experimental-probe-lod-error-pixels", 0.01, 64.0));
+            }
+            else if (argument == "--probe-lod-max-level") {
+                if (++index >= arguments.size()) throw std::invalid_argument(
+                    "--probe-lod-max-level requires 0..15 (zero pins LOD0)");
+                const uint64_t level = parseUnsigned(arguments[index], "--probe-lod-max-level");
+                if (level > 15u) throw std::invalid_argument(
+                    "--probe-lod-max-level requires 0..15");
+                config.probeLodMaximumLevel = static_cast<uint32_t>(level);
+            }
+            else if (argument == "--probe-lod-qualification-oracle") {
+                config.probeLodQualificationOracle = true;
+            }
+            else if (argument == "--gpu-lod-minimum-resident-level") {
+                if (++index >= arguments.size()) throw std::invalid_argument(
+                    "--gpu-lod-minimum-resident-level requires 0..15");
+                const uint64_t level = parseUnsigned(arguments[index],
+                    "--gpu-lod-minimum-resident-level");
+                if (level > 15u) throw std::invalid_argument(
+                    "--gpu-lod-minimum-resident-level requires 0..15");
+                config.gpuLodMinimumResidentLevel =
+                    static_cast<uint32_t>(level);
+            }
+            else if (argument == "--require-capture-signal") {
+                config.requireCaptureSignal = true;
             }
             else if (argument == "--capture-frame") {
                 if (++index >= arguments.size()) {
@@ -529,6 +694,9 @@ namespace Iridium {
             throw std::invalid_argument(
                 "--capture-frame and --capture-directory must be specified together");
         }
+        if (config.requireCaptureSignal && !config.captureFrameIndex.has_value()) {
+            throw std::invalid_argument("--require-capture-signal requires a capture request");
+        }
         if (config.outputTransport != Color::OutputTransport::SdrSrgb &&
             config.outputOperator != OutputTransformOperator::Aces2) {
             throw std::invalid_argument(
@@ -565,10 +733,11 @@ namespace Iridium {
             "  --profile-gpu                 Collect delayed Vulkan GPU timestamps\n"
             "  --profile-transparent-overdraw Collect optional transparent fragment workload\n"
             "  --validate-texture-residency-churn Exercise fallback and fence-delayed index reuse\n"
-            "  --validate-reflection-probes   Generate a resident local-probe GPU fixture\n"
+            "  --validate-reflection-probes   Generate resident and renderable-owner probe fixtures\n"
             "  --validate-ordinary2-capture  Read back and verify the first measured Ordinary2 interfaces and local color\n"
             "  --validate-ordinary2-fallback Verify invalid topology stays ThinGlass with no Ordinary2 atlas\n"
             "  --validate-ordinary2-resize   Resize populated Ordinary2 targets and verify post-restore GPU pairing\n"
+            "  --validate-weighted-oit-resize Resize populated WeightedOIT targets and restore the base extent\n"
             "  --validate-deep-layered-capture Read back the selected deep tier and verify resolve/fallback handoff\n"
             "  --validate-deep-layered-lifecycle Retire/reactivate the selected deep tier twice, then verify GPU output\n"
             "  --deep-layered-validation-quality QUALITY Select hero4 (default) or cinematic8 validation\n"
@@ -581,9 +750,14 @@ namespace Iridium {
             "  --shadow-directional-resolution SIZE Directional map size: 512, 1024, 2048, or 4096\n"
             "  --shadow-directional-lights COUNT Concurrent shadowed directional lights: 1 or 2\n"
             "  --shadow-directional-source-diameter DEGREES Directional emitter diameter: 0 to 5 degrees\n"
+            "  --shadow-directional-distance METRES Maximum camera-relative directional shadow coverage\n"
+            "  --shadow-directional-receiver-bias TEXELS Constant receiver-depth bias: 0 to 8 shadow texels\n"
+            "  --shadow-directional-receiver-plane-clamp TEXELS Receiver-plane correction clamp: 0 to 8 shadow texels\n"
+            "  --shadow-directional-normal-offset TEXELS Geometric-normal receiver offset: 0 to 4 shadow texels\n"
             "  --shadow-filter NAME           fixed or pcss (default)\n"
             "  --shadow-spot-atlas-resolution SIZE Persistent spot atlas size: 2048, 4096, or 8192\n"
             "  --benchmark-disable-local-shadows Disable castsShadows on generated spot/point benchmark lights\n"
+            "  --developer-legacy-transparency Force the retired two-bucket renderer for explicit developer A/B comparison\n"
             "  --gbuffer-layout NAME         reference (production) or quality/compact experiments\n"
             "  --profile-cpu-output PATH     Collect and write JSON Lines telemetry\n"
             "  --cache-state NAME            warm-steady-state, fresh-process-os-driver-cache-uncontrolled, or manually-cold-os-driver-cache\n"
@@ -595,18 +769,43 @@ namespace Iridium {
             "  --wireframe                   Capture the editor opaque-wireframe diagnostic\n"
             "  --exposure-ev EV              Manual output exposure in [-16,+16] stops\n"
             "  --output-operator NAME        aces2 (default), legacy, or identity\n"
-			"  --output-transport NAME       sdr (default), scrgb, or hdr10\n"
+			"  --output-transport NAME       auto, sdr (default), scrgb, or hdr10\n"
+			"  --validate-output-transport-switch Rebuild scRGB, HDR10, then SDR across frames\n"
             "  --paper-white-nits NITS      HDR UI/reference-white luminance (default 203)\n"
             "  --peak-nits NITS             HDR mastering/display peak (default 1000)\n"
-            "  --debug-view NAME             final, base-color, normal, roughness, metallic, emissive, depth, ao, f0, f90, material-id, material-flags, closure-class, cluster-occupancy, cluster-overflow, direct-lighting, shadow-cascade, or shadow-visibility\n"
+            "  --debug-view NAME             final, base-color, normal, roughness, metallic, emissive, depth, ao, f0, f90, material-id, material-flags, closure-class, cluster-occupancy, cluster-overflow, direct-lighting, shadow-cascade, shadow-visibility, transparency-class, transparency-fallback, transparency-interval, transparency-pyramid-mip, transparency-layers, or transparency-overflow\n"
             "  --benchmark ID                Run a deterministic benchmark fixture\n"
             "  --benchmark-manifest PATH     Override the M0 benchmark manifest\n"
+            "  --weighted-oit-order-seed N  Deterministically permute OIT draws for qualification; 0 preserves production order\n"
             "  --cooked-model-artifact PATH  Load a self-contained cooked model instead of source\n"
             "  --cooked-environment-artifact PATH Load a cooked cubemap/IBL environment product\n"
             "  --open-asset-viewer GUID      Open a model or material in the isolated editor viewer\n"
             "  --capture-frame INDEX         Capture zero-based measured frame INDEX\n"
             "  --capture-directory PATH      Write a stable .tga/.json capture pair under PATH\n"
             "  --capture-point NAME          Capture scene (default), final-sdr, or final-output\n"
+            "  --require-capture-signal      Reject constant/nonfinite RGB captures (fixture sanity gate)\n"
+            "  --reference-direct-gbuffer   Qualification: direct GBuffer, conventional-shadow, and probe-capture submission\n"
+            "  --reference-direct-shadows   Qualification: conventional directional/spot/point shadows only\n"
+            "  --reference-direct-probe-capture Qualification: direct probe capture while other consumers stay automatic\n"
+            "  --shadow-indirect-qualification-oracle  Repeat device-built shadow visibility on CPU for exact qualification\n"
+            "  --experimental-shadow-lod-error-texels N  Opt-in directional/spot/point shadow-map LOD (0.01..64 texels)\n"
+            "  --experimental-virtual-shadow-resources  M7.8 live depth page demand (no virtual sampling)\n"
+            "  --virtual-shadow-depth-qualification-oracle  Expensive full-depth CPU/GPU request comparison\n"
+            "  --shadow-lod-max-level N      Shadow-map LOD cap 0..15; zero pins LOD0\n"
+            "  --experimental-gpu-lod-error-pixels N  Opt-in main-GBuffer LOD (0.01..64 pixels)\n"
+            "  --gpu-lod-max-level N         Experimental LOD cap 0..15; zero pins LOD0\n"
+            "  --gpu-lod-hysteresis-fraction N  Coarsening margin 0..0.5 (default 0.15)\n"
+            "  --gpu-lod-qualification-oracle  Repeat GPU LOD selection on CPU for exact qualification\n"
+            "  --experimental-probe-lod-error-pixels N  Opt-in face-invariant probe-capture LOD (0.01..64 pixels)\n"
+            "  --probe-lod-max-level N       Probe-capture LOD cap 0..15; zero pins LOD0\n"
+            "  --probe-lod-qualification-oracle  Repeat probe LOD commands on CPU for exact qualification\n"
+            "  --experimental-depth-pyramid  Build scene-depth mips for M7.6 qualification (no culling)\n"
+            "  --experimental-depth-occlusion-query  Query eligible history without rejecting draws\n"
+            "  --experimental-depth-occlusion-rejection  Experimental qualified Hi-Z indirect rejection\n"
+            "  --depth-occlusion-qualification-oracle  Repeat fused occlusion projection/query independently for exact qualification\n"
+            "  --validate-depth-pyramid-capture Read back live depth and verify every pyramid mip\n"
+            "  --validate-depth-pyramid-resize Exercise deterministic scene-target resize/history recovery\n"
+            "  --gpu-lod-minimum-resident-level N  Qualification: physically withhold finer LOD index ranges (0..15)\n"
             "  --warmup-frames COUNT         Run COUNT unmeasured frames first\n"
             "  --frame-limit COUNT           Exit after COUNT measured frames\n"
             "  --window-size WIDTHxHEIGHT    Set the render-window dimensions\n"

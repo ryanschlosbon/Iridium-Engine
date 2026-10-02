@@ -48,6 +48,27 @@ namespace {
         return true;
     }
 
+    bool testAutomaticPreferenceOrder() {
+        const std::vector allFormats{ Sdr, Hdr10, ScRgb };
+        const auto scRgb = selectVulkanOutputTransport(
+            OutputTransport::Automatic, allFormats, true);
+        CHECK(scRgb.requested == OutputTransport::Automatic);
+        CHECK(scRgb.effective == OutputTransport::ScRgb);
+        CHECK(scRgb.surfaceFormat.format == ScRgb.format);
+
+        const std::vector hdr10Formats{ Sdr, Hdr10 };
+        const auto hdr10 = selectVulkanOutputTransport(
+            OutputTransport::Automatic, hdr10Formats, true);
+        CHECK(hdr10.effective == OutputTransport::Hdr10Pq);
+
+        const std::vector sdrFormats{ Sdr };
+        const auto sdr = selectVulkanOutputTransport(
+            OutputTransport::Automatic, sdrFormats, false);
+        CHECK(sdr.effective == OutputTransport::SdrSrgb);
+        CHECK(!sdr.usedSdrFallback);
+        return true;
+    }
+
     bool testExplicitSdrFallbacks() {
         const std::vector formats{ Sdr };
         const auto scRgb = selectVulkanOutputTransport(
@@ -114,6 +135,7 @@ namespace {
 int main() {
     const struct TestCase { const char* name; bool (*run)(); } tests[] = {
         { "exact transport selections", testExactSelections },
+        { "automatic transport preference", testAutomaticPreferenceOrder },
         { "explicit SDR fallbacks", testExplicitSdrFallbacks },
         { "optional HDR metadata", testHdrMetadataIsOptionalAndReported },
         { "alternative HDR10 packing", testAlternativeHdr10Packing },

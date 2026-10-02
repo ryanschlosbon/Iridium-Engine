@@ -53,6 +53,12 @@ public:
 	bool hasSwapchainColorspace() const { return swapchainColorspaceEnabled; }
 	bool hasHdrMetadata() const { return hdrMetadataEnabled; }
 	bool hasDescriptorIndexing() const { return descriptorIndexingEnabled; }
+	bool hasMultiDrawIndirect() const { return multiDrawIndirectEnabled; }
+	bool hasDrawIndirectFirstInstance() const {
+		return drawIndirectFirstInstanceEnabled;
+	}
+	bool hasDrawIndirectCount() const { return drawIndirectCountEnabled; }
+	uint32_t getMaxDrawIndirectCount() const { return maxDrawIndirectCount; }
 	uint32_t getMaxIndexedTextureViews() const { return maxIndexedTextureViews; }
 	uint32_t getMaxIndexedSamplers() const { return maxIndexedSamplers; }
 	uint32_t getMaxUpdateAfterBindDescriptors() const {
@@ -100,6 +106,10 @@ private:
 	bool swapchainColorspaceEnabled = false;
 	bool hdrMetadataEnabled = false;
 	bool descriptorIndexingEnabled = false;
+	bool multiDrawIndirectEnabled = false;
+	bool drawIndirectFirstInstanceEnabled = false;
+	bool drawIndirectCountEnabled = false;
+	uint32_t maxDrawIndirectCount = 0;
 	uint32_t maxIndexedTextureViews = 0;
 	uint32_t maxIndexedSamplers = 0;
 	uint32_t maxUpdateAfterBindDescriptors = 0;

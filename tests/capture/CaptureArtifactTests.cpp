@@ -2,6 +2,7 @@
 #include "capture/PfmImage.h"
 #include "capture/TgaImage.h"
 #include "utils/Sha256.h"
+#include <nlohmann/json.hpp>
 
 #include <array>
 #include <cstddef>
@@ -9,6 +10,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <cstring>
 #include <stdexcept>
 #include <string>
@@ -104,6 +106,9 @@ namespace {
         metadata.benchmarkStateFrameIndex = 20;
         metadata.warmupFrameCount = 8;
         metadata.directionalShadowOwnerCount = 2;
+        metadata.directionalShadowReceiverDepthBiasTexels = 1.25f;
+        metadata.directionalShadowReceiverPlaneClampTexels = 2.0f;
+        metadata.directionalShadowNormalOffsetTexels = 0.5f;
         metadata.debugView = "Base Color";
         metadata.debugViewSemantics = "opaque base color";
 
@@ -129,6 +134,12 @@ namespace {
         CHECK(text.find(paths.imageSha256) != std::string::npos);
         CHECK(text.find("post_transparency_pre_ui_scene_color") != std::string::npos);
         CHECK(text.find("\"owner_count\": 2") != std::string::npos);
+        CHECK(text.find("\"receiver_depth_bias_texels\": 1.25") !=
+            std::string::npos);
+        CHECK(text.find("\"receiver_plane_clamp_texels\": 2.0") !=
+            std::string::npos);
+        CHECK(text.find("\"normal_offset_texels\": 0.5") !=
+            std::string::npos);
         metadataInput.close();
 
         bool rejectedOverwrite = false;
@@ -319,6 +330,87 @@ namespace {
         return true;
     }
 
+    bool testSignalSanityAndPadding() {
+        const auto root = testRoot();
+        std::filesystem::remove_all(root);
+        CaptureArtifactMetadata metadata{};
+        metadata.requireSpatialSignal = true;
+        FrameCapture capture = makeSceneLinearCapture();
+        auto paths = writeCaptureArtifact(root / "populated", capture, metadata);
+        auto readSignal = [](const std::filesystem::path& path) {
+            std::ifstream stream(path);
+            return nlohmann::json::parse(stream).at("image").at("signal");
+        };
+        auto signal = readSignal(paths.metadata);
+        CHECK(signal["has_finite_spatial_signal"] == true);
+        CHECK(signal["finite_rgb_pixels"] == 4);
+        CHECK(signal["nonzero_finite_rgb_pixels"] == 4);
+        CHECK(signal["finite_pixel_rgb_min"][0] == -0.25);
+        CHECK(signal["finite_pixel_rgb_max"][0] == 100.0);
+        CHECK(signal["maximum_spatial_channel_range"] == 100.25);
+
+        auto rejectedWithoutArtifacts = [&](const std::string& name) {
+            const auto directory = root / name;
+            try { (void)writeCaptureArtifact(directory, capture, metadata); }
+            catch (const std::runtime_error&) {
+                return !std::filesystem::exists(directory) || std::filesystem::is_empty(directory);
+            }
+            return false;
+        };
+        // Padding is nonzero, and alpha varies, but all RGB values are black.
+        capture.rowPitchBytes += 16;
+        capture.pixels.assign(size_t(capture.rowPitchBytes) * capture.height, std::byte{ 255 });
+        for (uint32_t y = 0; y < capture.height; ++y) {
+            for (uint32_t x = 0; x < capture.width; ++x) {
+                const std::array<float, 4> rgba{ 0.0f, -0.0f, 0.0f, float(x + y) };
+                std::memcpy(capture.pixels.data() + size_t(y) * capture.rowPitchBytes + size_t(x) * 16,
+                    rgba.data(), sizeof(rgba));
+            }
+        }
+        CHECK(rejectedWithoutArtifacts("black"));
+        metadata.requireSpatialSignal = false;
+        paths = writeCaptureArtifact(root / "intentional-black", capture, metadata);
+        signal = readSignal(paths.metadata);
+        CHECK(signal["has_finite_spatial_signal"] == false);
+        CHECK(signal["finite_rgb_pixels"] == 4);
+        CHECK(signal["nonzero_finite_rgb_pixels"] == 0);
+        CHECK(signal["maximum_spatial_channel_range"] == 0.0);
+
+        metadata.requireSpatialSignal = true;
+        capture = makeSceneLinearCapture();
+        const float bad = std::numeric_limits<float>::quiet_NaN();
+        std::memcpy(capture.pixels.data(), &bad, sizeof(bad));
+        CHECK(rejectedWithoutArtifacts("nonfinite"));
+        metadata.requireSpatialSignal = false;
+        paths = writeCaptureArtifact(root / "diagnostic-nonfinite", capture, metadata);
+        signal = readSignal(paths.metadata);
+        CHECK(signal["finite_rgb_pixels"] == 3);
+        CHECK(signal["has_finite_spatial_signal"] == false);
+
+        metadata.requireSpatialSignal = true;
+        capture = makeRgbaCapture();
+        capture.pixelFormat = FrameCapturePixelFormat::Bgra8Srgb;
+        capture.rowPitchBytes = 12;
+        capture.pixels.assign(24, std::byte{ 255 });
+        for (uint32_t y = 0; y < 2; ++y) {
+            for (uint32_t x = 0; x < 2; ++x) {
+                const std::array<std::byte, 4> pixel{
+                    std::byte{ 32 }, std::byte{ 16 }, std::byte{ 8 }, std::byte(x + y) };
+                std::memcpy(capture.pixels.data() + y * 12 + x * 4, pixel.data(), pixel.size());
+            }
+        }
+        CHECK(rejectedWithoutArtifacts("constant-color"));
+        capture.pixels[0] = std::byte{ 64 }; // Blue only, not red, changes.
+        paths = writeCaptureArtifact(root / "bgra-padding", capture, metadata);
+        signal = readSignal(paths.metadata);
+        CHECK(signal["has_finite_spatial_signal"] == true);
+        CHECK(signal["finite_pixel_rgb_max"][0] == 8.0 / 255.0);
+        CHECK(signal["finite_pixel_rgb_min"][2] == 32.0 / 255.0);
+        CHECK(signal["finite_pixel_rgb_max"][2] == 64.0 / 255.0);
+        std::filesystem::remove_all(root);
+        return true;
+    }
+
 } // namespace
 
 int main() {
@@ -335,6 +427,7 @@ int main() {
         { "Malformed TGA rejection", testRejectsMalformedTga },
         { "Noncanonical TGA header rejection", testRejectsNoncanonicalTgaHeader },
         { "UNORM artifact metadata rejection", testRejectsUnormArtifactMetadata },
+        { "RGB signal sanity, nonfinite rejection, and padding", testSignalSanityAndPadding },
     };
 
     size_t failures = 0;

@@ -25,6 +25,7 @@ namespace Iridium {
         CreateFolder,
         RenameFolder,
         DeleteFolder,
+        MoveFolder,
         MoveAsset,
         RenameAsset,
         DeleteAsset,
@@ -77,6 +78,10 @@ namespace Iridium {
         [[nodiscard]] uint64_t requestDeleteFolder(
             std::string rootId,
             std::filesystem::path directory);
+        [[nodiscard]] uint64_t requestMoveFolder(
+            std::string rootId,
+            std::filesystem::path directory,
+            std::filesystem::path destinationDirectory);
         [[nodiscard]] uint64_t requestMoveAsset(
             AssetGuid assetGuid,
             std::filesystem::path destinationDirectory);

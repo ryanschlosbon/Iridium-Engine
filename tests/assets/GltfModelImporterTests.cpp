@@ -6,6 +6,9 @@
 #include "assets/model/GltfModelImporter.h"
 #include "assets/model/ModelProduct.h"
 #include "assets/model/ModelRuntimeProduct.h"
+#include "assets/model/MaterialPreviewCompileQueue.h"
+#include "assets/model/MaterialPreviewPolicy.h"
+#include "material/MaterialAuthoringPatch.h"
 
 #include <algorithm>
 #include <chrono>
@@ -16,9 +19,12 @@
 #include <iostream>
 #include <memory>
 #include <mutex>
+#include <numeric>
 #include <span>
 #include <string>
 #include <stop_token>
+#include <thread>
+#include <future>
 #include <vector>
 
 namespace {
@@ -79,55 +85,10 @@ namespace {
     std::optional<CookedModelProductData> decodeModel(
         const CookedArtifact& artifact,
         std::vector<CookDiagnostic>& diagnostics) {
-        const CookSection* manifest =
-            findSection(artifact, kCookedModelManifestSection);
-        const CookSection* materials =
-            findSection(artifact, kCookedModelMaterialSection);
-        const CookSection* textureViews =
-            findSection(artifact, kCookedModelTextureViewSection);
-        const CookSection* vertices =
-            findSection(artifact, kCookedModelVertexSection);
-        const CookSection* indices =
-            findSection(artifact, kCookedModelIndexSection);
-        const CookSection* rtPositions =
-            findSection(artifact, kCookedModelRtPositionSection);
-        const CookSection* rtIndices =
-            findSection(artifact, kCookedModelRtIndexSection);
-        if (!manifest || !materials || !textureViews ||
-            !vertices || !indices ||
-            !rtPositions || !rtIndices) {
-            return std::nullopt;
-        }
-        auto decodedManifest =
-            readModelManifest(manifest->bytes, diagnostics);
-        auto decodedMaterials =
-            readModelMaterials(materials->bytes, diagnostics);
-        auto decodedTextureViews =
-            readModelTextureViews(
-                textureViews->bytes, diagnostics);
-        auto decodedVertices =
-            readModelVertices(vertices->bytes, diagnostics);
-        auto decodedIndices =
-            readModelIndices(indices->bytes, diagnostics);
-        auto decodedRtPositions =
-            readModelRtPositions(rtPositions->bytes, diagnostics);
-        auto decodedRtIndices =
-            readModelIndices(rtIndices->bytes, diagnostics, "/rt_indices");
-        if (!decodedManifest || !decodedMaterials ||
-            !decodedTextureViews ||
-            !decodedVertices || !decodedIndices ||
-            !decodedRtPositions || !decodedRtIndices) {
-            return std::nullopt;
-        }
-        return CookedModelProductData{
-            .manifest = std::move(*decodedManifest),
-            .materials = std::move(*decodedMaterials),
-            .textureViews = std::move(*decodedTextureViews),
-            .vertices = std::move(*decodedVertices),
-            .indices = std::move(*decodedIndices),
-            .rtPositions = std::move(*decodedRtPositions),
-            .rtIndices = std::move(*decodedRtIndices),
-        };
+        CookedModelReadResult decoded = readCookedModelProduct(artifact);
+        diagnostics.insert(diagnostics.end(), decoded.diagnostics.begin(),
+            decoded.diagnostics.end());
+        return std::move(decoded.data);
     }
 
     std::optional<PreparedAssetCook> preparedFixture() {
@@ -142,6 +103,241 @@ namespace {
                 .profile = "release",
                 .qualityPolicy = "reference",
             }, "m3.4-model-v1");
+    }
+
+    bool testLivePolicyPrecedenceAndTopologyPreservation() {
+        const auto material = createAssetGuidV7();
+        const auto primitive = createAssetGuidV7();
+        const auto piece = createAssetGuidV7();
+        CookedModelProductData product;
+        product.materials.push_back({.materialGuid = material});
+        CookedModelPrimitive part;
+        part.sourcePrimitiveGuid = primitive;
+        part.primitiveGuid = piece;
+        part.materialGuid = material;
+        part.transparency.requestedClass = TransparencyClass::LayeredGlass;
+        part.transparency.resolvedClass = TransparencyClass::ThinGlass;
+        part.transparency.flags = CompiledTransparencyFallbackApplied | CompiledTransparencyTopologyRequired;
+        product.manifest.primitives.push_back(part);
+        SourceMaterial source;
+        source.transparencyPolicy.requestedClass = TransparencyClass::LayeredGlass;
+        const std::map<AssetGuid, SourceMaterial> sources{{material, source}};
+        nlohmann::json settings{{"transparency_policies", {
+            {material.toString(), {{"class", "layered_glass"}, {"quality", "hero4"}, {"priority", 4}, {"thin_sheet_thickness_m", .03}}},
+            {primitive.toString(), {{"class", "layered_glass"}, {"quality", "cinematic8"}, {"priority", 9}, {"thin_sheet_thickness_m", .06}}}
+        }}};
+        const auto policies = applyPreviewPolicySettings(product, sources, settings);
+        CHECK(policies.at(piece).priority == 9);
+        CHECK(policies.at(piece).quality == TransparencyQuality::Cinematic8);
+        CHECK(policies.at(piece).thinSheetThicknessMeters == .06f);
+        CHECK(policies.at(piece).resolvedClass == TransparencyClass::ThinGlass);
+        CHECK(policies.at(piece).flags == part.transparency.flags);
+        settings["transparency_policies"].erase(primitive.toString());
+        const auto inherited = applyPreviewPolicySettings(product, sources, settings);
+        CHECK(inherited.at(piece).priority == 4);
+        CHECK(inherited.at(piece).quality == TransparencyQuality::Hero4);
+        settings["transparency_policies"][material.toString()]["class"] = "thin_glass";
+        bool rejected = false;
+        try { (void)applyPreviewPolicySettings(product, sources, settings); }
+        catch (const std::runtime_error&) { rejected = true; }
+        CHECK(rejected);
+        return true;
+    }
+
+    bool testBoundedAsyncMaterialPreviewCompiler() {
+        MaterialPreviewCompileQueue queue;
+        std::promise<void> release;
+        const auto gate = release.get_future().share();
+        const auto caller = std::this_thread::get_id();
+        std::thread::id worker;
+        const bool accepted = queue.submit(17, [&worker, gate] {
+            worker = std::this_thread::get_id();
+            gate.wait();
+            return RuntimeCanonicalMaterialResult{};
+        });
+        const bool busy = queue.busy();
+        const bool prematureCompletion = queue.poll().has_value();
+        const bool secondAccepted = queue.submit(18, [] { return RuntimeCanonicalMaterialResult{}; });
+        // Release before any assertion so a failed assertion cannot block shutdown.
+        release.set_value();
+        CHECK(accepted && busy && !prematureCompletion && !secondAccepted);
+        auto waitForCompletion = [&]() {
+            std::optional<MaterialPreviewCompileQueue::Completion> result;
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+            while (!(result = queue.poll()) && std::chrono::steady_clock::now() < deadline)
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            return result;
+        };
+        const auto completed = waitForCompletion();
+        CHECK(completed && completed->serial == 17 && completed->diagnostic.empty());
+        CHECK(worker != caller);
+        CHECK(!queue.busy());
+        CHECK(queue.submit(19, []() -> RuntimeCanonicalMaterialResult {
+            throw std::runtime_error("test invalid material");
+        }));
+        const auto failed = waitForCompletion();
+        CHECK(failed && failed->serial == 19 && failed->diagnostic == "test invalid material");
+        CHECK(queue.submit(20, [] { return RuntimeCanonicalMaterialResult{}; }));
+        const auto recovered = waitForCompletion();
+        CHECK(recovered && recovered->serial == 20 && recovered->diagnostic.empty());
+        return true;
+    }
+
+    bool testMaterialEditsSurviveSourceChanges() {
+        using Json = nlohmann::json;
+        const Json patch{{"schema_version", 1}, {"values", {
+            {"/pbrMetallicRoughness/metallicFactor", 0.0},
+            {"/extensions/KHR_materials_transmission/transmissionFactor", 1.0}}}};
+        Json source{{"pbrMetallicRoughness", {{"metallicFactor", 1.0}, {"roughnessFactor", .2}}}};
+        applyMaterialAuthoringPatch(source, patch);
+        CHECK(source["pbrMetallicRoughness"]["metallicFactor"] == 0.0);
+        CHECK(source["pbrMetallicRoughness"]["roughnessFactor"] == .2);
+        Json reimported{{"pbrMetallicRoughness", {{"metallicFactor", .9}, {"roughnessFactor", .7}}}};
+        applyMaterialAuthoringPatch(reimported, patch);
+        CHECK(reimported["pbrMetallicRoughness"]["metallicFactor"] == 0.0);
+        CHECK(reimported["pbrMetallicRoughness"]["roughnessFactor"] == .7);
+        const auto document = importGltfSourceMaterialsJson(Json{
+            {"asset", {{"version", "2.0"}}}, {"materials", Json::array({reimported})}}.dump());
+        CHECK(!document.hasErrors());
+        CHECK(compileSourceMaterialDocument(document).succeeded());
+        // The private runtime preview and durable reimport use the same source
+        // semantics, including extension merges rather than packed-color edits.
+        const auto baseline = importGltfSourceMaterialsJson(Json{
+            {"asset", {{"version", "2.0"}}}, {"materials", Json::array({{
+                {"pbrMetallicRoughness", {{"metallicFactor", .8}, {"roughnessFactor", .3}}},
+                {"extensions", {{"KHR_materials_clearcoat", {{"clearcoatFactor", .5}, {"clearcoatRoughnessFactor", .7}}}}}
+            }})}}.dump());
+        CHECK(!baseline.hasErrors());
+        Json previewPatch{{"schema_version", 1}, {"values", {
+            {"/pbrMetallicRoughness/metallicFactor", .1},
+            {"/extensions/KHR_materials_clearcoat/clearcoatFactor", .9},
+            {"/extensions/KHR_materials_emissive_strength/emissiveStrength", 4.0}}}};
+        const auto previewSource = withMaterialAuthoringPatch(baseline.materials().front(), previewPatch);
+        CHECK(previewSource.metallicRoughness.metallicFactor.value == .1f);
+        CHECK(previewSource.metallicRoughness.roughnessFactor.value == .3f);
+        CHECK(previewSource.emissiveStrength.value == 4.0f);
+        CHECK(baseline.materials().front().metallicRoughness.metallicFactor.value == .8f);
+        const auto previewValues = materialAuthoringSourceValues(previewSource);
+        CHECK(previewValues.at("/extensions/KHR_materials_clearcoat/clearcoatRoughnessFactor") == .7);
+        CHECK(previewValues.at("/extensions/KHR_materials_clearcoat/clearcoatFactor") == .9);
+        CHECK(compileSourceMaterial(previewSource).succeeded());
+        auto textured = baseline.materials().front();
+        textured.textures.push_back({.semantic = SourceTextureSemantic::Normal, .textureIndex = 7,
+            .imageIdentity = "preserved-normal.png"});
+        const auto texturedPreview = withMaterialAuthoringPatch(textured, Json{
+            {"schema_version", 1}, {"values", {{"/normalTexture/scale", .25}}}});
+        CHECK(texturedPreview.textures.front().textureIndex == 7);
+        CHECK(texturedPreview.textures.front().imageIdentity == "preserved-normal.png");
+        CHECK(texturedPreview.textures.front().scalar.value == .25f);
+        CHECK(texturedPreview.normalScale.value == .25f);
+
+        auto prepared = preparedFixture();
+        CHECK(prepared && prepared->valid());
+        const auto identity = std::ranges::find_if(prepared->context.subassets,
+            [](const auto& asset) { return asset.sourceKey == "materials/0"; });
+        CHECK(identity != prepared->context.subassets.end());
+        const std::string guid = identity->guid.toString();
+        auto settings = prepared->importer->normalizeSettings(2,
+            {{"material_overrides", {{guid, patch}}}}, true);
+        CHECK(settings.valid());
+        const auto product = prepared->importer->cook(prepared->source, settings,
+            prepared->target, prepared->context);
+        CHECK(!hasCookErrors(product.diagnostics));
+        const auto section = std::ranges::find_if(product.sections,
+            [](const auto& value) { return value.id == kCookedModelMaterialSection; });
+        CHECK(section != product.sections.end());
+        std::vector<CookDiagnostic> diagnostics;
+        const auto materials = readModelMaterials(section->bytes, diagnostics);
+        CHECK(materials && diagnostics.empty());
+        const auto material = std::ranges::find_if(*materials,
+            [&](const auto& value) { return value.materialGuid == identity->guid; });
+        CHECK(material != materials->end());
+        CHECK(material->compiled.standard.metallicFactor == 0.0f);
+        CHECK(material->compiled.transparency.resolvedClass == TransparencyClass::ThinGlass);
+        Json invalidPatch = patch;
+        invalidPatch["values"]["/pbrMetallicRoughness/metallicFactor"] = -1;
+        CHECK(!prepared->importer->normalizeSettings(2,
+            {{"material_overrides", {{guid, invalidPatch}}}}, true).valid());
+        return true;
+    }
+
+    bool testExplicitVersion7Compatibility() {
+        auto metadata = readAssetMetadata(
+            fixtureRoot() / "gltf_model_cooker_fixture.gltf.iridium.meta");
+        CHECK(metadata.metadata);
+        metadata.metadata->importerVersion = kPreviousGltfModelImporterVersion;
+        ImporterRegistry registry;
+        registerGltfModelImporters(registry);
+        const auto legacy = registry.selectExplicit("iridium.gltf-model", 7);
+        CHECK(legacy.valid());
+        CHECK(!registry.selectExplicit("iridium.gltf-model", 6).valid());
+        const auto bytes = readFile(fixtureRoot() / "gltf_model_cooker_fixture.gltf");
+        const auto automatic = registry.selectAutomatic(
+            "gltf_model_cooker_fixture.gltf", bytes);
+        CHECK(automatic.valid());
+        CHECK(automatic.importer->descriptor().implementationVersion == 8);
+        const auto settings = legacy.importer->normalizeSettings(
+            2, nlohmann::json::object(), true);
+        CHECK(settings.valid());
+        CHECK(!settings.values.contains("generate_lods"));
+        CHECK(!legacy.importer->normalizeSettings(2,
+            {{ "generate_lods", true }}, true).valid());
+        CHECK(!legacy.importer->normalizeSettings(2, {
+            { "generate_lods", true },
+            { "lod_allow_boundary_collapse", true },
+        }, true).valid());
+        CHECK(!legacy.importer->normalizeSettings(2, {
+            { "generate_lods", true },
+            { "lod_split_boundary_fans", true },
+        }, true).valid());
+        CHECK(!legacy.importer->normalizeSettings(2, {
+            { "generate_lods", true },
+            { "lod_transactional_orientation", true },
+        }, true).valid());
+        CHECK(!legacy.importer->normalizeSettings(2, {
+            { "generate_lods", true },
+            { "lod_transactional_topology", true },
+        }, true).valid());
+
+        const auto prepared = prepareAssetCook(registry, fixtureRoot(),
+            "gltf_model_cooker_fixture.gltf", *metadata.metadata, {
+                .platform = "windows-x64", .profile = "release",
+                .qualityPolicy = "reference",
+            }, "m3.4-model-v1");
+        CHECK(prepared.valid());
+        const auto blob = buildPreparedArtifact(prepared);
+        const auto artifact = readCookedArtifact(blob.bytes, blob.artifactHash);
+        CHECK(artifact.valid());
+        CHECK(artifact.artifact->artifactSchemaVersion == 6);
+        const auto model = readCookedModelProduct(*artifact.artifact);
+        CHECK(model.valid());
+        CHECK(model.data->lodChains.empty());
+        CHECK(makeRuntimeModelCpuData(*model.data).valid());
+
+        const auto currentPrepared = preparedFixture();
+        CHECK(currentPrepared && currentPrepared->valid());
+        CHECK(currentPrepared->cookKey != prepared.cookKey);
+        const auto currentBlob = buildPreparedArtifact(*currentPrepared);
+        const auto current = readCookedArtifact(currentBlob.bytes);
+        CHECK(current.valid());
+        CHECK(current.artifact->artifactSchemaVersion == 7);
+        CHECK(current.artifact->sections.size() == artifact.artifact->sections.size());
+        for (const CookSection& section : artifact.artifact->sections) {
+            const CookSection* candidate = findSection(*current.artifact, section.id);
+            CHECK(candidate);
+            if (section.id == kCookedModelManifestSection) {
+                std::vector<CookDiagnostic> diagnostics;
+                auto manifest = readModelManifest(section.bytes, diagnostics);
+                CHECK(manifest);
+                manifest->schemaVersion = kCookedModelSchemaVersion;
+                CHECK(serializeModelManifest(*manifest) == candidate->bytes);
+            }
+            else {
+                CHECK(section.bytes == candidate->bytes);
+                CHECK(section.schemaVersion == candidate->schemaVersion);
+            }
+        }
+        return true;
     }
 
     bool testDeterministicCookAndArtifactRoundTrip() {
@@ -209,6 +405,12 @@ namespace {
         CHECK(runtime.valid());
         CHECK(runtime.data->vertices.size() == 12);
         CHECK(runtime.data->indices.size() == 12);
+        CHECK(runtime.data->geometryArena.abiVersion ==
+            GeometryArenaAbiVersion);
+        CHECK(runtime.data->geometryArena.uint16Indices.size() == 12);
+        CHECK(runtime.data->geometryArena.uint32Indices.empty());
+        CHECK(runtime.data->geometryArena.stats.sourceIndexBytes == 48);
+        CHECK(runtime.data->geometryArena.stats.arenaIndexBytes == 24);
         CHECK(runtime.data->primitives.size() == 4);
         CHECK(typed.data->materials.size() == 2);
         CHECK(typed.data->materials[0].sourceKey ==
@@ -561,23 +763,20 @@ namespace {
             }));
 
         const auto readGeometry = [](const CookProduct& product) {
-            std::vector<CookDiagnostic> diagnostics;
-            const auto manifestSection = std::ranges::find_if(
-                product.sections, [](const CookSection& section) {
-                    return section.id == kCookedModelManifestSection;
-                });
-            const auto indexSection = std::ranges::find_if(
-                product.sections, [](const CookSection& section) {
-                    return section.id == kCookedModelIndexSection;
-                });
-            if (manifestSection == product.sections.end() ||
-                indexSection == product.sections.end()) {
+            CookedArtifact artifact{
+                .artifactType = product.artifactType,
+                .artifactSchemaVersion = product.artifactSchemaVersion,
+                .sections = product.sections,
+            };
+            const CookedModelReadResult decoded =
+                readCookedModelProduct(artifact);
+            if (!decoded.valid()) {
                 return std::pair<std::optional<CookedModelManifest>,
                     std::optional<std::vector<uint32_t>>>{};
             }
             return std::pair{
-                readModelManifest(manifestSection->bytes, diagnostics),
-                readModelIndices(indexSection->bytes, diagnostics),
+                std::optional<CookedModelManifest>(decoded.data->manifest),
+                std::optional<std::vector<uint32_t>>(decoded.data->indices),
             };
         };
         const auto [baselineManifest, baselineIndices] =
@@ -1042,6 +1241,32 @@ namespace {
         return true;
     }
 
+    bool testOpaqueTriangleOptimizationContract() {
+        std::vector<uint32_t> indices{ 0, 1, 2 };
+        for (uint32_t triangle = 1; triangle <= 11; ++triangle) {
+            const uint32_t first = 3 + (triangle - 1) * 3;
+            indices.insert(indices.end(), { first, first + 1, first + 2 });
+        }
+        indices.insert(indices.end(), { 0, 2, 40, 1, 2, 0 });
+        std::vector<uint32_t> source(14);
+        std::iota(source.begin(), source.end(), 0u);
+        std::ranges::reverse(source);
+        const ModelTriangleOptimization optimized =
+            optimizeModelTriangleOrder(indices, source, 41);
+        CHECK(optimized.redundantTriangleCount == 1);
+        CHECK(optimized.cacheMissesSaved > 0);
+        CHECK(optimized.sourceTriangleIndices.size() == 13);
+        CHECK(optimized.sourceTriangleIndices[0] == 0);
+        CHECK(optimized.sourceTriangleIndices[1] == 12);
+        CHECK(std::ranges::find(optimized.sourceTriangleIndices, 13) ==
+            optimized.sourceTriangleIndices.end());
+        const ModelTriangleOptimization repeated =
+            optimizeModelTriangleOrder(indices, source, 41);
+        CHECK(repeated.sourceTriangleIndices ==
+            optimized.sourceTriangleIndices);
+        return true;
+    }
+
     bool testClosedTriangleTopologyContract() {
         const std::array<glm::vec3, 4> tetrahedron{
             glm::vec3{ 0.0f, 0.0f, 0.0f },
@@ -1372,6 +1597,106 @@ namespace {
             "legacy_two_bucket");
         CHECK(migrated.values.at("transparency_policies").empty());
 
+        const NormalizedImportSettings currentDefault =
+            importer.normalizeSettings(2, nlohmann::json::object(), true);
+        CHECK(currentDefault.valid());
+        CHECK(currentDefault.schemaVersion == 2);
+        CHECK(currentDefault.values.at("generate_lods") == false);
+        const auto lodSettings = importer.normalizeSettings(2,
+            {{ "generate_lods", true }}, true);
+        CHECK(lodSettings.valid());
+        CHECK(lodSettings.values.at("generate_lods") == true);
+        CHECK(!lodSettings.values.contains("lod_allow_boundary_collapse"));
+        CHECK(!lodSettings.values.contains("lod_split_boundary_fans"));
+        CHECK(!lodSettings.values.contains("lod_transactional_orientation"));
+        CHECK(!lodSettings.values.contains("lod_transactional_topology"));
+        const auto boundaryLodSettings = importer.normalizeSettings(2, {
+            { "generate_lods", true },
+            { "lod_allow_boundary_collapse", true },
+        }, true);
+        CHECK(boundaryLodSettings.valid());
+        CHECK(boundaryLodSettings.values.at("lod_allow_boundary_collapse") == true);
+        CHECK(boundaryLodSettings.canonicalBytes != lodSettings.canonicalBytes);
+        const auto splitFanLodSettings = importer.normalizeSettings(2, {
+            { "generate_lods", true },
+            { "lod_allow_boundary_collapse", true },
+            { "lod_split_boundary_fans", true },
+        }, true);
+        CHECK(splitFanLodSettings.valid());
+        CHECK(splitFanLodSettings.values.at("lod_split_boundary_fans") == true);
+        CHECK(splitFanLodSettings.canonicalBytes !=
+            boundaryLodSettings.canonicalBytes);
+        const auto transactionalLodSettings = importer.normalizeSettings(2, {
+            { "generate_lods", true },
+            { "lod_allow_boundary_collapse", true },
+            { "lod_split_boundary_fans", true },
+            { "lod_transactional_orientation", true },
+        }, true);
+        CHECK(transactionalLodSettings.valid());
+        CHECK(transactionalLodSettings.values.at(
+            "lod_transactional_orientation") == true);
+        CHECK(transactionalLodSettings.canonicalBytes !=
+            splitFanLodSettings.canonicalBytes);
+        const auto topologyTransactionalLodSettings = importer.normalizeSettings(2, {
+            { "generate_lods", true },
+            { "lod_allow_boundary_collapse", true },
+            { "lod_split_boundary_fans", true },
+            { "lod_transactional_orientation", true },
+            { "lod_transactional_topology", true },
+        }, true);
+        CHECK(topologyTransactionalLodSettings.valid());
+        CHECK(topologyTransactionalLodSettings.values.at(
+            "lod_transactional_topology") == true);
+        CHECK(topologyTransactionalLodSettings.canonicalBytes !=
+            transactionalLodSettings.canonicalBytes);
+        CHECK(!importer.normalizeSettings(2,
+            {{ "lod_allow_boundary_collapse", true }}, true).valid());
+        CHECK(!importer.normalizeSettings(2,
+            {{ "lod_split_boundary_fans", true }}, true).valid());
+        CHECK(!importer.normalizeSettings(2,
+            {{ "lod_transactional_orientation", true }}, true).valid());
+        CHECK(!importer.normalizeSettings(2,
+            {{ "lod_transactional_topology", true }}, true).valid());
+        CHECK(!importer.normalizeSettings(2, {
+            { "generate_lods", true },
+            { "lod_allow_boundary_collapse", "yes" },
+        }, true).valid());
+        CHECK(!importer.normalizeSettings(2, {
+            { "generate_lods", true },
+            { "lod_split_boundary_fans", "yes" },
+        }, true).valid());
+        CHECK(!importer.normalizeSettings(2, {
+            { "generate_lods", true },
+            { "lod_transactional_orientation", "yes" },
+        }, true).valid());
+        CHECK(!importer.normalizeSettings(2, {
+            { "generate_lods", true },
+            { "lod_transactional_topology", "yes" },
+        }, true).valid());
+        CHECK(!importer.normalizeSettings(2,
+            {{ "generate_lods", "yes" }}, true).valid());
+        CHECK(currentDefault.values.at("transparency_execution_mode") ==
+            "classified");
+        const NormalizedImportSettings currentUnknownExecution =
+            importer.normalizeSettings(2, {
+                { "transparency_execution_mode", "future_renderer" },
+            }, true);
+        CHECK(currentUnknownExecution.valid());
+        CHECK(currentUnknownExecution.values.at(
+            "transparency_execution_mode") == "classified");
+        CHECK(std::ranges::any_of(currentUnknownExecution.diagnostics,
+            [](const CookDiagnostic& diagnostic) {
+                return diagnostic.code ==
+                    "GLTF_TRANSPARENCY_EXECUTION_UNKNOWN";
+            }));
+        const NormalizedImportSettings explicitLegacyComparison =
+            importer.normalizeSettings(2, {
+                { "transparency_execution_mode", "legacy_two_bucket" },
+            }, true);
+        CHECK(explicitLegacyComparison.valid());
+        CHECK(explicitLegacyComparison.values.at(
+            "transparency_execution_mode") == "legacy_two_bucket");
+
         const std::string materialGuid =
             "019f9bce-85b8-7102-8405-060708090a0b";
         const std::string primitiveGuid =
@@ -1516,7 +1841,12 @@ int main() {
         bool (*function)();
     };
     const std::vector<TestCase> tests{
+        { "bounded async preview compilation", testBoundedAsyncMaterialPreviewCompiler },
+        { "live policy inheritance preserves topology", testLivePolicyPrecedenceAndTopologyPreservation },
+        { "material override inheritance and cooked routing", testMaterialEditsSurviveSourceChanges },
         { "deterministic artifact", testDeterministicCookAndArtifactRoundTrip },
+        { "explicit version-7/schema-6 compatibility",
+            testExplicitVersion7Compatibility },
         { "policy recook reuses embedded texture products",
             testPolicyRecookReusesEmbeddedTextureProducts },
         { "primitive material bounds RT parity",
@@ -1536,6 +1866,8 @@ int main() {
         { "warm receipt", testWarmReceiptAvoidsSourceParse },
         { "triangle connected-component contract",
             testTriangleConnectedComponentContract },
+        { "opaque triangle optimization contract",
+            testOpaqueTriangleOptimizationContract },
         { "closed triangle topology contract",
             testClosedTriangleTopologyContract },
         { "LayeredGlass topology cook resolution",

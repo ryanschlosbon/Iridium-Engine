@@ -202,9 +202,6 @@ namespace Iridium {
         [[nodiscard]] ReflectionProbeCaptureDirtyReason dirtyReason(
             const ReflectionProbeCaptureRequest& request,
             const CaptureState& state) const noexcept;
-        [[nodiscard]] bool pendingIsCompatible(
-            const ReflectionProbeCaptureRequest& request,
-            const CaptureState& state) const noexcept;
         [[nodiscard]] uint64_t nextTicket();
         static void validateConfig(
             const ReflectionProbeCaptureSchedulerConfig& config);

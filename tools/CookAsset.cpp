@@ -156,7 +156,7 @@ int main(int argc, char** argv) {
         registry.registerImporter(std::make_shared<TextFixtureImporter>());
         registry.registerImporter(std::make_shared<TextureImporter>());
         registry.registerImporter(std::make_shared<EnvironmentImporter>());
-        registry.registerImporter(std::make_shared<GltfModelImporter>());
+        registerGltfModelImporters(registry);
         LocalDerivedDataCache cache(options->ddc);
         logProgress("prepare", 0, 1,
             "Resolving receipt or parsing source and dependencies");

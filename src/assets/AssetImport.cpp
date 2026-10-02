@@ -75,7 +75,7 @@ namespace Iridium {
         registry.registerImporter(std::make_shared<EnvironmentImporter>());
         registry.registerImporter(
             std::make_shared<BakedProbeEnvironmentImporter>());
-        registry.registerImporter(std::make_shared<GltfModelImporter>());
+        registerGltfModelImporters(registry);
         return registry;
     }
 

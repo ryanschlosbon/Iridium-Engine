@@ -9,7 +9,9 @@
 #include "EditorUIState.h"
 #include "EditorSelectionState.h"
 #include "EditorAssetDocumentService.h"
+#include "EditorTransformSettings.h"
 #include "renderer/rhi/RenderDebugView.h"
+#include "renderer/rhi/ViewportGridOverlay.h"
 #include <vector>
 #include <memory>
 
@@ -67,6 +69,9 @@ public:
     }
 
     ViewportPanel& getViewportPanel() { return viewportPanel; }
+    void* retainedSceneTexture = nullptr;
+    void* retainedAssetTexture = nullptr;
+    bool renderingAssetView = false;
     [[nodiscard]] AssetViewerPanel& getAssetViewerPanel() noexcept {
         return assetViewerPanel_;
     }
@@ -74,10 +79,14 @@ public:
         return assetViewerPanel_;
     }
     [[nodiscard]] Iridium::RenderExtent requestedRenderExtent() const noexcept {
-        return assetDocuments_.active()
-            ? assetViewerPanel_.requestedRenderExtent
-            : viewportPanel.requestedRenderExtent;
+        const auto scene = viewportPanel.requestedRenderExtent;
+        const auto asset = assetViewerPanel_.requestedRenderExtent;
+        return assetDocuments_.active() ? Iridium::RenderExtent{
+            scene.width > asset.width ? scene.width : asset.width,
+            scene.height > asset.height ? scene.height : asset.height} : scene;
     }
+    [[nodiscard]] Iridium::ViewportGridOverlay viewportGridOverlay(
+        const glm::mat4& view, const glm::mat4& projection) const noexcept;
     [[nodiscard]] Iridium::EditorAssetDocumentService& assetDocuments() noexcept {
         return assetDocuments_;
     }
@@ -88,6 +97,12 @@ public:
     [[nodiscard]] Iridium::RenderDebugView getDebugView() const;
     void drawColorValidationOverlay() const;
     [[nodiscard]] bool consumeOutputSettings(EditorOutputSettings& settings);
+    [[nodiscard]] int layeredInterfaceOverride() const noexcept { return uiState.layeredInterfaceOverride; }
+    void setOutputTransportStatus(
+        Iridium::Color::OutputTransport requested,
+        Iridium::Color::OutputTransport effective,
+        const std::array<bool, 3>& supported,
+        std::string diagnostic);
     [[nodiscard]] bool consumeShadowSettings(
         Iridium::ProjectShadowSettings& settings);
     [[nodiscard]] bool consumeReflectionProbeSettings(
@@ -100,6 +115,7 @@ private:
     Iridium::EditorSelectionState selection_;
     Iridium::EditorAssetViewerRegistry assetViewerRegistry_;
     Iridium::EditorAssetDocumentService assetDocuments_;
+    Iridium::EditorTransformSettings transformSettings_;
     AssetViewerPanel assetViewerPanel_;
     EditorUIState uiState;
     ViewportPanel viewportPanel;

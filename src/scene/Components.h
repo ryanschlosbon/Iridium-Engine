@@ -4,6 +4,7 @@
 #include "components/TransformComponent.h"
 #include "components/NameComponent.h"
 #include "components/MeshComponent.h"
+#include "components/RenderInstanceBatchComponent.h"
 #include "components/RelationshipComponent.h"
 #include "components/LightComponent.h"
 #include "components/SkyComponent.h"

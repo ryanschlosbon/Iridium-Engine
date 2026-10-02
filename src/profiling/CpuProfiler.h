@@ -127,11 +127,12 @@ namespace Iridium {
     public:
         static constexpr size_t MaxEventsPerFrame = 512;
         static constexpr size_t MaxGpuRangesPerFrame = 32;
-        // M5 lighting, shadow, probe, and residency diagnostics bring the
-        // production frame to 140 counters before the end-of-frame C++
-        // allocation sample. Keep bounded headroom for later attached backend
-        // diagnostics without silently dropping the acceptance counters.
-        static constexpr size_t MaxCountersPerFrame = 192;
+        // Lighting, shadow, probe, transparency, residency, allocation, and M7
+        // heterogeneous directional/spot/point qualification can fill 310
+        // entries in feature-heavy frames. Keep bounded storage for every
+        // fail-visible reason and the acceptance counters that follow it without
+        // allocating in the steady frame.
+        static constexpr size_t MaxCountersPerFrame = 320;
         static constexpr size_t CompletedFrameCapacity = 512;
         static constexpr size_t MaxNestedScopesPerThread = 64;
         // Exact nearest-rank statistics are retained for the complete contracted

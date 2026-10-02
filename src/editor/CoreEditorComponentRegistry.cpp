@@ -10,6 +10,8 @@
 #include "scene/components/SkyComponent.h"
 #include "scene/runtime/CoreComponentIds.h"
 
+#include <limits>
+
 namespace Iridium {
 
     CoreEditorComponentRegistryResult createCoreEditorComponentRegistry() {
@@ -68,7 +70,11 @@ namespace Iridium {
             "model", "Model", 1, PropertyValueType::AssetReference,
             &MeshComponent::requestedAssetGuid, false, true, nullptr));
         mesh.properties.push_back(editorPropertyDescriptor(
-            "material_overrides", "Material overrides", 2,
+            "maximum_lod_level", "Maximum LOD level", 2,
+            PropertyValueType::Int32, &MeshComponent::maximumLodLevel,
+            false, false, int32_t{ MeshComponent::MaximumLodLevel }));
+        mesh.properties.push_back(editorPropertyDescriptor(
+            "material_overrides", "Material overrides", 3,
             PropertyValueType::Collection,
             &MeshComponent::materialOverrides, false, false,
             EmptyCollectionDefault{}));
@@ -92,21 +98,21 @@ namespace Iridium {
             "illuminance_lux", "Illuminance (lux)", 2,
             PropertyValueType::Float32,
             &LightComponent::illuminanceLux, false, false, 100000.0f,
-            0.0f, 10000000.0f));
+            0.0f, std::numeric_limits<float>::max()));
         light.properties.push_back(editorPropertyDescriptor(
             "luminous_intensity_candela", "Luminous intensity (cd)", 3,
             PropertyValueType::Float32,
             &LightComponent::luminousIntensityCandela, false, false, 10000.0f,
-            0.0f, 1000000000.0f));
+            0.0f, std::numeric_limits<float>::max()));
         light.properties.push_back(editorPropertyDescriptor(
             "range_meters", "Range (m)", 4, PropertyValueType::Float32,
             &LightComponent::rangeMeters, false, false, 10.0f,
-            0.0f, 1000.0f));
+            0.0f, std::numeric_limits<float>::max()));
         light.properties.push_back(editorPropertyDescriptor(
             "source_radius_meters", "Source radius (m)", 5,
             PropertyValueType::Float32,
             &LightComponent::sourceRadiusMeters, false, false, 0.05f,
-            0.0f, 50.0f));
+            0.0f, std::numeric_limits<float>::max()));
         light.properties.push_back(editorPropertyDescriptor(
             "inner_cone_degrees", "Inner cone (degrees)", 6,
             PropertyValueType::Float32,

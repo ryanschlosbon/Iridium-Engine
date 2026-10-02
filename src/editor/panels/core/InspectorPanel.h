@@ -19,6 +19,7 @@ namespace Iridium {
     class AssetThumbnailService;
     class EditorSceneCommandService;
     class EditorTransactionService;
+    struct EditorTransformSettings;
 }
 
 class MeshComponent;
@@ -38,7 +39,9 @@ public:
         Iridium::EditorTransactionService*
             transactionService,
         Iridium::EditorSceneCommandService*
-            sceneCommands);
+            sceneCommands,
+        Iridium::EditorTransformSettings*
+            transformSettings);
 
     void OnImGuiRender(
         Registry& registry,
@@ -93,10 +96,13 @@ private:
         transactionService_ = nullptr;
     Iridium::EditorSceneCommandService*
         sceneCommands_ = nullptr;
+    Iridium::EditorTransformSettings*
+        transformSettings_ = nullptr;
     Entity uniformScaleEntity = NULL_ENTITY;
     bool uniformScale = false;
     Entity nameEntity_ = NULL_ENTITY;
     std::array<char, 256> nameBuffer_{};
+    std::array<char, 128> componentSearch_{};
     std::string observedName_;
     uint32_t changedItemId_ = 0;
     bool changedItemActivated_ = false;
@@ -125,4 +131,6 @@ private:
         drawerRegistry_;
     Iridium::EditorPropertyEditSessionState
         genericPropertySessions_;
+    bool directionalIntensityKilolux_ = false;
+    bool localIntensityLumens_ = false;
 };

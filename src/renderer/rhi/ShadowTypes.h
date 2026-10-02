@@ -63,6 +63,9 @@ namespace Iridium {
         uint32_t sampleableMask = 0;
         uint32_t resolution = 4096;
         float sourceAngularDiameterDegrees = 0.535f;
+        float receiverDepthBiasTexels = 1.25f;
+        float receiverPlaneClampTexels = 2.0f;
+        float normalOffsetTexels = 0.5f;
         ShadowFilterProfile filterProfile{};
     };
 

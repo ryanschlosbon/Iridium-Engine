@@ -21,6 +21,9 @@ namespace Iridium {
         bool gpuProfilingAvailable = false;
         bool windowVisible = true;
         bool windowDecorated = true;
+        // Optional fixture sanity gate, not a substitute for image comparison.
+        // Intentional black/constant diagnostic captures remain valid by default.
+        bool requireSpatialSignal = false;
         std::string compiler;
         std::string shaderCompiler;
         std::string operatingSystem;
@@ -78,6 +81,9 @@ namespace Iridium {
         std::string directionalShadowFilter;
         float directionalShadowSourceAngularDiameterDegrees = 0.0f;
         float directionalShadowMaximumPenumbraTexels = 0.0f;
+        float directionalShadowReceiverDepthBiasTexels = 0.0f;
+        float directionalShadowReceiverPlaneClampTexels = 0.0f;
+        float directionalShadowNormalOffsetTexels = 0.0f;
         uint32_t directionalShadowBlockerSearchSamples = 0;
         uint32_t directionalShadowFilterSamples = 0;
         std::vector<std::pair<std::string, std::string>> contentHashes;

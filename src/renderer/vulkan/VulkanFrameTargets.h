@@ -28,6 +28,8 @@ namespace Iridium {
         VkRenderPass glassDepth = VK_NULL_HANDLE;
         VkRenderPass layeredInterfaceCapture = VK_NULL_HANDLE;
         VkRenderPass layeredLocalComposition = VK_NULL_HANDLE;
+        VkRenderPass weightedOitAccumulation = VK_NULL_HANDLE;
+        VkRenderPass weightedOitResolve = VK_NULL_HANDLE;
         VkRenderPass output = VK_NULL_HANDLE;
         VkRenderPass ui = VK_NULL_HANDLE;
     };
@@ -48,6 +50,8 @@ namespace Iridium {
         VulkanImageResource layeredExitDepth;
         VulkanImageResource layeredExitIdentity;
         VulkanImageResource layeredLocalColor;
+        VulkanImageResource weightedOitAccumulation;
+        VulkanImageResource weightedOitRevealage;
         VulkanImageResource output;
         VulkanImageResource uiComposition;
         std::vector<VkImageView> refractionColorMipViews;
@@ -60,6 +64,8 @@ namespace Iridium {
         VkFramebuffer layeredEntryFramebuffer = VK_NULL_HANDLE;
         VkFramebuffer layeredExitFramebuffer = VK_NULL_HANDLE;
         VkFramebuffer layeredLocalCompositionFramebuffer = VK_NULL_HANDLE;
+        VkFramebuffer weightedOitAccumulationFramebuffer = VK_NULL_HANDLE;
+        VkFramebuffer weightedOitResolveFramebuffer = VK_NULL_HANDLE;
         VkFramebuffer outputFramebuffer = VK_NULL_HANDLE;
         VkFramebuffer uiCompositionFramebuffer = VK_NULL_HANDLE;
 
@@ -107,6 +113,7 @@ namespace Iridium {
             VkExtent2D sceneExtent,
             VulkanTargetRenderPasses renderPasses, uint32_t frameContextCount,
             bool hdr10Composition, bool transparencyPyramids,
+            bool legacyTransparency,
             const VulkanLayeredGraphConfig& layered,
             const VulkanRenderGraphExecutor& graphResources);
         void cleanup();

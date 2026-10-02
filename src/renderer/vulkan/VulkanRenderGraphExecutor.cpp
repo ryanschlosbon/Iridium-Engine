@@ -177,6 +177,7 @@ VkFormat toVkFormat(RenderGraph::Format format) {
     case RenderGraph::Format::Rgb10A2Unorm:
         return VK_FORMAT_A2B10G10R10_UNORM_PACK32;
     case RenderGraph::Format::Rgba16Float: return VK_FORMAT_R16G16B16A16_SFLOAT;
+    case RenderGraph::Format::R16Float: return VK_FORMAT_R16_SFLOAT;
     case RenderGraph::Format::Rg16Snorm: return VK_FORMAT_R16G16_SNORM;
     case RenderGraph::Format::R11G11B10Float: return VK_FORMAT_B10G11R11_UFLOAT_PACK32;
     case RenderGraph::Format::R16Uint: return VK_FORMAT_R16_UINT;
@@ -195,6 +196,7 @@ RenderGraph::Format toGraphFormat(VkFormat format) {
     case VK_FORMAT_A2B10G10R10_UNORM_PACK32:
         return RenderGraph::Format::Rgb10A2Unorm;
     case VK_FORMAT_R16G16B16A16_SFLOAT: return RenderGraph::Format::Rgba16Float;
+    case VK_FORMAT_R16_SFLOAT: return RenderGraph::Format::R16Float;
     case VK_FORMAT_R16G16_SNORM: return RenderGraph::Format::Rg16Snorm;
     case VK_FORMAT_B10G11R11_UFLOAT_PACK32: return RenderGraph::Format::R11G11B10Float;
     case VK_FORMAT_R16_UINT: return RenderGraph::Format::R16Uint;
@@ -433,6 +435,10 @@ void VulkanRenderGraphExecutor::rebuild(RenderGraph::CompiledGraph graph) {
     frameAccess_.assign(resources_.frameCount(),
         std::vector<RenderGraph::Access>(physicalSlotCount_,
             RenderGraph::Access::Undefined));
+    externalBuffers_.assign(resources_.frameCount(),
+        std::vector<ExternalBufferBinding>(logicalResourceCount_));
+    externalBufferTracked_.assign(logicalResourceCount_, false);
+    frameRetired_.assign(resources_.frameCount(), true);
     cache_.store(std::move(graph));
     barriers_ = std::move(candidateBarriers);
     topologyHash_ = hash;
@@ -441,6 +447,37 @@ void VulkanRenderGraphExecutor::rebuild(RenderGraph::CompiledGraph graph) {
 
 void VulkanRenderGraphExecutor::onFrameFenceCompleted(uint32_t frameIndex) {
     resources_.onFrameFenceCompleted(frameIndex);
+    frameRetired_.at(frameIndex) = true;
+}
+
+void VulkanRenderGraphExecutor::bindExternalBuffer(uint32_t frameIndex,
+    std::string_view logicalName, VkBuffer buffer, VkDeviceSize size,
+    RenderGraph::Access initialAccess) {
+    if (initialAccess == RenderGraph::Access::ColorAttachment ||
+        initialAccess == RenderGraph::Access::DepthAttachmentWrite ||
+        initialAccess == RenderGraph::Access::DepthAttachmentRead ||
+        initialAccess == RenderGraph::Access::SampledRead || initialAccess == RenderGraph::Access::Present)
+        throw std::invalid_argument("External graph buffer cannot have image-only access");
+    (void)getVulkanGraphAccessInfo(initialAccess, RenderGraph::ResourceType::Buffer);
+    const auto* graph = cache_.find(topologyHash_);
+    if (!graph || !buffer || frameIndex >= externalBuffers_.size() ||
+        !frameRetired_[frameIndex] || executingFrame_ == frameIndex)
+        throw std::invalid_argument("External graph buffer binding requires a retired frame slot");
+    const auto found = std::ranges::find_if(graph->resources(), [&](const auto& value) {
+        return value.name == logicalName;
+    });
+    if (found == graph->resources().end() || !found->desc.imported ||
+        found->desc.type != RenderGraph::ResourceType::Buffer ||
+        found->physicalSlot != RenderGraph::InvalidIndex || size < found->desc.buffer.size)
+        throw std::invalid_argument("External graph buffer binding is incompatible with the declared resource");
+    const auto index = static_cast<uint32_t>(found - graph->resources().begin());
+    for (uint32_t slot = 0; slot < externalBuffers_.size(); ++slot)
+        for (uint32_t resource = 0; resource < externalBuffers_[slot].size(); ++resource)
+            if ((slot != frameIndex || resource != index) &&
+                externalBuffers_[slot][resource].buffer == buffer)
+                throw std::invalid_argument("Tracked external graph buffers must not alias resources or frame slots");
+    externalBuffers_[frameIndex][index] = {buffer, size, initialAccess};
+    externalBufferTracked_[index] = true;
 }
 
 bool VulkanRenderGraphExecutor::validateFrame(uint32_t frameIndex) noexcept {
@@ -450,6 +487,9 @@ bool VulkanRenderGraphExecutor::validateFrame(uint32_t frameIndex) noexcept {
         return false;
     }
     try {
+        for (uint32_t index = 0; index < externalBufferTracked_.size(); ++index)
+            if (externalBufferTracked_[index] && (frameIndex >= externalBuffers_.size() ||
+                !externalBuffers_[frameIndex][index].buffer)) return false;
         return frameIndex < resources_.frameCount() &&
             resources_.activeResourceCount(frameIndex) == graph->physicalSlots().size();
     }
@@ -463,6 +503,7 @@ void VulkanRenderGraphExecutor::beginFrameExecution(uint32_t frameIndex) {
         throw std::logic_error("Render-graph frame execution began in an invalid state");
     }
     executingFrame_ = frameIndex;
+    frameRetired_[frameIndex] = false;
     nextPass_ = 0;
 }
 
@@ -533,6 +574,8 @@ void VulkanRenderGraphExecutor::transitionPhysicalResource(
 
 void VulkanRenderGraphExecutor::beginPass(VkCommandBuffer commandBuffer,
     std::string_view passName) {
+    if (commandBuffer == VK_NULL_HANDLE)
+        throw std::invalid_argument("Render-graph pass requires a command buffer");
     const RenderGraph::CompiledGraph& graph = executingGraph();
     if (nextPass_ >= graph.passes().size() ||
         graph.passes()[nextPass_].name != passName) {
@@ -545,6 +588,22 @@ void VulkanRenderGraphExecutor::beginPass(VkCommandBuffer commandBuffer,
         const RenderGraph::CompiledResource& resource =
             graph.resources()[usage.logicalResourceIndex];
         if (resource.physicalSlot == RenderGraph::InvalidIndex) {
+            if (externalBufferTracked_[usage.logicalResourceIndex]) {
+                auto& binding = externalBuffers_[executingFrame_][usage.logicalResourceIndex];
+                const auto before = getVulkanGraphAccessInfo(binding.access, RenderGraph::ResourceType::Buffer);
+                const auto after = getVulkanGraphAccessInfo(usage.access, RenderGraph::ResourceType::Buffer);
+                // Same-access writes still need ordering. State survives slot reuse.
+                const VkAccessFlags writes = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
+                if (binding.access != usage.access || (before.access & writes)) {
+                    VkBufferMemoryBarrier barrier{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
+                    barrier.srcAccessMask = before.access; barrier.dstAccessMask = after.access;
+                    barrier.srcQueueFamilyIndex = barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                    barrier.buffer = binding.buffer; barrier.size = resource.desc.buffer.size;
+                    vkCmdPipelineBarrier(commandBuffer, before.stages, after.stages, 0,
+                        0, nullptr, 1, &barrier, 0, nullptr);
+                }
+                binding.access = usage.access;
+            }
             continue;
         }
         transitionPhysicalResource(commandBuffer, resource.physicalSlot,
@@ -593,6 +652,7 @@ void VulkanRenderGraphExecutor::cleanupAfterDeviceIdle() noexcept {
     cache_.clear();
     barriers_.clear();
     frameAccess_.clear();
+    externalBuffers_.clear(); externalBufferTracked_.clear(); frameRetired_.clear();
     executingFrame_ = RenderGraph::InvalidIndex;
     nextPass_ = 0;
     allocatorFactory_.reset();

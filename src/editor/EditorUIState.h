@@ -5,11 +5,17 @@
 #include "renderer/rhi/ReflectionProbeSettings.h"
 #include "assets/AssetBrowserModel.h"
 
+#include <array>
 #include <optional>
+#include <string>
 
 struct EditorOutputSettings {
     Iridium::Color::OutputTransport transport =
         Iridium::Color::OutputTransport::SdrSrgb;
+    Iridium::Color::OutputTransport effectiveTransport =
+        Iridium::Color::OutputTransport::SdrSrgb;
+    std::array<bool, 3> supportedTransports{ true, false, false };
+    std::string transportDiagnostic;
     float manualExposureEv = 0.0f;
     float paperWhiteNits = 203.0f;
     float peakNits = 1000.0f;
@@ -31,6 +37,8 @@ struct EditorUIState {
     bool shadowSettingsChanged = false;
     Iridium::ProjectReflectionProbeSettings reflectionProbeSettings;
     bool reflectionProbeSettingsChanged = false;
+    // Session-only renderer quality override; zero preserves authored policy.
+    int layeredInterfaceOverride = 0;
 
     // We will use this one to test the architecture right now
     bool showDemoWindow = false;

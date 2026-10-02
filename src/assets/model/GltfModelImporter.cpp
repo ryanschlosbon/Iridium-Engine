@@ -4,9 +4,11 @@
 #include "assets/cooker/CookKey.h"
 #include "assets/cooker/LocalDerivedDataCache.h"
 #include "assets/model/ModelProduct.h"
+#include "assets/model/ModelLodGenerator.h"
 #include "assets/texture/TextureImporter.h"
 #include "assets/texture/TextureProduct.h"
 #include "material/MaterialCompiler.h"
+#include "material/MaterialAuthoringPatch.h"
 #include "material/MaterialTangentGeneration.h"
 #include "material/SourceMaterial.h"
 #include "utils/Sha256.h"
@@ -1385,6 +1387,158 @@ namespace Iridium {
         return result;
     }
 
+    namespace {
+
+        std::array<uint32_t, 3> stableTriangleKey(
+            std::span<const uint32_t> indices, uint32_t triangle) {
+            const std::array<uint32_t, 3> a{
+                indices[triangle * 3], indices[triangle * 3 + 1],
+                indices[triangle * 3 + 2] };
+            const std::array<uint32_t, 3> b{ a[1], a[2], a[0] };
+            const std::array<uint32_t, 3> c{ a[2], a[0], a[1] };
+            return std::min({ a, b, c });
+        }
+
+        uint64_t simulatedVertexCacheMisses(
+            std::span<const uint32_t> indices,
+            std::span<const uint32_t> triangles) {
+            constexpr size_t CacheSize = 32;
+            std::vector<uint32_t> cache;
+            cache.reserve(CacheSize);
+            uint64_t misses = 0;
+            for (uint32_t triangle : triangles) {
+                for (uint32_t corner = 0; corner < 3; ++corner) {
+                    const uint32_t vertex = indices[triangle * 3 + corner];
+                    const auto found = std::ranges::find(cache, vertex);
+                    if (found == cache.end()) ++misses;
+                    else cache.erase(found);
+                    cache.insert(cache.begin(), vertex);
+                    if (cache.size() > CacheSize) cache.pop_back();
+                }
+            }
+            return misses;
+        }
+
+        std::vector<uint32_t> optimizeOpaqueTriangleOrder(
+            std::span<const uint32_t> indices,
+            std::span<const uint32_t> sourceTriangles,
+            size_t vertexCount,
+            uint64_t& redundantTriangles,
+            uint64_t& cacheMissesSaved) {
+            std::set<std::array<uint32_t, 3>> uniqueTriangles;
+            std::vector<uint32_t> filtered;
+            filtered.reserve(sourceTriangles.size());
+            std::vector<uint32_t> orderedSource(sourceTriangles.begin(),
+                sourceTriangles.end());
+            std::ranges::sort(orderedSource);
+            for (uint32_t triangle : orderedSource) {
+                if (uniqueTriangles.insert(
+                        stableTriangleKey(indices, triangle)).second) {
+                    filtered.push_back(triangle);
+                }
+                else {
+                    ++redundantTriangles;
+                }
+            }
+            if (filtered.size() < 2) return filtered;
+
+            std::vector<std::vector<uint32_t>> adjacency(vertexCount);
+            for (uint32_t filteredIndex = 0;
+                    filteredIndex < filtered.size(); ++filteredIndex) {
+                const uint32_t triangle = filtered[filteredIndex];
+                for (uint32_t corner = 0; corner < 3; ++corner)
+                    adjacency[indices[triangle * 3 + corner]].push_back(
+                        filteredIndex);
+            }
+            std::vector<bool> emitted(filtered.size(), false);
+            std::vector<bool> candidatePresent(filtered.size(), false);
+            std::vector<uint32_t> candidates;
+            std::vector<uint32_t> cache;
+            cache.reserve(32);
+            std::vector<uint32_t> optimized;
+            optimized.reserve(filtered.size());
+            size_t nextUnemitted = 0;
+            while (optimized.size() != filtered.size()) {
+                while (nextUnemitted < emitted.size() &&
+                    emitted[nextUnemitted]) ++nextUnemitted;
+                if (candidates.empty()) {
+                    candidates.push_back(
+                        static_cast<uint32_t>(nextUnemitted));
+                    candidatePresent[nextUnemitted] = true;
+                }
+                size_t bestPosition = 0;
+                uint32_t bestHits = 0;
+                uint32_t bestTriangle = UINT32_MAX;
+                for (size_t position = 0; position < candidates.size();
+                        ++position) {
+                    const uint32_t candidate = candidates[position];
+                    if (emitted[candidate]) continue;
+                    const uint32_t triangle = filtered[candidate];
+                    uint32_t hits = 0;
+                    for (uint32_t corner = 0; corner < 3; ++corner) {
+                        hits += std::ranges::find(cache,
+                            indices[triangle * 3 + corner]) != cache.end();
+                    }
+                    if (hits > bestHits ||
+                        (hits == bestHits && triangle < bestTriangle)) {
+                        bestHits = hits;
+                        bestTriangle = triangle;
+                        bestPosition = position;
+                    }
+                }
+                const uint32_t selected = candidates[bestPosition];
+                candidates[bestPosition] = candidates.back();
+                candidates.pop_back();
+                candidatePresent[selected] = false;
+                if (emitted[selected]) continue;
+                emitted[selected] = true;
+                const uint32_t triangle = filtered[selected];
+                optimized.push_back(triangle);
+                for (uint32_t corner = 0; corner < 3; ++corner) {
+                    const uint32_t vertex = indices[triangle * 3 + corner];
+                    const auto found = std::ranges::find(cache, vertex);
+                    if (found != cache.end()) cache.erase(found);
+                    cache.insert(cache.begin(), vertex);
+                    if (cache.size() > 32) cache.pop_back();
+                    for (uint32_t adjacent : adjacency[vertex]) {
+                        if (!emitted[adjacent] &&
+                                !candidatePresent[adjacent]) {
+                            candidates.push_back(adjacent);
+                            candidatePresent[adjacent] = true;
+                        }
+                    }
+                }
+            }
+            const uint64_t originalMisses = simulatedVertexCacheMisses(
+                indices, filtered);
+            const uint64_t optimizedMisses = simulatedVertexCacheMisses(
+                indices, optimized);
+            if (optimizedMisses >= originalMisses) return filtered;
+            cacheMissesSaved += originalMisses - optimizedMisses;
+            return optimized;
+        }
+
+    } // namespace
+
+    ModelTriangleOptimization optimizeModelTriangleOrder(
+        std::span<const uint32_t> triangleIndices,
+        std::span<const uint32_t> sourceTriangleIndices,
+        size_t vertexCount) {
+        if (triangleIndices.size() % 3 != 0 ||
+            std::ranges::any_of(sourceTriangleIndices,
+                [&](uint32_t triangle) {
+                    return triangle >= triangleIndices.size() / 3;
+                })) {
+            throw std::invalid_argument(
+                "Triangle optimization input ranges are invalid.");
+        }
+        ModelTriangleOptimization result;
+        result.sourceTriangleIndices = optimizeOpaqueTriangleOrder(
+            triangleIndices, sourceTriangleIndices, vertexCount,
+            result.redundantTriangleCount, result.cacheMissesSaved);
+        return result;
+    }
+
     ClosedTriangleTopologyAnalysis analyzeClosedTriangleTopology(
         std::span<const glm::vec3> positions,
         std::span<const uint32_t> triangleIndices,
@@ -1491,12 +1645,22 @@ namespace Iridium {
             .assetTypes = { "iridium.model" },
             .extensions = { ".gltf", ".glb" },
         };
-        return descriptor;
+        static const ImporterDescriptor legacyDescriptor{
+            .id = "iridium.gltf-model",
+            .implementationVersion = kPreviousGltfModelImporterVersion,
+            .currentSettingsSchemaVersion = 2,
+            .assetTypes = { "iridium.model" },
+            .extensions = { ".gltf", ".glb" },
+        };
+        return revision_ == GltfModelImporterRevision::LegacyLod0V7
+            ? legacyDescriptor : descriptor;
     }
 
     ImportProbeResult GltfModelImporter::probe(
         const std::filesystem::path& relativePath,
         std::span<const std::byte> sourceBytes) const {
+        if (revision_ == GltfModelImporterRevision::LegacyLod0V7)
+            return ImportProbeResult::Unsupported;
         std::string extension = relativePath.extension().generic_string();
         std::ranges::transform(extension, extension.begin(),
             [](unsigned char value) {
@@ -1529,17 +1693,24 @@ namespace Iridium {
         }
         result.values = {
             { "bake_node_transforms", true },
+            { "generate_lods", false },
             { "generate_missing_tangents", true },
             { "import_scale", 1.0 },
             { "preserve_rt_geometry", true },
             { "recalculate_normals", false },
             { "recalculate_tangents", false },
             { "reverse_winding", false },
-            { "transparency_execution_mode", "legacy_two_bucket" },
+            { "transparency_execution_mode", sourceSchemaVersion == 1
+                ? "legacy_two_bucket" : "classified" },
             { "transparency_policies", Json::object() },
         };
-        const std::set<std::string> known{
+        std::set<std::string> known{
             "bake_node_transforms",
+            "generate_lods",
+            "lod_allow_boundary_collapse",
+            "lod_split_boundary_fans",
+            "lod_transactional_orientation",
+            "lod_transactional_topology",
             "generate_missing_tangents",
             "import_scale",
             "preserve_rt_geometry",
@@ -1548,7 +1719,17 @@ namespace Iridium {
             "reverse_winding",
             "transparency_execution_mode",
             "transparency_policies",
+            "material_overrides",
         };
+        if (revision_ == GltfModelImporterRevision::LegacyLod0V7) {
+            known.erase("material_overrides");
+            result.values.erase("generate_lods");
+            known.erase("generate_lods");
+            known.erase("lod_allow_boundary_collapse");
+            known.erase("lod_split_boundary_fans");
+            known.erase("lod_transactional_orientation");
+            known.erase("lod_transactional_topology");
+        }
         for (const auto& [key, value] : settings.items()) {
             if (!known.contains(key)) {
                 addDiagnostic(result.diagnostics,
@@ -1558,6 +1739,21 @@ namespace Iridium {
                     strict
                         ? "Strict cooking rejects unknown glTF model settings."
                         : "Unknown glTF model setting is ignored.");
+                continue;
+            }
+            if (key == "material_overrides") {
+                try {
+                    if (!value.is_object()) throw std::runtime_error("Expected GUID-keyed material overrides");
+                    for (const auto& [guidText, patch] : value.items()) {
+                        const auto guid = AssetGuid::parse(guidText);
+                        if (!guid || guid->isNil()) throw std::runtime_error("Material override requires a stable GUID");
+                        validateMaterialAuthoringPatch(patch);
+                    }
+                    // Absent/empty edits retain historical cook keys.
+                    if (!value.empty()) result.values[key] = value;
+                } catch (const std::exception& error) {
+                    addError(result.diagnostics, "GLTF_MATERIAL_OVERRIDE_INVALID", "/" + key, error.what());
+                }
                 continue;
             }
             if (key == "import_scale") {
@@ -1583,12 +1779,15 @@ namespace Iridium {
                 continue;
             }
             if (key == "transparency_execution_mode") {
+                const char* safeMode = sourceSchemaVersion == 1
+                    ? "legacy_two_bucket" : "classified";
                 if (!value.is_string()) {
                     addDiagnostic(result.diagnostics,
                         CookDiagnosticSeverity::Warning,
                         "GLTF_TRANSPARENCY_EXECUTION_UNKNOWN",
                         "/" + key,
-                        "Unknown transparency execution mode was normalized to legacy_two_bucket.");
+                        std::string("Unknown transparency execution mode was normalized to ") +
+                            safeMode + ".");
                     continue;
                 }
                 const std::string mode = value.get<std::string>();
@@ -1597,7 +1796,8 @@ namespace Iridium {
                         CookDiagnosticSeverity::Warning,
                         "GLTF_TRANSPARENCY_EXECUTION_UNKNOWN",
                         "/" + key,
-                        "Unknown transparency execution mode was normalized to legacy_two_bucket.");
+                        std::string("Unknown transparency execution mode was normalized to ") +
+                            safeMode + ".");
                     continue;
                 }
                 result.values[key] = mode;
@@ -1767,6 +1967,30 @@ namespace Iridium {
             result.values["preserve_rt_geometry"] != true) {
             addError(result.diagnostics, "GLTF_SETTINGS_REQUIRED_CONTRACT", "/",
                 "M3.4 requires baked node transforms and RT-preserving geometry.");
+        }
+        if (result.values.value("lod_allow_boundary_collapse", false) &&
+            !result.values.value("generate_lods", false)) {
+            addError(result.diagnostics, "GLTF_LOD_BOUNDARY_REQUIRES_LODS",
+                "/lod_allow_boundary_collapse",
+                "Boundary-aware LOD collapse requires generate_lods=true.");
+        }
+        if (result.values.value("lod_split_boundary_fans", false) &&
+            !result.values.value("generate_lods", false)) {
+            addError(result.diagnostics, "GLTF_LOD_FAN_SPLIT_REQUIRES_LODS",
+                "/lod_split_boundary_fans",
+                "Boundary-fan LOD normalization requires generate_lods=true.");
+        }
+        if (result.values.value("lod_transactional_orientation", false) &&
+            !result.values.value("generate_lods", false)) {
+            addError(result.diagnostics, "GLTF_LOD_ORIENTATION_REQUIRES_LODS",
+                "/lod_transactional_orientation",
+                "Transactional LOD orientation requires generate_lods=true.");
+        }
+        if (result.values.value("lod_transactional_topology", false) &&
+            !result.values.value("generate_lods", false)) {
+            addError(result.diagnostics, "GLTF_LOD_TOPOLOGY_REQUIRES_LODS",
+                "/lod_transactional_topology",
+                "Transactional LOD topology requires generate_lods=true.");
         }
         if (hasCookErrors(result.diagnostics)) return result;
         const CanonicalSettingsResult canonical =
@@ -1948,6 +2172,12 @@ namespace Iridium {
                 { "primitives", Json::array() },
                 { "schema", kParsedDocumentSchema },
             };
+            // Retain only the material ingestion inputs, not geometry or buffers.
+            Json materialSource = { {"asset", {{"version", "2.0"}}} };
+            for (const char* key : {"materials", "textures", "images", "samplers",
+                    "extensionsUsed", "extensionsRequired"})
+                if (root.contains(key)) materialSource[key] = root.at(key);
+            parsed["material_source"] = std::move(materialSource);
             for (size_t index = 0; index < compiled.materials.size(); ++index) {
                 cancelled();
                 const MaterialCompileResult& material = compiled.materials[index];
@@ -2308,7 +2538,7 @@ namespace Iridium {
 
         try {
             cancelled();
-            const Json parsed = Json::parse(
+            Json parsed = Json::parse(
                 reinterpret_cast<const char*>(source.documentBytes.data()),
                 reinterpret_cast<const char*>(source.documentBytes.data() +
                     source.documentBytes.size()));
@@ -2316,6 +2546,53 @@ namespace Iridium {
                 kParsedDocumentSchema) {
                 throw std::runtime_error(
                     "Parsed glTF intermediate schema is unsupported.");
+            }
+            if (settings.values.contains("material_overrides")) {
+                if (!parsed.contains("material_source"))
+                    throw std::runtime_error("Material authoring requires reparsing the source asset");
+                Json& materialSource = parsed.at("material_source");
+                std::set<std::string> appliedGuids;
+                for (auto& raw : parsed.at("materials")) {
+                    const int64_t index = raw.at("source_index").get<int64_t>();
+                    if (index < 0) continue;
+                    const auto guid = subassetGuid(context, "materials/" + std::to_string(index));
+                    if (!guid) continue;
+                    const auto found = settings.values.at("material_overrides").find(guid->toString());
+                    if (found == settings.values.at("material_overrides").end()) continue;
+                    nlohmann::json edited = materialSource.at("materials").at(index);
+                    applyMaterialAuthoringPatch(edited, *found);
+                    materialSource.at("materials").at(index) = std::move(edited);
+                    appliedGuids.insert(guid->toString());
+                }
+                for (const auto& [guid, patch] : settings.values.at("material_overrides").items()) {
+                    (void)patch;
+                    if (!appliedGuids.contains(guid))
+                        addDiagnostic(failed.diagnostics, CookDiagnosticSeverity::Warning,
+                            "GLTF_MATERIAL_OVERRIDE_ORPHAN", "/material_overrides/" + guid,
+                            "Material is missing; its saved edits are retained but not reassigned");
+                }
+                const auto authoredDocument = importGltfSourceMaterialsJson(materialSource.dump());
+                if (authoredDocument.hasErrors()) {
+                    for (const auto& diagnostic : authoredDocument.diagnostics())
+                        addError(failed.diagnostics, diagnostic.code,
+                            "/material_overrides" + diagnostic.path, diagnostic.message);
+                    return failed;
+                }
+                const auto effective = compileSourceMaterialDocument(authoredDocument, MaterialCompilePolicy::Strict);
+                if (!effective.succeeded()) {
+                    for (const auto& diagnostic : effective.diagnostics)
+                        addError(failed.diagnostics, diagnostic.code, "/material_overrides", diagnostic.message);
+                    return failed;
+                }
+                for (auto& raw : parsed.at("materials")) {
+                    const int64_t index = raw.at("source_index").get<int64_t>();
+                    if (index < 0) continue;
+                    const auto& material = *effective.materials.at(index).material;
+                    raw["compiled_product"] = hexEncode(serializeCompiledMaterial(material));
+                    raw["content_hash"] = material.contentHash;
+                    raw["coverage"] = static_cast<uint32_t>(sourceCoverage(material.standard.alphaMode));
+                    raw["double_sided"] = material.standard.doubleSided;
+                }
             }
             const Json& materials = parsed.at("materials");
             CookedModelProductData data;
@@ -3004,9 +3281,40 @@ namespace Iridium {
                     glm::vec3 boundsMin(std::numeric_limits<float>::max());
                     glm::vec3 boundsMax(std::numeric_limits<float>::lowest());
 
+                    uint64_t redundantTriangles = 0;
+                    uint64_t cacheMissesSaved = 0;
+                    std::vector<uint32_t> cookedTriangles;
+                    if (coverage == ModelCoverage::Transparent) {
+                        cookedTriangles.assign(
+                            component.sourceTriangleIndices.begin(),
+                            component.sourceTriangleIndices.end());
+                    }
+                    else {
+                        cookedTriangles = optimizeOpaqueTriangleOrder(
+                            runtimeIndices,
+                            component.sourceTriangleIndices,
+                            vertices.size(), redundantTriangles,
+                            cacheMissesSaved);
+                    }
+                    if (redundantTriangles != 0) {
+                        addDiagnostic(failed.diagnostics,
+                            CookDiagnosticSeverity::Info,
+                            "GLTF_REDUNDANT_TRIANGLES_FILTERED", connectedKey,
+                            "Removed " + std::to_string(redundantTriangles) +
+                            " exact same-winding opaque triangle duplicates.");
+                    }
+                    if (cacheMissesSaved != 0) {
+                        addDiagnostic(failed.diagnostics,
+                            CookDiagnosticSeverity::Info,
+                            "GLTF_VERTEX_CACHE_REORDERED", connectedKey,
+                            "Deterministic 32-entry cache simulation saved " +
+                            std::to_string(cacheMissesSaved) +
+                            " vertex fetches; transparent order is preserved.");
+                    }
+
                     std::vector<bool> referenced(vertices.size(), false);
                     for (uint32_t sourceTriangle :
-                            component.sourceTriangleIndices) {
+                            cookedTriangles) {
                         for (uint32_t corner = 0; corner < 3; ++corner)
                             referenced[runtimeIndices[
                                 sourceTriangle * 3 + corner]] = true;
@@ -3041,7 +3349,7 @@ namespace Iridium {
                             vertex.pos.y, vertex.pos.z });
                     }
                     for (uint32_t sourceTriangle :
-                            component.sourceTriangleIndices) {
+                            cookedTriangles) {
                         for (uint32_t corner = 0; corner < 3; ++corner) {
                             const uint32_t sourceIndex =
                                 runtimeIndices[sourceTriangle * 3 + corner];
@@ -3085,7 +3393,11 @@ namespace Iridium {
                         .topology = ModelPrimitiveTopology::Triangles,
                         .winding = ModelWinding::Clockwise,
                         .coverage = coverage,
-                        .indexFormat = ModelIndexFormat::UInt32,
+                        .indexFormat = data.vertices.size() - firstVertex <=
+                                static_cast<uint64_t>(
+                                    std::numeric_limits<uint16_t>::max()) + 1u
+                            ? ModelIndexFormat::UInt16
+                            : ModelIndexFormat::UInt32,
                         .flags = primitiveFlags,
                         .rtFlags = ModelRtBuildInput |
                             (coverage == ModelCoverage::Opaque
@@ -3114,10 +3426,94 @@ namespace Iridium {
             data.manifest.indexCount = data.indices.size();
             data.manifest.rtPositionCount = data.rtPositions.size();
             data.manifest.rtIndexCount = data.rtIndices.size();
+            if (settings.values.value("generate_lods", false)) {
+                if (revision_ == GltfModelImporterRevision::LegacyLod0V7)
+                    throw std::invalid_argument("LOD generation requires importer version 8.");
+                reportCookProgress(context, "geometry-lods", 0, 1,
+                    "Generating bounded-error opaque LOD candidates");
+                ModelLodGenerationSettings lodSettings{};
+                lodSettings.allowBoundaryEdgeCollapse = settings.values.value(
+                    "lod_allow_boundary_collapse", false);
+                lodSettings.splitNonManifoldBoundaryFans = settings.values.value(
+                    "lod_split_boundary_fans", false);
+                lodSettings.preventOrientationChangingMerges =
+                    settings.values.value("lod_transactional_orientation", false);
+                lodSettings.preventTopologyChangingMerges =
+                    settings.values.value("lod_transactional_topology", false);
+                ModelLodGenerationStatistics lodStatistics;
+                const size_t generatedChains = appendGeneratedModelLods(
+                    data, lodSettings, stopToken, &lodStatistics);
+                addDiagnostic(failed.diagnostics, CookDiagnosticSeverity::Info,
+                    "GLTF_LOD_CHAINS_GENERATED", "/lod_chains",
+                    "Generated " + std::to_string(generatedChains) +
+                    " deterministic bounded-error opaque LOD chains using " +
+                    (lodSettings.allowBoundaryEdgeCollapse
+                        ? "bounded boundary-edge collapse"
+                        : "locked boundaries") +
+                    (lodSettings.splitNonManifoldBoundaryFans
+                        ? " plus split boundary fans"
+                        : "") +
+                    (lodSettings.preventOrientationChangingMerges
+                        ? " plus transactional orientation"
+                        : "") +
+                    (lodSettings.preventTopologyChangingMerges
+                        ? " plus transactional topology"
+                        : "") +
+                    "; attempted " +
+                    std::to_string(lodStatistics.attemptedPrimitiveCount) +
+                    " opaque triangle primitives / " +
+                    std::to_string(lodStatistics.attemptedTriangleCount) +
+                    " triangles, with " +
+                    std::to_string(lodStatistics.belowMinimumPrimitiveCount) +
+                    " below-minimum, " +
+                    std::to_string(lodStatistics.degenerateSourcePrimitiveCount) +
+                    " degenerate-source, " +
+                    std::to_string(lodStatistics.invalidSourceTopologyPrimitiveCount) +
+                    " invalid-topology, and " +
+                    std::to_string(lodStatistics.noAcceptedLevelPrimitiveCount) +
+                    " proof-rejected primitives; canonical LOD0 and RT geometry "
+                    "remain unchanged.");
+                addDiagnostic(failed.diagnostics, CookDiagnosticSeverity::Info,
+                    "GLTF_LOD_GENERATION_GATES", "/lod_chains",
+                    "LOD gate telemetry: " +
+                    std::to_string(lodStatistics.edgeConsiderationCount) +
+                    " edge considerations, " +
+                    std::to_string(lodStatistics.acceptedMergeCount) +
+                    " accepted merges, " +
+                    std::to_string(lodStatistics.orientationRejectedEdgeCount) +
+                    " orientation-rejected merges, " +
+                    std::to_string(lodStatistics.correspondenceRejectedEdgeCount) +
+                    " correspondence-rejected merges, " +
+                    std::to_string(lodStatistics.topologyRejectedEdgeCount) +
+                    " topology-rejected merges, " +
+                    std::to_string(lodStatistics.boundaryRejectedEdgeCount) +
+                    " boundary rejections, " +
+                    std::to_string(lodStatistics.attributeRejectedEdgeCount) +
+                    " attribute rejections, " +
+                    std::to_string(lodStatistics.budgetRejectedEdgeCount) +
+                    " budget rejections; level gates rejected " +
+                    std::to_string(lodStatistics.orientationRejectedLevelCount) +
+                    " orientation, " +
+                    std::to_string(lodStatistics.noReductionLevelCount) +
+                    " no-reduction, " +
+                    std::to_string(lodStatistics.belowMinimumReductionLevelCount) +
+                    " below-10%-reduction, " +
+                    std::to_string(lodStatistics.correspondenceRejectedLevelCount) +
+                    " correspondence, and " +
+                    std::to_string(lodStatistics.topologyRejectedLevelCount) +
+                    " topology candidates; " +
+                    std::to_string(lodStatistics.generatedLevelCount) +
+                    " levels accepted.");
+                reportCookProgress(context, "geometry-lods", 1, 1,
+                    "Opaque LOD candidate generation complete");
+            }
             reportCookProgress(context, "model-product", 0, 1,
                 "Serializing model sections");
             CookProduct product =
-                makeCookedModelProduct(data);
+                makeCookedModelProduct(data,
+                    revision_ == GltfModelImporterRevision::LegacyLod0V7
+                        ? kPreviousCookedModelSchemaVersion
+                        : kCookedModelSchemaVersion);
             product.diagnostics.insert(
                 product.diagnostics.end(),
                 failed.diagnostics.begin(),
@@ -3130,6 +3526,12 @@ namespace Iridium {
                 exception.what());
             return failed;
         }
+    }
+
+    void registerGltfModelImporters(ImporterRegistry& registry) {
+        registry.registerImporter(std::make_shared<GltfModelImporter>());
+        registry.registerImporter(std::make_shared<GltfModelImporter>(
+            GltfModelImporterRevision::LegacyLod0V7));
     }
 
 } // namespace Iridium

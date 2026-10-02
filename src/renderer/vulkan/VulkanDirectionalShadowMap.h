@@ -26,14 +26,16 @@ namespace Iridium {
             texelWorldSize{};
         std::array<glm::vec4, kDirectionalShadowLightCapacity>
             depthSpanMeters{};
-        // tan(source angular radius), maximum penumbra texels, reserved.
+        // tan(source angular radius), maximum penumbra texels,
+        // receiver-plane clamp texels, reserved.
         std::array<glm::vec4, kDirectionalShadowLightCapacity>
             filterParameters{};
         // Blocker samples, filter samples, contact hardening, reserved.
         std::array<glm::uvec4, kDirectionalShadowLightCapacity>
             filterMetadata{};
-        // Raster constant/slope, receiver bias in shadow texels, reserved.
-        glm::vec4 biasParameters{ 0.5f, 1.0f, 1.25f, 0.0f };
+        // Raster constant/slope, receiver depth bias, normal offset; receiver
+        // terms are in the active cascade's world-shadow-texel footprint.
+        glm::vec4 biasParameters{ 0.5f, 1.0f, 1.25f, 0.5f };
     };
 
     static_assert(sizeof(VulkanDirectionalShadowData) == 720);
@@ -43,7 +45,8 @@ namespace Iridium {
         void init(VkDevice device, VulkanResourceAllocator& allocator,
             VulkanUploadContext& uploads, ::DescriptorAllocator& descriptors,
             VkDescriptorSetLayout materialLayout,
-            VkDescriptorSetLayout samplerLayout, uint32_t resolution);
+            VkDescriptorSetLayout samplerLayout,
+            VkDescriptorSetLayout gpuSceneLayout, uint32_t resolution);
         void cleanup() noexcept;
 
         void updateFrame(uint32_t frameIndex,
@@ -53,18 +56,22 @@ namespace Iridium {
         void endCascade(VkCommandBuffer commandBuffer) const;
 
         [[nodiscard]] VkPipeline pipeline(bool alphaMasked,
-            bool doubleSided) const noexcept;
+            bool doubleSided, bool gpuSceneIndirect = false) const noexcept;
         [[nodiscard]] VkPipelineLayout pipelineLayout() const noexcept {
             return pipelineLayout_;
         }
         [[nodiscard]] VkDescriptorSet renderDescriptor(uint32_t frameIndex) const;
+        [[nodiscard]] VkDescriptorSetLayout renderSetLayout() const noexcept {
+            return renderSetLayout_;
+        }
         [[nodiscard]] VkDescriptorImageInfo sampleImage() const noexcept;
         [[nodiscard]] VkDescriptorBufferInfo sampleBuffer(
             uint32_t frameIndex) const noexcept;
         [[nodiscard]] uint32_t resolution() const noexcept { return resolution_; }
 
     private:
-        VkPipeline createPipeline(bool alphaMasked, bool doubleSided);
+        VkPipeline createPipeline(bool alphaMasked, bool doubleSided,
+            bool gpuSceneIndirect);
         VkShaderModule createShaderModule(const char* relativePath) const;
 
         VkDevice device_ = VK_NULL_HANDLE;
@@ -76,7 +83,7 @@ namespace Iridium {
         std::array<VkFramebuffer, kDirectionalShadowLayerCount> framebuffers_{};
         VkDescriptorSetLayout renderSetLayout_ = VK_NULL_HANDLE;
         VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;
-        std::array<VkPipeline, 4> pipelines_{};
+        std::array<VkPipeline, 8> pipelines_{};
         std::array<VulkanBufferResource, 2> frameBuffers_{};
         std::array<VkDescriptorSet, 2> renderSets_{};
         ::DescriptorAllocator* descriptors_ = nullptr;

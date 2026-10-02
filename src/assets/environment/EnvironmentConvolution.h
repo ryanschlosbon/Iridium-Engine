@@ -68,4 +68,11 @@ namespace Iridium {
         const EnvironmentConvolutionSettings& settings,
         std::string toolVersion);
 
+    // Benchmark fixture product: exact constant radiance/prefilter and pi*L
+    // diffuse irradiance, with the shared reference split-sum BRDF integration.
+    // This is startup fixture construction, not a runtime HDRI import path.
+    [[nodiscard]] CookProduct makeConstantEnvironmentProduct(
+        const AssetGuid& sourceTextureGuid, glm::vec3 linearRec709Radiance,
+        uint32_t brdfLutSize = 256, uint32_t brdfSamples = 1024);
+
 } // namespace Iridium

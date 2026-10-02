@@ -50,10 +50,14 @@ namespace Iridium {
         bool separateTextureSamplers = false;
         bool descriptorUpdateAfterBind = false;
         bool gpuLightRecords = false;
+        bool multiDrawIndirect = false;
+        bool drawIndirectFirstInstance = false;
+        bool drawIndirectCount = false;
         uint32_t maxIndexedTextureViews = 0;
         uint32_t maxIndexedSamplers = 0;
         uint32_t maxUpdateAfterBindDescriptors = 0;
         uint32_t maxGpuLightRecords = 0;
+        uint32_t maxDrawIndirectCount = 0;
     };
 
     constexpr uint32_t indexElementSize(IndexFormat format) noexcept {

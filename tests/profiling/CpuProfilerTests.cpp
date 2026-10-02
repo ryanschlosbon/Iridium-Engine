@@ -1,5 +1,6 @@
 #include "profiling/CpuProfileExport.h"
 #include "profiling/CpuProfiler.h"
+#include "profiling/TransparencyProfilePresentation.h"
 #include "profiling/GpuTimestamp.h"
 
 #include <nlohmann/json.hpp>
@@ -58,6 +59,39 @@ namespace {
         CHECK(!profiler.endFrame());
         CHECK(profiler.completedFrameCount() == 0);
         CHECK(profiler.snapshotCompletedFrames().empty());
+        return true;
+    }
+
+    bool testTransparencyPresentationClassification() {
+        CHECK(transparencyProfileGroup("transparent.class.thin_glass") ==
+            TransparencyProfileGroup::Routing);
+        CHECK(transparencyProfileGroup("transparent.pyramid.builds") ==
+            TransparencyProfileGroup::Refraction);
+        CHECK(transparencyProfileGroup(
+            "transparent.ordinary2.atlas.accepted_packets") ==
+            TransparencyProfileGroup::Ordinary2);
+        CHECK(transparencyProfileGroup(
+            "transparent.layered.deep.atlas.rejected_packets") ==
+            TransparencyProfileGroup::DeepLayered);
+        CHECK(transparencyProfileGroup("transparent.oit.instances") ==
+            TransparencyProfileGroup::WeightedOit);
+        CHECK(transparencyProfileGroup(
+            "draw.recorded.transparent.oit.resolve") ==
+            TransparencyProfileGroup::WeightedOit);
+        CHECK(transparencyProfileGroup(
+            "transparent.bucket.background_packets") ==
+            TransparencyProfileGroup::LegacyComparison);
+        CHECK(transparencyProfileGroup("draw.recorded.opaque") ==
+            TransparencyProfileGroup::None);
+        CHECK(isTransparencyRiskCounter(
+            "transparent.ordinary2.fallback.near_plane_packets"));
+        CHECK(isTransparencyRiskCounter(
+            "transparent.layered.deep.atlas.rejected_packets"));
+        CHECK(!isTransparencyRiskCounter(
+            "transparent.ordinary2.atlas.accepted_packets"));
+        CHECK(!isTransparencyRiskCounter("material.unique_overflow"));
+        CHECK(isTransparencyGpuRange("gpu.transparency.oit.accumulate"));
+        CHECK(!isTransparencyGpuRange("gpu.gbuffer.opaque"));
         return true;
     }
 
@@ -124,8 +158,8 @@ namespace {
     }
 
     bool testOverflowAndActiveScopeDrop() {
-        static_assert(CpuProfiler::MaxCountersPerFrame >= 192,
-            "production profiling requires M5 counter headroom");
+        static_assert(CpuProfiler::MaxCountersPerFrame >= 320,
+            "production profiling requires M6 counter headroom");
         CpuProfiler profiler(true);
         CHECK(profiler.beginFrame());
         for (size_t event = 0; event < CpuProfiler::MaxEventsPerFrame + 8; ++event) {
@@ -441,6 +475,18 @@ namespace {
     }
 
     bool testMemoryProfileAccounting() {
+        CHECK(std::string_view(profileMemoryCategoryName(
+            ProfileMemoryCategory::VirtualShadowPageTable)) ==
+            "buffer.shadow.virtual.page_table");
+        CHECK(std::string_view(profileMemoryCategoryName(
+            ProfileMemoryCategory::VirtualShadowPhysicalPool)) ==
+            "image.shadow.virtual.physical_pool");
+        CHECK(std::string_view(profileMemoryLifetimeClass(
+            ProfileMemoryCategory::VirtualShadowPhysicalPool)) ==
+            "persistent");
+        CHECK(std::string_view(profileMemoryCategoryName(
+            ProfileMemoryCategory::VirtualShadowWorkingSet)) ==
+            "buffer.shadow.virtual.working_set");
         MemoryProfileAccumulator accumulator;
         ProfileMemoryAllocation texture{};
         ProfileMemoryAllocation staging{};
@@ -577,6 +623,8 @@ int main() {
 
     constexpr TestCase tests[] = {
         { "Disabled behavior", testDisabledBehavior },
+        { "Transparency presentation classification",
+            testTransparencyPresentationClassification },
         { "Nesting and counters", testNestingAndCounters },
         { "Concurrent collection", testConcurrentCollection },
         { "Overflow and active-scope drop", testOverflowAndActiveScopeDrop },

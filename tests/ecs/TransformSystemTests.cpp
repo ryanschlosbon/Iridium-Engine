@@ -4,6 +4,7 @@
 #include "scene/components/TransformComponent.h"
 
 #include <exception>
+#include <algorithm>
 #include <iostream>
 
 namespace {
@@ -55,6 +56,32 @@ namespace {
         return true;
     }
 
+    bool testChangedEntityJournalIncludesPropagatedChildren() {
+        Registry registry;
+        TransformSystem system;
+        const Entity parent = registry.createEntity();
+        const Entity child = registry.createEntity();
+        registry.addComponent<TransformComponent>(parent);
+        registry.addComponent<TransformComponent>(child);
+        auto& parentRelationship = registry.addComponent<RelationshipComponent>(parent);
+        parentRelationship.children.push_back(child);
+        auto& childRelationship = registry.addComponent<RelationshipComponent>(child);
+        childRelationship.parent = parent;
+        childRelationship.depth = 1;
+        std::vector<Entity> changed;
+        CHECK(system.update(registry, &changed) == 2);
+        CHECK(changed.size() == 2);
+        CHECK(std::ranges::find(changed, parent) != changed.end());
+        CHECK(std::ranges::find(changed, child) != changed.end());
+        CHECK(system.update(registry, &changed) == 0);
+        CHECK(changed.empty());
+        registry.getComponent<TransformComponent>(parent).setPosition(
+            { 3.0f, 0.0f, 0.0f });
+        CHECK(system.update(registry, &changed) == 2);
+        CHECK(changed.size() == 2);
+        return true;
+    }
+
 } // namespace
 
 int main() {
@@ -65,6 +92,8 @@ int main() {
     constexpr TestCase tests[] = {
         { "Orphan changed count", testOrphanChangedCount },
         { "Hierarchy propagation count", testHierarchyPropagationCount },
+        { "Changed entity journal includes propagated children",
+            testChangedEntityJournalIncludesPropagatedChildren },
     };
 
     size_t failures = 0;

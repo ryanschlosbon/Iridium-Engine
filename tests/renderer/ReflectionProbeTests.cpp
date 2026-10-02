@@ -552,14 +552,16 @@ namespace {
         CHECK(first.entries[0].scheduledFaceMask != 0);
         CHECK(first.entries[1].owner == baked.owner);
         CHECK(first.entries[1].scheduledFaceMask == 0);
+        const uint64_t pendingTicket = first.entries[0].captureTicket;
         scheduler.markScheduledFacesRendered();
 
         realtime.sceneRevision = 1;
         const std::array changed{ baked, realtime };
-        const auto& invalidated = scheduler.schedule(changed);
-        CHECK(invalidated.stats.capturesInvalidated == 1);
-        CHECK(invalidated.stats.capturesStarted == 1);
-        CHECK(invalidated.entries[0].dirtyReason ==
+        const auto& continued = scheduler.schedule(changed);
+        CHECK(continued.stats.capturesInvalidated == 0);
+        CHECK(continued.stats.capturesStarted == 0);
+        CHECK(continued.entries[0].captureTicket == pendingTicket);
+        CHECK(continued.entries[0].dirtyReason ==
             ReflectionProbeCaptureDirtyReason::NewProbe);
         scheduler.markScheduledFacesRendered();
 
@@ -611,6 +613,45 @@ namespace {
         scheduler.markScheduledFacesRendered();
         return true;
     }
+
+    bool realtimeCaptureCompletesAcrossChangingDependencies() {
+        ReflectionProbeCaptureScheduler scheduler({
+            .maximumRenderedTexels = 128ull * 128ull,
+            .maximumFacesPerProbePerFrame = 1,
+            .maximumCapturesInFlight = 1,
+            .minimumRealtimeFramesBetweenCaptures = 6,
+        });
+        auto request = captureRequest(1,
+            ReflectionProbeUpdateMode::Realtime);
+        request.resolution = 128;
+        uint64_t ticket = 0;
+        for (uint64_t face = 0; face < 6; ++face) {
+            request.sceneRevision = face + 1;
+            request.frameIndex = face;
+            const auto& schedule = scheduler.schedule(
+                std::span(&request, 1));
+            CHECK(schedule.stats.facesScheduled == 1);
+            CHECK(schedule.stats.capturesInvalidated == 0);
+            if (face == 0) ticket = schedule.entries[0].captureTicket;
+            CHECK(schedule.entries[0].captureTicket == ticket);
+            scheduler.markScheduledFacesRendered();
+        }
+        const auto ready = scheduler.publicationsReady();
+        CHECK(ready.size() == 1);
+        CHECK(ready[0].captureTicket == ticket);
+        CHECK(ready[0].capturedRequest.sceneRevision == 1);
+        scheduler.markPublished(request.owner, ticket);
+
+        request.sceneRevision = 99;
+        request.frameIndex = 30;
+        const auto& refresh = scheduler.schedule(std::span(&request, 1));
+        CHECK(refresh.entries[0].dirtyReason ==
+            ReflectionProbeCaptureDirtyReason::SceneChanged);
+        CHECK(refresh.entries[0].captureTicket != ticket);
+        CHECK(refresh.stats.facesScheduled == 1);
+        scheduler.markScheduledFacesRendered();
+        return true;
+    }
 }
 
 int main() {
@@ -647,6 +688,8 @@ int main() {
             captureSchedulerHonorsModesInvalidationAndBudgets },
         { "realtime capture cadence bounds automatic refresh",
             realtimeCaptureCadenceBoundsAutomaticRefresh },
+        { "realtime capture completes across changing dependencies",
+            realtimeCaptureCompletesAcrossChangingDependencies },
     };
     for (const auto& test : tests) {
         std::cout << "[ RUN      ] " << test.name << '\n';

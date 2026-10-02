@@ -2,6 +2,7 @@
 
 #include "DescriptorAllocator.h"
 #include "VkContext.h"
+#include "renderer/rhi/ViewportGridOverlay.h"
 
 #include <vulkan/vulkan.h>
 
@@ -29,7 +30,8 @@ namespace Iridium {
             VkFramebuffer framebuffer, VkExtent2D extent,
             float manualExposureEv, uint32_t outputOperator,
             uint32_t outputTransport, float paperWhiteNits,
-            float peakNits, bool selectionActive) const;
+            float peakNits, bool selectionActive,
+            const ViewportGridOverlay& gridOverlay) const;
         void cleanup();
 
         [[nodiscard]] VkRenderPass renderPass() const noexcept {

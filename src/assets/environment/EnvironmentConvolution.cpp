@@ -653,6 +653,27 @@ ConvolvedEnvironment convolveEnvironmentReference(
     return result;
 }
 
+CookProduct makeConstantEnvironmentProduct(const AssetGuid& sourceTextureGuid,
+    glm::vec3 linearRec709Radiance, uint32_t brdfLutSize, uint32_t brdfSamples) {
+    const EnvironmentConvolutionSettings settings{
+        .radianceSize = 1, .irradianceSize = 1, .prefilteredSize = 1,
+        .brdfLutSize = brdfLutSize, .prefilteredSamples = 1,
+        .brdfSamples = brdfSamples,
+    };
+    const EnvironmentFloatImage source{
+        .width = 1, .height = 1,
+        .pixels = { glm::vec4(linearRec709Radiance, 1.0f) },
+    };
+    ConvolvedEnvironment environment = convolveEnvironmentReference(source, settings);
+    const glm::vec3 radiance(environment.radiance.mips.front().front());
+    // One source texel suffices for a constant function. Use its analytic
+    // cosine integral instead of the directional SH estimate for that texel.
+    for (glm::vec4& irradiance : environment.irradiance.mips.front())
+        irradiance = glm::vec4(Pi * radiance, 1.0f);
+    return makeConvolvedEnvironmentProduct(sourceTextureGuid, environment,
+        settings, "iridium.benchmark.constant_environment.v1");
+}
+
 std::vector<std::byte> makeCapturedCubeDiffuseIrradiance(
     std::span<const std::byte> radianceRgba16, uint32_t radianceSize,
     uint32_t irradianceSize) {

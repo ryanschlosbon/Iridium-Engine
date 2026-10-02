@@ -35,10 +35,12 @@ namespace {
 void VulkanReflectionProbeCapturePass::init(VkDevice device,
     VkPhysicalDevice physicalDevice, VulkanResourceAllocator& allocator,
     ::DescriptorAllocator& descriptors, VkDescriptorSetLayout materialLayout,
-    VkDescriptorSetLayout samplerLayout, VkDescriptorSetLayout sceneLayout) {
+    VkDescriptorSetLayout samplerLayout, VkDescriptorSetLayout sceneLayout,
+    VkDescriptorSetLayout gpuSceneLayout) {
     if (device_ != VK_NULL_HANDLE || device == VK_NULL_HANDLE ||
         physicalDevice == VK_NULL_HANDLE || materialLayout == VK_NULL_HANDLE ||
-        samplerLayout == VK_NULL_HANDLE || sceneLayout == VK_NULL_HANDLE)
+        samplerLayout == VK_NULL_HANDLE || sceneLayout == VK_NULL_HANDLE ||
+        gpuSceneLayout == VK_NULL_HANDLE)
         throw std::invalid_argument(
             "Invalid reflection-probe capture-pass initialization");
     device_ = device;
@@ -104,7 +106,8 @@ void VulkanReflectionProbeCapturePass::init(VkDevice device,
 
         const VkDescriptorSetLayoutBinding captureBinding{ 0,
             VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1,
-            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT |
+                VK_SHADER_STAGE_COMPUTE_BIT,
             nullptr };
         VkDescriptorSetLayoutCreateInfo captureLayout{
             VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
@@ -127,10 +130,21 @@ void VulkanReflectionProbeCapturePass::init(VkDevice device,
         requireSuccess(vkCreatePipelineLayout(device_, &graphicsLayout,
             nullptr, &graphicsLayout_),
             "vkCreatePipelineLayout(reflection probe capture)");
+        const std::array gpuSceneLayouts{ captureLayout_, materialLayout,
+            samplerLayout, sceneLayout, gpuSceneLayout };
+        graphicsLayout.setLayoutCount =
+            static_cast<uint32_t>(gpuSceneLayouts.size());
+        graphicsLayout.pSetLayouts = gpuSceneLayouts.data();
+        requireSuccess(vkCreatePipelineLayout(device_, &graphicsLayout,
+            nullptr, &gpuSceneGraphicsLayout_),
+            "vkCreatePipelineLayout(GPU-scene reflection probe capture)");
         skyPipeline_ = createGraphicsPipeline(true, false, false);
-        for (uint32_t index = 0; index < pipelines_.size(); ++index)
+        for (uint32_t index = 0; index < pipelines_.size(); ++index) {
             pipelines_[index] = createGraphicsPipeline(false,
                 (index & 1u) != 0, (index & 2u) != 0);
+            gpuScenePipelines_[index] = createGraphicsPipeline(false,
+                (index & 1u) != 0, (index & 2u) != 0, true);
+        }
 
         VkPhysicalDeviceProperties properties{};
         vkGetPhysicalDeviceProperties(physicalDevice, &properties);
@@ -228,10 +242,12 @@ VkShaderModule VulkanReflectionProbeCapturePass::createShaderModule(
 }
 
 VkPipeline VulkanReflectionProbeCapturePass::createGraphicsPipeline(bool sky,
-    bool, bool doubleSided) const {
+    bool, bool doubleSided, bool gpuScene) const {
     const VkShaderModule vertex = createShaderModule(sky
         ? "assets/shaders/reflection_probe_sky_vert.spv"
-        : "assets/shaders/reflection_probe_capture_vert.spv");
+        : gpuScene
+            ? "assets/shaders/reflection_probe_capture_gpu_scene_vert.spv"
+            : "assets/shaders/reflection_probe_capture_vert.spv");
     const VkShaderModule fragment = createShaderModule(sky
         ? "assets/shaders/reflection_probe_sky_frag.spv"
         : "assets/shaders/reflection_probe_capture_frag.spv");
@@ -302,7 +318,7 @@ VkPipeline VulkanReflectionProbeCapturePass::createGraphicsPipeline(bool sky,
         pipeline.pDepthStencilState = &depth;
         pipeline.pColorBlendState = &colorBlend;
         pipeline.pDynamicState = &dynamic;
-        pipeline.layout = graphicsLayout_;
+        pipeline.layout = gpuScene ? gpuSceneGraphicsLayout_ : graphicsLayout_;
         pipeline.renderPass = renderPass_;
         requireSuccess(vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1,
             &pipeline, nullptr, &result),
@@ -388,14 +404,28 @@ void VulkanReflectionProbeCapturePass::bindFaceDescriptors(
         graphicsLayout_, 3, 1, &sceneDescriptor, 0, nullptr);
 }
 
+void VulkanReflectionProbeCapturePass::bindFaceComputeDescriptor(
+    VkCommandBuffer commandBuffer, VkPipelineLayout pipelineLayout,
+    uint32_t frameIndex, uint32_t recordIndex) const {
+    if (frameIndex >= faceDescriptors_.size() ||
+        pipelineLayout == VK_NULL_HANDLE)
+        throw std::out_of_range(
+            "Reflection-probe compute face descriptor is invalid");
+    const uint32_t offset = static_cast<uint32_t>(dynamicOffset(recordIndex));
+    vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+        pipelineLayout, 0u, 1u, &faceDescriptors_[frameIndex], 1u, &offset);
+}
+
 void VulkanReflectionProbeCapturePass::endFace(
     VkCommandBuffer commandBuffer) const {
     vkCmdEndRenderPass(commandBuffer);
 }
 
 VkPipeline VulkanReflectionProbeCapturePass::pipeline(bool alphaMasked,
-    bool doubleSided) const noexcept {
-    return pipelines_[(doubleSided ? 2u : 0u) | (alphaMasked ? 1u : 0u)];
+    bool doubleSided, bool gpuScene) const noexcept {
+    const uint32_t index = (doubleSided ? 2u : 0u) |
+        (alphaMasked ? 1u : 0u);
+    return gpuScene ? gpuScenePipelines_[index] : pipelines_[index];
 }
 
 std::vector<VkDescriptorSet>
@@ -611,10 +641,15 @@ void VulkanReflectionProbeCapturePass::cleanup() noexcept {
     for (VkPipeline pipeline : pipelines_)
         if (pipeline != VK_NULL_HANDLE)
             vkDestroyPipeline(device_, pipeline, nullptr);
+    for (VkPipeline pipeline : gpuScenePipelines_)
+        if (pipeline != VK_NULL_HANDLE)
+            vkDestroyPipeline(device_, pipeline, nullptr);
     if (skyPipeline_ != VK_NULL_HANDLE)
         vkDestroyPipeline(device_, skyPipeline_, nullptr);
     if (graphicsLayout_ != VK_NULL_HANDLE)
         vkDestroyPipelineLayout(device_, graphicsLayout_, nullptr);
+    if (gpuSceneGraphicsLayout_ != VK_NULL_HANDLE)
+        vkDestroyPipelineLayout(device_, gpuSceneGraphicsLayout_, nullptr);
     if (captureLayout_ != VK_NULL_HANDLE)
         vkDestroyDescriptorSetLayout(device_, captureLayout_, nullptr);
     if (renderPass_ != VK_NULL_HANDLE)

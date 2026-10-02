@@ -14,6 +14,8 @@ struct PointShadowEntry {
     vec4 lightPositionFar;
     uvec4 metadata;
     vec4 depthBias;
+    vec4 filterParameters;
+    uvec4 filterMetadata;
 };
 
 layout(std140, set = 0, binding = 0) uniform PointShadowData {

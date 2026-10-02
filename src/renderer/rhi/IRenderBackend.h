@@ -14,6 +14,11 @@
 #include "renderer/lighting/ReflectionProbeCapture.h"
 #include "ShadowTypes.h"
 #include "RenderBackendRuntimeInfo.h"
+#include "ViewportGridOverlay.h"
+#include "GpuScene.h"
+#include "GeometryArena.h"
+#include "DepthPyramid.h"
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -26,6 +31,39 @@
 struct GLFWwindow;
 
 namespace Iridium {
+
+    // Shadow consumers address persistent scene geometry through the same
+    // frame-local dense primitive indices used by GPU-scene indirect work.
+    // Packets remain only as an explicit compatibility path for producers
+    // that could not enter the persistent publication.
+    struct ShadowCasterSubmission {
+        std::span<const uint32_t> gpuScenePrimitiveIndices;
+        std::span<const DrawPacket> directPackets;
+        uint64_t membershipRevision = 0;
+
+        [[nodiscard]] constexpr size_t size() const noexcept {
+            return gpuScenePrimitiveIndices.size() + directPackets.size();
+        }
+        [[nodiscard]] constexpr bool empty() const noexcept {
+            return size() == 0u;
+        }
+    };
+
+    // Reflection captures are an independent visibility consumer. Dense
+    // references come from GpuSceneConsumerProbe rather than either main-view
+    // queue; packets remain only for publication fallback.
+    struct ReflectionProbeCasterSubmission {
+        std::span<const uint32_t> gpuScenePrimitiveIndices;
+        std::span<const DrawPacket> directPackets;
+        uint64_t membershipRevision = 0;
+
+        [[nodiscard]] constexpr size_t size() const noexcept {
+            return gpuScenePrimitiveIndices.size() + directPackets.size();
+        }
+        [[nodiscard]] constexpr bool empty() const noexcept {
+            return size() == 0u;
+        }
+    };
 
     struct EnvironmentLightingHandles {
         TextureHandle radiance;
@@ -59,6 +97,7 @@ namespace Iridium {
         bool ordinary2LayeredInterfaces = false;
         bool hero4LayeredInterfaces = false;
         bool cinematic8LayeredInterfaces = false;
+        bool weightedOit = false;
     };
 
     struct FrameTopologyPreparation {
@@ -79,6 +118,10 @@ namespace Iridium {
         virtual void init(GLFWwindow* window, const RenderBackendConfig& config) = 0;
         virtual void cleanup() = 0;
         virtual void recreateSwapchain(GLFWwindow* window) = 0;
+        // Changes presentation transport at a frame boundary while preserving
+        // scene, material, geometry, and texture residency.
+        virtual void setOutputTransport(GLFWwindow* window,
+            Color::OutputTransport requestedTransport) = 0;
         [[nodiscard]] virtual RenderExtent getRenderExtent() const = 0;
         // Changes only scene/offscreen targets. Presentation remains owned by
         // the swapchain. On failure the previous extent must remain active.
@@ -98,6 +141,16 @@ namespace Iridium {
 
         // Performs fence-safe capacity growth before beginFrame acquires a slot.
         virtual void prepareLighting(uint32_t requiredCapacity) = 0;
+        // Grows fence-owned persistent scene tables before a frame slot is
+        // acquired. Publication then updates only revision-mismatched ranges
+        // in the acquired context.
+        virtual void prepareGpuScene(
+            const GpuSceneCapacityRequirements& requirements) = 0;
+        virtual void publishGpuScene(const GpuScenePackedTables& scene) = 0;
+        [[nodiscard]] virtual GpuSceneFrameSerials
+            getGpuSceneFrameSerials() const noexcept = 0;
+        [[nodiscard]] virtual GpuSceneUploadTelemetry
+            getGpuSceneUploadTelemetry() const noexcept = 0;
         // Grows fence-owned probe records/cluster products and publishes the
         // abstract local-environment table before beginFrame acquires a slot.
         virtual void prepareReflectionProbes(uint32_t requiredCapacity,
@@ -116,25 +169,27 @@ namespace Iridium {
         // Prepares swapchains, acquires the next image, and resets command buffers
         virtual FrameStatus beginFrame() = 0;
 
-        virtual void updateCamera(const ViewTransportRecord& view) = 0;
+        virtual void updateCamera(const ViewTransportRecord& view,
+            ViewHistoryContext history = {}) = 0;
         virtual void setDebugView(RenderDebugView view) = 0;
         virtual void setOutputSettings(float manualExposureEv,
             float paperWhiteNits, float peakNits) = 0;
+        virtual void setViewportGridOverlay(
+            const ViewportGridOverlay& overlay) = 0;
 
         // Persistent cached directional shadow storage is updated before any
         // opaque/forward consumer reads it. An empty packet disables sampling.
         virtual void submitDirectionalShadows(
-            std::span<const DrawPacket> shadowCasters,
+            const ShadowCasterSubmission& shadowCasters,
             std::span<const DirectionalShadowFramePacket> shadows) = 0;
         virtual void submitSpotShadows(
-            std::span<const DrawPacket> shadowCasters,
+            const ShadowCasterSubmission& shadowCasters,
             std::span<const SpotShadowFramePacket> shadows) = 0;
         virtual void submitPointShadows(
-            std::span<const DrawPacket> shadowCasters,
+            const ShadowCasterSubmission& shadowCasters,
             std::span<const PointShadowFramePacket> shadows) = 0;
         virtual void submitReflectionProbeCaptures(
-            std::span<const DrawPacket> opaqueCasters,
-            std::span<const DrawPacket> complexOpaqueCasters,
+            const ReflectionProbeCasterSubmission& probeCasters,
             std::span<const ReflectionProbeCaptureScheduleEntry> captures,
             const LightingFramePacket& lights) = 0;
         [[nodiscard]] virtual ReflectionProbeCaptureTelemetry
@@ -142,7 +197,21 @@ namespace Iridium {
         // Opaque cache key over caster geometry, transforms, pipeline state,
         // and backend-owned material revisions. It carries no Vulkan identity.
         [[nodiscard]] virtual uint64_t getShadowCasterRevision(
-            std::span<const DrawPacket> shadowCasters) const noexcept = 0;
+            const ShadowCasterSubmission& shadowCasters) const noexcept = 0;
+        // Cache identities for the independent conservative caster membership
+        // of each directional cascade. Backend material revisions are included.
+        [[nodiscard]] virtual std::array<uint64_t,
+            kDirectionalShadowCascadeCount>
+            getDirectionalShadowCasterRevisions(
+                const ShadowCasterSubmission& shadowCasters,
+                const DirectionalShadowCascadePlan& plan) const noexcept = 0;
+
+        // Freezes the complete depth-writing content identity before main-view
+        // compaction. Both queues contribute to the depth pyramid even though
+        // complex-forward raster is submitted later.
+        virtual void prepareDepthPyramidHistory(
+            std::span<const DrawPacket> opaqueQueue,
+            std::span<const DrawPacket> opaqueForwardQueue) {}
 
         // Pass 1: Draws opaque meshes to the G-Buffer (Normal, Albedo, Depth)
         virtual void submitOpaqueQueue(std::span<const DrawPacket> opaqueQueue,
@@ -165,7 +234,8 @@ namespace Iridium {
         virtual void submitForwardQueues(
             std::span<const DrawPacket> opaqueForwardQueue,
             std::span<const DrawPacket> sortedSurfaceQueue,
-            std::span<const DrawPacket> compatibilityTransparentQueue) = 0;
+            std::span<const DrawPacket> compatibilityTransparentQueue,
+            std::span<const glm::mat4> instanceTransforms = {}) = 0;
 
         // Records an asynchronous readback of the post-transparency scene image.
         // The call itself does not wait for GPU completion. Completed captures may
@@ -186,6 +256,10 @@ namespace Iridium {
             uint64_t validationId, TransparencyQuality quality) = 0;
         [[nodiscard]] virtual std::vector<DeepLayeredCaptureValidationResult>
             collectDeepLayeredCaptureValidations(bool waitForPending) = 0;
+        virtual void requestDepthPyramidCaptureValidation(
+            uint64_t validationId) = 0;
+        [[nodiscard]] virtual std::vector<DepthPyramidCaptureValidationResult>
+            collectDepthPyramidCaptureValidations(bool waitForPending) = 0;
 
         // Pass 4: Maps scene-linear color into the selected display output.
         virtual void submitOutputPass() = 0;
@@ -214,6 +288,15 @@ namespace Iridium {
             std::span<const std::byte> vertexBytes,
             std::span<const std::byte> indexBytes) = 0;
         virtual void freeGeometry(GeometryHandle handle) = 0;
+        // Allocates one shared vertex stream and split index streams. Each
+        // primitive handle carries its base-vertex binding internally so the
+        // established DrawPacket ABI remains unchanged.
+        virtual GeometryArenaAllocation allocateGeometryArena(
+            uint32_t vertexStride,
+            std::span<const std::byte> vertexBytes,
+            const GeometryArenaData& arena) = 0;
+        virtual void freeGeometryArena(
+            std::span<const GeometryHandle> primitiveGeometry) = 0;
 
         // --- TEXTURES ---
         virtual TextureHandle allocateTexture(const TextureDesc& desc,
@@ -230,6 +313,11 @@ namespace Iridium {
 
         virtual void setEnvironmentLighting(
             const EnvironmentLightingHandles& environment) = 0;
+        [[nodiscard]] virtual EnvironmentLightingHandles getEnvironmentLighting() const { return {}; }
+        // Serially rendered views share transient work, retaining independent outputs.
+        // Preparation is a between-frames operation; view indices are 0 and 1.
+        virtual void prepareRetainedViews(bool enabled, uint32_t renderView) {}
+        [[nodiscard]] virtual void* getRetainedViewTextureID(uint32_t view) { return nullptr; }
         virtual void setEnvironmentLightingSettings(
             const EnvironmentLightingSettings&) {}
         virtual void setOutputTransformLut(TextureHandle lutHandle) = 0;

@@ -64,6 +64,77 @@ These facts must be revalidated as the refactor continues.
   indexed texture-view and sampler tables. Descriptor indexing is a required
   high-end capability; material capacity is derived from device limits rather than
   fixed at 4,096.
+- M7.6 accepts a workload-selectable previous-frame Hi-Z route. Per-view persistent
+  R32 histories are built in place after fused GPU-scene compaction consumes the
+  preceding contents. Camera/depth-content/resize changes and small or uncertain
+  bounds fail visible. A controlled native-4K depth stack removes 79.4090% of
+  opaque commands and reduces complete GPU median by 0.661920 ms with identical
+  scene bytes. Qualification-only CPU/device oracles remain available under
+  validation but are absent from the deployable path; global default remains off.
+- M7.7 is accepted and M7.8 is active. M7.7's first conventional-shadow slice caps directional coverage by
+  project/profile policy instead of a distant camera far plane, retains stable
+  practical/log splits, reports per-cascade world units per texel, reconstructs
+  PCSS filter comparisons bilinearly, and makes the Cinematic project tier
+  reachable. Its second accepted slice adds bounded receiver-plane correction and
+  a geometric-normal offset in cascade world-texel units. A matched grazing fixture
+  removes severe self-shadow striping without increasing global raster bias or
+  changing measured deferred-lighting median cost. Its third accepted slice builds
+  a conservative caster set per refreshed directional cascade before Vulkan draw
+  recording; a moving-grid fixture rejects 162/192 caster-cascade pairs while the
+  established contact capture remains byte-identical. A follow-up replaces the
+  global directional caster cache key with four conservative revisions; an
+  enter-volume transition refreshes only two affected cascades and leaves two
+  cached/sampleable. Its fourth accepted slice replaces copied persistent caster
+  packets with compact, camera-independent GPU-scene primitive references for
+  directional, spot, and point shadows. The 48-primitive qualification scene uses
+  192 bytes of submission references, zero fallback packets, and preserves the
+  accepted contact image byte-for-byte. Its fifth accepted slice builds
+  directional-cascade commands on the device; all 30 qualification commands match
+  the CPU oracle with zero overflow, and paired direct/indirect captures are byte-
+  identical. Its sixth accepted correctness slice extends bounded device commands
+  to spot-atlas tiles and point-cube faces; 9 spot and 90 point-face commands match
+  their independent oracles with zero mismatch/overflow, and paired captures are
+  byte-identical. The follow-up completes oracle gating: production retains exact
+  delayed device counts/overflow checks but performs no CPU light-view tests for
+  wholly GPU-owned casters; validation or the explicit qualification switch
+  restores exact CPU comparison. Reflection capture now has its own compact probe-
+  consumer submission: the nine-primitive qualification uses 36 bytes instead of
+  2,160, self-excludes 18 owned primitive-face pairs, and processes the remaining
+  36 tests with zero invalid references. It matches the direct capture byte-for-
+  byte. Compact capture shading now resolves persistent transforms and materials
+  through a dedicated GPU-scene graphics pipeline; its isolated probe-only A/B
+  retains all 33 draws within one R16 scene-linear quantization step of the direct
+  path. Reflection capture now owns bounded device command storage; compute performs
+  conservative cube-face tests and stable-owner exclusion before indirect-count
+  submission. All 33 device commands match the CPU oracle with zero overflow, the
+  deployable route performs no GPU-owned CPU face tests, and its capture is unchanged.
+  The later reflection-sensitive warmed gate repairs multi-frame realtime capture
+  ticket progress and proves byte-identical 4K output at a 16-pixel probe bound,
+  but removes only 0.9263% of retained capture triangles with no repeatable
+  performance or memory win. That gate is complete without production admission:
+  probe LOD remains experimental/default-off and LOD0 remains global. Conventional directional/spot/point
+  device-command submission has separately passed its warmed heterogeneous gate.
+  Directional-shadow command construction now also owns an independent density-
+  based LOD selector driven by each cascade's measured world-units-per-texel. The
+  dense near/mid/far correctness fixture reduces 21 of 1,243 commands and 13,524
+  triangles at a 2-texel bound with exact command-oracle agreement and a byte-
+  identical LOD0 capture. Production performs no CPU caster tests or shadow-LOD
+  oracle work. The later native-4K warmed gate rejects production admission after
+  only a 1.2684% combined triangle reduction and no repeatable complete-path win,
+  so the global default remains LOD0. See
+  `docs/performance/M7.7-directional-shadow-lod-2026-09-14.md`.
+  Point-cube commands now also use a face-invariant radial shadow-texel selector.
+  A 2-texel dense-car checkpoint reduces 16 of 565 commands and 11,436 triangles
+  with exact command agreement, zero overflow, and a maximum scene-linear
+  difference of `5.96046448e-7`. The Release route records zero CPU point-caster
+  tests and oracle work. See
+  `docs/performance/M7.7-point-shadow-radial-lod-2026-09-14.md`.
+  Spotlight commands now evaluate the cooked error bound in the authored light
+  projection and atlas-tile texel density. The 2-texel checkpoint reduces 10 of
+  339 commands and 6,376 triangles with exact command agreement and a byte-
+  identical LOD0 capture. Production records zero CPU spotlight visibility/LOD
+  work. See
+  `docs/performance/M7.7-spot-shadow-projected-lod-2026-09-14.md`.
 
 ## Accepted architecture
 
@@ -136,7 +207,11 @@ SDR/scRGB/HDR10, selected-object captures, and Nsight frame replay pass. The fin
 proxy baseline is 0.455296 ms GPU and 0.631800 ms CPU with 893.159 MiB requested
 peak. The Project Settings editor exposes live exposure, paper white, and peak;
 `--output-transport scrgb` is the recommended Windows HDR editor startup mode and
-does not require exclusive fullscreen.
+does not require exclusive fullscreen. ADR-0013 post-M6 hardening now also exposes
+Auto/SDR/scRGB/HDR10 as a live Project Settings selector. It preserves resident scene
+assets while rebuilding only presentation-dependent resources at a frame boundary;
+Auto prefers scRGB, then HDR10, then SDR, and the ACES LUT follows the effective
+transport after negotiation or fallback.
 
 M3 was accepted on 2026-07-31. Read
 `docs/milestones/M3-acceptance-report-2026-07-31.md`, the completed execution plan,
@@ -451,13 +526,123 @@ measured frames at 1.680448 ms GPU-frame median-of-medians and 1.276928 ms summe
 transparency-range median-of-medians. Graph and live memory are identical across
 processes, with zero actual compatibility draws, rejects, preparation fallbacks,
 measured topology events, profiler errors, or dropped frames. M6.6 is complete.
-M6.7 is active with a backend-neutral WeightedOIT reference contract. It is
-explicit-only and nonrefractive, consumes premultiplied scene-linear AP1 radiance,
-uses bounded depth/coverage weights and a documented FP16 numerical envelope, and
-resolves weighted average through multiplicative revealage. Its exact native-4K
-logical target cost is 82,944,000 bytes per frame context with no owned depth. The
-foundation changes no visible rendering or default graph memory; Vulkan execution
-and particle/high-overdraw qualification remain open.
+M6.7 subsequently completed its backend-neutral WeightedOIT reference contract and conditional
+Vulkan graph storage. It is explicit-only and nonrefractive, consumes premultiplied
+scene-linear AP1 radiance, uses bounded depth/coverage weights and a documented FP16
+numerical envelope, and resolves weighted average through multiplicative revealage.
+Its opt-in graph products are one full-resolution `RGBA16F` accumulation image and
+one `R16F` revealage image per frame context, exactly 82,944,000 logical native-4K
+bytes with no owned depth. Active passes read opaque depth without writing it and sit
+after foreground transparency but before bloom; frame targets acquire both images.
+The live backend now prewarms or demand-enables this topology and retires it after
+120 inactive frames through the existing rollback-safe transparency rebuild. Explicit
+WeightedOIT packets bypass refraction pyramids and legacy glass. When resident they
+use additive FP16 weighted-color accumulation, multiplicative FP16 revealage, and a
+premultiplied fullscreen resolve into scene HDR; only the first dynamic-demand frame
+uses deterministic sorted fallback while topology activates. Default scene output
+and default graph memory remain unchanged. The tracked cooked
+`weighted_oit_particles_v1` fixture now covers 256 explicit emissive-16 particles in
+an 8x8x4 overlap grid. A corrected 1280x720 Debug run is Vulkan-clean with exactly
+256 accumulation draws, one resolve, zero sorted/compatibility draws, zero refraction
+or layered residency, and no profiler drops. The fixture exposed a graph-alias layout
+conflict in unreachable refraction descriptors, so WeightedOIT now compiles the
+non-applicable refraction transport and bindings out. Its pre-output scene-linear PFM
+at emissive 16 contains 921,600 finite pixels, zero nonfinite pixels, 142,884 active
+pixels, and a maximum AP1 component of 10.21875. A boundary fixture at emissive 256
+also cooks cleanly through importer v6 and produces
+921,600 finite pixels, zero nonfinite or FP16-limit pixels, identical active coverage,
+and a maximum AP1 component of 163.5. A single-process 300-frame native-4K Release
+baseline measures 4.005 ms CPU, 3.185 ms total GPU, 2.764 ms OIT
+accumulation, and 0.020 ms resolve medians. This is populated-path evidence, not final
+particle-system acceptance. An allocation-free seeded permutation control preserves
+production order at seed zero and exports the active seed in profiler evidence.
+Sixty-four independent validation processes have identical coverage and exact
+256/1/0 accumulation/resolve/fallback routing; all distinct scene-linear hashes stay
+within 0.046875 absolute AP1, 0.001718 RMSE, and 0.4587% relative error versus seed
+zero, closing the draw-order gate. The 4096/65536 tiers now publish one runtime
+entity and one backend-neutral transform-range packet each. At the 65,536 production
+bound, Debug validation uploads exactly 4 MiB, records one instanced draw, reports
+zero fallback, and reduces extraction/sort from 567.681/389.941 ms to
+0.261/0.0009 ms. Its finite scene-linear result remains within the frozen order-error
+envelope versus the explicit-packet baseline. This closes the high-overdraw gate;
+the populated path also survives three deterministic scene-target resizes with a
+byte-identical restored capture, and separate SDR/scRGB/HDR10 processes preserve
+exact routing with fully finite HDR output. Multi-process native-4K Release
+qualification passes across five processes and 50,000 measured frames:
+GPU-frame/accumulation/resolve median-of-medians are 3.182048/2.742272/0.020480 ms,
+with exact one-draw routing, identical memory, and no profiler loss. M6.7 is complete.
+M6.8 editor controls, diagnostics, and allocation hardening are complete. A
+backend-neutral compiled-policy diagnostic now exposes resolved route, topology
+state, fallback cause, and sanitization in headless snapshots, Material Diagnostics,
+and Asset Browser. Viewport/CLI Transparency Class and Transparency Fallback modes
+use per-view transport across opaque, Ordinary2/deep layered, and WeightedOIT paths;
+validation captures prove the expected class/fallback palettes without changing the
+final render path. Opaque cooked model primitives present a disabled compact result
+with transparency controls collapsed until an explicit stable-GUID override is
+checked; missing cook evidence never hides controls. The Profiler groups the complete
+transparency counter family, highlights nonzero fallback/rejection/overflow signals,
+and enumerates active `gpu.transparency.*` ranges dynamically. Measured interval,
+selected pyramid mip, retained layer count, and overflow/saturation views are now
+Vulkan-validated across Ordinary2, Cinematic8, and WeightedOIT. Exact pixel evidence
+matches independent deep-layer readback, and the diagnostic paths add no images,
+descriptors, or steady allocations. Persistent transform and shadow-mapping scratch,
+sorted owner validation, and static deep-pass identities reduce the inherited
+17-call/5,216-byte baseline to exact zero across 96 measured Release frames covering
+Ordinary2, Cinematic8, and WeightedOIT. The Vulkan validation capture is byte-identical
+to its pre-hardening reference, with the same 650 residual-tail pixels and no validation
+messages. M6.8 is complete. Asset import and
+transparency-policy edits now have an independent backend-neutral transaction history:
+apply/undo/redo each recook, history advances only after successful catalog completion,
+failed jobs do not move its cursor, divergence is rejected, and scene document state
+is unchanged. A real headless glTF apply/undo/redo test verifies sidecar persistence
+and stable root/primitive identity.
+M6.9 cutover now makes classified hybrid execution the production default for fresh
+schema-2 glTF imports and uninitialized cooked/runtime/draw records. Schema-1 retains
+its frozen legacy migration and historical settings/CookKeys remain readable, but the
+production runtime ignores serialized architecture selection. Artists see Classified
+hybrid as a fixed production renderer; `--developer-legacy-transparency` is the sole
+developer A/B override. It is applied before complete cooked-model publication so
+geometry routing, material feature flags and variants, shaders, passes, blend, and
+depth state change together. Vulkan validation of the same classified Ordinary2
+artifact proves the default exact one-draw entry/exit/composition/resolve path with
+5,888 paired pixels and a forced legacy one-depth/one-forward control with zero
+Ordinary2 work. Their final-SDR hashes differ. The production graph now omits the
+legacy `depth.glass` image and all four two-bucket passes; its base topology is
+19 passes, 26 logical resources, and 19 physical slots versus 22/27/20 under the
+developer override. The active 1280x720 Ordinary2 graph saves exactly 7,372,800
+requested and 7,864,320 committed bytes with byte-identical output. Rejected
+classified topology retains one direct compatibility-forward fallback with no depth
+prepass or legacy bucket. M6.9 final production qualification passes 71/71 tests in
+both Debug and Release. Five native-4K Ordinary2 processes cover 50,000 measured
+frames at 0.720192 ms GPU median-of-medians with zero retained-frame allocations or
+profiler loss; separate Cinematic8 and WeightedOIT profiles measure 1.612576 and
+2.657440 ms. Resize/lifecycle and SDR/scRGB/HDR10 validation are clean, and the Alfa
+capture is byte-identical to the accepted pre-cutover result. M6 is complete; see
+`docs/milestones/M6-acceptance-report-2026-08-27.md`.
+M6.10 then closes the editor workflow while keeping accepted benchmark output
+grid-free:
+viewport mesh picking is restored; the default adaptive metric grid, world SI unit,
+independent transform snaps with Ctrl bypass, and world/local gizmo space live in an
+editor-only settings record. Inspector positions and light distances follow the world
+unit, light intensity is uncapped with lux/kilolux and candela/lumen presentation, and
+components/properties are searchable. Asset folders support grid/tree nesting and a
+persistent custom tree order, while model subassets expand into an attached horizontal
+thumbnail strip. A benchmark metadata fixture was renamed away from `.iridium.meta`,
+removing six false live sidecars and leaving the asset catalog with zero duplicate
+GUID diagnostics. The world grid subsequently moved from finite ImGui lines to a
+procedural output-overlay contract: it is unbounded, derivative-filtered, fades at
+grazing/horizon angles, and uses the production opaque depth attachment so foreground
+geometry occludes it. Benchmark, asset-preview, and capture output keep the grid off.
+Asset Browser model drops into the viewport are grounded at world `Y = 0`, including
+parallel/above-horizon ray fallback. Contextual shortcuts now use semantic modifier
+groups: Alt owns viewport presentation/tools, beginning with **Alt+G** for grid
+visibility. The binding is focused-viewport-only and yields to text input, active
+widgets, gizmo manipulation, and popups.
+Earlier M6.7 default-topology qualification measured
+0.922 ms CPU and 0.460 ms GPU medians with zero OIT work. That qualification run
+published 207 counters; the always-emitted order-seed evidence counter brings the
+current default to 208. The profiler's bounded capacity is now 256, removing the
+observed 15-counter loss without adding steady-frame allocation.
 The durable post-M5 lead context for M6 is
 `docs/milestones/M6-hybrid-transparency-handover-2026-08-13.md`. It records the
 current two-bucket/depth-copy glass bridge, the headlamp-alpha corrective behavior,
@@ -472,11 +657,290 @@ ceiling. It remains unqualified CPU/GPU evidence because the title uses a coarse
 window and mailbox acquire/present waits can still contribute. Freeze and profile
 the exact three-asset scene at native 4K Release before assigning the delta to
 geometry, materials, shadows, transparency, or CPU submission.
-Current source creates and sorts one CPU draw packet per enabled opaque submesh,
-issues direct indexed draws, has no general opaque frustum/Hi-Z path, and does not
-populate the cooked LOD/meshlet section slots. Near-linear scaling with authored
-primitive, triangle, complex-forward, transparent, and shadow-caster work is
-therefore expected until M7/M8.
+Current source publishes persistent generation-safe GPU-scene records, performs
+device-compute main-view frustum compaction into indirect commands, and can populate
+parent-contained bounded-error LOD chains behind explicit experimental importer and
+runtime settings. The representative topology-transactional cook covers 289,619 of
+301,966 opaque triangles and reduces native-4K lit main-view triangles by 7.7677% at
+the 2-pixel candidate ceiling with exact device/oracle selection. Default rendering
+remains LOD0. The expanded near/mid/far and 240-frame motion/cut gates are
+validation-clean and temporally stable. Exact CPU LOD command reconstruction now runs
+only under validation or an explicit qualification switch, while the GPU selector
+reuses invariant bounds projection across each chain. This repairs the initial 1.5206%
+native-4K wall regression to effective parity (+0.0378%) at 2.8282% triangle
+reduction, but complete GPU median remains 0.5642% higher and candidate tails regress
+on that small workload. A qualification-only physical residency floor now
+removes fine index ranges before upload and rebinds the canonical primitive identity
+to the first retained coarser range. The native-4K floor-one gate withholds 1,737,714
+bytes across 70 chains, retains 303 commands with zero fallback or mismatch, and
+changes 0.143856% of the LOD0 image at 0.9999913623 mean luma SSIM. The frozen
+256-instance stress workload admits generated main-view LOD as workload-selectable:
+2-pixel selection removes 24.5102% of 51,612,672 triangles, improves median complete-
+frame wall time by 0.310995 ms (1.4487%), improves CPU/GPU medians and tails, and
+retains identical memory plus exact validation/oracle results. One of five matched
+pairs reverses, and the small-workload control does not win, so global rendering
+remains LOD0 rather than forcing generated LOD on every scene. M7.5, M7.6, and M7.7
+are accepted; M7.8 is active. The parent vertex stream remains resident; independent
+vertex/index child CookKeys, asynchronous streaming, and shadow/probe visibility
+remain later M7 work. M8 meshlet sections are not yet populated. See
+`docs/performance/M7.5-lod-oracle-separation-2026-09-02.md`,
+`docs/performance/M7.5-physical-coarser-residency-2026-09-02.md`, and
+`docs/performance/M7.5-material-workload-admission-2026-09-02.md`.
+M7.6 now has a backend-neutral conservative depth-pyramid oracle, an opt-in live
+Vulkan farthest-depth build, persistent scene/asset-view histories, exact live
+source/history readback, and versioned device query shaders. Forward/reverse
+reduction, odd-extent coverage and bounded 2x2 sampling match across 3,640 hardware
+queries. Complete deferred-opaque plus depth-writing-forward ownership is computed
+before opaque compaction. The additional default-off live-query path records
+requested/projected/tested/would-reject/invalid/fail-visible diagnostics but still
+submits every draw. Its first synchronized dense run tests 288 candidates, reports
+34 `would_reject`, retains 15 projection failures, and has zero invalid results per
+frame. A second qualification shader now projects directly from live GPU-scene
+tables and checks every fence-delayed verdict against the independently CPU-projected
+safety route. Overlap/cut, off-frustum, and output-transport rebuild runs have zero
+invalid records and zero unsafe mismatches; conservative GPU margins intentionally
+retain more marginal candidates. A separately explicit rejection variant now consumes
+only valid matching verdicts during opaque compaction. It removes 73 of 404 pre-cut
+commands and 42 of 404 post-cut commands in the frozen temporal fixture, fails visible
+on the cut, preserves current-build image bytes, and maintains exact per-bin oracle
+parity. Off-frustum and output-transport rebuild runs are exact. A follow-up fuses
+projection/query/result emission with compaction, shares one implementation with the
+standalone oracle, and uses a sampler-free base pipeline whenever history is invalid.
+The second dispatch and barrier are gone. This is still not production admission:
+fused local work is about 0.0025–0.0047 ms above base compaction plus query in the
+current small fixture, and the 4K pairs retain unrelated pass/GPU-state variance.
+Selected moving-occluder, moving-occludee, and disocclusion fixtures now reject
+history exactly once as `DepthContentChanged`, recover on the next frame, preserve
+byte-identical query/rejection captures, and maintain exact device/oracle parity.
+The subpixel fixture now retains 101/101 commands as exact `SmallBounds` fail-visible
+results, and a selected visibility step rejects stale ownership as
+`DepthContentChanged`, retains the full
+transition set, and recovers on the next frame. Three scene-target resize/rebuilds
+also invalidate history, retain all transition work, recover on their following
+frames, and restore 1280x720. The later in-place-history refactor removes the two
+frame-local build chains and full-mip publication copy while retaining independent
+scene/asset histories, exact capture/oracle parity, and resize recovery. It saves
+9.374718 MiB requested at 1280x720 and 84.373894 MiB requested at native 4K. The
+final controlled native-4K depth stack removes 5,133 of 6,464 commands and improves
+complete GPU median by 0.661920 ms with byte-identical captures. M7.6 is accepted
+as workload-selectable; global production rejection remains off. See
+`docs/performance/M7.6-depth-pyramid-contract-2026-09-02.md`,
+`docs/performance/M7.6-live-query-qualification-2026-09-10.md`,
+`docs/performance/M7.6-device-owned-projection-qualification-2026-09-11.md`, and
+`docs/performance/M7.6-experimental-command-rejection-2026-09-11.md`, followed by
+`docs/performance/M7.6-fused-query-compaction-2026-09-11.md`,
+`docs/performance/M7.6-moving-occluder-disocclusion-2026-09-11.md`,
+`docs/performance/M7.6-small-object-depth-content-2026-09-11.md` and
+`docs/performance/M7.6-resize-recovery-2026-09-11.md`, followed by
+`docs/performance/M7.6-in-place-view-history-2026-09-11.md`, and
+`docs/performance/M7.6-large-occluded-admission-2026-09-12.md`.
+M7.7's first conventional-shadow slice adds project/profile-owned directional
+coverage, exact practical/log split and world-density diagnostics, bilinearly
+reconstructed PCSS filter comparisons, and a reachable Cinematic project tier.
+The second slice adds bounded receiver-plane/geometric-normal bias with exact
+profile and capture provenance. The third adds camera-independent, conservative
+per-cascade caster visibility with exact tested/culled telemetry. See
+`docs/performance/M7.7-directional-shadow-density-and-filter-reconstruction-2026-09-12.md`
+and
+`docs/performance/M7.7-directional-shadow-receiver-bias-2026-09-12.md` and
+`docs/performance/M7.7-directional-shadow-caster-visibility-2026-09-12.md`.
+The fourth slice publishes per-primitive shadow/probe consumer masks and feeds
+directional, spot, and point passes through compact GPU-scene references with an
+explicit direct fallback. See
+`docs/performance/M7.7-gpu-scene-shadow-submission-2026-09-13.md`.
+The fifth slice uses those references to build and submit directional-cascade
+indexed commands on the device. Fence-delayed device counts match the independent
+CPU oracle and direct/indirect final images are byte-identical. The sixth slice
+extends the same bounded ABI to spot-atlas tiles and point-cube faces: 9 spot
+commands and 90 point-face commands match the CPU oracle with zero mismatch or
+overflow, and paired captures are byte-identical. A follow-up makes CPU comparison
+qualification-only while retaining
+exact delayed device counts and overflow checks. See
+`docs/performance/M7.7-directional-shadow-device-commands-2026-09-13.md` and
+`docs/performance/M7.7-local-shadow-device-commands-2026-09-13.md` and
+`docs/performance/M7.7-shadow-command-oracle-gating-2026-09-13.md`, followed by
+`docs/performance/M7.7-independent-probe-visibility-2026-09-13.md`.
+Reflection capture also has an independent, default-off radial LOD selector whose
+decision is identical across all six faces. Host validation limits chains to
+resident buffer-compatible prefixes; a 2-pixel correctness run reduces 7 of 226
+commands and 4,508 triangles with exact device/oracle agreement and a byte-
+identical LOD0 scene capture. See
+`docs/performance/M7.7-probe-radial-lod-2026-09-14.md`.
+Directional cascade LOD now independently converts cooked error into shadow texels
+using per-cascade world density. A 2-texel correctness run reduces 21 of 1,243
+commands and 13,524 triangles with exact device/oracle agreement and a byte-
+identical LOD0 capture; production records no CPU caster tests or LOD oracle work.
+See `docs/performance/M7.7-directional-shadow-lod-2026-09-14.md`.
+Point-cube LOD uses a face-invariant radial projection bound shared by all six
+faces. The 2-texel correctness fixture reduces 16 of 565 commands and 11,436
+triangles with exact device/oracle agreement and no pixel exceeding `1e-6` AP1
+difference from LOD0; production records zero CPU point-face visibility/LOD work.
+See `docs/performance/M7.7-point-shadow-radial-lod-2026-09-14.md`.
+Spotlight LOD uses the authored light clip transform and atlas-tile resolution to
+evaluate the same conservative perspective error bound used by main-view LOD. The
+2-texel correctness fixture reduces 10 of 339 commands and 6,376 triangles with
+exact device/oracle agreement and a byte-identical LOD0 capture; production records
+zero CPU spotlight visibility/LOD work. See
+`docs/performance/M7.7-spot-shadow-projected-lod-2026-09-14.md`.
+The subsequent native-4K moving heterogeneous gate admits conventional
+directional/spot/point device-command submission. Across reversed-order pairs it
+reduces median combined CPU shadow recording by 70.1-70.9%, slightly lowers
+combined GPU shadow work, and preserves byte-identical final-SDR output. See
+`docs/performance/M7.7-heterogeneous-shadow-admission-2026-09-19.md`. Shadow and
+probe LOD remain default-off. The probe gate is complete without admission after
+its reflection-sensitive warmed run; see
+`docs/performance/M7.7-probe-lod-warmed-admission-2026-09-24.md`. The conventional
+shadow-LOD gate is likewise complete without admission: eight texels remove only
+1.2684% of combined triangles, save 0.007-0.011 ms of shadow GPU work, regress CPU
+recording, and do not produce repeatable whole-frame ordering. LOD0 remains default;
+see `docs/performance/M7.7-shadow-lod-warmed-admission-2026-09-29.md`.
+The next host-overhead checkpoint publishes stable shadow/probe consumer membership
+with the GPU scene and caches directional/spot/point geometry-material bins across
+transform-only frames. Per-light visibility and LOD remain device-owned. The
+Release smoke hits all three caches without fallback; see
+`docs/performance/M7.7-shadow-membership-cache-2026-09-29.md`.
+Opaque conventional-shadow raster now uses position-only vertex shaders and a
+single-attribute Vulkan layout; alpha masks keep the full opacity input set. This
+retains the canonical interleaved geometry store while saving 0.082-0.088 ms of
+combined shadow raster time in reversed-order native-4K pairs with byte-identical
+output. See
+`docs/performance/M7.7-opaque-shadow-position-fetch-2026-09-29.md`.
+The final moving-camera contact fixture closes the remaining M7.7 quality matrix:
+thin, fully clipped alpha-mask, double-sided, close-contact, grazing, and cascade-
+density transition coverage has exact device/oracle commands, zero overflow or
+fallback, and byte-identical direct/automatic native-4K captures at both sweep
+extremes. See
+`docs/performance/M7.7-shadow-quality-closure-2026-09-29.md`. M7.8 now owns the
+sparse Virtual Shadow Map production candidate while conventional maps remain the
+selectable reference and fallback.
+M7.8 now begins with a backend-neutral sparse residency ABI and deterministic CPU
+planner covering stable page identity, separate static/dynamic cache validity,
+bounded priority allocation, requested-page protection, age/priority eviction,
+pending-raster publication, and safe missing-page fallback. Vulkan virtual storage
+is now available behind a default-off qualification switch: a 1,024-page D32 atlas
+and 65,536-entry flat table use separate persistent memory categories. Two aligned
+device-local frame-owned compute working sets now add 17,042,496 bytes, bringing the
+validated enabled total to exactly 88.753 MiB; the disabled path remains zero.
+Sampling remains disabled; conventional
+shadows are unchanged. ABI v2 also defines deterministic directional receiver
+marking and signed world-page coordinates with snapped per-level origins, preserving
+cache identity across camera-relative clipmap scrolling. See
+`docs/performance/M7.8-virtual-shadow-residency-contract-2026-09-29.md`.
+The raw Vulkan receiver-marking compute stage now matches this oracle in Debug and
+Release RTX 4090 hardware qualification. It emits explicit mapped, unmapped,
+invalid, and address-overflow states. The following single-invocation GPU reference
+compactor matches CPU deduplication, deterministic ranking, bounded overflow,
+dropped coverage, saturation, and malformed-mark telemetry in both configurations.
+It freezes behavior rather than scalability; runtime parallel compaction, page
+raster, and sampling remain disabled.
+The first parallel sort/reduce/sort prototype is correctness-clean at 4,096
+receivers and the 65,536-mark capacity, but is rejected: its 272 full-capacity
+bitonic compare/exchange dispatches measure 841.992 ms Debug and 837.758-844.757 ms
+across repeated Release medians on the RTX 4090. It is qualification evidence only,
+and its scratch layout
+is deliberately not public RHI ABI. M7.8 next requires a hierarchical/radix or
+bounded top-K replacement before runtime integration.
+The hierarchical replacement now passes that standalone gate. It uses 256-entry
+shared-memory block sorts, eight global merges per 65,536-entry ordering, and a
+two-stage saturated dropped-coverage reduction. Exact oracle parity is retained,
+while device-local compute falls to 0.145792/0.145984 ms Debug/Release median at
+65,536 unique marks and a 4,096-request cap on the RTX 4090. Upload/readback and host
+allocation are outside the timestamps. Persistent buffers now exist behind the
+default-off resource switch. That owner now also creates immutable per-frame
+descriptors and both compute pipelines. The shared direct marker-to-compactor
+operation passes exact two-slot populated/empty reuse with synchronization
+validation at 0.148512/0.147264 ms Debug/Release for 65,536 receivers. Live depth-
+driven receiver/clip publication and integrated frame evidence remain next. See
+`docs/performance/M7.8-persistent-mark-compact-chain-2026-09-30.md`.
+The persistent owner now also initializes a sampled-depth receiver producer. Its
+explicit pixel-region contract reconstructs every pixel, rejects over-capacity
+regions, and suppresses clear/invalid depth and unsafe homogeneous division. Real
+D32 reconstruction plus marking/compaction matches the oracle for odd offset
+regions, forward/reverse depth and perspective/singular cameras. Full-view page
+demand accumulation, live clip publication and render-graph scheduling remain open.
+See `docs/performance/M7.8-depth-receiver-producer-2026-09-30.md`.
+
+The full-view continuation now accumulates every depth pixel directly into bounded
+per-clip page cells and compacts once, without subsampling or added tracked GPU
+buffer/image storage. Exact odd two-clip and native-4K request/overflow parity passes
+under synchronization validation; the 4K chain measures 0.569824/0.569504 ms
+Debug/Release on the RTX 4090. Stable live clips, render-graph scheduling, integrated
+frame admission, page raster and sampling remain open. Conventional shadows stay
+active and M7.8 remains in progress. See
+`docs/performance/M7.8-full-view-page-marking-2026-09-30.md`.
+
+The camera-driven clip prerequisite now constructs a fixed-capacity directional
+stack with doubling world spans, page-snapped signed origins and per-level density
+diagnostics. CPU/GPU checks preserve overlap identity through positive/negative
+scroll and exact guard fallback. Fixed light-space depth avoids camera-driven depth
+cache invalidation; changes to projection policy require a new explicit revision.
+The four-level builder costs 0.186163 us Release with no heap allocation. Actual
+scene/light revision ownership, conservative depth bounds, per-slot uploads and
+render-graph dispatch remain the next live integration gate. See
+`docs/performance/M7.8-camera-driven-directional-clips-2026-09-30.md`.
+
+The live CPU publication continuation now derives the first selected directional
+light's clip packet from the actual view and caster bounds under the experimental
+resource switch, including conventional cache-hit frames. A backend-neutral
+publisher retains conservative quantized depth envelopes, advances projection
+revisions on expansion/light policy changes, and suppresses unknown-bound packets.
+Both layers conservatively use the complete caster revision. Per-slot GPU uploads
+and external-buffer graph hazard tracking remain open before live compute dispatch.
+See `docs/performance/M7.8-live-clip-publication-2026-09-30.md`.
+
+The frame-slot upload continuation adds non-owning imported-buffer graph bindings
+with retirement-scoped rebinding, distinct-slot handles and persistent write-hazard
+tracking. The experimental graph uploads 1,536 checked packed clip bytes from an
+immutable slot snapshot into the existing working buffer each frame. Both slots
+pass the twelve-frame validation smoke with unchanged 88.753 MiB GPU storage;
+standalone GPU oracle parity survives the new command-embedded upload. Live sampled
+depth accumulation, integrated per-slot request comparison and native-4K admission
+remain next. See `docs/performance/M7.8-frame-slot-clip-uploads-2026-09-30.md`.
+
+
+M7.8 live scene-depth demand is now recorded after opaque forward rendering, with
+fence-retired request checks and an explicit full-depth CPU oracle. Native-4K
+moving-camera and complex-forward coverage match exactly; empty packets and three
+positive-extent resizes are validation-clean. Matched captures remain byte-identical.
+Five paired runs show about 0.42 ms demand cost and increased complete-frame p99;
+this is qualification overhead, not VSM admission. Request readbacks add 262,208
+bytes; full-depth buffers are separately opt-in. GPU residency, page raster and
+sampling remain next; M7.8 stays active and M7.9-M7.12 remain unfinished. See
+`docs/performance/M7.8-live-depth-page-demand-2026-09-30.md`.
+
+The 2026-10-01 raster prerequisite now shares checked physical-tile layout between
+RHI and Vulkan and defines pending-page crops, rasterized borders/interior UVs,
+strict identity/requested-layer revision rejection and conservative caster volumes.
+CPU tests and independent GPU point projection cover border/depth/scroll behavior;
+the 4K reference capture and allocation totals remain unchanged. GPU residency,
+triangle page raster and sampling remain unfinished. See
+`docs/performance/M7.8-page-raster-regions-2026-10-01.md`.
+
+Residency ABI v1 now defines lossless 48-byte full-identity keys and 96-byte
+resident records, preserving signed 64-bit coordinates/revisions/frame ages and
+independent layer validity. The retired-slot collector uses checked request-to-
+identity conversion and its native-4K CPU oracle compares full identities/revisions.
+This is metadata qualification only: no GPU allocator/storage or new sampling is
+enabled. M7.8 stays active. See
+`docs/performance/M7.8-residency-identity-2026-10-01.md`.
+
+A serial GPU residency reference now reproduces full-key CPU allocation, cache
+hits, independent layer invalidation, protected eviction, overflow and fallback
+semantics. Fourteen oracle dispatches and five atomic rejection cases pass under
+Vulkan validation in Debug/Release; checked 80-byte requests, 96-byte mappings
+and 48-byte telemetry freeze its boundary. The bounded 256-request reference
+measures 10.5083/10.8429 ms GPU median and is explicitly rejected for live
+production integration. It is private test infrastructure, not page raster,
+completion publication or sampling. Engine allocations and conventional image
+production remain unchanged. M7.8 stays active: scalable GPU residency, indirect
+page raster, shared sampling/local lights and full-path qualification are still
+required. See
+`docs/performance/M7.8-gpu-residency-reference-2026-10-01.md`.
+
+The 2026-09-04 review corrected false occlusion at odd extents: queries now invert
+each mip's integer reduction partition recursively. Exhaustive hole/rectangle tests
+pass for forward and reverse depth. Vulkan must match the corrected oracle; see
+`docs/performance/M7.6-odd-extent-query-correction-2026-09-04.md`.
 
 M7 now explicitly owns static/movable/animated GPU-scene update policy,
 frustum/screen-error-LOD/Hi-Z visibility, compact indirect submission, a shared

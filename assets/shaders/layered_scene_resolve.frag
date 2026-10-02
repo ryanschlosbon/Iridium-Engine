@@ -17,6 +17,13 @@ int iridiumLayeredUnpackSigned16(uint value) {
     return int((value & 0xffffu) ^ 0x8000u) - 0x8000;
 }
 
+vec3 iridiumLayeredRetainedCountColor(uint retainedLayers) {
+    if (retainedLayers >= 8u) return vec3(1.00, 0.15, 0.60);
+    if (retainedLayers >= 4u) return vec3(1.00, 0.40, 0.05);
+    if (retainedLayers >= 2u) return vec3(0.05, 0.85, 0.90);
+    return vec3(0.25);
+}
+
 void main() {
     bool mirrored = push.padding1 != 0u;
     if (gl_FrontFacing == mirrored)
@@ -34,7 +41,8 @@ void main() {
     uint entryIdentity = texelFetch(layeredEntryIdentity,
         atlasPixel, 0).r;
     uint expectedEntryIdentity = push.materialIndex + 1u;
-    uint workMask = push.padding0 != 0u ? 0x00001fffu : 0x7fffffffu;
+    uint workMask = (push.padding0 & 1u) != 0u
+        ? 0x00001fffu : 0x7fffffffu;
     if ((entryIdentity & workMask) != expectedEntryIdentity)
         discard;
 
@@ -42,5 +50,12 @@ void main() {
     if (!(localColor.a > 0.0) || any(isnan(localColor)) ||
         any(isinf(localColor)))
         discard;
+    uint debugView = (push.padding0 >> 8u) & 0xffu;
+    if (debugView == 22u) {
+        uint retainedLayers = (push.padding0 >> 16u) & 0xffu;
+        outColor = vec4(
+            iridiumLayeredRetainedCountColor(retainedLayers), 1.0);
+        return;
+    }
     outColor = localColor;
 }

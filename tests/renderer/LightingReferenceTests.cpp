@@ -187,7 +187,8 @@ namespace {
             std::string::npos);
         CHECK(forward.find("shadowVisibility = min(shadowVisibility, visibility)") !=
             std::string::npos);
-        CHECK(forward.find("push.padding0 != 16u && push.padding0 != 17u") !=
+        CHECK(forward.find(
+            "materialDebugView != 16u && materialDebugView != 17u") !=
             std::string::npos);
         CHECK(pointShadow.find("binding = 24") != std::string::npos);
         CHECK(pointShadow.find("binding = 25") != std::string::npos);

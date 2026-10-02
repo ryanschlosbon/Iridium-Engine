@@ -394,6 +394,14 @@ void VkContext::createLogicalDevice() {
 		supportedFeatures.pipelineStatisticsQuery == VK_TRUE;
 	deviceFeatures.pipelineStatisticsQuery = pipelineStatisticsEnabled
 		? VK_TRUE : VK_FALSE;
+	multiDrawIndirectEnabled = supportedFeatures.multiDrawIndirect == VK_TRUE;
+	drawIndirectFirstInstanceEnabled =
+		supportedFeatures.drawIndirectFirstInstance == VK_TRUE;
+	deviceFeatures.multiDrawIndirect = multiDrawIndirectEnabled
+		? VK_TRUE : VK_FALSE;
+	deviceFeatures.drawIndirectFirstInstance =
+		drawIndirectFirstInstanceEnabled ? VK_TRUE : VK_FALSE;
+	maxDrawIndirectCount = physicalDeviceProperties.limits.maxDrawIndirectCount;
 
     VkPhysicalDeviceVulkan12Features supportedVulkan12{
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES };
@@ -408,6 +416,7 @@ void VkContext::createLogicalDevice() {
         supportedVulkan12.descriptorBindingSampledImageUpdateAfterBind == VK_TRUE &&
         supportedVulkan12.descriptorBindingVariableDescriptorCount == VK_TRUE &&
         supportedVulkan12.shaderSampledImageArrayNonUniformIndexing == VK_TRUE;
+	drawIndirectCountEnabled = supportedVulkan12.drawIndirectCount == VK_TRUE;
 
     VkPhysicalDeviceVulkan12Features enabledVulkan12{
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES };
@@ -431,6 +440,8 @@ void VkContext::createLogicalDevice() {
         maxUpdateAfterBindDescriptors =
             indexingProperties.maxUpdateAfterBindDescriptorsInAllPools;
     }
+	if (drawIndirectCountEnabled)
+		enabledVulkan12.drawIndirectCount = VK_TRUE;
 
     // 3. Extensions Setup (THE MAC COMPATIBILITY FIX)
     // Start with the Swapchain extension, which is required on all platforms.
@@ -467,7 +478,8 @@ void VkContext::createLogicalDevice() {
     createInfo.pQueueCreateInfos = queueCreateInfos.data();
 
     createInfo.pEnabledFeatures = &deviceFeatures;
-    createInfo.pNext = descriptorIndexingEnabled ? &enabledVulkan12 : nullptr;
+    createInfo.pNext = descriptorIndexingEnabled || drawIndirectCountEnabled
+		? &enabledVulkan12 : nullptr;
 
     // Pass the dynamically created list of extensions
     createInfo.enabledExtensionCount = static_cast<uint32_t>(deviceExtensions.size());

@@ -17,6 +17,7 @@ namespace Iridium {
     enum class EditorAssetViewerKind : uint8_t {
         Model,
         Material,
+        Primitive,
     };
 
     enum class EditorAssetPresentationSource : uint8_t {
@@ -70,6 +71,11 @@ namespace Iridium {
         std::optional<RuntimeAssetState> runtimeState;
         std::string runtimeDiagnostic;
         uint64_t activationSerial = 0;
+        uint64_t sessionSerial = 0;
+        std::optional<AssetGuid> selectedPart;
+        bool selectedPartIsMaterial = false;
+        bool isolateSelectedPart = false;
+        uint64_t framingRevision = 1;
 
         auto operator<=>(const EditorAssetDocument&) const = default;
     };
@@ -103,6 +109,7 @@ namespace Iridium {
         [[nodiscard]] EditorAssetOpenResult open(
             const EditorAssetOpenRequest& request);
         [[nodiscard]] bool activate(AssetGuid assetGuid) noexcept;
+        void selectPreviewPart(std::optional<AssetGuid> part, bool material, bool isolate) noexcept;
         [[nodiscard]] bool close(AssetGuid assetGuid);
         void closeAll();
 

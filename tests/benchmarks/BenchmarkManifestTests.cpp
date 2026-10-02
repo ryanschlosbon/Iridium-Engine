@@ -65,6 +65,92 @@ namespace {
             "ordinary2-runtime-manifest.v1.json";
     }
 
+    std::filesystem::path m7ThreeDenseManifestPath() {
+        return std::filesystem::path(PROJECT_ROOT_DIR) /
+            "assets" /
+            "m7-three-dense-assets-manifest.v1.json";
+    }
+
+    std::filesystem::path m7FixtureMatrixPath() {
+        return std::filesystem::path(PROJECT_ROOT_DIR) /
+            "assets" / "benchmarks" / "m7" / "fixture-matrix.v1.json";
+    }
+
+    std::filesystem::path m7OcclusionTemporalManifestPath() {
+        return std::filesystem::path(PROJECT_ROOT_DIR) / "assets" /
+            "m7-occlusion-temporal-manifest.v1.json";
+    }
+
+    std::filesystem::path m7OcclusionMotionManifestPath() {
+        return std::filesystem::path(PROJECT_ROOT_DIR) / "assets" /
+            "m7-occlusion-motion-manifest.v1.json";
+    }
+
+    std::filesystem::path m7OcclusionSmallObjectManifestPath() {
+        return std::filesystem::path(PROJECT_ROOT_DIR) / "assets" /
+            "m7-occlusion-small-object-manifest.v1.json";
+    }
+
+    std::filesystem::path m7OcclusionDepthContentManifestPath() {
+        return std::filesystem::path(PROJECT_ROOT_DIR) / "assets" /
+            "m7-occlusion-depth-content-manifest.v1.json";
+    }
+
+    std::filesystem::path m7OcclusionPerformanceManifestPath() {
+        return std::filesystem::path(PROJECT_ROOT_DIR) / "assets" /
+            "m7-occlusion-performance-manifest.v1.json";
+    }
+
+    std::filesystem::path m7LodLitAdmissionManifestPath() {
+        return std::filesystem::path(PROJECT_ROOT_DIR) / "assets" /
+            "m7-lod-lit-admission-manifest.v1.json";
+    }
+
+    std::filesystem::path m7DirectionalShadowGrazingManifestPath() {
+        return std::filesystem::path(PROJECT_ROOT_DIR) / "assets" /
+            "m7-directional-shadow-grazing-manifest.v1.json";
+    }
+
+    std::filesystem::path m7DirectionalShadowLodManifestPath() {
+        return std::filesystem::path(PROJECT_ROOT_DIR) / "assets" /
+            "m7-directional-shadow-lod-manifest.v1.json";
+    }
+
+    std::filesystem::path m7PointShadowLodManifestPath() {
+        return std::filesystem::path(PROJECT_ROOT_DIR) / "assets" /
+            "m7-point-shadow-lod-manifest.v1.json";
+    }
+
+    std::filesystem::path m7SpotShadowLodManifestPath() {
+        return std::filesystem::path(PROJECT_ROOT_DIR) / "assets" /
+            "m7-spot-shadow-lod-manifest.v1.json";
+    }
+
+    std::filesystem::path m7HeterogeneousShadowAdmissionManifestPath() {
+        return std::filesystem::path(PROJECT_ROOT_DIR) / "assets" /
+            "m7-heterogeneous-shadow-admission-manifest.v1.json";
+    }
+
+    std::filesystem::path m7ProbeLodAdmissionManifestPath() {
+        return std::filesystem::path(PROJECT_ROOT_DIR) / "assets" /
+            "m7-probe-lod-admission-manifest.v1.json";
+    }
+
+    std::filesystem::path m7ShadowLodWarmedAdmissionManifestPath() {
+        return std::filesystem::path(PROJECT_ROOT_DIR) / "assets" /
+            "m7-shadow-lod-warmed-admission-manifest.v1.json";
+    }
+
+    std::filesystem::path m7ShadowQualityClosureManifestPath() {
+        return std::filesystem::path(PROJECT_ROOT_DIR) / "assets" /
+            "m7-shadow-quality-closure-manifest.v1.json";
+    }
+
+    std::filesystem::path m7RunManifestPath() {
+        return std::filesystem::path(PROJECT_ROOT_DIR) /
+            "assets" / "benchmarks" / "m7" / "m7.0-run-manifest.v1.json";
+    }
+
     nlohmann::json loadJson(const std::filesystem::path& path) {
         std::ifstream input(path);
         if (!input) throw std::runtime_error("Failed to open fixture: " + path.string());
@@ -456,7 +542,7 @@ namespace {
             CHECK(metadata.at("importer").at("id") ==
                 "iridium.gltf-model");
             CHECK(metadata.at("importer").at("version") ==
-                6);
+                7);
             CHECK(metadata.at("settings").at("values")
                 .at("import_scale") == 1.0);
             const std::string rootGuid =
@@ -524,7 +610,7 @@ namespace {
     bool testM6Ordinary2RuntimeFixtureContract() {
         const BenchmarkManifest manifest = loadBenchmarkManifest(
             m6Ordinary2RuntimeManifestPath());
-        CHECK(manifest.fixtures.size() == 10);
+        CHECK(manifest.fixtures.size() == 14);
         const BenchmarkFixture& ordinary = findBenchmarkFixture(manifest,
             "ordinary2_lit_closed_v1");
         const BenchmarkFixture& mirrored = findBenchmarkFixture(manifest,
@@ -545,6 +631,14 @@ namespace {
             "cinematic8_overflow_residual_v1");
         const BenchmarkFixture& mixed = findBenchmarkFixture(manifest,
             "mixed_deep_tier_tetrahedra_v1");
+        const BenchmarkFixture& weighted = findBenchmarkFixture(manifest,
+            "weighted_oit_particles_v1");
+        const BenchmarkFixture& weighted4096 = findBenchmarkFixture(manifest,
+            "weighted_oit_particles_4096_v1");
+        const BenchmarkFixture& weighted65536 = findBenchmarkFixture(manifest,
+            "weighted_oit_particles_65536_v1");
+        const BenchmarkFixture& weightedHdr256 = findBenchmarkFixture(manifest,
+            "weighted_oit_particles_hdr256_v1");
         CHECK(ordinary.sceneFactory.instanceScale == glm::vec3(1.0f));
         CHECK(mirrored.sceneFactory.instanceScale ==
             glm::vec3(-1.0f, 1.0f, 1.0f));
@@ -664,6 +758,74 @@ namespace {
         }
         CHECK(hero4Policies == 2u);
         CHECK(cinematic8Policies == 1u);
+        CHECK(weighted.contentFiles.size() == 2);
+        CHECK(weighted.sceneFactory.instanceGrid == glm::uvec3(8, 8, 4));
+        CHECK(weighted.sceneFactory.instanceSpacing ==
+            glm::vec3(0.17f, 0.17f, 0.06f));
+        CHECK(weighted.measuredFrames == 8);
+        CHECK(containsText(weighted.expectedBehavior,
+            "256 explicit particles"));
+        CHECK(containsText(weighted.expectedBehavior,
+            "does not activate refraction pyramids"));
+        CHECK(containsText(weighted.expectedBehavior,
+            "Seeds 0 through 63"));
+        CHECK(weighted.unavailableCapabilities.empty());
+        CHECK(weighted4096.sourceAsset == weighted.sourceAsset);
+        CHECK(weighted4096.sceneFactory.instanceGrid ==
+            glm::uvec3(16, 16, 16));
+        CHECK(weighted4096.sceneFactory.renderInstanceBatch);
+        CHECK(weighted4096.sceneFactory.instanceSpacing ==
+            glm::vec3(0.085f, 0.085f, 0.015f));
+        CHECK(weighted4096.sceneFactory.instanceScale == glm::vec3(0.5f));
+        CHECK(benchmarkInstanceCount(
+            weighted4096.sceneFactory.instanceGrid) == 4'096u);
+        CHECK(containsText(weighted4096.expectedBehavior,
+            "262144 bytes"));
+        CHECK(weighted65536.sourceAsset == weighted.sourceAsset);
+        CHECK(weighted65536.sceneFactory.instanceGrid ==
+            glm::uvec3(32, 32, 64));
+        CHECK(weighted65536.sceneFactory.renderInstanceBatch);
+        CHECK(weighted65536.sceneFactory.instanceSpacing ==
+            glm::vec3(0.0425f, 0.0425f, 0.00375f));
+        CHECK(weighted65536.sceneFactory.instanceScale == glm::vec3(0.25f));
+        CHECK(benchmarkInstanceCount(
+            weighted65536.sceneFactory.instanceGrid) == 65'536u);
+        CHECK(containsText(weighted65536.expectedBehavior,
+            "4194304 bytes"));
+        const nlohmann::json weightedSource = loadJson(
+            weighted.sourceAsset);
+        CHECK(weightedSource.at("materials").at(0).at("alphaMode") ==
+            "BLEND");
+        CHECK(weightedSource.at("materials").at(0).at("extensions").at(
+            "KHR_materials_emissive_strength").at("emissiveStrength") ==
+            16.0);
+        const nlohmann::json weightedMetadata = loadJson(
+            weighted.sourceAsset.string() + ".iridium.meta");
+        CHECK(weightedMetadata.at("importer").at("version") == 7);
+        CHECK(weightedMetadata.at("settings").at("values").at(
+            "transparency_execution_mode") == "classified");
+        const auto& weightedPolicies = weightedMetadata.at("settings").at(
+            "values").at("transparency_policies");
+        CHECK(weightedPolicies.size() == 1);
+        CHECK(weightedPolicies.begin().value().at("class") ==
+            "weighted_oit");
+        CHECK(weightedHdr256.contentFiles.size() == 2);
+        CHECK(weightedHdr256.sceneFactory.instanceGrid ==
+            glm::uvec3(8, 8, 4));
+        CHECK(weightedHdr256.measuredFrames == 1);
+        const nlohmann::json weightedHdr256Source = loadJson(
+            weightedHdr256.sourceAsset);
+        CHECK(weightedHdr256Source.at("materials").at(0).at(
+            "extensions").at("KHR_materials_emissive_strength").at(
+                "emissiveStrength") == 256.0);
+        const nlohmann::json weightedHdr256Metadata = loadJson(
+            weightedHdr256.sourceAsset.string() + ".iridium.meta");
+        CHECK(weightedHdr256Metadata.at("importer").at("version") == 7);
+        const auto& weightedHdr256Policies = weightedHdr256Metadata.at(
+            "settings").at("values").at("transparency_policies");
+        CHECK(weightedHdr256Policies.size() == 1);
+        CHECK(weightedHdr256Policies.begin().value().at("class") ==
+            "weighted_oit");
         return true;
     }
 
@@ -672,6 +834,457 @@ namespace {
         CHECK(benchmarkInstanceCount(glm::uvec3(0, 1, 1)) == 0);
         CHECK(benchmarkInstanceCount(glm::uvec3(
             0xffffffffu, 0xffffffffu, 1u)) == 0);
+        return true;
+    }
+
+    bool testM7ThreeDenseFixtureContract() {
+        const BenchmarkManifest manifest = loadBenchmarkManifest(
+            m7ThreeDenseManifestPath());
+        CHECK(manifest.fixtures.size() == 6);
+        const BenchmarkFixture& allVisible = findBenchmarkFixture(
+            manifest, "m7_three_dense_all_visible_v1");
+        const BenchmarkFixture& oneVisible = findBenchmarkFixture(
+            manifest, "m7_three_dense_one_visible_v1");
+        const BenchmarkFixture& depthRange = findBenchmarkFixture(
+            manifest, "m7_three_dense_near_mid_far_v1");
+        const BenchmarkFixture& staticFixture = findBenchmarkFixture(
+            manifest, "m7_three_dense_static_v1");
+        const BenchmarkFixture& moving = findBenchmarkFixture(
+            manifest, "m7_three_dense_moving_v1");
+        const BenchmarkFixture& stress = findBenchmarkFixture(
+            manifest, "m7_many_instance_stress_v1");
+        CHECK(allVisible.sceneFactory.instanceGrid == glm::uvec3(3, 1, 1));
+        CHECK(allVisible.sceneFactory.instanceSpacing == glm::vec3(3.0f, 0.0f, 0.0f));
+        CHECK(allVisible.contentFiles.size() == 2);
+        CHECK(oneVisible.camera.verticalFovDegrees == 12.0f);
+        CHECK(depthRange.sceneFactory.instanceGrid == glm::uvec3(1, 1, 3));
+        CHECK(depthRange.sceneFactory.instanceSpacing == glm::vec3(0.0f, 0.0f, 8.0f));
+        CHECK(!staticFixture.sceneFactory.animateInstances);
+        CHECK(moving.sceneFactory.animateInstances);
+        CHECK(moving.sceneFactory.motionPeriodFrames == 240);
+        CHECK(benchmarkInstanceCount(stress.sceneFactory.instanceGrid) == 256);
+        CHECK(containsText(allVisible.expectedBehavior,
+            "replacement for the unsaved owner-observed"));
+        CHECK(containsText(staticFixture.expectedBehavior,
+            "exactly zero"));
+
+        const nlohmann::json matrix = loadJson(m7FixtureMatrixPath());
+        CHECK(matrix.at("schema_version") == 1);
+        CHECK(matrix.at("cases").size() == 16);
+        std::set<std::string> ids;
+        for (const auto& fixtureCase : matrix.at("cases")) {
+            CHECK(ids.insert(fixtureCase.at("id").get<std::string>()).second);
+            CHECK(!fixtureCase.at("purpose").get<std::string>().empty());
+            CHECK(!fixtureCase.at("availability").get<std::string>().empty());
+        }
+        CHECK(ids.contains("large_occluder"));
+        CHECK(ids.contains("shadow_only_caster"));
+        CHECK(ids.contains("probe_only_off_camera"));
+        CHECK(ids.contains("representative_m6_transparency"));
+        CHECK(ids.contains("oversized_model_publication"));
+
+        const nlohmann::json runManifest = loadJson(m7RunManifestPath());
+        CHECK(runManifest.at("milestone_slice") == "M7.0");
+        CHECK(runManifest.at("profiles").size() == 5);
+        CHECK(runManifest.at("aggregate").at("steady_cpp_allocation_calls") == 0);
+        CHECK(runManifest.at("validation_capture").at(
+            "validation_messages_observed") == 0);
+        return true;
+    }
+
+    bool testM7OcclusionTemporalFixtureContract() {
+        const BenchmarkManifest manifest = loadBenchmarkManifest(
+            m7OcclusionTemporalManifestPath());
+        CHECK(manifest.fixtures.size() == 1);
+        const BenchmarkFixture& fixture = findBenchmarkFixture(
+            manifest, "m7_occlusion_depth_stack_v1");
+        CHECK(fixture.sceneFactory.instanceGrid == glm::uvec3(1, 1, 4));
+        CHECK(fixture.sceneFactory.instanceSpacing ==
+            glm::vec3(0.0f, 0.0f, 4.0f));
+        CHECK(fixture.sceneFactory.cameraCutEnabled);
+        CHECK(fixture.sceneFactory.cameraCutFrame == 12);
+        CHECK(evaluateBenchmarkCamera(fixture, 11).position ==
+            glm::vec3(0.0f, 1.2f, 16.0f));
+        CHECK(evaluateBenchmarkCamera(fixture, 12).position ==
+            glm::vec3(12.0f, 2.5f, 12.0f));
+        CHECK(containsText(fixture.expectedBehavior, "fail visible"));
+        CHECK(containsText(fixture.expectedBehavior, "never removes geometry"));
+        return true;
+    }
+
+    bool testM7OcclusionMotionFixtureContract() {
+        const BenchmarkManifest manifest = loadBenchmarkManifest(
+            m7OcclusionMotionManifestPath());
+        CHECK(manifest.fixtures.size() == 2);
+        const BenchmarkFixture& occluder = findBenchmarkFixture(
+            manifest, "m7_occluder_disocclusion_step_v1");
+        CHECK(occluder.sceneFactory.objectStepEnabled);
+        CHECK(occluder.sceneFactory.objectStepInstanceIndex == 3);
+        CHECK(occluder.sceneFactory.objectStepFrame == 12);
+        CHECK(evaluateBenchmarkInstanceOffset(
+            occluder.sceneFactory, 11, 3) == glm::vec3(0.0f));
+        CHECK(evaluateBenchmarkInstanceOffset(
+            occluder.sceneFactory, 12, 3) == glm::vec3(6.0f, 0.0f, 0.0f));
+        CHECK(evaluateBenchmarkInstanceOffset(
+            occluder.sceneFactory, 12, 2) == glm::vec3(0.0f));
+
+        const BenchmarkFixture& occludee = findBenchmarkFixture(
+            manifest, "m7_occludee_reveal_step_v1");
+        CHECK(occludee.sceneFactory.objectStepInstanceIndex == 0);
+        CHECK(evaluateBenchmarkInstanceOffset(
+            occludee.sceneFactory, 12, 0) == glm::vec3(-6.0f, 0.0f, 0.0f));
+        CHECK(containsText(occluder.expectedBehavior, "fail visible"));
+        CHECK(containsText(occludee.expectedBehavior, "fail visible"));
+        return true;
+    }
+
+    bool testM7OcclusionSmallObjectFixtureContract() {
+        const BenchmarkManifest manifest = loadBenchmarkManifest(
+            m7OcclusionSmallObjectManifestPath());
+        CHECK(manifest.fixtures.size() == 1);
+        const BenchmarkFixture& fixture = findBenchmarkFixture(
+            manifest, "m7_occlusion_subpixel_object_v1");
+        CHECK(fixture.sceneFactory.instanceGrid == glm::uvec3(1, 1, 1));
+        CHECK(fixture.sceneFactory.instanceScale == glm::vec3(0.001f));
+        CHECK(containsText(fixture.expectedBehavior, "SmallBounds"));
+        CHECK(containsText(fixture.expectedBehavior, "fail visible"));
+        return true;
+    }
+
+    bool testM7OcclusionDepthContentFixtureContract() {
+        const BenchmarkManifest manifest = loadBenchmarkManifest(
+            m7OcclusionDepthContentManifestPath());
+        CHECK(manifest.fixtures.size() == 1);
+        const BenchmarkFixture& fixture = findBenchmarkFixture(
+            manifest, "m7_occluder_visibility_step_v1");
+        CHECK(fixture.sceneFactory.objectVisibilityStepEnabled);
+        CHECK(fixture.sceneFactory.objectVisibilityStepInstanceIndex == 3);
+        CHECK(fixture.sceneFactory.objectVisibilityStepFrame == 12);
+        CHECK(!fixture.sceneFactory.objectVisibilityAfterStep);
+        CHECK(containsText(fixture.expectedBehavior, "DepthContentChanged"));
+        return true;
+    }
+
+    bool testM7OcclusionPerformanceFixtureContract() {
+        const BenchmarkManifest manifest = loadBenchmarkManifest(
+            m7OcclusionPerformanceManifestPath());
+        CHECK(manifest.fixtures.size() == 1);
+        const BenchmarkFixture& fixture = findBenchmarkFixture(
+            manifest, "m7_occlusion_dense_depth_stack_v1");
+        CHECK(fixture.sceneFactory.instanceGrid == glm::uvec3(1, 1, 64));
+        CHECK(fixture.sceneFactory.instanceSpacing ==
+            glm::vec3(0.0f, 0.0f, 4.0f));
+        CHECK(fixture.sceneFactory.instanceScale == glm::vec3(1.0f));
+        CHECK(fixture.sceneFactory.instanceScaleOverrideEnabled);
+        CHECK(fixture.sceneFactory.instanceScaleOverrideIndex == 63);
+        CHECK(fixture.sceneFactory.instanceScaleOverride == glm::vec3(3.0f));
+        CHECK(benchmarkInstanceCount(fixture.sceneFactory.instanceGrid) == 64);
+        CHECK(fixture.camera.position == glm::vec3(0.0f, 1.2f, 150.0f));
+        CHECK(fixture.camera.farPlane == 400.0f);
+        CHECK(fixture.warmupFrames == 100);
+        CHECK(fixture.measuredFrames == 500);
+        CHECK(containsText(fixture.expectedBehavior, "most farther opaque"));
+        CHECK(containsText(fixture.expectedBehavior, "identical scene output"));
+        return true;
+    }
+
+    bool testM7LodObliqueFixtureContract() {
+        const auto manifest = loadBenchmarkManifest(std::filesystem::path(PROJECT_ROOT_DIR) /
+            "assets" / "m7-lod-validation-manifest.v1.json");
+        CHECK(manifest.fixtures.size() == 1);
+        const auto& fixture = findBenchmarkFixture(manifest, "m7_lod_oblique_depth_v1");
+        CHECK(fixture.sceneFactory.instanceGrid == glm::uvec3(1, 1, 3));
+        CHECK(fixture.sceneFactory.instanceSpacing == glm::vec3(0, 0, 12));
+        CHECK(fixture.camera.position == glm::vec3(18, 8, 28));
+        CHECK(fixture.contentFiles.size() == 2);
+        CHECK(containsText(fixture.expectedBehavior, "without replacing or rewriting"));
+        return true;
+    }
+
+    bool testM7LodHistoryFixtureContract() {
+        const auto manifest = loadBenchmarkManifest(std::filesystem::path(PROJECT_ROOT_DIR) /
+            "assets" / "m7-lod-history-manifest.v1.json");
+        const auto& fixture = findBenchmarkFixture(manifest, "m7_lod_history_oscillation_cut_v1");
+        CHECK(fixture.sceneFactory.cameraOscillationAmplitude == glm::vec3(0, 0, 6));
+        CHECK(fixture.sceneFactory.cameraOscillationPeriodFrames == 24);
+        CHECK(evaluateBenchmarkCamera(fixture, 0).position == glm::vec3(18, 8, 28));
+        CHECK(evaluateBenchmarkCamera(fixture, 6).position == glm::vec3(18, 8, 34));
+        CHECK(evaluateBenchmarkCamera(fixture, 18).position == glm::vec3(18, 8, 22));
+        CHECK(evaluateBenchmarkCamera(fixture, 24).position == evaluateBenchmarkCamera(fixture, 0).position);
+        CHECK(evaluateBenchmarkCamera(fixture, 120).position == glm::vec3(18, 8, 22));
+        CHECK(evaluateBenchmarkCamera(fixture, 126).position == glm::vec3(18, 8, 28));
+        CHECK(evaluateBenchmarkCamera(fixture, 138).position == glm::vec3(18, 8, 16));
+        return true;
+    }
+
+    bool testM7LodLitAdmissionFixtureContract() {
+        const BenchmarkManifest manifest = loadBenchmarkManifest(
+            m7LodLitAdmissionManifestPath());
+        CHECK(manifest.fixtures.size() == 1);
+        const BenchmarkFixture& fixture = findBenchmarkFixture(
+            manifest, "m7_lod_lit_oblique_v1");
+        CHECK(fixture.sceneFactory.instanceGrid == glm::uvec3(1, 1, 3));
+        CHECK(fixture.lights.size() == 3);
+        CHECK(fixture.lights[0].type == BenchmarkLightType::Spot);
+        CHECK(fixture.lights[0].shadowQuality ==
+            BenchmarkShadowQuality::Ultra);
+        CHECK(fixture.lights[0].castsShadows);
+        CHECK(fixture.lights[0].priority == 3);
+        CHECK(fixture.lights[1].type == BenchmarkLightType::Point);
+        CHECK(!fixture.lights[1].castsShadows);
+        CHECK(fixture.lights[2].type == BenchmarkLightType::Directional);
+        CHECK(fixture.lights[2].illuminanceLux == 30'000.0f);
+        CHECK(fixture.constantEnvironmentLinear ==
+            glm::vec3(0.012f, 0.016f, 0.024f));
+        CHECK(containsText(fixture.expectedBehavior, "image-space error"));
+        return true;
+    }
+
+    bool testM7DirectionalShadowGrazingFixtureContract() {
+        const BenchmarkManifest manifest = loadBenchmarkManifest(
+            m7DirectionalShadowGrazingManifestPath());
+        CHECK(manifest.fixtures.size() == 3);
+        const BenchmarkFixture& fixture = findBenchmarkFixture(
+            manifest, "m7_directional_shadow_grazing_v1");
+        CHECK(fixture.lights.size() == 1);
+        CHECK(fixture.lights[0].type == BenchmarkLightType::Directional);
+        CHECK(fixture.lights[0].rotationDegrees == glm::vec3(0, 110, 0));
+        CHECK(fixture.lights[0].shadowQuality ==
+            BenchmarkShadowQuality::Ultra);
+        CHECK(fixture.lights[0].castsShadows);
+        CHECK(fixture.contentFiles.size() == 1);
+        CHECK(sha256File(fixture.contentFiles[0].path) ==
+            fixture.contentFiles[0].sha256);
+        CHECK(containsText(fixture.expectedBehavior, "Receiver-plane"));
+        CHECK(containsText(fixture.expectedBehavior, "front-facing"));
+        const BenchmarkFixture& culling = findBenchmarkFixture(
+            manifest, "m7_directional_shadow_caster_culling_v1");
+        CHECK(culling.sceneFactory.instanceGrid == glm::uvec3(16, 1, 1));
+        CHECK(culling.sceneFactory.instanceSpacing == glm::vec3(12, 0, 0));
+        CHECK(culling.sceneFactory.animateInstances);
+        CHECK(culling.lights.size() == 1);
+        CHECK(culling.lights[0].type == BenchmarkLightType::Directional);
+        CHECK(culling.lights[0].castsShadows);
+        CHECK(containsText(culling.expectedBehavior, "conservatively rejected"));
+        CHECK(containsText(culling.expectedBehavior, "Camera-invisible"));
+        CHECK(containsText(culling.expectedBehavior, "fail-visible"));
+        const BenchmarkFixture& affected = findBenchmarkFixture(
+            manifest, "m7_directional_shadow_affected_bounds_v1");
+        CHECK(affected.sceneFactory.objectStepEnabled);
+        CHECK(affected.sceneFactory.objectStepInstanceIndex == 0u);
+        CHECK(affected.sceneFactory.objectStepFrame == 10u);
+        CHECK(affected.sceneFactory.objectStepOffset == glm::vec3(90, 0, 0));
+        CHECK(!affected.sceneFactory.animateInstances);
+        CHECK(containsText(affected.expectedBehavior, "Unaffected cascades"));
+        return true;
+    }
+
+    bool testM7DirectionalShadowLodFixtureContract() {
+        const BenchmarkManifest manifest = loadBenchmarkManifest(
+            m7DirectionalShadowLodManifestPath());
+        CHECK(manifest.fixtures.size() == 1);
+        const BenchmarkFixture& fixture = findBenchmarkFixture(
+            manifest, "m7_directional_shadow_lod_near_mid_far_v1");
+        CHECK(fixture.sceneFactory.instanceGrid == glm::uvec3(1, 1, 3));
+        CHECK(fixture.sceneFactory.instanceSpacing == glm::vec3(0, 0, 8));
+        CHECK(fixture.lights.size() == 1);
+        CHECK(fixture.lights[0].type == BenchmarkLightType::Directional);
+        CHECK(fixture.lights[0].shadowQuality ==
+            BenchmarkShadowQuality::Ultra);
+        CHECK(fixture.lights[0].castsShadows);
+        CHECK(fixture.contentFiles.size() == 2);
+        for (const BenchmarkContentFile& content : fixture.contentFiles)
+            CHECK(sha256File(content.path) == content.sha256);
+        CHECK(containsText(fixture.expectedBehavior,
+            "cascade world-units-per-texel"));
+        CHECK(containsText(fixture.expectedBehavior,
+            "complete device-generated command multiset"));
+        return true;
+    }
+
+    bool testM7PointShadowLodFixtureContract() {
+        const BenchmarkManifest manifest = loadBenchmarkManifest(
+            m7PointShadowLodManifestPath());
+        CHECK(manifest.fixtures.size() == 1);
+        const BenchmarkFixture& fixture = findBenchmarkFixture(
+            manifest, "m7_point_shadow_lod_near_mid_far_v1");
+        CHECK(fixture.sceneFactory.instanceGrid == glm::uvec3(1, 1, 3));
+        CHECK(fixture.sceneFactory.instanceSpacing == glm::vec3(0, 0, 12));
+        CHECK(fixture.lights.size() == 1);
+        CHECK(fixture.lights[0].type == BenchmarkLightType::Point);
+        CHECK(fixture.lights[0].shadowQuality == BenchmarkShadowQuality::High);
+        CHECK(fixture.lights[0].castsShadows);
+        CHECK(fixture.lights[0].rangeMeters == 60.0f);
+        CHECK(fixture.contentFiles.size() == 2);
+        for (const BenchmarkContentFile& content : fixture.contentFiles)
+            CHECK(sha256File(content.path) == content.sha256);
+        CHECK(containsText(fixture.expectedBehavior, "face-invariant radial LOD"));
+        CHECK(containsText(fixture.expectedBehavior,
+            "complete device-generated point-shadow command multisets"));
+        return true;
+    }
+
+    bool testM7SpotShadowLodFixtureContract() {
+        const BenchmarkManifest manifest = loadBenchmarkManifest(
+            m7SpotShadowLodManifestPath());
+        CHECK(manifest.fixtures.size() == 1);
+        const BenchmarkFixture& fixture = findBenchmarkFixture(
+            manifest, "m7_spot_shadow_lod_near_mid_far_v1");
+        CHECK(fixture.sceneFactory.instanceGrid == glm::uvec3(1, 1, 3));
+        CHECK(fixture.sceneFactory.instanceSpacing == glm::vec3(0, 0, 12));
+        CHECK(fixture.lights.size() == 1);
+        CHECK(fixture.lights[0].type == BenchmarkLightType::Spot);
+        CHECK(fixture.lights[0].shadowQuality == BenchmarkShadowQuality::High);
+        CHECK(fixture.lights[0].castsShadows);
+        CHECK(fixture.lights[0].rangeMeters == 60.0f);
+        CHECK(fixture.contentFiles.size() == 2);
+        for (const BenchmarkContentFile& content : fixture.contentFiles)
+            CHECK(sha256File(content.path) == content.sha256);
+        CHECK(containsText(fixture.expectedBehavior,
+            "spotlight clip volume"));
+        CHECK(containsText(fixture.expectedBehavior,
+            "complete device-generated spot-shadow command multisets"));
+        return true;
+    }
+
+    bool testM7HeterogeneousShadowAdmissionFixtureContract() {
+        const BenchmarkManifest manifest = loadBenchmarkManifest(
+            m7HeterogeneousShadowAdmissionManifestPath());
+        CHECK(manifest.fixtures.size() == 1);
+        const BenchmarkFixture& fixture = findBenchmarkFixture(
+            manifest, "m7_heterogeneous_shadow_warm_motion_v1");
+        CHECK(fixture.sceneFactory.instanceGrid == glm::uvec3(8, 1, 4));
+        CHECK(fixture.sceneFactory.instanceSpacing == glm::vec3(4, 0, 4));
+        CHECK(fixture.sceneFactory.animateInstances);
+        CHECK(fixture.sceneFactory.motionAmplitude == 0.15f);
+        CHECK(fixture.sceneFactory.motionPeriodFrames == 120u);
+        CHECK(fixture.lights.size() == 5);
+        CHECK(std::ranges::count_if(fixture.lights,
+            [](const BenchmarkLight& light) {
+                return light.type == BenchmarkLightType::Directional &&
+                    light.castsShadows;
+            }) == 1);
+        CHECK(std::ranges::count_if(fixture.lights,
+            [](const BenchmarkLight& light) {
+                return light.type == BenchmarkLightType::Spot &&
+                    light.castsShadows;
+            }) == 2);
+        CHECK(std::ranges::count_if(fixture.lights,
+            [](const BenchmarkLight& light) {
+                return light.type == BenchmarkLightType::Point &&
+                    light.castsShadows;
+            }) == 2);
+        CHECK(fixture.warmupFrames == 120);
+        CHECK(fixture.measuredFrames == 600);
+        CHECK(fixture.contentFiles.size() == 1);
+        CHECK(sha256File(fixture.contentFiles[0].path) ==
+            fixture.contentFiles[0].sha256);
+        CHECK(containsText(fixture.expectedBehavior,
+            "isolated conventional-shadow reference"));
+        CHECK(containsText(fixture.expectedBehavior, "zero overflow"));
+        return true;
+    }
+
+    bool testM7ProbeLodAdmissionFixtureContract() {
+        const BenchmarkManifest manifest = loadBenchmarkManifest(
+            m7ProbeLodAdmissionManifestPath());
+        CHECK(manifest.fixtures.size() == 1);
+        const BenchmarkFixture& fixture = findBenchmarkFixture(
+            manifest, "m7_probe_lod_reflection_motion_v1");
+        CHECK(fixture.sceneFactory.instanceGrid == glm::uvec3(3, 1, 1));
+        CHECK(fixture.sceneFactory.animateInstances);
+        CHECK(fixture.warmupFrames == 120);
+        CHECK(fixture.measuredFrames == 600);
+        CHECK(fixture.reflectionProbeCapture.has_value());
+        const BenchmarkReflectionProbeCapture& probe =
+            *fixture.reflectionProbeCapture;
+        CHECK(probe.position == glm::vec3(0.0f, 3.0f, 4.0f));
+        CHECK(probe.updateMode ==
+            BenchmarkReflectionProbeUpdateMode::Realtime);
+        CHECK(probe.resolution == 1'024u);
+        CHECK(probe.nearPlane == 0.1f);
+        CHECK(probe.farPlane == 150.0f);
+        CHECK(probe.influenceRadiusMeters == 1'000.0f);
+        CHECK(probe.priority == 2);
+        CHECK(probe.captureSky);
+        CHECK(fixture.contentFiles.size() == 2);
+        CHECK(containsText(fixture.expectedBehavior,
+            "standalone non-renderable owner"));
+        CHECK(containsText(fixture.expectedBehavior,
+            "realtime capture cadence"));
+        return true;
+    }
+
+    bool testM7ShadowLodWarmedAdmissionFixtureContract() {
+        const BenchmarkManifest manifest = loadBenchmarkManifest(
+            m7ShadowLodWarmedAdmissionManifestPath());
+        CHECK(manifest.fixtures.size() == 1);
+        const BenchmarkFixture& fixture = findBenchmarkFixture(
+            manifest, "m7_shadow_lod_warm_motion_v1");
+        CHECK(fixture.sceneFactory.instanceGrid == glm::uvec3(4, 1, 2));
+        CHECK(fixture.sceneFactory.instanceSpacing == glm::vec3(7, 0, 9));
+        CHECK(fixture.sceneFactory.animateInstances);
+        CHECK(fixture.sceneFactory.motionAmplitude == 0.15f);
+        CHECK(fixture.sceneFactory.motionPeriodFrames == 120u);
+        CHECK(fixture.lights.size() == 5);
+        CHECK(std::ranges::count_if(fixture.lights,
+            [](const BenchmarkLight& light) {
+                return light.type == BenchmarkLightType::Directional &&
+                    light.castsShadows;
+            }) == 1);
+        CHECK(std::ranges::count_if(fixture.lights,
+            [](const BenchmarkLight& light) {
+                return light.type == BenchmarkLightType::Spot &&
+                    light.castsShadows;
+            }) == 2);
+        CHECK(std::ranges::count_if(fixture.lights,
+            [](const BenchmarkLight& light) {
+                return light.type == BenchmarkLightType::Point &&
+                    light.castsShadows;
+            }) == 2);
+        CHECK(fixture.warmupFrames == 120);
+        CHECK(fixture.measuredFrames == 600);
+        CHECK(fixture.contentFiles.size() == 2);
+        for (const BenchmarkContentFile& content : fixture.contentFiles)
+            CHECK(sha256File(content.path) == content.sha256);
+        CHECK(containsText(fixture.expectedBehavior,
+            "independently selects geometry"));
+        CHECK(containsText(fixture.expectedBehavior, "zero overflow"));
+        return true;
+    }
+
+    bool testM7ShadowQualityClosureFixtureContract() {
+        const BenchmarkManifest manifest = loadBenchmarkManifest(
+            m7ShadowQualityClosureManifestPath());
+        CHECK(manifest.fixtures.size() == 1);
+        const BenchmarkFixture& fixture = findBenchmarkFixture(
+            manifest, "m7_shadow_quality_closure_v1");
+        CHECK(fixture.camera.position == glm::vec3(0, 0, 28));
+        CHECK(fixture.camera.farPlane == 180.0f);
+        CHECK(fixture.sceneFactory.instanceGrid == glm::uvec3(3, 1, 1));
+        CHECK(fixture.sceneFactory.instanceSpacing == glm::vec3(8, 0, 0));
+        CHECK(fixture.sceneFactory.cameraOscillationAmplitude ==
+            glm::vec3(0, 0, 20));
+        CHECK(fixture.sceneFactory.cameraOscillationPeriodFrames == 120u);
+        CHECK(evaluateBenchmarkCamera(fixture, 30).position ==
+            glm::vec3(0, 0, 48));
+        CHECK(evaluateBenchmarkCamera(fixture, 90).position ==
+            glm::vec3(0, 0, 8));
+        CHECK(fixture.lights.size() == 1);
+        CHECK(fixture.lights[0].type == BenchmarkLightType::Directional);
+        CHECK(fixture.lights[0].rotationDegrees == glm::vec3(0, 110, 0));
+        CHECK(fixture.lights[0].shadowQuality ==
+            BenchmarkShadowQuality::Ultra);
+        CHECK(fixture.warmupFrames == 120u);
+        CHECK(fixture.measuredFrames == 240u);
+        CHECK(fixture.contentFiles.size() == 1);
+        CHECK(sha256File(fixture.contentFiles[0].path) ==
+            fixture.contentFiles[0].sha256);
+        CHECK(containsText(fixture.expectedBehavior, "staircase-shaped"));
+        CHECK(containsText(fixture.expectedBehavior, "fully clipped"));
+        CHECK(containsText(fixture.expectedBehavior, "Double-sided"));
+        CHECK(containsText(fixture.expectedBehavior, "peter-panning"));
+        CHECK(containsText(fixture.expectedBehavior, "byte-identical"));
         return true;
     }
 
@@ -692,6 +1305,37 @@ int main() {
         { "M6 pyramid fixture contract", testM6PyramidFixtureContract },
         { "M6 Ordinary2 runtime fixture contract",
             testM6Ordinary2RuntimeFixtureContract },
+        { "M7 three dense fixture contract", testM7ThreeDenseFixtureContract },
+        { "M7 occlusion temporal fixture contract",
+            testM7OcclusionTemporalFixtureContract },
+        { "M7 occlusion motion fixture contract",
+            testM7OcclusionMotionFixtureContract },
+        { "M7 occlusion small-object fixture contract",
+            testM7OcclusionSmallObjectFixtureContract },
+        { "M7 occlusion depth-content fixture contract",
+            testM7OcclusionDepthContentFixtureContract },
+        { "M7 occlusion performance fixture contract",
+            testM7OcclusionPerformanceFixtureContract },
+        { "M7 LOD oblique fixture contract", testM7LodObliqueFixtureContract },
+        { "M7 LOD history fixture contract", testM7LodHistoryFixtureContract },
+        { "M7 LOD lit admission fixture contract",
+            testM7LodLitAdmissionFixtureContract },
+        { "M7 directional-shadow grazing fixture contract",
+            testM7DirectionalShadowGrazingFixtureContract },
+        { "M7 directional-shadow LOD fixture contract",
+            testM7DirectionalShadowLodFixtureContract },
+        { "M7 point-shadow LOD fixture contract",
+            testM7PointShadowLodFixtureContract },
+        { "M7 spot-shadow LOD fixture contract",
+            testM7SpotShadowLodFixtureContract },
+        { "M7 heterogeneous-shadow admission fixture contract",
+            testM7HeterogeneousShadowAdmissionFixtureContract },
+        { "M7 probe-LOD admission fixture contract",
+            testM7ProbeLodAdmissionFixtureContract },
+        { "M7 shadow-LOD warmed admission fixture contract",
+            testM7ShadowLodWarmedAdmissionFixtureContract },
+        { "M7 shadow-quality closure fixture contract",
+            testM7ShadowQualityClosureFixtureContract },
         { "repeated loads are identical", testRepeatedLoadsAreIdentical },
         { "unknown fixture fails", testUnknownFixtureFails },
         { "instance count overflow is rejected", testInstanceCountOverflowIsRejected },

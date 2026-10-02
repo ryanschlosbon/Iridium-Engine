@@ -44,6 +44,12 @@ namespace Iridium {
 
     void registerCoreAssetViewers(EditorAssetViewerRegistry& registry) {
         registry.registerViewer({
+            .assetType = "iridium.model-primitive",
+            .viewerId = "iridium.viewer.primitive",
+            .kind = EditorAssetViewerKind::Primitive,
+            .presentationSource = EditorAssetPresentationSource::ParentAsset,
+        });
+        registry.registerViewer({
             .assetType = "iridium.model",
             .viewerId = "iridium.viewer.model",
             .kind = EditorAssetViewerKind::Model,
@@ -101,7 +107,13 @@ namespace Iridium {
             };
         }
         if (EditorAssetDocument* existing = findMutable(request.assetGuid)) {
+            ++existing->framingRevision;
             existing->activationSerial = ++activationSerial_;
+            if (existing->kind == EditorAssetViewerKind::Primitive) {
+                existing->selectedPart = request.assetGuid;
+                existing->selectedPartIsMaterial = false;
+                existing->isolateSelectedPart = true;
+            }
             activeAssetGuid_ = existing->assetGuid;
             return { .succeeded = true, .reused = true };
         }
@@ -129,6 +141,11 @@ namespace Iridium {
                     : request.displayName,
                 .kind = registration->kind,
                 .activationSerial = ++activationSerial_,
+                .sessionSerial = activationSerial_,
+                .selectedPart = registration->kind != EditorAssetViewerKind::Model
+                    ? std::optional(request.assetGuid) : std::nullopt,
+                .selectedPartIsMaterial = registration->kind == EditorAssetViewerKind::Material,
+                .isolateSelectedPart = registration->kind == EditorAssetViewerKind::Primitive,
             });
         }
         catch (...) {
@@ -137,6 +154,18 @@ namespace Iridium {
         }
         activeAssetGuid_ = request.assetGuid;
         return { .succeeded = true };
+    }
+
+    void EditorAssetDocumentService::selectPreviewPart(std::optional<AssetGuid> part,
+        bool material, bool isolate) noexcept {
+        if (!activeAssetGuid_) return;
+        if (auto* document = findMutable(*activeAssetGuid_)) {
+            if (document->isolateSelectedPart != (isolate && part.has_value()) ||
+                (isolate && document->selectedPart != part)) ++document->framingRevision;
+            document->selectedPart = part;
+            document->selectedPartIsMaterial = material;
+            document->isolateSelectedPart = isolate && part.has_value();
+        }
     }
 
     bool EditorAssetDocumentService::activate(AssetGuid assetGuid) noexcept {

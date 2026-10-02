@@ -21,6 +21,7 @@ namespace Iridium {
 
     struct VulkanPipelineRecord {
         VkPipeline pipeline = VK_NULL_HANDLE;
+        VkPipeline gpuSceneIndirectPipeline = VK_NULL_HANDLE;
         VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
         RenderPassClass renderPass = RenderPassClass::GBuffer;
     };
@@ -76,7 +77,10 @@ namespace Iridium {
         ResourcePool<VulkanPipelineRecord, PipelineHandle> pipelineRecords_;
         std::unordered_map<PipelineStateDesc, PipelineHandle, PipelineStateDescHash> pipelineMap_;
 
-        VkPipeline createPipeline(const PipelineStateDesc& desc, const VulkanPipelineTarget& target);
+        VkPipeline createPipeline(const PipelineStateDesc& desc,
+            const VulkanPipelineTarget& target,
+            const char* vertexShaderPath =
+                "assets/shaders/canonical_material_vert.spv");
         VkShaderModule createShaderModule(const std::vector<char>& code) const;
         const VulkanPipelineTarget& getTarget(RenderPassClass renderPass) const;
     };

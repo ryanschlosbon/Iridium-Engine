@@ -3,11 +3,15 @@
 #include "assets/environment/EnvironmentProduct.h"
 #include "assets/model/ModelProduct.h"
 #include "assets/model/ModelRuntimeProduct.h"
+#include "material/MaterialAuthoringPatch.h"
+#include "assets/model/MaterialPreviewPolicy.h"
 #include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
+#include <iostream>
 #include <memory>
 #include <optional>
 #include <set>
@@ -48,10 +52,215 @@ namespace Iridium {
 
     } // namespace
 
-    AssetManager::AssetManager(IRenderBackend* backend)
-        : renderBackend(backend) {}
+    AssetManager::AssetManager(IRenderBackend* backend,
+        TransparencyExecutionMode runtimeTransparencyExecutionMode,
+        uint32_t minimumResidentLodLevel)
+        : renderBackend(backend),
+          runtimeTransparencyExecutionMode_(
+              runtimeTransparencyExecutionMode),
+          minimumResidentLodLevel_(minimumResidentLodLevel) {
+        if (minimumResidentLodLevel_ >= MaximumGpuSceneLodLevels) {
+            throw std::invalid_argument(
+                "Asset manager LOD residency floor exceeds the GPU-scene ABI");
+        }
+    }
+
+    void AssetManager::requestMaterialPreview(AssetGuid document, AssetGuid root,
+        const std::map<AssetGuid, SourceMaterial>& sources, const nlohmann::json& settings,
+        std::string_view sourceCookKey, const nlohmann::json& publishedSettings) {
+        if (sources.empty()) return;
+        auto& preview = materialPreviews_[document];
+        if (preview.root == root && preview.settings == settings && preview.publishedSettings == publishedSettings && preview.sourceCookKey == sourceCookKey && !preview.sources.empty()) return;
+        preview.root = root;
+        preview.sources = sources;
+        preview.settings = settings;
+        preview.publishedSettings = publishedSettings;
+        preview.sourceCookKey = sourceCookKey;
+        preview.pending = true;
+        preview.requestSerial = ++previewRequestSerial_;
+    }
+
+    std::shared_ptr<ModelAsset> AssetManager::findMaterialPreview(AssetGuid document) const {
+        const auto found = materialPreviews_.find(document);
+        if (found == materialPreviews_.end()) return {};
+        const auto parent = findCookedModel(found->second.root);
+        return parent && parent->artifactCookKey == found->second.cookKey ? found->second.model : nullptr;
+    }
+
+    std::string AssetManager::materialPreviewDiagnostic(AssetGuid document) const {
+        const auto found = materialPreviews_.find(document);
+        return found == materialPreviews_.end() ? std::string{} : found->second.diagnostic;
+    }
+
+    void AssetManager::processMaterialPreviews(std::span<const AssetGuid> openDocuments) {
+        auto completion = previewCompiler_.poll();
+        const auto release = [&](MaterialPreview& preview) {
+            for (const auto& binding : preview.ownedBindings) renderBackend->freeMaterial(binding.material);
+            preview.ownedBindings.clear();
+            preview.canonicalAssets.clear();
+            preview.model.reset();
+        };
+        for (auto it = materialPreviews_.begin(); it != materialPreviews_.end();) {
+            if (std::ranges::find(openDocuments, it->first) == openDocuments.end()) {
+                release(it->second);
+                it = materialPreviews_.erase(it);
+                continue;
+            }
+            auto& preview = it++->second;
+            const auto parent = findCookedModel(preview.root);
+            const auto input = previewInputs_.find(preview.root);
+            if (!parent || input == previewInputs_.end()) continue;
+            if (preview.cookKey != parent->artifactCookKey) {
+                release(preview);
+                preview.pending = true;
+                preview.requestSerial = ++previewRequestSerial_;
+                preview.cookKey = parent->artifactCookKey;
+            }
+            const bool completed = completion && completion->serial == preview.requestSerial;
+            if (!preview.pending && !completed) continue;
+            if (preview.sourceCookKey != input->second.cookKey) {
+                preview.diagnostic = "Waiting for matching source material revision after reimport...";
+                continue;
+            }
+            std::vector<MaterialBinding> allocated;
+            try {
+                if (!completed) {
+                    if (previewCompiler_.busy()) continue;
+                    auto inputs = input->second;
+                    auto policies = applyPreviewPolicySettings(inputs.product, preview.sources, preview.settings);
+                    auto compile = [inputs = std::move(inputs), sources = preview.sources,
+                        settings = preview.settings, publishedSettings = preview.publishedSettings,
+                        executionMode = runtimeTransparencyExecutionMode_]() {
+                        CookedModelProductData product = inputs.product;
+                        auto views = inputs.views;
+                        const auto patches = settings.value("material_overrides", nlohmann::json::object());
+                        for (auto& material : product.materials) {
+                            const auto source = sources.find(material.materialGuid);
+                            if (source == sources.end()) continue;
+                            const auto patch = patches.value(material.materialGuid.toString(),
+                                nlohmann::json{{"schema_version", 1}, {"values", nlohmann::json::object()}});
+                            auto edited = withMaterialAuthoringPatch(source->second, patch);
+                            auto compiled = compileSourceMaterial(edited);
+                            const auto publishedPatch = publishedSettings.value("material_overrides", nlohmann::json::object()).value(
+                                material.materialGuid.toString(), nlohmann::json{{"schema_version", 1}, {"values", nlohmann::json::object()}});
+                            const auto baseline = compileSourceMaterial(withMaterialAuthoringPatch(source->second, publishedPatch));
+                            if (!compiled.succeeded()) {
+                                std::string error = "Preview compilation failed";
+                                for (const auto& diagnostic : compiled.diagnostics) error += ": " + diagnostic.message;
+                                throw std::runtime_error(error);
+                            }
+                            // Topology-dependent routing must stay consistent with the
+                            // cooked primitive contract. Do not pretend a scalar update
+                            // can validate a new closed-volume transport classification.
+                            if (!baseline.succeeded()) throw std::runtime_error("Imported source material cannot be previewed");
+                            if (compiled.material->standard.alphaMode != material.compiled.standard.alphaMode ||
+                                compiled.material->transparency.resolvedClass != baseline.material->transparency.resolvedClass)
+                                throw std::runtime_error("Coverage/transport route changed: Apply and reimport is required. Last valid preview retained.");
+                            std::vector<CookedModelTextureBinding> remapped;
+                            std::vector<RuntimeTextureViewBinding> remappedViews;
+                            for (uint32_t operation = 0; operation < compiled.material->textureOperations.size(); ++operation) {
+                                const auto semantic = compiled.material->textureOperations[operation].semantic;
+                                const auto old = std::ranges::find_if(material.compiled.textureOperations,
+                                    [&](const auto& value) { return value.semantic == semantic; });
+                                if (old == material.compiled.textureOperations.end())
+                                    throw std::runtime_error("New texture bindings require Apply and reimport");
+                                const auto oldIndex = static_cast<uint32_t>(old - material.compiled.textureOperations.begin());
+                                const auto binding = std::ranges::find_if(material.textureBindings,
+                                    [&](const auto& value) { return value.operationIndex == oldIndex; });
+                                const auto view = std::ranges::find_if(views, [&](const auto& value) {
+                                    return value.materialGuid == material.materialGuid && value.operationIndex == oldIndex;
+                                });
+                                if (binding == material.textureBindings.end() || view == views.end())
+                                    throw std::runtime_error("Preview texture is not resident");
+                                remapped.push_back(*binding);
+                                remapped.back().operationIndex = operation;
+                                remappedViews.push_back(*view);
+                                remappedViews.back().operationIndex = operation;
+                            }
+                            std::erase_if(views, [&](const auto& value) { return value.materialGuid == material.materialGuid; });
+                            views.insert(views.end(), remappedViews.begin(), remappedViews.end());
+                            material.textureBindings = std::move(remapped);
+                            const auto policy = material.compiled.transparency;
+                            material.compiled = *compiled.material;
+                            material.compiled.transparency = policy;
+                        }
+                        const auto canonical = makeRuntimeCanonicalMaterials(product, views,
+                            inputs.fallbacks, false, executionMode);
+                        if (!canonical.valid()) throw std::runtime_error("Preview material packing failed; last valid preview retained");
+                        return canonical;
+                    };
+                    if (previewCompiler_.submit(preview.requestSerial, std::move(compile))) {
+                        preview.preparedPrimitivePolicies = std::move(policies);
+                        preview.pending = false;
+                        preview.diagnostic = "Compiling private preview; showing the last valid material...";
+                    }
+                    continue;
+                }
+                if (!completion->diagnostic.empty()) throw std::runtime_error(completion->diagnostic);
+                const auto& canonical = completion->result;
+                const auto bindPrimitives = [&](ModelAsset& model) {
+                    for (auto& primitive : model.subMeshes) {
+                        const auto policy = preview.preparedPrimitivePolicies.find(primitive.primitiveGuid);
+                        if (policy == preview.preparedPrimitivePolicies.end())
+                            throw std::runtime_error("Preview primitive policy is unresolved");
+                        const auto material = std::ranges::find_if(canonical.materials, [&](const auto& value) {
+                            return value.materialGuid == primitive.materialGuid &&
+                                (runtimeTransparencyExecutionMode_ != TransparencyExecutionMode::Classified ||
+                                    value.transparency == policy->second);
+                        });
+                        if (material == canonical.materials.end()) throw std::runtime_error("Preview material slot is unresolved");
+                        primitive.transparency = policy->second;
+                        primitive.materialIndex = static_cast<int>(material - canonical.materials.begin());
+                    }
+                };
+                bool updateOnly = preview.model && preview.canonicalAssets.size() == canonical.materials.size();
+                for (size_t index = 0; updateOnly && index < canonical.materials.size(); ++index) {
+                    const auto& before = preview.canonicalAssets[index];
+                    const auto& after = canonical.materials[index].asset;
+                    updateOnly = before.pipelineState == after.pipelineState && before.textures == after.textures &&
+                        before.packed.closureClass == after.packed.closureClass;
+                }
+                if (updateOnly) {
+                    auto rebound = preview.model;
+                    if (preview.preparedPrimitivePolicies != preview.publishedPrimitivePolicies) {
+                        rebound = std::make_shared<ModelAsset>(*preview.model);
+                        bindPrimitives(*rebound);
+                    }
+                    for (size_t index = 0; index < canonical.materials.size(); ++index) {
+                        const auto& next = canonical.materials[index].asset;
+                        if (std::memcmp(&preview.canonicalAssets[index].packed, &next.packed, sizeof(PackedGpuMaterial)) != 0)
+                            renderBackend->updateCanonicalMaterial(preview.ownedBindings[index].material, next.packed);
+                        preview.canonicalAssets[index] = next;
+                    }
+                    preview.model = std::move(rebound);
+                    preview.publishedPrimitivePolicies = preview.preparedPrimitivePolicies;
+                    preview.diagnostic = "Private live preview. Apply publishes to shared scene materials; Revert discards draft edits.";
+                    continue;
+                }
+                auto model = std::make_shared<ModelAsset>(*parent);
+                model->ownsGeometry = model->ownsMaterials = model->ownsTextures = false;
+                model->materials.clear();
+                for (const auto& material : canonical.materials) {
+                    allocated.push_back(renderBackend->allocateCanonicalMaterial(material.asset));
+                    model->materials.push_back(allocated.back());
+                }
+                bindPrimitives(*model);
+                release(preview);
+                preview.model = std::move(model);
+                preview.ownedBindings = std::move(allocated);
+                preview.publishedPrimitivePolicies = preview.preparedPrimitivePolicies;
+                for (const auto& material : canonical.materials) preview.canonicalAssets.push_back(material.asset);
+                preview.diagnostic = "Private live preview. Apply publishes to shared scene materials; Revert discards draft edits.";
+            } catch (const std::exception& error) {
+                preview.pending = false;
+                for (const auto& binding : allocated) renderBackend->freeMaterial(binding.material);
+                preview.diagnostic = error.what();
+            }
+        }
+    }
 
     AssetManager::~AssetManager() {
+        processMaterialPreviews({});
         std::set<MaterialHandle> freedMaterials;
         std::set<TextureHandle> freedTextures;
         std::set<GeometryHandle> freedGeometry;
@@ -103,8 +312,14 @@ namespace Iridium {
 
         for (auto& pair : cookedModelCache) {
             auto asset = pair.second;
-            if (asset->ownsGeometry && asset->geometry.isValid() &&
-                freedGeometry.insert(asset->geometry).second) {
+            if (!asset->ownsGeometry) continue;
+            if (!asset->geometryArena.empty()) {
+                renderBackend->freeGeometryArena(asset->geometryArena);
+                for (GeometryHandle handle : asset->geometryArena)
+                    freedGeometry.insert(handle);
+            }
+            else if (asset->geometry.isValid() &&
+                    freedGeometry.insert(asset->geometry).second) {
                 renderBackend->freeGeometry(asset->geometry);
             }
         }
@@ -228,6 +443,71 @@ namespace Iridium {
         desc.indexFormat = IndexFormat::UInt32;
         asset->geometry = renderBackend->allocateGeometry(desc,
             std::as_bytes(std::span(vertices)), std::as_bytes(std::span(indices)));
+        asset->sourceIndexBytes = indices.size() * sizeof(uint32_t);
+        asset->arenaIndexBytes = asset->sourceIndexBytes;
+        for (SubMesh& primitive : asset->subMeshes) {
+            primitive.geometry = asset->geometry;
+            primitive.indexFormat = 1;
+        }
+    }
+
+    void AssetManager::uploadArenaToGPU(ModelAsset* asset,
+        const RuntimeModelCpuData& geometry) {
+        GeometryArenaAllocation allocation =
+            renderBackend->allocateGeometryArena(sizeof(Vertex),
+                std::as_bytes(std::span(geometry.vertices)),
+                geometry.geometryArena);
+        if (!allocation.valid() || allocation.primitiveGeometry.size() !=
+                geometry.geometryArena.primitives.size()) {
+            if (!allocation.primitiveGeometry.empty())
+                renderBackend->freeGeometryArena(
+                    allocation.primitiveGeometry);
+            throw std::runtime_error(
+                "Backend returned an incomplete geometry arena allocation");
+        }
+        try {
+            const auto assignRange = [&](SubMesh& primitive) {
+                const GeometryArenaPrimitiveIdentity identity{
+                    primitive.sourcePrimitiveGuid, primitive.primitiveGuid };
+                const auto found = std::ranges::find(
+                    geometry.geometryArena.primitives, identity,
+                    &GeometryArenaPrimitiveRange::identity);
+                if (found == geometry.geometryArena.primitives.end()) {
+                    throw std::logic_error(
+                        "Runtime primitive is absent from its geometry arena");
+                }
+                const size_t rangeIndex = static_cast<size_t>(
+                    found - geometry.geometryArena.primitives.begin());
+                primitive.geometry =
+                    allocation.primitiveGeometry[rangeIndex];
+                primitive.indexStart = found->firstIndex;
+                primitive.vertexOffset = found->vertexOffset;
+                primitive.indexFormat = found->indexStream ==
+                        GeometryArenaIndexStream::UInt16 ? 0u : 1u;
+            };
+            for (SubMesh& primitive : asset->subMeshes) {
+                assignRange(primitive);
+            }
+            for (ModelLodChain& chain : asset->lodChains) {
+                for (ModelLodLevel& level : chain.levels)
+                    assignRange(level.subMesh);
+            }
+        }
+        catch (...) {
+            renderBackend->freeGeometryArena(
+                allocation.primitiveGeometry);
+            throw;
+        }
+        asset->geometryArena = std::move(
+            allocation.primitiveGeometry);
+        asset->geometry = asset->geometryArena.front();
+        asset->sourceIndexBytes = geometry.geometryArena.stats.sourceIndexBytes;
+        asset->arenaIndexBytes = geometry.geometryArena.stats.arenaIndexBytes;
+        asset->arenaSavedIndexBytes = geometry.geometryArena.stats.savedIndexBytes;
+        asset->arenaUInt16IndexCount =
+            geometry.geometryArena.stats.uint16IndexCount;
+        asset->arenaUInt32IndexCount =
+            geometry.geometryArena.stats.uint32IndexCount;
     }
 
     std::shared_ptr<ModelAsset> AssetManager::loadModelFromCookedArtifact(
@@ -266,6 +546,9 @@ namespace Iridium {
             }
             throw std::runtime_error(message);
         }
+        const RuntimeModelLodResidencyStats lodResidency =
+            applyRuntimeModelLodResidencyFloor(
+                *runtime.data, minimumResidentLodLevel_);
         ResolvedRuntimeModelCpuResult resolved =
             resolveRuntimeModelMaterials(
                 std::move(*runtime.data), materials);
@@ -291,12 +574,31 @@ namespace Iridium {
         model->ownsTextures = false;
         model->subMeshes =
             std::move(resolved.data->geometry.primitives);
+        model->lodChains =
+            std::move(resolved.data->geometry.lodChains);
         model->materials = std::move(resolved.data->materials);
         model->totalIndices =
             static_cast<uint32_t>(
                 resolved.data->geometry.indices.size());
-        uploadToGPU(model.get(), resolved.data->geometry.vertices,
-            resolved.data->geometry.indices);
+        model->lodResidentBaseLevel = lodResidency.maximumAppliedLevel;
+        model->lodFallbackChainCount = lodResidency.fallbackChainCount;
+        model->lodWithheldPrimitiveRangeCount =
+            lodResidency.withheldPrimitiveRangeCount;
+        model->lodWithheldIndexBytes = lodResidency.withheldIndexBytes();
+        uploadArenaToGPU(model.get(), resolved.data->geometry);
+        if (lodResidency.fallbackChainCount != 0u) {
+            std::cout << "IRIDIUM_LOD_PHYSICAL_FALLBACK {\"asset_guid\":\""
+                << model->assetGuid.toString() << "\",\"requested_floor\":"
+                << lodResidency.requestedMinimumLevel
+                << ",\"maximum_applied_floor\":"
+                << lodResidency.maximumAppliedLevel
+                << ",\"fallback_chains\":"
+                << lodResidency.fallbackChainCount
+                << ",\"withheld_ranges\":"
+                << lodResidency.withheldPrimitiveRangeCount
+                << ",\"withheld_index_bytes\":"
+                << lodResidency.withheldIndexBytes() << "}\n";
+        }
         cookedModelCache.emplace(artifact.assetGuid, model);
         if (onModelLoadedCallback) onModelLoadedCallback(model);
         return model;
@@ -493,14 +795,19 @@ namespace Iridium {
             const RuntimeMaterialFallbacks& fallbacks,
             bool notifyLoaded) {
         RuntimeModelCpuResult geometry =
-            makeRuntimeModelCpuData(product, false);
+            makeRuntimeModelCpuData(product, false,
+                runtimeTransparencyExecutionMode_);
         if (!geometry.valid()) {
             throw std::runtime_error(
                 "Complete cooked model geometry conversion failed.");
         }
+        const RuntimeModelLodResidencyStats lodResidency =
+            applyRuntimeModelLodResidencyFloor(
+                *geometry.data, minimumResidentLodLevel_);
         RuntimeCanonicalMaterialResult canonical =
             makeRuntimeCanonicalMaterials(product,
-                textureViews, fallbacks, false);
+                textureViews, fallbacks, false,
+                runtimeTransparencyExecutionMode_);
         if (!canonical.valid()) {
             std::string message =
                 "Complete cooked model material reconstruction failed";
@@ -577,14 +884,19 @@ namespace Iridium {
         model->ownsTextures = false;
         model->subMeshes =
             std::move(resolved.data->geometry.primitives);
+        model->lodChains =
+            std::move(resolved.data->geometry.lodChains);
         model->materials =
             std::move(resolved.data->materials);
         model->totalIndices = static_cast<uint32_t>(
             resolved.data->geometry.indices.size());
+        model->lodResidentBaseLevel = lodResidency.maximumAppliedLevel;
+        model->lodFallbackChainCount = lodResidency.fallbackChainCount;
+        model->lodWithheldPrimitiveRangeCount =
+            lodResidency.withheldPrimitiveRangeCount;
+        model->lodWithheldIndexBytes = lodResidency.withheldIndexBytes();
         try {
-            uploadToGPU(model.get(),
-                resolved.data->geometry.vertices,
-                resolved.data->geometry.indices);
+            uploadArenaToGPU(model.get(), resolved.data->geometry);
         } catch (...) {
             for (const MaterialBinding& binding :
                 model->materials) {
@@ -595,6 +907,27 @@ namespace Iridium {
             }
             throw;
         }
+        if (lodResidency.fallbackChainCount != 0u) {
+            std::cout << "IRIDIUM_LOD_PHYSICAL_FALLBACK {\"asset_guid\":\""
+                << model->assetGuid.toString() << "\",\"requested_floor\":"
+                << lodResidency.requestedMinimumLevel
+                << ",\"maximum_applied_floor\":"
+                << lodResidency.maximumAppliedLevel
+                << ",\"fallback_chains\":"
+                << lodResidency.fallbackChainCount
+                << ",\"withheld_ranges\":"
+                << lodResidency.withheldPrimitiveRangeCount
+                << ",\"withheld_index_bytes\":"
+                << lodResidency.withheldIndexBytes() << "}\n";
+        }
+        PreviewInputs inputs;
+        inputs.product.materials = product.materials;
+        inputs.product.manifest.primitives = product.manifest.primitives;
+        inputs.product.manifest.transparencyExecutionMode = product.manifest.transparencyExecutionMode;
+        inputs.views.assign(textureViews.begin(), textureViews.end());
+        inputs.fallbacks = fallbacks;
+        inputs.cookKey = artifact.cookKey;
+        previewInputs_.insert_or_assign(artifact.assetGuid, std::move(inputs));
         cookedModelCache.emplace(artifact.assetGuid, model);
         if (notifyLoaded && onModelLoadedCallback) {
             onModelLoadedCallback(model);
@@ -828,9 +1161,14 @@ namespace Iridium {
             replacement->ownsTextures = false;
         }
         if (replacement->ownsGeometry &&
-            replacement->geometry.isValid()) {
-            renderBackend->freeGeometry(
-                replacement->geometry);
+            !replacement->geometryArena.empty()) {
+            renderBackend->freeGeometryArena(
+                replacement->geometryArena);
+            replacement->ownsGeometry = false;
+        }
+        else if (replacement->ownsGeometry &&
+                replacement->geometry.isValid()) {
+            renderBackend->freeGeometry(replacement->geometry);
             replacement->ownsGeometry = false;
         }
         if (onModelLoadedCallback) {

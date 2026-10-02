@@ -16,6 +16,9 @@ namespace Iridium::Color {
         SdrSrgb,
         ScRgb,
         Hdr10Pq,
+        // Runtime preference only. The renderer resolves this to one of the
+        // concrete transports before recording output-transform work.
+        Automatic,
     };
 
     enum class OutputProfile : uint8_t {

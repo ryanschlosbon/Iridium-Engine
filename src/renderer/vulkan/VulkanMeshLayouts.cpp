@@ -44,15 +44,38 @@ namespace Iridium {
             materialSetLayout_ = indexedMaterialSetLayout;
             samplerSetLayout_ = indexedSamplerSetLayout;
 
+            std::array<VkDescriptorSetLayoutBinding, 4> gpuSceneBindings{};
+            for (uint32_t binding = 0; binding < gpuSceneBindings.size();
+                    ++binding) {
+                gpuSceneBindings[binding].binding = binding;
+                gpuSceneBindings[binding].descriptorType =
+                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                gpuSceneBindings[binding].descriptorCount = 1u;
+                gpuSceneBindings[binding].stageFlags =
+                    VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
+            }
+            VkDescriptorSetLayoutCreateInfo gpuSceneLayoutInfo{
+                VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
+            gpuSceneLayoutInfo.bindingCount = static_cast<uint32_t>(
+                gpuSceneBindings.size());
+            gpuSceneLayoutInfo.pBindings = gpuSceneBindings.data();
+            if (vkCreateDescriptorSetLayout(device_, &gpuSceneLayoutInfo,
+                    nullptr, &gpuSceneSetLayout_) != VK_SUCCESS) {
+                throw std::runtime_error(
+                    "failed to create GPU-scene descriptor set layout");
+            }
+
             VkPushConstantRange meshPushConstants{};
             meshPushConstants.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
             meshPushConstants.offset = 0;
             meshPushConstants.size = sizeof(CanonicalMeshPushConstants);
 
-            std::array<VkDescriptorSetLayout, 3> gBufferSetLayouts{
-                globalSetLayout_, materialSetLayout_, samplerSetLayout_ };
+            std::array<VkDescriptorSetLayout, 5> gBufferSetLayouts{
+                globalSetLayout_, materialSetLayout_, samplerSetLayout_,
+                lightingSetLayout, gpuSceneSetLayout_ };
             VkPipelineLayoutCreateInfo gBufferLayoutInfo{ VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
-            gBufferLayoutInfo.setLayoutCount = 3u;
+            gBufferLayoutInfo.setLayoutCount = static_cast<uint32_t>(
+                gBufferSetLayouts.size());
             gBufferLayoutInfo.pSetLayouts = gBufferSetLayouts.data();
             gBufferLayoutInfo.pushConstantRangeCount = 1;
             gBufferLayoutInfo.pPushConstantRanges = &meshPushConstants;
@@ -61,11 +84,12 @@ namespace Iridium {
                 throw std::runtime_error("failed to create G-buffer pipeline layout");
             }
 
-            std::array<VkDescriptorSetLayout, 4> forwardSetLayouts{
+            std::array<VkDescriptorSetLayout, 5> forwardSetLayouts{
                 globalSetLayout_, materialSetLayout_,
-                samplerSetLayout_, lightingSetLayout };
+                samplerSetLayout_, lightingSetLayout, gpuSceneSetLayout_ };
             VkPipelineLayoutCreateInfo forwardLayoutInfo{ VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
-            forwardLayoutInfo.setLayoutCount = 4u;
+            forwardLayoutInfo.setLayoutCount = static_cast<uint32_t>(
+                forwardSetLayouts.size());
             forwardLayoutInfo.pSetLayouts = forwardSetLayouts.data();
             forwardLayoutInfo.pushConstantRangeCount = 1;
             forwardLayoutInfo.pPushConstantRanges = &meshPushConstants;
@@ -94,6 +118,10 @@ namespace Iridium {
         }
         materialSetLayout_ = VK_NULL_HANDLE;
         samplerSetLayout_ = VK_NULL_HANDLE;
+        if (gpuSceneSetLayout_ != VK_NULL_HANDLE) {
+            vkDestroyDescriptorSetLayout(device_, gpuSceneSetLayout_, nullptr);
+            gpuSceneSetLayout_ = VK_NULL_HANDLE;
+        }
         if (globalSetLayout_ != VK_NULL_HANDLE) {
             vkDestroyDescriptorSetLayout(device_, globalSetLayout_, nullptr);
             globalSetLayout_ = VK_NULL_HANDLE;

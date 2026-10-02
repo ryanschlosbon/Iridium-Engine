@@ -1,4 +1,5 @@
 #include "material/MaterialRuntime.h"
+#include "material/TransparencyDiagnostics.h"
 
 #include "renderer/color/SceneColor.h"
 #include "utils/Sha256.h"
@@ -672,6 +673,8 @@ namespace Iridium {
         root["compiled"] = nullptr;
         if (compileResult.material) {
             const CompiledMaterial& compiled = *compileResult.material;
+            const TransparencyDiagnosticSummary transparencyDiagnostics =
+                describeTransparencyPolicy(compiled.transparency);
             root["compiled"] = {
                 { "schema_version", compiled.schemaVersion },
                 { "hash", compiled.contentHash },
@@ -703,6 +706,25 @@ namespace Iridium {
                     { "priority", compiled.transparency.priority },
                     { "thin_sheet_thickness_m",
                         compiled.transparency.thinSheetThicknessMeters },
+                    { "execution_route", transparencyExecutionRouteName(
+                        compiled.transparency.resolvedClass) },
+                    { "topology_status",
+                        transparencyTopologyDiagnosticName(
+                            transparencyDiagnostics.topology) },
+                    { "topology_explanation",
+                        transparencyTopologyDiagnosticDescription(
+                            transparencyDiagnostics.topology) },
+                    { "fallback_reason", transparencyFallbackReasonName(
+                        transparencyDiagnostics.fallback) },
+                    { "fallback_explanation",
+                        transparencyFallbackReasonDescription(
+                            transparencyDiagnostics.fallback) },
+                    { "explicit_class",
+                        transparencyDiagnostics.explicitClass },
+                    { "fallback_applied",
+                        transparencyDiagnostics.fallbackApplied },
+                    { "policy_sanitized",
+                        transparencyDiagnostics.policySanitized },
                 } },
             };
             root["compiled"]["complex_lobes"] = Json::array();

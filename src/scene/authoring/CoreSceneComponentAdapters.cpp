@@ -126,6 +126,7 @@ namespace Iridium {
             if (!value) { data = nullptr; return true; }
             ensureObject(data);
             data["enabled"] = value->enabled;
+            data["maximumLodLevel"] = value->maximumLodLevel;
             const AssetGuid model = !value->requestedAssetGuid.isNil()
                 ? value->requestedAssetGuid
                 : !value->assetGuid.isNil()
@@ -160,6 +161,8 @@ namespace Iridium {
             const SourceJson& data, std::string& error) {
             auto& value = registry.addComponent<MeshComponent>(entity);
             value.enabled = data.value("enabled", true);
+            value.maximumLodLevel = data.value("maximumLodLevel",
+                MeshComponent::MaximumLodLevel);
             value.model.reset();
             value.assetGuid = {};
             value.requestedAssetGuid = {};
@@ -191,6 +194,13 @@ namespace Iridium {
 
         bool validateMeshSource(const SourceJson& data, std::string& error) {
             if (!objectData(data, error)) return false;
+            const int32_t maximumLodLevel = data.value("maximumLodLevel",
+                MeshComponent::MaximumLodLevel);
+            if (maximumLodLevel < 0 ||
+                maximumLodLevel > MeshComponent::MaximumLodLevel) {
+                error = "Mesh maximum LOD level must be between 0 and 15";
+                return false;
+            }
             constexpr std::array removedPaths{
                 "meshPath", "mesh_path", "currentMeshPath",
                 "requestedMeshPath", "requestedAssetSourcePath",
@@ -202,6 +212,19 @@ namespace Iridium {
                     return false;
                 }
             }
+            return true;
+        }
+
+        bool migrateMeshV1(const SourceJson& input, SourceJson& output,
+            std::vector<SourceMigrationNotice>& notices, std::string& error) {
+            if (!input.is_object()) {
+                error = "Mesh v1 data must be an object";
+                return false;
+            }
+            output = input;
+            output["maximumLodLevel"] = MeshComponent::MaximumLodLevel;
+            notices.push_back({ "mesh.v1_lod_policy_adopted", "/maximumLodLevel",
+                "Mesh v1 adopted the default project-controlled maximum LOD level" });
             return true;
         }
 
@@ -688,7 +711,8 @@ namespace Iridium {
         }
         bool validateMeshRuntime(const Registry& registry, Entity entity) {
             const auto* value = component<MeshComponent>(registry, entity);
-            if (!value) return false;
+            if (!value || value->maximumLodLevel < 0 ||
+                value->maximumLodLevel > MeshComponent::MaximumLodLevel) return false;
             std::set<AssetGuid> sources;
             for (const auto& entry : value->materialOverrides) {
                 if (entry.sourceMaterialGuid.isNil() || entry.materialGuid.isNil() ||
@@ -805,7 +829,8 @@ namespace Iridium {
             CookedComponentWriter& writer) {
             const auto* value = component<MeshComponent>(registry, entity);
             if (!value || !writer.writeBoolean(value->enabled) ||
-                !writer.writeAssetReference(meshModelGuid(*value))) return false;
+                !writer.writeAssetReference(meshModelGuid(*value)) ||
+                !writer.writeInt32(value->maximumLodLevel)) return false;
             std::vector<MeshComponent::MaterialOverride> overrides =
                 value->materialOverrides;
             std::ranges::sort(overrides,
@@ -831,10 +856,13 @@ namespace Iridium {
             CookedComponentReader& reader) {
             bool enabled = true;
             AssetGuid model;
+            int32_t maximumLodLevel = MeshComponent::MaximumLodLevel;
             uint32_t count = 0;
             if (!reader.readBoolean(enabled) ||
                 !reader.readAssetReference("model", false,
                     StableReferenceKind::Asset, model) ||
+                !reader.readInt32(maximumLodLevel) || maximumLodLevel < 0 ||
+                maximumLodLevel > MeshComponent::MaximumLodLevel ||
                 !reader.readUInt32(count) || count > reader.remaining() / 8) {
                 return false;
             }
@@ -859,6 +887,7 @@ namespace Iridium {
             if (!reader.finish()) return false;
             auto& value = registry.addComponent<MeshComponent>(entity);
             value.enabled = enabled;
+            value.maximumLodLevel = maximumLodLevel;
             value.model.reset();
             value.assetGuid = model;
             value.requestedAssetGuid = model;
@@ -1113,6 +1142,8 @@ namespace Iridium {
             .bakedLightingSet = { serializeBakedLightingSet,
                 deserializeBakedLightingSet, validateBakedLightingSetSource },
         };
+        sourceCallbacks.mesh.currentSourceVersion = 2;
+        sourceCallbacks.mesh.migrations = { { 1, 2, migrateMeshV1 } };
         sourceCallbacks.light.currentSourceVersion = 2;
         sourceCallbacks.light.migrations = { { 1, 2, migrateLightV1 } };
         CoreSourceRegistryResult source =

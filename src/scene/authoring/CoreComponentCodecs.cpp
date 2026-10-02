@@ -55,6 +55,7 @@ namespace Iridium {
         status = add(codec("iridium.component.mesh", 3, {
             binding("enabled", "enabled"),
             binding("model", "model"),
+            binding("maximum_lod_level", "maximumLodLevel"),
             binding("material_overrides", "materialOverrides"),
         }, callbacks.mesh));
         if (!status) return { std::move(registry), std::move(status) };

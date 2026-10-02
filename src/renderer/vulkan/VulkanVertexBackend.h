@@ -10,6 +10,9 @@
 
 #include "../rhi/IRenderBackend.h"
 #include "../rhi/ResourcePool.h"
+#include "../rhi/GpuSceneUploadPlanner.h"
+#include "../rhi/GpuSceneIndirect.h"
+#include "../rhi/GpuSceneLod.h"
 
 #include "VkContext.h"
 #include "VkSwapchain.h"
@@ -33,9 +36,11 @@
 #include "VulkanSceneDescriptors.h"
 #include "VulkanRenderGraphExecutor.h"
 #include "VulkanTransparencyPyramid.h"
+#include "VulkanDepthPyramid.h"
 #include "VulkanLayeredInterfaceCapturePass.h"
 #include "VulkanLayeredLocalCompositionPass.h"
 #include "VulkanLayeredSceneResolvePass.h"
+#include "VulkanWeightedOitPass.h"
 #include "VulkanOutputPass.h"
 #include "VulkanHdrEncodePass.h"
 #include "VulkanIndexedTextureTable.h"
@@ -46,6 +51,7 @@
 #include "VulkanDirectionalShadowMap.h"
 #include "VulkanSpotShadowAtlas.h"
 #include "VulkanPointShadowPools.h"
+#include "VulkanVirtualShadowResources.h"
 #include "renderer/transparency/TransparencyPyramidResidency.h"
 #include "renderer/transparency/LayeredAtlas.h"
 #include "renderer/transparency/Ordinary2Atlas.h"
@@ -62,8 +68,13 @@ namespace Iridium {
     struct VulkanGeometryPayload {
         VulkanBufferResource vertexBuffer;
         VulkanBufferResource indexBuffer;
+        VulkanBufferResource arenaUInt16IndexBuffer;
+        VulkanBufferResource arenaUInt32IndexBuffer;
+        VkDeviceSize vertexOffset = 0;
         uint32_t indexCount = 0;
         IndexFormat indexFormat = IndexFormat::UInt32;
+        bool arenaAllocation = false;
+        bool ownsArenaBuffers = false;
     };
 
     struct VulkanTexturePayload {
@@ -95,17 +106,40 @@ namespace Iridium {
     private:
         struct FrameCounters {
             uint64_t drawOpaque = 0;
+            uint64_t opaqueIndirectCommands = 0;
+            uint64_t opaqueIndirectBins = 0;
+            uint64_t opaqueIndirectFallbackPackets = 0;
+            uint64_t opaqueIndirectFallbackReason = 0;
+            uint64_t depthHistoryEligible = 0;
+            uint64_t depthHistoryRejection = 0;
             uint64_t drawSelection = 0;
             uint64_t drawShadowDirectional = 0;
             uint64_t drawShadowDirectionalAlphaMask = 0;
+            uint64_t shadowDirectionalCastersTested = 0;
+            uint64_t shadowDirectionalCastersCulled = 0;
+            uint64_t shadowDirectionalIndirectCommands = 0;
+            uint64_t shadowDirectionalIndirectBins = 0;
+            uint64_t shadowDirectionalDirectFallback = 0;
+            uint64_t shadowDirectionalIndirectFallbackReason = 0;
+            uint64_t shadowDirectionalMembershipCacheHit = 0;
             uint64_t drawShadowSpot = 0;
             uint64_t drawShadowSpotAlphaMask = 0;
             uint64_t shadowSpotCastersTested = 0;
             uint64_t shadowSpotCastersCulled = 0;
+            uint64_t shadowSpotIndirectCommands = 0;
+            uint64_t shadowSpotIndirectBins = 0;
+            uint64_t shadowSpotDirectFallback = 0;
+            uint64_t shadowSpotIndirectFallbackReason = 0;
+            uint64_t shadowSpotMembershipCacheHit = 0;
             uint64_t drawShadowPoint = 0;
             uint64_t drawShadowPointAlphaMask = 0;
             uint64_t shadowPointCastersTested = 0;
             uint64_t shadowPointCastersCulled = 0;
+            uint64_t shadowPointIndirectCommands = 0;
+            uint64_t shadowPointIndirectBins = 0;
+            uint64_t shadowPointDirectFallback = 0;
+            uint64_t shadowPointIndirectFallbackReason = 0;
+            uint64_t shadowPointMembershipCacheHit = 0;
             uint64_t drawLighting = 0;
             uint64_t drawOutput = 0;
             uint64_t drawTransparentDepth = 0;
@@ -123,6 +157,13 @@ namespace Iridium {
             uint64_t transparentForegroundPackets = 0;
             uint64_t transparentNonemptyBuckets = 0;
             uint64_t transparentSortedPackets = 0;
+            uint64_t weightedOitPackets = 0;
+            uint64_t weightedOitSortedFallbackPackets = 0;
+            uint64_t weightedOitInstanceCapacityFallbackPackets = 0;
+            uint64_t weightedOitInstances = 0;
+            uint64_t weightedOitInstanceUploadBytes = 0;
+            uint64_t drawWeightedOitAccumulation = 0;
+            uint64_t drawWeightedOitResolve = 0;
             uint64_t transparencyPyramidBuilds = 0;
             uint64_t transparencyPyramidMipDispatches = 0;
             uint64_t transparencyPyramidTopologyRebuilds = 0;
@@ -184,13 +225,20 @@ namespace Iridium {
         VulkanFrameTargets frameTargets;
         VulkanRenderGraphExecutor renderGraph_;
         VulkanTransparencyPyramid transparencyPyramid_;
+        VulkanDepthPyramid depthPyramid_;
+        bool depthPyramidEnabled_ = false;
         VulkanLayeredInterfaceCapturePass layeredInterfaceCapture_;
         VulkanLayeredLocalCompositionPass layeredLocalComposition_;
         VulkanLayeredSceneResolvePass layeredSceneResolve_;
+        VulkanWeightedOitPass weightedOit_;
+        std::array<VulkanBufferResource, VulkanFrameScheduler::FramesInFlight>
+            weightedOitInstanceBuffers_{};
+        uint32_t weightedOitInstanceCapacity_ = 0u;
         TransparencyPyramidResidency transparencyPyramidResidency_;
         TransparencyPyramidResidency ordinary2AtlasResidency_;
         TransparencyPyramidResidency hero4AtlasResidency_;
         TransparencyPyramidResidency cinematic8AtlasResidency_;
+        TransparencyPyramidResidency weightedOitResidency_;
         VkExtent2D ordinary2AtlasExtent_{};
         VkExtent2D hero4AtlasExtent_{};
         VkExtent2D cinematic8AtlasExtent_{};
@@ -219,6 +267,20 @@ namespace Iridium {
         VulkanDirectionalShadowMap directionalShadow_;
         VulkanSpotShadowAtlas spotShadow_;
         VulkanPointShadowPools pointShadow_;
+        VulkanVirtualShadowResources virtualShadowResources_;
+        DirectionalVirtualShadowClipPublisher virtualShadowClipPublisher_;
+        std::optional<DirectionalVirtualShadowClipPlan> virtualShadowClipPlan_;
+        std::array<std::optional<DirectionalVirtualShadowClipPlan>, VulkanFrameScheduler::FramesInFlight>
+            virtualShadowFrameClipPlans_;
+        std::vector<VirtualShadowCasterBounds> virtualShadowCasterBoundsScratch_;
+        uint32_t virtualShadowClipPageSize_ = 128;
+        std::array<VkImageView, VulkanFrameScheduler::FramesInFlight> virtualShadowDepthBindings_{};
+        std::array<bool, VulkanFrameScheduler::FramesInFlight> virtualShadowReadbackPending_{};
+        bool virtualShadowDepthQualificationOracle_ = false;
+        std::array<VulkanBufferResource, VulkanFrameScheduler::FramesInFlight> virtualShadowDepthReadbacks_{};
+        std::array<VkExtent2D, VulkanFrameScheduler::FramesInFlight> virtualShadowDepthExtents_{};
+        std::array<glm::mat4, VulkanFrameScheduler::FramesInFlight> virtualShadowInverseViewProjections_{};
+        void collectVirtualShadowRequests(uint32_t slot);
         EnvironmentLightingHandles environmentLighting_;
         EnvironmentLightingSettings environmentLightingSettings_;
         TextureHandle neutralEnvironmentCube_;
@@ -255,18 +317,101 @@ namespace Iridium {
         // --- IMGUI STATE ---
         VkDescriptorPool imguiPool = VK_NULL_HANDLE;
         std::vector<VkDescriptorSet> uiSceneTextures;
+        std::array<VulkanImageResource, 2> retainedViewImages_{};
+        std::array<VkDescriptorSet, 2> retainedViewDescriptors_{};
+        VkSampler retainedViewSampler_ = VK_NULL_HANDLE;
+        uint32_t retainedRenderView_ = 0;
+        bool retainedViewsEnabled_ = false;
+        void destroyRetainedViews();
+        void publishRetainedView();
         std::vector<VkDescriptorSet> uiDepthTextures;
         std::vector<uint32_t> imguiFragmentShaderCode_;
 
         // Global Camera Data
         std::vector<VulkanBufferResource> uniformBuffers;
         std::vector<VkDescriptorSet> globalDescriptorSets;
+        std::array<VkDescriptorSet, VulkanFrameScheduler::FramesInFlight>
+            gpuSceneDescriptorSets_{};
         std::array<VulkanBufferResource, VulkanFrameScheduler::FramesInFlight>
             canonicalMaterialBuffers_{};
         uint32_t canonicalMaterialCapacity_ = 0;
         uint32_t canonicalMaterialMaximumCapacity_ = 0;
         std::array<VulkanBufferResource, VulkanFrameScheduler::FramesInFlight>
             lightRecordBuffers_{};
+        std::array<VulkanBufferResource, VulkanFrameScheduler::FramesInFlight>
+            gpuSceneTransformBuffers_{};
+        std::array<VulkanBufferResource, VulkanFrameScheduler::FramesInFlight>
+            gpuSceneInstanceBuffers_{};
+        std::array<VulkanBufferResource, VulkanFrameScheduler::FramesInFlight>
+            gpuScenePrimitiveBuffers_{};
+        std::array<VulkanBufferResource, VulkanFrameScheduler::FramesInFlight>
+            gpuSceneGeometryBuffers_{};
+        std::array<VulkanBufferResource, VulkanFrameScheduler::FramesInFlight>
+            opaqueIndirectCommandBuffers_{};
+        std::array<VulkanBufferResource, VulkanFrameScheduler::FramesInFlight>
+            opaqueIndirectCountBuffers_{};
+        std::array<VulkanBufferResource, VulkanFrameScheduler::FramesInFlight>
+            opaqueIndirectCandidateBuffers_{};
+        std::array<VulkanBufferResource, VulkanFrameScheduler::FramesInFlight>
+            directionalShadowIndirectCommandBuffers_{};
+        std::array<VulkanBufferResource, VulkanFrameScheduler::FramesInFlight>
+            directionalShadowIndirectCountBuffers_{};
+        std::array<VulkanBufferResource, VulkanFrameScheduler::FramesInFlight>
+            directionalShadowIndirectCandidateBuffers_{};
+        std::array<VkDescriptorSet, VulkanFrameScheduler::FramesInFlight>
+            directionalShadowIndirectDescriptorSets_{};
+        VkDescriptorSetLayout directionalShadowIndirectSetLayout_ =
+            VK_NULL_HANDLE;
+        VkPipelineLayout directionalShadowCompactPipelineLayout_ =
+            VK_NULL_HANDLE;
+        VkPipeline directionalShadowCompactPipeline_ = VK_NULL_HANDLE;
+        std::array<VulkanBufferResource, VulkanFrameScheduler::FramesInFlight>
+            spotShadowIndirectCommandBuffers_{};
+        std::array<VulkanBufferResource, VulkanFrameScheduler::FramesInFlight>
+            spotShadowIndirectCountBuffers_{};
+        std::array<VulkanBufferResource, VulkanFrameScheduler::FramesInFlight>
+            spotShadowIndirectCandidateBuffers_{};
+        std::array<VkDescriptorSet, VulkanFrameScheduler::FramesInFlight>
+            spotShadowIndirectDescriptorSets_{};
+        VkPipelineLayout spotShadowCompactPipelineLayout_ = VK_NULL_HANDLE;
+        VkPipeline spotShadowCompactPipeline_ = VK_NULL_HANDLE;
+        std::array<VulkanBufferResource, VulkanFrameScheduler::FramesInFlight>
+            pointShadowIndirectCommandBuffers_{};
+        std::array<VulkanBufferResource, VulkanFrameScheduler::FramesInFlight>
+            pointShadowIndirectCountBuffers_{};
+        std::array<VulkanBufferResource, VulkanFrameScheduler::FramesInFlight>
+            pointShadowIndirectCandidateBuffers_{};
+        std::array<VkDescriptorSet, VulkanFrameScheduler::FramesInFlight>
+            pointShadowIndirectDescriptorSets_{};
+        VkPipelineLayout pointShadowCompactPipelineLayout_ = VK_NULL_HANDLE;
+        VkPipeline pointShadowCompactPipeline_ = VK_NULL_HANDLE;
+        std::array<VulkanBufferResource, VulkanFrameScheduler::FramesInFlight>
+            reflectionProbeIndirectCommandBuffers_{};
+        std::array<VulkanBufferResource, VulkanFrameScheduler::FramesInFlight>
+            reflectionProbeIndirectCountBuffers_{};
+        std::array<VulkanBufferResource, VulkanFrameScheduler::FramesInFlight>
+            reflectionProbeIndirectCandidateBuffers_{};
+        std::array<VkDescriptorSet, VulkanFrameScheduler::FramesInFlight>
+            reflectionProbeIndirectDescriptorSets_{};
+        VkPipelineLayout reflectionProbeCompactPipelineLayout_ =
+            VK_NULL_HANDLE;
+        VkPipeline reflectionProbeCompactPipeline_ = VK_NULL_HANDLE;
+        std::array<VulkanBufferResource, VulkanFrameScheduler::FramesInFlight>
+            depthOcclusionQueryBuffers_{};
+        std::array<VulkanBufferResource, VulkanFrameScheduler::FramesInFlight>
+            depthOcclusionResultBuffers_{};
+        std::array<VulkanBufferResource, VulkanFrameScheduler::FramesInFlight>
+            depthOcclusionGpuSceneResultBuffers_{};
+        std::array<VkDescriptorSet, VulkanFrameScheduler::FramesInFlight>
+            gpuSceneCullDescriptorSets_{};
+        // Shared across the ordered graphics queue, not replicated per frame.
+        VulkanBufferResource mainOpaqueLodHistoryBuffer_{};
+        GpuSceneLodHistory mainOpaqueLodHistory_;
+        std::vector<uint8_t> opaqueIndirectSeenHistory_;
+        VkDescriptorSetLayout gpuSceneCullSetLayout_ = VK_NULL_HANDLE;
+        VkPipelineLayout gpuSceneCullPipelineLayout_ = VK_NULL_HANDLE;
+        VkPipeline gpuSceneCullPipeline_ = VK_NULL_HANDLE;
+        VkPipeline gpuSceneCullFallbackPipeline_ = VK_NULL_HANDLE;
         std::array<VulkanBufferResource, VulkanFrameScheduler::FramesInFlight>
             activeLightSlotBuffers_{};
         std::array<VulkanBufferResource, VulkanFrameScheduler::FramesInFlight>
@@ -300,6 +445,112 @@ namespace Iridium {
             uploadedPointShadowMappingRevisions_{};
         std::vector<uint32_t> spotShadowDataSlots_;
         std::vector<uint32_t> pointShadowDataSlots_;
+        struct ResolvedShadowCaster {
+            GeometryHandle geometry;
+            MaterialHandle material;
+            PipelineHandle pipeline;
+            glm::mat4 worldTransform{ 1.0f };
+            glm::vec3 boundsSphereCenterWorld{ 0.0f };
+            float boundsSphereRadiusWorld = -1.0f;
+            uint32_t indexCount = 0;
+            uint32_t firstIndex = 0;
+            uint32_t gpuScenePrimitiveIndex = InvalidGpuSceneIndex;
+            SceneEntityUuid owner;
+        };
+        struct ShadowIndirectBin {
+            uint32_t commandBegin = 0;
+            uint32_t commandCount = 0;
+            GeometryHandle geometry;
+            VkBuffer vertexBuffer = VK_NULL_HANDLE;
+            VkBuffer indexBuffer = VK_NULL_HANDLE;
+            VkIndexType indexType = VK_INDEX_TYPE_UINT32;
+            bool alphaMasked = false;
+            bool doubleSided = false;
+        };
+        std::vector<uint32_t> spotShadowMappingScratch_;
+        std::vector<uint32_t> pointShadowMappingScratch_;
+        std::vector<ResolvedShadowCaster> shadowCasterScratch_;
+        std::vector<uint8_t> directionalShadowCasterMaskScratch_;
+        std::vector<ShadowIndirectBin>
+            directionalShadowIndirectBins_;
+        std::vector<GpuSceneIndirectCandidate>
+            directionalShadowIndirectCandidates_;
+        std::vector<GpuSceneIndirectCandidate>
+            directionalShadowIndirectUnsortedCandidates_;
+        std::vector<uint32_t> directionalShadowIndirectBinCursorScratch_;
+        std::vector<uint32_t> directionalShadowIndirectPrimitiveBinScratch_;
+        std::array<uint32_t, kDirectionalShadowLayerCount>
+            directionalShadowIndirectWorkIndices_{};
+        struct PendingShadowIndirectValidation {
+            uint64_t profileFrameId = 0;
+            std::vector<uint32_t> expectedCounts;
+            std::vector<uint32_t> countCapacities;
+            std::vector<uint32_t> commandOffsets;
+            std::vector<std::vector<GpuSceneIndexedIndirectCommand>>
+                expectedCommands;
+            bool validateExpectedCounts = false;
+            bool pending = false;
+        };
+        std::array<PendingShadowIndirectValidation,
+            VulkanFrameScheduler::FramesInFlight>
+            pendingDirectionalShadowIndirectValidations_{};
+        uint32_t directionalShadowIndirectPrimitiveCapacity_ = 0;
+        uint32_t directionalShadowIndirectCommandCapacity_ = 0;
+        uint32_t directionalShadowIndirectCountCapacity_ = 0;
+        uint64_t directionalShadowMembershipRevision_ = 0;
+        uint32_t directionalShadowMembershipLodErrorBits_ = 0;
+        uint32_t directionalShadowMembershipMaximumLod_ = 0;
+        std::vector<ShadowIndirectBin> spotShadowIndirectBins_;
+        std::vector<GpuSceneIndirectCandidate>
+            spotShadowIndirectCandidates_;
+        std::vector<GpuSceneIndirectCandidate>
+            spotShadowIndirectUnsortedCandidates_;
+        std::vector<uint32_t> spotShadowIndirectBinCursorScratch_;
+        std::vector<uint32_t> spotShadowIndirectPrimitiveBinScratch_;
+        std::array<uint32_t, kSpotShadowEntryCapacity>
+            spotShadowIndirectWorkIndices_{};
+        std::array<PendingShadowIndirectValidation,
+            VulkanFrameScheduler::FramesInFlight>
+            pendingSpotShadowIndirectValidations_{};
+        uint32_t spotShadowIndirectPrimitiveCapacity_ = 0;
+        uint32_t spotShadowIndirectCommandCapacity_ = 0;
+        uint32_t spotShadowIndirectCountCapacity_ = 0;
+        uint64_t spotShadowMembershipRevision_ = 0;
+        uint32_t spotShadowMembershipLodErrorBits_ = 0;
+        uint32_t spotShadowMembershipMaximumLod_ = 0;
+        std::vector<ShadowIndirectBin> pointShadowIndirectBins_;
+        std::vector<GpuSceneIndirectCandidate>
+            pointShadowIndirectCandidates_;
+        std::vector<GpuSceneIndirectCandidate>
+            pointShadowIndirectUnsortedCandidates_;
+        std::vector<uint32_t> pointShadowIndirectBinCursorScratch_;
+        std::vector<uint32_t> pointShadowIndirectPrimitiveBinScratch_;
+        std::array<uint32_t, kPointShadowEntryCapacity * 6u>
+            pointShadowIndirectWorkIndices_{};
+        std::array<PendingShadowIndirectValidation,
+            VulkanFrameScheduler::FramesInFlight>
+            pendingPointShadowIndirectValidations_{};
+        uint32_t pointShadowIndirectPrimitiveCapacity_ = 0;
+        uint32_t pointShadowIndirectCommandCapacity_ = 0;
+        uint32_t pointShadowIndirectCountCapacity_ = 0;
+        uint64_t pointShadowMembershipRevision_ = 0;
+        uint32_t pointShadowMembershipLodErrorBits_ = 0;
+        uint32_t pointShadowMembershipMaximumLod_ = 0;
+        std::vector<ShadowIndirectBin> reflectionProbeIndirectBins_;
+        std::vector<GpuSceneIndirectCandidate>
+            reflectionProbeIndirectCandidates_;
+        std::vector<GpuSceneIndirectCandidate>
+            reflectionProbeIndirectUnsortedCandidates_;
+        std::vector<uint32_t> reflectionProbeIndirectBinCursorScratch_;
+        std::vector<uint32_t> reflectionProbeIndirectPrimitiveBinScratch_;
+        std::array<PendingShadowIndirectValidation,
+            VulkanFrameScheduler::FramesInFlight>
+            pendingReflectionProbeIndirectValidations_{};
+        uint32_t reflectionProbeIndirectPrimitiveCapacity_ = 0;
+        uint32_t reflectionProbeIndirectCommandCapacity_ = 0;
+        uint32_t reflectionProbeIndirectCountCapacity_ = 0;
+        GpuSceneIndirectFallbackReason reflectionProbeIndirectFallbackReason_ =
+            GpuSceneIndirectFallbackReason::None;
         std::vector<PackedGpuLight> patchedLightRecordsScratch_;
         uint64_t spotShadowMappingRevision_ = 1;
         uint64_t pointShadowMappingRevision_ = 1;
@@ -307,6 +558,82 @@ namespace Iridium {
         std::vector<LightRecordRange> lightUploadRanges_;
         uint32_t lightRecordCapacity_ = 0;
         uint32_t lightRecordMaximumCapacity_ = 0;
+        GpuSceneCapacityRequirements gpuSceneCapacity_{};
+        GpuSceneCapacityRequirements gpuSceneMaximumCapacity_{};
+        GpuSceneCapacityRequirements gpuScenePublishedCounts_{};
+        struct GpuSceneCpuMirror {
+            std::vector<GpuSceneAffineTransform> transforms;
+            std::vector<GpuSceneInstanceRecord> instances;
+            std::vector<GpuScenePrimitiveRecord> primitives;
+            std::vector<GpuSceneGeometryRecord> geometries;
+            std::vector<GpuScenePrimitiveIdentity> primitiveIdentities;
+        };
+        [[nodiscard]] bool resolveGpuSceneCaster(uint32_t primitiveIndex,
+            uint32_t consumerMask,
+            ResolvedShadowCaster& caster) const noexcept;
+        template<typename Visitor>
+        void visitShadowCasters(const ShadowCasterSubmission& submission,
+            Visitor&& visitor) const;
+        template<typename Visitor>
+        void visitReflectionProbeCasters(
+            const ReflectionProbeCasterSubmission& submission,
+            Visitor&& visitor) const;
+        // Upload heaps can be uncached/write-combined. CPU validation must use
+        // an owned mirror updated by the exact same per-context dirty ranges.
+        std::array<GpuSceneCpuMirror, VulkanFrameScheduler::FramesInFlight> gpuSceneCpuMirrors_;
+        std::array<ViewTransportRecord, VulkanFrameScheduler::FramesInFlight> gpuSceneCpuViews_;
+        std::array<std::vector<uint64_t>, VulkanFrameScheduler::FramesInFlight>
+            uploadedGpuSceneTransformRevisions_{};
+        std::array<std::vector<uint64_t>, VulkanFrameScheduler::FramesInFlight>
+            uploadedGpuSceneInstanceRevisions_{};
+        std::array<std::vector<uint64_t>, VulkanFrameScheduler::FramesInFlight>
+            uploadedGpuScenePrimitiveRevisions_{};
+        std::array<std::vector<uint64_t>, VulkanFrameScheduler::FramesInFlight>
+            uploadedGpuSceneGeometryRevisions_{};
+        std::vector<GpuSceneRecordRange> gpuSceneUploadRanges_;
+        GpuSceneUploadTelemetry gpuSceneUploadTelemetry_{};
+        GpuSceneIndirectPlan opaqueIndirectPlan_;
+        struct OpaqueIndirectBin {
+            uint32_t packetBegin = 0;
+            uint32_t commandBegin = 0;
+            uint32_t commandCount = 0;
+            PipelineHandle pipeline;
+            MaterialHandle material;
+            GeometryHandle geometry;
+        };
+        std::vector<OpaqueIndirectBin> opaqueIndirectBins_;
+        std::vector<GpuSceneIndirectCandidate> opaqueIndirectCandidates_;
+        std::vector<DepthPyramidDeviceQuery> depthOcclusionQueries_;
+        struct PendingOpaqueIndirectValidation {
+            uint64_t profileFrameId = 0;
+            std::vector<uint32_t> expectedBinCounts;
+            std::vector<uint32_t> binCapacities;
+            std::vector<GpuSceneIndexedIndirectCommand> expectedCommandsByPrimitive;
+            std::vector<uint8_t> seenPrimitives;
+            std::vector<GpuSceneIndexedIndirectCommand> commandReadback;
+            uint64_t baseTriangles = 0;
+            uint64_t oracleTriangles = 0;
+            uint64_t oracleReducedCommands = 0;
+            uint64_t historyValid = 0, historyReset = 0, historyChanged = 0;
+            uint64_t occlusionProfileFrameId = 0;
+            uint32_t occlusionQueryCount = 0;
+            uint32_t occlusionProjectionRejected = 0;
+            uint32_t gpuSceneOcclusionCandidateCount = 0;
+            std::vector<uint32_t> occlusionProjectedCandidateIndices;
+            std::vector<uint32_t> occlusionCandidatePrimitiveIndices;
+            std::vector<uint32_t> occlusionCandidateBinIndices;
+            std::vector<uint8_t> occlusionCpuVisibleCandidates;
+            bool occlusionQualificationOracle = false;
+            bool occlusionPending = false;
+            bool gpuSceneOcclusionPending = false;
+            bool occlusionRejectionApplied = false;
+            bool pending = false;
+        };
+        std::array<PendingOpaqueIndirectValidation,
+            VulkanFrameScheduler::FramesInFlight>
+            pendingOpaqueIndirectValidations_{};
+        uint32_t opaqueIndirectCommandCapacity_ = 0;
+        static constexpr uint32_t MaximumOpaqueIndirectCommandCapacity = 65536u;
         uint32_t activeLightCount_ = 0;
         uint64_t lightUploadBytes_ = 0;
         uint32_t lightUploadRangeCount_ = 0;
@@ -350,10 +677,33 @@ namespace Iridium {
         bool initialized_ = false;
         bool cleaned_ = false;
         bool frameOpen_ = false;
+        ViewHistoryContext currentViewHistory_{};
+        uint64_t currentProjectionRevision_ = 1;
+        uint64_t currentDepthContentRevision_ = 1;
+        DepthPyramidHistoryDecision currentDepthHistoryDecision_{};
+        bool depthHistoryPrepared_ = false;
+        uint64_t publishedGpuSceneEpoch_ = 1;
         bool imguiInitialized_ = false;
         CpuProfiler* cpuProfiler_ = nullptr;
         bool collectFrameCounters_ = false;
         FrameCounters frameCounters_{};
+        bool legacyTransparency_ = false;
+        uint64_t weightedOitOrderSeed_ = 0;
+        bool forceDirectGBufferReference_ = false;
+        bool forceDirectShadowReference_ = false;
+        bool shadowIndirectQualificationOracle_ = false;
+        float experimentalShadowLodErrorTexels_ = 0.0f;
+        uint32_t shadowLodMaximumLevel_ = 15u;
+        bool depthOcclusionQueryEnabled_ = false;
+        bool depthOcclusionRejectionEnabled_ = false;
+        bool depthOcclusionQualificationOracle_ = false;
+        float experimentalGpuLodErrorPixels_ = 0.0f;
+        uint32_t gpuLodMaximumLevel_ = 15u;
+        float gpuLodHysteresisFraction_ = 0.15f;
+        bool gpuLodQualificationOracle_ = false;
+        float experimentalProbeLodErrorPixels_ = 0.0f;
+        uint32_t probeLodMaximumLevel_ = 15u;
+        bool probeLodQualificationOracle_ = false;
         glm::mat4 ordinary2ViewProjection_{ 1.0f };
         bool ordinary2ViewProjectionValid_ = false;
         std::vector<uint32_t> uniqueMaterialIds_;
@@ -372,10 +722,13 @@ namespace Iridium {
         float manualExposureEv_ = 0.0f;
         OutputTransformOperator outputOperator_ = OutputTransformOperator::Aces2;
 		Color::OutputTransport outputTransport_ = Color::OutputTransport::SdrSrgb;
+		Color::OutputTransport requestedOutputTransport_ =
+			Color::OutputTransport::SdrSrgb;
 		VkFormat outputTargetFormat_ = VulkanSdrOutputFormat;
         float paperWhiteNits_ = 203.0f;
         float peakNits_ = 1000.0f;
         bool selectionOutlineActive_ = false;
+        ViewportGridOverlay viewportGridOverlay_{};
         uint64_t retiredTextureCount_ = 0;
         TextureHandle outputTransformLut_{};
         bool finalCaptureHookRecorded_ = false;
@@ -426,6 +779,18 @@ namespace Iridium {
             pendingDeepLayeredCaptureValidations_;
         std::vector<DeepLayeredCaptureValidationResult>
             completedDeepLayeredCaptureValidations_;
+        struct PendingDepthPyramidCaptureValidation {
+            uint64_t validationId = 0;
+            uint32_t frameIndex = 0;
+            VkExtent2D extent{};
+            uint32_t mipCount = 0;
+            VulkanBufferResource readback;
+        };
+        std::optional<uint64_t> depthPyramidCaptureValidationRequest_;
+        std::vector<PendingDepthPyramidCaptureValidation>
+            pendingDepthPyramidCaptureValidations_;
+        std::vector<DepthPyramidCaptureValidationResult>
+            completedDepthPyramidCaptureValidations_;
 
         // Private helpers that Application.cpp no longer needs to worry about
         void createUniformBuffers();
@@ -433,11 +798,51 @@ namespace Iridium {
         void ensureCanonicalMaterialCapacity(uint32_t requiredCapacity);
         void uploadCanonicalMaterialsForFrame(uint32_t frameIndex);
         void createLightRecordBuffers(uint32_t capacity);
+        void createGpuSceneBuffers(
+            const GpuSceneCapacityRequirements& capacity);
+        void bindGpuSceneBuffers();
+        void createOpaqueIndirectBuffers(uint32_t capacity);
+        void createGpuSceneCullPipeline();
+        void createDirectionalShadowIndirectPipeline();
+        void createDirectionalShadowIndirectBuffers(uint32_t primitiveCapacity);
+        void bindDirectionalShadowIndirectBuffers();
+        void collectDirectionalShadowIndirectValidation(uint32_t frameIndex);
+        [[nodiscard]] bool prepareDirectionalShadowIndirectSubmission(
+            const ShadowCasterSubmission& shadowCasters,
+            std::span<const DirectionalShadowFramePacket> shadows);
+        void createSpotShadowIndirectPipeline();
+        void createSpotShadowIndirectBuffers(uint32_t primitiveCapacity);
+        void bindSpotShadowIndirectBuffers();
+        void collectSpotShadowIndirectValidation(uint32_t frameIndex);
+        [[nodiscard]] bool prepareSpotShadowIndirectSubmission(
+            const ShadowCasterSubmission& shadowCasters,
+            std::span<const SpotShadowFramePacket> shadows);
+        void createPointShadowIndirectPipeline();
+        void createPointShadowIndirectBuffers(uint32_t primitiveCapacity);
+        void bindPointShadowIndirectBuffers();
+        void collectPointShadowIndirectValidation(uint32_t frameIndex);
+        [[nodiscard]] bool preparePointShadowIndirectSubmission(
+            const ShadowCasterSubmission& shadowCasters,
+            std::span<const PointShadowFramePacket> shadows);
+        void createReflectionProbeIndirectPipeline();
+        void createReflectionProbeIndirectBuffers(uint32_t primitiveCapacity);
+        void bindReflectionProbeIndirectBuffers();
+        void collectReflectionProbeIndirectValidation(uint32_t frameIndex);
+        [[nodiscard]] bool prepareReflectionProbeIndirectSubmission(
+            const ReflectionProbeCasterSubmission& probeCasters,
+            std::span<const ReflectionProbeCaptureScheduleEntry> captures);
+        void recordReflectionProbeIndirectDispatch(uint32_t frameIndex,
+            uint32_t faceRecord, uint32_t excludedInstanceIndex);
+        void bindOpaqueIndirectBuffers();
+        void collectOpaqueIndirectValidation(uint32_t frameIndex);
+        [[nodiscard]] bool prepareOpaqueIndirectSubmission(
+            std::span<const DrawPacket> opaqueQueue);
         void bindLightRecordBuffers();
         void bindClusterBuffers();
         void bindSceneClusterBuffers();
         void createNeutralEnvironmentProducts();
-        void bindEnvironmentProducts();
+        void bindEnvironmentProducts(uint32_t frame = UINT32_MAX);
+        std::array<EnvironmentLightingHandles, VulkanFrameScheduler::FramesInFlight> frameEnvironments_{};
         void bindDirectionalShadowDescriptors();
         void bindSpotShadowDescriptors();
         void bindPointShadowDescriptors();
@@ -467,6 +872,7 @@ namespace Iridium {
                 std::nullopt,
             std::optional<VkExtent2D> requestedCinematic8AtlasExtent =
                 std::nullopt);
+        void setWeightedOitInstanceCapacity(uint32_t capacity);
         void updateUniformBuffer(const glm::mat4& view, const glm::mat4& proj);
         void createLightingRenderPass();
         void resetFrameCounters();
@@ -529,8 +935,11 @@ namespace Iridium {
             TransparencyQuality quality);
         void collectOrdinary2CaptureValidationsForSlot(uint32_t frameIndex);
         void collectDeepLayeredCaptureValidationsForSlot(uint32_t frameIndex);
+        void recordDepthPyramidCaptureValidationReadback();
+        void collectDepthPyramidCaptureValidationsForSlot(uint32_t frameIndex);
         void destroyPendingOrdinary2CaptureValidations() noexcept;
         void destroyPendingDeepLayeredCaptureValidations() noexcept;
+        void destroyPendingDepthPyramidCaptureValidations() noexcept;
         [[nodiscard]] static std::optional<FrameCapturePixelFormat>
             capturePixelFormat(VkFormat format) noexcept;
         [[nodiscard]] FrameMemoryProfile memorySnapshot();
@@ -543,6 +952,8 @@ namespace Iridium {
         void init(GLFWwindow* window, const RenderBackendConfig& config) override;
         void cleanup() override;
         void recreateSwapchain(GLFWwindow* window) override;
+        void setOutputTransport(GLFWwindow* window,
+            Color::OutputTransport requestedTransport) override;
         [[nodiscard]] RenderExtent getRenderExtent() const override;
         [[nodiscard]] bool resizeSceneRenderExtent(
             RenderExtent extent, std::string& diagnostic) override;
@@ -551,6 +962,16 @@ namespace Iridium {
         [[nodiscard]] FrameTopologyPreparation prepareFrameTopology(
             const FrameTopologyRequirements& requirements) override;
         void prepareLighting(uint32_t requiredCapacity) override;
+        void prepareGpuScene(
+            const GpuSceneCapacityRequirements& requirements) override;
+        void publishGpuScene(const GpuScenePackedTables& scene) override;
+        [[nodiscard]] GpuSceneFrameSerials getGpuSceneFrameSerials()
+            const noexcept override {
+            return { scheduler.lastSubmittedSerial(),
+                scheduler.completedSerial() };
+        }
+        [[nodiscard]] GpuSceneUploadTelemetry getGpuSceneUploadTelemetry()
+            const noexcept override { return gpuSceneUploadTelemetry_; }
         void prepareReflectionProbes(uint32_t requiredCapacity,
             std::span<const EnvironmentLightingHandles> environments) override;
         [[nodiscard]] std::vector<ReflectionProbeCaptureCompletion>
@@ -563,22 +984,26 @@ namespace Iridium {
         void configureReflectionProbeCaptures(
             const ProjectReflectionProbeSettings& settings) override;
         FrameStatus beginFrame() override;
-        void updateCamera(const ViewTransportRecord& view) override;
+        void updateCamera(const ViewTransportRecord& view,
+            ViewHistoryContext history = {}) override;
         void setDebugView(RenderDebugView view) override { debugView_ = view; }
         void setOutputSettings(float manualExposureEv, float paperWhiteNits,
             float peakNits) override;
+        void setViewportGridOverlay(
+            const ViewportGridOverlay& overlay) override {
+            viewportGridOverlay_ = overlay;
+        }
         void submitDirectionalShadows(
-            std::span<const DrawPacket> shadowCasters,
+            const ShadowCasterSubmission& shadowCasters,
             std::span<const DirectionalShadowFramePacket> shadows) override;
         void submitSpotShadows(
-            std::span<const DrawPacket> shadowCasters,
+            const ShadowCasterSubmission& shadowCasters,
             std::span<const SpotShadowFramePacket> shadows) override;
         void submitPointShadows(
-            std::span<const DrawPacket> shadowCasters,
+            const ShadowCasterSubmission& shadowCasters,
             std::span<const PointShadowFramePacket> shadows) override;
         void submitReflectionProbeCaptures(
-            std::span<const DrawPacket> opaqueCasters,
-            std::span<const DrawPacket> complexOpaqueCasters,
+            const ReflectionProbeCasterSubmission& probeCasters,
             std::span<const ReflectionProbeCaptureScheduleEntry> captures,
             const LightingFramePacket& lights) override;
         [[nodiscard]] ReflectionProbeCaptureTelemetry
@@ -586,7 +1011,14 @@ namespace Iridium {
             return reflectionProbeCaptureTelemetry_;
         }
         [[nodiscard]] uint64_t getShadowCasterRevision(
-            std::span<const DrawPacket> shadowCasters) const noexcept override;
+            const ShadowCasterSubmission& shadowCasters) const noexcept override;
+        [[nodiscard]] std::array<uint64_t, kDirectionalShadowCascadeCount>
+            getDirectionalShadowCasterRevisions(
+                const ShadowCasterSubmission& shadowCasters,
+                const DirectionalShadowCascadePlan& plan) const noexcept override;
+        void prepareDepthPyramidHistory(
+            std::span<const DrawPacket> opaqueQueue,
+            std::span<const DrawPacket> opaqueForwardQueue) override;
 
         void submitOpaqueQueue(std::span<const DrawPacket> opaqueQueue,
             std::span<const DrawPacket> selectionQueue, bool isWireframe) override;
@@ -606,7 +1038,8 @@ namespace Iridium {
         }
         void submitForwardQueues(std::span<const DrawPacket> opaqueForwardQueue,
             std::span<const DrawPacket> sortedSurfaceQueue,
-            std::span<const DrawPacket> compatibilityTransparentQueue) override;
+            std::span<const DrawPacket> compatibilityTransparentQueue,
+            std::span<const glm::mat4> instanceTransforms = {}) override;
         void captureCurrentFrame(uint64_t captureId,
             FrameCapturePoint point) override;
         [[nodiscard]] std::vector<FrameCapture> collectFrameCaptures(
@@ -620,6 +1053,10 @@ namespace Iridium {
         [[nodiscard]] std::vector<DeepLayeredCaptureValidationResult>
             collectDeepLayeredCaptureValidations(
                 bool waitForPending) override;
+        void requestDepthPyramidCaptureValidation(
+            uint64_t validationId) override;
+        [[nodiscard]] std::vector<DepthPyramidCaptureValidationResult>
+            collectDepthPyramidCaptureValidations(bool waitForPending) override;
         void submitOutputPass() override;
         void submitUIPass() override;
 
@@ -635,6 +1072,12 @@ namespace Iridium {
             std::span<const std::byte> vertexBytes,
             std::span<const std::byte> indexBytes) override;
         void freeGeometry(GeometryHandle handle) override;
+        GeometryArenaAllocation allocateGeometryArena(
+            uint32_t vertexStride,
+            std::span<const std::byte> vertexBytes,
+            const GeometryArenaData& arena) override;
+        void freeGeometryArena(
+            std::span<const GeometryHandle> primitiveGeometry) override;
 
         TextureHandle allocateTexture(const TextureDesc& desc,
             std::span<const std::byte> pixelBytes) override;
@@ -648,6 +1091,9 @@ namespace Iridium {
 
         void setEnvironmentLighting(
             const EnvironmentLightingHandles& environment) override;
+        [[nodiscard]] EnvironmentLightingHandles getEnvironmentLighting() const override { return environmentLighting_; }
+        void prepareRetainedViews(bool enabled, uint32_t renderView) override;
+        [[nodiscard]] void* getRetainedViewTextureID(uint32_t view) override;
         void setEnvironmentLightingSettings(
             const EnvironmentLightingSettings& settings) override;
         void setOutputTransformLut(TextureHandle lutHandle) override;

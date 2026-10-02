@@ -14,7 +14,6 @@ namespace {
     std::atomic<bool> g_cpuAllocationFrameActive{ false };
     std::atomic<uint64_t> g_cpuAllocationCount{ 0 };
     std::atomic<uint64_t> g_cpuAllocationBytes{ 0 };
-
     void recordAllocation(std::size_t size) noexcept {
         if (!g_cpuAllocationFrameActive.load(std::memory_order_relaxed)) {
             return;

@@ -57,6 +57,33 @@ namespace Iridium {
         return AssetDragKind::Unknown;
     }
 
+    AssetBrowserDrawerSection assetBrowserDrawerSection(
+        const AssetCatalogRecord& record,
+        bool transparentPrimitive) noexcept {
+        if (record.assetType == "iridium.material") {
+            return AssetBrowserDrawerSection::Material;
+        }
+        if (record.assetType == "iridium.model-primitive") {
+            return transparentPrimitive
+                ? AssetBrowserDrawerSection::TransparentPrimitive
+                : AssetBrowserDrawerSection::ModelPrimitive;
+        }
+        return AssetBrowserDrawerSection::Unsupported;
+    }
+
+    std::string_view assetBrowserDrawerSectionLabel(
+        AssetBrowserDrawerSection section) noexcept {
+        switch (section) {
+        case AssetBrowserDrawerSection::Material: return "Materials";
+        case AssetBrowserDrawerSection::ModelPrimitive:
+            return "Model Primitives";
+        case AssetBrowserDrawerSection::TransparentPrimitive:
+            return "Transparent Primitive";
+        case AssetBrowserDrawerSection::Unsupported: return "Other";
+        }
+        return "Other";
+    }
+
     std::vector<AssetBrowserFolder>
         buildAssetBrowserFolders(
             std::span<const std::string> directories) {
@@ -98,6 +125,28 @@ namespace Iridium {
         }
         sortFolders(roots);
         return roots;
+    }
+
+    std::optional<std::string> decodeAssetFolderDragPayload(
+        std::string_view payloadType,
+        std::span<const std::byte> bytes) noexcept {
+        if (payloadType != kAssetBrowserFolderDragPayloadType ||
+            bytes.size() < 2 || bytes.size() > 4096 ||
+            bytes.back() != std::byte{ 0 }) {
+            return std::nullopt;
+        }
+        const auto* data = reinterpret_cast<const char*>(bytes.data());
+        if (std::memchr(data, '\0', bytes.size() - 1) != nullptr) {
+            return std::nullopt;
+        }
+        std::filesystem::path path(std::string(data, bytes.size() - 1));
+        path = path.lexically_normal();
+        const std::string normalized = path.generic_string();
+        if (normalized.empty() || normalized == "." || path.is_absolute() ||
+            normalized == ".." || normalized.starts_with("../")) {
+            return std::nullopt;
+        }
+        return normalized;
     }
 
     AssetDragPayloadBytes encodeAssetDragPayload(

@@ -1,4 +1,5 @@
 #include "renderer/lighting/DirectionalShadow.h"
+#include "renderer/lighting/ShadowCasterCulling.h"
 
 #include <algorithm>
 #include <bit>
@@ -216,6 +217,24 @@ DirectionalShadowCascadeBlend directionalShadowCascadeBlend(
     return result;
 }
 
+uint32_t directionalShadowCasterCascadeMask(
+    const DirectionalShadowCascadePlan& plan, glm::vec3 center,
+    float radius, uint32_t candidateMask) noexcept {
+    constexpr uint32_t AllCascades =
+        (1u << kDirectionalShadowCascadeCount) - 1u;
+    candidateMask &= AllCascades;
+    uint32_t visibleMask = 0u;
+    for (uint32_t cascade = 0; cascade < kDirectionalShadowCascadeCount;
+        ++cascade) {
+        const uint32_t bit = 1u << cascade;
+        if ((candidateMask & bit) == 0u) continue;
+        if (shadowCasterSphereIntersectsClipVolume(
+                plan.cascades[cascade].worldToShadowClip, center, radius))
+            visibleMask |= bit;
+    }
+    return visibleMask;
+}
+
 float directionalShadowTentWeight(int32_t x, int32_t y) noexcept {
     if (x < -2 || x > 2 || y < -2 || y > 2) return 0.0f;
     constexpr std::array<float, 5> Weights{ 1.0f, 2.0f, 3.0f, 2.0f, 1.0f };
@@ -226,6 +245,37 @@ float directionalShadowTentWeight(int32_t x, int32_t y) noexcept {
 glm::vec3 directionalShadowNormalOffset(glm::vec3 worldPosition,
     glm::vec3 surfaceNormal, float worldUnitsPerTexel, float scale) noexcept {
     return worldPosition + surfaceNormal * worldUnitsPerTexel * scale;
+}
+
+glm::vec2 directionalShadowReceiverPlaneDepthGradient(
+    glm::vec2 shadowUvDx, glm::vec2 shadowUvDy,
+    float shadowDepthDx, float shadowDepthDy) noexcept {
+    const float determinant = shadowUvDx.x * shadowUvDy.y -
+        shadowUvDx.y * shadowUvDy.x;
+    if (!std::isfinite(determinant) || std::abs(determinant) < 1.0e-12f ||
+        !std::isfinite(shadowDepthDx) || !std::isfinite(shadowDepthDy))
+        return {};
+
+    const glm::vec2 gradient{
+        (shadowDepthDx * shadowUvDy.y -
+            shadowDepthDy * shadowUvDx.y) / determinant,
+        (shadowDepthDy * shadowUvDx.x -
+            shadowDepthDx * shadowUvDy.x) / determinant,
+    };
+    return finite(glm::vec3(gradient, 0.0f)) ? gradient : glm::vec2{};
+}
+
+float directionalShadowReceiverPlaneReferenceDepth(float referenceDepth,
+    glm::vec2 depthGradient, glm::vec2 sampleUvOffset,
+    float maximumCorrection) noexcept {
+    if (!std::isfinite(referenceDepth) ||
+        !finite(glm::vec3(depthGradient, 0.0f)) ||
+        !finite(glm::vec3(sampleUvOffset, 0.0f)) ||
+        !std::isfinite(maximumCorrection) || maximumCorrection <= 0.0f)
+        return referenceDepth;
+    const float correction = std::clamp(glm::dot(depthGradient,
+        sampleUvOffset), -maximumCorrection, maximumCorrection);
+    return referenceDepth + correction;
 }
 
 DirectionalShadowSchedule DirectionalShadowCache::schedule(
@@ -244,8 +294,11 @@ DirectionalShadowSchedule DirectionalShadowCache::schedule(
             sizeof(glm::mat4)) != 0;
         const bool dirty = !state.valid || state.owner != input.selection.owner ||
             state.lightRevision != input.lightRevision ||
-            state.casterRevision != input.casterRevision ||
+            state.casterRevision != input.casterRevisions[index] ||
             state.pipelineRevision != input.pipelineRevision || matrixChanged;
+        if (state.valid &&
+            state.casterRevision != input.casterRevisions[index])
+            ++result.casterInvalidatedCount;
         if (dirty) result.dirtyMask |= 1u << index;
         else result.sampleableMask |= 1u << index;
     }
@@ -281,7 +334,7 @@ void DirectionalShadowCache::markRendered(uint32_t renderedMask) {
         state.worldToShadowClip =
             pending_->plan.cascades[index].worldToShadowClip;
         state.lightRevision = pending_->lightRevision;
-        state.casterRevision = pending_->casterRevision;
+        state.casterRevision = pending_->casterRevisions[index];
         state.pipelineRevision = pending_->pipelineRevision;
         state.valid = true;
     }

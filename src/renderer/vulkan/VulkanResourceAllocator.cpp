@@ -19,7 +19,7 @@ namespace Iridium {
                 std::to_string(static_cast<int>(result)) + ".");
         }
 
-        uint64_t imageRequestedBytes(VkExtent2D extent, VkFormat format,
+        constexpr uint64_t imageRequestedBytes(VkExtent2D extent, VkFormat format,
             uint32_t mipLevels, uint32_t arrayLayers) noexcept {
             uint64_t bytesPerTexel = 0;
             uint64_t bytesPerBlock = 0;
@@ -29,6 +29,7 @@ namespace Iridium {
             case VK_FORMAT_B8G8R8A8_UNORM:
             case VK_FORMAT_B8G8R8A8_SRGB:
             case VK_FORMAT_D32_SFLOAT:
+            case VK_FORMAT_R32_SFLOAT:
                 bytesPerTexel = 4;
                 break;
             case VK_FORMAT_R16G16_SFLOAT:
@@ -63,6 +64,8 @@ namespace Iridium {
             }
             return result * arrayLayers;
         }
+        static_assert(imageRequestedBytes({1, 1}, VK_FORMAT_R32_SFLOAT, 1, 1) == 4);
+        static_assert(imageRequestedBytes({15, 3}, VK_FORMAT_R32_SFLOAT, 4, 1) == 224);
     } // namespace
 
     void VulkanResourceAllocator::init(VkPhysicalDevice physicalDevice, VkDevice device,

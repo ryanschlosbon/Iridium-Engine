@@ -50,6 +50,7 @@ namespace Iridium {
             VulkanUploadContext& uploads, ::DescriptorAllocator& descriptors,
             VkDescriptorSetLayout materialLayout,
             VkDescriptorSetLayout samplerLayout,
+            VkDescriptorSetLayout gpuSceneLayout,
             std::array<uint32_t, 3> capacities);
         void cleanup() noexcept;
 
@@ -60,12 +61,15 @@ namespace Iridium {
         void endFace(VkCommandBuffer commandBuffer) const;
 
         [[nodiscard]] VkPipeline pipeline(bool alphaMasked,
-            bool doubleSided) const noexcept;
+            bool doubleSided, bool gpuSceneIndirect = false) const noexcept;
         [[nodiscard]] VkPipelineLayout pipelineLayout() const noexcept {
             return pipelineLayout_;
         }
         [[nodiscard]] VkDescriptorSet renderDescriptor(
             uint32_t frameIndex) const;
+        [[nodiscard]] VkDescriptorSetLayout renderSetLayout() const noexcept {
+            return renderSetLayout_;
+        }
         [[nodiscard]] std::array<VkDescriptorImageInfo, 3>
             sampleImages() const noexcept;
         [[nodiscard]] VkDescriptorBufferInfo sampleBuffer(
@@ -84,7 +88,8 @@ namespace Iridium {
         };
 
         [[nodiscard]] static uint32_t poolIndex(uint32_t resolution);
-        VkPipeline createPipeline(bool alphaMasked, bool doubleSided);
+        VkPipeline createPipeline(bool alphaMasked, bool doubleSided,
+            bool gpuSceneIndirect);
         VkShaderModule createShaderModule(const char* relativePath) const;
 
         VkDevice device_ = VK_NULL_HANDLE;
@@ -95,7 +100,7 @@ namespace Iridium {
         VkRenderPass renderPass_ = VK_NULL_HANDLE;
         VkDescriptorSetLayout renderSetLayout_ = VK_NULL_HANDLE;
         VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;
-        std::array<VkPipeline, 4> pipelines_{};
+        std::array<VkPipeline, 8> pipelines_{};
         std::array<VulkanBufferResource, 2> frameBuffers_{};
         std::array<VkDescriptorSet, 2> renderSets_{};
         ::DescriptorAllocator* descriptors_ = nullptr;

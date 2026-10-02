@@ -12,6 +12,7 @@ layout(location = 2) in vec3 fragNormal;
 layout(location = 3) in vec3 fragWorldPos;
 layout(location = 4) in vec4 fragTangent;
 layout(location = 5) in vec2 fragTexCoord1;
+layout(location = 6) flat in uint fragMaterialIndex;
 layout(location = 0) out vec4 outColor;
 
 layout(std140, set = 0, binding = 0) uniform CaptureFaceData {
@@ -56,7 +57,7 @@ vec4 sampleOrOne(PackedMaterial material, uint semantic) {
 }
 
 void main() {
-    PackedMaterial material = materials[push.materialIndex];
+    PackedMaterial material = materials[fragMaterialIndex];
     if (material.schemaVersion != MATERIAL_SCHEMA_VERSION) discard;
     vec4 baseSample = sampleOrOne(material, MATERIAL_TEXTURE_BASE_COLOR);
     float alpha = baseSample.a * material.baseColorFactor.a * fragColor.a;
@@ -95,6 +96,7 @@ void main() {
     MaterialTangentFrame frame = materialBuildTangentFrame(fragNormal,
         fragTangent.xyz, handedness, material.doubleSided != 0u,
         gl_FrontFacing);
+    vec3 shadowGeometricNormal = normalize(frame.normal);
     if (packedMaterialHasTexture(material, MATERIAL_TEXTURE_NORMAL)) {
         vec3 encoded = sampleMaterialTexture(
             material, MATERIAL_TEXTURE_NORMAL).rgb;
@@ -119,6 +121,9 @@ void main() {
     vec3 N = normalize(frame.normal);
     vec3 V = normalize(capture.capturePositionNear.xyz - fragWorldPos);
     vec3 direct = vec3(0.0);
+    IridiumDirectionalShadowReceiver shadowReceiver =
+        IridiumDirectionalShadowReceiver(fragWorldPos, N,
+            shadowGeometricNormal, dFdx(fragWorldPos), dFdy(fragWorldPos));
     uint lightCount = min(capture.metadata.x, iridiumClusterInput.x);
     float viewDepth = length(capture.capturePositionNear.xyz - fragWorldPos);
     for (uint lightSlot = 0u; lightSlot < lightCount; ++lightSlot) {
@@ -128,7 +133,7 @@ void main() {
         float noL = max(dot(N, light.direction), 0.0);
         if (!(noL > 0.0)) continue;
         float visibility = iridiumDirectionalShadowVisibility(lightSlot,
-            fragWorldPos, N, light.direction, viewDepth);
+            shadowReceiver, light.direction, viewDepth);
         uint type = iridiumPackedLightType(record);
         if (type == IRIDIUM_LIGHT_TYPE_SPOT)
             visibility *= iridiumSpotShadowVisibility(lightSlot, record,

@@ -831,6 +831,44 @@ namespace {
         const auto sourceGuid = AssetGuid::parse(
             "019fb73d-5a26-7326-8688-ea55a972179c");
         CHECK(sourceGuid.has_value());
+        const CookProduct constantProduct = makeConstantEnvironmentProduct(
+            *sourceGuid, glm::vec3(0.25f), 4, 128);
+        const CookProduct constantRepeat = makeConstantEnvironmentProduct(
+            *sourceGuid, glm::vec3(0.25f), 4, 128);
+        CHECK(!hasCookErrors(constantProduct.diagnostics));
+        const auto constantDecoded = readCookedEnvironmentProduct({
+            .assetGuid = *sourceGuid,
+            .artifactType = constantProduct.artifactType,
+            .artifactSchemaVersion = constantProduct.artifactSchemaVersion,
+            .sections = constantProduct.sections,
+        });
+        CHECK(constantDecoded.valid());
+        CHECK(constantDecoded.data->manifest.radiance.width == 1);
+        CHECK(constantDecoded.data->manifest.brdfLut.width == 4);
+        CHECK(constantDecoded.data->radiance ==
+            constantDecoded.data->prefilteredSpecular);
+        // Check RGB, not opaque alpha, so a black payload cannot pass.
+        for (size_t face = 0; face < 6; ++face) {
+            for (size_t channel = 0; channel < 3; ++channel) {
+                uint16_t radianceBits = 0, irradianceBits = 0;
+                const size_t offset = (face * 4 + channel) * sizeof(uint16_t);
+                std::memcpy(&radianceBits, constantDecoded.data->radiance.data() + offset, sizeof(uint16_t));
+                std::memcpy(&irradianceBits, constantDecoded.data->irradiance.data() + offset, sizeof(uint16_t));
+                CHECK(std::abs(Color::halfToFloat(radianceBits) - 0.25f) < 0.001f);
+                CHECK(std::abs(Color::halfToFloat(irradianceBits) - 0.25f * 3.14159265358979323846f) < 0.001f);
+            }
+        }
+        for (size_t index = 0; index < constantProduct.sections.size(); ++index)
+            CHECK(constantProduct.sections[index].bytes ==
+                constantRepeat.sections[index].bytes);
+        bool invalidConstantRejected = false;
+        try {
+            (void)makeConstantEnvironmentProduct(*sourceGuid,
+                glm::vec3(-0.25f), 4, 16);
+        } catch (const std::invalid_argument&) {
+            invalidConstantRejected = true;
+        }
+        CHECK(invalidConstantRejected);
         const CookProduct firstProduct = makeConvolvedEnvironmentProduct(
             *sourceGuid, first, settings, "m5.5-test-v1");
         const CookProduct secondProduct = makeConvolvedEnvironmentProduct(

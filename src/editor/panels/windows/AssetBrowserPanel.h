@@ -4,6 +4,8 @@
 #include "assets/thumbnail/AssetThumbnailService.h"
 #include "editor/panels/EditorPanel.h"
 #include "editor/EditorUIState.h"
+#include "editor/EditorAssetSettingsTransactionService.h"
+#include "editor/EditorMaterialDraftHistory.h"
 
 #include <array>
 #include <filesystem>
@@ -35,6 +37,7 @@ public:
 
     void OnImGuiRender(Registry& registry,
         Iridium::AssetManager* assetManager) override;
+    void renderAssetParameters(Iridium::AssetGuid guid, Iridium::AssetManager* assetManager);
 
 private:
     enum class ContentDialogMode {
@@ -66,9 +69,14 @@ private:
     void drawAssetDrawer(
         const Iridium::AssetBrowserItem& root,
         Iridium::AssetManager* assetManager);
+    void ensureDrawerCache(
+        Iridium::AssetGuid rootGuid,
+        Iridium::AssetManager* assetManager);
+    void invalidateDrawerCache();
     void drawDrawerRecord(
         const Iridium::AssetCatalogRecord& record,
-        Iridium::AssetManager* assetManager);
+        Iridium::AssetManager* assetManager,
+        Iridium::AssetBrowserDrawerSection section);
     void openContentDialog(
         ContentDialogMode mode,
         std::filesystem::path path = {},
@@ -79,6 +87,15 @@ private:
         Iridium::AssetGuid assetGuid,
         const std::filesystem::path&
             destinationDirectory);
+    void requestFolderMove(
+        std::string_view sourceDirectory,
+        const std::filesystem::path& destinationDirectory);
+    void rebuildOrderedFolders();
+    void loadFolderOrder();
+    void saveFolderOrder();
+    void reorderFolderBefore(
+        std::string_view sourcePath,
+        std::string_view targetPath);
     void drawResults(Registry& registry,
         Iridium::AssetManager* assetManager,
         Iridium::AssetBrowserPage& page,
@@ -93,7 +110,9 @@ private:
     void drawSettingsEditor(
         const Iridium::AssetBrowserItem&
             selected,
-        Iridium::AssetGuid rootGuid);
+        Iridium::AssetGuid rootGuid,
+        const Iridium::CompiledTransparencyPolicy*
+            cookedTransparencyPolicy);
     [[nodiscard]] bool requestCurrentReimport(
         const Iridium::AssetBrowserItem&
             selected);
@@ -115,6 +134,8 @@ private:
         thumbnailService_ = nullptr;
     Iridium::AssetRuntimeService* runtimeService_ = nullptr;
     Iridium::EditorAssetDocumentService* assetDocuments_ = nullptr;
+    Iridium::EditorAssetSettingsTransactionService
+        settingsTransactions_;
     std::array<char, 256> search_{};
     int typeFilter_ = 0;
     int statusFilter_ = 0;
@@ -123,6 +144,13 @@ private:
     bool showDetailsPanel_ = true;
     std::vector<Iridium::AssetBrowserFolder>
         folders_;
+    std::vector<Iridium::AssetBrowserFolder>
+        orderedFolders_;
+    std::map<std::string, std::vector<std::string>>
+        folderOrder_;
+    std::filesystem::path folderOrderPath_;
+    std::optional<std::pair<std::string, std::string>>
+        pendingFolderReorder_;
     bool foldersInitialized_ = false;
     std::optional<Iridium::AssetGuid>
         settingsGuid_;
@@ -130,12 +158,34 @@ private:
     nlohmann::json settingsDraft_ =
         nlohmann::json::object();
     bool settingsDirty_ = false;
+    struct ViewerDraft {
+        uint64_t sessionSerial = 0;
+        Iridium::EditorMaterialDraftHistory history;
+        std::string historySource;
+        std::optional<Iridium::AssetGuid> guid;
+        std::string source;
+        nlohmann::json settings = nlohmann::json::object();
+        bool dirty = false;
+        std::string diagnostic;
+    };
+    std::map<Iridium::AssetGuid, ViewerDraft> viewerDrafts_;
     std::string actionDiagnostic_;
     std::optional<Iridium::AssetBrowserItem>
         inspectedItem_;
     std::optional<Iridium::AssetBrowserItem>
         drawerItem_;
-    bool drawerPending_ = false;
+    struct DrawerCachedRecord {
+        Iridium::AssetCatalogRecord record;
+        Iridium::AssetBrowserDrawerSection section =
+            Iridium::AssetBrowserDrawerSection::Unsupported;
+    };
+    std::optional<Iridium::AssetGuid> drawerCacheRoot_;
+    std::vector<Iridium::AssetCatalogRecord> drawerCacheRecords_;
+    std::vector<DrawerCachedRecord> drawerCacheContents_;
+    Iridium::AssetThumbnailSourceDetail drawerCacheDetail_;
+    std::vector<Iridium::AssetGuid> drawerVisibleDemandGuids_;
+    bool drawerCacheClassified_ = false;
+    int drawerCacheNextDetailProbeFrame_ = 0;
     std::map<Iridium::AssetGuid,
         Iridium::AssetBrowserDecoration>
         runtimeDecorations_;

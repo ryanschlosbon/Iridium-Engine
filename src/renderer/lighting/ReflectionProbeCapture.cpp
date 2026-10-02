@@ -5,7 +5,6 @@
 #include <cmath>
 #include <limits>
 #include <stdexcept>
-#include <unordered_set>
 
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -20,14 +19,6 @@ namespace {
     [[nodiscard]] bool supportedResolution(uint32_t value) noexcept {
         return value == 128 || value == 256 || value == 512 ||
             value == 1024 || value == 2048 || value == 4096;
-    }
-
-    [[nodiscard]] bool sameRealtimeDependencies(
-        const ReflectionProbeCaptureRequest& left,
-        const ReflectionProbeCaptureRequest& right) noexcept {
-        return left.sceneRevision == right.sceneRevision &&
-            left.lightingRevision == right.lightingRevision &&
-            left.environmentRevision == right.environmentRevision;
     }
 
     [[nodiscard]] bool requestPrecedes(
@@ -188,21 +179,6 @@ ReflectionProbeCaptureDirtyReason ReflectionProbeCaptureScheduler::dirtyReason(
     return ReflectionProbeCaptureDirtyReason::None;
 }
 
-bool ReflectionProbeCaptureScheduler::pendingIsCompatible(
-    const ReflectionProbeCaptureRequest& request,
-    const CaptureState& state) const noexcept {
-    if (!state.hasPending) return true;
-    const auto& pending = state.pending;
-    if (request.settingsRevision != pending.settingsRevision ||
-        request.pipelineRevision != pending.pipelineRevision ||
-        request.explicitRequestRevision !=
-            pending.explicitRequestRevision ||
-        request.updateMode != pending.updateMode)
-        return false;
-    return request.updateMode != ReflectionProbeUpdateMode::Realtime ||
-        sameRealtimeDependencies(request, pending);
-}
-
 uint64_t ReflectionProbeCaptureScheduler::nextTicket() {
     if (nextTicket_ == (std::numeric_limits<uint64_t>::max)())
         throw std::overflow_error(
@@ -219,20 +195,35 @@ const ReflectionProbeCaptureSchedule& ReflectionProbeCaptureScheduler::schedule(
 
     std::vector<ReflectionProbeCaptureRequest> ranked(
         requests.begin(), requests.end());
-    std::unordered_set<SceneEntityUuid, SceneEntityUuidHash> owners;
-    owners.reserve(ranked.size());
     for (const auto& request : ranked) {
         validateRequest(request);
-        if (!owners.insert(request.owner).second)
-            throw std::invalid_argument(
-                "Reflection-probe capture owner is duplicated");
     }
-    std::ranges::sort(ranked, requestPrecedes);
+    std::ranges::sort(ranked,
+        [](const ReflectionProbeCaptureRequest& left,
+            const ReflectionProbeCaptureRequest& right) {
+            return left.owner < right.owner;
+        });
+    if (std::adjacent_find(ranked.begin(), ranked.end(),
+            [](const ReflectionProbeCaptureRequest& left,
+                const ReflectionProbeCaptureRequest& right) {
+                return left.owner == right.owner;
+            }) != ranked.end())
+        throw std::invalid_argument(
+            "Reflection-probe capture owner is duplicated");
 
     for (size_t index = states_.size(); index-- > 0;) {
-        if (owners.contains(states_[index].owner)) continue;
+        const auto found = std::lower_bound(ranked.begin(), ranked.end(),
+            states_[index].owner,
+            [](const ReflectionProbeCaptureRequest& request,
+                SceneEntityUuid owner) {
+                return request.owner < owner;
+            });
+        if (found != ranked.end() && found->owner == states_[index].owner)
+            continue;
         states_.erase(states_.begin() + static_cast<ptrdiff_t>(index));
     }
+
+    std::ranges::sort(ranked, requestPrecedes);
 
     currentSchedule_.emplace();
     auto& result = *currentSchedule_;
@@ -248,16 +239,14 @@ const ReflectionProbeCaptureSchedule& ReflectionProbeCaptureScheduler::schedule(
             states_.push_back({ .owner = request.owner });
             state = &states_.back();
         }
-        if (state->hasPending && !pendingIsCompatible(request, *state)) {
-            state->hasPending = false;
-            state->awaitingPublication = false;
-            state->capturedFaceMask = 0;
-            state->pendingTicket = 0;
-            state->pendingReason = ReflectionProbeCaptureDirtyReason::None;
-            --pendingCount;
-            ++result.stats.capturesInvalidated;
-        }
-
+        // Once any face is recorded, finish and publish that ticket before
+        // observing newer settings or realtime dependencies. Capture storage
+        // is private to the ticket and may still be referenced by in-flight
+        // command buffers; silently replacing scheduler state would orphan it.
+        // More importantly, a continuously moving realtime scene must still
+        // make progress when a budget spreads one cube over several frames.
+        // The next schedule after publication compares the current request to
+        // the completed snapshot and queues a refresh after normal cadence.
         ReflectionProbeCaptureDirtyReason reason = state->hasPending
             ? state->pendingReason : dirtyReason(request, *state);
         const bool cadenceLimited = !state->hasPending && state->hasPublished &&

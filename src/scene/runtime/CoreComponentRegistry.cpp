@@ -1,5 +1,6 @@
 #include "scene/runtime/CoreComponentRegistry.h"
 #include "scene/runtime/CoreComponentIds.h"
+#include "scene/components/MeshComponent.h"
 
 #include <initializer_list>
 #include <string_view>
@@ -93,10 +94,12 @@ namespace Iridium {
             property("enabled", PropertyValueType::Boolean, 0, false, false, true),
             property("model", PropertyValueType::AssetReference, 1, false, true,
                 nullptr),
-            property("material_overrides", PropertyValueType::Collection, 2,
+            property("maximum_lod_level", PropertyValueType::Int32, 2, false,
+                false, int32_t{ MeshComponent::MaximumLodLevel }),
+            property("material_overrides", PropertyValueType::Collection, 3,
                 false, false, EmptyCollectionDefault{},
                 CollectionOrdering::SourceSubassetGuid),
-        }, callbacks.mesh));
+        }, callbacks.mesh, 2));
         if (!status) return { std::move(registry), std::move(status) };
 
         status = add(descriptor(CoreLightComponentId, "LGT1", {

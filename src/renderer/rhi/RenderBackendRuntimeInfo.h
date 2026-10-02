@@ -1,5 +1,8 @@
 #pragma once
 
+#include "renderer/color/OutputTransformConfig.h"
+
+#include <array>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -33,6 +36,11 @@ namespace Iridium {
 		std::string requestedOutputTransport;
 		std::string effectiveOutputTransport;
 		std::string outputTransportDiagnostic;
+		std::array<bool, 3> supportedOutputTransportModes{};
+		Color::OutputTransport requestedOutputTransportMode =
+			Color::OutputTransport::SdrSrgb;
+		Color::OutputTransport effectiveOutputTransportMode =
+			Color::OutputTransport::SdrSrgb;
 		bool swapchainColorspaceExtensionEnabled = false;
 		bool hdrMetadataExtensionEnabled = false;
         std::string outputMode;
@@ -61,6 +69,7 @@ namespace Iridium {
         bool cinematic8AtlasResident = false;
         uint32_t cinematic8AtlasWidth = 0;
         uint32_t cinematic8AtlasHeight = 0;
+        bool weightedOitResident = false;
         bool frameTopologyPrewarmRequested = false;
         bool frameTopologyPrewarmChanged = false;
         uint64_t frameTopologyPrewarmNanoseconds = 0;
@@ -68,6 +77,12 @@ namespace Iridium {
         uint32_t gpuLightActiveCount = 0;
         uint64_t gpuLightUploadBytes = 0;
         uint32_t gpuLightUploadRanges = 0;
+        uint32_t gpuSceneTransformCapacity = 0;
+        uint32_t gpuSceneInstanceCapacity = 0;
+        uint32_t gpuScenePrimitiveCapacity = 0;
+        uint32_t gpuSceneGeometryCapacity = 0;
+        uint64_t gpuSceneUploadBytes = 0;
+        uint32_t gpuSceneUploadRanges = 0;
         BackendUploadTelemetry uploads;
     };
 

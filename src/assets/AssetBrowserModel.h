@@ -15,6 +15,8 @@ namespace Iridium {
 
     inline constexpr std::string_view kAssetBrowserDragPayloadType =
         "IRIDIUM_ASSET_GUID_V1";
+    inline constexpr std::string_view kAssetBrowserFolderDragPayloadType =
+        "IRIDIUM_ASSET_FOLDER_V1";
 
     enum class AssetBrowserLayout : uint8_t {
         Grid,
@@ -36,6 +38,19 @@ namespace Iridium {
         Environment,
         BakedLighting,
     };
+
+    enum class AssetBrowserDrawerSection : uint8_t {
+        Material,
+        ModelPrimitive,
+        TransparentPrimitive,
+        Unsupported,
+    };
+
+    [[nodiscard]] AssetBrowserDrawerSection assetBrowserDrawerSection(
+        const AssetCatalogRecord& record,
+        bool transparentPrimitive) noexcept;
+    [[nodiscard]] std::string_view assetBrowserDrawerSectionLabel(
+        AssetBrowserDrawerSection section) noexcept;
 
     struct AssetBrowserDecoration {
         std::optional<RuntimeAssetState> runtimeState;
@@ -73,6 +88,9 @@ namespace Iridium {
     [[nodiscard]] std::vector<AssetBrowserFolder>
         buildAssetBrowserFolders(
             std::span<const std::string> directories);
+    [[nodiscard]] std::optional<std::string> decodeAssetFolderDragPayload(
+        std::string_view payloadType,
+        std::span<const std::byte> bytes) noexcept;
 
     struct AssetDragPayload {
         AssetGuid guid;

@@ -47,7 +47,8 @@ namespace Iridium {
         void init(VkDevice device, VulkanResourceAllocator& allocator,
             VulkanUploadContext& uploads, ::DescriptorAllocator& descriptors,
             VkDescriptorSetLayout materialLayout,
-            VkDescriptorSetLayout samplerLayout, uint32_t resolution);
+            VkDescriptorSetLayout samplerLayout,
+            VkDescriptorSetLayout gpuSceneLayout, uint32_t resolution);
         void cleanup() noexcept;
 
         void updateFrame(uint32_t frameIndex,
@@ -57,12 +58,15 @@ namespace Iridium {
         void endTile(VkCommandBuffer commandBuffer) const;
 
         [[nodiscard]] VkPipeline pipeline(bool alphaMasked,
-            bool doubleSided) const noexcept;
+            bool doubleSided, bool gpuSceneIndirect = false) const noexcept;
         [[nodiscard]] VkPipelineLayout pipelineLayout() const noexcept {
             return pipelineLayout_;
         }
         [[nodiscard]] VkDescriptorSet renderDescriptor(
             uint32_t frameIndex) const;
+        [[nodiscard]] VkDescriptorSetLayout renderSetLayout() const noexcept {
+            return renderSetLayout_;
+        }
         [[nodiscard]] VkDescriptorImageInfo sampleImage() const noexcept;
         [[nodiscard]] VkDescriptorBufferInfo sampleBuffer(
             uint32_t frameIndex) const noexcept;
@@ -71,7 +75,8 @@ namespace Iridium {
         }
 
     private:
-        VkPipeline createPipeline(bool alphaMasked, bool doubleSided);
+        VkPipeline createPipeline(bool alphaMasked, bool doubleSided,
+            bool gpuSceneIndirect);
         VkShaderModule createShaderModule(const char* relativePath) const;
 
         VkDevice device_ = VK_NULL_HANDLE;
@@ -82,7 +87,7 @@ namespace Iridium {
         VkFramebuffer framebuffer_ = VK_NULL_HANDLE;
         VkDescriptorSetLayout renderSetLayout_ = VK_NULL_HANDLE;
         VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;
-        std::array<VkPipeline, 4> pipelines_{};
+        std::array<VkPipeline, 8> pipelines_{};
         std::array<VulkanBufferResource, 2> frameBuffers_{};
         std::array<VkDescriptorSet, 2> renderSets_{};
         ::DescriptorAllocator* descriptors_ = nullptr;

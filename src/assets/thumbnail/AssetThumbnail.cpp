@@ -251,8 +251,12 @@ namespace Iridium {
                 baseImage(record.guid, extent);
             std::vector<const CookedModelPrimitive*>
                 primitives;
-            for (const CookedModelPrimitive& primitive :
-                product.manifest.primitives) {
+            const auto lodChildren = makeCookedModelLodChildMask(product);
+            for (size_t primitiveIndex = 0;
+                    primitiveIndex < product.manifest.primitives.size(); ++primitiveIndex) {
+                if (lodChildren[primitiveIndex]) continue;
+                const CookedModelPrimitive& primitive =
+                    product.manifest.primitives[primitiveIndex];
                 if (record.assetType ==
                         "iridium.model-primitive" &&
                     primitive.primitiveGuid !=

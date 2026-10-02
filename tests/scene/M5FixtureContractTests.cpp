@@ -118,7 +118,7 @@ namespace {
             "m5_lighting_v1.iridium.scene.json";
         const Json contract = readJson(root() / "tests" / "scene" / "fixtures" /
             "m5_lighting_v1_contract.json");
-        const Json& current = contract.at("m5_10Supersession");
+        const Json& current = contract.at("m7_5Supersession");
         bool contractMatches = true;
         const auto compareContract = [&contractMatches, &current](
             std::string_view field, const auto& actual) {
@@ -276,6 +276,147 @@ namespace {
         CHECK(m6_6Supersession.at("status").is_string());
         const Json& m6_6Hashes =
             m6_6Supersession.at("current_contract_hashes");
+        const Json& m6_7Supersession = manifest.at("m6_7Supersession");
+        CHECK(m6_7Supersession.at("status").is_string());
+        const Json& m6_7Hashes =
+            m6_7Supersession.at("current_contract_hashes");
+        const Json& m6_8Supersession = manifest.at("m6_8Supersession");
+        CHECK(m6_8Supersession.at("status").is_string());
+        const Json& m6_8Hashes =
+            m6_8Supersession.at("current_contract_hashes");
+        const Json& m7_7Supersession = manifest.at("m7_7Supersession");
+        CHECK(m7_7Supersession.at("status").is_string());
+        const Json& m7_7Hashes =
+            m7_7Supersession.at("current_contract_hashes");
+        const Json& m7_7BiasSupersession =
+            manifest.at("m7_7BiasSupersession");
+        CHECK(m7_7BiasSupersession.at("status").is_string());
+        const Json& m7_7BiasHashes =
+            m7_7BiasSupersession.at("current_contract_hashes");
+        const Json& m7_7CasterVisibilitySupersession =
+            manifest.at("m7_7CasterVisibilitySupersession");
+        CHECK(m7_7CasterVisibilitySupersession.at("status").is_string());
+        const Json& m7_7CasterVisibilityHashes =
+            m7_7CasterVisibilitySupersession.at("current_contract_hashes");
+        const Json& m7_7AffectedBoundsSupersession =
+            manifest.at("m7_7AffectedBoundsSupersession");
+        CHECK(m7_7AffectedBoundsSupersession.at("status").is_string());
+        const Json& m7_7AffectedBoundsHashes =
+            m7_7AffectedBoundsSupersession.at("current_contract_hashes");
+        const Json& m7_7GpuSceneShadowSubmissionSupersession =
+            manifest.at("m7_7GpuSceneShadowSubmissionSupersession");
+        CHECK(m7_7GpuSceneShadowSubmissionSupersession.at("status").is_string());
+        const Json& m7_7GpuSceneShadowSubmissionHashes =
+            m7_7GpuSceneShadowSubmissionSupersession.at(
+                "current_contract_hashes");
+        const Json& m7_7DirectionalDeviceCommandSupersession =
+            manifest.at("m7_7DirectionalDeviceCommandSupersession");
+        CHECK(m7_7DirectionalDeviceCommandSupersession.at("status").is_string());
+        const Json& m7_7DirectionalDeviceCommandHashes =
+            m7_7DirectionalDeviceCommandSupersession.at(
+                "current_contract_hashes");
+        const Json& m7_7LocalShadowDeviceCommandSupersession =
+            manifest.at("m7_7LocalShadowDeviceCommandSupersession");
+        CHECK(m7_7LocalShadowDeviceCommandSupersession.at("status").is_string());
+        const Json& m7_7LocalShadowDeviceCommandHashes =
+            m7_7LocalShadowDeviceCommandSupersession.at(
+                "current_contract_hashes");
+        const Json& m7_7ShadowCommandOracleGatingSupersession =
+            manifest.at("m7_7ShadowCommandOracleGatingSupersession");
+        CHECK(m7_7ShadowCommandOracleGatingSupersession.at("status").is_string());
+        const Json& m7_7ShadowCommandOracleGatingHashes =
+            m7_7ShadowCommandOracleGatingSupersession.at(
+                "current_contract_hashes");
+        const Json& m7_7IndependentProbeVisibilitySupersession =
+            manifest.at("m7_7IndependentProbeVisibilitySupersession");
+        CHECK(m7_7IndependentProbeVisibilitySupersession.at("status").
+            is_string());
+        const Json& m7_7IndependentProbeVisibilityHashes =
+            m7_7IndependentProbeVisibilitySupersession.at(
+                "current_contract_hashes");
+        const Json& m7_7ProbeGpuSceneCapturePipelineSupersession =
+            manifest.at("m7_7ProbeGpuSceneCapturePipelineSupersession");
+        CHECK(m7_7ProbeGpuSceneCapturePipelineSupersession.at("status").
+            is_string());
+        const Json& m7_7ProbeGpuSceneCapturePipelineHashes =
+            m7_7ProbeGpuSceneCapturePipelineSupersession.at(
+                "current_contract_hashes");
+        const Json& m7_7ProbeDeviceCommandSupersession =
+            manifest.at("m7_7ProbeDeviceCommandSupersession");
+        CHECK(m7_7ProbeDeviceCommandSupersession.at("status").is_string());
+        const Json& m7_7ProbeDeviceCommandHashes =
+            m7_7ProbeDeviceCommandSupersession.at(
+                "current_contract_hashes");
+        const Json& m7_7ProbeLodSupersession =
+            manifest.at("m7_7ProbeLodSupersession");
+        CHECK(m7_7ProbeLodSupersession.at("status").is_string());
+        const Json& m7_7ProbeLodHashes =
+            m7_7ProbeLodSupersession.at("current_contract_hashes");
+        const Json& m7_7DirectionalShadowLodSupersession =
+            manifest.at("m7_7DirectionalShadowLodSupersession");
+        CHECK(m7_7DirectionalShadowLodSupersession.at("status").is_string());
+        const Json& m7_7DirectionalShadowLodHashes =
+            m7_7DirectionalShadowLodSupersession.at(
+                "current_contract_hashes");
+        const Json& m7_7PointShadowLodSupersession =
+            manifest.at("m7_7PointShadowLodSupersession");
+        CHECK(m7_7PointShadowLodSupersession.at("status").is_string());
+        const Json& m7_7PointShadowLodHashes =
+            m7_7PointShadowLodSupersession.at("current_contract_hashes");
+        const Json& m7_7SpotShadowLodSupersession =
+            manifest.at("m7_7SpotShadowLodSupersession");
+        CHECK(m7_7SpotShadowLodSupersession.at("status").is_string());
+        const Json& m7_7SpotShadowLodHashes =
+            m7_7SpotShadowLodSupersession.at("current_contract_hashes");
+        const Json& m7_7HeterogeneousShadowAdmissionSupersession =
+            manifest.at("m7_7HeterogeneousShadowAdmissionSupersession");
+        CHECK(m7_7HeterogeneousShadowAdmissionSupersession.at("status").
+            is_string());
+        const Json& m7_7HeterogeneousShadowAdmissionHashes =
+            m7_7HeterogeneousShadowAdmissionSupersession.at(
+                "current_contract_hashes");
+        const Json& m7_7ProbeLodWarmedAdmissionSupersession =
+            manifest.at("m7_7ProbeLodWarmedAdmissionSupersession");
+        CHECK(m7_7ProbeLodWarmedAdmissionSupersession.at("status").
+            is_string());
+        const Json& m7_7ProbeLodWarmedAdmissionHashes =
+            m7_7ProbeLodWarmedAdmissionSupersession.at(
+                "current_contract_hashes");
+        const Json& m7_7ShadowLodWarmedAdmissionSupersession =
+            manifest.at("m7_7ShadowLodWarmedAdmissionSupersession");
+        CHECK(m7_7ShadowLodWarmedAdmissionSupersession.at("status").
+            is_string());
+        const Json& m7_7ShadowLodWarmedAdmissionHashes =
+            m7_7ShadowLodWarmedAdmissionSupersession.at(
+                "current_contract_hashes");
+        const Json& m7_7ShadowMembershipCacheSupersession =
+            manifest.at("m7_7ShadowMembershipCacheSupersession");
+        CHECK(m7_7ShadowMembershipCacheSupersession.at("status").
+            is_string());
+        const Json& m7_7ShadowMembershipCacheHashes =
+            m7_7ShadowMembershipCacheSupersession.at(
+                "current_contract_hashes");
+        const Json& m7_7OpaqueShadowPositionFetchSupersession =
+            manifest.at("m7_7OpaqueShadowPositionFetchSupersession");
+        CHECK(m7_7OpaqueShadowPositionFetchSupersession.at("status").
+            is_string());
+        const Json& m7_7OpaqueShadowPositionFetchHashes =
+            m7_7OpaqueShadowPositionFetchSupersession.at(
+                "current_contract_hashes");
+        const Json& m7_7ShadowQualityClosureSupersession =
+            manifest.at("m7_7ShadowQualityClosureSupersession");
+        CHECK(m7_7ShadowQualityClosureSupersession.at("status").
+            is_string());
+        const Json& m7_7ShadowQualityClosureHashes =
+            m7_7ShadowQualityClosureSupersession.at(
+                "current_contract_hashes");
+        const Json& m7_8VirtualShadowResidencyContractSupersession =
+            manifest.at("m7_8VirtualShadowResidencyContractSupersession");
+        CHECK(m7_8VirtualShadowResidencyContractSupersession.at("status").
+            is_string());
+        const Json& m7_8VirtualShadowResidencyContractHashes =
+            m7_8VirtualShadowResidencyContractSupersession.at(
+                "current_contract_hashes");
         const auto latestHash = [&](const std::string& path,
             const std::string& priorHash) {
             const std::string m6_1Hash = m6Hashes.contains(path)
@@ -288,8 +429,108 @@ namespace {
                 ? m6_4Hashes.at(path).get<std::string>() : m6_3Hash;
             const std::string m6_5Hash = m6_5Hashes.contains(path)
                 ? m6_5Hashes.at(path).get<std::string>() : m6_4Hash;
-            return m6_6Hashes.contains(path)
+            const std::string m6_6Hash = m6_6Hashes.contains(path)
                 ? m6_6Hashes.at(path).get<std::string>() : m6_5Hash;
+            const std::string m6_7Hash = m6_7Hashes.contains(path)
+                ? m6_7Hashes.at(path).get<std::string>() : m6_6Hash;
+            const std::string m6_8Hash = m6_8Hashes.contains(path)
+                ? m6_8Hashes.at(path).get<std::string>() : m6_7Hash;
+            const std::string m7_7Hash = m7_7Hashes.contains(path)
+                ? m7_7Hashes.at(path).get<std::string>() : m6_8Hash;
+            const std::string m7_7BiasHash = m7_7BiasHashes.contains(path)
+                ? m7_7BiasHashes.at(path).get<std::string>() : m7_7Hash;
+            const std::string m7_7CasterVisibilityHash =
+                m7_7CasterVisibilityHashes.contains(path)
+                ? m7_7CasterVisibilityHashes.at(path).get<std::string>()
+                : m7_7BiasHash;
+            const std::string m7_7AffectedBoundsHash =
+                m7_7AffectedBoundsHashes.contains(path)
+                ? m7_7AffectedBoundsHashes.at(path).get<std::string>()
+                : m7_7CasterVisibilityHash;
+            const std::string m7_7GpuSceneShadowSubmissionHash =
+                m7_7GpuSceneShadowSubmissionHashes.contains(path)
+                ? m7_7GpuSceneShadowSubmissionHashes.at(path).
+                    get<std::string>()
+                : m7_7AffectedBoundsHash;
+            const std::string m7_7DirectionalDeviceCommandHash =
+                m7_7DirectionalDeviceCommandHashes.contains(path)
+                ? m7_7DirectionalDeviceCommandHashes.at(path).
+                    get<std::string>()
+                : m7_7GpuSceneShadowSubmissionHash;
+            const std::string m7_7LocalShadowDeviceCommandHash =
+                m7_7LocalShadowDeviceCommandHashes.contains(path)
+                ? m7_7LocalShadowDeviceCommandHashes.at(path).
+                    get<std::string>()
+                : m7_7DirectionalDeviceCommandHash;
+            const std::string m7_7ShadowCommandOracleGatingHash =
+                m7_7ShadowCommandOracleGatingHashes.contains(path)
+                ? m7_7ShadowCommandOracleGatingHashes.at(path).
+                    get<std::string>()
+                : m7_7LocalShadowDeviceCommandHash;
+            const std::string m7_7IndependentProbeVisibilityHash =
+                m7_7IndependentProbeVisibilityHashes.contains(path)
+                ? m7_7IndependentProbeVisibilityHashes.at(path).
+                    get<std::string>()
+                : m7_7ShadowCommandOracleGatingHash;
+            const std::string m7_7ProbeGpuSceneCapturePipelineHash =
+                m7_7ProbeGpuSceneCapturePipelineHashes.contains(path)
+                ? m7_7ProbeGpuSceneCapturePipelineHashes.at(path).
+                    get<std::string>()
+                : m7_7IndependentProbeVisibilityHash;
+            const std::string m7_7ProbeDeviceCommandHash =
+                m7_7ProbeDeviceCommandHashes.contains(path)
+                ? m7_7ProbeDeviceCommandHashes.at(path).get<std::string>()
+                : m7_7ProbeGpuSceneCapturePipelineHash;
+            const std::string m7_7ProbeLodHash =
+                m7_7ProbeLodHashes.contains(path)
+                ? m7_7ProbeLodHashes.at(path).get<std::string>()
+                : m7_7ProbeDeviceCommandHash;
+            const std::string m7_7DirectionalShadowLodHash =
+                m7_7DirectionalShadowLodHashes.contains(path)
+                ? m7_7DirectionalShadowLodHashes.at(path).get<std::string>()
+                : m7_7ProbeLodHash;
+            const std::string m7_7PointShadowLodHash =
+                m7_7PointShadowLodHashes.contains(path)
+                ? m7_7PointShadowLodHashes.at(path).get<std::string>()
+                : m7_7DirectionalShadowLodHash;
+            const std::string m7_7SpotShadowLodHash =
+                m7_7SpotShadowLodHashes.contains(path)
+                ? m7_7SpotShadowLodHashes.at(path).get<std::string>()
+                : m7_7PointShadowLodHash;
+            const std::string m7_7HeterogeneousShadowAdmissionHash =
+                m7_7HeterogeneousShadowAdmissionHashes.contains(path)
+                ? m7_7HeterogeneousShadowAdmissionHashes.at(path).
+                    get<std::string>()
+                : m7_7SpotShadowLodHash;
+            const std::string m7_7ProbeLodWarmedAdmissionHash =
+                m7_7ProbeLodWarmedAdmissionHashes.contains(path)
+                ? m7_7ProbeLodWarmedAdmissionHashes.at(path).
+                    get<std::string>()
+                : m7_7HeterogeneousShadowAdmissionHash;
+            const std::string m7_7ShadowLodWarmedAdmissionHash =
+                m7_7ShadowLodWarmedAdmissionHashes.contains(path)
+                ? m7_7ShadowLodWarmedAdmissionHashes.at(path).
+                    get<std::string>()
+                : m7_7ProbeLodWarmedAdmissionHash;
+            const std::string m7_7ShadowMembershipCacheHash =
+                m7_7ShadowMembershipCacheHashes.contains(path)
+                ? m7_7ShadowMembershipCacheHashes.at(path).
+                    get<std::string>()
+                : m7_7ShadowLodWarmedAdmissionHash;
+            const std::string m7_7OpaqueShadowPositionFetchHash =
+                m7_7OpaqueShadowPositionFetchHashes.contains(path)
+                ? m7_7OpaqueShadowPositionFetchHashes.at(path).
+                    get<std::string>()
+                : m7_7ShadowMembershipCacheHash;
+            const std::string m7_7ShadowQualityClosureHash =
+                m7_7ShadowQualityClosureHashes.contains(path)
+                ? m7_7ShadowQualityClosureHashes.at(path).
+                    get<std::string>()
+                : m7_7OpaqueShadowPositionFetchHash;
+            return m7_8VirtualShadowResidencyContractHashes.contains(path)
+                ? m7_8VirtualShadowResidencyContractHashes.at(path).
+                    get<std::string>()
+                : m7_7ShadowQualityClosureHash;
         };
         for (auto entry = correctiveHashes.begin();
             entry != correctiveHashes.end(); ++entry) {
@@ -312,6 +553,99 @@ namespace {
             CHECK(Iridium::sha256File(root() / entry.key()) ==
                 latestHash(entry.key(), entry.value().get<std::string>()));
         for (auto entry = m6_6Hashes.begin(); entry != m6_6Hashes.end(); ++entry)
+            CHECK(Iridium::sha256File(root() / entry.key()) ==
+                latestHash(entry.key(), entry.value().get<std::string>()));
+        for (auto entry = m6_7Hashes.begin(); entry != m6_7Hashes.end(); ++entry)
+            CHECK(Iridium::sha256File(root() / entry.key()) ==
+                latestHash(entry.key(), entry.value().get<std::string>()));
+        for (auto entry = m6_8Hashes.begin(); entry != m6_8Hashes.end(); ++entry)
+            CHECK(Iridium::sha256File(root() / entry.key()) ==
+                latestHash(entry.key(), entry.value().get<std::string>()));
+        for (auto entry = m7_7Hashes.begin(); entry != m7_7Hashes.end(); ++entry)
+            CHECK(Iridium::sha256File(root() / entry.key()) ==
+                latestHash(entry.key(), entry.value().get<std::string>()));
+        for (auto entry = m7_7BiasHashes.begin();
+            entry != m7_7BiasHashes.end(); ++entry)
+            CHECK(Iridium::sha256File(root() / entry.key()) ==
+                latestHash(entry.key(), entry.value().get<std::string>()));
+        for (auto entry = m7_7CasterVisibilityHashes.begin();
+            entry != m7_7CasterVisibilityHashes.end(); ++entry)
+            CHECK(Iridium::sha256File(root() / entry.key()) ==
+                latestHash(entry.key(), entry.value().get<std::string>()));
+        for (auto entry = m7_7AffectedBoundsHashes.begin();
+            entry != m7_7AffectedBoundsHashes.end(); ++entry)
+            CHECK(Iridium::sha256File(root() / entry.key()) ==
+                latestHash(entry.key(), entry.value().get<std::string>()));
+        for (auto entry = m7_7GpuSceneShadowSubmissionHashes.begin();
+            entry != m7_7GpuSceneShadowSubmissionHashes.end(); ++entry)
+            CHECK(Iridium::sha256File(root() / entry.key()) ==
+                latestHash(entry.key(), entry.value().get<std::string>()));
+        for (auto entry = m7_7DirectionalDeviceCommandHashes.begin();
+            entry != m7_7DirectionalDeviceCommandHashes.end(); ++entry)
+            CHECK(Iridium::sha256File(root() / entry.key()) ==
+                latestHash(entry.key(), entry.value().get<std::string>()));
+        for (auto entry = m7_7LocalShadowDeviceCommandHashes.begin();
+            entry != m7_7LocalShadowDeviceCommandHashes.end(); ++entry)
+            CHECK(Iridium::sha256File(root() / entry.key()) ==
+                latestHash(entry.key(), entry.value().get<std::string>()));
+        for (auto entry = m7_7ShadowCommandOracleGatingHashes.begin();
+            entry != m7_7ShadowCommandOracleGatingHashes.end(); ++entry)
+            CHECK(Iridium::sha256File(root() / entry.key()) ==
+                latestHash(entry.key(), entry.value().get<std::string>()));
+        for (auto entry = m7_7IndependentProbeVisibilityHashes.begin();
+            entry != m7_7IndependentProbeVisibilityHashes.end(); ++entry)
+            CHECK(Iridium::sha256File(root() / entry.key()) ==
+                latestHash(entry.key(), entry.value().get<std::string>()));
+        for (auto entry = m7_7ProbeGpuSceneCapturePipelineHashes.begin();
+            entry != m7_7ProbeGpuSceneCapturePipelineHashes.end(); ++entry)
+            CHECK(Iridium::sha256File(root() / entry.key()) ==
+                latestHash(entry.key(), entry.value().get<std::string>()));
+        for (auto entry = m7_7ProbeDeviceCommandHashes.begin();
+            entry != m7_7ProbeDeviceCommandHashes.end(); ++entry)
+            CHECK(Iridium::sha256File(root() / entry.key()) ==
+                latestHash(entry.key(), entry.value().get<std::string>()));
+        for (auto entry = m7_7ProbeLodHashes.begin();
+            entry != m7_7ProbeLodHashes.end(); ++entry)
+            CHECK(Iridium::sha256File(root() / entry.key()) ==
+                latestHash(entry.key(), entry.value().get<std::string>()));
+        for (auto entry = m7_7DirectionalShadowLodHashes.begin();
+            entry != m7_7DirectionalShadowLodHashes.end(); ++entry)
+            CHECK(Iridium::sha256File(root() / entry.key()) ==
+                latestHash(entry.key(), entry.value().get<std::string>()));
+        for (auto entry = m7_7PointShadowLodHashes.begin();
+            entry != m7_7PointShadowLodHashes.end(); ++entry)
+            CHECK(Iridium::sha256File(root() / entry.key()) ==
+                latestHash(entry.key(), entry.value().get<std::string>()));
+        for (auto entry = m7_7SpotShadowLodHashes.begin();
+            entry != m7_7SpotShadowLodHashes.end(); ++entry)
+            CHECK(Iridium::sha256File(root() / entry.key()) ==
+                latestHash(entry.key(), entry.value().get<std::string>()));
+        for (auto entry = m7_7HeterogeneousShadowAdmissionHashes.begin();
+            entry != m7_7HeterogeneousShadowAdmissionHashes.end(); ++entry)
+            CHECK(Iridium::sha256File(root() / entry.key()) ==
+                latestHash(entry.key(), entry.value().get<std::string>()));
+        for (auto entry = m7_7ProbeLodWarmedAdmissionHashes.begin();
+            entry != m7_7ProbeLodWarmedAdmissionHashes.end(); ++entry)
+            CHECK(Iridium::sha256File(root() / entry.key()) ==
+                latestHash(entry.key(), entry.value().get<std::string>()));
+        for (auto entry = m7_7ShadowLodWarmedAdmissionHashes.begin();
+            entry != m7_7ShadowLodWarmedAdmissionHashes.end(); ++entry)
+            CHECK(Iridium::sha256File(root() / entry.key()) ==
+                latestHash(entry.key(), entry.value().get<std::string>()));
+        for (auto entry = m7_7ShadowMembershipCacheHashes.begin();
+            entry != m7_7ShadowMembershipCacheHashes.end(); ++entry)
+            CHECK(Iridium::sha256File(root() / entry.key()) ==
+                latestHash(entry.key(), entry.value().get<std::string>()));
+        for (auto entry = m7_7OpaqueShadowPositionFetchHashes.begin();
+            entry != m7_7OpaqueShadowPositionFetchHashes.end(); ++entry)
+            CHECK(Iridium::sha256File(root() / entry.key()) ==
+                latestHash(entry.key(), entry.value().get<std::string>()));
+        for (auto entry = m7_7ShadowQualityClosureHashes.begin();
+            entry != m7_7ShadowQualityClosureHashes.end(); ++entry)
+            CHECK(Iridium::sha256File(root() / entry.key()) ==
+                latestHash(entry.key(), entry.value().get<std::string>()));
+        for (auto entry = m7_8VirtualShadowResidencyContractHashes.begin();
+            entry != m7_8VirtualShadowResidencyContractHashes.end(); ++entry)
             CHECK(Iridium::sha256File(root() / entry.key()) ==
                 entry.value().get<std::string>());
         const auto expectedCurrentHash = [&](const std::string& path,

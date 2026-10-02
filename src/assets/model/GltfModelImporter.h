@@ -10,7 +10,10 @@
 
 namespace Iridium {
 
-    inline constexpr uint32_t kGltfModelImporterVersion = 6;
+    inline constexpr uint32_t kGltfModelImporterVersion = 8;
+    inline constexpr uint32_t kPreviousGltfModelImporterVersion = 7;
+
+    enum class GltfModelImporterRevision { Current, LegacyLod0V7 };
 
     struct TriangleConnectedComponent {
         uint32_t sourceTriangleSeed = 0;
@@ -22,6 +25,19 @@ namespace Iridium {
     [[nodiscard]] std::vector<TriangleConnectedComponent>
         findTriangleConnectedComponents(
             std::span<const uint32_t> triangleIndices);
+
+    struct ModelTriangleOptimization {
+        std::vector<uint32_t> sourceTriangleIndices;
+        uint64_t redundantTriangleCount = 0;
+        uint64_t cacheMissesSaved = 0;
+    };
+
+    // Exact same-winding duplicates are removed and remaining opaque triangles
+    // are reordered only when a deterministic 32-entry LRU simulation improves.
+    [[nodiscard]] ModelTriangleOptimization optimizeModelTriangleOrder(
+        std::span<const uint32_t> triangleIndices,
+        std::span<const uint32_t> sourceTriangleIndices,
+        size_t vertexCount);
 
     struct ClosedTriangleTopologyAnalysis {
         uint32_t triangleCount = 0;
@@ -52,6 +68,8 @@ namespace Iridium {
     // bounds, material GUID references, and RT reconstruction streams.
     class GltfModelImporter final : public AssetImporter {
     public:
+        explicit GltfModelImporter(GltfModelImporterRevision revision =
+            GltfModelImporterRevision::Current) : revision_(revision) {}
         [[nodiscard]] const ImporterDescriptor& descriptor() const noexcept override;
         [[nodiscard]] ImportProbeResult probe(
             const std::filesystem::path& relativePath,
@@ -68,6 +86,12 @@ namespace Iridium {
             const CookTarget& target,
             const AssetCookContext& context,
             std::stop_token stopToken = {}) const override;
+    private:
+        GltfModelImporterRevision revision_;
     };
+
+    // Version 7 remains available only through explicit sidecar selection, with
+    // its original settings bytes and schema-6 recipe. New imports select v8.
+    void registerGltfModelImporters(ImporterRegistry& registry);
 
 } // namespace Iridium
