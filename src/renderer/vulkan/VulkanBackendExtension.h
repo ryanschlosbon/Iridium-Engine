@@ -11,7 +11,6 @@
 #include "renderer/rhi/DepthPyramid.h"
 #include "renderer/rhi/GpuScene.h"
 #include "renderer/rhi/GpuSceneIndirect.h"
-#include "renderer/rhi/Ordinary2CaptureValidation.h"
 #include "renderer/rhi/VirtualShadowMap.h"
 #include "renderer/transparency/LayeredAtlas.h"
 #include "core/types/FrameCapture.h"
@@ -66,13 +65,6 @@ namespace Iridium {
         // Null unless the depth pyramid is enabled for this process.
         VulkanDepthPyramid* depthPyramid = nullptr;
         CpuProfiler* profiler = nullptr;
-    };
-
-    // The backend's frame-recording state at a request or hook.
-    struct VulkanFrameRecording {
-        bool open = false;
-        VkCommandBuffer cmd = VK_NULL_HANDLE;
-        uint32_t slot = 0;
     };
 
     struct VulkanCaptureHookPayload {
@@ -256,36 +248,6 @@ namespace Iridium {
         ~IVulkanIndirectOracle() = default;
     };
 
-    // Temporary forwarding target for the eight capture/oracle requests that
-    // are still on IRenderBackend (M7R R2.7). R2.9 deletes these methods and
-    // this interface; the harness then arms the extension directly.
-    class IVulkanLegacyQualificationRequests {
-    public:
-        virtual void captureCurrentFrame(uint64_t captureId,
-            const VulkanFrameRecording& frame,
-            const VulkanCaptureHookPayload& source) = 0;
-        [[nodiscard]] virtual std::vector<FrameCapture> collectFrameCaptures(
-            bool frameOpen, bool waitForPending) = 0;
-        virtual void requestOrdinary2CaptureValidation(uint64_t validationId,
-            const VulkanFrameRecording& frame) = 0;
-        [[nodiscard]] virtual std::vector<Ordinary2CaptureValidationResult>
-            collectOrdinary2CaptureValidations(bool frameOpen,
-                bool waitForPending) = 0;
-        virtual void requestDeepLayeredCaptureValidation(uint64_t validationId,
-            TransparencyQuality quality, const VulkanFrameRecording& frame) = 0;
-        [[nodiscard]] virtual std::vector<DeepLayeredCaptureValidationResult>
-            collectDeepLayeredCaptureValidations(bool frameOpen,
-                bool waitForPending) = 0;
-        virtual void requestDepthPyramidCaptureValidation(
-            uint64_t validationId, const VulkanFrameRecording& frame) = 0;
-        [[nodiscard]] virtual std::vector<DepthPyramidCaptureValidationResult>
-            collectDepthPyramidCaptureValidations(bool frameOpen,
-                bool waitForPending) = 0;
-
-    protected:
-        ~IVulkanLegacyQualificationRequests() = default;
-    };
-
     class IVulkanBackendExtension : public IRenderBackendExtension {
     public:
         [[nodiscard]] RenderBackendApi api() const noexcept final {
@@ -313,8 +275,6 @@ namespace Iridium {
         [[nodiscard]] virtual IVulkanIndirectOracle* indirectOracle() noexcept {
             return nullptr;
         }
-        [[nodiscard]] virtual IVulkanLegacyQualificationRequests*
-            legacyQualificationRequests() noexcept { return nullptr; }
         // After the device is idle and the oracles have drained, before any
         // backend resource is destroyed.
         virtual void onBeforeDeviceDestroy() {}

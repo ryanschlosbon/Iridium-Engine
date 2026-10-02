@@ -6,7 +6,9 @@
 //
 // Hook order inside Application::run():
 //
+//   runPolicy()                     once, at the start of run()
 //   onStartup(Configure)            before the backend exists
+//   backendExtensions()             once, when the backend is created
 //   onStartup(BackendReady)         backend + AssetManager exist; before asset services
 //                                   (allocations here shift texture/material indices)
 //   onStartup(ContentLoad)          only when runPolicy().ownsStartupContent; replaces
@@ -38,6 +40,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 
 #include "app/ApplicationConfig.h"
@@ -46,6 +49,7 @@
 #include "material/TransparencyPolicy.h"
 #include "renderer/color/OutputTransformConfig.h"
 #include "renderer/rhi/IRenderBackend.h"
+#include "renderer/rhi/RenderBackendExtension.h"
 #include "renderer/rhi/RenderDebugView.h"
 #include "renderer/rhi/RhiResourceTypes.h"
 #include "renderer/rhi/ShadowTypes.h"
@@ -57,6 +61,24 @@ namespace Iridium {
     class SceneWorld;
     struct LoadedEnvironmentAsset;
     struct ModelAsset;
+
+    // Reference routes and qualification settings that change how the
+    // Application drives the renderer. Only an observer selects them (the
+    // qualification harness, from its command-line options); the defaults are
+    // the production routes.
+    struct AppRenderRouting {
+        // Direct GBuffer draws with no main-view frustum rejection, plus
+        // conventional shadows and direct probe capture.
+        bool forceDirectGBufferReference = false;
+        // Conventional directional/spot/point shadow submission only.
+        bool forceDirectShadowReference = false;
+        // Direct probe capture while other consumers stay automatic.
+        bool forceDirectProbeCaptureReference = false;
+        // Deterministic WeightedOIT draw permutation; 0 is production order.
+        uint64_t weightedOitOrderSeed = 0;
+        // Physically withheld finer LOD index ranges (0 keeps every level).
+        uint32_t gpuLodMinimumResidentLevel = 0;
+    };
 
     // How the Application runs when an observer owns the run. Defaults are the
     // interactive editor.
@@ -71,6 +93,7 @@ namespace Iridium {
         // The observer loads the startup model/environment and constructs the
         // startup scene; the Application creates no default entities.
         bool ownsStartupContent = false;
+        AppRenderRouting routing{};
     };
 
     enum class StartupPhase : uint8_t {
@@ -240,6 +263,11 @@ namespace Iridium {
         virtual ~IFrameObserver() = default;
 
         [[nodiscard]] virtual AppRunPolicy runPolicy() const { return {}; }
+        // Backend extensions to attach when the backend is created (after
+        // onStartup(Configure)). Not owned by the backend: they must outlive
+        // the Application's backend, i.e. the observer outlives Application.
+        [[nodiscard]] virtual std::span<IRenderBackendExtension* const>
+            backendExtensions() { return {}; }
         virtual void onStartup(StartupPhase, AppStartupContext&) {}
         virtual void onFrameBegin(FrameBeginPhase, AppFrameContext&) {}
         virtual void onFrameSubmit(FrameSubmitPoint, AppFrameContext&) {}

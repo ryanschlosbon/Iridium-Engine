@@ -20,6 +20,7 @@
 #include <utility>
 #include <bit>
 
+#include "core/BuildInfo.h"
 #include "profiling/CpuAllocationProfile.h"
 #include "renderer/rhi/RenderBackendFactory.h"
 #include "scene/components/MeshComponent.h"
@@ -62,14 +63,6 @@
 #ifdef max
 #undef max
 #endif
-#endif
-
-#ifndef IRIDIUM_BUILD_CONFIGURATION
-#define IRIDIUM_BUILD_CONFIGURATION "unknown"
-#endif
-
-#ifndef IRIDIUM_SOURCE_COMMIT
-#define IRIDIUM_SOURCE_COMMIT "unknown"
 #endif
 
 namespace Iridium {
@@ -339,42 +332,40 @@ namespace Iridium {
         notifyStartup(StartupPhase::Configure, startup);
         // 1. Instantiate the RHI (The Strategy Pattern in action)
         const auto backendStart = std::chrono::steady_clock::now();
-        renderBackend = createRenderBackend(RenderBackendApi::Vulkan);
+        // Production runs attach no extension; the qualification harness
+        // supplies its own (M7R R2.9).
+        renderBackend = createRenderBackend(RenderBackendCreateInfo{
+            .api = RenderBackendApi::Vulkan,
+            .extensions = observer_
+                ? observer_->backendExtensions()
+                : std::span<IRenderBackendExtension* const>{},
+        });
+        const AppRenderRouting& routing = policy_.routing;
         renderBackend->init(window, {
             .enableValidation = config_.enableValidation,
             .experimentalDepthPyramid = config_.experimentalDepthPyramid,
             .experimentalVirtualShadowResources =
                 config_.experimentalVirtualShadowResources,
-            .virtualShadowDepthQualificationOracle =
-                config_.virtualShadowDepthQualificationOracle,
             .experimentalDepthOcclusionQuery =
                 config_.experimentalDepthOcclusionQuery,
             .experimentalDepthOcclusionRejection =
                 config_.experimentalDepthOcclusionRejection,
-            .enableDepthOcclusionQualificationOracle =
-                config_.depthOcclusionQualificationOracle,
             .cpuProfiler = &cpuProfiler_,
             .enableGpuProfiling = config_.enableGpuProfiling,
             .enableTransparentPipelineStatistics =
                 config_.enableTransparentPipelineStatistics,
-            .validateReflectionProbeCaptureTargets =
-                config_.validateReflectionProbes,
-            .forceDirectGBufferReference = config_.forceDirectGBufferReference,
-            .forceDirectShadowReference = config_.forceDirectShadowReference,
-            .enableShadowIndirectQualificationOracle =
-                config_.shadowIndirectQualificationOracle,
+            .forceDirectGBufferReference = routing.forceDirectGBufferReference,
+            .forceDirectShadowReference = routing.forceDirectShadowReference,
             .experimentalShadowLodErrorTexels =
                 config_.experimentalShadowLodErrorTexels,
             .shadowLodMaximumLevel = config_.shadowLodMaximumLevel,
             .experimentalGpuLodErrorPixels = config_.experimentalGpuLodErrorPixels,
             .gpuLodMaximumLevel = config_.gpuLodMaximumLevel,
             .gpuLodHysteresisFraction = config_.gpuLodHysteresisFraction,
-            .enableGpuLodQualificationOracle = config_.gpuLodQualificationOracle,
             .experimentalProbeLodErrorPixels =
                 config_.experimentalProbeLodErrorPixels,
             .probeLodMaximumLevel = config_.probeLodMaximumLevel,
-            .enableProbeLodQualificationOracle = config_.probeLodQualificationOracle,
-            .weightedOitOrderSeed = config_.weightedOitOrderSeed,
+            .weightedOitOrderSeed = routing.weightedOitOrderSeed,
             .gBufferLayout = config_.gBufferLayout,
             .clusterTileSize = config_.clusterTileSize,
             .clusterDepthSlices = config_.clusterDepthSlices,
@@ -414,7 +405,7 @@ namespace Iridium {
             TransparencyExecutionMode::Classified;
         assetManager = std::make_unique<AssetManager>(renderBackend.get(),
             runtimeTransparencyExecutionMode,
-            config_.gpuLodMinimumResidentLevel);
+            policy_.routing.gpuLodMinimumResidentLevel);
         // Qualification probe allocations made here shift texture and material
         // indices, so they precede every asset service.
         startup.backend = renderBackend.get();
@@ -982,7 +973,8 @@ namespace Iridium {
                     std::to_string(
                         config_.reflectionProbeSettings.prefilterSampleCount),
                 .toolVersion = std::string("Iridium ") +
-                    IRIDIUM_SOURCE_COMMIT + " " + IRIDIUM_BUILD_CONFIGURATION,
+                    BuildInfo::sourceCommit() + " " +
+                    BuildInfo::configuration(),
                 .radiance = { captured.resolution, captured.resolution, 1, 6,
                     TextureFormat::RGBA16_SFloat },
                 .irradiance = { IrradianceSize, IrradianceSize, 1, 6,
@@ -1574,8 +1566,8 @@ namespace Iridium {
                 : std::span<const uint32_t>{};
         const std::span<const uint32_t> probeGpuScenePrimitiveIndices =
             !assetPreviewActive && gpuSceneFrame_ &&
-                !config_.forceDirectGBufferReference &&
-                !config_.forceDirectProbeCaptureReference
+                !policy_.routing.forceDirectGBufferReference &&
+                !policy_.routing.forceDirectProbeCaptureReference
                 ? std::span<const uint32_t>(
                     gpuSceneFrame_->probeConsumerPrimitiveIndices)
                 : std::span<const uint32_t>{};
@@ -2343,8 +2335,8 @@ namespace Iridium {
         appendDirectShadowFallbacks(forwardOpaqueQueue);
         const auto appendDirectProbeFallbacks = [&](const auto& queue) {
             for (const DrawPacket& packet : queue) {
-                if (config_.forceDirectGBufferReference ||
-                    config_.forceDirectProbeCaptureReference ||
+                if (policy_.routing.forceDirectGBufferReference ||
+                    policy_.routing.forceDirectProbeCaptureReference ||
                     !hasGpuScenePrimitive(packet))
                     probeCasterQueue_.push_back(packet);
             }
@@ -2369,8 +2361,8 @@ namespace Iridium {
             .gpuScenePrimitiveIndices = probeGpuScenePrimitiveIndices,
             .directPackets = probeCasterQueue_,
             .membershipRevision = !assetPreviewActive && gpuSceneFrame_ &&
-                !config_.forceDirectGBufferReference &&
-                !config_.forceDirectProbeCaptureReference
+                !policy_.routing.forceDirectGBufferReference &&
+                !policy_.routing.forceDirectProbeCaptureReference
                 ? gpuSceneFrame_->probeConsumerMembershipRevision : 0u,
         };
         cpuProfiler_.recordCounter("probe.capture.casters.gpu_scene",

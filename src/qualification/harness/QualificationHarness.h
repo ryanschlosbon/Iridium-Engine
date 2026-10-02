@@ -5,17 +5,18 @@
 // content and scene construction, validator preconditions, resize/lifecycle/
 // transport/residency validators, per-frame capture and readback-validation
 // requests, end-of-run IRIDIUM_* reports, the capture artifact and the CPU-profile
-// run report. It is attached through IFrameObserver (app/FrameObserver.h).
-//
-// Backend capture/validation calls still go through IRenderBackend; R2.9 moves
-// them to the Vulkan qualification extension.
+// run report. It is attached through IFrameObserver (app/FrameObserver.h) and
+// supplies the backend extension that records captures and readbacks
+// (IQualificationBackend, implemented by VulkanQualificationExtension).
 
 #include "app/FrameObserver.h"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -23,32 +24,38 @@
 #include "core/types/FrameCapture.h"
 #include "capture/CaptureArtifact.h"
 #include "core/types/RenderHandles.h"
+#include "qualification/QualificationBackend.h"
+#include "qualification/QualificationOptions.h"
 #include "renderer/rhi/RenderBackendRuntimeInfo.h"
 
 namespace Iridium {
 
     struct SystemProfile;
 
-    // The run policy the harness requests for a configuration: a --benchmark run
-    // is deterministic, fullscreen and owns its startup content.
+    // The run policy the harness requests: a --benchmark run is deterministic,
+    // fullscreen and owns its startup content; reference routes, the OIT order
+    // seed and the resident LOD floor reach the Application as routing.
     [[nodiscard]] AppRunPolicy qualificationRunPolicy(
-        const ApplicationConfig& config);
+        const QualificationOptions& options);
+    // The oracle/startup-validator selection handed to the backend extension.
+    [[nodiscard]] QualificationBackendConfig qualificationBackendConfig(
+        const QualificationOptions& options);
 
-    // Factory used by main.cpp. Calling it only from a discarded
-    // `if constexpr (kQualificationBuild)` branch keeps an OFF build from
-    // needing this library at link time.
+    // Factory used by main.cpp (IRIDIUM_QUALIFICATION=ON builds only): the
+    // harness with a VulkanQualificationExtension.
     [[nodiscard]] std::unique_ptr<IFrameObserver> createQualificationHarness(
-        const ApplicationConfig& config);
+        const QualificationOptions& options);
 
     class QualificationHarness final : public IFrameObserver {
     public:
-        explicit QualificationHarness(const ApplicationConfig& config);
+        QualificationHarness(QualificationOptions options,
+            std::unique_ptr<IQualificationBackend> backend);
 
         [[nodiscard]] AppRunPolicy runPolicy() const override { return policy_; }
+        [[nodiscard]] std::span<IRenderBackendExtension* const>
+            backendExtensions() override { return extensions_; }
         void onStartup(StartupPhase phase, AppStartupContext& context) override;
         void onFrameBegin(FrameBeginPhase phase,
-            AppFrameContext& context) override;
-        void onFrameSubmit(FrameSubmitPoint point,
             AppFrameContext& context) override;
         void onFrameEnd(AppFrameContext& context) override;
         void onShutdown(ShutdownPhase phase,
@@ -124,7 +131,10 @@ namespace Iridium {
             const SystemProfile& systemProfile,
             const std::optional<CaptureArtifactPaths>& captureArtifact) const;
 
+        const QualificationOptions options_;
         AppRunPolicy policy_{};
+        std::unique_ptr<IQualificationBackend> backend_;
+        std::array<IRenderBackendExtension*, 1> extensions_{};
 
         // Benchmark content.
         std::optional<BenchmarkFixture> benchmark_;

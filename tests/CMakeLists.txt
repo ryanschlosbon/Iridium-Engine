@@ -75,19 +75,24 @@ inline constexpr const char* kIridiumCompiledShaders[] = {
 endif()
 
 # --- core / ecs / profiling --------------------------------------------------------
-iridium_add_test(ApplicationConfigTests
-        SOURCES core/ApplicationConfigTests.cpp
-        LIBS iridium_app)
-
 iridium_add_test(CliOptionRegistryTests
         SOURCES core/CliOptionRegistryTests.cpp)
 
-# R2.4 CLI parity: the registry parser against a frozen copy of the 6b000ad
-# parser (FrozenApplicationConfigParser.cpp, test-only). Remove at M7R R2.10.
-iridium_add_test(ApplicationCliParityTests
-        SOURCES core/ApplicationCliParityTests.cpp
-                core/FrozenApplicationConfigParser.cpp
-        LIBS iridium_app)
+# The full engine command line includes the qualification library's flags
+# (M7R R2.9), so these exist only in IRIDIUM_QUALIFICATION=ON builds. The parity
+# test also checks the OFF-shaped (runtime/editor/renderer) registry.
+if(TARGET iridium_qualification)
+    iridium_add_test(ApplicationConfigTests
+            SOURCES core/ApplicationConfigTests.cpp
+            LIBS iridium_qualification)
+
+    # R2.4 CLI parity: the registry parser against a frozen copy of the 6b000ad
+    # parser (FrozenApplicationConfigParser.cpp, test-only). Remove at M7R R2.10.
+    iridium_add_test(ApplicationCliParityTests
+            SOURCES core/ApplicationCliParityTests.cpp
+                    core/FrozenApplicationConfigParser.cpp
+            LIBS iridium_qualification)
+endif()
 
 # --- app / qualification harness (M7R R2.6) ---------------------------------------
 # The Application's IFrameObserver hook order on a real device, without the
@@ -421,7 +426,9 @@ iridium_add_test(ViewportLayoutTests
 
 # --- explicit qualification oracles (M7R R2.5) --------------------------------------
 # --validation no longer implies the CPU oracles; these runs keep device/CPU parity
-# exercised on tracked engine-authored fixtures.
+# exercised on tracked engine-authored fixtures. The oracle flags exist only in
+# IRIDIUM_QUALIFICATION=ON builds.
+if(TARGET iridium_qualification)
 foreach(_oracle_case IN ITEMS
         "point_shadow_contact_v1|assets/m7-local-shadow-device-manifest.v1.json"
         "m7_heterogeneous_shadow_warm_motion_v1|assets/m7-heterogeneous-shadow-admission-manifest.v1.json")
@@ -445,3 +452,4 @@ foreach(_oracle_case IN ITEMS
             LABELS "vulkan;process"
             ENVIRONMENT "VK_LOADER_LAYERS_DISABLE=~implicit~")
 endforeach()
+endif()

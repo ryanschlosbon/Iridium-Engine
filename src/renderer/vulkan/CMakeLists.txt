@@ -45,6 +45,7 @@ add_library(iridium_vulkan STATIC
 )
 target_link_libraries(iridium_vulkan PUBLIC
         iridium_lighting
+        iridium_transparency
         iridium_rhi
         iridium_graph
         iridium_profiling

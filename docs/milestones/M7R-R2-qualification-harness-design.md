@@ -158,6 +158,29 @@ class CliOptionRegistry { public:
 - GPU range names stay unchanged.
 - The harness drives the extension through a neutral `IQualificationBackend` (`arm*`/`collect*`) at `BackendFrameOpened`.
 
+### As implemented at R2.9 (deviations)
+
+- **Routing fields.** Five qualification flags change how the Application drives
+  the renderer (the three reference routes, the WeightedOIT order seed and the
+  resident LOD floor). They live in `QualificationOptions` and reach the
+  Application as `AppRunPolicy::routing` (`AppRenderRouting`), not through
+  `ApplicationConfig`. `RenderBackendConfig` keeps `forceDirect*` and
+  `weightedOitOrderSeed`; it loses the six oracle/probe-validator fields, which
+  the harness hands to the extension at `StartupPhase::Configure`
+  (`QualificationBackendConfig`).
+- **`IQualificationBackend`.** The harness owns a `VulkanQualificationExtension`
+  through the neutral `src/qualification/QualificationBackend.h` (as §2 says), so
+  the harness stays free of Vulkan headers and its tests use a device-free fake.
+  Captures arm at `BackendFrameOpened` with the validations;
+  `FrameSubmitPoint` stays on `IFrameObserver` but the harness no longer uses it.
+- **Harness attachment.** As at R2.6, qualification builds attach the harness to
+  every run (it prints the `IRIDIUM_*` startup and run-metric lines), so the
+  extension and its hook declarations are present on every ON run.
+- **Libraries.** `iridium_transparency` is a header-only INTERFACE library over
+  `iridium_rhi`; the result types are in `src/qualification/QualificationResults.h`.
+  `main.cpp`'s `#if IRIDIUM_QUALIFICATION` uses a macro from the generated
+  `core/BuildFeatures.h`.
+
 ## 3. `IRIDIUM_QUALIFICATION=OFF`
 
 - **Library:** `src/qualification/` (`iridium-qualification`) is added only when ON.

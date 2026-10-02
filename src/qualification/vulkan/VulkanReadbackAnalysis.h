@@ -7,7 +7,7 @@
 
 #include "core/types/FrameCapture.h"
 #include "renderer/rhi/DepthPyramid.h"
-#include "renderer/rhi/Ordinary2CaptureValidation.h"
+#include "qualification/QualificationResults.h"
 
 #include <cstddef>
 #include <cstdint>

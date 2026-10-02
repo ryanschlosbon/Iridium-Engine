@@ -46,17 +46,17 @@ namespace Iridium {
         AppStartupContext& context) {
         ApplicationConfig& config = context.config;
         const auto manifestStart = std::chrono::steady_clock::now();
-        const std::filesystem::path manifestPath = config.benchmarkManifest.empty()
+        const std::filesystem::path manifestPath = options_.benchmarkManifest.empty()
             ? std::filesystem::path(PROJECT_ROOT_DIR) /
                 "assets" / "benchmarks" / "m0" / "manifest.v1.json"
-            : config.benchmarkManifest;
+            : options_.benchmarkManifest;
         const BenchmarkManifest manifest = loadBenchmarkManifest(manifestPath);
         const std::filesystem::path projectRoot =
             std::filesystem::weakly_canonical(PROJECT_ROOT_DIR);
         benchmarkManifestPath_ = std::filesystem::relative(
             manifest.sourcePath, projectRoot).generic_string();
         benchmarkManifestSha256_ = sha256File(manifest.sourcePath);
-        benchmark_ = findBenchmarkFixture(manifest, config.benchmarkId);
+        benchmark_ = findBenchmarkFixture(manifest, options_.benchmarkId);
         context.timings.manifestVerificationNanoseconds =
             elapsedNanoseconds(manifestStart);
         const auto importStart = std::chrono::steady_clock::now();
@@ -235,13 +235,12 @@ namespace Iridium {
             }
         }
         context.firstEntity = firstEntity;
-        context.initialSelection = context.config.selectBenchmarkEntity
+        context.initialSelection = options_.selectBenchmarkEntity
             ? firstEntity : NULL_ENTITY;
     }
 
     void QualificationHarness::constructGeneratedLights(
         AppStartupContext& context) {
-        const ApplicationConfig& config = context.config;
         SceneWorld& sceneWorld = context.scene;
         Registry& registry = sceneWorld.registry();
         const std::optional<BenchmarkFixture>& activeBenchmark = benchmark_;
@@ -258,17 +257,17 @@ namespace Iridium {
                 activeBenchmark->id == "directional_shadow_motion_v1");
         const bool explicitFixtureLights = activeBenchmark &&
             !activeBenchmark->lights.empty() &&
-            config.clusterStressLightCount == 0 &&
-            config.validateLightTableScale == 0;
+            options_.clusterStressLightCount == 0 &&
+            options_.validateLightTableScale == 0;
         const uint32_t fixtureLightCount = explicitFixtureLights
             ? static_cast<uint32_t>(activeBenchmark->lights.size())
             : directionalShadowFixture
             ? 1u : (spotShadowContactFixture || pointShadowContactFixture)
             ? 2u : sampleCarLightingFixture ? 3u : 0u;
-        const uint32_t generatedLightCount = config.clusterStressLightCount != 0
-            ? config.clusterStressLightCount
-            : config.validateLightTableScale != 0
-                ? config.validateLightTableScale
+        const uint32_t generatedLightCount = options_.clusterStressLightCount != 0
+            ? options_.clusterStressLightCount
+            : options_.validateLightTableScale != 0
+                ? options_.validateLightTableScale
                 : fixtureLightCount;
         generatedLightCount_ = generatedLightCount;
         if (generatedLightCount == 0) return;
@@ -321,7 +320,7 @@ namespace Iridium {
                         emissionDirection.x, emissionDirection.z));
                 }
             }
-            else if (config.clusterStressLightCount != 0) {
+            else if (options_.clusterStressLightCount != 0) {
                 transform.position = {
                     (static_cast<float>(index % 32u) - 15.5f) * 2.0f,
                     (static_cast<float>((index / 32u) % 16u) - 7.5f) * 2.0f,
@@ -335,7 +334,7 @@ namespace Iridium {
                     static_cast<float>(index / 4'096u),
                 };
             }
-            if (config.clusterStressLightCount != 0 && index < 4u) {
+            if (options_.clusterStressLightCount != 0 && index < 4u) {
                 // Spread global stress lights across opposing azimuths so
                 // multi-owner shadow composition is exercised, not merely
                 // duplicate projections from coincident directions.
@@ -374,7 +373,7 @@ namespace Iridium {
                 light.innerConeDegrees = fixtureLight->innerConeDegrees;
                 light.outerConeDegrees = fixtureLight->outerConeDegrees;
                 light.castsShadows = fixtureLight->castsShadows &&
-                    !config.disableBenchmarkLocalShadows;
+                    !options_.disableBenchmarkLocalShadows;
                 light.shadowQuality = static_cast<LightShadowQuality>(
                     fixtureLight->shadowQuality);
                 light.priority = fixtureLight->priority;
@@ -388,20 +387,20 @@ namespace Iridium {
                 : spotShadowContactFixture
                 ? LightType::Spot
                 : pointShadowContactFixture ? LightType::Point
-                : config.clusterStressLightCount == 0
+                : options_.clusterStressLightCount == 0
                 ? static_cast<LightType>(index % 3u)
                 : (index < 4u ? LightType::Directional :
                     (index % 2u == 0u ? LightType::Point : LightType::Spot));
             if (directionalShadowFixture || spotShadowContactFixture ||
                 pointShadowContactFixture) {
                 light.castsShadows =
-                    !config.disableBenchmarkLocalShadows;
+                    !options_.disableBenchmarkLocalShadows;
             }
             else if (sampleCarLightingFixture) {
                 light.castsShadows = true;
             }
             if (!spotShadowContactFixture && !pointShadowContactFixture &&
-                config.clusterStressLightCount != 0 &&
+                options_.clusterStressLightCount != 0 &&
                 light.type == LightType::Spot) {
                 // The stress volume is centered in front of these negative-Z
                 // lights, so the authored +Z emission axis already aims back
@@ -415,7 +414,7 @@ namespace Iridium {
             }
             light.illuminanceLux = 100'000.0f;
             light.luminousIntensityCandela = 1'250.0f;
-            light.rangeMeters = config.clusterStressLightCount == 0
+            light.rangeMeters = options_.clusterStressLightCount == 0
                 ? 25.0f : 4.0f;
             if (sampleCarLightingFixture) {
                 constexpr std::array<glm::vec3, 3> kRigColors{
@@ -457,8 +456,7 @@ namespace Iridium {
 
     void QualificationHarness::constructProbeValidationEntities(
         AppStartupContext& context) {
-        const ApplicationConfig& config = context.config;
-        if (!config.validateReflectionProbes) return;
+        if (!options_.validateReflectionProbes) return;
         SceneWorld& sceneWorld = context.scene;
         Registry& registry = sceneWorld.registry();
         const AssetGuid activeEnvironmentAssetGuid =

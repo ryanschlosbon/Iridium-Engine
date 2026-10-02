@@ -12,7 +12,6 @@ namespace Iridium {
             registerRuntimeOptions(registry, config);
             registerEditorOptions(registry, config);
             registerRendererOptions(registry, config);
-            registerQualificationOptions(registry, config);
         }
 
     } // namespace AppCli
@@ -26,11 +25,15 @@ namespace Iridium {
         return config;
     }
 
+    std::string applicationUsage(const Cli::CliOptionRegistry& registry) {
+        return "Usage: IridiumEngine [options]\n" + registry.usage();
+    }
+
     std::string applicationUsage() {
         ApplicationConfig unused{};
         Cli::CliOptionRegistry registry;
         AppCli::registerApplicationOptions(registry, unused);
-        return "Usage: IridiumEngine [options]\n" + registry.usage();
+        return applicationUsage(registry);
     }
 
 } // namespace Iridium

@@ -8,7 +8,6 @@
 #include <optional>
 #include "core/types/AssetGuid.h"
 #include "renderer/rhi/RenderDebugView.h"
-#include "core/types/FrameCapture.h"
 #include "renderer/rhi/GBufferLayout.h"
 #include "renderer/rhi/RenderBackendConfig.h"
 #include "renderer/rhi/ReflectionProbeSettings.h"
@@ -33,46 +32,18 @@ namespace Iridium {
         bool windowDecorated = true;
         bool showProfiler = false;
         bool showMaterialDiagnostics = false;
-        bool selectBenchmarkEntity = false;
-        bool disableBenchmarkLocalShadows = false;
-        bool forceDirectGBufferReference = false;
-        bool forceDirectShadowReference = false;
-        bool forceDirectProbeCaptureReference = false;
-        bool shadowIndirectQualificationOracle = false;
         float experimentalShadowLodErrorTexels = 0.0f;
         uint32_t shadowLodMaximumLevel = 15u;
         float experimentalGpuLodErrorPixels = 0.0f;
         uint32_t gpuLodMaximumLevel = 15u;
         float gpuLodHysteresisFraction = 0.15f;
-        bool gpuLodQualificationOracle = false;
         float experimentalProbeLodErrorPixels = 0.0f;
         uint32_t probeLodMaximumLevel = 15u;
-        bool probeLodQualificationOracle = false;
         bool experimentalDepthPyramid = false;
         bool experimentalVirtualShadowResources = false;
-        bool virtualShadowDepthQualificationOracle = false;
         bool experimentalDepthOcclusionQuery = false;
         bool experimentalDepthOcclusionRejection = false;
-        bool depthOcclusionQualificationOracle = false;
-        bool validateDepthPyramidCapture = false;
-        bool validateDepthPyramidResize = false;
-        uint32_t gpuLodMinimumResidentLevel = 0;
         bool forceWireframe = false;
-        bool validateTextureResidencyChurn = false;
-        bool validateReflectionProbes = false;
-        bool validateOrdinary2Capture = false;
-        bool validateOrdinary2Fallback = false;
-        bool validateOrdinary2Resize = false;
-        bool validateWeightedOitResize = false;
-        bool validateDeepLayeredCapture = false;
-        bool validateDeepLayeredLifecycle = false;
-        bool validateOutputTransportSwitch = false;
-        TransparencyQuality deepLayeredCaptureQuality =
-            TransparencyQuality::Hero4;
-        uint32_t validateTextureTableScale = 0;
-        uint32_t validateMaterialTableScale = 0;
-        uint32_t validateLightTableScale = 0;
-        uint32_t clusterStressLightCount = 0;
         uint32_t clusterTileSize = 32;
         uint32_t clusterDepthSlices = 24;
         ProjectShadowSettings shadowSettings{};
@@ -88,23 +59,24 @@ namespace Iridium {
         uint64_t frameLimit = 0;
         bool warmupFrameCountSpecified = false;
         bool frameLimitSpecified = false;
-        std::filesystem::path cpuProfileOutput;
         RenderDebugView debugView = RenderDebugView::Final;
-        std::string benchmarkId;
-        std::filesystem::path benchmarkManifest;
-        uint64_t weightedOitOrderSeed = 0;
         std::filesystem::path cookedModelArtifact;
         std::filesystem::path cookedEnvironmentArtifact;
         std::optional<AssetGuid> editorAssetViewerGuid;
-        std::optional<uint64_t> captureFrameIndex;
-        bool requireCaptureSignal = false;
-        FrameCapturePoint capturePoint = FrameCapturePoint::SceneLinear;
-        std::filesystem::path captureDirectory;
-        std::string cacheState = "unspecified";
     };
 
+    namespace Cli { class CliOptionRegistry; }
+
+    // Parses the runtime, editor and renderer options (AppCli::
+    // registerApplicationOptions). Qualification flags are registered by the
+    // qualification library, which main.cpp adds to its registry only in
+    // IRIDIUM_QUALIFICATION=ON builds; here they are unknown options.
     [[nodiscard]] ApplicationConfig parseApplicationConfig(
         std::span<const std::string_view> arguments);
+    // "Usage: IridiumEngine [options]\n" followed by the registry's usage.
+    [[nodiscard]] std::string applicationUsage(
+        const Cli::CliOptionRegistry& registry);
+    // Usage of the runtime, editor and renderer options.
     [[nodiscard]] std::string applicationUsage();
 
 } // namespace Iridium

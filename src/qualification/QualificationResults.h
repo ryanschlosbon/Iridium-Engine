@@ -1,5 +1,11 @@
 #pragma once
 
+// Results of the qualification readback validations (M7R R2.9): the Ordinary2
+// and deep-layered interface captures and the depth-pyramid capture. Produced
+// by VulkanQualificationExtension and reported by the qualification harness;
+// production code never sees them.
+
+#include "renderer/rhi/DepthPyramid.h"
 #include "renderer/transparency/LayeredGlass.h"
 
 #include <array>
@@ -118,6 +124,27 @@ namespace Iridium {
                 minimumLocalAlpha > 0.0f &&
                 maximumLocalAlpha >= minimumLocalAlpha &&
                 maximumLocalAlpha <= 1.0f;
+        }
+    };
+
+    struct DepthPyramidCaptureValidationResult {
+        uint64_t validationId = 0;
+        DepthPyramidExtent extent{};
+        uint32_t mipCount = 0;
+        uint64_t sourceTexelCount = 0;
+        uint64_t pyramidTexelCount = 0;
+        uint64_t invalidSourceTexelCount = 0;
+        uint64_t mismatchTexelCount = 0;
+        uint64_t historyMismatchTexelCount = 0;
+        uint32_t firstMismatchMip = 0;
+        uint64_t firstMismatchTexel = 0;
+        float maximumAbsoluteError = 0.0f;
+
+        [[nodiscard]] bool passed() const noexcept {
+            return extent.valid() && mipCount != 0 &&
+                sourceTexelCount != 0 && pyramidTexelCount != 0 &&
+                invalidSourceTexelCount == 0 && mismatchTexelCount == 0 &&
+                historyMismatchTexelCount == 0;
         }
     };
 

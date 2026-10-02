@@ -148,27 +148,6 @@ namespace Iridium {
     static_assert(sizeof(DepthPyramidDeviceQuery) == 32);
     static_assert(sizeof(DepthPyramidDeviceResult) == 32);
 
-    struct DepthPyramidCaptureValidationResult {
-        uint64_t validationId = 0;
-        DepthPyramidExtent extent{};
-        uint32_t mipCount = 0;
-        uint64_t sourceTexelCount = 0;
-        uint64_t pyramidTexelCount = 0;
-        uint64_t invalidSourceTexelCount = 0;
-        uint64_t mismatchTexelCount = 0;
-        uint64_t historyMismatchTexelCount = 0;
-        uint32_t firstMismatchMip = 0;
-        uint64_t firstMismatchTexel = 0;
-        float maximumAbsoluteError = 0.0f;
-
-        [[nodiscard]] bool passed() const noexcept {
-            return extent.valid() && mipCount != 0 &&
-                sourceTexelCount != 0 && pyramidTexelCount != 0 &&
-                invalidSourceTexelCount == 0 && mismatchTexelCount == 0 &&
-                historyMismatchTexelCount == 0;
-        }
-    };
-
     struct DepthPyramidHistoryPublication {
         DepthPyramidHistoryOwner owner{};
         DepthPyramidExtent extent{};

@@ -1,12 +1,15 @@
 #pragma once
 
-// A device-free IRenderBackend for observer/harness tests. Every call is a no-op
-// except the ones the qualification harness makes, which are recorded in order.
+// A device-free IRenderBackend and IQualificationBackend for harness tests.
+// Every call is a no-op except the ones the qualification harness makes, which
+// are recorded in order.
 
 #include "app/FrameObserver.h"
 #include "assets/AssetManager.h"
+#include "qualification/QualificationBackend.h"
 
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -21,10 +24,10 @@ namespace IridiumTest {
             FreeTexture,
             AllocateMaterial,
             FreeMaterial,
-            CaptureCurrentFrame,
-            RequestOrdinary2Validation,
-            RequestDeepLayeredValidation,
-            RequestDepthPyramidValidation,
+            ArmFrameCapture,
+            ArmOrdinary2Validation,
+            ArmDeepLayeredValidation,
+            ArmDepthPyramidValidation,
         };
         Kind kind{};
         uint64_t value = 0;     // handle index, capture or validation id
@@ -122,32 +125,6 @@ namespace IridiumTest {
             std::span<const DrawPacket>, std::span<const DrawPacket>,
             std::span<const glm::mat4>) override {}
 
-        void captureCurrentFrame(uint64_t captureId,
-            FrameCapturePoint point) override {
-            record(BackendCall::Kind::CaptureCurrentFrame, captureId,
-                static_cast<uint32_t>(point));
-        }
-        std::vector<FrameCapture> collectFrameCaptures(bool) override {
-            return {};
-        }
-        void requestOrdinary2CaptureValidation(uint64_t validationId) override {
-            record(BackendCall::Kind::RequestOrdinary2Validation, validationId);
-        }
-        std::vector<Ordinary2CaptureValidationResult>
-            collectOrdinary2CaptureValidations(bool) override { return {}; }
-        void requestDeepLayeredCaptureValidation(uint64_t validationId,
-            TransparencyQuality quality) override {
-            record(BackendCall::Kind::RequestDeepLayeredValidation, validationId,
-                static_cast<uint32_t>(quality));
-        }
-        std::vector<DeepLayeredCaptureValidationResult>
-            collectDeepLayeredCaptureValidations(bool) override { return {}; }
-        void requestDepthPyramidCaptureValidation(uint64_t validationId) override {
-            record(BackendCall::Kind::RequestDepthPyramidValidation, validationId);
-        }
-        std::vector<DepthPyramidCaptureValidationResult>
-            collectDepthPyramidCaptureValidations(bool) override { return {}; }
-
         void submitOutputPass() override {}
         void submitUIPass() override {}
         void beginUI() override {}
@@ -191,14 +168,69 @@ namespace IridiumTest {
         void setEnvironmentLighting(const EnvironmentLightingHandles&) override {}
         void setOutputTransformLut(TextureHandle) override {}
 
-    private:
+        // Also used by FakeQualificationBackend, so render-backend and
+        // qualification-backend calls share one ordered log.
         void record(BackendCall::Kind kind, uint64_t value,
             uint32_t detail = 0) {
             calls.push_back({ kind, value, detail, marker });
         }
 
+    private:
         uint32_t nextTexture_ = 1u;
         uint32_t nextMaterial_ = 1u;
+    };
+
+    // A device-free IQualificationBackend: arm requests are recorded in the
+    // FakeRenderBackend's log (with its marker); collections return nothing.
+    class FakeQualificationBackend final : public IQualificationBackend {
+    public:
+        explicit FakeQualificationBackend(FakeRenderBackend& log) : log_(log) {}
+
+        std::optional<QualificationBackendConfig> configured;
+
+        IRenderBackendExtension& backendExtension() noexcept override {
+            return extension_;
+        }
+        void configureQualification(
+            const QualificationBackendConfig& config) override {
+            configured = config;
+        }
+        void armFrameCapture(uint64_t captureId,
+            FrameCapturePoint point) override {
+            log_.record(BackendCall::Kind::ArmFrameCapture, captureId,
+                static_cast<uint32_t>(point));
+        }
+        void armOrdinary2CaptureValidation(uint64_t validationId) override {
+            log_.record(BackendCall::Kind::ArmOrdinary2Validation, validationId);
+        }
+        void armDeepLayeredCaptureValidation(uint64_t validationId,
+            TransparencyQuality quality) override {
+            log_.record(BackendCall::Kind::ArmDeepLayeredValidation, validationId,
+                static_cast<uint32_t>(quality));
+        }
+        void armDepthPyramidCaptureValidation(uint64_t validationId) override {
+            log_.record(BackendCall::Kind::ArmDepthPyramidValidation, validationId);
+        }
+        std::vector<FrameCapture> collectFrameCaptures(bool) override {
+            return {};
+        }
+        std::vector<Ordinary2CaptureValidationResult>
+            collectOrdinary2CaptureValidations(bool) override { return {}; }
+        std::vector<DeepLayeredCaptureValidationResult>
+            collectDeepLayeredCaptureValidations(bool) override { return {}; }
+        std::vector<DepthPyramidCaptureValidationResult>
+            collectDepthPyramidCaptureValidations(bool) override { return {}; }
+
+    private:
+        class Extension final : public IRenderBackendExtension {
+        public:
+            RenderBackendApi api() const noexcept override {
+                return RenderBackendApi::Vulkan;
+            }
+        };
+
+        FakeRenderBackend& log_;
+        Extension extension_;
     };
 
     // Records IAppControl requests; resizes always succeed.

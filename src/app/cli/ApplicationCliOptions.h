@@ -38,13 +38,11 @@ namespace Iridium {
             ApplicationConfig& config);
         void registerRendererOptions(Cli::CliOptionRegistry& registry,
             ApplicationConfig& config);
-        // Benchmark, capture, validation and oracle flags. Kept separate so the
-        // qualification library can own them (M7R R2.9).
-        void registerQualificationOptions(Cli::CliOptionRegistry& registry,
-            ApplicationConfig& config);
 
-        // Every module above, in usage order: runtime, editor, renderer,
-        // qualification.
+        // Every module above, in usage order: runtime, editor, renderer. The
+        // qualification library registers its own flags after these
+        // (registerQualificationOptions, qualification/QualificationOptions.h);
+        // main.cpp adds them only in IRIDIUM_QUALIFICATION=ON builds.
         void registerApplicationOptions(Cli::CliOptionRegistry& registry,
             ApplicationConfig& config);
 

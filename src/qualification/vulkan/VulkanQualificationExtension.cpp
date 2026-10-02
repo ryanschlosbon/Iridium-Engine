@@ -90,9 +90,19 @@ namespace Iridium {
     // Lifecycle
     // --------------------------------------------------------------------
 
-    void VulkanQualificationExtension::configure(const RenderBackendConfig& config) {
-        oracle_.configure(VulkanIndirectOracleConfig::fromBackendConfig(config));
-        validateProbeCaptureTargets_ = config.validateReflectionProbeCaptureTargets;
+    void VulkanQualificationExtension::configureQualification(
+        const QualificationBackendConfig& config) {
+        if (attached())
+            throw std::logic_error(
+                "Qualification extension is configured before backend initialization");
+        oracle_.configure(VulkanIndirectOracleConfig{
+            .shadowIndirect = config.shadowIndirectOracle,
+            .gpuLod = config.gpuLodOracle,
+            .probeLod = config.probeLodOracle,
+            .depthOcclusion = config.depthOcclusionOracle,
+            .virtualShadowDepth = config.virtualShadowDepthOracle,
+        });
+        validateProbeCaptureTargets_ = config.validateProbeCaptureTargets;
     }
 
     VulkanGraphHooks VulkanQualificationExtension::graphHooks() const noexcept {
@@ -278,14 +288,6 @@ namespace Iridium {
         armedFrameCapture_ = ArmedFrameCapture{ captureId, point };
     }
 
-    void VulkanQualificationExtension::captureCurrentFrame(uint64_t captureId,
-        const VulkanFrameRecording& frame, const VulkanCaptureHookPayload& source) {
-        if (!frame.open || frame.cmd == VK_NULL_HANDLE) {
-            throw std::logic_error("Frame capture requires an active frame.");
-        }
-        recordFrameCapture(captureId, frame.cmd, frame.slot, source);
-    }
-
     void VulkanQualificationExtension::recordFrameCapture(uint64_t captureId,
         VkCommandBuffer cmd, uint32_t slot, const VulkanCaptureHookPayload& source) {
         if (!attached() || source.source == nullptr)
@@ -377,11 +379,7 @@ namespace Iridium {
     }
 
     std::vector<FrameCapture> VulkanQualificationExtension::collectFrameCaptures(
-        bool frameOpen, bool waitForPending) {
-        if (frameOpen) {
-            throw std::logic_error(
-                "Frame captures cannot be collected while a frame is open.");
-        }
+        bool waitForPending) {
         if (waitForPending && !pendingFrameCaptures_.empty()) {
             services_.scheduler->waitForAllFrames();
             for (uint32_t frameIndex = 0;
@@ -398,12 +396,8 @@ namespace Iridium {
     // Ordinary2 capture validation
     // --------------------------------------------------------------------
 
-    void VulkanQualificationExtension::requestOrdinary2CaptureValidation(
-        uint64_t validationId, const VulkanFrameRecording& frame) {
-        if (!frame.open || frame.cmd == VK_NULL_HANDLE) {
-            throw std::logic_error(
-                "Ordinary2 capture validation must be requested during a frame");
-        }
+    void VulkanQualificationExtension::armOrdinary2CaptureValidation(
+        uint64_t validationId) {
         const bool duplicatePending = std::ranges::any_of(pendingOrdinary2_,
             [validationId](const PendingOrdinary2CaptureValidation& pending) {
                 return pending.validationId == validationId;
@@ -495,11 +489,7 @@ namespace Iridium {
 
     std::vector<Ordinary2CaptureValidationResult>
     VulkanQualificationExtension::collectOrdinary2CaptureValidations(
-        bool frameOpen, bool waitForPending) {
-        if (frameOpen) {
-            throw std::logic_error(
-                "Ordinary2 validation cannot be collected during a frame");
-        }
+        bool waitForPending) {
         if (waitForPending && !pendingOrdinary2_.empty()) {
             services_.scheduler->waitForAllFrames();
             for (uint32_t frameIndex = 0;
@@ -517,13 +507,8 @@ namespace Iridium {
     // Deep layered (Hero4 / Cinematic8) capture validation
     // --------------------------------------------------------------------
 
-    void VulkanQualificationExtension::requestDeepLayeredCaptureValidation(
-        uint64_t validationId, TransparencyQuality quality,
-        const VulkanFrameRecording& frame) {
-        if (!frame.open || frame.cmd == VK_NULL_HANDLE) {
-            throw std::logic_error(
-                "Deep layered validation must be requested during a frame");
-        }
+    void VulkanQualificationExtension::armDeepLayeredCaptureValidation(
+        uint64_t validationId, TransparencyQuality quality) {
         if (quality != TransparencyQuality::Hero4 &&
             quality != TransparencyQuality::Cinematic8) {
             throw std::invalid_argument(
@@ -682,11 +667,7 @@ namespace Iridium {
 
     std::vector<DeepLayeredCaptureValidationResult>
     VulkanQualificationExtension::collectDeepLayeredCaptureValidations(
-        bool frameOpen, bool waitForPending) {
-        if (frameOpen) {
-            throw std::logic_error(
-                "Deep layered validation cannot be collected during a frame");
-        }
+        bool waitForPending) {
         if (waitForPending && !pendingDeepLayered_.empty()) {
             services_.scheduler->waitForAllFrames();
             for (uint32_t frameIndex = 0u;
@@ -704,12 +685,8 @@ namespace Iridium {
     // Depth-pyramid capture validation
     // --------------------------------------------------------------------
 
-    void VulkanQualificationExtension::requestDepthPyramidCaptureValidation(
-        uint64_t validationId, const VulkanFrameRecording& frame) {
-        if (!frame.open || frame.cmd == VK_NULL_HANDLE) {
-            throw std::logic_error(
-                "Depth-pyramid validation must be requested during a frame");
-        }
+    void VulkanQualificationExtension::armDepthPyramidCaptureValidation(
+        uint64_t validationId) {
         if (services_.depthPyramid == nullptr) {
             throw std::logic_error(
                 "Depth-pyramid validation requires the experimental build path");
@@ -800,11 +777,7 @@ namespace Iridium {
 
     std::vector<DepthPyramidCaptureValidationResult>
     VulkanQualificationExtension::collectDepthPyramidCaptureValidations(
-        bool frameOpen, bool waitForPending) {
-        if (frameOpen) {
-            throw std::logic_error(
-                "Depth-pyramid validation cannot be collected during a frame");
-        }
+        bool waitForPending) {
         if (waitForPending && !pendingDepthPyramid_.empty()) {
             services_.scheduler->waitForAllFrames();
             for (uint32_t frameIndex = 0;

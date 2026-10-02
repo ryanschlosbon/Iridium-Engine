@@ -182,11 +182,10 @@ namespace Iridium {
     bool QualificationHarness::updateDeepLayeredLifecycleValidation(
         AppFrameContext& context, uint64_t measuredFrameIndex) {
         using State = DeepLayeredLifecycleValidationState;
-        const ApplicationConfig& config = context.config;
         const RenderBackendRuntimeInfo runtimeInfo =
             context.backend.getRuntimeInfo();
         const bool selectedTierResident =
-            config.deepLayeredCaptureQuality == TransparencyQuality::Hero4
+            options_.deepLayeredCaptureQuality == TransparencyQuality::Hero4
                 ? runtimeInfo.hero4AtlasResident
                 : runtimeInfo.cinematic8AtlasResident;
         const bool topologyResident = selectedTierResident &&
@@ -220,7 +219,7 @@ namespace Iridium {
                 << measuredFrameIndex << ",\"event\":\"" << event
                 << "\",\"quality\":\""
                 << transparencyQualityName(
-                    config.deepLayeredCaptureQuality)
+                    options_.deepLayeredCaptureQuality)
                 << "\",\"tier_resident\":"
                 << (selectedTierResident ? "true" : "false")
                 << ",\"refraction_pyramids_resident\":"
@@ -276,7 +275,7 @@ namespace Iridium {
 
     void QualificationHarness::updateTextureResidencyChurn(
         AppFrameContext& context) {
-        if (!context.config.validateTextureResidencyChurn) return;
+        if (!options_.validateTextureResidencyChurn) return;
         IRenderBackend& backend = context.backend;
         const uint64_t frameIndex = context.applicationFrameIndex;
 
@@ -327,7 +326,7 @@ namespace Iridium {
 
     void QualificationHarness::updateOutputTransportValidation(
         AppFrameContext& context) {
-        if (!context.config.validateOutputTransportSwitch ||
+        if (!options_.validateOutputTransportSwitch ||
             outputTransportValidationStep_ >= 3u ||
             context.outputTransportPending) {
             return;

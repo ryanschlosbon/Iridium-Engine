@@ -4,38 +4,74 @@
 #include <cstddef>
 #include <iostream>
 #include <stdexcept>
+#include <utility>
 
 #include "assets/AssetManager.h"
 #include "platform/SystemProfile.h"
 #include "qualification/harness/HarnessDetail.h"
+#include "qualification/vulkan/VulkanQualificationExtension.h"
 #include "renderer/rhi/Mesh.h"
 #include "renderer/rhi/TransparencyQualityOverride.h"
 
 namespace Iridium {
 
-    AppRunPolicy qualificationRunPolicy(const ApplicationConfig& config) {
-        const bool benchmark = !config.benchmarkId.empty();
+    AppRunPolicy qualificationRunPolicy(const QualificationOptions& options) {
+        const bool benchmark = !options.benchmarkId.empty();
         return AppRunPolicy{
             .deterministicContent = benchmark,
             .fullscreenScenePresentation = benchmark,
             .colorValidationOverlay = benchmark &&
-                config.benchmarkId == "color_volume_transparency_v1",
+                options.benchmarkId == "color_volume_transparency_v1",
             .ownsStartupContent = benchmark,
+            .routing = {
+                .forceDirectGBufferReference =
+                    options.forceDirectGBufferReference,
+                .forceDirectShadowReference = options.forceDirectShadowReference,
+                .forceDirectProbeCaptureReference =
+                    options.forceDirectProbeCaptureReference,
+                .weightedOitOrderSeed = options.weightedOitOrderSeed,
+                .gpuLodMinimumResidentLevel = options.gpuLodMinimumResidentLevel,
+            },
+        };
+    }
+
+    QualificationBackendConfig qualificationBackendConfig(
+        const QualificationOptions& options) {
+        return QualificationBackendConfig{
+            .shadowIndirectOracle = options.shadowIndirectQualificationOracle,
+            .gpuLodOracle = options.gpuLodQualificationOracle,
+            .probeLodOracle = options.probeLodQualificationOracle,
+            .depthOcclusionOracle = options.depthOcclusionQualificationOracle,
+            .virtualShadowDepthOracle =
+                options.virtualShadowDepthQualificationOracle,
+            .validateProbeCaptureTargets = options.validateReflectionProbes,
         };
     }
 
     std::unique_ptr<IFrameObserver> createQualificationHarness(
-        const ApplicationConfig& config) {
-        return std::make_unique<QualificationHarness>(config);
+        const QualificationOptions& options) {
+        return std::make_unique<QualificationHarness>(options,
+            std::make_unique<VulkanQualificationExtension>());
     }
 
-    QualificationHarness::QualificationHarness(const ApplicationConfig& config)
-        : policy_(qualificationRunPolicy(config)) {}
+    QualificationHarness::QualificationHarness(QualificationOptions options,
+        std::unique_ptr<IQualificationBackend> backend)
+        : options_(std::move(options)),
+          policy_(qualificationRunPolicy(options_)),
+          backend_(std::move(backend)) {
+        if (!backend_)
+            throw std::invalid_argument(
+                "The qualification harness requires a backend extension");
+        extensions_[0] = &backend_->backendExtension();
+    }
 
     void QualificationHarness::onStartup(StartupPhase phase,
         AppStartupContext& context) {
         switch (phase) {
         case StartupPhase::Configure:
+            // Oracles and graph hooks are fixed before the backend exists.
+            backend_->configureQualification(
+                qualificationBackendConfig(options_));
             return;
         case StartupPhase::BackendReady:
             capabilities_ = context.capabilities;
@@ -69,9 +105,8 @@ namespace Iridium {
 
     void QualificationHarness::allocateTableScaleProbes(
         AppStartupContext& context) {
-        const ApplicationConfig& config = context.config;
         IRenderBackend& backend = *context.backend;
-        if (config.validateTextureTableScale != 0) {
+        if (options_.validateTextureTableScale != 0) {
             constexpr std::array<std::byte, 4>
                 texturePixel{
                     std::byte{ 0x3f },
@@ -85,9 +120,9 @@ namespace Iridium {
                 .format = TextureFormat::RGBA8_UNorm,
             };
             textureScaleProbeTextures_.reserve(
-                config.validateTextureTableScale);
+                options_.validateTextureTableScale);
             for (uint32_t index = 0;
-                index < config.validateTextureTableScale; ++index) {
+                index < options_.validateTextureTableScale; ++index) {
                 textureScaleProbeTextures_.push_back(
                     backend.allocateTexture(probe, texturePixel));
             }
@@ -99,7 +134,7 @@ namespace Iridium {
                 << textureScaleProbeTextures_.size()
                 << ",\"indexed\":true}\n";
         }
-        if (config.validateMaterialTableScale != 0) {
+        if (options_.validateMaterialTableScale != 0) {
             constexpr std::array<std::byte, 4>
                 whitePixel{
                     std::byte{ 0xff },
@@ -133,9 +168,9 @@ namespace Iridium {
             probe.packed.textureIndices.fill(
                 materialScaleProbeTexture_.getIndex());
             materialScaleProbeMaterials_.reserve(
-                config.validateMaterialTableScale);
+                options_.validateMaterialTableScale);
             for (uint32_t index = 0;
-                index < config.validateMaterialTableScale; ++index) {
+                index < options_.validateMaterialTableScale; ++index) {
                 materialScaleProbeMaterials_.push_back(
                     backend.allocateCanonicalMaterial(probe).material);
             }
@@ -151,23 +186,23 @@ namespace Iridium {
         const ApplicationConfig& config = context.config;
         const std::shared_ptr<ModelAsset>& mainModel = context.mainModel;
         const RenderExtent renderExtent = context.renderExtent;
-        if (config.captureFrameIndex) {
+        if (options_.captureFrameIndex) {
             if (!benchmark_ && !config.editorAssetViewerGuid) {
                 throw std::invalid_argument(
                     "Deterministic frame capture requires --benchmark or "
                     "--open-asset-viewer.");
             }
             if (config.frameLimit != 0 &&
-                *config.captureFrameIndex >= config.frameLimit) {
+                *options_.captureFrameIndex >= config.frameLimit) {
                 throw std::invalid_argument(
                     "--capture-frame must be lower than the measured frame limit.");
             }
         }
-        if (config.validateDepthPyramidCapture && config.frameLimit == 0u) {
+        if (options_.validateDepthPyramidCapture && config.frameLimit == 0u) {
             throw std::invalid_argument(
                 "--validate-depth-pyramid-capture requires a bounded measured frame limit.");
         }
-        if (config.validateDepthPyramidResize) {
+        if (options_.validateDepthPyramidResize) {
             if (config.frameLimit < 10u) {
                 throw std::invalid_argument(
                     "--validate-depth-pyramid-resize requires at least ten measured frames.");
@@ -183,17 +218,17 @@ namespace Iridium {
             depthPyramidResizeValidation_.originalExtent = renderExtent;
         }
         const uint32_t layeredValidationModeCount =
-            (config.validateOrdinary2Capture ? 1u : 0u) +
-            (config.validateOrdinary2Fallback ? 1u : 0u) +
-            (config.validateOrdinary2Resize ? 1u : 0u) +
-            (config.validateWeightedOitResize ? 1u : 0u) +
-            (config.validateDeepLayeredCapture ? 1u : 0u) +
-            (config.validateDeepLayeredLifecycle ? 1u : 0u);
+            (options_.validateOrdinary2Capture ? 1u : 0u) +
+            (options_.validateOrdinary2Fallback ? 1u : 0u) +
+            (options_.validateOrdinary2Resize ? 1u : 0u) +
+            (options_.validateWeightedOitResize ? 1u : 0u) +
+            (options_.validateDeepLayeredCapture ? 1u : 0u) +
+            (options_.validateDeepLayeredLifecycle ? 1u : 0u);
         if (layeredValidationModeCount > 1u) {
             throw std::invalid_argument(
                 "Transparency capture, fallback, resize, and deep validations are mutually exclusive.");
         }
-        if (config.validateOrdinary2Capture) {
+        if (options_.validateOrdinary2Capture) {
             if (config.frameLimit == 0u) {
                 throw std::invalid_argument(
                     "--validate-ordinary2-capture requires a bounded measured frame limit.");
@@ -204,7 +239,7 @@ namespace Iridium {
                     "--validate-ordinary2-capture requires a startup model with Ordinary2 layered interfaces.");
             }
         }
-        if (config.validateOrdinary2Fallback) {
+        if (options_.validateOrdinary2Fallback) {
             if (config.frameLimit == 0u) {
                 throw std::invalid_argument(
                     "--validate-ordinary2-fallback requires a bounded measured frame limit.");
@@ -231,7 +266,7 @@ namespace Iridium {
                     "--validate-ordinary2-fallback requires only topology-rejected LayeredGlass candidates resolved to ThinGlass.");
             }
         }
-        if (config.validateOrdinary2Resize) {
+        if (options_.validateOrdinary2Resize) {
             if (config.frameLimit < 6u) {
                 throw std::invalid_argument(
                     "--validate-ordinary2-resize requires at least six measured frames.");
@@ -248,7 +283,7 @@ namespace Iridium {
             }
             ordinary2ResizeValidation_.originalExtent = renderExtent;
         }
-        if (config.validateWeightedOitResize) {
+        if (options_.validateWeightedOitResize) {
             if (config.frameLimit < 6u) {
                 throw std::invalid_argument(
                     "--validate-weighted-oit-resize requires at least six measured frames.");
@@ -265,13 +300,13 @@ namespace Iridium {
             }
             weightedOitResizeValidation_.originalExtent = renderExtent;
         }
-        if (config.validateDeepLayeredCapture) {
+        if (options_.validateDeepLayeredCapture) {
             if (config.frameLimit == 0u) {
                 throw std::invalid_argument(
                     "--validate-deep-layered-capture requires a bounded measured frame limit.");
             }
             const bool hasRequestedTier = mainModel &&
-                (config.deepLayeredCaptureQuality ==
+                (options_.deepLayeredCaptureQuality ==
                         TransparencyQuality::Hero4
                     ? modelRequiresHero4LayeredInterfaces(*mainModel)
                     : modelRequiresCinematic8LayeredInterfaces(*mainModel));
@@ -280,13 +315,13 @@ namespace Iridium {
                     "--validate-deep-layered-capture requires a benchmark startup model with the selected deep layered quality.");
             }
         }
-        if (config.validateDeepLayeredLifecycle) {
+        if (options_.validateDeepLayeredLifecycle) {
             if (config.frameLimit < 250u) {
                 throw std::invalid_argument(
                     "--validate-deep-layered-lifecycle requires at least 250 measured frames.");
             }
             const bool hasRequestedTier = mainModel &&
-                (config.deepLayeredCaptureQuality ==
+                (options_.deepLayeredCaptureQuality ==
                         TransparencyQuality::Hero4
                     ? modelRequiresHero4LayeredInterfaces(*mainModel)
                     : modelRequiresCinematic8LayeredInterfaces(*mainModel));
@@ -299,7 +334,6 @@ namespace Iridium {
 
     void QualificationHarness::recordTopologyBaselines(
         AppStartupContext& context) {
-        const ApplicationConfig& config = context.config;
         const FrameTopologyPreparation& topology = context.topology;
         std::cout << "IRIDIUM_FRAME_TOPOLOGY_PREWARM {\"requested\":"
             << (topology.requested ? "true" : "false")
@@ -307,15 +341,15 @@ namespace Iridium {
             << (topology.changed ? "true" : "false")
             << ",\"duration_ns\":"
             << topology.durationNanoseconds << "}\n" << std::flush;
-        if (config.validateOrdinary2Resize) {
+        if (options_.validateOrdinary2Resize) {
             ordinary2ResizeValidation_.initialRenderGraphRebuildCount =
                 context.backend->getRuntimeInfo().renderGraphRebuildCount;
         }
-        if (config.validateWeightedOitResize) {
+        if (options_.validateWeightedOitResize) {
             weightedOitResizeValidation_.initialRenderGraphRebuildCount =
                 context.backend->getRuntimeInfo().renderGraphRebuildCount;
         }
-        if (config.validateDepthPyramidResize) {
+        if (options_.validateDepthPyramidResize) {
             depthPyramidResizeValidation_.initialRenderGraphRebuildCount =
                 context.backend->getRuntimeInfo().renderGraphRebuildCount;
         }
@@ -324,7 +358,7 @@ namespace Iridium {
     void QualificationHarness::allocateResidencyChurnProbe(
         AppStartupContext& context) {
         const ApplicationConfig& config = context.config;
-        if (!config.validateTextureResidencyChurn) return;
+        if (!options_.validateTextureResidencyChurn) return;
         if (config.frameLimit != 0 &&
             config.warmupFrameCount + config.frameLimit < 3) {
             throw std::invalid_argument(
@@ -351,7 +385,6 @@ namespace Iridium {
 
     void QualificationHarness::onFrameBegin(FrameBeginPhase phase,
         AppFrameContext& context) {
-        const ApplicationConfig& config = context.config;
         switch (phase) {
         case FrameBeginPhase::PreSceneUpdate:
             updateBenchmarkState(context);
@@ -359,67 +392,60 @@ namespace Iridium {
         case FrameBeginPhase::PostSceneUpdate: {
             const bool isMeasuredFrame = context.measuredFrameIndex.has_value();
             const uint64_t measured = context.measuredFrameIndex.value_or(0u);
-            if (isMeasuredFrame && config.validateOrdinary2Resize) {
+            if (isMeasuredFrame && options_.validateOrdinary2Resize) {
                 updateOrdinary2ResizeValidation(context, measured);
             }
-            if (isMeasuredFrame && config.validateWeightedOitResize) {
+            if (isMeasuredFrame && options_.validateWeightedOitResize) {
                 updateWeightedOitResizeValidation(context, measured);
             }
-            if (isMeasuredFrame && config.validateDepthPyramidResize) {
+            if (isMeasuredFrame && options_.validateDepthPyramidResize) {
                 updateDepthPyramidResizeValidation(context, measured);
             }
             const bool validateDeepLayeredLifecycle = isMeasuredFrame &&
-                config.validateDeepLayeredLifecycle &&
+                options_.validateDeepLayeredLifecycle &&
                 updateDeepLayeredLifecycleValidation(context, measured);
 
             frame_ = {};
             frame_.captureId = isMeasuredFrame &&
-                    config.captureFrameIndex == measured
-                ? config.captureFrameIndex
+                    options_.captureFrameIndex == measured
+                ? options_.captureFrameIndex
                 : std::nullopt;
             frame_.ordinary2Validation = isMeasuredFrame &&
-                ((config.validateOrdinary2Capture && measured == 0u) ||
-                    (config.validateOrdinary2Resize && measured == 5u));
+                ((options_.validateOrdinary2Capture && measured == 0u) ||
+                    (options_.validateOrdinary2Resize && measured == 5u));
             frame_.deepLayeredValidation = isMeasuredFrame &&
-                ((config.validateDeepLayeredCapture && measured == 0u) ||
+                ((options_.validateDeepLayeredCapture && measured == 0u) ||
                     validateDeepLayeredLifecycle);
             frame_.depthPyramidValidation = isMeasuredFrame &&
-                config.validateDepthPyramidCapture && measured == 0u;
+                options_.validateDepthPyramidCapture && measured == 0u;
             context.requests.suppressGridOverlay =
                 benchmark_.has_value() || frame_.captureId.has_value();
             return;
         }
         case FrameBeginPhase::BackendFrameOpened:
             updateTextureResidencyChurn(context);
-            // Readback validations are consumed by the forward submission, so
-            // arming them as soon as the frame is open is equivalent to arming
-            // them right before it.
+            // Every request is consumed by a backend hook later in this
+            // frame's recording (validation readbacks during the forward
+            // submission, the scene-linear capture when scene color is
+            // complete, final-output captures after the output pass), so
+            // arming them as soon as the frame is open is equivalent to the
+            // pre-R2.9 calls made right before those points.
             if (frame_.ordinary2Validation) {
-                context.backend.requestOrdinary2CaptureValidation(0u);
+                backend_->armOrdinary2CaptureValidation(0u);
             }
             if (frame_.deepLayeredValidation) {
-                context.backend.requestDeepLayeredCaptureValidation(
-                    0u, config.deepLayeredCaptureQuality);
+                backend_->armDeepLayeredCaptureValidation(
+                    0u, options_.deepLayeredCaptureQuality);
             }
             if (frame_.depthPyramidValidation) {
-                context.backend.requestDepthPyramidCaptureValidation(0u);
+                backend_->armDepthPyramidCaptureValidation(0u);
+            }
+            if (frame_.captureId) {
+                backend_->armFrameCapture(*frame_.captureId,
+                    options_.capturePoint);
+                capturedApplicationFrameIndex_ = context.applicationFrameIndex;
             }
             return;
-        }
-    }
-
-    void QualificationHarness::onFrameSubmit(FrameSubmitPoint point,
-        AppFrameContext& context) {
-        if (!frame_.captureId) return;
-        const FrameCapturePoint capturePoint = context.config.capturePoint;
-        const bool sceneLinear = capturePoint == FrameCapturePoint::SceneLinear;
-        const bool finalOutput = capturePoint == FrameCapturePoint::FinalSdr ||
-            capturePoint == FrameCapturePoint::FinalOutput;
-        if ((point == FrameSubmitPoint::SceneLinearReady && sceneLinear) ||
-            (point == FrameSubmitPoint::OutputReady && finalOutput)) {
-            context.backend.captureCurrentFrame(*frame_.captureId,
-                capturePoint);
-            capturedApplicationFrameIndex_ = context.applicationFrameIndex;
         }
     }
 
@@ -438,7 +464,7 @@ namespace Iridium {
             releaseProbeResources(context);
             return;
         case ShutdownPhase::Finalize: {
-            if (!completedCapture_ && context.config.cpuProfileOutput.empty())
+            if (!completedCapture_ && options_.cpuProfileOutput.empty())
                 return;
             const SystemProfile systemProfile = querySystemProfile();
             const std::optional<CaptureArtifactPaths> captureArtifact =

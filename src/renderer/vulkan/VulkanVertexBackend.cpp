@@ -725,17 +725,6 @@ namespace Iridium {
         // The first extension providing each service serves it.
         if (indirectOracle_ == nullptr)
             indirectOracle_ = vulkanExtension->indirectOracle();
-        if (legacyQualificationRequests_ == nullptr)
-            legacyQualificationRequests_ =
-                vulkanExtension->legacyQualificationRequests();
-    }
-
-    void VulkanVertexBackend::adoptExtension(
-        std::unique_ptr<IRenderBackendExtension> extension) {
-        if (ownedExtension_)
-            throw std::logic_error("The backend owns one default extension");
-        attachExtension(extension.get());
-        ownedExtension_ = std::move(extension);
     }
 
     VulkanBackendServices VulkanVertexBackend::backendServices() noexcept {
@@ -11256,9 +11245,9 @@ const VkDeviceSize offset = geometry->vertexOffset;
     }
 
     // ------------------------------------------------------------------
-    // Capture and capture-validation requests (M7R R2.7). The qualification
-    // extension owns the readbacks and analysis; the backend owns the graph
-    // bracket around a capture copy. R2.9 removes the forwarding methods.
+    // Capture hooks (M7R R2.7). The qualification extension owns the
+    // readbacks and analysis; the backend owns the graph bracket around a
+    // capture copy.
     // ------------------------------------------------------------------
 
     VulkanCaptureHookPayload VulkanVertexBackend::captureSource(
@@ -11299,76 +11288,6 @@ const VkDeviceSize offset = geometry->vertexOffset;
             context.payload = source;
             notifyHook(context);
         });
-    }
-
-    IVulkanLegacyQualificationRequests& VulkanVertexBackend::legacyRequests(
-        const char* request) const {
-        if (legacyQualificationRequests_ == nullptr)
-            throw std::logic_error(std::string(request) +
-                " requires the Vulkan qualification extension");
-        return *legacyQualificationRequests_;
-    }
-
-    void VulkanVertexBackend::captureCurrentFrame(uint64_t captureId,
-        FrameCapturePoint point) {
-        if (!frameOpen_ || currentCmd == VK_NULL_HANDLE) {
-            throw std::logic_error("Frame capture requires an active frame.");
-        }
-        IVulkanLegacyQualificationRequests& requests =
-            legacyRequests("Frame capture");
-        recordCaptureCopy(point, [&](const VulkanCaptureHookPayload& source) {
-            requests.captureCurrentFrame(captureId, frameRecording(), source);
-        });
-    }
-
-    std::vector<FrameCapture> VulkanVertexBackend::collectFrameCaptures(
-        bool waitForPending) {
-        if (legacyQualificationRequests_ == nullptr) return {};
-        return legacyQualificationRequests_->collectFrameCaptures(frameOpen_,
-            waitForPending);
-    }
-
-    void VulkanVertexBackend::requestOrdinary2CaptureValidation(
-        uint64_t validationId) {
-        legacyRequests("Ordinary2 capture validation")
-            .requestOrdinary2CaptureValidation(validationId, frameRecording());
-    }
-
-    std::vector<Ordinary2CaptureValidationResult>
-    VulkanVertexBackend::collectOrdinary2CaptureValidations(
-        bool waitForPending) {
-        if (legacyQualificationRequests_ == nullptr) return {};
-        return legacyQualificationRequests_->collectOrdinary2CaptureValidations(
-            frameOpen_, waitForPending);
-    }
-
-    void VulkanVertexBackend::requestDeepLayeredCaptureValidation(
-        uint64_t validationId, TransparencyQuality quality) {
-        legacyRequests("Deep layered validation")
-            .requestDeepLayeredCaptureValidation(validationId, quality,
-                frameRecording());
-    }
-
-    std::vector<DeepLayeredCaptureValidationResult>
-    VulkanVertexBackend::collectDeepLayeredCaptureValidations(
-        bool waitForPending) {
-        if (legacyQualificationRequests_ == nullptr) return {};
-        return legacyQualificationRequests_->collectDeepLayeredCaptureValidations(
-            frameOpen_, waitForPending);
-    }
-
-    void VulkanVertexBackend::requestDepthPyramidCaptureValidation(
-        uint64_t validationId) {
-        legacyRequests("Depth-pyramid validation")
-            .requestDepthPyramidCaptureValidation(validationId, frameRecording());
-    }
-
-    std::vector<DepthPyramidCaptureValidationResult>
-    VulkanVertexBackend::collectDepthPyramidCaptureValidations(
-        bool waitForPending) {
-        if (legacyQualificationRequests_ == nullptr) return {};
-        return legacyQualificationRequests_->collectDepthPyramidCaptureValidations(
-            frameOpen_, waitForPending);
     }
 
     void VulkanVertexBackend::submitOutputPass() {

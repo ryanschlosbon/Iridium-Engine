@@ -1,6 +1,6 @@
 # iridium_rhi: backend-neutral render types and CPU-side GPU-scene planning.
-# renderer/transparency (header-only) and renderer/scene belong to this library:
-# rhi and transparency still include each other until M7R R2.
+# renderer/scene (GPU-scene publication) belongs to this library; the header-only
+# renderer/transparency is iridium_transparency, which depends on it.
 add_library(iridium_rhi STATIC
         DepthPyramid.cpp
         GeometryArena.cpp

@@ -4,7 +4,6 @@
 #include "renderer/rhi/ResourcePool.h"
 #include "renderer/rhi/RhiResourceTypes.h"
 #include "renderer/rhi/MaterialTableCapacity.h"
-#include "renderer/rhi/Ordinary2CaptureValidation.h"
 #include "renderer/rhi/RenderDebugView.h"
 #include "renderer/transparency/LayeredAtlas.h"
 #include "renderer/transparency/LayeredGlass.h"
@@ -1289,113 +1288,6 @@ namespace {
         return true;
     }
 
-    bool testOrdinary2CaptureValidationResultContract() {
-        Ordinary2CaptureValidationResult result{
-            .validationId = 7u,
-            .atlasWidth = 1280u,
-            .atlasHeight = 176u,
-            .expectedDrawCount = 1u,
-            .workItemCount = 1u,
-            .inspectedPixelCount = 225'280u,
-            .entryPixelCount = 4'128u,
-            .exitPixelCount = 4'128u,
-            .pairedPixelCount = 4'128u,
-            .localColorPixelCount = 4'128u,
-            .minimumPairedDepthDelta = 0.0000026226f,
-            .maximumPairedDepthDelta = 0.00340205f,
-            .minimumLocalAlpha = 0.75f,
-            .maximumLocalAlpha = 1.0f,
-        };
-        CHECK(result.passed());
-        result.workMismatchPixelCount = 1u;
-        CHECK(!result.passed());
-        result.workMismatchPixelCount = 0u;
-        result.nonIncreasingDepthPixelCount = 1u;
-        CHECK(!result.passed());
-        result.nonIncreasingDepthPixelCount = 0u;
-        result.pairedPixelCount = result.exitPixelCount - 1u;
-        CHECK(!result.passed());
-        result.pairedPixelCount = result.exitPixelCount;
-        result.localColorInvalidPixelCount = 1u;
-        CHECK(!result.passed());
-        return true;
-    }
-
-    bool testDeepLayeredCaptureValidationResultContract() {
-        DeepLayeredCaptureValidationResult result{
-            .validationId = 11u,
-            .quality = TransparencyQuality::Hero4,
-            .atlasWidth = 1280u,
-            .atlasHeight = 352u,
-            .interfaceCount = 4u,
-            .expectedDrawCount = 2u,
-            .sceneResolveDrawCount = 2u,
-            .compatibilityForwardDrawCount = 0u,
-            .workItemCount = 2u,
-            .maximumObservedInterfaceCount = 4u,
-            .inspectedPixelCount = 450'560u,
-            .interfacePixelCounts = { 8'000u, 8'000u, 4'000u, 4'000u },
-            .pairedPixelCount = 8'000u,
-            .nestedFourInterfacePixelCount = 4'000u,
-            .localColorPixelCount = 8'000u,
-            .minimumDepthDelta = 0.000002f,
-            .maximumDepthDelta = 0.004f,
-            .minimumLocalAlpha = 0.50f,
-            .maximumLocalAlpha = 1.0f,
-        };
-        CHECK(result.passed());
-        result.crossingPairPixelCount = 512u;
-        CHECK(result.passed());
-        result.saturatedResidualPixelCount = 32u;
-        CHECK(result.passed());
-        result.interfaceGapPixelCount = 1u;
-        CHECK(!result.passed());
-        result.interfaceGapPixelCount = 0u;
-        result.nestedFourInterfacePixelCount = 0u;
-        CHECK(!result.passed());
-        result.nestedFourInterfacePixelCount = 4'000u;
-        result.maximumObservedInterfaceCount = 2u;
-        result.interfacePixelCounts[3] = 0u;
-        result.earlyTerminatedPixelCount = 4'000u;
-        result.terminatedOccupiedTileCount = 16u;
-        CHECK(result.passed());
-        result.maximumObservedInterfaceCount = 4u;
-        result.interfacePixelCounts[3] = 4'000u;
-        result.earlyTerminatedPixelCount = 0u;
-        result.terminatedOccupiedTileCount = 0u;
-        result.localColorPixelCount = result.pairedPixelCount - 1u;
-        CHECK(!result.passed());
-        result.localColorPixelCount = result.pairedPixelCount;
-        result.sceneResolveDrawCount = 1u;
-        CHECK(!result.passed());
-        result.sceneResolveDrawCount = 2u;
-        result.compatibilityForwardDrawCount = 1u;
-        CHECK(!result.passed());
-        result.compatibilityForwardDrawCount = 0u;
-        result.quality = TransparencyQuality::Cinematic8;
-        result.interfaceCount = 8u;
-        result.maximumObservedInterfaceCount = 8u;
-        result.expectedDrawCount = 4u;
-        result.sceneResolveDrawCount = 4u;
-        result.workItemCount = 4u;
-        result.interfacePixelCounts[7] = 1u;
-        CHECK(result.passed());
-        result.maximumObservedInterfaceCount = 7u;
-        CHECK(!result.passed());
-        result.maximumObservedInterfaceCount = 8u;
-        result.interfacePixelCounts[7] = 0u;
-        CHECK(!result.passed());
-        result.quality = TransparencyQuality::Hero4;
-        result.interfaceCount = 4u;
-        result.maximumObservedInterfaceCount = 4u;
-        result.expectedDrawCount = 2u;
-        result.sceneResolveDrawCount = 2u;
-        result.workItemCount = 2u;
-        result.quality = TransparencyQuality::Ordinary2;
-        CHECK(!result.passed());
-        return true;
-    }
-
     bool testOrdinary2ProjectionAndRequestCollection() {
         constexpr uint32_t WorkValid = TransparentWorkIntervalValid;
         const Ordinary2ProjectionResult centered =
@@ -1756,10 +1648,6 @@ int main() {
             testLayeredTierAwareAtlasPreparation },
         { "Ordinary2 bounded atlas preparation",
             testOrdinary2BoundedAtlasPreparation },
-        { "Ordinary2 capture validation result contract",
-            testOrdinary2CaptureValidationResultContract },
-        { "deep layered capture validation result contract",
-            testDeepLayeredCaptureValidationResultContract },
         { "Ordinary2 projection and bounded request collection",
             testOrdinary2ProjectionAndRequestCollection },
         { "content-driven frame-topology requirements",

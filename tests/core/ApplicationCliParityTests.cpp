@@ -10,10 +10,15 @@
 // 3. Usage text: every original help line survives (whitespace-normalised).
 // 4. Without the qualification registrations the qualification flags are
 //    unknown options.
+//
+// Since M7R R2.9 the engine's parse result is ApplicationConfig plus the
+// qualification library's QualificationOptions; the tests compare their union
+// (CombinedConfig) with the frozen parser's single struct.
 #include "FrozenApplicationConfigParser.h"
 
 #include "app/ApplicationConfig.h"
 #include "app/cli/ApplicationCliOptions.h"
+#include "qualification/QualificationOptions.h"
 #include "core/cli/CliOptionRegistry.h"
 
 #include <charconv>
@@ -63,8 +68,14 @@ namespace {
         return static_cast<int>(value);
     }
 
-    // Every ApplicationConfig field, exactly (floats round-trip via to_chars).
-    std::string describe(const ApplicationConfig& c) {
+    // The registry parser writes two structs since M7R R2.9; the union has the
+    // frozen parser's single-struct shape (same field names, no overlap).
+    struct CombinedConfig : ApplicationConfig, QualificationOptions {};
+
+    // Every field, exactly (floats round-trip via to_chars). Instantiated for
+    // CombinedConfig and FrozenR2Reference::ApplicationConfig.
+    template <typename Config>
+    std::string describe(const Config& c) {
         std::ostringstream s;
         const auto field = [&s](const char* name, const std::string& value) {
             s << name << '=' << value << ';';
@@ -179,9 +190,31 @@ namespace {
         return s.str();
     }
 
-    using Parser = ApplicationConfig (*)(std::span<const std::string_view>);
+    // The IridiumEngine command line of a qualification build: the runtime,
+    // editor and renderer registrations (ApplicationConfig) followed by the
+    // qualification library's (QualificationOptions), as main.cpp builds it.
+    void registerEngineOptions(Cli::CliOptionRegistry& registry, CombinedConfig& c) {
+        AppCli::registerApplicationOptions(registry, c);
+        registerQualificationOptions(registry, c, c);
+    }
+
+    CombinedConfig parseEngineConfig(std::span<const std::string_view> arguments) {
+        CombinedConfig config{};
+        Cli::CliOptionRegistry registry;
+        registerEngineOptions(registry, config);
+        registry.parse(arguments);
+        return config;
+    }
+
+    std::string engineUsage() {
+        CombinedConfig unused{};
+        Cli::CliOptionRegistry registry;
+        registerEngineOptions(registry, unused);
+        return applicationUsage(registry);
+    }
 
     // "OK:<config>" or "ERR:<kind>:<message>".
+    template <typename Parser>
     std::string outcome(Parser parser, const Args& args) {
         try {
             return "OK:" + describe(parser(args));
@@ -194,7 +227,7 @@ namespace {
         }
     }
 
-    std::string newOutcome(const Args& args) { return outcome(&parseApplicationConfig, args); }
+    std::string newOutcome(const Args& args) { return outcome(&parseEngineConfig, args); }
     std::string frozenOutcome(const Args& args) {
         return outcome(&FrozenR2Reference::parseApplicationConfig, args);
     }
@@ -228,7 +261,7 @@ namespace {
         // Extra arguments the post-parse checks need for an accepted run.
         Args context;
         // Mutates a default config into the expected result of name+value+context.
-        std::function<void(ApplicationConfig&)> expect;
+        std::function<void(CombinedConfig&)> expect;
         std::string_view missingMessage;  // empty for a switch
         std::vector<InvalidValue> invalid;
     };
@@ -241,7 +274,7 @@ namespace {
     // The spec: one row per flag of the 6b000ad parser (82 flags; the removed
     // --developer-legacy-transparency is checked separately).
     std::vector<FlagCase> flagTable() {
-        using C = ApplicationConfig;
+        using C = CombinedConfig;
         const Args captureContext{ "--capture-frame", "0", "--capture-directory", "out/cap" };
         const auto withCapture = [](C& c) {
             c.captureFrameIndex = 0;
@@ -535,9 +568,9 @@ namespace {
 
     bool testFlagTable() {
         const std::vector<FlagCase> table = flagTable();
-        ApplicationConfig scratch{};
+        CombinedConfig scratch{};
         Cli::CliOptionRegistry registry;
-        AppCli::registerApplicationOptions(registry, scratch);
+        registerEngineOptions(registry, scratch);
 
         CHECK(table.size() == 82);
         CHECK(registry.options().size() == 82);
@@ -553,7 +586,7 @@ namespace {
             CHECK_MSG(option->arity == (row.missingMessage.empty() ? 0 : 1), row.name);
 
             // Accepted, with exactly the expected fields (and implications) set.
-            ApplicationConfig expected{};
+            CombinedConfig expected{};
             row.expect(expected);
             const Args args = acceptedArgs(row);
             const std::string actual = newOutcome(args);
@@ -562,7 +595,7 @@ namespace {
             // A switch must not be a no-op on the default config (except the
             // validation switch that matches the build default).
             if (row.name != "--validation" && row.name != "--no-validation") {
-                CHECK_MSG(describe(expected) != describe(ApplicationConfig{}), row.name);
+                CHECK_MSG(describe(expected) != describe(CombinedConfig{}), row.name);
             }
 
             if (!row.missingMessage.empty()) {
@@ -607,7 +640,7 @@ namespace {
                 removed);
             CHECK(frozenOutcome(args) == newOutcome(args));
         }
-        CHECK(applicationUsage().find("--developer-legacy-transparency") == std::string::npos);
+        CHECK(engineUsage().find("--developer-legacy-transparency") == std::string::npos);
         return true;
     }
 
@@ -778,7 +811,7 @@ namespace {
     }
 
     bool testUsageParity() {
-        const std::string usage = applicationUsage();
+        const std::string usage = engineUsage();
         CHECK(usage.starts_with("Usage: IridiumEngine [options]\n"));
         const std::vector<std::string> oldLines =
             optionLines(FrozenR2Reference::applicationUsage());
@@ -820,6 +853,17 @@ namespace {
         }
         CHECK(registry.usage().find("--benchmark") == std::string::npos);
         CHECK(registry.usage().find("qualification options:") == std::string::npos);
+        // parseApplicationConfig/applicationUsage are this OFF-shaped registry.
+        CHECK(newOutcome(Args{ "--benchmark", "material_lab_v1" }).starts_with("OK:"));
+        try {
+            (void)parseApplicationConfig(Args{ "--benchmark", "material_lab_v1" });
+            CHECK(false);
+        }
+        catch (const std::invalid_argument& error) {
+            CHECK(std::string_view(error.what()) == "Unknown option: --benchmark");
+        }
+        CHECK(applicationUsage().find("--benchmark") == std::string::npos);
+        CHECK(applicationUsage().find("--frame-limit COUNT") != std::string::npos);
         // Non-qualification flags and their checks still work.
         ApplicationConfig accepted{};
         Cli::CliOptionRegistry partial;

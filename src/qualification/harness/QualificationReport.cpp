@@ -37,22 +37,21 @@ namespace Iridium {
 
     void QualificationHarness::collectEndOfRunValidations(
         AppShutdownContext& context) {
-        const ApplicationConfig& config = context.config;
         IRenderBackend& backend = *context.backend;
         const RenderExtent renderExtent = context.run.renderExtent;
-        if (config.captureFrameIndex) {
+        if (options_.captureFrameIndex) {
             std::vector<FrameCapture> captures =
-                backend.collectFrameCaptures(true);
+                backend_->collectFrameCaptures(true);
             if (captures.size() != 1 ||
-                captures.front().captureId != *config.captureFrameIndex) {
+                captures.front().captureId != *options_.captureFrameIndex) {
                 throw std::runtime_error(
                     "The requested measured frame did not produce exactly one capture.");
             }
             completedCapture_ = std::move(captures.front());
         }
-        if (config.validateDepthPyramidCapture) {
+        if (options_.validateDepthPyramidCapture) {
             const auto validations =
-                backend.collectDepthPyramidCaptureValidations(true);
+                backend_->collectDepthPyramidCaptureValidations(true);
             if (validations.size() != 1u ||
                 validations.front().validationId != 0u) {
                 throw std::runtime_error(
@@ -85,10 +84,10 @@ namespace Iridium {
                     "Live scene-depth pyramid readback did not match the CPU oracle.");
             }
         }
-        if (config.validateOrdinary2Capture ||
-            config.validateOrdinary2Resize) {
+        if (options_.validateOrdinary2Capture ||
+            options_.validateOrdinary2Resize) {
             const std::vector<Ordinary2CaptureValidationResult> validations =
-                backend.collectOrdinary2CaptureValidations(true);
+                backend_->collectOrdinary2CaptureValidations(true);
             if (validations.size() != 1u ||
                 validations.front().validationId != 0u) {
                 throw std::runtime_error(
@@ -140,11 +139,10 @@ namespace Iridium {
                     "Ordinary2 GPU capture/local-color validation failed.");
             }
         }
-        if (config.validateDeepLayeredCapture ||
-            config.validateDeepLayeredLifecycle) {
+        if (options_.validateDeepLayeredCapture ||
+            options_.validateDeepLayeredLifecycle) {
             const std::vector<DeepLayeredCaptureValidationResult>
-                validations = backend.
-                    collectDeepLayeredCaptureValidations(true);
+                validations = backend_->collectDeepLayeredCaptureValidations(true);
             if (validations.size() != 1u ||
                 validations.front().validationId != 0u) {
                 throw std::runtime_error(
@@ -237,9 +235,9 @@ namespace Iridium {
             }
         }
         runtimeInfo_ = backend.getRuntimeInfo();
-        if (config.validateDeepLayeredLifecycle) {
+        if (options_.validateDeepLayeredLifecycle) {
             const bool selectedTierResident =
-                config.deepLayeredCaptureQuality ==
+                options_.deepLayeredCaptureQuality ==
                         TransparencyQuality::Hero4
                     ? runtimeInfo_.hero4AtlasResident &&
                         runtimeInfo_.hero4AtlasWidth != 0u &&
@@ -258,7 +256,7 @@ namespace Iridium {
             std::cout
                 << "IRIDIUM_DEEP_LAYERED_LIFECYCLE_VALIDATION {\"quality\":\""
                 << transparencyQualityName(
-                    config.deepLayeredCaptureQuality)
+                    options_.deepLayeredCaptureQuality)
                 << "\",\"retirements\":"
                 << deepLayeredLifecycleValidation_.retirements
                 << ",\"reactivations\":"
@@ -279,7 +277,7 @@ namespace Iridium {
                     "Deep layered tier lifecycle validation failed.");
             }
         }
-        if (config.validateOrdinary2Resize) {
+        if (options_.validateOrdinary2Resize) {
             const uint64_t rebuildDelta =
                 runtimeInfo_.renderGraphRebuildCount >=
                     ordinary2ResizeValidation_.initialRenderGraphRebuildCount
@@ -328,7 +326,7 @@ namespace Iridium {
                     ordinary2ResizeValidation_.lastDiagnostic);
             }
         }
-        if (config.validateWeightedOitResize) {
+        if (options_.validateWeightedOitResize) {
             const uint64_t rebuildDelta =
                 runtimeInfo_.renderGraphRebuildCount >=
                     weightedOitResizeValidation_.initialRenderGraphRebuildCount
@@ -368,7 +366,7 @@ namespace Iridium {
                     weightedOitResizeValidation_.lastDiagnostic);
             }
         }
-        if (config.validateDepthPyramidResize) {
+        if (options_.validateDepthPyramidResize) {
             runtimeInfo_ = backend.getRuntimeInfo();
             const uint64_t rebuildDelta =
                 runtimeInfo_.renderGraphRebuildCount >=
@@ -404,7 +402,7 @@ namespace Iridium {
                     depthPyramidResizeValidation_.lastDiagnostic);
             }
         }
-        if (config.validateOrdinary2Fallback) {
+        if (options_.validateOrdinary2Fallback) {
             const Ordinary2FallbackModelStats stats =
                 ordinary2FallbackModelStats(*context.run.mainModel);
             const bool passed = stats.transparentSubmeshes > 0u &&

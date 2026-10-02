@@ -23,15 +23,6 @@ namespace Iridium {
         bool probeLod = false;
         bool depthOcclusion = false;
         bool virtualShadowDepth = false;
-
-        [[nodiscard]] static VulkanIndirectOracleConfig fromBackendConfig(
-            const RenderBackendConfig& config) noexcept {
-            return { config.enableShadowIndirectQualificationOracle,
-                config.enableGpuLodQualificationOracle,
-                config.enableProbeLodQualificationOracle,
-                config.enableDepthOcclusionQualificationOracle,
-                config.virtualShadowDepthQualificationOracle };
-        }
     };
 
     class VulkanIndirectOracle final : public IVulkanIndirectOracle {

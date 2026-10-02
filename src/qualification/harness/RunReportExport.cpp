@@ -9,39 +9,12 @@
 #include <iostream>
 #include <string>
 
+#include "core/BuildInfo.h"
 #include "platform/SystemProfile.h"
 #include "profiling/CpuProfileExport.h"
 #include "profiling/CpuProfiler.h"
 #include "qualification/harness/HarnessDetail.h"
 #include "renderer/rhi/Mesh.h"
-
-#ifndef IRIDIUM_BUILD_CONFIGURATION
-#define IRIDIUM_BUILD_CONFIGURATION "unknown"
-#endif
-
-#ifndef IRIDIUM_SOURCE_COMMIT
-#define IRIDIUM_SOURCE_COMMIT "unknown"
-#endif
-
-#ifndef IRIDIUM_SOURCE_BRANCH
-#define IRIDIUM_SOURCE_BRANCH "unknown"
-#endif
-
-#ifndef IRIDIUM_SOURCE_DIRTY_AT_CONFIGURE
-#define IRIDIUM_SOURCE_DIRTY_AT_CONFIGURE 0
-#endif
-
-#ifndef IRIDIUM_COMPILER
-#define IRIDIUM_COMPILER "unavailable"
-#endif
-
-#ifndef IRIDIUM_SHADER_COMPILER
-#define IRIDIUM_SHADER_COMPILER "unavailable"
-#endif
-
-#ifndef IRIDIUM_VULKAN_SDK
-#define IRIDIUM_VULKAN_SDK "unavailable"
-#endif
 
 namespace Iridium {
 
@@ -53,12 +26,12 @@ namespace Iridium {
         const ApplicationConfig& config = context.config;
         const AppRunSnapshot& run = context.run;
         CaptureArtifactMetadata captureMetadata{};
-        captureMetadata.requireSpatialSignal = config.requireCaptureSignal;
-        captureMetadata.buildConfiguration = IRIDIUM_BUILD_CONFIGURATION;
-        captureMetadata.sourceCommit = IRIDIUM_SOURCE_COMMIT;
-        captureMetadata.sourceBranch = IRIDIUM_SOURCE_BRANCH;
+        captureMetadata.requireSpatialSignal = options_.requireCaptureSignal;
+        captureMetadata.buildConfiguration = BuildInfo::configuration();
+        captureMetadata.sourceCommit = BuildInfo::sourceCommit();
+        captureMetadata.sourceBranch = BuildInfo::sourceBranch();
         captureMetadata.sourceDirtyAtConfigure =
-            IRIDIUM_SOURCE_DIRTY_AT_CONFIGURE != 0;
+            BuildInfo::sourceDirtyAtConfigure();
         captureMetadata.validationEnabled = config.enableValidation;
         captureMetadata.cpuProfilingEnabled = context.profiler.isEnabled();
         captureMetadata.gpuProfilingRequested = config.enableGpuProfiling;
@@ -66,8 +39,8 @@ namespace Iridium {
             capabilities_.gpuTimestampProfiling;
         captureMetadata.windowVisible = config.windowVisible;
         captureMetadata.windowDecorated = config.windowDecorated;
-        captureMetadata.compiler = IRIDIUM_COMPILER;
-        captureMetadata.shaderCompiler = IRIDIUM_SHADER_COMPILER;
+        captureMetadata.compiler = BuildInfo::compiler();
+        captureMetadata.shaderCompiler = BuildInfo::shaderCompiler();
         captureMetadata.operatingSystem = systemProfile.operatingSystem;
         captureMetadata.cpuName = systemProfile.cpuName;
         captureMetadata.systemMemoryBytes = systemProfile.physicalMemoryBytes;
@@ -79,7 +52,7 @@ namespace Iridium {
             runtimeInfo_.vulkanDeviceApiVersion;
         captureMetadata.vulkanLoaderApiVersion =
             runtimeInfo_.vulkanLoaderApiVersion;
-        captureMetadata.vulkanSdkVersion = IRIDIUM_VULKAN_SDK;
+        captureMetadata.vulkanSdkVersion = BuildInfo::vulkanSdk();
         captureMetadata.applicationEnabledLayers =
             runtimeInfo_.applicationEnabledLayers;
         captureMetadata.activeTools = runtimeInfo_.activeTools;
@@ -96,19 +69,19 @@ namespace Iridium {
             "_d32_4c_" + std::to_string(
                 config.shadowSettings.maximumDirectionalLights) +
             "l_5x5_tent";
-        captureMetadata.qualitySettings += config.forceDirectGBufferReference
+        captureMetadata.qualitySettings += options_.forceDirectGBufferReference
             ? "_gbuffer_direct_unculled_reference" : "_gbuffer_automatic";
         captureMetadata.qualitySettings +=
-            (config.forceDirectGBufferReference ||
-                config.forceDirectShadowReference)
+            (options_.forceDirectGBufferReference ||
+                options_.forceDirectShadowReference)
             ? "_shadow_direct_reference" : "_shadow_automatic";
         captureMetadata.qualitySettings +=
-            (config.forceDirectGBufferReference ||
-                config.forceDirectProbeCaptureReference)
+            (options_.forceDirectGBufferReference ||
+                options_.forceDirectProbeCaptureReference)
             ? "_probe_capture_direct_reference"
             : "_probe_capture_automatic";
         captureMetadata.qualitySettings += "_shadow_indirect_oracle_" +
-            std::to_string(config.shadowIndirectQualificationOracle);
+            std::to_string(options_.shadowIndirectQualificationOracle);
         captureMetadata.qualitySettings += "_shadow_lod_texels_" +
             std::to_string(config.experimentalShadowLodErrorTexels) +
             "_max_" + std::to_string(config.shadowLodMaximumLevel);
@@ -116,12 +89,12 @@ namespace Iridium {
             std::to_string(config.experimentalGpuLodErrorPixels) + "_max_" +
             std::to_string(config.gpuLodMaximumLevel) + "_hysteresis_" +
             std::to_string(config.gpuLodHysteresisFraction) + "_oracle_" +
-            std::to_string(config.gpuLodQualificationOracle) + "_resident_floor_" +
-            std::to_string(config.gpuLodMinimumResidentLevel);
+            std::to_string(options_.gpuLodQualificationOracle) + "_resident_floor_" +
+            std::to_string(options_.gpuLodMinimumResidentLevel);
         captureMetadata.qualitySettings += "_probe_lod_px_" +
             std::to_string(config.experimentalProbeLodErrorPixels) +
             "_max_" + std::to_string(config.probeLodMaximumLevel) +
-            "_oracle_" + std::to_string(config.probeLodQualificationOracle);
+            "_oracle_" + std::to_string(options_.probeLodQualificationOracle);
         captureMetadata.qualitySettings += "_depth_pyramid_" +
             std::to_string(config.experimentalDepthPyramid) +
             "_occlusion_query_" +
@@ -129,11 +102,11 @@ namespace Iridium {
             "_occlusion_rejection_" +
             std::to_string(config.experimentalDepthOcclusionRejection);
         captureMetadata.qualitySettings += "_occlusion_oracle_" +
-            std::to_string(config.depthOcclusionQualificationOracle);
+            std::to_string(options_.depthOcclusionQualificationOracle);
         captureMetadata.qualitySettings += "_fixture_lights_" +
             std::to_string(benchmark_
                 ? benchmark_->lights.size() : 0u);
-        captureMetadata.cacheState = config.cacheState;
+        captureMetadata.cacheState = options_.cacheState;
         captureMetadata.outputOperator = outputOperatorName(config.outputOperator);
         captureMetadata.manualExposureEv = config.manualExposureEv;
         captureMetadata.gamutMapping = gamutMappingName(config.outputOperator);
@@ -158,7 +131,7 @@ namespace Iridium {
         captureMetadata.acesPackageVersion = "v2.0.0+2025.04.04";
         captureMetadata.acesTransformId = transformId(config.outputOperator,
             effectiveOutputTransport);
-        captureMetadata.measuredFrameIndex = *config.captureFrameIndex;
+        captureMetadata.measuredFrameIndex = *options_.captureFrameIndex;
         captureMetadata.applicationFrameIndex =
             capturedApplicationFrameIndex_.value_or(0);
         captureMetadata.benchmarkStateFrameIndex =
@@ -263,7 +236,7 @@ namespace Iridium {
             captureShadowFilter.filterSamples;
         captureMetadata.unavailableFields = {};
         CaptureArtifactPaths captureArtifact = writeCaptureArtifact(
-            config.captureDirectory, *completedCapture_, captureMetadata);
+            options_.captureDirectory, *completedCapture_, captureMetadata);
         std::cout << "IRIDIUM_CAPTURE {\"image\":\""
             << captureArtifact.image.generic_string() << "\",\"metadata\":\""
             << captureArtifact.metadata.generic_string() << "\",\"sha256\":\""
@@ -276,18 +249,18 @@ namespace Iridium {
         const SystemProfile& systemProfile,
         const std::optional<CaptureArtifactPaths>& captureArtifact) const {
         const ApplicationConfig& config = context.config;
-        if (config.cpuProfileOutput.empty()) return;
+        if (options_.cpuProfileOutput.empty()) return;
         const AppRunSnapshot& run = context.run;
         CpuProfileRunMetadata metadata{};
         metadata.runId = "cpu-" + std::to_string(
             std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::system_clock::now().time_since_epoch()).count());
-        metadata.buildConfiguration = IRIDIUM_BUILD_CONFIGURATION;
-        metadata.sourceCommit = IRIDIUM_SOURCE_COMMIT;
-        metadata.sourceBranch = IRIDIUM_SOURCE_BRANCH;
-        metadata.compiler = IRIDIUM_COMPILER;
-        metadata.shaderCompiler = IRIDIUM_SHADER_COMPILER;
-        metadata.vulkanSdkVersion = IRIDIUM_VULKAN_SDK;
+        metadata.buildConfiguration = BuildInfo::configuration();
+        metadata.sourceCommit = BuildInfo::sourceCommit();
+        metadata.sourceBranch = BuildInfo::sourceBranch();
+        metadata.compiler = BuildInfo::compiler();
+        metadata.shaderCompiler = BuildInfo::shaderCompiler();
+        metadata.vulkanSdkVersion = BuildInfo::vulkanSdk();
         metadata.operatingSystem = systemProfile.operatingSystem;
         metadata.cpuName = systemProfile.cpuName;
         metadata.systemMemoryBytes = systemProfile.physicalMemoryBytes;
@@ -305,7 +278,7 @@ namespace Iridium {
         metadata.applicationEnabledLayers =
             runtimeInfo_.applicationEnabledLayers;
         metadata.activeVulkanTools = runtimeInfo_.activeTools;
-        metadata.sourceDirtyAtConfigure = IRIDIUM_SOURCE_DIRTY_AT_CONFIGURE != 0;
+        metadata.sourceDirtyAtConfigure = BuildInfo::sourceDirtyAtConfigure();
         metadata.validationEnabled = config.enableValidation;
         metadata.windowVisible = config.windowVisible;
         metadata.windowDecorated = config.windowDecorated;
@@ -376,19 +349,19 @@ namespace Iridium {
             std::to_string(config.clusterTileSize) + "x" +
             std::to_string(config.clusterDepthSlices) +
             "_scene_linear_fixed_quality";
-        metadata.qualitySettings += config.forceDirectGBufferReference
+        metadata.qualitySettings += options_.forceDirectGBufferReference
             ? "_gbuffer_direct_unculled_reference" : "_gbuffer_automatic";
         metadata.qualitySettings +=
-            (config.forceDirectGBufferReference ||
-                config.forceDirectShadowReference)
+            (options_.forceDirectGBufferReference ||
+                options_.forceDirectShadowReference)
             ? "_shadow_direct_reference" : "_shadow_automatic";
         metadata.qualitySettings +=
-            (config.forceDirectGBufferReference ||
-                config.forceDirectProbeCaptureReference)
+            (options_.forceDirectGBufferReference ||
+                options_.forceDirectProbeCaptureReference)
             ? "_probe_capture_direct_reference"
             : "_probe_capture_automatic";
         metadata.qualitySettings += "_shadow_indirect_oracle_" +
-            std::to_string(config.shadowIndirectQualificationOracle);
+            std::to_string(options_.shadowIndirectQualificationOracle);
         metadata.qualitySettings += "_shadow_lod_texels_" +
             std::to_string(config.experimentalShadowLodErrorTexels) +
             "_max_" + std::to_string(config.shadowLodMaximumLevel);
@@ -396,12 +369,12 @@ namespace Iridium {
             std::to_string(config.experimentalGpuLodErrorPixels) + "_max_" +
             std::to_string(config.gpuLodMaximumLevel) + "_hysteresis_" +
             std::to_string(config.gpuLodHysteresisFraction) + "_oracle_" +
-            std::to_string(config.gpuLodQualificationOracle) + "_resident_floor_" +
-            std::to_string(config.gpuLodMinimumResidentLevel);
+            std::to_string(options_.gpuLodQualificationOracle) + "_resident_floor_" +
+            std::to_string(options_.gpuLodMinimumResidentLevel);
         metadata.qualitySettings += "_probe_lod_px_" +
             std::to_string(config.experimentalProbeLodErrorPixels) +
             "_max_" + std::to_string(config.probeLodMaximumLevel) +
-            "_oracle_" + std::to_string(config.probeLodQualificationOracle);
+            "_oracle_" + std::to_string(options_.probeLodQualificationOracle);
         metadata.qualitySettings += "_depth_pyramid_" +
             std::to_string(config.experimentalDepthPyramid) +
             "_occlusion_query_" +
@@ -409,7 +382,7 @@ namespace Iridium {
             "_occlusion_rejection_" +
             std::to_string(config.experimentalDepthOcclusionRejection);
         metadata.qualitySettings += "_occlusion_oracle_" +
-            std::to_string(config.depthOcclusionQualificationOracle);
+            std::to_string(options_.depthOcclusionQualificationOracle);
         metadata.qualitySettings += "_fixture_lights_" +
             std::to_string(benchmark_
                 ? benchmark_->lights.size() : 0u);
@@ -417,7 +390,7 @@ namespace Iridium {
             std::string(gBufferLayoutName(config.gBufferLayout)) +
             "_" + runtimeInfo_.textureBindingMode +
             (config.forceWireframe ? "_opaque_wireframe" : "");
-        metadata.cacheState = config.cacheState;
+        metadata.cacheState = options_.cacheState;
         metadata.outputOperator = std::string(outputOperatorName(
             config.outputOperator)) + "_final_output";
         metadata.exposureState = "manual_ev_" +
@@ -576,7 +549,7 @@ namespace Iridium {
             metadata.unavailableFields.push_back(
                 "transparent.fullscreen_equivalents");
         }
-        writeCpuProfileJsonLines(config.cpuProfileOutput, context.profiler, metadata);
+        writeCpuProfileJsonLines(options_.cpuProfileOutput, context.profiler, metadata);
     }
 
 } // namespace Iridium

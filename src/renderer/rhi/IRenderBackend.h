@@ -5,8 +5,6 @@
 #include "RhiResourceTypes.h"
 #include "RenderBackendConfig.h"
 #include "RenderDebugView.h"
-#include "core/types/FrameCapture.h"
-#include "Ordinary2CaptureValidation.h"
 #include "LightingTypes.h"
 #include "Mesh.h"
 #include "ReflectionProbeTypes.h"
@@ -237,29 +235,9 @@ namespace Iridium {
             std::span<const DrawPacket> compatibilityTransparentQueue,
             std::span<const glm::mat4> instanceTransforms = {}) = 0;
 
-        // Records an asynchronous readback of the post-transparency scene image.
-        // The call itself does not wait for GPU completion. Completed captures may
-        // be drained without waiting, or the explicit end-of-run drain may wait.
-        virtual void captureCurrentFrame(uint64_t captureId,
-            FrameCapturePoint point) = 0;
-        [[nodiscard]] virtual std::vector<FrameCapture> collectFrameCaptures(
-            bool waitForPending) = 0;
-
-        // Explicit diagnostic only. The request is consumed by the next live
-        // Ordinary2 capture/local composition with at least one prepared draw;
-        // normal frames do not allocate a readback buffer or record transfers.
-        virtual void requestOrdinary2CaptureValidation(
-            uint64_t validationId) = 0;
-        [[nodiscard]] virtual std::vector<Ordinary2CaptureValidationResult>
-            collectOrdinary2CaptureValidations(bool waitForPending) = 0;
-        virtual void requestDeepLayeredCaptureValidation(
-            uint64_t validationId, TransparencyQuality quality) = 0;
-        [[nodiscard]] virtual std::vector<DeepLayeredCaptureValidationResult>
-            collectDeepLayeredCaptureValidations(bool waitForPending) = 0;
-        virtual void requestDepthPyramidCaptureValidation(
-            uint64_t validationId) = 0;
-        [[nodiscard]] virtual std::vector<DepthPyramidCaptureValidationResult>
-            collectDepthPyramidCaptureValidations(bool waitForPending) = 0;
+        // Frame captures and capture-validation readbacks are not part of this
+        // interface: the qualification harness attaches a backend extension
+        // for them (M7R R2.9).
 
         // Pass 4: Maps scene-linear color into the selected display output.
         virtual void submitOutputPass() = 0;

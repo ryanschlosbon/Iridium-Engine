@@ -1,5 +1,7 @@
-# iridium_app: application frame loop and command-line configuration. Links every
-# engine module; the IridiumEngine executable is main.cpp on top of it.
+# iridium_app: application frame loop and the runtime/editor/renderer command
+# line. The IridiumEngine executable is main.cpp on top of it; qualification
+# (capture, benchmarks, validators, oracles and their flags) is linked only in
+# IRIDIUM_QUALIFICATION=ON builds (src/qualification).
 add_library(iridium_app STATIC
         Application.cpp
         ApplicationConfig.cpp
@@ -7,7 +9,6 @@ add_library(iridium_app STATIC
         cli/RuntimeOptions.cpp
         cli/EditorOptions.cpp
         cli/RendererOptions.cpp
-        cli/QualificationOptions.cpp
 )
 target_link_libraries(iridium_app PUBLIC
         iridium_vulkan
@@ -15,11 +16,10 @@ target_link_libraries(iridium_app PUBLIC
         iridium_lighting
         iridium_scene
         iridium_assets
+        iridium_transparency
         iridium_rhi
         iridium_material
         iridium_color
-        iridium_capture
-        iridium_benchmarks
         iridium_platform
         iridium_profiling
         iridium_ecs
@@ -32,13 +32,6 @@ target_link_libraries(iridium_app PUBLIC
 # Application.h defines GLM_FORCE_DEPTH_ZERO_TO_ONE before its first GLM include,
 # so this target's PCH must not contain GLM.
 iridium_target_pch(iridium_app ENGINE NO_GLM)
-
-# Build provenance recorded in baked reflection-probe products. Only
-# Application.cpp reads these, so only it recompiles when they change. (Capture
-# and run metadata provenance lives in the qualification harness.)
-set_property(SOURCE Application.cpp APPEND PROPERTY COMPILE_DEFINITIONS
-        IRIDIUM_BUILD_CONFIGURATION="${CMAKE_BUILD_TYPE}"
-        IRIDIUM_SOURCE_COMMIT="${IRIDIUM_SOURCE_COMMIT}")
 
 add_executable(IridiumEngine
         main.cpp

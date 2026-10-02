@@ -39,8 +39,10 @@ option(IRIDIUM_QUALIFICATION
     "Build the qualification harness (oracles, captures, validators, benchmarks)" ON)
 if(IRIDIUM_QUALIFICATION)
     set(IRIDIUM_QUALIFICATION_BUILD true)
+    set(IRIDIUM_QUALIFICATION_BUILD_VALUE 1)
 else()
     set(IRIDIUM_QUALIFICATION_BUILD false)
+    set(IRIDIUM_QUALIFICATION_BUILD_VALUE 0)
 endif()
 configure_file(cmake/BuildFeatures.h.in
     "${CMAKE_BINARY_DIR}/generated/core/BuildFeatures.h" @ONLY)

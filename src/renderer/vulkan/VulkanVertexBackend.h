@@ -714,13 +714,11 @@ namespace Iridium {
         bool finalCaptureHookRecorded_ = false;
 
         // --- 4. EXTENSIONS (M7R R2.7) ---
-        // Attached by the factory before init(). The backend owns only the
-        // legacy factory's default extension; null pointers are the null
-        // object (no hook passes, no oracle work).
-        std::unique_ptr<IRenderBackendExtension> ownedExtension_;
+        // Attached by the factory before init(); not owned (each must outlive
+        // the backend). None attached is the null object (no hook passes, no
+        // oracle work).
         std::vector<IVulkanBackendExtension*> extensions_;
         IVulkanIndirectOracle* indirectOracle_ = nullptr;
-        IVulkanLegacyQualificationRequests* legacyQualificationRequests_ = nullptr;
         VulkanGraphHooks graphHooks_ = VulkanGraphHooks::none();
 
         // Private helpers that Application.cpp no longer needs to worry about
@@ -877,12 +875,7 @@ namespace Iridium {
         void runCaptureHook(VulkanHookPoint point, FrameCapturePoint capturePoint);
         [[nodiscard]] VulkanCaptureHookPayload captureSource(
             FrameCapturePoint point);
-        [[nodiscard]] VulkanFrameRecording frameRecording() const noexcept {
-            return { frameOpen_, currentCmd, scheduler.currentFrameIndex() };
-        }
         [[nodiscard]] VulkanBackendServices backendServices() noexcept;
-        [[nodiscard]] IVulkanLegacyQualificationRequests& legacyRequests(
-            const char* request) const;
         // Oracle access for expectation-emission sites: null unless this is a
         // qualification build with an attached oracle enabled for the view.
         [[nodiscard]] IVulkanIndirectOracle* activeIndirectOracle(
@@ -899,10 +892,8 @@ namespace Iridium {
         VulkanVertexBackend() = default;
         ~VulkanVertexBackend() override { cleanup(); }
 
-        // Factory-only, before init(). attachExtension does not take
-        // ownership; adoptExtension owns the legacy default extension.
+        // Factory-only, before init(). Does not take ownership.
         void attachExtension(IRenderBackendExtension* extension);
-        void adoptExtension(std::unique_ptr<IRenderBackendExtension> extension);
 
         // --- IRenderBackend Interface Implementation ---
         void init(GLFWwindow* window, const RenderBackendConfig& config) override;
@@ -996,23 +987,6 @@ namespace Iridium {
             std::span<const DrawPacket> sortedSurfaceQueue,
             std::span<const DrawPacket> compatibilityTransparentQueue,
             std::span<const glm::mat4> instanceTransforms = {}) override;
-        void captureCurrentFrame(uint64_t captureId,
-            FrameCapturePoint point) override;
-        [[nodiscard]] std::vector<FrameCapture> collectFrameCaptures(
-            bool waitForPending) override;
-        void requestOrdinary2CaptureValidation(
-            uint64_t validationId) override;
-        [[nodiscard]] std::vector<Ordinary2CaptureValidationResult>
-            collectOrdinary2CaptureValidations(bool waitForPending) override;
-        void requestDeepLayeredCaptureValidation(uint64_t validationId,
-            TransparencyQuality quality) override;
-        [[nodiscard]] std::vector<DeepLayeredCaptureValidationResult>
-            collectDeepLayeredCaptureValidations(
-                bool waitForPending) override;
-        void requestDepthPyramidCaptureValidation(
-            uint64_t validationId) override;
-        [[nodiscard]] std::vector<DepthPyramidCaptureValidationResult>
-            collectDepthPyramidCaptureValidations(bool waitForPending) override;
         void submitOutputPass() override;
         void submitUIPass() override;
 

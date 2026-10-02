@@ -12,6 +12,7 @@
 #include "renderer/lighting/ClusteredLighting.h"
 #include "renderer/vulkan/VulkanProductionRenderGraph.h"
 
+#include <algorithm>
 #include <array>
 #include <set>
 #include <string>
@@ -300,6 +301,67 @@ namespace {
         return true;
     }
 
+    // M7R R2.9: a backend with no extension attached (every production run,
+    // and every IRIDIUM_QUALIFICATION=OFF build) declares no hook passes.
+    // The graph then differs from the qualification graph only by the
+    // validation readback hooks; final-capture-hook stays (retained editor
+    // views use it). The VSM depth snapshot changes a usage, not a pass.
+    bool testNullExtensionGraphDiffersOnlyByHooks() {
+        const auto passNames = [](const RenderGraph::CompiledGraph& compiled) {
+            std::vector<std::string> names;
+            for (const RenderGraph::CompiledPass& pass : compiled.passes())
+                names.emplace_back(pass.name);
+            return names;
+        };
+        // What VulkanQualificationExtension declares without the VSM oracle.
+        constexpr VulkanGraphHooks qualificationHooks{ .depthPyramidValidation = true,
+            .layeredValidation = true, .virtualShadowDepthSnapshot = false };
+        const std::array<VulkanLayeredGraphConfig, 2> layeredConfigs{
+            VulkanLayeredGraphConfig{},
+            VulkanLayeredGraphConfig{ Ordinary2Atlas, Hero4Atlas, Cinematic8Atlas, true } };
+        for (const bool hdr10 : { false, true }) {
+            for (const VulkanLayeredGraphConfig& layered : layeredConfigs) {
+                for (const bool depthPyramid : { false, true }) {
+                    VulkanProductionGraphFeatures features{
+                        .depthPyramid = depthPyramid,
+                        .virtualShadowWorkingSetBytes = depthPyramid ? 1u << 20 : 0u };
+                    features.hooks = qualificationHooks;
+                    const std::vector<std::string> on =
+                        passNames(layeredGraph(layered, features, hdr10));
+                    features.hooks = VulkanGraphHooks::none();
+                    const std::vector<std::string> off =
+                        passNames(layeredGraph(layered, features, hdr10));
+                    std::vector<std::string> onWithoutHooks;
+                    for (const std::string& name : on)
+                        if (!name.ends_with("validation-readback-hook"))
+                            onWithoutHooks.push_back(name);
+                    IRIDIUM_CHECK(off == onWithoutHooks);
+                    IRIDIUM_CHECK(std::ranges::find(off, std::string("final-capture-hook"))
+                        != off.end());
+                    // The default (empty-scene) graph is identical.
+                    const bool optionalProducts = depthPyramid ||
+                        layered.ordinary2AtlasExtent.width != 0u;
+                    IRIDIUM_CHECK(optionalProducts || on == off);
+                }
+            }
+        }
+        // VSM depth snapshot: same passes; only the request readback's scene
+        // depth TransferSource read differs.
+        VulkanProductionGraphFeatures vsm{ .virtualShadowWorkingSetBytes = 1u << 20 };
+        vsm.hooks = VulkanGraphHooks::none();
+        const RenderGraph::CompiledGraph withoutSnapshot =
+            layeredGraph(VulkanLayeredGraphConfig{}, vsm);
+        vsm.hooks.virtualShadowDepthSnapshot = true;
+        const RenderGraph::CompiledGraph withSnapshot =
+            layeredGraph(VulkanLayeredGraphConfig{}, vsm);
+        IRIDIUM_CHECK(passNames(withSnapshot) == passNames(withoutSnapshot));
+        IRIDIUM_CHECK(GraphQuery(withSnapshot).reads("shadow.virtual.request-readback",
+            "depth.opaque", Access::TransferSource));
+        IRIDIUM_CHECK(!GraphQuery(withoutSnapshot).reads("shadow.virtual.request-readback",
+            "depth.opaque", Access::TransferSource));
+        return true;
+    }
+
 } // namespace
 
 int main() {
@@ -310,6 +372,8 @@ int main() {
         { "TransferSource only on qualification hooks", testTransferSourceOnlyOnHooks },
         { "single output transform", testSingleOutputTransform },
         { "one clustered-light product", testOneClusteredLightProduct },
+        { "null-extension graph differs only by hooks",
+            testNullExtensionGraphDiffersOnlyByHooks },
     };
     return Iridium::Test::runTests(tests);
 }

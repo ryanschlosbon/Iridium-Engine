@@ -12,6 +12,7 @@
 #include <iostream>
 #include <memory>
 #include <optional>
+#include <utility>
 
 namespace {
 
@@ -29,7 +30,9 @@ namespace {
 
     struct HarnessRig {
         ApplicationConfig config;
+        QualificationOptions options;
         FakeRenderBackend backend;
+        FakeQualificationBackend* qualification = nullptr;
         FakeAppControl control;
         CpuProfiler profiler{ false };
         SceneWorld scene;
@@ -39,7 +42,12 @@ namespace {
         std::shared_ptr<ModelAsset> mainModel;
         std::unique_ptr<QualificationHarness> harness;
 
-        void start() { harness = std::make_unique<QualificationHarness>(config); }
+        void start() {
+            auto fake = std::make_unique<FakeQualificationBackend>(backend);
+            qualification = fake.get();
+            harness = std::make_unique<QualificationHarness>(options,
+                std::move(fake));
+        }
 
         AppStartupContext startupContext() {
             AppStartupContext context{
@@ -110,22 +118,71 @@ namespace {
         CHECK(!requests.viewHistoryResetRevision);
         CHECK(!requests.suppressGridOverlay);
 
-        ApplicationConfig config{};
-        const AppRunPolicy interactive = qualificationRunPolicy(config);
+        const AppRenderRouting& production = observerDefault.routing;
+        CHECK(!production.forceDirectGBufferReference);
+        CHECK(!production.forceDirectShadowReference);
+        CHECK(!production.forceDirectProbeCaptureReference);
+        CHECK(production.weightedOitOrderSeed == 0u);
+        CHECK(production.gpuLodMinimumResidentLevel == 0u);
+        CHECK(DefaultObserver{}.backendExtensions().empty());
+
+        QualificationOptions options{};
+        const AppRunPolicy interactive = qualificationRunPolicy(options);
         CHECK(!interactive.deterministicContent);
         CHECK(!interactive.fullscreenScenePresentation);
         CHECK(!interactive.colorValidationOverlay);
         CHECK(!interactive.ownsStartupContent);
+        CHECK(!interactive.routing.forceDirectGBufferReference);
 
-        config.benchmarkId = "ordinary2_lit_closed_v1";
-        const AppRunPolicy benchmark = QualificationHarness(config).runPolicy();
+        options.benchmarkId = "ordinary2_lit_closed_v1";
+        FakeRenderBackend log;
+        QualificationHarness harness(options,
+            std::make_unique<FakeQualificationBackend>(log));
+        const AppRunPolicy benchmark = harness.runPolicy();
         CHECK(benchmark.deterministicContent);
         CHECK(benchmark.fullscreenScenePresentation);
         CHECK(!benchmark.colorValidationOverlay);
         CHECK(benchmark.ownsStartupContent);
+        // The harness supplies exactly its backend's extension.
+        CHECK(harness.backendExtensions().size() == 1u);
 
-        config.benchmarkId = "color_volume_transparency_v1";
-        CHECK(qualificationRunPolicy(config).colorValidationOverlay);
+        options.benchmarkId = "color_volume_transparency_v1";
+        CHECK(qualificationRunPolicy(options).colorValidationOverlay);
+
+        // Reference routes reach the Application only as routing.
+        options.forceDirectGBufferReference = true;
+        options.forceDirectShadowReference = true;
+        options.forceDirectProbeCaptureReference = true;
+        options.weightedOitOrderSeed = 63u;
+        options.gpuLodMinimumResidentLevel = 2u;
+        const AppRenderRouting routing = qualificationRunPolicy(options).routing;
+        CHECK(routing.forceDirectGBufferReference);
+        CHECK(routing.forceDirectShadowReference);
+        CHECK(routing.forceDirectProbeCaptureReference);
+        CHECK(routing.weightedOitOrderSeed == 63u);
+        CHECK(routing.gpuLodMinimumResidentLevel == 2u);
+        return true;
+    }
+
+    bool testBackendConfiguredAtConfigure() {
+        HarnessRig rig;
+        rig.options.shadowIndirectQualificationOracle = true;
+        rig.options.virtualShadowDepthQualificationOracle = true;
+        rig.options.validateReflectionProbes = true;
+        rig.start();
+        CHECK(!rig.qualification->configured);
+        AppStartupContext startup = rig.startupContext();
+        startup.backend = nullptr;   // Configure runs before the backend exists
+        rig.harness->onStartup(StartupPhase::Configure, startup);
+        CHECK(rig.qualification->configured.has_value());
+        const QualificationBackendConfig& config = *rig.qualification->configured;
+        CHECK(config.shadowIndirectOracle);
+        CHECK(!config.gpuLodOracle);
+        CHECK(!config.probeLodOracle);
+        CHECK(!config.depthOcclusionOracle);
+        CHECK(config.virtualShadowDepthOracle);
+        CHECK(config.validateProbeCaptureTargets);
+        CHECK(rig.backend.calls.empty());
         return true;
     }
 
@@ -133,8 +190,8 @@ namespace {
         for (const FrameCapturePoint point : { FrameCapturePoint::SceneLinear,
                 FrameCapturePoint::FinalSdr, FrameCapturePoint::FinalOutput }) {
             HarnessRig rig;
-            rig.config.captureFrameIndex = 2u;
-            rig.config.capturePoint = point;
+            rig.options.captureFrameIndex = 2u;
+            rig.options.capturePoint = point;
             rig.start();
             for (uint64_t frame = 0; frame < 6u; ++frame) {
                 const std::optional<uint64_t> measured = frame >= 1u
@@ -145,29 +202,30 @@ namespace {
             }
             CHECK(rig.backend.calls.size() == 1u);
             const BackendCall& capture = rig.backend.calls.front();
-            CHECK(capture.kind == Kind::CaptureCurrentFrame);
+            CHECK(capture.kind == Kind::ArmFrameCapture);
             CHECK(capture.value == 2u);
             CHECK(capture.detail == static_cast<uint32_t>(point));
-            CHECK(capture.marker == (point == FrameCapturePoint::SceneLinear
-                ? "scene-linear" : "output"));
+            // Armed inside the open frame; the extension consumes it at the
+            // scene-color or final-capture hook of the same recording.
+            CHECK(capture.marker == "opened");
         }
         return true;
     }
 
     bool testReadbackValidationsArmInsideTheOpenFrame() {
         HarnessRig rig;
-        rig.config.validateDepthPyramidCapture = true;
-        rig.config.validateDeepLayeredCapture = true;
-        rig.config.deepLayeredCaptureQuality = TransparencyQuality::Cinematic8;
+        rig.options.validateDepthPyramidCapture = true;
+        rig.options.validateDeepLayeredCapture = true;
+        rig.options.deepLayeredCaptureQuality = TransparencyQuality::Cinematic8;
         rig.start();
         rig.runMeasured(2u, 4u);
         CHECK(rig.backend.calls.size() == 2u);
-        CHECK(rig.backend.calls[0].kind == Kind::RequestDeepLayeredValidation);
+        CHECK(rig.backend.calls[0].kind == Kind::ArmDeepLayeredValidation);
         CHECK(rig.backend.calls[0].value == 0u);
         CHECK(rig.backend.calls[0].detail ==
             static_cast<uint32_t>(TransparencyQuality::Cinematic8));
         CHECK(rig.backend.calls[0].marker == "opened");
-        CHECK(rig.backend.calls[1].kind == Kind::RequestDepthPyramidValidation);
+        CHECK(rig.backend.calls[1].kind == Kind::ArmDepthPyramidValidation);
         CHECK(rig.backend.calls[1].marker == "opened");
         return true;
     }
@@ -177,8 +235,8 @@ namespace {
         // readback requests; nothing re-arms them later (pre-R2 behavior, which
         // the end-of-run report then rejects).
         HarnessRig rig;
-        rig.config.captureFrameIndex = 0u;
-        rig.config.validateOrdinary2Capture = true;
+        rig.options.captureFrameIndex = 0u;
+        rig.options.validateOrdinary2Capture = true;
         rig.start();
         rig.runFrame(0u, 0u, false);
         rig.runFrame(1u, 1u);
@@ -189,7 +247,7 @@ namespace {
 
     bool testResizeSequenceRunsBetweenFrames() {
         HarnessRig rig;
-        rig.config.validateOrdinary2Resize = true;
+        rig.options.validateOrdinary2Resize = true;
         rig.start();
         rig.runMeasured(1u, 7u);
         CHECK(rig.control.resizes.size() == 3u);
@@ -201,14 +259,14 @@ namespace {
         // which this rig does not run.
         CHECK(rig.control.resizes[2].width == 0u);
         CHECK(rig.backend.calls.size() == 1u);
-        CHECK(rig.backend.calls[0].kind == Kind::RequestOrdinary2Validation);
+        CHECK(rig.backend.calls[0].kind == Kind::ArmOrdinary2Validation);
         CHECK(rig.backend.calls[0].marker == "opened");
         return true;
     }
 
     bool testOutputTransportSwitchSequence() {
         HarnessRig rig;
-        rig.config.validateOutputTransportSwitch = true;
+        rig.options.validateOutputTransportSwitch = true;
         rig.start();
         rig.runFrame(0u, 0u, true, true);   // an editor switch is pending: wait
         CHECK(rig.control.transports.empty());
@@ -222,8 +280,8 @@ namespace {
 
     bool testTableScaleProbesAreHarnessOwned() {
         HarnessRig rig;
-        rig.config.validateTextureTableScale = 3u;
-        rig.config.validateMaterialTableScale = 2u;
+        rig.options.validateTextureTableScale = 3u;
+        rig.options.validateMaterialTableScale = 2u;
         rig.start();
         AppStartupContext startup = rig.startupContext();
         rig.backend.marker = "backend-ready";
@@ -275,6 +333,7 @@ int main() {
 
     constexpr TestCase tests[] = {
         { "Run policy", testRunPolicy },
+        { "Backend configured at Configure", testBackendConfiguredAtConfigure },
         { "Capture points", testCapturePoints },
         { "Readback validations arm inside the open frame",
             testReadbackValidationsArmInsideTheOpenFrame },

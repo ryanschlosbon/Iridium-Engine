@@ -1,11 +1,14 @@
 #pragma once
 
-// The qualification side of the Vulkan backend (M7R R2.7): frame captures,
-// Ordinary2 / deep-layered / depth-pyramid capture validation readbacks, the
-// reflection-probe capture-target startup validator, and the indirect/VSM
-// oracle (VulkanIndirectOracle). Attached through the backend factory; the
-// backend reaches it only through IVulkanBackendExtension.
+// The qualification side of the Vulkan backend (M7R R2.7-R2.9): frame
+// captures, Ordinary2 / deep-layered / depth-pyramid capture validation
+// readbacks, the reflection-probe capture-target startup validator, and the
+// indirect/VSM oracle (VulkanIndirectOracle). The qualification harness owns
+// it, attaches it through RenderBackendCreateInfo and drives it through
+// IQualificationBackend; the backend reaches it only through
+// IVulkanBackendExtension.
 
+#include "qualification/QualificationBackend.h"
 #include "qualification/vulkan/VulkanIndirectOracle.h"
 #include "renderer/vulkan/VulkanBackendExtension.h"
 #include "renderer/vulkan/VulkanResourceAllocator.h"
@@ -16,7 +19,7 @@
 namespace Iridium {
 
     class VulkanQualificationExtension final : public IVulkanBackendExtension,
-        public IVulkanLegacyQualificationRequests {
+        public IQualificationBackend {
     public:
         VulkanQualificationExtension() = default;
         VulkanQualificationExtension(const VulkanQualificationExtension&) = delete;
@@ -25,7 +28,6 @@ namespace Iridium {
         ~VulkanQualificationExtension() override = default;
 
         // IVulkanBackendExtension
-        void configure(const RenderBackendConfig& config) override;
         [[nodiscard]] VulkanGraphHooks graphHooks() const noexcept override;
         void onBackendInitialized(const VulkanBackendServices& services) override;
         [[nodiscard]] bool wantsHook(
@@ -35,37 +37,33 @@ namespace Iridium {
         [[nodiscard]] IVulkanIndirectOracle* indirectOracle() noexcept override {
             return &oracle_;
         }
-        [[nodiscard]] IVulkanLegacyQualificationRequests*
-            legacyQualificationRequests() noexcept override { return this; }
         void onBeforeDeviceDestroy() override;
 
-        // Deferred capture (the R2.9 harness path): consumed at the next
-        // SceneColorComplete or FinalCaptureHook matching the point.
-        void armFrameCapture(uint64_t captureId, FrameCapturePoint point);
-
-        // IVulkanLegacyQualificationRequests (removed with the IRenderBackend
-        // methods in R2.9).
-        void captureCurrentFrame(uint64_t captureId,
-            const VulkanFrameRecording& frame,
-            const VulkanCaptureHookPayload& source) override;
+        // IQualificationBackend
+        [[nodiscard]] IRenderBackendExtension& backendExtension() noexcept override {
+            return *this;
+        }
+        void configureQualification(
+            const QualificationBackendConfig& config) override;
+        // Consumed at the next SceneColorComplete (scene-linear) or
+        // FinalCaptureHook (final output) hook.
+        void armFrameCapture(uint64_t captureId,
+            FrameCapturePoint point) override;
+        // Consumed by the next Ordinary2 / matching deep-tier validation hook
+        // with at least one prepared draw.
+        void armOrdinary2CaptureValidation(uint64_t validationId) override;
+        void armDeepLayeredCaptureValidation(uint64_t validationId,
+            TransparencyQuality quality) override;
+        // Requires an initialized backend with the depth pyramid enabled.
+        void armDepthPyramidCaptureValidation(uint64_t validationId) override;
         [[nodiscard]] std::vector<FrameCapture> collectFrameCaptures(
-            bool frameOpen, bool waitForPending) override;
-        void requestOrdinary2CaptureValidation(uint64_t validationId,
-            const VulkanFrameRecording& frame) override;
+            bool waitForPending) override;
         [[nodiscard]] std::vector<Ordinary2CaptureValidationResult>
-            collectOrdinary2CaptureValidations(bool frameOpen,
-                bool waitForPending) override;
-        void requestDeepLayeredCaptureValidation(uint64_t validationId,
-            TransparencyQuality quality,
-            const VulkanFrameRecording& frame) override;
+            collectOrdinary2CaptureValidations(bool waitForPending) override;
         [[nodiscard]] std::vector<DeepLayeredCaptureValidationResult>
-            collectDeepLayeredCaptureValidations(bool frameOpen,
-                bool waitForPending) override;
-        void requestDepthPyramidCaptureValidation(uint64_t validationId,
-            const VulkanFrameRecording& frame) override;
+            collectDeepLayeredCaptureValidations(bool waitForPending) override;
         [[nodiscard]] std::vector<DepthPyramidCaptureValidationResult>
-            collectDepthPyramidCaptureValidations(bool frameOpen,
-                bool waitForPending) override;
+            collectDepthPyramidCaptureValidations(bool waitForPending) override;
 
     private:
         struct PendingFrameCapture {

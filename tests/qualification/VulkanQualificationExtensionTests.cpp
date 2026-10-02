@@ -3,7 +3,6 @@
 // backend-factory attachment. No device is created.
 #include "qualification/vulkan/VulkanIndirectOracle.h"
 #include "qualification/vulkan/VulkanQualificationExtension.h"
-#include "qualification/vulkan/VulkanQualificationInstall.h"
 #include "qualification/vulkan/VulkanReadbackAnalysis.h"
 #include "renderer/rhi/RenderBackendFactory.h"
 
@@ -36,6 +35,115 @@ namespace {
     template<typename T>
     void put(std::vector<std::byte>& bytes, size_t offset, T value) {
         std::memcpy(bytes.data() + offset, &value, sizeof(value));
+    }
+
+    // Result verdicts (moved from Stage3ArchitectureTests with the result types
+    // in M7R R2.9).
+    bool testOrdinary2CaptureValidationResultContract() {
+        Ordinary2CaptureValidationResult result{
+            .validationId = 7u,
+            .atlasWidth = 1280u,
+            .atlasHeight = 176u,
+            .expectedDrawCount = 1u,
+            .workItemCount = 1u,
+            .inspectedPixelCount = 225'280u,
+            .entryPixelCount = 4'128u,
+            .exitPixelCount = 4'128u,
+            .pairedPixelCount = 4'128u,
+            .localColorPixelCount = 4'128u,
+            .minimumPairedDepthDelta = 0.0000026226f,
+            .maximumPairedDepthDelta = 0.00340205f,
+            .minimumLocalAlpha = 0.75f,
+            .maximumLocalAlpha = 1.0f,
+        };
+        CHECK(result.passed());
+        result.workMismatchPixelCount = 1u;
+        CHECK(!result.passed());
+        result.workMismatchPixelCount = 0u;
+        result.nonIncreasingDepthPixelCount = 1u;
+        CHECK(!result.passed());
+        result.nonIncreasingDepthPixelCount = 0u;
+        result.pairedPixelCount = result.exitPixelCount - 1u;
+        CHECK(!result.passed());
+        result.pairedPixelCount = result.exitPixelCount;
+        result.localColorInvalidPixelCount = 1u;
+        CHECK(!result.passed());
+        return true;
+    }
+
+    bool testDeepLayeredCaptureValidationResultContract() {
+        DeepLayeredCaptureValidationResult result{
+            .validationId = 11u,
+            .quality = TransparencyQuality::Hero4,
+            .atlasWidth = 1280u,
+            .atlasHeight = 352u,
+            .interfaceCount = 4u,
+            .expectedDrawCount = 2u,
+            .sceneResolveDrawCount = 2u,
+            .compatibilityForwardDrawCount = 0u,
+            .workItemCount = 2u,
+            .maximumObservedInterfaceCount = 4u,
+            .inspectedPixelCount = 450'560u,
+            .interfacePixelCounts = { 8'000u, 8'000u, 4'000u, 4'000u },
+            .pairedPixelCount = 8'000u,
+            .nestedFourInterfacePixelCount = 4'000u,
+            .localColorPixelCount = 8'000u,
+            .minimumDepthDelta = 0.000002f,
+            .maximumDepthDelta = 0.004f,
+            .minimumLocalAlpha = 0.50f,
+            .maximumLocalAlpha = 1.0f,
+        };
+        CHECK(result.passed());
+        result.crossingPairPixelCount = 512u;
+        CHECK(result.passed());
+        result.saturatedResidualPixelCount = 32u;
+        CHECK(result.passed());
+        result.interfaceGapPixelCount = 1u;
+        CHECK(!result.passed());
+        result.interfaceGapPixelCount = 0u;
+        result.nestedFourInterfacePixelCount = 0u;
+        CHECK(!result.passed());
+        result.nestedFourInterfacePixelCount = 4'000u;
+        result.maximumObservedInterfaceCount = 2u;
+        result.interfacePixelCounts[3] = 0u;
+        result.earlyTerminatedPixelCount = 4'000u;
+        result.terminatedOccupiedTileCount = 16u;
+        CHECK(result.passed());
+        result.maximumObservedInterfaceCount = 4u;
+        result.interfacePixelCounts[3] = 4'000u;
+        result.earlyTerminatedPixelCount = 0u;
+        result.terminatedOccupiedTileCount = 0u;
+        result.localColorPixelCount = result.pairedPixelCount - 1u;
+        CHECK(!result.passed());
+        result.localColorPixelCount = result.pairedPixelCount;
+        result.sceneResolveDrawCount = 1u;
+        CHECK(!result.passed());
+        result.sceneResolveDrawCount = 2u;
+        result.compatibilityForwardDrawCount = 1u;
+        CHECK(!result.passed());
+        result.compatibilityForwardDrawCount = 0u;
+        result.quality = TransparencyQuality::Cinematic8;
+        result.interfaceCount = 8u;
+        result.maximumObservedInterfaceCount = 8u;
+        result.expectedDrawCount = 4u;
+        result.sceneResolveDrawCount = 4u;
+        result.workItemCount = 4u;
+        result.interfacePixelCounts[7] = 1u;
+        CHECK(result.passed());
+        result.maximumObservedInterfaceCount = 7u;
+        CHECK(!result.passed());
+        result.maximumObservedInterfaceCount = 8u;
+        result.interfacePixelCounts[7] = 0u;
+        CHECK(!result.passed());
+        result.quality = TransparencyQuality::Hero4;
+        result.interfaceCount = 4u;
+        result.maximumObservedInterfaceCount = 4u;
+        result.expectedDrawCount = 2u;
+        result.sceneResolveDrawCount = 2u;
+        result.workItemCount = 2u;
+        result.quality = TransparencyQuality::Ordinary2;
+        CHECK(!result.passed());
+        return true;
     }
 
     bool testOrdinary2Analysis() {
@@ -298,39 +406,58 @@ namespace {
     bool testExtensionHooksAndRequests() {
         VulkanQualificationExtension extension;
         CHECK(extension.api() == RenderBackendApi::Vulkan);
-        RenderBackendConfig config{};
-        extension.configure(config);
+        IQualificationBackend& qualification = extension;
+        CHECK(&qualification.backendExtension() ==
+            static_cast<IRenderBackendExtension*>(&extension));
+        qualification.configureQualification({});
         VulkanGraphHooks hooks = extension.graphHooks();
         CHECK(hooks.depthPyramidValidation && hooks.layeredValidation);
         CHECK(!hooks.virtualShadowDepthSnapshot);
-        config.virtualShadowDepthQualificationOracle = true;
-        extension.configure(config);
+        for (const VulkanIndirectOracleView view : {
+                VulkanIndirectOracleView::DirectionalShadow,
+                VulkanIndirectOracleView::OpaqueLod,
+                VulkanIndirectOracleView::DepthOcclusion,
+                VulkanIndirectOracleView::VirtualShadowDepth })
+            CHECK(!extension.indirectOracle()->enabled(view));
+        qualification.configureQualification({ .virtualShadowDepthOracle = true });
         CHECK(extension.graphHooks().virtualShadowDepthSnapshot);
         CHECK(extension.indirectOracle()->enabled(
             VulkanIndirectOracleView::VirtualShadowDepth));
+        qualification.configureQualification({ .shadowIndirectOracle = true,
+            .gpuLodOracle = true, .probeLodOracle = true,
+            .depthOcclusionOracle = true });
+        CHECK(extension.indirectOracle()->enabled(
+            VulkanIndirectOracleView::SpotShadow));
+        CHECK(extension.indirectOracle()->enabled(
+            VulkanIndirectOracleView::OpaqueLod));
+        CHECK(extension.indirectOracle()->enabled(
+            VulkanIndirectOracleView::ReflectionProbe));
+        CHECK(extension.indirectOracle()->enabled(
+            VulkanIndirectOracleView::DepthOcclusion));
+        CHECK(!extension.graphHooks().virtualShadowDepthSnapshot);
 
-        // Validation hooks run only for a pending request with work to read.
+        // Validation hooks run only for an armed request with work to read.
         VulkanHookContext context{ .point = VulkanHookPoint::Ordinary2Validation,
             .payload = VulkanOrdinary2HookPayload{ { 8u, 8u }, 1u, 1u } };
         CHECK(!extension.wantsHook(context));
-        const VulkanFrameRecording closed{};
-        bool rejected = false;
-        try { extension.requestOrdinary2CaptureValidation(1u, closed); }
-        catch (const std::logic_error&) { rejected = true; }
-        CHECK(rejected);
-        const VulkanFrameRecording open{ true,
-            reinterpret_cast<VkCommandBuffer>(uintptr_t{ 1 }), 0u };
-        extension.requestOrdinary2CaptureValidation(1u, open);
+        qualification.armOrdinary2CaptureValidation(1u);
         CHECK(extension.wantsHook(context));
         context.payload = VulkanOrdinary2HookPayload{ { 8u, 8u }, 0u, 1u };
         CHECK(!extension.wantsHook(context));
-        rejected = false;
-        try { extension.requestOrdinary2CaptureValidation(2u, open); }
+        bool rejected = false;
+        try { qualification.armOrdinary2CaptureValidation(2u); }
         catch (const std::invalid_argument&) { rejected = true; }
         CHECK(rejected);
 
-        extension.requestDeepLayeredCaptureValidation(4u,
-            TransparencyQuality::Cinematic8, open);
+        rejected = false;
+        try {
+            qualification.armDeepLayeredCaptureValidation(3u,
+                TransparencyQuality::Ordinary2);
+        }
+        catch (const std::invalid_argument&) { rejected = true; }
+        CHECK(rejected);
+        qualification.armDeepLayeredCaptureValidation(4u,
+            TransparencyQuality::Cinematic8);
         VulkanHookContext deep{ .point = VulkanHookPoint::DeepLayeredValidation,
             .payload = VulkanDeepLayeredHookPayload{
                 TransparencyQuality::Hero4, 4u, 3u, 1u } };
@@ -341,24 +468,27 @@ namespace {
 
         // Depth-pyramid requests need the pyramid (absent before init).
         rejected = false;
-        try { extension.requestDepthPyramidCaptureValidation(5u, open); }
+        try { qualification.armDepthPyramidCaptureValidation(5u); }
         catch (const std::logic_error&) { rejected = true; }
         CHECK(rejected);
+        CHECK(!extension.wantsHook(
+            { .point = VulkanHookPoint::DepthPyramidValidation }));
 
-        // Deferred capture arms exactly one point.
+        // A capture arms exactly one point.
         CHECK(!extension.wantsHook({ .point = VulkanHookPoint::SceneColorComplete }));
-        extension.armFrameCapture(6u, FrameCapturePoint::FinalSdr);
+        qualification.armFrameCapture(6u, FrameCapturePoint::FinalSdr);
         CHECK(!extension.wantsHook({ .point = VulkanHookPoint::SceneColorComplete }));
         CHECK(extension.wantsHook({ .point = VulkanHookPoint::FinalCaptureHook }));
         rejected = false;
-        try { extension.armFrameCapture(7u, FrameCapturePoint::SceneLinear); }
+        try { qualification.armFrameCapture(7u, FrameCapturePoint::SceneLinear); }
         catch (const std::invalid_argument&) { rejected = true; }
         CHECK(rejected);
-        CHECK(extension.collectFrameCaptures(false, false).empty());
-        rejected = false;
-        try { (void)extension.collectFrameCaptures(true, false); }
-        catch (const std::logic_error&) { rejected = true; }
-        CHECK(rejected);
+
+        // Nothing was recorded: every collection is empty and needs no device.
+        CHECK(qualification.collectFrameCaptures(true).empty());
+        CHECK(qualification.collectOrdinary2CaptureValidations(true).empty());
+        CHECK(qualification.collectDeepLayeredCaptureValidations(true).empty());
+        CHECK(qualification.collectDepthPyramidCaptureValidations(true).empty());
         return true;
     }
 
@@ -384,24 +514,8 @@ namespace {
         IRenderBackendExtension* const list[]{ &extension };
         CHECK(createRenderBackend(RenderBackendCreateInfo{
             .api = RenderBackendApi::Vulkan, .extensions = list }) != nullptr);
-        // Without registration the legacy overload attaches nothing; the
-        // installer registers the qualification extension explicitly.
-        std::unique_ptr<IRenderBackend> legacy =
-            createRenderBackend(RenderBackendApi::Vulkan);
-        CHECK(legacy != nullptr);
-        CHECK(legacy->collectFrameCaptures(true).empty());
-        installQualificationBackendExtensions();
-        legacy = createRenderBackend(RenderBackendApi::Vulkan);
-        CHECK(legacy != nullptr);
-        rejected = false;
-        try { legacy->requestOrdinary2CaptureValidation(1u); }
-        catch (const std::logic_error& error) {
-            // Reached the extension: the frame-state check, not "requires".
-            rejected = std::string_view(error.what()).find("during a frame") !=
-                std::string_view::npos;
-        }
-        CHECK(rejected);
-        setDefaultRenderBackendExtensionFactory(nullptr);
+        // Production creation attaches nothing.
+        CHECK(createRenderBackend(RenderBackendCreateInfo{}) != nullptr);
         return true;
     }
 
@@ -414,6 +528,10 @@ namespace {
 
 int main() {
     constexpr TestCase tests[] = {
+        { "Ordinary2 capture validation result contract",
+            testOrdinary2CaptureValidationResultContract },
+        { "Deep layered capture validation result contract",
+            testDeepLayeredCaptureValidationResultContract },
         { "Ordinary2 readback analysis", testOrdinary2Analysis },
         { "Deep layered readback analysis", testDeepLayeredAnalysis },
         { "Depth-pyramid readback analysis", testDepthPyramidAnalysis },
