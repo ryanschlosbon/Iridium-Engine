@@ -323,8 +323,14 @@ namespace Iridium {
                     "Indexed material texture-table growth must occur at a "
                     "frame boundary");
             }
-            indexedTextureTable_.ensureFrameCapacity(
-                frameIndex, handle.getIndex() + 1);
+            // Between frames the current slot's last submission may still be
+            // executing (its wait is in the next beginFrame): growing would
+            // destroy a descriptor pool in use. The write below raises the
+            // logical capacity, and beginFrame grows the slot after its wait,
+            // as it does for the other slot.
+            if (!scheduler_->slotInFlight(frameIndex))
+                indexedTextureTable_.ensureFrameCapacity(
+                    frameIndex, handle.getIndex() + 1);
             indexedTextureTable_.write(handle.getIndex(), payload.image.view,
                 handle.getIndex(), payload.sampler);
             // Pre-frame publication can batch descriptor synchronization into
