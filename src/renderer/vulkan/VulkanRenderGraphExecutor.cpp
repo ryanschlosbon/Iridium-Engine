@@ -558,8 +558,10 @@ void VulkanRenderGraphExecutor::rebuild(RenderGraph::CompiledGraph graph) {
     externalBuffers_.assign(resources_.frameCount(),
         std::vector<ExternalBufferBinding>(logicalResourceCount_));
     externalBufferTracked_.assign(logicalResourceCount_, false);
-    externalImages_.assign(resources_.frameCount() + 1,
-        std::vector<ExternalImageBinding>(logicalResourceCount_));
+    // Binding rows are sized by the first bindExternalImage (a plan without
+    // imported-image bindings allocates none); rows exist whenever any
+    // externalImageScope_ entry is set.
+    externalImages_.clear();
     externalImageScope_.assign(logicalResourceCount_, 0);
     frameRetired_.assign(resources_.frameCount(), true);
     cache_.store(std::move(graph));
@@ -841,6 +843,10 @@ void VulkanRenderGraphExecutor::bindExternalImage(uint32_t frameOrGlobal,
                 throw std::invalid_argument(
                     "Executor-owned external images shared by frame slots need a global binding");
         }
+    }
+    if (externalImages_.empty()) {
+        externalImages_.assign(resources_.frameCount() + 1,
+            std::vector<ExternalImageBinding>(logicalResourceCount_));
     }
     ExternalImageBinding& binding = externalImages_[global ? resources_.frameCount()
         : frameOrGlobal][id.logical];
