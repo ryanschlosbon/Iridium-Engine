@@ -112,6 +112,7 @@ namespace {
         flag("depthOcclusionQualificationOracle", c.depthOcclusionQualificationOracle);
         flag("indirectStreamDigest", c.indirectStreamDigest);
         flag("renderGraphAliasing", c.renderGraphAliasing);
+        field("uploadQueue", exact(enumValue(c.uploadQueue)));
         flag("aliasPoison", c.aliasPoison);
         flag("validateDepthPyramidCapture", c.validateDepthPyramidCapture);
         flag("validateDepthPyramidResize", c.validateDepthPyramidResize);
@@ -333,7 +334,7 @@ namespace {
                 { { "", "--open-asset-viewer requires an asset GUID" },
                   { "not-a-guid", "--open-asset-viewer requires a non-nil asset GUID" },
                   { kNilGuid, "--open-asset-viewer requires a non-nil asset GUID" } } },
-            // --- renderer (30) ---
+            // --- renderer (32) ---
             { "--cluster-tile-size", G, "16", {}, [](C& c) { c.clusterTileSize = 16; },
                 "--cluster-tile-size requires 16 or 32",
                 { { "8", "--cluster-tile-size requires 16 or 32" },
@@ -464,6 +465,12 @@ namespace {
                 "--render-graph-aliasing requires on or off",
                 { { "yes", "--render-graph-aliasing requires on or off" },
                   { "", "--render-graph-aliasing requires on or off" } } },
+            // M7R R4d.1 (not in the 6b000ad parser); auto by default.
+            { "--upload-queue", G, "graphics", {}, [](C& c) {
+                c.uploadQueue = UploadQueueMode::Graphics; },
+                "--upload-queue requires auto, graphics or legacy-blocking",
+                { { "transfer", "--upload-queue requires auto, graphics or legacy-blocking" },
+                  { "", "--upload-queue requires auto, graphics or legacy-blocking" } } },
             // --- qualification (39) ---
             { "--validate-texture-residency-churn", Q, {}, {}, [](C& c) {
                 c.validateTextureResidencyChurn = true; }, {}, {} },
@@ -599,8 +606,8 @@ namespace {
         Cli::CliOptionRegistry registry;
         registerEngineOptions(registry, scratch);
 
-        CHECK(table.size() == 88);
-        CHECK(registry.options().size() == 88);
+        CHECK(table.size() == 89);
+        CHECK(registry.options().size() == 89);
         std::set<std::string_view> names;
         std::map<std::string_view, size_t> ownerCounts;
         for (const FlagCase& row : table) {
@@ -643,6 +650,15 @@ namespace {
         CHECK(newOutcome({ "--qualification-scripted-changes", "hitch.json" }) ==
             error("--qualification-scripted-changes requires --profile-cpu-output"));
         {
+            // --upload-queue: every value, the last one wins.
+            CombinedConfig legacy{};
+            legacy.uploadQueue = UploadQueueMode::LegacyBlocking;
+            CHECK(newOutcome({ "--upload-queue", "legacy-blocking" }) ==
+                "OK:" + describe(legacy));
+            CHECK(newOutcome({ "--upload-queue", "legacy-blocking", "--upload-queue", "auto" }) ==
+                "OK:" + describe(CombinedConfig{}));
+        }
+        {
             // --pipeline-cache off disables the cache; a later path re-enables it.
             CombinedConfig off{};
             off.pipelineCacheEnabled = false;
@@ -654,7 +670,7 @@ namespace {
         }
         CHECK(ownerCounts[R] == 14);
         CHECK(ownerCounts[E] == 4);
-        CHECK(ownerCounts[G] == 31);
+        CHECK(ownerCounts[G] == 32);
         CHECK(ownerCounts[Q] == 39);
         std::cout << "  owners: runtime " << ownerCounts[R] << ", editor " << ownerCounts[E]
                   << ", renderer " << ownerCounts[G] << ", qualification "
@@ -706,7 +722,7 @@ namespace {
     bool testUsageParity() {
         const std::string usage = engineUsage();
         CHECK(usage.starts_with("Usage: IridiumEngine [options]\n"));
-        CHECK(optionLines(usage).size() == 88);
+        CHECK(optionLines(usage).size() == 89);
         // Groups appear in owner order: runtime, editor, renderer, qualification.
         const size_t runtime = usage.find("runtime options:");
         const size_t editor = usage.find("editor options:");
@@ -725,7 +741,7 @@ namespace {
         AppCli::registerRuntimeOptions(registry, config);
         AppCli::registerEditorOptions(registry, config);
         AppCli::registerRendererOptions(registry, config);
-        CHECK(registry.options().size() == 49);
+        CHECK(registry.options().size() == 50);
         try {
             registry.parse(Args{ "--benchmark", "material_lab_v1" });
             CHECK(false);
@@ -781,7 +797,7 @@ int main() {
     };
 
     constexpr TestCase tests[] = {
-        { "Per-flag table (88 flags)", testFlagTable },
+        { "Per-flag table (89 flags)", testFlagTable },
         { "Aliases and removed flags", testAliasesAndRemovedFlags },
         { "Usage parity", testUsageParity },
         { "Registry without qualification", testRegistryWithoutQualification },

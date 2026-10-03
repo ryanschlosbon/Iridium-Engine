@@ -47,8 +47,9 @@ inline constexpr const char* kIridiumCompiledShaders[] = {
     add_library(iridium_test_vulkan_support STATIC
             support/HeadlessVulkanDevice.cpp
             support/HeadlessComputeKernel.cpp)
+    # iridium_vulkan: the production upload-queue selection (M7R R4d).
     target_link_libraries(iridium_test_vulkan_support PUBLIC
-            iridium_test_support Vulkan::Vulkan)
+            iridium_test_support iridium_vulkan Vulkan::Vulkan)
 
     # Parity kernels: tests/shaders/*.comp include production GLSL from
     # assets/shaders and compile into the build tree only.
@@ -349,6 +350,12 @@ iridium_add_test(EditorRenderBridgeTests
 iridium_add_test(VulkanPipelineCacheFileTests
         SOURCES renderer/VulkanPipelineCacheFileTests.cpp
         LIBS iridium_vulkan iridium_platform)
+
+# M7R R4d: upload queue selection and the staging ring (device-free; the
+# device round trips are in VulkanResourceAllocatorTests).
+iridium_add_test(VulkanUploadQueueTests
+        SOURCES renderer/VulkanUploadQueueTests.cpp
+        LIBS iridium_vulkan)
 
 # Hardware qualification: these create a Vulkan device and load SPIR-V from
 # assets/shaders, so they carry the `vulkan` label and depend on iridium_shaders.

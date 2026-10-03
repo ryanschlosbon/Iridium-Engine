@@ -48,6 +48,8 @@ namespace Iridium {
         // M7R R4b: --render-graph-aliasing on|off (on since R4b.6; the switch
         // is kept until R6).
         bool renderGraphAliasing = true;
+        // M7R R4d: --upload-queue auto|graphics|legacy-blocking.
+        UploadQueueMode uploadQueue = UploadQueueMode::Auto;
         bool forceWireframe = false;
         uint32_t clusterTileSize = 32;
         uint32_t clusterDepthSlices = 24;

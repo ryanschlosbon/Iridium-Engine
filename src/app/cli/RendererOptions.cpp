@@ -320,6 +320,18 @@ namespace Iridium::AppCli {
                 else throw std::invalid_argument("--render-graph-aliasing requires on or off");
             });
 
+        addValueOption(registry, owner, "--upload-queue", "auto|graphics|legacy-blocking",
+            "Upload queue: transfer queue + timelines, graphics only, or pre-R4d blocking",
+            "--upload-queue requires auto, graphics or legacy-blocking",
+            [&c](std::string_view value) {
+                if (value == "auto") c.uploadQueue = UploadQueueMode::Auto;
+                else if (value == "graphics") c.uploadQueue = UploadQueueMode::Graphics;
+                else if (value == "legacy-blocking")
+                    c.uploadQueue = UploadQueueMode::LegacyBlocking;
+                else throw std::invalid_argument(
+                    "--upload-queue requires auto, graphics or legacy-blocking");
+            });
+
         registry.addValidator(std::string(owner), [&c] {
             if (c.outputTransport != Color::OutputTransport::SdrSrgb &&
                 c.outputOperator != OutputTransformOperator::Aces2) {

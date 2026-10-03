@@ -13,6 +13,20 @@ namespace Iridium {
 
     class CpuProfiler;
 
+    // M7R R4d (--upload-queue): where resource uploads run.
+    //   Auto: fresh resources on the device's upload queue (a dedicated
+    //     transfer or graphics-free compute family, with queue-family
+    //     ownership transfers), the rest on graphics; frames wait on the
+    //     upload timeline instead of the CPU.
+    //   Graphics: the same asynchronous path on the graphics queue only.
+    //   LegacyBlocking: the pre-R4d path (graphics submit and a fence wait in
+    //     every flush, one staging allocation per upload).
+    enum class UploadQueueMode : uint8_t {
+        Auto,
+        Graphics,
+        LegacyBlocking,
+    };
+
     struct RenderBackendConfig {
         bool enableValidation = false;
         // Adds Khronos synchronization validation when enableValidation is set.
@@ -33,6 +47,7 @@ namespace Iridium {
         // share memory (--render-graph-aliasing on|off; on since R4b.6, the
         // switch is kept until R6).
         bool renderGraphAliasing = true;
+        UploadQueueMode uploadQueue = UploadQueueMode::Auto;
         CpuProfiler* cpuProfiler = nullptr;
         bool enableGpuProfiling = false;
         bool enableTransparentPipelineStatistics = false;

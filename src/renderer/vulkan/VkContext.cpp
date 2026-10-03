@@ -379,10 +379,23 @@ void VkContext::createLogicalDevice() {
     // 1. Queue Family Logic
     QueueFamilyIndices indices = findQueueFamilies(physicalDevice);
 
+    // M7R R4d: the upload queue family (dedicated transfer, else graphics-free
+    // compute, else graphics).
+    {
+        uint32_t familyCount = 0;
+        vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &familyCount, nullptr);
+        std::vector<VkQueueFamilyProperties> families(familyCount);
+        vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &familyCount,
+            families.data());
+        transferQueueChoice = Iridium::selectVulkanTransferQueueFamily(families,
+            indices.graphicsFamily.value());
+    }
+
     std::vector<VkDeviceQueueCreateInfo> queueCreateInfos;
     std::set<uint32_t> uniqueQueueFamilies = {
        indices.graphicsFamily.value(),
-       indices.presentFamily.value()
+       indices.presentFamily.value(),
+       transferQueueChoice.family
     };
 
     float queuePriority = 1.0f;
@@ -459,6 +472,12 @@ void VkContext::createLogicalDevice() {
     }
 	if (drawIndirectCountEnabled)
 		enabledVulkan12.drawIndirectCount = VK_TRUE;
+	// M7R R4d: timeline semaphores (core in Vulkan 1.2) for the upload and
+	// graphics timelines; without them uploads stay legacy-blocking and frames
+	// keep their fences.
+	timelineSemaphoreEnabled = supportedVulkan12.timelineSemaphore == VK_TRUE;
+	if (timelineSemaphoreEnabled)
+		enabledVulkan12.timelineSemaphore = VK_TRUE;
 	// M7R R3: synchronization2 is enabled when available (core in Vulkan 1.3);
 	// barrier recording migrates to vkCmdPipelineBarrier2 incrementally.
 	synchronization2Enabled = supportedVulkan13.synchronization2 == VK_TRUE;
@@ -508,7 +527,7 @@ void VkContext::createLogicalDevice() {
 
     createInfo.pEnabledFeatures = &deviceFeatures;
     createInfo.pNext = descriptorIndexingEnabled || drawIndirectCountEnabled ||
-		vulkan13FeaturesEnabled ? &enabledVulkan12 : nullptr;
+		timelineSemaphoreEnabled || vulkan13FeaturesEnabled ? &enabledVulkan12 : nullptr;
 
     // Pass the dynamically created list of extensions
     createInfo.enabledExtensionCount = static_cast<uint32_t>(deviceExtensions.size());
@@ -527,6 +546,7 @@ void VkContext::createLogicalDevice() {
     // 5. Retrieve Queue Handles
     vkGetDeviceQueue(device, indices.graphicsFamily.value(), 0, &graphicsQueue);
     vkGetDeviceQueue(device, indices.presentFamily.value(), 0, &presentQueue);
+    vkGetDeviceQueue(device, transferQueueChoice.family, 0, &transferQueue);
 }
 
 SwapChainSupportDetails VkContext::querySwapChainSupport(VkPhysicalDevice device) {

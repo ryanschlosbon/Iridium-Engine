@@ -153,6 +153,7 @@ namespace Iridium {
         forceDirectGBufferReference_ = config.forceDirectGBufferReference;
         forceDirectShadowReference_ = config.forceDirectShadowReference;
         renderGraphAliasing_ = config.renderGraphAliasing;
+        uploadQueueMode_ = config.uploadQueue;
         experimentalShadowLodErrorTexels_ =
             config.experimentalShadowLodErrorTexels;
         shadowLodMaximumLevel_ = (std::min)(config.shadowLodMaximumLevel,
@@ -216,6 +217,10 @@ namespace Iridium {
                 vkContext->getPhysicalDeviceProperties().limits,
                 config.virtualShadowResources);
         }
+        std::cout << "Upload queue: family " << vkContext->getTransferQueueFamily()
+            << " (" << vulkanTransferQueueKindName(vkContext->getTransferQueueKind())
+            << "), timeline semaphores "
+            << (vkContext->hasTimelineSemaphore() ? "on" : "off") << '\n';
         uploadContext.init(vkContext->getDevice(), vkContext->getGraphicsQueue(),
             vkContext->getGraphicsQueueFamily(), resourceAllocator, cpuProfiler_);
 		vkSwapchain = std::make_unique<VkSwapchain>(vkContext.get(), window,

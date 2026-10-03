@@ -2,8 +2,9 @@
 
 // A surface-free Vulkan 1.3 device for hardware qualification tests: instance with
 // the Khronos validation layer and a debug messenger that counts validation
-// errors, one graphics+compute queue, and the core features the production
-// VkContext enables (descriptor indexing, draw-indirect count, ...). Tests create
+// errors, one graphics+compute queue (plus the upload queue VkContext would
+// select, M7R R4d), and the core features the production VkContext enables
+// (descriptor indexing, draw-indirect count, timeline semaphores, ...). Tests create
 // production passes against it and assert that validation stays silent.
 
 #include <vulkan/vulkan.h>
@@ -45,6 +46,13 @@ namespace Iridium::Test {
         [[nodiscard]] VkDevice device() const noexcept { return device_; }
         [[nodiscard]] VkQueue queue() const noexcept { return queue_; }
         [[nodiscard]] uint32_t queueFamily() const noexcept { return queueFamily_; }
+        // M7R R4d: selectVulkanTransferQueueFamily's choice for this device
+        // (the graphics queue itself when the device has no other family).
+        [[nodiscard]] VkQueue transferQueue() const noexcept { return transferQueue_; }
+        [[nodiscard]] uint32_t transferQueueFamily() const noexcept {
+            return transferQueueFamily_;
+        }
+        [[nodiscard]] bool hasTimelineSemaphore() const noexcept { return timelineSemaphore_; }
         [[nodiscard]] const VkPhysicalDeviceProperties& properties() const noexcept {
             return properties_;
         }
@@ -85,6 +93,9 @@ namespace Iridium::Test {
         VkPhysicalDevice physical_ = VK_NULL_HANDLE;
         VkDevice device_ = VK_NULL_HANDLE;
         VkQueue queue_ = VK_NULL_HANDLE;
+        VkQueue transferQueue_ = VK_NULL_HANDLE;
+        uint32_t transferQueueFamily_ = UINT32_MAX;
+        bool timelineSemaphore_ = false;
         VkCommandPool commandPool_ = VK_NULL_HANDLE;
         uint32_t queueFamily_ = UINT32_MAX;
         VkPhysicalDeviceProperties properties_{};

@@ -1,5 +1,7 @@
 #include "HeadlessVulkanDevice.h"
 
+#include "renderer/vulkan/VulkanQueueSelection.h"
+
 #include <array>
 #include <cstring>
 #include <fstream>
@@ -129,6 +131,9 @@ HeadlessVulkanDevice::HeadlessVulkanDevice(const Options& options) {
     enabled12.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
     enabled12.descriptorBindingVariableDescriptorCount = VK_TRUE;
     enabled12.drawIndirectCount = supported12.drawIndirectCount;
+    // M7R R4d: timeline semaphores exactly when supported, as VkContext does.
+    timelineSemaphore_ = supported12.timelineSemaphore == VK_TRUE;
+    enabled12.timelineSemaphore = supported12.timelineSemaphore;
     // M7R R3: synchronization2 is enabled exactly when supported, as VkContext
     // does, so the graph executor's vkCmdPipelineBarrier2 path is validated.
     synchronization2_ = supported13.synchronization2 == VK_TRUE;
@@ -160,20 +165,35 @@ HeadlessVulkanDevice::HeadlessVulkanDevice(const Options& options) {
         }
     }
 
+    {
+        uint32_t familyCount = 0;
+        vkGetPhysicalDeviceQueueFamilyProperties(physical_, &familyCount, nullptr);
+        std::vector<VkQueueFamilyProperties> families(familyCount);
+        vkGetPhysicalDeviceQueueFamilyProperties(physical_, &familyCount,
+            families.data());
+        transferQueueFamily_ =
+            selectVulkanTransferQueueFamily(families, queueFamily_).family;
+    }
     const float priority = 1.0f;
-    VkDeviceQueueCreateInfo queueInfo{ VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO };
-    queueInfo.queueFamilyIndex = queueFamily_;
-    queueInfo.queueCount = 1;
-    queueInfo.pQueuePriorities = &priority;
+    std::array<VkDeviceQueueCreateInfo, 2> queueInfos{};
+    for (VkDeviceQueueCreateInfo& queueInfo : queueInfos) {
+        queueInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+        queueInfo.queueCount = 1;
+        queueInfo.pQueuePriorities = &priority;
+    }
+    queueInfos[0].queueFamilyIndex = queueFamily_;
+    queueInfos[1].queueFamilyIndex = transferQueueFamily_;
     VkDeviceCreateInfo deviceInfo{ VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO };
     deviceInfo.pNext = &enabled12;
-    deviceInfo.queueCreateInfoCount = 1;
-    deviceInfo.pQueueCreateInfos = &queueInfo;
+    deviceInfo.queueCreateInfoCount =
+        transferQueueFamily_ == queueFamily_ ? 1u : 2u;
+    deviceInfo.pQueueCreateInfos = queueInfos.data();
     deviceInfo.pEnabledFeatures = &features;
     deviceInfo.enabledExtensionCount = static_cast<uint32_t>(deviceExtensions.size());
     deviceInfo.ppEnabledExtensionNames = deviceExtensions.data();
     check(vkCreateDevice(physical_, &deviceInfo, nullptr, &device_), "vkCreateDevice");
     vkGetDeviceQueue(device_, queueFamily_, 0, &queue_);
+    vkGetDeviceQueue(device_, transferQueueFamily_, 0, &transferQueue_);
 
     VkCommandPoolCreateInfo poolInfo{ VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO };
     poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
