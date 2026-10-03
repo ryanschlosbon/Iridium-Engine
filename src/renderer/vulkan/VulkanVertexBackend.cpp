@@ -107,16 +107,6 @@ namespace Iridium {
                 "transparent.layered.cinematic8.interface.7.terminate-tiles",
             };
 
-        VkIndexType toVkIndexType(IndexFormat format) {
-            switch (format) {
-            case IndexFormat::UInt16:
-                return VK_INDEX_TYPE_UINT16;
-            case IndexFormat::UInt32:
-                return VK_INDEX_TYPE_UINT32;
-            }
-            throw std::invalid_argument("Unsupported geometry index format.");
-        }
-
         constexpr uint64_t FixedPipelineIdentityMask = uint64_t{ 1 } << 63;
         constexpr uint32_t SpotShadowIndirectMaximumWorkCount = 64u;
         constexpr uint32_t PointShadowIndirectMaximumWorkCount = 192u;
@@ -3245,52 +3235,58 @@ namespace Iridium {
     bool VulkanVertexBackend::resolveGpuSceneCaster(
         uint32_t primitiveIndex, uint32_t consumerMask,
         ResolvedShadowCaster& caster) const noexcept {
-        const uint32_t frameIndex = scheduler.currentFrameIndex();
-        const GpuSceneCpuMirror& scene = gpuSceneCpuMirrors_[frameIndex];
-        if (consumerMask == 0u ||
-            primitiveIndex >= gpuScenePublishedCounts_.primitives ||
-            primitiveIndex >= scene.primitives.size() ||
-            primitiveIndex >= scene.primitiveIdentities.size())
-            return false;
-        const GpuScenePrimitiveRecord& primitive =
-            scene.primitives[primitiveIndex];
-        if ((primitive.state.w & consumerMask) != consumerMask ||
-            primitive.binding.x >= gpuScenePublishedCounts_.instances ||
-            primitive.binding.x >= scene.instances.size() ||
-            primitive.binding.y >= gpuScenePublishedCounts_.geometries ||
-            primitive.binding.y >= scene.geometries.size())
-            return false;
-        const GpuSceneInstanceRecord& instance =
-            scene.instances[primitive.binding.x];
-        if ((instance.state.z & GpuSceneInstanceEnabled) == 0u ||
-            (instance.state.w & consumerMask) != consumerMask ||
-            instance.references.x >= gpuScenePublishedCounts_.transforms ||
-            instance.references.x >= scene.transforms.size())
-            return false;
-        const GpuSceneGeometryRecord& geometry =
-            scene.geometries[primitive.binding.y];
-        if ((geometry.storage.w & GpuSceneGeometryLegacyRhiHandle) == 0u ||
-            geometry.storage.x == InvalidGpuSceneIndex ||
-            geometry.draw.y == 0u)
-            return false;
-        caster = {
-            .geometry = GeometryHandle{ geometry.storage.x },
-            .material = MaterialHandle{ primitive.binding.z },
-            .pipeline = PipelineHandle{ primitive.binding.w },
-            .worldTransform = unpackGpuSceneAffine(
-                scene.transforms[instance.references.x]),
-            .boundsSphereCenterWorld = {
-                instance.worldBoundsSphere.x,
-                instance.worldBoundsSphere.y,
-                instance.worldBoundsSphere.z,
-            },
-            .boundsSphereRadiusWorld = instance.worldBoundsSphere.w,
-            .indexCount = geometry.draw.y,
-            .firstIndex = geometry.draw.x,
-            .owner = scene.primitiveIdentities[primitiveIndex].owner,
+        return resolveIndirectCaster(indirectScene(scheduler.currentFrameIndex()),
+            primitiveIndex, consumerMask, caster);
+    }
+
+    VulkanIndirectScene VulkanVertexBackend::indirectScene(
+        uint32_t frame) const noexcept {
+        const GpuSceneCpuMirror& scene = gpuSceneCpuMirrors_[frame];
+        return {
+            .transforms = scene.transforms,
+            .instances = scene.instances,
+            .primitives = scene.primitives,
+            .geometries = scene.geometries,
+            .identities = scene.primitiveIdentities,
+            .published = gpuScenePublishedCounts_,
         };
-        return caster.geometry.isValid() && caster.material.isValid() &&
-            caster.pipeline.isValid();
+    }
+
+    VulkanIndirectAssetResolver VulkanVertexBackend::indirectAssets() const noexcept {
+        return {
+            .owner = this,
+            .geometry = [](const void* owner, GeometryHandle handle,
+                VulkanIndirectGeometry& geometry) {
+                const VulkanGeometryPayload* payload =
+                    static_cast<const VulkanVertexBackend*>(owner)->
+                        geometryVault.get(handle);
+                if (payload == nullptr) return false;
+                geometry = { payload->vertexBuffer.buffer,
+                    payload->indexBuffer.buffer, payload->indexFormat,
+                    payload->vertexOffset };
+                return true;
+            },
+            .material = [](const void* owner, MaterialHandle handle,
+                VulkanIndirectMaterial& material) {
+                const VulkanMaterialPayload* payload =
+                    static_cast<const VulkanVertexBackend*>(owner)->
+                        materialVault.get(handle);
+                if (payload == nullptr) return false;
+                material = { payload->packed.alphaMode,
+                    payload->packed.doubleSided };
+                return true;
+            },
+            .gbufferIndirectPipeline = [](const void* owner,
+                PipelineHandle handle) {
+                const VulkanPipelineRecord* record =
+                    static_cast<const VulkanVertexBackend*>(owner)->
+                        pipelineLibrary.get(handle);
+                return record != nullptr &&
+                    record->gpuSceneIndirectPipeline != VK_NULL_HANDLE &&
+                    record->pipelineLayout != VK_NULL_HANDLE &&
+                    record->renderPass == RenderPassClass::GBuffer;
+            },
+        };
     }
 
     template<typename Visitor>
@@ -3534,16 +3530,11 @@ namespace Iridium {
             directionalShadowMembershipRevision_ = 0u;
             return false;
         };
-        if (policy.forceDirectReference)
-            return reject(GpuSceneIndirectFallbackReason::DirectReference);
-        if (!policy.multiDrawIndirect || !policy.drawIndirectFirstInstance ||
-            !policy.drawIndirectCount || policy.maxDrawIndirectCount == 0u)
-            return reject(GpuSceneIndirectFallbackReason::MissingCapability);
-        if (requested < policy.minimumCommandCount)
-            return reject(GpuSceneIndirectFallbackReason::TinyWorkload);
-        if (requested > policy.maxDrawIndirectCount ||
-            requested > directionalShadowIndirectPrimitiveCapacity_)
-            return reject(GpuSceneIndirectFallbackReason::CapacityExceeded);
+        if (const GpuSceneIndirectFallbackReason reason =
+                evaluateIndirectPolicy(policy, requested,
+                    directionalShadowIndirectPrimitiveCapacity_);
+            reason != GpuSceneIndirectFallbackReason::None)
+            return reject(reason);
 
         const uint32_t frame = scheduler.currentFrameIndex();
         const GpuSceneCpuMirror& scene = gpuSceneCpuMirrors_[frame];
@@ -3603,40 +3594,14 @@ namespace Iridium {
             }
             const uint32_t binIndex = static_cast<uint32_t>(
                 std::distance(directionalShadowIndirectBins_.begin(), bin));
-            uint32_t maximumLod = 0u;
-            if (experimentalShadowLodErrorTexels_ > 0.0f) {
-                const uint32_t instanceIndex = primitive.binding.x;
-                const uint32_t contentMaximumLod =
-                    instanceIndex < scene.instances.size()
-                    ? gpuSceneInstanceMaximumLod(
-                        scene.instances[instanceIndex].state.z) : 0u;
-                const uint32_t effectiveMaximumLod = (std::min)(
-                    shadowLodMaximumLevel_, contentMaximumLod);
-                uint32_t current = primitive.binding.y;
-                for (uint32_t lod = 1u; lod <= effectiveMaximumLod; ++lod) {
-                    const uint32_t next = scene.geometries[current].state.z;
-                    if (next >= scene.geometries.size()) break;
-                    const GpuSceneGeometryRecord& child = scene.geometries[next];
-                    const VulkanGeometryPayload* childPayload =
-                        (child.storage.w & GpuSceneGeometryLegacyRhiHandle) != 0u
-                        ? geometryVault.get(GeometryHandle{ child.storage.x })
-                        : nullptr;
-                    if (childPayload == nullptr ||
-                        childPayload->vertexBuffer.buffer !=
-                            geometry->vertexBuffer.buffer ||
-                        childPayload->indexBuffer.buffer !=
-                            geometry->indexBuffer.buffer ||
-                        childPayload->indexFormat != geometry->indexFormat ||
-                        child.draw.w != static_cast<uint32_t>(
-                            childPayload->indexFormat) ||
-                        std::bit_cast<int32_t>(child.draw.z) < 0 ||
-                        static_cast<uint64_t>(child.draw.z) * sizeof(Vertex) !=
-                            childPayload->vertexOffset)
-                        break;
-                    maximumLod = lod;
-                    current = next;
-                }
-            }
+            const uint32_t maximumLod = experimentalShadowLodErrorTexels_ > 0.0f
+                ? residentLodPrefix(scene.geometries, scene.instances,
+                    primitive, shadowLodMaximumLevel_,
+                    { geometry->vertexBuffer.buffer,
+                        geometry->indexBuffer.buffer,
+                        geometry->indexFormat, geometry->vertexOffset },
+                    indirectAssets())
+                : 0u;
             ++bin->commandCount;
             directionalShadowIndirectUnsortedCandidates_.push_back({
                 .primitiveIndex = primitiveIndex,
@@ -4274,16 +4239,11 @@ namespace Iridium {
             spotShadowMembershipRevision_ = 0u;
             return false;
         };
-        if (policy.forceDirectReference)
-            return reject(GpuSceneIndirectFallbackReason::DirectReference);
-        if (!policy.multiDrawIndirect || !policy.drawIndirectFirstInstance ||
-            !policy.drawIndirectCount || policy.maxDrawIndirectCount == 0u)
-            return reject(GpuSceneIndirectFallbackReason::MissingCapability);
-        if (requested < policy.minimumCommandCount)
-            return reject(GpuSceneIndirectFallbackReason::TinyWorkload);
-        if (requested > policy.maxDrawIndirectCount ||
-            requested > spotShadowIndirectPrimitiveCapacity_)
-            return reject(GpuSceneIndirectFallbackReason::CapacityExceeded);
+        if (const GpuSceneIndirectFallbackReason reason =
+                evaluateIndirectPolicy(policy, requested,
+                    spotShadowIndirectPrimitiveCapacity_);
+            reason != GpuSceneIndirectFallbackReason::None)
+            return reject(reason);
 
         const uint32_t frame = scheduler.currentFrameIndex();
         const GpuSceneCpuMirror& scene = gpuSceneCpuMirrors_[frame];
@@ -4342,41 +4302,14 @@ namespace Iridium {
             }
             const uint32_t binIndex = static_cast<uint32_t>(
                 std::distance(spotShadowIndirectBins_.begin(), bin));
-            uint32_t maximumLod = 0u;
-            if (experimentalShadowLodErrorTexels_ > 0.0f) {
-                const uint32_t instanceIndex = primitive.binding.x;
-                const uint32_t contentMaximumLod =
-                    instanceIndex < scene.instances.size()
-                    ? gpuSceneInstanceMaximumLod(
-                        scene.instances[instanceIndex].state.z) : 0u;
-                const uint32_t effectiveMaximumLod = (std::min)(
-                    shadowLodMaximumLevel_, contentMaximumLod);
-                uint32_t current = primitive.binding.y;
-                for (uint32_t lod = 1u; lod <= effectiveMaximumLod; ++lod) {
-                    const uint32_t next = scene.geometries[current].state.z;
-                    if (next >= scene.geometries.size()) break;
-                    const GpuSceneGeometryRecord& child =
-                        scene.geometries[next];
-                    const VulkanGeometryPayload* childPayload =
-                        (child.storage.w & GpuSceneGeometryLegacyRhiHandle) != 0u
-                        ? geometryVault.get(GeometryHandle{ child.storage.x })
-                        : nullptr;
-                    if (childPayload == nullptr ||
-                        childPayload->vertexBuffer.buffer !=
-                            geometry->vertexBuffer.buffer ||
-                        childPayload->indexBuffer.buffer !=
-                            geometry->indexBuffer.buffer ||
-                        childPayload->indexFormat != geometry->indexFormat ||
-                        child.draw.w != static_cast<uint32_t>(
-                            childPayload->indexFormat) ||
-                        std::bit_cast<int32_t>(child.draw.z) < 0 ||
-                        static_cast<uint64_t>(child.draw.z) * sizeof(Vertex) !=
-                            childPayload->vertexOffset)
-                        break;
-                    maximumLod = lod;
-                    current = next;
-                }
-            }
+            const uint32_t maximumLod = experimentalShadowLodErrorTexels_ > 0.0f
+                ? residentLodPrefix(scene.geometries, scene.instances,
+                    primitive, shadowLodMaximumLevel_,
+                    { geometry->vertexBuffer.buffer,
+                        geometry->indexBuffer.buffer,
+                        geometry->indexFormat, geometry->vertexOffset },
+                    indirectAssets())
+                : 0u;
             ++bin->commandCount;
             spotShadowIndirectUnsortedCandidates_.push_back({
                 .primitiveIndex = primitiveIndex,
@@ -4881,16 +4814,11 @@ namespace Iridium {
             pointShadowMembershipRevision_ = 0u;
             return false;
         };
-        if (policy.forceDirectReference)
-            return reject(GpuSceneIndirectFallbackReason::DirectReference);
-        if (!policy.multiDrawIndirect || !policy.drawIndirectFirstInstance ||
-            !policy.drawIndirectCount || policy.maxDrawIndirectCount == 0u)
-            return reject(GpuSceneIndirectFallbackReason::MissingCapability);
-        if (requested < policy.minimumCommandCount)
-            return reject(GpuSceneIndirectFallbackReason::TinyWorkload);
-        if (requested > policy.maxDrawIndirectCount ||
-            requested > pointShadowIndirectPrimitiveCapacity_)
-            return reject(GpuSceneIndirectFallbackReason::CapacityExceeded);
+        if (const GpuSceneIndirectFallbackReason reason =
+                evaluateIndirectPolicy(policy, requested,
+                    pointShadowIndirectPrimitiveCapacity_);
+            reason != GpuSceneIndirectFallbackReason::None)
+            return reject(reason);
 
         const uint32_t frame = scheduler.currentFrameIndex();
         const GpuSceneCpuMirror& scene = gpuSceneCpuMirrors_[frame];
@@ -4949,40 +4877,14 @@ namespace Iridium {
             }
             const uint32_t binIndex = static_cast<uint32_t>(
                 std::distance(pointShadowIndirectBins_.begin(), bin));
-            uint32_t maximumLod = 0u;
-            if (experimentalShadowLodErrorTexels_ > 0.0f) {
-                const uint32_t instanceIndex = primitive.binding.x;
-                const uint32_t contentMaximumLod =
-                    instanceIndex < scene.instances.size()
-                    ? gpuSceneInstanceMaximumLod(
-                        scene.instances[instanceIndex].state.z) : 0u;
-                const uint32_t effectiveMaximumLod = (std::min)(
-                    shadowLodMaximumLevel_, contentMaximumLod);
-                uint32_t current = primitive.binding.y;
-                for (uint32_t lod = 1u; lod <= effectiveMaximumLod; ++lod) {
-                    const uint32_t next = scene.geometries[current].state.z;
-                    if (next >= scene.geometries.size()) break;
-                    const GpuSceneGeometryRecord& child = scene.geometries[next];
-                    const VulkanGeometryPayload* childPayload =
-                        (child.storage.w & GpuSceneGeometryLegacyRhiHandle) != 0u
-                        ? geometryVault.get(GeometryHandle{ child.storage.x })
-                        : nullptr;
-                    if (childPayload == nullptr ||
-                        childPayload->vertexBuffer.buffer !=
-                            geometry->vertexBuffer.buffer ||
-                        childPayload->indexBuffer.buffer !=
-                            geometry->indexBuffer.buffer ||
-                        childPayload->indexFormat != geometry->indexFormat ||
-                        child.draw.w != static_cast<uint32_t>(
-                            childPayload->indexFormat) ||
-                        std::bit_cast<int32_t>(child.draw.z) < 0 ||
-                        static_cast<uint64_t>(child.draw.z) * sizeof(Vertex) !=
-                            childPayload->vertexOffset)
-                        break;
-                    maximumLod = lod;
-                    current = next;
-                }
-            }
+            const uint32_t maximumLod = experimentalShadowLodErrorTexels_ > 0.0f
+                ? residentLodPrefix(scene.geometries, scene.instances,
+                    primitive, shadowLodMaximumLevel_,
+                    { geometry->vertexBuffer.buffer,
+                        geometry->indexBuffer.buffer,
+                        geometry->indexFormat, geometry->vertexOffset },
+                    indirectAssets())
+                : 0u;
             ++bin->commandCount;
             pointShadowIndirectUnsortedCandidates_.push_back({
                 .primitiveIndex = primitiveIndex,
@@ -5505,16 +5407,11 @@ namespace Iridium {
             reflectionProbeIndirectPrimitiveBinScratch_.clear();
             return false;
         };
-        if (policy.forceDirectReference)
-            return reject(GpuSceneIndirectFallbackReason::DirectReference);
-        if (!policy.multiDrawIndirect || !policy.drawIndirectFirstInstance ||
-            !policy.drawIndirectCount || policy.maxDrawIndirectCount == 0u)
-            return reject(GpuSceneIndirectFallbackReason::MissingCapability);
-        if (requested < policy.minimumCommandCount)
-            return reject(GpuSceneIndirectFallbackReason::TinyWorkload);
-        if (requested > policy.maxDrawIndirectCount ||
-            requested > reflectionProbeIndirectPrimitiveCapacity_)
-            return reject(GpuSceneIndirectFallbackReason::CapacityExceeded);
+        if (const GpuSceneIndirectFallbackReason reason =
+                evaluateIndirectPolicy(policy, requested,
+                    reflectionProbeIndirectPrimitiveCapacity_);
+            reason != GpuSceneIndirectFallbackReason::None)
+            return reject(reason);
 
         const uint32_t frame = scheduler.currentFrameIndex();
         const GpuSceneCpuMirror& scene = gpuSceneCpuMirrors_[frame];
@@ -5572,41 +5469,14 @@ namespace Iridium {
             }
             const uint32_t binIndex = static_cast<uint32_t>(
                 std::distance(reflectionProbeIndirectBins_.begin(), bin));
-            uint32_t maximumLod = 0u;
-            if (experimentalProbeLodErrorPixels_ > 0.0f) {
-                const uint32_t instanceIndex = primitive.binding.x;
-                const uint32_t contentMaximumLod =
-                    instanceIndex < scene.instances.size()
-                    ? gpuSceneInstanceMaximumLod(
-                        scene.instances[instanceIndex].state.z) : 0u;
-                const uint32_t effectiveMaximumLod = (std::min)(
-                    probeLodMaximumLevel_, contentMaximumLod);
-                uint32_t current = primitive.binding.y;
-                for (uint32_t lod = 1u; lod <= effectiveMaximumLod; ++lod) {
-                    const uint32_t next = scene.geometries[current].state.z;
-                    if (next >= scene.geometries.size()) break;
-                    const GpuSceneGeometryRecord& child =
-                        scene.geometries[next];
-                    const VulkanGeometryPayload* childPayload =
-                        (child.storage.w & GpuSceneGeometryLegacyRhiHandle) != 0u
-                        ? geometryVault.get(GeometryHandle{ child.storage.x })
-                        : nullptr;
-                    if (childPayload == nullptr ||
-                        childPayload->vertexBuffer.buffer !=
-                            geometry->vertexBuffer.buffer ||
-                        childPayload->indexBuffer.buffer !=
-                            geometry->indexBuffer.buffer ||
-                        childPayload->indexFormat != geometry->indexFormat ||
-                        child.draw.w != static_cast<uint32_t>(
-                            childPayload->indexFormat) ||
-                        std::bit_cast<int32_t>(child.draw.z) < 0 ||
-                        static_cast<uint64_t>(child.draw.z) * sizeof(Vertex) !=
-                            childPayload->vertexOffset)
-                        break;
-                    maximumLod = lod;
-                    current = next;
-                }
-            }
+            const uint32_t maximumLod = experimentalProbeLodErrorPixels_ > 0.0f
+                ? residentLodPrefix(scene.geometries, scene.instances,
+                    primitive, probeLodMaximumLevel_,
+                    { geometry->vertexBuffer.buffer,
+                        geometry->indexBuffer.buffer,
+                        geometry->indexFormat, geometry->vertexOffset },
+                    indirectAssets())
+                : 0u;
             ++bin->commandCount;
             reflectionProbeIndirectUnsortedCandidates_.push_back({
                 .primitiveIndex = primitiveIndex,
@@ -6298,30 +6168,13 @@ namespace Iridium {
                     candidate.historyTokenLow = history.tokenLow;
                     candidate.historyTokenHigh = history.tokenHigh;
                     const auto* basePayload = geometryVault.get(opaqueQueue[packetIndex].geometry);
-                    uint32_t current = primitiveRecords[candidate.primitiveIndex].binding.y;
-                    const uint32_t instanceIndex =
-                        primitiveRecords[candidate.primitiveIndex].binding.x;
-                    const uint32_t contentMaximumLod = instanceIndex < instanceRecords.size()
-                        ? gpuSceneInstanceMaximumLod(instanceRecords[instanceIndex].state.z)
-                        : 0u;
-                    const uint32_t effectiveMaximumLod = (std::min)(
-                        gpuLodMaximumLevel_, contentMaximumLod);
-                    for (uint32_t lod = 1; lod <= effectiveMaximumLod; ++lod) {
-                        const uint32_t next = geometryRecords[current].state.z;
-                        if (next >= geometryRecords.size()) break;
-                        const auto& child = geometryRecords[next];
-                        const auto* childPayload = (child.storage.w & GpuSceneGeometryLegacyRhiHandle) != 0
-                            ? geometryVault.get(GeometryHandle{ child.storage.x }) : nullptr;
-                        if (!childPayload || childPayload->vertexBuffer.buffer != basePayload->vertexBuffer.buffer ||
-                            childPayload->indexBuffer.buffer != basePayload->indexBuffer.buffer ||
-                            childPayload->indexFormat != basePayload->indexFormat ||
-                            child.draw.w != static_cast<uint32_t>(childPayload->indexFormat) ||
-                            std::bit_cast<int32_t>(child.draw.z) < 0 ||
-                            static_cast<uint64_t>(child.draw.z) * sizeof(Vertex) != childPayload->vertexOffset)
-                            break; // Resident prefix only: never rebind a buffer inside an indirect bin.
-                        candidate.maximumLod = lod;
-                        current = next;
-                    }
+                    candidate.maximumLod = residentLodPrefix(geometryRecords,
+                        instanceRecords, primitiveRecords[candidate.primitiveIndex],
+                        gpuLodMaximumLevel_,
+                        { basePayload->vertexBuffer.buffer,
+                            basePayload->indexBuffer.buffer,
+                            basePayload->indexFormat, basePayload->vertexOffset },
+                        indirectAssets());
                 }
             }
         }
@@ -7293,70 +7146,19 @@ VkDeviceSize offset = geometry->vertexOffset;
     }
 
     void VulkanVertexBackend::createDirectionalShadowIndirectPipeline() {
-        std::array<VkDescriptorSetLayoutBinding, 3> bindings{};
-        for (uint32_t binding = 0; binding < bindings.size(); ++binding) {
-            bindings[binding].binding = binding;
-            bindings[binding].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            bindings[binding].descriptorCount = 1u;
-            bindings[binding].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-        }
-        VkDescriptorSetLayoutCreateInfo setInfo{
-            VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
-        setInfo.bindingCount = static_cast<uint32_t>(bindings.size());
-        setInfo.pBindings = bindings.data();
-        if (vkCreateDescriptorSetLayout(vkContext->getDevice(), &setInfo,
-                nullptr, &directionalShadowIndirectSetLayout_) != VK_SUCCESS) {
-            throw std::runtime_error(
-                "failed to create directional-shadow indirect descriptor layout");
-        }
-
+        const VkDevice device = vkContext->getDevice();
+        directionalShadowIndirectSetLayout_ =
+            createIndirectSetLayout(device, "directional-shadow");
         const std::array<VkDescriptorSetLayout, 3> setLayouts{
             directionalShadow_.renderSetLayout(),
             meshLayouts.getGpuSceneSetLayout(),
             directionalShadowIndirectSetLayout_ };
-        VkPushConstantRange push{};
-        push.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-        push.size = 9u * sizeof(uint32_t);
-        VkPipelineLayoutCreateInfo layoutInfo{
-            VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
-        layoutInfo.setLayoutCount = static_cast<uint32_t>(setLayouts.size());
-        layoutInfo.pSetLayouts = setLayouts.data();
-        layoutInfo.pushConstantRangeCount = 1u;
-        layoutInfo.pPushConstantRanges = &push;
-        if (vkCreatePipelineLayout(vkContext->getDevice(), &layoutInfo,
-                nullptr, &directionalShadowCompactPipelineLayout_) != VK_SUCCESS) {
-            throw std::runtime_error(
-                "failed to create directional-shadow compact pipeline layout");
-        }
-
-        const std::vector<char> code = readFile(std::string(PROJECT_ROOT_DIR) +
-            "assets/shaders/directional_shadow_compact_comp.spv");
-        VkShaderModuleCreateInfo moduleInfo{
-            VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO };
-        moduleInfo.codeSize = code.size();
-        moduleInfo.pCode = reinterpret_cast<const uint32_t*>(code.data());
-        VkShaderModule module = VK_NULL_HANDLE;
-        if (code.empty() || code.size() % sizeof(uint32_t) != 0u ||
-            vkCreateShaderModule(vkContext->getDevice(), &moduleInfo,
-                nullptr, &module) != VK_SUCCESS) {
-            throw std::runtime_error(
-                "failed to create directional-shadow compact shader module");
-        }
-        const VkPipelineShaderStageCreateInfo stage{
-            VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-            nullptr, 0u, VK_SHADER_STAGE_COMPUTE_BIT, module, "main", nullptr };
-        VkComputePipelineCreateInfo pipelineInfo{
-            VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO };
-        pipelineInfo.stage = stage;
-        pipelineInfo.layout = directionalShadowCompactPipelineLayout_;
-        const VkResult result = vkCreateComputePipelines(
-            vkContext->getDevice(), VK_NULL_HANDLE, 1u, &pipelineInfo,
-            nullptr, &directionalShadowCompactPipeline_);
-        vkDestroyShaderModule(vkContext->getDevice(), module, nullptr);
-        if (result != VK_SUCCESS) {
-            throw std::runtime_error(
-                "failed to create directional-shadow compact compute pipeline");
-        }
+        directionalShadowCompactPipelineLayout_ = createComputePipelineLayout(
+            device, setLayouts, 9u, "directional-shadow compact");
+        directionalShadowCompactPipeline_ = createComputePipeline(device,
+            directionalShadowCompactPipelineLayout_,
+            "assets/shaders/directional_shadow_compact_comp.spv",
+            "directional-shadow compact");
         for (VkDescriptorSet& set : directionalShadowIndirectDescriptorSets_)
             set = descriptorAllocator.allocate(
                 directionalShadowIndirectSetLayout_);
@@ -7395,50 +7197,16 @@ VkDeviceSize offset = geometry->vertexOffset;
         if (directionalShadowIndirectSetLayout_ == VK_NULL_HANDLE)
             throw std::logic_error(
                 "spot-shadow indirect resources require the shared shadow layout");
+        const VkDevice device = vkContext->getDevice();
         const std::array<VkDescriptorSetLayout, 3> setLayouts{
             spotShadow_.renderSetLayout(),
             meshLayouts.getGpuSceneSetLayout(),
             directionalShadowIndirectSetLayout_ };
-        VkPushConstantRange push{};
-        push.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-        push.size = 9u * sizeof(uint32_t);
-        VkPipelineLayoutCreateInfo layoutInfo{
-            VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
-        layoutInfo.setLayoutCount = static_cast<uint32_t>(setLayouts.size());
-        layoutInfo.pSetLayouts = setLayouts.data();
-        layoutInfo.pushConstantRangeCount = 1u;
-        layoutInfo.pPushConstantRanges = &push;
-        if (vkCreatePipelineLayout(vkContext->getDevice(), &layoutInfo,
-                nullptr, &spotShadowCompactPipelineLayout_) != VK_SUCCESS)
-            throw std::runtime_error(
-                "failed to create spot-shadow compact pipeline layout");
-
-        const std::vector<char> code = readFile(std::string(PROJECT_ROOT_DIR) +
-            "assets/shaders/spot_shadow_compact_comp.spv");
-        VkShaderModuleCreateInfo moduleInfo{
-            VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO };
-        moduleInfo.codeSize = code.size();
-        moduleInfo.pCode = reinterpret_cast<const uint32_t*>(code.data());
-        VkShaderModule module = VK_NULL_HANDLE;
-        if (code.empty() || code.size() % sizeof(uint32_t) != 0u ||
-            vkCreateShaderModule(vkContext->getDevice(), &moduleInfo,
-                nullptr, &module) != VK_SUCCESS)
-            throw std::runtime_error(
-                "failed to create spot-shadow compact shader module");
-        const VkPipelineShaderStageCreateInfo stage{
-            VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-            nullptr, 0u, VK_SHADER_STAGE_COMPUTE_BIT, module, "main", nullptr };
-        VkComputePipelineCreateInfo pipelineInfo{
-            VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO };
-        pipelineInfo.stage = stage;
-        pipelineInfo.layout = spotShadowCompactPipelineLayout_;
-        const VkResult result = vkCreateComputePipelines(
-            vkContext->getDevice(), VK_NULL_HANDLE, 1u, &pipelineInfo,
-            nullptr, &spotShadowCompactPipeline_);
-        vkDestroyShaderModule(vkContext->getDevice(), module, nullptr);
-        if (result != VK_SUCCESS)
-            throw std::runtime_error(
-                "failed to create spot-shadow compact compute pipeline");
+        spotShadowCompactPipelineLayout_ = createComputePipelineLayout(
+            device, setLayouts, 9u, "spot-shadow compact");
+        spotShadowCompactPipeline_ = createComputePipeline(device,
+            spotShadowCompactPipelineLayout_,
+            "assets/shaders/spot_shadow_compact_comp.spv", "spot-shadow compact");
         for (VkDescriptorSet& set : spotShadowIndirectDescriptorSets_)
             set = descriptorAllocator.allocate(
                 directionalShadowIndirectSetLayout_);
@@ -7448,50 +7216,16 @@ VkDeviceSize offset = geometry->vertexOffset;
         if (directionalShadowIndirectSetLayout_ == VK_NULL_HANDLE)
             throw std::logic_error(
                 "point-shadow indirect resources require the shared shadow layout");
+        const VkDevice device = vkContext->getDevice();
         const std::array<VkDescriptorSetLayout, 3> setLayouts{
             pointShadow_.renderSetLayout(),
             meshLayouts.getGpuSceneSetLayout(),
             directionalShadowIndirectSetLayout_ };
-        VkPushConstantRange push{};
-        push.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-        push.size = 10u * sizeof(uint32_t);
-        VkPipelineLayoutCreateInfo layoutInfo{
-            VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
-        layoutInfo.setLayoutCount = static_cast<uint32_t>(setLayouts.size());
-        layoutInfo.pSetLayouts = setLayouts.data();
-        layoutInfo.pushConstantRangeCount = 1u;
-        layoutInfo.pPushConstantRanges = &push;
-        if (vkCreatePipelineLayout(vkContext->getDevice(), &layoutInfo,
-                nullptr, &pointShadowCompactPipelineLayout_) != VK_SUCCESS)
-            throw std::runtime_error(
-                "failed to create point-shadow compact pipeline layout");
-
-        const std::vector<char> code = readFile(std::string(PROJECT_ROOT_DIR) +
-            "assets/shaders/point_shadow_compact_comp.spv");
-        VkShaderModuleCreateInfo moduleInfo{
-            VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO };
-        moduleInfo.codeSize = code.size();
-        moduleInfo.pCode = reinterpret_cast<const uint32_t*>(code.data());
-        VkShaderModule module = VK_NULL_HANDLE;
-        if (code.empty() || code.size() % sizeof(uint32_t) != 0u ||
-            vkCreateShaderModule(vkContext->getDevice(), &moduleInfo,
-                nullptr, &module) != VK_SUCCESS)
-            throw std::runtime_error(
-                "failed to create point-shadow compact shader module");
-        const VkPipelineShaderStageCreateInfo stage{
-            VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-            nullptr, 0u, VK_SHADER_STAGE_COMPUTE_BIT, module, "main", nullptr };
-        VkComputePipelineCreateInfo pipelineInfo{
-            VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO };
-        pipelineInfo.stage = stage;
-        pipelineInfo.layout = pointShadowCompactPipelineLayout_;
-        const VkResult result = vkCreateComputePipelines(
-            vkContext->getDevice(), VK_NULL_HANDLE, 1u, &pipelineInfo,
-            nullptr, &pointShadowCompactPipeline_);
-        vkDestroyShaderModule(vkContext->getDevice(), module, nullptr);
-        if (result != VK_SUCCESS)
-            throw std::runtime_error(
-                "failed to create point-shadow compact compute pipeline");
+        pointShadowCompactPipelineLayout_ = createComputePipelineLayout(
+            device, setLayouts, 10u, "point-shadow compact");
+        pointShadowCompactPipeline_ = createComputePipeline(device,
+            pointShadowCompactPipelineLayout_,
+            "assets/shaders/point_shadow_compact_comp.spv", "point-shadow compact");
         for (VkDescriptorSet& set : pointShadowIndirectDescriptorSets_)
             set = descriptorAllocator.allocate(
                 directionalShadowIndirectSetLayout_);
@@ -7502,50 +7236,17 @@ VkDeviceSize offset = geometry->vertexOffset;
             reflectionProbeCapturePass_.captureSetLayout() == VK_NULL_HANDLE)
             throw std::logic_error(
                 "reflection-probe indirect resources require capture and command layouts");
+        const VkDevice device = vkContext->getDevice();
         const std::array<VkDescriptorSetLayout, 3> setLayouts{
             reflectionProbeCapturePass_.captureSetLayout(),
             meshLayouts.getGpuSceneSetLayout(),
             directionalShadowIndirectSetLayout_ };
-        VkPushConstantRange push{};
-        push.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-        push.size = 10u * sizeof(uint32_t);
-        VkPipelineLayoutCreateInfo layoutInfo{
-            VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
-        layoutInfo.setLayoutCount = static_cast<uint32_t>(setLayouts.size());
-        layoutInfo.pSetLayouts = setLayouts.data();
-        layoutInfo.pushConstantRangeCount = 1u;
-        layoutInfo.pPushConstantRanges = &push;
-        if (vkCreatePipelineLayout(vkContext->getDevice(), &layoutInfo,
-                nullptr, &reflectionProbeCompactPipelineLayout_) != VK_SUCCESS)
-            throw std::runtime_error(
-                "failed to create reflection-probe compact pipeline layout");
-
-        const std::vector<char> code = readFile(std::string(PROJECT_ROOT_DIR) +
-            "assets/shaders/reflection_probe_capture_compact_comp.spv");
-        VkShaderModuleCreateInfo moduleInfo{
-            VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO };
-        moduleInfo.codeSize = code.size();
-        moduleInfo.pCode = reinterpret_cast<const uint32_t*>(code.data());
-        VkShaderModule module = VK_NULL_HANDLE;
-        if (code.empty() || code.size() % sizeof(uint32_t) != 0u ||
-            vkCreateShaderModule(vkContext->getDevice(), &moduleInfo,
-                nullptr, &module) != VK_SUCCESS)
-            throw std::runtime_error(
-                "failed to create reflection-probe compact shader module");
-        const VkPipelineShaderStageCreateInfo stage{
-            VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-            nullptr, 0u, VK_SHADER_STAGE_COMPUTE_BIT, module, "main", nullptr };
-        VkComputePipelineCreateInfo pipelineInfo{
-            VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO };
-        pipelineInfo.stage = stage;
-        pipelineInfo.layout = reflectionProbeCompactPipelineLayout_;
-        const VkResult result = vkCreateComputePipelines(
-            vkContext->getDevice(), VK_NULL_HANDLE, 1u, &pipelineInfo,
-            nullptr, &reflectionProbeCompactPipeline_);
-        vkDestroyShaderModule(vkContext->getDevice(), module, nullptr);
-        if (result != VK_SUCCESS)
-            throw std::runtime_error(
-                "failed to create reflection-probe compact compute pipeline");
+        reflectionProbeCompactPipelineLayout_ = createComputePipelineLayout(
+            device, setLayouts, 10u, "reflection-probe compact");
+        reflectionProbeCompactPipeline_ = createComputePipeline(device,
+            reflectionProbeCompactPipelineLayout_,
+            "assets/shaders/reflection_probe_capture_compact_comp.spv",
+            "reflection-probe compact");
         for (VkDescriptorSet& set : reflectionProbeIndirectDescriptorSets_)
             set = descriptorAllocator.allocate(
                 directionalShadowIndirectSetLayout_);
@@ -8206,61 +7907,20 @@ VkDeviceSize offset = geometry->vertexOffset;
         const std::array<VkDescriptorSetLayout, 3> setLayouts{
             meshLayouts.getGlobalSetLayout(),
             meshLayouts.getGpuSceneSetLayout(), gpuSceneCullSetLayout_ };
-        VkPushConstantRange push{};
-        push.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-        push.size = 11u * sizeof(uint32_t);
-        VkPipelineLayoutCreateInfo layoutInfo{
-            VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
-        layoutInfo.setLayoutCount = static_cast<uint32_t>(setLayouts.size());
-        layoutInfo.pSetLayouts = setLayouts.data();
-        layoutInfo.pushConstantRangeCount = 1u;
-        layoutInfo.pPushConstantRanges = &push;
-        if (vkCreatePipelineLayout(vkContext->getDevice(), &layoutInfo,
-                nullptr, &gpuSceneCullPipelineLayout_) != VK_SUCCESS) {
-            throw std::runtime_error(
-                "failed to create GPU-scene cull pipeline layout");
-        }
-
-        const auto createPipeline = [&](const char* relativePath,
-                                        VkPipeline& pipeline) {
-            const std::vector<char> code = readFile(
-                std::string(PROJECT_ROOT_DIR) + relativePath);
-            VkShaderModuleCreateInfo moduleInfo{
-                VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO };
-            moduleInfo.codeSize = code.size();
-            moduleInfo.pCode = reinterpret_cast<const uint32_t*>(code.data());
-            VkShaderModule module = VK_NULL_HANDLE;
-            if (code.empty() || code.size() % sizeof(uint32_t) != 0u ||
-                vkCreateShaderModule(vkContext->getDevice(), &moduleInfo,
-                    nullptr, &module) != VK_SUCCESS) {
-                throw std::runtime_error(
-                    "failed to create GPU-scene cull shader module");
-            }
-            const VkPipelineShaderStageCreateInfo stage{
-                VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-                nullptr, 0u, VK_SHADER_STAGE_COMPUTE_BIT, module, "main",
-                nullptr };
-            VkComputePipelineCreateInfo pipelineInfo{
-                VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO };
-            pipelineInfo.stage = stage;
-            pipelineInfo.layout = gpuSceneCullPipelineLayout_;
-            const VkResult result = vkCreateComputePipelines(
-                vkContext->getDevice(), VK_NULL_HANDLE, 1u, &pipelineInfo,
-                nullptr, &pipeline);
-            vkDestroyShaderModule(vkContext->getDevice(), module, nullptr);
-            if (result != VK_SUCCESS) {
-                throw std::runtime_error(
-                    "failed to create GPU-scene cull compute pipeline");
-            }
-        };
+        gpuSceneCullPipelineLayout_ = createComputePipelineLayout(
+            vkContext->getDevice(), setLayouts, 11u, "GPU-scene cull");
         constexpr const char* baseShader =
             "assets/shaders/gpu_scene_frustum_compact_comp.spv";
         constexpr const char* fusedShader =
             "assets/shaders/gpu_scene_frustum_occlusion_compact_comp.spv";
-        createPipeline(depthOcclusionRejectionEnabled_ ? fusedShader : baseShader,
-            gpuSceneCullPipeline_);
+        gpuSceneCullPipeline_ = createComputePipeline(vkContext->getDevice(),
+            gpuSceneCullPipelineLayout_,
+            depthOcclusionRejectionEnabled_ ? fusedShader : baseShader,
+            "GPU-scene cull");
         if (depthOcclusionRejectionEnabled_)
-            createPipeline(baseShader, gpuSceneCullFallbackPipeline_);
+            gpuSceneCullFallbackPipeline_ = createComputePipeline(
+                vkContext->getDevice(), gpuSceneCullPipelineLayout_, baseShader,
+                "GPU-scene cull");
     }
 
     void VulkanVertexBackend::bindOpaqueIndirectBuffers() {

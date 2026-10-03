@@ -34,6 +34,7 @@
 #include "VulkanSceneDescriptors.h"
 #include "VulkanProductionRenderGraph.h"
 #include "VulkanBackendExtension.h"
+#include "VulkanIndirectCullerShared.h"
 #include "VulkanRenderGraphExecutor.h"
 #include "VulkanTransparencyPyramid.h"
 #include "VulkanDepthPyramid.h"
@@ -440,18 +441,7 @@ namespace Iridium {
             uploadedPointShadowMappingRevisions_{};
         std::vector<uint32_t> spotShadowDataSlots_;
         std::vector<uint32_t> pointShadowDataSlots_;
-        struct ResolvedShadowCaster {
-            GeometryHandle geometry;
-            MaterialHandle material;
-            PipelineHandle pipeline;
-            glm::mat4 worldTransform{ 1.0f };
-            glm::vec3 boundsSphereCenterWorld{ 0.0f };
-            float boundsSphereRadiusWorld = -1.0f;
-            uint32_t indexCount = 0;
-            uint32_t firstIndex = 0;
-            uint32_t gpuScenePrimitiveIndex = InvalidGpuSceneIndex;
-            SceneEntityUuid owner;
-        };
+        using ResolvedShadowCaster = VulkanResolvedCaster;
         struct ShadowIndirectBin {
             uint32_t commandBegin = 0;
             uint32_t commandCount = 0;
@@ -564,6 +554,11 @@ namespace Iridium {
         [[nodiscard]] bool resolveGpuSceneCaster(uint32_t primitiveIndex,
             uint32_t consumerMask,
             ResolvedShadowCaster& caster) const noexcept;
+        // The slot's CPU GPU-scene mirror with the published counts.
+        [[nodiscard]] VulkanIndirectScene indirectScene(
+            uint32_t frame) const noexcept;
+        // Geometry/material/pipeline payload lookups for the indirect cullers.
+        [[nodiscard]] VulkanIndirectAssetResolver indirectAssets() const noexcept;
         template<typename Visitor>
         void visitShadowCasters(const ShadowCasterSubmission& submission,
             Visitor&& visitor) const;

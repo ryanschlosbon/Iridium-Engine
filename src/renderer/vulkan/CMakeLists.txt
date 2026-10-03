@@ -17,6 +17,7 @@ add_library(iridium_vulkan STATIC
         VulkanFrameTargets.cpp
         VulkanHdrEncodePass.cpp
         VulkanIndexedTextureTable.cpp
+        VulkanIndirectCullerShared.cpp
         VulkanLayeredInterfaceCapturePass.cpp
         VulkanLayeredLocalCompositionPass.cpp
         VulkanLayeredSceneResolvePass.cpp

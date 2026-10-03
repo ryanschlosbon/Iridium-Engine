@@ -4,6 +4,7 @@
 #   powershell -NoProfile -ExecutionPolicy Bypass -File tools/m7r/Run-IndirectDigest.ps1 -Label r3a0
 #   ... -Label r3a2 -Exe <worktree>\out\build\x64-release\bin\IridiumEngine.exe -Compare r3a0
 #   ... -Label r3a2 -Compare r3a0 -NoRun          (compare two existing labels)
+#   ... -Label r3a0-ext -Extended                 (adds the shadow/probe LOD routes)
 #
 # Each fixture runs exactly like the frozen capture route (native 3840x2160, SDR, 12 warm-up
 # + 6 measured frames) without the capture itself. Output goes to <DataRoot>/out/m7r/digests/
@@ -17,6 +18,7 @@ param(
     [string] $Compare = '',
     [switch] $NoRun,
     [string[]] $Only = @(),
+    [switch] $Extended,
     [string] $DataRoot = ''
 )
 $ErrorActionPreference = 'Stop'
@@ -32,6 +34,15 @@ $digestRoot = Join-Path $DataRoot 'out/m7r/digests'
 
 # The R3a.0 design's digest fixtures, keyed as in $M7RFrozenSet.
 $M7RDigestFixtures = @('F1-all', 'F3-stress', 'F5-hetero', 'F5-point', 'F6-probecap', 'F7-hiz', 'F7-lod')
+# -Extended: the shadow and probe resident-LOD routes, which no frozen fixture enables.
+$M7RDigestExtended = @(
+    @{ Key = 'X-shadow-lod'; Id = 'm7_directional_shadow_lod_near_mid_far_v1'; Manifest = 'assets/m7-directional-shadow-lod-manifest.v1.json'
+       Model = 'alfa-lod'; Args = @('--experimental-shadow-lod-error-texels', '2', '--shadow-lod-max-level', '15') }
+    @{ Key = 'X-probe-lod'; Id = 'm7_probe_lod_reflection_motion_v1'; Manifest = 'assets/m7-probe-lod-admission-manifest.v1.json'
+       Model = 'alfa-lod'; Environment = 'belfast-env'; Args = @('--validate-reflection-probes', '--experimental-probe-lod-error-pixels', '8') }
+)
+$digestSet = @($M7RFrozenSet | Where-Object { $M7RDigestFixtures -contains $_.Key })
+if ($Extended) { $digestSet += $M7RDigestExtended }
 
 function Read-DigestLabel([string] $label) {
     $path = Join-Path $digestRoot "$label/digest.json"
@@ -50,8 +61,7 @@ if (-not $NoRun) {
         if (-not $exePath) { $exePath = Resolve-Path $Exe }
         $exePath = $exePath.Path
         $fixtures = @()
-        foreach ($fixture in $M7RFrozenSet) {
-            if ($M7RDigestFixtures -notcontains $fixture.Key) { continue }
+        foreach ($fixture in $digestSet) {
             if ($Only.Count -gt 0 -and $Only -notcontains $fixture.Key) { continue }
             $log = Join-Path $outDir "$($fixture.Key).log"
             $arguments = @(
