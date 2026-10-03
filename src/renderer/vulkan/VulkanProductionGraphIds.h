@@ -105,6 +105,7 @@ namespace Iridium {
         // 256, 512 and 1024 pools.
         std::array<RenderGraph::GraphResourceId, 3> shadowPointMaps{};
         RenderGraph::GraphResourceId virtualShadowWorkingSet;
+        RenderGraph::GraphResourceId depthPyramidHistory;
         RenderGraph::GraphResourceId gbufferNormal;
         RenderGraph::GraphResourceId gbufferAlbedo;
         RenderGraph::GraphResourceId gbufferEmissive;

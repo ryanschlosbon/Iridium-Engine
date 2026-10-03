@@ -4,6 +4,7 @@
 #include "renderer/vulkan/VulkanGBufferLayout.h"
 #include "renderer/lighting/ClusteredLighting.h"
 #include "renderer/rhi/ShadowTypes.h"
+#include "renderer/rhi/DepthPyramid.h"
 
 #include <limits>
 #include <algorithm>
@@ -400,6 +401,7 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
     };
     const auto addCompaction = [&](std::string view,
         RenderGraph::PassHandle& consumerPass, const char* consumerName) {
+        RenderGraph::PassHandle compactPass{};
         RenderGraph::ResourceHandle commands =
             indirectBuffer(view + ".indirect-commands");
         RenderGraph::ResourceHandle counts =
@@ -411,6 +413,8 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
         consumerPass = graph.addPass(consumerName);
         graph.read(consumerPass, commands, Access::IndirectRead);
         graph.read(consumerPass, counts, Access::IndirectRead);
+        compactPass = compact;
+        return compactPass;
     };
 
     RenderGraph::PassHandle directionalShadowPass{};
@@ -440,8 +444,30 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
     for (const RenderGraph::ResourceHandle pointShadow : pointShadows)
         graph.read(probeCapture, pointShadow, Access::SampledRead);
 
+    // M7R R3b.9: the Hi-Z depth-pyramid history (one image per retained
+    // view, the current view's bound per frame) is an executor-owned global
+    // import. The opaque compaction samples last frame's pyramid, the build
+    // rewrites it (mip-to-mip barriers stay inside the pass) and the
+    // validation hook copies it, so the executor issues the begin (to GENERAL)
+    // and ready (to SHADER_READ_ONLY, now at the next reader) barriers.
+    RenderGraph::ResourceHandle depthHistory{};
+    if (depthPyramid) {
+        RenderGraph::ResourceDesc historyDesc = imageDesc(
+            RenderGraph::Format::R32Float, sceneExtent,
+            RenderGraph::ResourceLifetime::External);
+        historyDesc.image.mipLevels = static_cast<uint16_t>(depthPyramidMipCount(
+            { sceneExtent.width, sceneExtent.height }));
+        historyDesc.imported = true;
+        historyDesc.initialAccess = Access::SampledRead;
+        depthHistory = graph.createResource("depth.occlusion-pyramid.history",
+            historyDesc);
+    }
+
     RenderGraph::PassHandle gbuffer{};
-    addCompaction("gpu-scene.opaque", gbuffer, "gbuffer");
+    const RenderGraph::PassHandle opaqueCompact =
+        addCompaction("gpu-scene.opaque", gbuffer, "gbuffer");
+    if (depthPyramid)
+        graph.read(opaqueCompact, depthHistory, Access::SampledRead);
     normal = graph.write(gbuffer, normal, Access::ColorAttachment, LoadOp::Clear);
     albedo = graph.write(gbuffer, albedo, Access::ColorAttachment, LoadOp::Clear);
     emissive = graph.write(gbuffer, emissive, Access::ColorAttachment, LoadOp::Clear);
@@ -603,11 +629,13 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
     if (depthPyramid) {
         const auto build = graph.addPass("depth.occlusion-pyramid.build", RenderGraph::QueueClass::Compute);
         graph.read(build, depth, Access::SampledRead);
+        depthHistory = graph.write(build, depthHistory, Access::StorageReadWrite);
         if (features.hooks.depthPyramidValidation) {
             depthPyramidValidation = graph.addPass(
                 "depth.occlusion-pyramid.validation-readback-hook",
                 RenderGraph::QueueClass::Transfer);
             graph.read(depthPyramidValidation, depth, Access::TransferSource);
+            graph.read(depthPyramidValidation, depthHistory, Access::TransferSource);
             graph.addDependency(build, depthPyramidValidation);
         }
     }
@@ -995,6 +1023,7 @@ VulkanProductionGraphIds resolveVulkanProductionGraphIds(
     ids.shadowPointMaps = { resource("shadow.point.256"),
         resource("shadow.point.512"), resource("shadow.point.1024") };
     ids.virtualShadowWorkingSet = resource("shadow.virtual.working-set");
+    ids.depthPyramidHistory = resource("depth.occlusion-pyramid.history");
     ids.gbufferNormal = resource("gbuffer.normal");
     ids.gbufferAlbedo = resource("gbuffer.albedo");
     ids.gbufferEmissive = resource("gbuffer.emissive");

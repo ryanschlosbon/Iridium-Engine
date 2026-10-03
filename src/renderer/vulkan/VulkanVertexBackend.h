@@ -629,6 +629,12 @@ namespace Iridium {
         // R3b.7 imported buffers: culler indirect command/count buffers and
         // probe-cluster buffers (per slot). Waits for every frame in flight.
         void bindGraphImportedBuffers();
+        // R3b.9: the depth-pyramid history import follows the retained view;
+        // `reset` after the history images are rebuilt.
+        void bindDepthPyramidHistory(bool reset);
+        uint32_t depthHistoryBoundView_ = UINT32_MAX;
+        std::array<RenderGraph::Access, VulkanDepthPyramid::HistoryViewCount>
+            depthHistoryAccess_{};
         [[nodiscard]] VulkanImageResource swapchainGraphImage(
             uint32_t imageIndex) const;
         [[nodiscard]] VulkanProductionGraphFeatures

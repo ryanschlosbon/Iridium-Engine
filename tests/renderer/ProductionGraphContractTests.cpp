@@ -474,6 +474,27 @@ namespace {
                 IRIDIUM_CHECK_MSG(graph.reads("probe.capture", shadow,
                     Access::SampledRead), shadow);
             IRIDIUM_CHECK(graph.usages(*graph.pass("probe.capture")).size() == 5u);
+
+            // R3b.9: the depth-pyramid history is an imported image sampled by
+            // the opaque compaction, rebuilt by the pyramid pass and copied by
+            // its validation hook.
+            const auto* history = graph.resource("depth.occlusion-pyramid.history");
+            IRIDIUM_CHECK_MSG((history != nullptr) == graph.hasPass(
+                "depth.occlusion-pyramid.build"), name);
+            if (history != nullptr) {
+                IRIDIUM_CHECK(history->desc.imported &&
+                    history->physicalSlot == RenderGraph::InvalidIndex &&
+                    history->desc.image.format == RenderGraph::Format::R32Float &&
+                    history->desc.image.mipLevels == 11u);
+                IRIDIUM_CHECK(graph.reads("gpu-scene.opaque.compact",
+                    "depth.occlusion-pyramid.history", Access::SampledRead));
+                IRIDIUM_CHECK(graph.writes("depth.occlusion-pyramid.build",
+                    "depth.occlusion-pyramid.history", Access::StorageReadWrite));
+                IRIDIUM_CHECK(graph.hasPass(
+                    "depth.occlusion-pyramid.validation-readback-hook") ==
+                    graph.reads("depth.occlusion-pyramid.validation-readback-hook",
+                        "depth.occlusion-pyramid.history", Access::TransferSource));
+            }
             for (const char* buffer : { "lighting.probe-cluster.headers",
                     "lighting.probe-cluster.indices" }) {
                 IRIDIUM_CHECK(graph.writes("lighting.probe-cluster", buffer,

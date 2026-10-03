@@ -611,7 +611,10 @@ namespace Iridium {
         bindGpuSceneBuffers();
         opaqueCuller_.bindBuffers();
         transparencyPyramid_.rebuild(frameTargets);
-        if (depthPyramidEnabled_) depthPyramid_.rebuild(frameTargets);
+        if (depthPyramidEnabled_) {
+            depthPyramid_.rebuild(frameTargets);
+            bindDepthPyramidHistory(true);
+        }
         layeredInterfaceCapture_.rebuildDescriptors(frameTargets);
         layeredLocalComposition_.rebuildDescriptors(frameTargets);
         layeredSceneResolve_.rebuildDescriptors(frameTargets);
@@ -1702,6 +1705,27 @@ namespace Iridium {
                 Access::SampledRead, shadowPolicy);
     }
 
+    void VulkanVertexBackend::bindDepthPyramidHistory(bool reset) {
+        // R3b.9: one executor-owned global import, bound to the retained
+        // view's history image. Switching views keeps each image's tracked
+        // state; a rebuild (fresh images) starts both from Undefined.
+        if (!depthPyramidEnabled_ || !graphIds_.depthPyramidHistory.isValid()) return;
+        if (reset) {
+            depthHistoryAccess_.fill(RenderGraph::Access::Undefined);
+            depthHistoryBoundView_ = UINT32_MAX;
+        }
+        if (depthHistoryBoundView_ == retainedRenderView_) return;
+        if (depthHistoryBoundView_ < depthHistoryAccess_.size())
+            depthHistoryAccess_[depthHistoryBoundView_] = renderGraph_.externalImageAccess(
+                VulkanGlobalBinding, graphIds_.depthPyramidHistory);
+        renderGraph_.bindExternalImage(VulkanGlobalBinding,
+            graphIds_.depthPyramidHistory,
+            depthPyramid_.historyImage(retainedRenderView_),
+            depthHistoryAccess_[retainedRenderView_],
+            ExternalSyncPolicy::executorOwned());
+        depthHistoryBoundView_ = retainedRenderView_;
+    }
+
     void VulkanVertexBackend::bindGraphImportedBuffers() {
         // R3b.7: per-slot indirect command/count buffers of the four drawing
         // cullers and the reflection-probe cluster buffers. Their owners
@@ -1773,6 +1797,8 @@ namespace Iridium {
         renderGraph_.setGpuRangeSink(VulkanGpuRangeSink::forScheduler(scheduler));
         bindGraphImportedImages();
         bindGraphImportedBuffers();
+        // The depth-pyramid history is bound after its images are rebuilt.
+        depthHistoryBoundView_ = UINT32_MAX;
         if (virtualShadowResources_.initialized()) {
             for (uint32_t frame = 0; frame < VulkanFrameScheduler::FramesInFlight; ++frame) {
                 const auto& buffer = virtualShadowResources_.workingSet(frame);
@@ -1918,7 +1944,10 @@ namespace Iridium {
             bindReflectionProbeEnvironments();
             sceneDescriptors.rebuild(frameTargets);
             transparencyPyramid_.rebuild(frameTargets);
-            if (depthPyramidEnabled_) depthPyramid_.rebuild(frameTargets);
+            if (depthPyramidEnabled_) {
+                depthPyramid_.rebuild(frameTargets);
+                bindDepthPyramidHistory(true);
+            }
             layeredInterfaceCapture_.rebuildDescriptors(frameTargets);
             layeredLocalComposition_.rebuildDescriptors(frameTargets);
             layeredSceneResolve_.rebuildDescriptors(frameTargets);
@@ -2129,7 +2158,10 @@ namespace Iridium {
         bindReflectionProbeEnvironments();
         sceneDescriptors.rebuild(frameTargets);
         transparencyPyramid_.rebuild(frameTargets);
-        if (depthPyramidEnabled_) depthPyramid_.rebuild(frameTargets);
+        if (depthPyramidEnabled_) {
+            depthPyramid_.rebuild(frameTargets);
+            bindDepthPyramidHistory(true);
+        }
         layeredInterfaceCapture_.rebuildDescriptors(frameTargets);
         layeredLocalComposition_.rebuildDescriptors(frameTargets);
         layeredSceneResolve_.rebuildDescriptors(frameTargets);
@@ -2285,7 +2317,10 @@ namespace Iridium {
             bindReflectionProbeEnvironments();
             sceneDescriptors.rebuild(frameTargets);
             transparencyPyramid_.rebuild(frameTargets);
-            if (depthPyramidEnabled_) depthPyramid_.rebuild(frameTargets);
+            if (depthPyramidEnabled_) {
+                depthPyramid_.rebuild(frameTargets);
+                bindDepthPyramidHistory(true);
+            }
             layeredInterfaceCapture_.rebuildDescriptors(frameTargets);
             layeredLocalComposition_.rebuildDescriptors(frameTargets);
             layeredSceneResolve_.rebuildDescriptors(frameTargets);
@@ -3199,6 +3234,7 @@ namespace Iridium {
         currentCmd = frame.commandBuffer;
         if (frameEnvironments_[scheduler.currentFrameIndex()] != environmentLighting_)
             bindEnvironmentProducts(scheduler.currentFrameIndex());
+        bindDepthPyramidHistory(false);
         renderGraph_.beginFrameExecution(scheduler.currentFrameIndex());
         renderGraph_.setFrameRecordContext({
             .commandBuffer = currentCmd,

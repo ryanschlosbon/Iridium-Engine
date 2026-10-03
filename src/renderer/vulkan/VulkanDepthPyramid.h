@@ -49,6 +49,11 @@ public:
     [[nodiscard]] const PublishedHistory& queuedHistory(
         uint32_t view) const;
     [[nodiscard]] VkImageView historyImageView(uint32_t view) const;
+    // The retained view's history pyramid (graph import
+    // "depth.occlusion-pyramid.history", executor-owned: M7R R3b.9).
+    [[nodiscard]] const VulkanImageResource& historyImage(uint32_t view) const {
+        return historyImages_.at(view);
+    }
     [[nodiscard]] VkSampler historySampler() const noexcept { return sampler_; }
 private:
     VkDevice device_{};

@@ -1,8 +1,6 @@
 #include "VulkanDepthPyramid.h"
 #include "DescriptorAllocator.h"
 #include "VulkanFrameTargets.h"
-#include "VulkanCommandList.h"
-#include "VulkanResourceState.h"
 #include "utils/File.h"
 #include <array>
 #include <algorithm>
@@ -258,23 +256,11 @@ uint32_t VulkanDepthPyramid::record(VkCommandBuffer command, uint32_t frame,
     }
     const auto& output = frames_[frame];
     const auto& outputView = output.views[view];
-    VulkanImageResource& image = historyImages_[view];
-    const VulkanStateInfo previous = getVulkanStateInfo(image.state,
-        image.aspect);
-    VkImageMemoryBarrier begin{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
-    begin.srcAccessMask = previous.access;
-    begin.dstAccessMask = VK_ACCESS_SHADER_READ_BIT |
-        VK_ACCESS_SHADER_WRITE_BIT;
-    begin.oldLayout = previous.layout;
-    begin.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-    begin.srcQueueFamilyIndex = begin.dstQueueFamilyIndex =
-        VK_QUEUE_FAMILY_IGNORED;
-    begin.image = image.image;
-    begin.subresourceRange = {
-        VK_IMAGE_ASPECT_COLOR_BIT,0,image.mipLevels,0,1};
-    vkCmdPipelineBarrier(command, previous.stages,
-        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr,
-        1, &begin);
+    const VulkanImageResource& image = historyImages_[view];
+    // M7R R3b.9: the history is an executor-owned graph import. The build
+    // pass's begin barrier (to GENERAL) and the next reader's barrier (to
+    // SHADER_READ_ONLY or TRANSFER_SRC) are the executor's; only the
+    // mip-to-mip ordering stays here.
     vkCmdBindPipeline(command,VK_PIPELINE_BIND_POINT_COMPUTE,pipeline_);
     const uint32_t forwardDepth = 0;
     vkCmdPushConstants(command,layout_,VK_SHADER_STAGE_COMPUTE_BIT,0,4,&forwardDepth);
@@ -290,22 +276,6 @@ uint32_t VulkanDepthPyramid::record(VkCommandBuffer command, uint32_t frame,
         barrier.image=image.image; barrier.subresourceRange={VK_IMAGE_ASPECT_COLOR_BIT,mip,1,0,1};
         vkCmdPipelineBarrier(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,0,0,nullptr,0,nullptr,1,&barrier);
     }
-    VkImageMemoryBarrier ready{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
-    ready.srcAccessMask = VK_ACCESS_SHADER_READ_BIT |
-        VK_ACCESS_SHADER_WRITE_BIT;
-    ready.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-    ready.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-    ready.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    ready.srcQueueFamilyIndex = ready.dstQueueFamilyIndex =
-        VK_QUEUE_FAMILY_IGNORED;
-    ready.image = image.image;
-    ready.subresourceRange = begin.subresourceRange;
-    vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
-            VK_PIPELINE_STAGE_VERTEX_SHADER_BIT |
-            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-        0, 0, nullptr, 0, nullptr, 1, &ready);
-    image.state = ResourceState::ShaderResource;
     publicationTracker_.schedule(frame, view, owner,
         {output.extent.width, output.extent.height},
         DeviceDepthConvention::ForwardZeroToOne, submissionSerial);
@@ -421,9 +391,9 @@ void VulkanDepthPyramid::recordHistoryReadback(VkCommandBuffer command,
         !historyImages_[view].isValid()) {
         throw std::invalid_argument("Invalid depth-pyramid history readback");
     }
-    VulkanImageResource& history = historyImages_[view];
-    VulkanCommandList commands(command);
-    commands.transition(history, ResourceState::CopySource);
+    // R3b.9: recorded inside depth.occlusion-pyramid.validation-readback-hook,
+    // whose declared TransferSource read puts the history in TRANSFER_SRC.
+    const VulkanImageResource& history = historyImages_[view];
     for (uint32_t mip = 0; mip < history.mipLevels; ++mip) {
         const DepthPyramidExtent extent = depthPyramidMipExtent(
             {history.extent.width, history.extent.height}, mip);
@@ -436,7 +406,6 @@ void VulkanDepthPyramid::recordHistoryReadback(VkCommandBuffer command,
         destinationOffset += static_cast<VkDeviceSize>(extent.width) *
             extent.height * sizeof(float);
     }
-    commands.transition(history, ResourceState::ShaderResource);
 }
 
 void VulkanDepthPyramid::onFrameFenceCompleted(uint32_t frame,

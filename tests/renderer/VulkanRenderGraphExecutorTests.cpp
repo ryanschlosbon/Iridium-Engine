@@ -82,7 +82,9 @@ namespace {
             return resource.name == "depth.occlusion-pyramid";
         }));
         const auto enabled = makeGraph({127, 73}, true);
-        CHECK(enabled.resources().size() == disabled.resources().size());
+        // R3b.9: the pyramid history is one imported image (no pool slot).
+        CHECK(enabled.resources().size() == disabled.resources().size() + 1);
+        CHECK(enabled.physicalSlots().size() == disabled.physicalSlots().size());
         CHECK(enabled.passes().size() == disabled.passes().size() + 2);
         CHECK(std::ranges::none_of(enabled.resources(), [](const auto& resource) {
             return resource.name == "depth.occlusion-pyramid";
