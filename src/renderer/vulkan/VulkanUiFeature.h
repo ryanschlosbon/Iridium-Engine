@@ -10,11 +10,8 @@
 
 #include "VulkanFeatureContext.h"
 #include "VulkanRenderGraphExecutor.h"
-#include "VkUIRenderPass.h"
 
 #include <vulkan/vulkan.h>
-
-#include <memory>
 
 namespace Iridium {
 
@@ -37,16 +34,8 @@ namespace Iridium {
 
         // Swapchain-dependent state (init and transport changes): the UI
         // colour format (the swapchain's, or RGBA16F for HDR10 composition).
-        // The render pass only creates the frame targets' UI framebuffers
-        // until R4a.final removes them; recording uses dynamic rendering.
-        void createRenderPass(VkFormat format, bool hdr10Composition);
-        void destroyRenderPass() noexcept {
-            renderPass_.reset();
-            colorFormat_ = VK_FORMAT_UNDEFINED;
-        }
-        [[nodiscard]] VkRenderPass renderPass() const noexcept {
-            return renderPass_ ? renderPass_->getRenderPass() : VK_NULL_HANDLE;
-        }
+        void setColorFormat(VkFormat format) noexcept { colorFormat_ = format; }
+        void resetColorFormat() noexcept { colorFormat_ = VK_FORMAT_UNDEFINED; }
         [[nodiscard]] VkFormat colorFormat() const noexcept { return colorFormat_; }
 
         // Drain point (submitUIPass).
@@ -56,7 +45,6 @@ namespace Iridium {
         static void executeUi(void* owner, VulkanPassContext& context);
 
         const VulkanFeatureContext* context_ = nullptr;
-        std::unique_ptr<VkUIRenderPass> renderPass_;
         VkFormat colorFormat_ = VK_FORMAT_UNDEFINED;
         IVulkanEditorUi* editorUi_ = nullptr;
         RenderGraph::PassId uiPass_{};

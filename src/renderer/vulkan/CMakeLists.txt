@@ -6,12 +6,9 @@ add_library(iridium_vulkan STATIC
         DescriptorAllocator.cpp
         RenderBackendFactory.cpp
         VkContext.cpp
-        VkForwardRenderPass.cpp
         VkGraphicsPipeline.cpp
         VkLightingPipeline.cpp
-        VkRenderPass.cpp
         VkSwapchain.cpp
-        VkUIRenderPass.cpp
         VulkanClusterLightingFeature.cpp
         VulkanClusteredLightingPipeline.cpp
         VulkanDeferredLightingFeature.cpp

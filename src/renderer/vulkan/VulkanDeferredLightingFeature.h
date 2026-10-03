@@ -64,15 +64,13 @@ namespace Iridium {
             sources_ = sources;
         }
 
-        // IVulkanFeature. create() builds the render pass and pipeline (the
+        // IVulkanFeature. create() builds the pipeline (the
         // lighting set layout is needed by the mesh layouts right after).
         void create(const VulkanFeatureContext& context) override;
         void onGraphRebuilt(const VulkanProductionGraphIds& ids) override;
         void registerPasses(VulkanRenderGraphExecutor& graph) override;
         void destroy() noexcept override;
 
-        // R4a: only the lighting framebuffer still uses it.
-        [[nodiscard]] VkRenderPass renderPass() const noexcept { return renderPass_; }
         [[nodiscard]] VkDescriptorSetLayout setLayout() const noexcept {
             return pipeline_->getDescriptorSetLayout();
         }
@@ -114,14 +112,12 @@ namespace Iridium {
     private:
         static void executeLighting(void* owner, VulkanPassContext& context);
         void recordLighting(VulkanPassContext& context);
-        void createRenderPass();
         void bindEnvironmentProducts(uint32_t frame = UINT32_MAX);
         void bindShadows();
 
         const VulkanFeatureContext* context_ = nullptr;
         GBufferLayout gBufferLayout_ = GBufferLayout::CanonicalReference;
         Sources sources_{};
-        VkRenderPass renderPass_ = VK_NULL_HANDLE;
         std::unique_ptr<VkLightingPipeline> pipeline_;
         VulkanSceneDescriptors scene_;
         RenderGraph::PassId lightingPass_{};

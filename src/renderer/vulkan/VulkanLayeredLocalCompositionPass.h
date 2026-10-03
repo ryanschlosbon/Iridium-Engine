@@ -29,9 +29,6 @@ namespace Iridium {
         void clearDescriptors() noexcept;
         void cleanup() noexcept;
 
-        [[nodiscard]] VkRenderPass renderPass() const noexcept {
-            return renderPass_;
-        }
         [[nodiscard]] VkPipelineLayout pipelineLayout() const noexcept {
             return pipelineLayout_;
         }
@@ -65,7 +62,6 @@ namespace Iridium {
 
         VkDevice device_ = VK_NULL_HANDLE;
         ::DescriptorAllocator* descriptors_ = nullptr;
-        VkRenderPass renderPass_ = VK_NULL_HANDLE;
         VkDescriptorSetLayout interfaceLayout_ = VK_NULL_HANDLE;
         VkDescriptorSetLayout deepInterfaceLayout_ = VK_NULL_HANDLE;
         VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;

@@ -36,44 +36,6 @@ void VulkanLayeredLocalCompositionPass::init(VkDevice device,
     device_ = device;
     descriptors_ = &descriptors;
     try {
-        VkAttachmentDescription color{};
-        color.format = VulkanSceneColorFormat;
-        color.samples = VK_SAMPLE_COUNT_1_BIT;
-        color.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-        color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-        color.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-        color.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-        color.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        color.finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-        const VkAttachmentReference colorReference{
-            0u, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL };
-        VkSubpassDescription subpass{};
-        subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-        subpass.colorAttachmentCount = 1u;
-        subpass.pColorAttachments = &colorReference;
-        VkSubpassDependency dependency{};
-        dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
-        dependency.dstSubpass = 0u;
-        dependency.srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
-            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-        dependency.dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
-            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-        dependency.srcAccessMask = VK_ACCESS_SHADER_READ_BIT |
-            VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-        dependency.dstAccessMask = VK_ACCESS_SHADER_READ_BIT |
-            VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-        VkRenderPassCreateInfo renderPassInfo{
-            VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO };
-        renderPassInfo.attachmentCount = 1u;
-        renderPassInfo.pAttachments = &color;
-        renderPassInfo.subpassCount = 1u;
-        renderPassInfo.pSubpasses = &subpass;
-        renderPassInfo.dependencyCount = 1u;
-        renderPassInfo.pDependencies = &dependency;
-        requireSuccess(vkCreateRenderPass(device_, &renderPassInfo, nullptr,
-            &renderPass_),
-            "vkCreateRenderPass(layered local composition)");
-
         std::array<VkDescriptorSetLayoutBinding, 4> bindings{};
         for (uint32_t binding = 0u; binding < bindings.size(); ++binding) {
             bindings[binding].binding = binding;
@@ -433,11 +395,8 @@ void VulkanLayeredLocalCompositionPass::cleanup() noexcept {
         vkDestroyDescriptorSetLayout(device_, deepInterfaceLayout_, nullptr);
     if (interfaceLayout_ != VK_NULL_HANDLE)
         vkDestroyDescriptorSetLayout(device_, interfaceLayout_, nullptr);
-    if (renderPass_ != VK_NULL_HANDLE)
-        vkDestroyRenderPass(device_, renderPass_, nullptr);
     device_ = VK_NULL_HANDLE;
     descriptors_ = nullptr;
-    renderPass_ = VK_NULL_HANDLE;
     interfaceLayout_ = VK_NULL_HANDLE;
     deepInterfaceLayout_ = VK_NULL_HANDLE;
     pipelineLayout_ = VK_NULL_HANDLE;

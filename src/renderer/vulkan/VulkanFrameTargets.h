@@ -1,7 +1,6 @@
 #pragma once
 
 #include "VulkanResourceAllocator.h"
-#include "VkSwapchain.h"
 #include "renderer/rhi/GBufferLayout.h"
 #include "renderer/transparency/LayeredGlass.h"
 
@@ -20,19 +19,6 @@ namespace Iridium {
     class VulkanRenderGraphExecutor;
     struct VulkanLayeredGraphConfig;
     struct VulkanProductionGraphIds;
-
-    struct VulkanTargetRenderPasses {
-        VkRenderPass gBuffer = VK_NULL_HANDLE;
-        VkRenderPass lighting = VK_NULL_HANDLE;
-        VkRenderPass forward = VK_NULL_HANDLE;
-        VkRenderPass transparent = VK_NULL_HANDLE;
-        VkRenderPass layeredInterfaceCapture = VK_NULL_HANDLE;
-        VkRenderPass layeredLocalComposition = VK_NULL_HANDLE;
-        VkRenderPass weightedOitAccumulation = VK_NULL_HANDLE;
-        VkRenderPass weightedOitResolve = VK_NULL_HANDLE;
-        VkRenderPass output = VK_NULL_HANDLE;
-        VkRenderPass ui = VK_NULL_HANDLE;
-    };
 
     struct VulkanFrameContextTargets {
         VulkanImageResource normal;
@@ -55,17 +41,6 @@ namespace Iridium {
         VulkanImageResource uiComposition;
         std::vector<VkImageView> refractionColorMipViews;
         std::vector<VkImageView> refractionDepthMipViews;
-        VkFramebuffer gBufferFramebuffer = VK_NULL_HANDLE;
-        VkFramebuffer lightingFramebuffer = VK_NULL_HANDLE;
-        VkFramebuffer forwardFramebuffer = VK_NULL_HANDLE;
-        VkFramebuffer transparentFramebuffer = VK_NULL_HANDLE;
-        VkFramebuffer layeredEntryFramebuffer = VK_NULL_HANDLE;
-        VkFramebuffer layeredExitFramebuffer = VK_NULL_HANDLE;
-        VkFramebuffer layeredLocalCompositionFramebuffer = VK_NULL_HANDLE;
-        VkFramebuffer weightedOitAccumulationFramebuffer = VK_NULL_HANDLE;
-        VkFramebuffer weightedOitResolveFramebuffer = VK_NULL_HANDLE;
-        VkFramebuffer outputFramebuffer = VK_NULL_HANDLE;
-        VkFramebuffer uiCompositionFramebuffer = VK_NULL_HANDLE;
 
         struct DeepLayeredTier {
             std::array<VulkanImageResource, kMaximumLayeredInterfaceCount>
@@ -75,9 +50,6 @@ namespace Iridium {
             std::array<VulkanImageResource, kMaximumLayeredInterfaceCount>
                 tileTermination{};
             VulkanImageResource localColor;
-            std::array<VkFramebuffer, kMaximumLayeredInterfaceCount>
-                interfaceFramebuffers{};
-            VkFramebuffer localCompositionFramebuffer = VK_NULL_HANDLE;
             VkExtent2D atlasExtent{};
             uint32_t interfaceCount = 0u;
 
@@ -90,10 +62,11 @@ namespace Iridium {
         DeepLayeredTier cinematic8;
     };
 
-    // Owns scene-sized offscreen images and framebuffers by frame context.
-    // Swapchain UI framebuffers are tracked separately by acquired image. It never
-    // owns swapchain images/views, render passes, descriptors, editor texture IDs, pipelines,
-    // or the allocator.
+    // Holds the frame contexts' views of the graph-owned scene-sized images,
+    // the refraction pyramids' per-mip views and the shared samplers. Passes
+    // record with dynamic rendering (M7R R4a), so there are no render passes or
+    // framebuffers. It never owns graph images, swapchain images/views,
+    // descriptors, editor texture IDs, pipelines, or the allocator.
     class VulkanFrameTargets final {
     public:
         VulkanFrameTargets() = default;
@@ -107,9 +80,8 @@ namespace Iridium {
         ~VulkanFrameTargets();
 
         // All owned images are created in ResourceState::Undefined.
-        void init(VkDevice device, const ::VkSwapchain& swapchain,
-            VkExtent2D sceneExtent,
-            VulkanTargetRenderPasses renderPasses, uint32_t frameContextCount,
+        void init(VkDevice device, VkExtent2D sceneExtent,
+            uint32_t frameContextCount,
             bool hdr10Composition, bool transparencyPyramids,
             const VulkanLayeredGraphConfig& layered,
             const VulkanRenderGraphExecutor& graphResources,
@@ -119,8 +91,6 @@ namespace Iridium {
         [[nodiscard]] size_t size() const noexcept;
         [[nodiscard]] VulkanFrameContextTargets& get(size_t index);
         [[nodiscard]] const VulkanFrameContextTargets& get(size_t index) const;
-        [[nodiscard]] VkFramebuffer uiFramebuffer(size_t swapchainImageIndex) const;
-        [[nodiscard]] size_t uiFramebufferCount() const noexcept;
         [[nodiscard]] VkSampler sampler() const noexcept;
         [[nodiscard]] VkSampler integerSampler() const noexcept;
         [[nodiscard]] VkSampler pyramidSampler() const noexcept;
@@ -139,7 +109,6 @@ namespace Iridium {
         VkExtent2D extent_{};
         VkFormat format_ = VK_FORMAT_UNDEFINED;
         std::vector<VulkanFrameContextTargets> targets_;
-        std::vector<VkFramebuffer> uiFramebuffers_;
     };
 
 } // namespace Iridium

@@ -21,8 +21,6 @@
 // Pipelines & Passes
 #include "VkGraphicsPipeline.h"
 #include "VkLightingPipeline.h"
-#include "VkRenderPass.h"
-#include "VkForwardRenderPass.h"
 #include "VulkanPipelineLibrary.h"
 #include "VulkanMeshLayouts.h"
 #include "VulkanResourceAllocator.h"

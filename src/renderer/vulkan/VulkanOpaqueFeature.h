@@ -1,13 +1,13 @@
 #pragma once
 
 // M7R R3c.7: the main-view opaque surface as a feature owner. Owns the
-// G-buffer render pass and its fixed wireframe/selection pipelines, the
+// G-buffer's fixed wireframe/selection pipelines, the
 // main-view opaque culler (VulkanOpaqueIndirectCuller) and the G-buffer draw
 // loops (GPU-scene indirect bins, the direct fallback, the editor wireframe
 // override and the selection masks), plus the depth pyramid: its history
 // eligibility, the executor-owned history import (R3b.9) and the build.
 // Registers "gpu-scene.opaque.compact", "gbuffer" (gpu.gbuffer.opaque and
-// gpu.gbuffer.selection open inside the render pass, as before) and
+// gpu.gbuffer.selection open inside the rendering instance, as before) and
 // "depth.occlusion-pyramid.build" (gpu.depth.occlusion-pyramid before its
 // barriers).
 
@@ -19,7 +19,6 @@
 #include "renderer/rhi/RenderDebugView.h"
 
 #include "VkGraphicsPipeline.h"
-#include "VkRenderPass.h"
 #include "VulkanDepthPyramid.h"
 #include "VulkanFeatureContext.h"
 #include "VulkanFrameScheduler.h"
@@ -83,10 +82,6 @@ namespace Iridium {
         [[nodiscard]] bool lodEnabled() const noexcept {
             return settings_.lodErrorPixels > 0.0f;
         }
-        [[nodiscard]] VkRenderPass gBufferRenderPass() const noexcept {
-            // R4a: only the G-buffer framebuffer still uses it.
-            return gBufferPass_ ? gBufferPass_->getRenderPass() : VK_NULL_HANDLE;
-        }
         [[nodiscard]] VulkanOpaqueIndirectCuller& culler() noexcept { return culler_; }
         [[nodiscard]] VulkanDepthPyramid& depthPyramid() noexcept { return depthPyramid_; }
         [[nodiscard]] bool historyPrepared() const noexcept { return historyPrepared_; }
@@ -130,7 +125,6 @@ namespace Iridium {
         const VulkanFeatureContext* context_ = nullptr;
         Settings settings_{};
         VulkanCullerServices services_{};
-        std::unique_ptr<VkRenderPassWrapper> gBufferPass_;
         std::unique_ptr<VkGraphicsPipeline> gBufferPipeline_;
         VulkanOpaqueIndirectCuller culler_;
         VulkanDepthPyramid depthPyramid_;

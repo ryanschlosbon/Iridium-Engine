@@ -55,43 +55,6 @@ namespace Iridium {
         allocator_ = &allocator;
 
         try {
-            VkAttachmentDescription attachment{};
-            attachment.format = outputFormat;
-            attachment.samples = VK_SAMPLE_COUNT_1_BIT;
-            attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-            attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-            attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-            attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-            attachment.initialLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-            attachment.finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-            VkAttachmentReference attachmentRef{ 0,
-                VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL };
-            VkSubpassDescription subpass{};
-            subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-            subpass.colorAttachmentCount = 1;
-            subpass.pColorAttachments = &attachmentRef;
-            VkSubpassDependency dependency{};
-            dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
-            dependency.dstSubpass = 0;
-            dependency.srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
-                VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-            dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-            dependency.srcAccessMask = VK_ACCESS_SHADER_READ_BIT |
-                VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-            dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-            VkRenderPassCreateInfo renderPassInfo{
-                VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO };
-            renderPassInfo.attachmentCount = 1;
-            renderPassInfo.pAttachments = &attachment;
-            renderPassInfo.subpassCount = 1;
-            renderPassInfo.pSubpasses = &subpass;
-            renderPassInfo.dependencyCount = 1;
-            renderPassInfo.pDependencies = &dependency;
-            if (vkCreateRenderPass(device_, &renderPassInfo, nullptr,
-                &renderPass_) != VK_SUCCESS) {
-                throw std::runtime_error("Failed to create output render pass.");
-            }
-
             std::array<VkDescriptorSetLayoutBinding, 4> bindings{};
             for (uint32_t index = 0; index < bindings.size(); ++index) {
                 bindings[index].binding = index;
@@ -345,14 +308,10 @@ namespace Iridium {
             if (descriptorSetLayout_ != VK_NULL_HANDLE) {
                 vkDestroyDescriptorSetLayout(device_, descriptorSetLayout_, nullptr);
             }
-            if (renderPass_ != VK_NULL_HANDLE) {
-                vkDestroyRenderPass(device_, renderPass_, nullptr);
-            }
         }
         pipeline_ = VK_NULL_HANDLE;
         pipelineLayout_ = VK_NULL_HANDLE;
         descriptorSetLayout_ = VK_NULL_HANDLE;
-        renderPass_ = VK_NULL_HANDLE;
         allocator_ = nullptr;
         device_ = VK_NULL_HANDLE;
     }

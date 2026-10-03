@@ -17,54 +17,8 @@ namespace Iridium {
 
     void VulkanDeferredLightingFeature::create(const VulkanFeatureContext& context) {
         context_ = &context;
-        createRenderPass();
         pipeline_ = std::make_unique<VkLightingPipeline>(&context.vk,
             VulkanSceneColorFormat, gBufferLayout_);
-    }
-
-    void VulkanDeferredLightingFeature::createRenderPass() {
-        // R4a: the pass records with dynamic rendering; this render pass only
-        // backs the lighting framebuffer until R4a.final removes both.
-        VkAttachmentDescription colorAttachment{};
-        colorAttachment.format = VulkanSceneColorFormat;
-        colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
-        colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-        colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-        colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-        colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-        colorAttachment.initialLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-        colorAttachment.finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-
-        VkAttachmentReference colorAttachmentRef{};
-        colorAttachmentRef.attachment = 0;
-        colorAttachmentRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-
-        VkSubpassDescription subpass{};
-        subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-        subpass.colorAttachmentCount = 1;
-        subpass.pColorAttachments = &colorAttachmentRef;
-
-        VkSubpassDependency dependency{};
-        dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
-        dependency.dstSubpass = 0;
-        dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
-            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-        dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-        dependency.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT;
-        dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-
-        VkRenderPassCreateInfo renderPassInfo{};
-        renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-        renderPassInfo.attachmentCount = 1;
-        renderPassInfo.pAttachments = &colorAttachment;
-        renderPassInfo.subpassCount = 1;
-        renderPassInfo.pSubpasses = &subpass;
-        renderPassInfo.dependencyCount = 1;
-        renderPassInfo.pDependencies = &dependency;
-
-        if (vkCreateRenderPass(context_->device, &renderPassInfo, nullptr, &renderPass_) != VK_SUCCESS) {
-            throw std::runtime_error("Failed to create lighting render pass!");
-        }
     }
 
     void VulkanDeferredLightingFeature::onGraphRebuilt(const VulkanProductionGraphIds& ids) {
@@ -82,10 +36,6 @@ namespace Iridium {
     void VulkanDeferredLightingFeature::destroy() noexcept {
         scene_.cleanup();
         pipeline_.reset();
-        if (renderPass_ != VK_NULL_HANDLE && context_ != nullptr) {
-            vkDestroyRenderPass(context_->device, renderPass_, nullptr);
-        }
-        renderPass_ = VK_NULL_HANDLE;
         environment_ = {};
         neutralCube_ = {};
         neutralBrdfLut_ = {};

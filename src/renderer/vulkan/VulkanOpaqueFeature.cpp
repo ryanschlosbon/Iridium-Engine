@@ -61,8 +61,6 @@ namespace Iridium {
             context.meshLayouts.getGlobalSetLayout(),
             context.meshLayouts.getGpuSceneSetLayout());
         // The fixed wireframe/selection pipelines never read the swapchain.
-        gBufferPass_ = std::make_unique<VkRenderPassWrapper>(&context.vk, nullptr,
-            settings_.gBufferLayout);
         gBufferPipeline_ = std::make_unique<VkGraphicsPipeline>(&context.vk, nullptr,
             context.meshLayouts.getGBufferPipelineLayout(), settings_.gBufferLayout);
     }
@@ -94,7 +92,6 @@ namespace Iridium {
     void VulkanOpaqueFeature::destroy() noexcept {
         if (context_ != nullptr) culler_.destroy(context_->device);
         gBufferPipeline_.reset();
-        gBufferPass_.reset();
         depthPyramid_.cleanup();
         context_ = nullptr;
     }

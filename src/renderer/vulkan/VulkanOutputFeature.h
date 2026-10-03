@@ -67,12 +67,8 @@ namespace Iridium {
         void createPipelines(VkFormat outputFormat, bool hdr10Composition,
             VkFormat swapchainFormat);
         void destroyPipelines() noexcept;
-        [[nodiscard]] VkRenderPass outputRenderPass() const noexcept {
-            return outputPass_.renderPass();
-        }
         // After the frame targets are rebuilt.
-        void rebuildHdr10Targets(const std::vector<VkImageView>& swapchainViews,
-            VkExtent2D extent);
+        void rebuildHdr10Targets();
         void rebuildDescriptors();
 
         // Drain points (submitOutputPass / submitUIPass).

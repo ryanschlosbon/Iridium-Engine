@@ -46,10 +46,13 @@ namespace Iridium {
         graph.registerPass(outputTransformPass_, { this, nullptr,
             &executeOutputTransform, "gpu.output.graph_transition",
             GpuRangePlacement::AroundBarriers, true });
+        // R4a.final: dynamic rendering over the pass's planned swapchain
+        // attachment (CLEAR opaque black, STORE). The swapchain is its only
+        // write, so the flag adds no same-access re-barrier.
         if (hdr10EncodePass_.isValid()) {
             graph.registerPass(hdr10EncodePass_, { this, nullptr,
                 &executeHdr10Encode, "gpu.output.hdr10_encode",
-                GpuRangePlacement::AfterBarriers });
+                GpuRangePlacement::AfterBarriers, true });
         }
     }
 
@@ -68,9 +71,8 @@ namespace Iridium {
         context_ = nullptr;
     }
 
-    void VulkanOutputFeature::rebuildHdr10Targets(
-        const std::vector<VkImageView>& swapchainViews, VkExtent2D extent) {
-        hdrEncodePass_.rebuild(context_->frameTargets, swapchainViews, extent);
+    void VulkanOutputFeature::rebuildHdr10Targets() {
+        hdrEncodePass_.rebuild(context_->frameTargets);
     }
 
     void VulkanOutputFeature::rebuildDescriptors() {
@@ -138,9 +140,13 @@ namespace Iridium {
         VulkanPassContext& context) {
         auto& self = *static_cast<VulkanOutputFeature*>(owner);
         const VulkanFeatureContext& shared = *self.context_;
+        VulkanRenderingOverrides rendering{};
+        rendering.renderArea.extent = self.stagedSwapchainExtent_;
+        context.beginRendering(rendering);
         self.hdrEncodePass_.record(context.commandBuffer, context.frame.frameIndex,
-            context.frame.imageIndex, self.stagedSwapchainExtent_,
-            self.staged_.paperWhiteNits, self.staged_.peakNits);
+            self.stagedSwapchainExtent_, self.staged_.paperWhiteNits,
+            self.staged_.peakNits);
+        context.endRendering();
         if (shared.telemetry.collecting()) {
             shared.telemetry.recordPipelineBind(pipelineIdentity(
                 FixedPipelineIdentity::OutputTransform));

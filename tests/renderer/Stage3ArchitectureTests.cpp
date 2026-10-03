@@ -13,7 +13,6 @@
 #include "renderer/vulkan/VulkanPipelineLibrary.h"
 #include "renderer/vulkan/VulkanResourceState.h"
 #include "renderer/vulkan/VulkanGBufferLayout.h"
-#include "renderer/vulkan/VkForwardRenderPass.h"
 #include "profiling/CpuAllocationProfile.h"
 
 #include <algorithm>
@@ -57,12 +56,6 @@ namespace {
         MoveOnlyPayload(MoveOnlyPayload&&) noexcept = default;
         MoveOnlyPayload& operator=(MoveOnlyPayload&&) noexcept = default;
     };
-
-    bool testForwardDepthStoreContract() {
-        CHECK(VkForwardRenderPass::depthStoreOperation(true) == VK_ATTACHMENT_STORE_OP_NONE);
-        CHECK(VkForwardRenderPass::depthStoreOperation(false) == VK_ATTACHMENT_STORE_OP_STORE);
-        return true;
-    }
 
     bool testRenderHandleAndResourcePool() {
         ResourcePool<int, GeometryHandle> pool(1);
@@ -1634,7 +1627,6 @@ int main() {
         { "PipelineStateDesc", testPipelineStateDescHash },
         { "render queue depth coverage", testRenderQueueDepthCoverage },
         { "ResourceState mapping", testResourceStateMapping },
-        { "read-only forward depth has no store write", testForwardDepthStoreContract },
         { "VulkanCommandList invalid wrapper", testInvalidCommandList },
         { "GBuffer candidate contracts", testGBufferCandidateContracts },
         { "packed GBuffer numeric bounds", testPackedGBufferNumericBounds },

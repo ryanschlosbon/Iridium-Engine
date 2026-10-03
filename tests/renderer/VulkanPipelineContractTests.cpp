@@ -151,7 +151,6 @@ namespace {
             composition.init(gpu.device(), layouts.descriptors,
                 layouts.meshes.getGlobalSetLayout(), layouts.textures.materialViewLayout(),
                 layouts.textures.samplerLayout(), layouts.lighting);
-            IRIDIUM_CHECK(composition.renderPass() != VK_NULL_HANDLE);
             IRIDIUM_CHECK(composition.pipeline() != VK_NULL_HANDLE);
             IRIDIUM_CHECK(composition.deepPipeline() != VK_NULL_HANDLE);
             IRIDIUM_CHECK(composition.deepResidualPipeline() != VK_NULL_HANDLE);
@@ -166,8 +165,6 @@ namespace {
             VulkanWeightedOitPass weighted;
             weighted.init(gpu.device(), layouts.descriptors,
                 layouts.meshes.getForwardPipelineLayout());
-            IRIDIUM_CHECK(weighted.accumulationRenderPass() != VK_NULL_HANDLE);
-            IRIDIUM_CHECK(weighted.resolveRenderPass() != VK_NULL_HANDLE);
             IRIDIUM_CHECK(weighted.accumulationPipeline() != VK_NULL_HANDLE);
             IRIDIUM_CHECK(weighted.resolvePipeline() != VK_NULL_HANDLE);
             IRIDIUM_CHECK(noValidationErrors("weighted OIT"));

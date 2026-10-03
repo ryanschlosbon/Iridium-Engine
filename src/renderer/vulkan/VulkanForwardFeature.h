@@ -1,7 +1,7 @@
 #pragma once
 
-// M7R R3c.9: the forward surfaces as a feature owner. Owns the forward and
-// transparent render passes, the three forward draw passes ("forward-opaque",
+// M7R R3c.9: the forward surfaces as a feature owner. Owns the three forward
+// draw passes (R4a: dynamic rendering) ("forward-opaque",
 // "transparent.sorted.forward" and "transparent.compatibility.forward", each
 // with its gpu.* range before its barriers) and the refraction pyramids
 // ("transparent.refraction-pyramids", gpu.transparency.refraction-pyramids
@@ -15,7 +15,6 @@
 #include "renderer/rhi/RenderDebugView.h"
 #include "renderer/transparency/TransparencyPyramidResidency.h"
 
-#include "VkForwardRenderPass.h"
 #include "VulkanFeatureContext.h"
 #include "VulkanRenderGraphExecutor.h"
 #include "VulkanTransparencyPyramid.h"
@@ -62,14 +61,6 @@ namespace Iridium {
         void registerPasses(VulkanRenderGraphExecutor& graph) override;
         void destroy() noexcept override;
 
-        [[nodiscard]] VkRenderPass forwardRenderPass() const noexcept {
-            return forwardPass_->getRenderPass();
-        }
-        // R4a: the forward/transparent render passes only back the frame
-        // targets' framebuffers until R4a.final removes both.
-        [[nodiscard]] VkRenderPass transparentRenderPass() const noexcept {
-            return transparentPass_->getRenderPass();
-        }
         [[nodiscard]] TransparencyPyramidResidency& pyramidResidency() noexcept {
             return pyramidResidency_;
         }
@@ -114,8 +105,6 @@ namespace Iridium {
 
         const VulkanFeatureContext* context_ = nullptr;
         const VulkanLayeredTransparencyFeature* layered_ = nullptr;
-        std::unique_ptr<VkForwardRenderPass> forwardPass_;
-        std::unique_ptr<VkForwardRenderPass> transparentPass_;
         VulkanTransparencyPyramid pyramid_;
         TransparencyPyramidResidency pyramidResidency_;
         std::array<ForwardPass, static_cast<size_t>(Queue::Count)> passes_{};

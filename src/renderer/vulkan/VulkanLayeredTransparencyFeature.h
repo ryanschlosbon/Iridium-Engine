@@ -65,13 +65,7 @@ namespace Iridium {
         void registerPasses(VulkanRenderGraphExecutor& graph) override;
         void destroy() noexcept override;
 
-        // Render passes for the frame targets; descriptors over them.
-        [[nodiscard]] VkRenderPass interfaceCaptureRenderPass() const noexcept {
-            return interfaceCapture_.renderPass();
-        }
-        [[nodiscard]] VkRenderPass localCompositionRenderPass() const noexcept {
-            return localComposition_.renderPass();
-        }
+        // Descriptors over the frame targets.
         void rebuildDescriptors();
         void clearDescriptors() noexcept;
 

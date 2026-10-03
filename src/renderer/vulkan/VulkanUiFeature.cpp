@@ -10,12 +10,6 @@ namespace Iridium {
         context_ = &context;
     }
 
-    void VulkanUiFeature::createRenderPass(VkFormat format, bool hdr10Composition) {
-        colorFormat_ = format;
-        renderPass_ = std::make_unique<VkUIRenderPass>(&context_->vk, format,
-            !hdr10Composition);
-    }
-
     void VulkanUiFeature::onGraphRebuilt(const VulkanProductionGraphIds& ids) {
         uiPass_ = ids.ui;
     }
@@ -28,7 +22,6 @@ namespace Iridium {
     }
 
     void VulkanUiFeature::destroy() noexcept {
-        renderPass_.reset();
         colorFormat_ = VK_FORMAT_UNDEFINED;
         editorUi_ = nullptr;
         context_ = nullptr;

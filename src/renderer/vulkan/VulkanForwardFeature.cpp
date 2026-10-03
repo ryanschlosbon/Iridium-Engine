@@ -14,10 +14,6 @@ namespace Iridium {
 
     void VulkanForwardFeature::create(const VulkanFeatureContext& context) {
         context_ = &context;
-        forwardPass_ = std::make_unique<VkForwardRenderPass>(&context.vk,
-            VulkanSceneColorFormat, VK_FORMAT_D32_SFLOAT);
-        transparentPass_ = std::make_unique<VkForwardRenderPass>(&context.vk,
-            VulkanSceneColorFormat, VK_FORMAT_D32_SFLOAT, true);
         pyramid_.init(context.device, context.descriptors,
             context.meshLayouts.getGlobalSetLayout());
         passes_[static_cast<size_t>(Queue::OpaqueForward)] = { this, Queue::OpaqueForward,
@@ -54,8 +50,6 @@ namespace Iridium {
 
     void VulkanForwardFeature::destroy() noexcept {
         pyramid_.cleanup();
-        transparentPass_.reset();
-        forwardPass_.reset();
         context_ = nullptr;
     }
 

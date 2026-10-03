@@ -14,12 +14,14 @@ namespace Iridium {
         ~VulkanHdrEncodePass();
         void init(VkContext& context, DescriptorAllocator& allocator,
             VkFormat swapchainFormat);
-        void rebuild(const VulkanFrameTargets& targets,
-            const std::vector<VkImageView>& swapchainViews, VkExtent2D extent);
+        void rebuild(const VulkanFrameTargets& targets);
         void clearTargets();
+        // Records the encode draw; the caller has begun dynamic rendering on
+        // the acquired swapchain image (M7R R4a: the executor's rendering plan
+        // for "hdr10-encode-present"; the executor transitions the swapchain,
+        // discarded on first use, and moves it to PRESENT at frame end).
         void record(VkCommandBuffer commandBuffer, uint32_t frameIndex,
-            uint32_t imageIndex, VkExtent2D extent, float paperWhiteNits,
-            float peakNits) const;
+            VkExtent2D extent, float paperWhiteNits, float peakNits) const;
         void cleanup();
 
     private:
@@ -29,9 +31,5 @@ namespace Iridium {
         VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;
         VkPipeline pipeline_ = VK_NULL_HANDLE;
         std::vector<VkDescriptorSet> descriptorSets_;
-        // M7R R4a: dynamic rendering on the acquired image's view. The
-        // executor transitions the swapchain (discarded on first use) and
-        // moves it to PRESENT at frame end.
-        std::vector<VkImageView> swapchainViews_;
     };
 }

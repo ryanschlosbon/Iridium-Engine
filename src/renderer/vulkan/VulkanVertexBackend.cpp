@@ -370,16 +370,13 @@ namespace Iridium {
         // 5. UI Pass
         const bool hdr10Composition = outputTransport_ ==
             Color::OutputTransport::Hdr10Pq;
-        ui_.createRenderPass(hdr10Composition ? VK_FORMAT_R16G16B16A16_SFLOAT
-            : vkSwapchain->getImageFormat(), hdr10Composition);
+        ui_.setColorFormat(hdr10Composition ? VK_FORMAT_R16G16B16A16_SFLOAT
+            : vkSwapchain->getImageFormat());
 
         // 7. Render Targets
         rebuildRenderGraphAfterDeviceIdle();
         initFrameTargets();
-        if (hdr10Composition) {
-            output_.rebuildHdr10Targets(vkSwapchain->getImageViews(),
-                vkSwapchain->getExtent());
-        }
+        if (hdr10Composition) output_.rebuildHdr10Targets();
         // Target descriptors declare shader-read layouts, so submit their initial
         // Undefined -> ShaderResource transitions before any descriptor or
         // editor registration can reference those images.
@@ -954,7 +951,7 @@ namespace Iridium {
         // them before the graph is rebuilt, and recreate them afterward.
         releaseFrameTargets();
         output_.destroyPipelines();
-        ui_.destroyRenderPass();
+        ui_.resetColorFormat();
 
         vkSwapchain = std::move(candidate);
 		requestedOutputTransport_ = requestedTransport;
@@ -966,8 +963,8 @@ namespace Iridium {
             vkSwapchain->getImageFormat());
         const bool hdr10Composition = outputTransport_ ==
             Color::OutputTransport::Hdr10Pq;
-        ui_.createRenderPass(hdr10Composition ? VK_FORMAT_R16G16B16A16_SFLOAT
-            : vkSwapchain->getImageFormat(), hdr10Composition);
+        ui_.setColorFormat(hdr10Composition ? VK_FORMAT_R16G16B16A16_SFLOAT
+            : vkSwapchain->getImageFormat());
         if (IVulkanEditorUi* editor = editorUi())
             editor->onPresentationChanged(editorUiPresentation());
         const uint32_t newImageCount = vkSwapchain->getImageCount();
@@ -1448,10 +1445,8 @@ namespace Iridium {
     void VulkanVertexBackend::createFrameTargets() {
         rebuildRenderGraphAfterDeviceIdle();
         initFrameTargets();
-        if (outputTransport_ == Color::OutputTransport::Hdr10Pq) {
-            output_.rebuildHdr10Targets(vkSwapchain->getImageViews(),
-                vkSwapchain->getExtent());
-        }
+        if (outputTransport_ == Color::OutputTransport::Hdr10Pq)
+            output_.rebuildHdr10Targets();
         // Establish the targets' declared layouts before descriptors (and
         // the editor) reference them.
         uploadContext.flush();
@@ -1464,14 +1459,7 @@ namespace Iridium {
     }
 
     void VulkanVertexBackend::initFrameTargets() {
-        frameTargets.init(vkContext->getDevice(), *vkSwapchain, sceneExtent_,
-            { opaque_.gBufferRenderPass(), lighting_.renderPass(),
-                forward_.forwardRenderPass(), forward_.transparentRenderPass(),
-                layered_.interfaceCaptureRenderPass(),
-                layered_.localCompositionRenderPass(),
-                oit_.accumulationRenderPass(),
-                oit_.resolveRenderPass(), output_.outputRenderPass(),
-                ui_.renderPass() },
+        frameTargets.init(vkContext->getDevice(), sceneExtent_,
             VulkanFrameScheduler::FramesInFlight,
             outputTransport_ == Color::OutputTransport::Hdr10Pq,
             forward_.pyramidResidency().enabled(),

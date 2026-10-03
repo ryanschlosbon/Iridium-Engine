@@ -112,8 +112,7 @@ namespace Iridium {
             throw std::runtime_error("Failed to create HDR encode pipeline.");
     }
 
-    void VulkanHdrEncodePass::rebuild(const VulkanFrameTargets& targets,
-        const std::vector<VkImageView>& swapchainViews, VkExtent2D extent) {
+    void VulkanHdrEncodePass::rebuild(const VulkanFrameTargets& targets) {
         clearTargets();
         for (const auto& target : targets.targets()) {
             VkDescriptorSet set = allocator_->allocate(descriptorSetLayout_);
@@ -126,31 +125,16 @@ namespace Iridium {
             write.pImageInfo = &image;
             vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
         }
-        (void)extent;
-        swapchainViews_ = swapchainViews;
     }
 
     void VulkanHdrEncodePass::clearTargets() {
         if (!descriptorSets_.empty() && allocator_) allocator_->free(descriptorSets_);
         descriptorSets_.clear();
-        swapchainViews_.clear();
     }
 
     void VulkanHdrEncodePass::record(VkCommandBuffer commandBuffer,
-        uint32_t frameIndex, uint32_t imageIndex, VkExtent2D extent,
+        uint32_t frameIndex, VkExtent2D extent,
         float paperWhiteNits, float peakNits) const {
-        VkRenderingAttachmentInfo color{ VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
-        color.imageView = swapchainViews_.at(imageIndex);
-        color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-        color.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-        color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-        color.clearValue.color = { { 0.0f, 0.0f, 0.0f, 1.0f } };
-        VkRenderingInfo rendering{ VK_STRUCTURE_TYPE_RENDERING_INFO };
-        rendering.renderArea.extent = extent;
-        rendering.layerCount = 1;
-        rendering.colorAttachmentCount = 1;
-        rendering.pColorAttachments = &color;
-        vkCmdBeginRendering(commandBuffer, &rendering);
         vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_);
         const VkDescriptorSet set = descriptorSets_.at(frameIndex);
         vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -164,7 +148,6 @@ namespace Iridium {
         vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
         vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
         vkCmdDraw(commandBuffer, 3, 1, 0, 0);
-        vkCmdEndRendering(commandBuffer);
     }
 
     void VulkanHdrEncodePass::cleanup() {
@@ -174,7 +157,7 @@ namespace Iridium {
             if (pipelineLayout_) vkDestroyPipelineLayout(device_, pipelineLayout_, nullptr);
             if (descriptorSetLayout_) vkDestroyDescriptorSetLayout(device_, descriptorSetLayout_, nullptr);
         }
-        descriptorSets_.clear(); swapchainViews_.clear(); device_ = VK_NULL_HANDLE;
+        descriptorSets_.clear(); device_ = VK_NULL_HANDLE;
         allocator_ = nullptr;
         descriptorSetLayout_ = VK_NULL_HANDLE; pipelineLayout_ = VK_NULL_HANDLE;
         pipeline_ = VK_NULL_HANDLE;

@@ -74,6 +74,17 @@ describes the execution model that replaces the imperative path.
    Imported buffers whose capacity grows are `variableSize`; their barriers use
    the bound size, so capacity growth never changes the topology hash.
 
+   *As implemented (R4a):* `RenderPassManaged` and its `initial`/`final` fields
+   are removed (R4a.9b), and no production pass uses a `VkRenderPass` or
+   framebuffer (R4a.final). The swapchain is `ExecutorOwned` with
+   `discardOnFirstUse()`, bound per frame after acquire with `current = Present`:
+   its writer transitions it from `UNDEFINED`, and `finishFrameExecution` emits
+   the frame-end Present export. The shadow maps are `ExecutorOwned` global
+   imports bound `SampledRead`; before each drawing pass the executor moves the
+   whole image to the depth-attachment layout with its contents kept, and the
+   next reader moves it back. The policies are now `ExecutorOwned` (optionally discarding on first
+   use) and `OwnerManaged`.
+
 5. **History is a graph lifetime.**
    - `createHistory(name, desc)` yields `{previous, current}` sharing a pair of two
      non-reusable physical slots outside the per-frame pool.
