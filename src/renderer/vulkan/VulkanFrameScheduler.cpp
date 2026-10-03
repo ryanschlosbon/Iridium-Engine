@@ -120,6 +120,7 @@ namespace Iridium {
             }
         }
         imagesInFlight_.assign(swapchainImageCount, VK_NULL_HANDLE);
+        deletions_.init(device_, nullptr);
 
         try {
             for (VulkanFrameContext& frame : frames_) {
@@ -196,8 +197,8 @@ namespace Iridium {
             renderFinishedPerImage_ = createPresentSemaphores(device_, swapchainImageCount);
         }
         catch (...) {
+            deletions_.clear();
             for (VulkanFrameContext& frame : frames_) {
-                frame.deferredDeletes.deletors.clear();
                 destroyFrameObjects(device_, frame);
             }
             imagesInFlight_.clear();
@@ -247,7 +248,8 @@ namespace Iridium {
         frame.fenceInFlight = false;
         completedSerial_ = (std::max)(completedSerial_, frame.submissionSerial);
         collectGpuResults(frame);
-        frame.deferredDeletes.flush();
+        // R4c.1: every queue submission up to completedSerial has finished.
+        (void)deletions_.collect(completedSerial_);
 
         uint32_t imageIndex = 0;
         {
@@ -319,6 +321,7 @@ namespace Iridium {
             }
         }
 
+        frameRecording_ = true;
         return { FrameStatus::Ready, frame.commandBuffer, imageIndex };
     }
 
@@ -370,6 +373,7 @@ namespace Iridium {
             }
             frame.fenceInFlight = true;
             frame.submissionSerial = ++lastSubmittedSerial_;
+            frameRecording_ = false;
             imagesInFlight_[imageIndex] = frame.inFlight;
             frame.gpuResultsPending = frame.profileFrameId != 0 &&
                 frame.timestampQueryCount != 0;
@@ -407,11 +411,18 @@ namespace Iridium {
         return recreate ? FrameStatus::RecreateSwapchain : FrameStatus::Ready;
     }
 
-    void VulkanFrameScheduler::defer(std::function<void()> callback) {
-        if (device_ == VK_NULL_HANDLE) {
-            throw std::logic_error("VulkanFrameScheduler is not initialized.");
+    void VulkanFrameScheduler::refreshCompletedSerial() {
+        if (device_ == VK_NULL_HANDLE) return;
+        for (const VulkanFrameContext& frame : frames_) {
+            if (!frame.fenceInFlight ||
+                frame.submissionSerial <= completedSerial_) continue;
+            const VkResult result = vkGetFenceStatus(device_, frame.inFlight);
+            if (result == VK_SUCCESS)
+                completedSerial_ = (std::max)(completedSerial_,
+                    frame.submissionSerial);
+            else if (result != VK_NOT_READY)
+                throwVkError("vkGetFenceStatus", result);
         }
-        frames_[currentFrame_].deferredDeletes.push_function(std::move(callback));
     }
 
     void VulkanFrameScheduler::resetSwapchainImages(uint32_t imageCount) {
@@ -739,6 +750,7 @@ namespace Iridium {
             cpuProfiler_ = nullptr;
             lastSubmittedSerial_ = 0;
             completedSerial_ = 0;
+            frameRecording_ = false;
             frameGpuRange_ = {};
             timestampPeriodNanoseconds_ = 0.0;
             timestampValidBits_ = 0;
@@ -751,9 +763,7 @@ namespace Iridium {
         }
 
         waitForAllFrames();
-        for (VulkanFrameContext& frame : frames_) {
-            frame.deferredDeletes.flush();
-        }
+        (void)deletions_.flush();
         for (VulkanFrameContext& frame : frames_) {
             destroyFrameObjects(device_, frame);
         }
@@ -767,6 +777,7 @@ namespace Iridium {
         currentFrame_ = 0;
         lastSubmittedSerial_ = 0;
         completedSerial_ = 0;
+        frameRecording_ = false;
         acquireSuboptimal_ = false;
         cpuProfiler_ = nullptr;
         frameGpuRange_ = {};

@@ -228,6 +228,7 @@ namespace Iridium {
                 vkContext->hasPipelineStatistics(),
             static_cast<uint64_t>(sceneExtent_.width) *
                 sceneExtent_.height);
+        scheduler.attachAllocator(resourceAllocator);
 
         resources_.init({
             .device = vkContext->getDevice(),

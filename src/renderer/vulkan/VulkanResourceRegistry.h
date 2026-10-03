@@ -161,6 +161,9 @@ namespace Iridium {
         };
 
         void cleanupSamplerCache() noexcept;
+        // Deletion-queue callback of freeTexture (R4c.1).
+        static void releaseRetiredTexture(void* user,
+            const VulkanDeletionArguments& arguments);
         [[nodiscard]] bool frameOpen() const noexcept {
             return frameOpen_ != nullptr && *frameOpen_;
         }

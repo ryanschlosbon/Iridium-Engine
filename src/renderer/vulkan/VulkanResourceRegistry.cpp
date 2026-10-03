@@ -79,13 +79,10 @@ namespace Iridium {
                 throw std::logic_error(
                     "Geometry-arena primitive handles must be retired together");
             }
-            // Capture the Vulkan pointers by value so the lambda remembers them
-            // Defer the destruction! The GPU won't crash, and the CPU won't stall.
-            scheduler_->defer([this,
-                vertex = payload->vertexBuffer, index = payload->indexBuffer]() mutable {
-                allocator_->destroy(vertex);
-                allocator_->destroy(index);
-                });
+            // R4c.1: retired until every frame that can reference them has
+            // completed (no stall).
+            scheduler_->retire(payload->vertexBuffer);
+            scheduler_->retire(payload->indexBuffer);
 
             geometryVault_.free(handle);
         }
@@ -211,14 +208,9 @@ namespace Iridium {
                     "Geometry arena retirement cannot mix allocations");
             }
         }
-        VulkanBufferResource vertex = first->vertexBuffer;
-        VulkanBufferResource uint16 = first->arenaUInt16IndexBuffer;
-        VulkanBufferResource uint32 = first->arenaUInt32IndexBuffer;
-        scheduler_->defer([this, vertex, uint16, uint32]() mutable {
-            allocator_->destroy(vertex);
-            allocator_->destroy(uint16);
-            allocator_->destroy(uint32);
-        });
+        scheduler_->retire(first->vertexBuffer);
+        scheduler_->retire(first->arenaUInt16IndexBuffer);
+        scheduler_->retire(first->arenaUInt32IndexBuffer);
         for (GeometryHandle handle : primitiveGeometry)
             geometryVault_.free(handle);
     }
@@ -364,16 +356,28 @@ namespace Iridium {
             payload->retired = true;
             ++retiredTextureCount_;
 
-            scheduler_->defer([this, handle, editorDescriptor, image]() mutable {
-                if (editorDescriptor != VK_NULL_HANDLE && editorRelease_ != nullptr)
-                    editorRelease_(editorReleaseOwner_, editorDescriptor);
-                allocator_->destroy(image);
-                textureVault_.free(handle);
-                if (retiredTextureCount_ != 0) --retiredTextureCount_;
-                });
+            // R4c.1: once the texture's last frame has completed, the editor
+            // descriptor and the vault slot are released and the image is
+            // destroyed.
+            scheduler_->retireCallback({ &VulkanResourceRegistry::releaseRetiredTexture,
+                this, { handle.id,
+                    reinterpret_cast<uint64_t>(editorDescriptor), 0, 0 } });
+            scheduler_->retire(image);
 
             releaseSampler(samplerCacheIndex);
         }
+    }
+
+    void VulkanResourceRegistry::releaseRetiredTexture(void* user,
+        const VulkanDeletionArguments& arguments) {
+        auto& self = *static_cast<VulkanResourceRegistry*>(user);
+        const TextureHandle handle{ static_cast<uint32_t>(arguments[0]) };
+        const auto editorDescriptor =
+            reinterpret_cast<VkDescriptorSet>(arguments[1]);
+        if (editorDescriptor != VK_NULL_HANDLE && self.editorRelease_ != nullptr)
+            self.editorRelease_(self.editorReleaseOwner_, editorDescriptor);
+        self.textureVault_.free(handle);
+        if (self.retiredTextureCount_ != 0) --self.retiredTextureCount_;
     }
 
     MaterialBinding VulkanResourceRegistry::allocateCanonicalMaterial(

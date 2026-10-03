@@ -1,14 +1,13 @@
 #pragma once
 
 #include "renderer/rhi/RhiResourceTypes.h"
-#include "utils/DeletionQueue.h"
+#include "VulkanDeletionQueue.h"
 
 #include <vulkan/vulkan.h>
 
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <functional>
 #include <vector>
 
 namespace Iridium {
@@ -38,7 +37,6 @@ namespace Iridium {
         VkQueryPool timestampQueryPool = VK_NULL_HANDLE;
         VkQueryPool transparentPipelineStatisticsQueryPool = VK_NULL_HANDLE;
         VkQueryPool layeredResidualOcclusionQueryPool = VK_NULL_HANDLE;
-        DeletionQueue deferredDeletes;
         std::array<VulkanGpuQueryRange, MaxVulkanGpuRangesPerFrame> gpuRanges{};
         uint64_t profileFrameId = 0;
         uint32_t timestampQueryCount = 0;
@@ -83,16 +81,60 @@ namespace Iridium {
             double timestampPeriodNanoseconds, uint32_t timestampValidBits,
             bool enableDebugLabels, bool enableTransparentPipelineStatistics,
             uint64_t transparentTargetPixelCount);
-        // Waits the current frame, flushes its deferred deletes, acquires an image,
-        // and waits the image's previous frame-fence owner before reuse. The frame
-        // command pool resets only after a usable image is acquired. The fence
-        // remains signaled until endFrame is ready to submit recorded work.
+        // The deletion queue's resource destructor (after the allocator is
+        // initialized; buffers and images retired before are still queued).
+        void attachAllocator(VulkanResourceAllocator& allocator) noexcept {
+            deletions_.attachAllocator(&allocator);
+        }
+        // Waits the current frame, collects every deletion whose serial has
+        // completed, acquires an image, and waits the image's previous
+        // frame-fence owner before reuse. The frame command pool resets only
+        // after a usable image is acquired. The fence remains signaled until
+        // endFrame is ready to submit recorded work.
         [[nodiscard]] VulkanFrameBegin beginFrame(VkSwapchainKHR swapchain);
         // Submits with the acquired image's present-wait semaphore, then presents
         // waiting on that same semaphore. A suboptimal acquire is remembered here
         // and returned as RecreateSwapchain after its semaphore is consumed.
         [[nodiscard]] FrameStatus endFrame(VkSwapchainKHR swapchain, uint32_t imageIndex);
-        void defer(std::function<void()> callback);
+
+        // M7R R4c.1: deferred deletion keyed by frame serial. The value is the
+        // serial of the last frame that can reference a resource retired now:
+        // the frame being recorded (lastSubmitted + 1) while one is open,
+        // otherwise the last submitted frame. beginFrame collects entries once
+        // completedSerial reaches it; cleanup flushes the rest.
+        [[nodiscard]] uint64_t retireValue() const noexcept {
+            return frameRecording_ ? lastSubmittedSerial_ + 1 : lastSubmittedSerial_;
+        }
+        void retire(const VulkanBufferResource& buffer) {
+            deletions_.retire(retireValue(), buffer);
+        }
+        void retire(const VulkanImageResource& image) {
+            deletions_.retire(retireValue(), image);
+        }
+        void retireImageView(VkImageView view) {
+            deletions_.retireImageView(retireValue(), view);
+        }
+        void retireDescriptorSet(::DescriptorAllocator& allocator, VkDescriptorSet set) {
+            deletions_.retireDescriptorSet(retireValue(), allocator, set);
+        }
+        void retireCallback(const VulkanDeletionCallback& callback) {
+            deletions_.retireCallback(retireValue(), callback);
+        }
+        [[nodiscard]] const VulkanDeletionQueue& deletionQueue() const noexcept {
+            return deletions_;
+        }
+        // Whether `slot`'s last submission has not been waited yet. A slot that
+        // is not in flight may have its per-slot resources replaced at once
+        // (capacity growth, R4c.2); otherwise the swap waits for the slot's
+        // retirement in beginFrame.
+        [[nodiscard]] bool slotInFlight(uint32_t slot) const noexcept {
+            return slot < FramesInFlight && frames_[slot].fenceInFlight;
+        }
+        // Raises completedSerial from fences that have already signalled,
+        // without waiting (vkGetFenceStatus). Slot state is unchanged; the next
+        // beginFrame still performs its own wait and retirement.
+        void refreshCompletedSerial();
+
         void resetSwapchainImages(uint32_t imageCount);
         void waitForAllFrames();
         void cleanup();
@@ -133,7 +175,10 @@ namespace Iridium {
         uint32_t currentFrame_ = 0;
         uint64_t lastSubmittedSerial_ = 0;
         uint64_t completedSerial_ = 0;
+        // True from a Ready beginFrame until endFrame submits (retireValue).
+        bool frameRecording_ = false;
         bool acquireSuboptimal_ = false;
+        VulkanDeletionQueue deletions_;
         CpuProfiler* cpuProfiler_ = nullptr;
         VulkanGpuRangeToken frameGpuRange_{};
         double timestampPeriodNanoseconds_ = 0.0;

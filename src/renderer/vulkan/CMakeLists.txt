@@ -12,6 +12,7 @@ add_library(iridium_vulkan STATIC
         VulkanClusterLightingFeature.cpp
         VulkanClusteredLightingPipeline.cpp
         VulkanDeferredLightingFeature.cpp
+        VulkanDeletionQueue.cpp
         VulkanDepthPyramid.cpp
         VulkanDirectionalShadowMap.cpp
         VulkanExtensionHooks.cpp

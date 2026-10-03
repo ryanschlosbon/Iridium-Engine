@@ -396,6 +396,14 @@ if(TARGET iridium_shaders)
             LIBS iridium_test_vulkan_support iridium_vulkan
             LABELS vulkan)
 
+    # M7R R4c.1: the fence-keyed deletion queue, and the frame scheduler's
+    # retire/collect ordering on a hidden window under synchronization
+    # validation.
+    iridium_add_test(VulkanDeletionQueueTests
+            SOURCES renderer/VulkanDeletionQueueTests.cpp
+            LIBS iridium_vulkan
+            LABELS vulkan)
+
     # M7R R3c.10: the production backend on a hidden window, with and
     # without the ImGui editor bridge, under synchronization validation.
     iridium_add_test(VulkanBackendFrameTests
