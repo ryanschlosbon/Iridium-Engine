@@ -427,6 +427,14 @@ namespace Iridium {
             vkSwapchain->getImageFormat());
         createGpuSceneCullPipeline();
         oit_.create(*featureContext_);
+        hooks_.create(*featureContext_);
+        hooks_.setFinalCaptureConsumer({ this,
+            [](void* owner, VkCommandBuffer commandBuffer) {
+                static_cast<VulkanVertexBackend*>(owner)->initializeRetainedViews(commandBuffer);
+            },
+            [](void* owner, VkCommandBuffer commandBuffer) {
+                static_cast<VulkanVertexBackend*>(owner)->copyRetainedView(commandBuffer);
+            } });
         layeredInterfaceCapture_.init(vkContext->getDevice(),
             descriptorAllocator, meshLayouts.getGlobalSetLayout(),
             resources_.textureTable().materialViewLayout(),
@@ -700,19 +708,6 @@ namespace Iridium {
             .depthPyramid = depthPyramidEnabled_ ? &depthPyramid_ : nullptr,
             .profiler = cpuProfiler_,
         };
-    }
-
-    void VulkanVertexBackend::runPassHook(const VulkanHookContext& context,
-        bool declared, RenderGraph::PassId pass, const char* gpuRangeName) {
-        if (!declared) return;
-        if (!extensionHooks_.anyWants(context)) {
-            renderGraph_.skipPass(pass);
-            return;
-        }
-        VulkanGpuRangeToken gpuRange = scheduler.beginGpuRange(gpuRangeName);
-        renderGraph_.beginPass(currentCmd, pass);
-        extensionHooks_.notify(context);
-        scheduler.endGpuRange(gpuRange);
     }
 
     void VulkanVertexBackend::setEnvironmentLighting(
@@ -1028,6 +1023,7 @@ namespace Iridium {
         layeredLocalComposition_.cleanup();
         layeredInterfaceCapture_.cleanup();
         oit_.destroy();
+        hooks_.destroy();
 
         meshLayouts.cleanup();
         resources_.textureTable().cleanup();
@@ -1071,7 +1067,6 @@ namespace Iridium {
 
         neutralEnvironmentCube_ = {};
         neutralEnvironmentBrdfLut_ = {};
-        finalCaptureHookRecorded_ = false;
         featureContext_.reset();
     }
 
@@ -2174,7 +2169,6 @@ namespace Iridium {
         frameOpen_ = false;
         depthHistoryPrepared_ = false;
         currentDepthHistoryDecision_ = {};
-        finalCaptureHookRecorded_ = false;
         probeCaptureHandled_ = false;
         ordinary2ViewProjectionValid_ = false;
         telemetry_.beginFrame();
@@ -5636,17 +5630,14 @@ const VkDeviceSize offset = geometry->vertexOffset;
                 [quality](const LayeredCaptureDraw& draw) {
                     return draw.quality == quality;
                 }));
-        runPassHook({ .point = VulkanHookPoint::DeepLayeredValidation,
+        hooks_.runPassHook(quality == TransparencyQuality::Hero4
+                ? VulkanHookPasses::PassHook::Hero4Validation
+                : VulkanHookPasses::PassHook::Cinematic8Validation,
+            { .point = VulkanHookPoint::DeepLayeredValidation,
                 .cmd = currentCmd, .slot = scheduler.currentFrameIndex(),
                 .payload = VulkanDeepLayeredHookPayload{ quality, interfaceCount,
                     drawCount, static_cast<uint32_t>(
-                        deepLayeredAtlasPlan_.workIdentities().size()) } },
-            true, quality == TransparencyQuality::Hero4
-                ? graphIds_.hero4.validationReadbackHook
-                : graphIds_.cinematic8.validationReadbackHook,
-            quality == TransparencyQuality::Hero4
-                ? "gpu.transparency.layered.hero4.validation-readback"
-                : "gpu.transparency.layered.cinematic8.validation-readback");
+                        deepLayeredAtlasPlan_.workIdentities().size()) } });
     }
 
     void VulkanVertexBackend::submitForwardQueues(
@@ -6094,12 +6085,11 @@ const VkDeviceSize offset = geometry->vertexOffset;
             if (telemetry_.collecting())
                 telemetry_.counters().dispatchRecorded += dispatches;
             scheduler.endGpuRange(range);
-            runPassHook({ .point = VulkanHookPoint::DepthPyramidValidation,
+            // R3c.4 drain point (a no-op unless the hook is declared).
+            hooks_.runPassHook(VulkanHookPasses::PassHook::DepthPyramidValidation,
+                { .point = VulkanHookPoint::DepthPyramidValidation,
                     .cmd = currentCmd, .slot = scheduler.currentFrameIndex(),
-                    .payload = VulkanDepthPyramidHookPayload{ retainedRenderView_ } },
-                extensionHooks_.graphHooks().depthPyramidValidation,
-                graphIds_.depthPyramidValidationHook,
-                "gpu.depth.occlusion-pyramid.validation-readback");
+                    .payload = VulkanDepthPyramidHookPayload{ retainedRenderView_ } });
         }
         recordForwardPass(sortedSurfaceQueue, graphIds_.sortedForward,
             "gpu.transparency.sorted.forward", transparentPass->getRenderPass(),
@@ -6115,15 +6105,13 @@ const VkDeviceSize offset = geometry->vertexOffset;
                 captureDraws);
             recordOrdinary2LocalComposition(compatibilityTransparentQueue,
                 captureDraws);
-            runPassHook({ .point = VulkanHookPoint::Ordinary2Validation,
+            hooks_.runPassHook(VulkanHookPasses::PassHook::Ordinary2Validation,
+                { .point = VulkanHookPoint::Ordinary2Validation,
                     .cmd = currentCmd, .slot = scheduler.currentFrameIndex(),
                     .payload = VulkanOrdinary2HookPayload{ ordinary2AtlasExtent_,
                         static_cast<uint32_t>(captureDraws.size()),
                         static_cast<uint32_t>(
-                            ordinary2AtlasPlan_.workIdentities().size()) } },
-                extensionHooks_.graphHooks().layeredValidation,
-                graphIds_.ordinary2ValidationHook,
-                "gpu.transparency.layered.validation-readback");
+                            ordinary2AtlasPlan_.workIdentities().size()) } });
             recordOrdinary2SceneResolve(compatibilityTransparentQueue,
                 captureDraws);
         }
@@ -6178,8 +6166,9 @@ const VkDeviceSize offset = geometry->vertexOffset;
         if (pipelineStatisticsActive) {
             scheduler.endTransparentPipelineStatistics();
         }
-        runCaptureHook(VulkanHookPoint::SceneColorComplete,
-            FrameCapturePoint::SceneLinear);
+        // R3c.4 drain point: scene-linear captures.
+        hooks_.runSceneColorCapture(currentCmd,
+            captureSource(FrameCapturePoint::SceneLinear));
     }
 
     // ------------------------------------------------------------------
@@ -6198,41 +6187,6 @@ const VkDeviceSize offset = geometry->vertexOffset;
             sceneLinear ? frameTargets.format() : outputTargetFormat_ };
     }
 
-    template<typename Record>
-    void VulkanVertexBackend::recordCaptureCopy(FrameCapturePoint point,
-        Record&& record) {
-        const VulkanCaptureHookPayload source = captureSource(point);
-        if (point == FrameCapturePoint::SceneLinear) {
-            // R3b.5: the declared hook pass moves scene.color to
-            // TransferSource; output-transform's begin returns it.
-            if (!extensionHooks_.graphHooks().sceneColorCapture)
-                throw std::logic_error(
-                    "Scene-linear capture requires the scene-color-capture-hook pass");
-            renderGraph_.beginPass(currentCmd, graphIds_.sceneColorCaptureHook);
-        }
-        else if (!finalCaptureHookRecorded_) {
-            renderGraph_.beginPass(currentCmd, graphIds_.finalCaptureHook);
-            finalCaptureHookRecorded_ = true;
-        }
-        record(source);
-    }
-
-    void VulkanVertexBackend::runCaptureHook(VulkanHookPoint point,
-        FrameCapturePoint capturePoint) {
-        VulkanHookContext context{ .point = point, .cmd = currentCmd,
-            .slot = scheduler.currentFrameIndex() };
-        if (!extensionHooks_.anyWants(context)) {
-            if (capturePoint == FrameCapturePoint::SceneLinear &&
-                extensionHooks_.graphHooks().sceneColorCapture)
-                renderGraph_.skipPass(graphIds_.sceneColorCaptureHook);
-            return;
-        }
-        recordCaptureCopy(capturePoint, [&](const VulkanCaptureHookPayload& source) {
-            context.payload = source;
-            extensionHooks_.notify(context);
-        });
-    }
-
     void VulkanVertexBackend::submitOutputPass() {
         // R3c.2 drain point: bloom-hook (skipped) and output-transform.
         output_.recordOutputTransform({
@@ -6241,16 +6195,14 @@ const VkDeviceSize offset = geometry->vertexOffset;
             .peakNits = peakNits_,
             .selectionOutline = selectionOutlineActive_,
         });
-        runCaptureHook(VulkanHookPoint::FinalCaptureHook,
-            outputTransport_ == Color::OutputTransport::SdrSrgb
-                ? FrameCapturePoint::FinalSdr : FrameCapturePoint::FinalOutput);
+        // R3c.4 drain point: final-output captures and the retained views.
+        hooks_.runFinalCapture(currentCmd,
+            captureSource(outputTransport_ == Color::OutputTransport::SdrSrgb
+                ? FrameCapturePoint::FinalSdr : FrameCapturePoint::FinalOutput),
+            retainedViewsEnabled_);
     }
 
     void VulkanVertexBackend::submitUIPass() {
-        if (retainedViewsEnabled_) publishRetainedView();
-        if (!finalCaptureHookRecorded_) {
-            renderGraph_.skipPass(graphIds_.finalCaptureHook);
-        }
         CpuScope recordScope(cpuProfiler_, "cpu.render.record.ui");
         renderGraph_.beginPass(currentCmd, graphIds_.ui);
         {
@@ -6426,19 +6378,19 @@ const VkDeviceSize offset = geometry->vertexOffset;
         return view < 2 ? reinterpret_cast<void*>(retainedViewDescriptors_[view]) : nullptr;
     }
 
-    void VulkanVertexBackend::publishRetainedView() {
-        VulkanCommandList commands(currentCmd);
+    void VulkanVertexBackend::initializeRetainedViews(VkCommandBuffer commandBuffer) {
+        VulkanCommandList commands(commandBuffer);
         for (auto& image : retainedViewImages_) if (image.state == ResourceState::Undefined) {
             commands.transition(image, ResourceState::CopyDestination);
             const VkClearColorValue black{};
             const VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-            vkCmdClearColorImage(currentCmd, image.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &black, 1, &range);
+            vkCmdClearColorImage(commandBuffer, image.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &black, 1, &range);
             commands.transition(image, ResourceState::ShaderResource);
         }
-        if (!finalCaptureHookRecorded_) {
-            renderGraph_.beginPass(currentCmd, graphIds_.finalCaptureHook);
-            finalCaptureHookRecorded_ = true;
-        }
+    }
+
+    void VulkanVertexBackend::copyRetainedView(VkCommandBuffer commandBuffer) {
+        VulkanCommandList commands(commandBuffer);
         auto& target = retainedViewImages_[retainedRenderView_];
         commands.transition(target, ResourceState::CopyDestination);
         VkImageCopy copy{};

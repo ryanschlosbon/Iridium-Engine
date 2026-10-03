@@ -37,6 +37,7 @@
 #include "VulkanClusterLightingFeature.h"
 #include "VulkanOutputFeature.h"
 #include "VulkanWeightedOitFeature.h"
+#include "VulkanHookPasses.h"
 #include "VulkanExtensionHooks.h"
 #include "VulkanFeatureContext.h"
 #include "VulkanFrameTelemetry.h"
@@ -107,6 +108,8 @@ namespace Iridium {
         VulkanLayeredSceneResolvePass layeredSceneResolve_;
         // R3c.3: WeightedOIT accumulation/resolve and instance capacity.
         VulkanWeightedOitFeature oit_;
+        // R3c.4: validation readback, scene-color and final capture hooks.
+        VulkanHookPasses hooks_;
         TransparencyPyramidResidency transparencyPyramidResidency_;
         TransparencyPyramidResidency ordinary2AtlasResidency_;
         TransparencyPyramidResidency hero4AtlasResidency_;
@@ -184,7 +187,10 @@ namespace Iridium {
         uint32_t retainedRenderView_ = 0;
         bool retainedViewsEnabled_ = false;
         void destroyRetainedViews();
-        void publishRetainedView();
+        // The final-capture-hook consumer (R3c.4): initialize newly created
+        // view images, then copy the output into the retained view.
+        void initializeRetainedViews(VkCommandBuffer commandBuffer);
+        void copyRetainedView(VkCommandBuffer commandBuffer);
         std::vector<VkDescriptorSet> uiDepthTextures;
         std::vector<uint32_t> imguiFragmentShaderCode_;
 
@@ -318,7 +324,6 @@ namespace Iridium {
         float paperWhiteNits_ = 203.0f;
         float peakNits_ = 1000.0f;
         bool selectionOutlineActive_ = false;
-        bool finalCaptureHookRecorded_ = false;
         // "probe.capture" begun or skipped this frame (R3b.8).
         bool probeCaptureHandled_ = false;
 
@@ -380,8 +385,8 @@ namespace Iridium {
             const glm::mat4& view, const glm::mat4& projection,
             float nearPlane, float farPlane, uint32_t activeProbeCount);
         // Feature owners in registration (and graph) order.
-        [[nodiscard]] std::array<IVulkanFeature*, 3> features() noexcept {
-            return { &clusterLighting_, &output_, &oit_ };
+        [[nodiscard]] std::array<IVulkanFeature*, 4> features() noexcept {
+            return { &clusterLighting_, &output_, &oit_, &hooks_ };
         }
         void initFrameTargets();
         void rebuildRenderGraphAfterDeviceIdle();
@@ -455,17 +460,8 @@ namespace Iridium {
         void recordDeepLayeredValidationHook(
             std::span<const LayeredCaptureDraw> draws,
             TransparencyQuality quality);
-        // Extension hooks (R2.7). A pass hook does nothing when undeclared,
-        // skips its pass when no extension wants it, or begins the GPU range
-        // and pass and calls every extension that wants it.
-        void runPassHook(const VulkanHookContext& context, bool declared,
-            RenderGraph::PassId pass, const char* gpuRangeName);
-        // Brackets a capture copy: scene-linear copies run in the declared
-        // scene-color-capture-hook pass (output-transform returns scene.color
-        // to SampledRead); final output runs in final-capture-hook.
-        template<typename Record>
-        void recordCaptureCopy(FrameCapturePoint point, Record&& record);
-        void runCaptureHook(VulkanHookPoint point, FrameCapturePoint capturePoint);
+        // The capture source of a capture point (scene-linear: scene.color;
+        // final: the output target).
         [[nodiscard]] VulkanCaptureHookPayload captureSource(
             FrameCapturePoint point);
         [[nodiscard]] VulkanBackendServices backendServices() noexcept;

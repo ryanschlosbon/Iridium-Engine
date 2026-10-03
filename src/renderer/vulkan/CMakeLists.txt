@@ -20,6 +20,7 @@ add_library(iridium_vulkan STATIC
         VulkanFrameTelemetry.cpp
         VulkanGpuSceneState.cpp
         VulkanHdrEncodePass.cpp
+        VulkanHookPasses.cpp
         VulkanIndexedTextureTable.cpp
         VulkanIndirectCullerShared.cpp
         VulkanIndirectViewCuller.cpp
