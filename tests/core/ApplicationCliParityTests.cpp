@@ -110,6 +110,7 @@ namespace {
         flag("experimentalDepthOcclusionQuery", c.experimentalDepthOcclusionQuery);
         flag("experimentalDepthOcclusionRejection", c.experimentalDepthOcclusionRejection);
         flag("depthOcclusionQualificationOracle", c.depthOcclusionQualificationOracle);
+        flag("indirectStreamDigest", c.indirectStreamDigest);
         flag("validateDepthPyramidCapture", c.validateDepthPyramidCapture);
         flag("validateDepthPyramidResize", c.validateDepthPyramidResize);
         field("gpuLodMinimumResidentLevel", exact(c.gpuLodMinimumResidentLevel));
@@ -447,7 +448,7 @@ namespace {
                 c.experimentalDepthPyramid = true;
                 c.experimentalDepthOcclusionQuery = true;
                 c.experimentalDepthOcclusionRejection = true; }, {}, {} },
-            // --- qualification (36) ---
+            // --- qualification (37) ---
             { "--validate-texture-residency-churn", Q, {}, {}, [](C& c) {
                 c.validateTextureResidencyChurn = true; }, {}, {} },
             { "--validate-reflection-probes", Q, {}, {}, [](C& c) {
@@ -520,6 +521,8 @@ namespace {
                 c.probeLodQualificationOracle = true; }, {}, {} },
             { "--depth-occlusion-qualification-oracle", Q, {}, {}, [](C& c) {
                 c.depthOcclusionQualificationOracle = true; }, {}, {} },
+            { "--qualification-indirect-stream-digest", Q, {}, {}, [](C& c) {
+                c.indirectStreamDigest = true; }, {}, {} },
             { "--validate-depth-pyramid-capture", Q, {}, {}, [](C& c) {
                 c.experimentalDepthPyramid = true; c.validateDepthPyramidCapture = true; },
                 {}, {} },
@@ -569,8 +572,8 @@ namespace {
         Cli::CliOptionRegistry registry;
         registerEngineOptions(registry, scratch);
 
-        CHECK(table.size() == 83);
-        CHECK(registry.options().size() == 83);
+        CHECK(table.size() == 84);
+        CHECK(registry.options().size() == 84);
         std::set<std::string_view> names;
         std::map<std::string_view, size_t> ownerCounts;
         for (const FlagCase& row : table) {
@@ -613,7 +616,7 @@ namespace {
         CHECK(ownerCounts[R] == 14);
         CHECK(ownerCounts[E] == 4);
         CHECK(ownerCounts[G] == 29);
-        CHECK(ownerCounts[Q] == 36);
+        CHECK(ownerCounts[Q] == 37);
         std::cout << "  owners: runtime " << ownerCounts[R] << ", editor " << ownerCounts[E]
                   << ", renderer " << ownerCounts[G] << ", qualification "
                   << ownerCounts[Q] << '\n';
@@ -664,7 +667,7 @@ namespace {
     bool testUsageParity() {
         const std::string usage = engineUsage();
         CHECK(usage.starts_with("Usage: IridiumEngine [options]\n"));
-        CHECK(optionLines(usage).size() == 83);
+        CHECK(optionLines(usage).size() == 84);
         // Groups appear in owner order: runtime, editor, renderer, qualification.
         const size_t runtime = usage.find("runtime options:");
         const size_t editor = usage.find("editor options:");
@@ -739,7 +742,7 @@ int main() {
     };
 
     constexpr TestCase tests[] = {
-        { "Per-flag table (83 flags)", testFlagTable },
+        { "Per-flag table (84 flags)", testFlagTable },
         { "Aliases and removed flags", testAliasesAndRemovedFlags },
         { "Usage parity", testUsageParity },
         { "Registry without qualification", testRegistryWithoutQualification },

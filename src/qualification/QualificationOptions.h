@@ -44,6 +44,9 @@ namespace Iridium {
         bool probeLodQualificationOracle = false;
         bool virtualShadowDepthQualificationOracle = false;
         bool depthOcclusionQualificationOracle = false;
+        // Hash every GPU-driven compaction stream per view/slot/frame
+        // (VulkanIndirectStreamDigest); observes only, changes no work.
+        bool indirectStreamDigest = false;
 
         // Validators.
         bool validateDepthPyramidCapture = false;
@@ -73,7 +76,7 @@ namespace Iridium {
         std::string cacheState = "unspecified";
     };
 
-    // Registers the 36 qualification flags and their post-parse checks
+    // Registers the 37 qualification flags and their post-parse checks
     // (owner "qualification"). Flags that imply runtime or renderer behavior
     // also write `config`: --profile-cpu-output enables CPU profiling, the
     // VSM depth oracle enables the VSM resources and the depth-pyramid

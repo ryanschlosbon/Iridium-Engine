@@ -17,7 +17,9 @@
 #include "VulkanProductionRenderGraph.h"
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
+#include <initializer_list>
 #include <span>
 #include <variant>
 #include <vector>
@@ -248,6 +250,153 @@ namespace Iridium {
         ~IVulkanIndirectOracle() = default;
     };
 
+    // ---------------------------------------------------------------------
+    // Indirect command-stream digest (M7R R3a.0, qualification only).
+    //
+    // Observes every GPU-driven compaction the backend records: the ordered
+    // compute dispatch log, the host-written candidate/count bytes, the
+    // indirect draws that consume the result and, once the slot's fence has
+    // retired, the device-written command regions. A stream is one view's
+    // compaction work for one frame slot; it begins when the host writes are
+    // committed and retires when the backend collects the slot. The backend
+    // reports the same values it passes to vkCmd*; it never changes what it
+    // records because an observer is attached.
+    // ---------------------------------------------------------------------
+    enum class VulkanIndirectStreamView : uint8_t {
+        DirectionalShadow,
+        SpotShadow,
+        PointShadow,
+        ReflectionProbe,
+        Opaque,
+    };
+    inline constexpr uint32_t kVulkanIndirectStreamViewCount = 5u;
+
+    // Host-written regions of a stream's candidate/count/query buffers.
+    enum class VulkanIndirectStreamHostTarget : uint8_t {
+        Candidates,
+        Counts,
+        OcclusionQueries,
+    };
+
+    // Device readback of one retired stream, in its count-region layout:
+    // count region i holds counts[i] commands (at most countCapacities[i])
+    // starting at command index commandOffsets[i]. Empty commandOffsets means
+    // the regions are packed back to back (prefix sums of the capacities).
+    // The slot's GPU-scene tables let a command's primitive slot (its
+    // firstInstance) be identified by content rather than by slot index.
+    struct VulkanIndirectStreamReadback {
+        const uint32_t* counts = nullptr;
+        const GpuSceneIndexedIndirectCommand* commands = nullptr;
+        std::span<const uint32_t> countCapacities{};
+        std::span<const uint32_t> commandOffsets{};
+        std::span<const GpuScenePrimitiveRecord> primitives{};
+        std::span<const GpuSceneInstanceRecord> instances{};
+        std::span<const GpuSceneAffineTransform> transforms{};
+    };
+
+    class IVulkanIndirectStreamObserver {
+    public:
+        using View = VulkanIndirectStreamView;
+
+        // The stream's own indirect command and count buffers; draws that
+        // consume them are recorded by role, not by handle.
+        virtual void beginStream(View view, uint32_t slot,
+            VkBuffer commandBuffer, VkBuffer countBuffer) = 0;
+        virtual void hostWrite(View view, uint32_t slot,
+            VulkanIndirectStreamHostTarget target,
+            std::span<const std::byte> bytes) = 0;
+        virtual void gpuRange(View view, uint32_t slot, const char* name) = 0;
+        virtual void barrier(View view, uint32_t slot,
+            VkPipelineStageFlags srcStages, VkPipelineStageFlags dstStages,
+            VkAccessFlags srcAccess, VkAccessFlags dstAccess) = 0;
+        virtual void bindPipeline(View view, uint32_t slot,
+            VkPipelineBindPoint bindPoint, VkPipeline pipeline) = 0;
+        virtual void bindDescriptorSets(View view, uint32_t slot,
+            VkPipelineBindPoint bindPoint, VkPipelineLayout layout,
+            uint32_t firstSet, std::span<const VkDescriptorSet> sets,
+            std::span<const uint32_t> dynamicOffsets) = 0;
+        virtual void pushConstants(View view, uint32_t slot,
+            VkPipelineLayout layout, VkShaderStageFlags stages, uint32_t offset,
+            std::span<const std::byte> bytes) = 0;
+        virtual void dispatch(View view, uint32_t slot, uint32_t groupsX,
+            uint32_t groupsY, uint32_t groupsZ) = 0;
+        // Work recorded by a helper on the stream's behalf (depth-occlusion
+        // query dispatches, the fused-occlusion history descriptor write):
+        // a stable tag and its arguments.
+        virtual void note(View view, uint32_t slot, uint32_t tag,
+            std::span<const uint64_t> values) = 0;
+        virtual void indirectDraw(View view, uint32_t slot, VkPipeline pipeline,
+            VkBuffer vertexBuffer, VkBuffer indexBuffer, VkIndexType indexType,
+            uint32_t pushWord, VkBuffer commandBuffer,
+            VkDeviceSize commandOffset, VkBuffer countBuffer,
+            VkDeviceSize countOffset, uint32_t maxDrawCount) = 0;
+        virtual void retireStream(View view, uint32_t slot,
+            const VulkanIndirectStreamReadback& readback) = 0;
+
+    protected:
+        ~IVulkanIndirectStreamObserver() = default;
+    };
+
+    // One stream's recording-site view of the observer: every call is a no-op
+    // without one, so emission sites stay one line next to their vkCmd* call.
+    struct VulkanIndirectStreamTap {
+        IVulkanIndirectStreamObserver* observer = nullptr;
+        VulkanIndirectStreamView view = VulkanIndirectStreamView::DirectionalShadow;
+        uint32_t slot = 0;
+
+        void begin(VkBuffer commandBuffer, VkBuffer countBuffer) const {
+            if (observer) observer->beginStream(view, slot, commandBuffer,
+                countBuffer);
+        }
+        void hostWrite(VulkanIndirectStreamHostTarget target, const void* data,
+            size_t size) const {
+            if (observer) observer->hostWrite(view, slot, target,
+                { static_cast<const std::byte*>(data), size });
+        }
+        void gpuRange(const char* name) const {
+            if (observer) observer->gpuRange(view, slot, name);
+        }
+        void barrier(VkPipelineStageFlags srcStages, VkPipelineStageFlags dstStages,
+            VkAccessFlags srcAccess, VkAccessFlags dstAccess) const {
+            if (observer) observer->barrier(view, slot, srcStages, dstStages,
+                srcAccess, dstAccess);
+        }
+        void bindPipeline(VkPipelineBindPoint bindPoint, VkPipeline pipeline) const {
+            if (observer) observer->bindPipeline(view, slot, bindPoint, pipeline);
+        }
+        void bindDescriptorSets(VkPipelineBindPoint bindPoint,
+            VkPipelineLayout layout, uint32_t firstSet,
+            std::span<const VkDescriptorSet> sets,
+            std::span<const uint32_t> dynamicOffsets = {}) const {
+            if (observer) observer->bindDescriptorSets(view, slot, bindPoint,
+                layout, firstSet, sets, dynamicOffsets);
+        }
+        void pushConstants(VkPipelineLayout layout, VkShaderStageFlags stages,
+            uint32_t offset, const void* data, size_t size) const {
+            if (observer) observer->pushConstants(view, slot, layout, stages,
+                offset, { static_cast<const std::byte*>(data), size });
+        }
+        void dispatch(uint32_t x, uint32_t y, uint32_t z) const {
+            if (observer) observer->dispatch(view, slot, x, y, z);
+        }
+        void note(uint32_t tag, std::initializer_list<uint64_t> values) const {
+            if (observer) observer->note(view, slot, tag,
+                { values.begin(), values.size() });
+        }
+        void indirectDraw(VkPipeline pipeline, VkBuffer vertexBuffer,
+            VkBuffer indexBuffer, VkIndexType indexType, uint32_t pushWord,
+            VkBuffer commandBuffer, VkDeviceSize commandOffset,
+            VkBuffer countBuffer, VkDeviceSize countOffset,
+            uint32_t maxDrawCount) const {
+            if (observer) observer->indirectDraw(view, slot, pipeline,
+                vertexBuffer, indexBuffer, indexType, pushWord, commandBuffer,
+                commandOffset, countBuffer, countOffset, maxDrawCount);
+        }
+        void retire(const VulkanIndirectStreamReadback& readback) const {
+            if (observer) observer->retireStream(view, slot, readback);
+        }
+    };
+
     class IVulkanBackendExtension : public IRenderBackendExtension {
     public:
         [[nodiscard]] RenderBackendApi api() const noexcept final {
@@ -273,6 +422,12 @@ namespace Iridium {
         // acquire path); its readbacks are CPU-safe.
         virtual void onFrameSlotRetired(uint32_t slot) { (void)slot; }
         [[nodiscard]] virtual IVulkanIndirectOracle* indirectOracle() noexcept {
+            return nullptr;
+        }
+        // Non-null only while a command-stream digest is requested (fixed
+        // before the backend is created).
+        [[nodiscard]] virtual IVulkanIndirectStreamObserver*
+            indirectStreamObserver() noexcept {
             return nullptr;
         }
         // After the device is idle and the oracles have drained, before any

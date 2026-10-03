@@ -3,5 +3,6 @@
 # harness owns the extension and attaches it through RenderBackendCreateInfo.
 target_sources(iridium_qualification PRIVATE
         VulkanIndirectOracle.cpp
+        VulkanIndirectStreamDigest.cpp
         VulkanQualificationExtension.cpp
         VulkanReadbackAnalysis.cpp)

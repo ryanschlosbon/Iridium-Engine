@@ -719,6 +719,7 @@ namespace Iridium {
         // oracle work).
         std::vector<IVulkanBackendExtension*> extensions_;
         IVulkanIndirectOracle* indirectOracle_ = nullptr;
+        IVulkanIndirectStreamObserver* indirectStreamObserver_ = nullptr;
         VulkanGraphHooks graphHooks_ = VulkanGraphHooks::none();
 
         // Private helpers that Application.cpp no longer needs to worry about
@@ -884,6 +885,14 @@ namespace Iridium {
                 if (indirectOracle_ != nullptr && indirectOracle_->enabled(view))
                     return indirectOracle_;
             }
+            return nullptr;
+        }
+        // Command-stream digest observer (R3a.0): null unless this is a
+        // qualification build with a digest requested.
+        [[nodiscard]] IVulkanIndirectStreamObserver*
+            activeIndirectStreamObserver() const noexcept {
+            if constexpr (kQualificationBuild)
+                return indirectStreamObserver_;
             return nullptr;
         }
         [[nodiscard]] FrameMemoryProfile memorySnapshot();

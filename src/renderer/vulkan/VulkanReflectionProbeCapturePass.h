@@ -75,6 +75,11 @@ namespace Iridium {
         void bindFaceComputeDescriptor(VkCommandBuffer commandBuffer,
             VkPipelineLayout pipelineLayout, uint32_t frameIndex,
             uint32_t recordIndex) const;
+        // The set and dynamic offset bindFaceComputeDescriptor binds at set 0.
+        [[nodiscard]] VkDescriptorSet faceComputeDescriptor(
+            uint32_t frameIndex) const;
+        [[nodiscard]] uint32_t faceComputeDynamicOffset(
+            uint32_t recordIndex) const;
         void endFace(VkCommandBuffer commandBuffer) const;
 
         [[nodiscard]] std::vector<VkDescriptorSet> recordPrefilter(

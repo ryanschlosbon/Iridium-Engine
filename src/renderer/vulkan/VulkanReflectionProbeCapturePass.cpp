@@ -416,6 +416,19 @@ void VulkanReflectionProbeCapturePass::bindFaceComputeDescriptor(
         pipelineLayout, 0u, 1u, &faceDescriptors_[frameIndex], 1u, &offset);
 }
 
+VkDescriptorSet VulkanReflectionProbeCapturePass::faceComputeDescriptor(
+    uint32_t frameIndex) const {
+    if (frameIndex >= faceDescriptors_.size())
+        throw std::out_of_range(
+            "Reflection-probe compute face descriptor is invalid");
+    return faceDescriptors_[frameIndex];
+}
+
+uint32_t VulkanReflectionProbeCapturePass::faceComputeDynamicOffset(
+    uint32_t recordIndex) const {
+    return static_cast<uint32_t>(dynamicOffset(recordIndex));
+}
+
 void VulkanReflectionProbeCapturePass::endFace(
     VkCommandBuffer commandBuffer) const {
     vkCmdEndRenderPass(commandBuffer);

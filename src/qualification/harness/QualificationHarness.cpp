@@ -44,6 +44,7 @@ namespace Iridium {
             .depthOcclusionOracle = options.depthOcclusionQualificationOracle,
             .virtualShadowDepthOracle =
                 options.virtualShadowDepthQualificationOracle,
+            .indirectStreamDigest = options.indirectStreamDigest,
             .validateProbeCaptureTargets = options.validateReflectionProbes,
         };
     }

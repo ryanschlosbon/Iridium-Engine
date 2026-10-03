@@ -10,6 +10,7 @@
 #include "renderer/transparency/LayeredGlass.h"
 
 #include <algorithm>
+#include <iostream>
 #include <limits>
 #include <stdexcept>
 #include <utility>
@@ -103,6 +104,9 @@ namespace Iridium {
             .virtualShadowDepth = config.virtualShadowDepthOracle,
         });
         validateProbeCaptureTargets_ = config.validateProbeCaptureTargets;
+        indirectStreamDigestEnabled_ = config.indirectStreamDigest;
+        indirectStreamDigest_.setOutput(
+            indirectStreamDigestEnabled_ ? &std::cout : nullptr);
     }
 
     VulkanGraphHooks VulkanQualificationExtension::graphHooks() const noexcept {
@@ -155,6 +159,8 @@ namespace Iridium {
     }
 
     void VulkanQualificationExtension::onBeforeDeviceDestroy() {
+        // The backend has collected every slot; all streams have retired.
+        if (indirectStreamDigestEnabled_) indirectStreamDigest_.finish();
         if (attached()) {
             VulkanResourceAllocator& allocator = *services_.allocator;
             for (PendingFrameCapture& pending : pendingFrameCaptures_)

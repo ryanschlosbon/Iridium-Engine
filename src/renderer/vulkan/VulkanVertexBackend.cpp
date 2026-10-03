@@ -726,6 +726,8 @@ namespace Iridium {
         // The first extension providing each service serves it.
         if (indirectOracle_ == nullptr)
             indirectOracle_ = vulkanExtension->indirectOracle();
+        if (indirectStreamObserver_ == nullptr)
+            indirectStreamObserver_ = vulkanExtension->indirectStreamObserver();
     }
 
     VulkanBackendServices VulkanVertexBackend::backendServices() noexcept {
@@ -3738,12 +3740,23 @@ namespace Iridium {
                     work * commandBegin + bin.commandBegin);
             }
         validation.pending = true;
+        const VulkanIndirectStreamTap stream{ activeIndirectStreamObserver(),
+            VulkanIndirectStreamView::DirectionalShadow, frame };
+        stream.begin(directionalShadowIndirectCommandBuffers_[frame].buffer,
+            directionalShadowIndirectCountBuffers_[frame].buffer);
 
         std::memcpy(directionalShadowIndirectCandidateBuffers_[frame].mapped,
             directionalShadowIndirectCandidates_.data(),
             directionalShadowIndirectCandidates_.size() *
                 sizeof(GpuSceneIndirectCandidate));
         std::memset(directionalShadowIndirectCountBuffers_[frame].mapped, 0,
+            static_cast<size_t>(requiredCounts) * sizeof(uint32_t));
+        stream.hostWrite(VulkanIndirectStreamHostTarget::Candidates,
+            directionalShadowIndirectCandidateBuffers_[frame].mapped,
+            directionalShadowIndirectCandidates_.size() *
+                sizeof(GpuSceneIndirectCandidate));
+        stream.hostWrite(VulkanIndirectStreamHostTarget::Counts,
+            directionalShadowIndirectCountBuffers_[frame].mapped,
             static_cast<size_t>(requiredCounts) * sizeof(uint32_t));
         VkMemoryBarrier hostBarrier{ VK_STRUCTURE_TYPE_MEMORY_BARRIER };
         hostBarrier.srcAccessMask = VK_ACCESS_HOST_WRITE_BIT;
@@ -3752,10 +3765,16 @@ namespace Iridium {
         vkCmdPipelineBarrier(currentCmd, VK_PIPELINE_STAGE_HOST_BIT,
             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0u,
             1u, &hostBarrier, 0u, nullptr, 0u, nullptr);
+        stream.barrier(VK_PIPELINE_STAGE_HOST_BIT,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, hostBarrier.srcAccessMask,
+            hostBarrier.dstAccessMask);
 
         VulkanGpuRangeToken range = scheduler.beginGpuRange(
             "gpu.shadow.directional.compact");
+        stream.gpuRange("gpu.shadow.directional.compact");
         vkCmdBindPipeline(currentCmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+            directionalShadowCompactPipeline_);
+        stream.bindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE,
             directionalShadowCompactPipeline_);
         const std::array<VkDescriptorSet, 3> sets{
             directionalShadow_.renderDescriptor(frame),
@@ -3764,6 +3783,8 @@ namespace Iridium {
         vkCmdBindDescriptorSets(currentCmd, VK_PIPELINE_BIND_POINT_COMPUTE,
             directionalShadowCompactPipelineLayout_, 0u,
             static_cast<uint32_t>(sets.size()), sets.data(), 0u, nullptr);
+        stream.bindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE,
+            directionalShadowCompactPipelineLayout_, 0u, sets);
         for (uint32_t layer = 0;
                 layer < directionalShadowIndirectWorkIndices_.size(); ++layer) {
             const uint32_t workIndex =
@@ -3786,8 +3807,12 @@ namespace Iridium {
                 directionalShadowCompactPipelineLayout_,
                 VK_SHADER_STAGE_COMPUTE_BIT, 0u, sizeof(parameters),
                 parameters.data());
+            stream.pushConstants(directionalShadowCompactPipelineLayout_,
+                VK_SHADER_STAGE_COMPUTE_BIT, 0u, parameters.data(),
+                sizeof(parameters));
             vkCmdDispatch(currentCmd,
                 (parameters[0] + 63u) / 64u, 1u, 1u);
+            stream.dispatch((parameters[0] + 63u) / 64u, 1u, 1u);
             ++frameCounters_.dispatchRecorded;
         }
         scheduler.endGpuRange(range);
@@ -3798,6 +3823,9 @@ namespace Iridium {
             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
             VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT, 0u,
             1u, &drawBarrier, 0u, nullptr, 0u, nullptr);
+        stream.barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT, drawBarrier.srcAccessMask,
+            drawBarrier.dstAccessMask);
         return true;
     }
 
@@ -3961,6 +3989,9 @@ namespace Iridium {
             directionalShadow_.renderDescriptor(frameIndex);
         VulkanGpuRangeToken gpuRange =
             scheduler.beginGpuRange("gpu.shadow.directional");
+        const VulkanIndirectStreamTap drawStream{ indirectValid
+                ? activeIndirectStreamObserver() : nullptr,
+            VulkanIndirectStreamView::DirectionalShadow, frameIndex };
 
         for (const DirectionalShadowFramePacket& shadow : shadows) {
           directionalShadowCasterMaskScratch_.resize(
@@ -4054,6 +4085,16 @@ namespace Iridium {
                             sizeof(uint32_t),
                         bin.commandCount,
                         sizeof(GpuSceneIndexedIndirectCommand));
+                    drawStream.indirectDraw(pipeline, bin.vertexBuffer,
+                        bin.indexBuffer, bin.indexType, layer,
+                        directionalShadowIndirectCommandBuffers_[frameIndex].buffer,
+                        static_cast<VkDeviceSize>(commandRegion +
+                            bin.commandBegin) *
+                            sizeof(GpuSceneIndexedIndirectCommand),
+                        directionalShadowIndirectCountBuffers_[frameIndex].buffer,
+                        static_cast<VkDeviceSize>(countRegion + binIndex) *
+                            sizeof(uint32_t),
+                        bin.commandCount);
                     ++frameCounters_.shadowDirectionalIndirectBins;
                 }
                 if (shadowOracle != nullptr) {
@@ -4426,12 +4467,23 @@ namespace Iridium {
                     work * commandBegin + bin.commandBegin);
             }
         validation.pending = true;
+        const VulkanIndirectStreamTap stream{ activeIndirectStreamObserver(),
+            VulkanIndirectStreamView::SpotShadow, frame };
+        stream.begin(spotShadowIndirectCommandBuffers_[frame].buffer,
+            spotShadowIndirectCountBuffers_[frame].buffer);
 
         std::memcpy(spotShadowIndirectCandidateBuffers_[frame].mapped,
             spotShadowIndirectCandidates_.data(),
             spotShadowIndirectCandidates_.size() *
                 sizeof(GpuSceneIndirectCandidate));
         std::memset(spotShadowIndirectCountBuffers_[frame].mapped, 0,
+            static_cast<size_t>(requiredCounts) * sizeof(uint32_t));
+        stream.hostWrite(VulkanIndirectStreamHostTarget::Candidates,
+            spotShadowIndirectCandidateBuffers_[frame].mapped,
+            spotShadowIndirectCandidates_.size() *
+                sizeof(GpuSceneIndirectCandidate));
+        stream.hostWrite(VulkanIndirectStreamHostTarget::Counts,
+            spotShadowIndirectCountBuffers_[frame].mapped,
             static_cast<size_t>(requiredCounts) * sizeof(uint32_t));
         VkMemoryBarrier hostBarrier{ VK_STRUCTURE_TYPE_MEMORY_BARRIER };
         hostBarrier.srcAccessMask = VK_ACCESS_HOST_WRITE_BIT;
@@ -4440,10 +4492,16 @@ namespace Iridium {
         vkCmdPipelineBarrier(currentCmd, VK_PIPELINE_STAGE_HOST_BIT,
             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0u,
             1u, &hostBarrier, 0u, nullptr, 0u, nullptr);
+        stream.barrier(VK_PIPELINE_STAGE_HOST_BIT,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, hostBarrier.srcAccessMask,
+            hostBarrier.dstAccessMask);
 
         VulkanGpuRangeToken range = scheduler.beginGpuRange(
             "gpu.shadow.spot.compact");
+        stream.gpuRange("gpu.shadow.spot.compact");
         vkCmdBindPipeline(currentCmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+            spotShadowCompactPipeline_);
+        stream.bindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE,
             spotShadowCompactPipeline_);
         const std::array<VkDescriptorSet, 3> sets{
             spotShadow_.renderDescriptor(frame),
@@ -4452,6 +4510,8 @@ namespace Iridium {
         vkCmdBindDescriptorSets(currentCmd, VK_PIPELINE_BIND_POINT_COMPUTE,
             spotShadowCompactPipelineLayout_, 0u,
             static_cast<uint32_t>(sets.size()), sets.data(), 0u, nullptr);
+        stream.bindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE,
+            spotShadowCompactPipelineLayout_, 0u, sets);
         for (const SpotShadowFramePacket& shadow : shadows) {
             if (!shadow.update) continue;
             const uint32_t workIndex =
@@ -4471,7 +4531,11 @@ namespace Iridium {
             vkCmdPushConstants(currentCmd, spotShadowCompactPipelineLayout_,
                 VK_SHADER_STAGE_COMPUTE_BIT, 0u, sizeof(parameters),
                 parameters.data());
+            stream.pushConstants(spotShadowCompactPipelineLayout_,
+                VK_SHADER_STAGE_COMPUTE_BIT, 0u, parameters.data(),
+                sizeof(parameters));
             vkCmdDispatch(currentCmd, (parameters[0] + 63u) / 64u, 1u, 1u);
+            stream.dispatch((parameters[0] + 63u) / 64u, 1u, 1u);
             ++frameCounters_.dispatchRecorded;
         }
         scheduler.endGpuRange(range);
@@ -4482,6 +4546,9 @@ namespace Iridium {
             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
             VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT, 0u,
             1u, &drawBarrier, 0u, nullptr, 0u, nullptr);
+        stream.barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT, drawBarrier.srcAccessMask,
+            drawBarrier.dstAccessMask);
         return true;
     }
 
@@ -4541,6 +4608,9 @@ namespace Iridium {
             spotShadow_.renderDescriptor(frameIndex);
         VulkanGpuRangeToken gpuRange =
             scheduler.beginGpuRange("gpu.shadow.spot");
+        const VulkanIndirectStreamTap drawStream{ indirectValid
+                ? activeIndirectStreamObserver() : nullptr,
+            VulkanIndirectStreamView::SpotShadow, frameIndex };
         for (const SpotShadowFramePacket& shadow : shadows) {
             if (!shadow.update) continue;
             directionalShadowCasterMaskScratch_.resize(
@@ -4624,6 +4694,16 @@ namespace Iridium {
                             sizeof(uint32_t),
                         bin.commandCount,
                         sizeof(GpuSceneIndexedIndirectCommand));
+                    drawStream.indirectDraw(pipeline, bin.vertexBuffer,
+                        bin.indexBuffer, bin.indexType, shadow.shadowDataSlot,
+                        spotShadowIndirectCommandBuffers_[frameIndex].buffer,
+                        static_cast<VkDeviceSize>(commandRegion +
+                            bin.commandBegin) *
+                            sizeof(GpuSceneIndexedIndirectCommand),
+                        spotShadowIndirectCountBuffers_[frameIndex].buffer,
+                        static_cast<VkDeviceSize>(countRegion + binIndex) *
+                            sizeof(uint32_t),
+                        bin.commandCount);
                     ++frameCounters_.shadowSpotIndirectBins;
                 }
                 if (shadowOracle != nullptr) {
@@ -4998,12 +5078,23 @@ namespace Iridium {
                     work * commandBegin + bin.commandBegin);
             }
         validation.pending = true;
+        const VulkanIndirectStreamTap stream{ activeIndirectStreamObserver(),
+            VulkanIndirectStreamView::PointShadow, frame };
+        stream.begin(pointShadowIndirectCommandBuffers_[frame].buffer,
+            pointShadowIndirectCountBuffers_[frame].buffer);
 
         std::memcpy(pointShadowIndirectCandidateBuffers_[frame].mapped,
             pointShadowIndirectCandidates_.data(),
             pointShadowIndirectCandidates_.size() *
                 sizeof(GpuSceneIndirectCandidate));
         std::memset(pointShadowIndirectCountBuffers_[frame].mapped, 0,
+            static_cast<size_t>(requiredCounts) * sizeof(uint32_t));
+        stream.hostWrite(VulkanIndirectStreamHostTarget::Candidates,
+            pointShadowIndirectCandidateBuffers_[frame].mapped,
+            pointShadowIndirectCandidates_.size() *
+                sizeof(GpuSceneIndirectCandidate));
+        stream.hostWrite(VulkanIndirectStreamHostTarget::Counts,
+            pointShadowIndirectCountBuffers_[frame].mapped,
             static_cast<size_t>(requiredCounts) * sizeof(uint32_t));
         VkMemoryBarrier hostBarrier{ VK_STRUCTURE_TYPE_MEMORY_BARRIER };
         hostBarrier.srcAccessMask = VK_ACCESS_HOST_WRITE_BIT;
@@ -5012,10 +5103,16 @@ namespace Iridium {
         vkCmdPipelineBarrier(currentCmd, VK_PIPELINE_STAGE_HOST_BIT,
             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0u,
             1u, &hostBarrier, 0u, nullptr, 0u, nullptr);
+        stream.barrier(VK_PIPELINE_STAGE_HOST_BIT,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, hostBarrier.srcAccessMask,
+            hostBarrier.dstAccessMask);
 
         VulkanGpuRangeToken range = scheduler.beginGpuRange(
             "gpu.shadow.point.compact");
+        stream.gpuRange("gpu.shadow.point.compact");
         vkCmdBindPipeline(currentCmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+            pointShadowCompactPipeline_);
+        stream.bindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE,
             pointShadowCompactPipeline_);
         const std::array<VkDescriptorSet, 3> sets{
             pointShadow_.renderDescriptor(frame),
@@ -5024,6 +5121,8 @@ namespace Iridium {
         vkCmdBindDescriptorSets(currentCmd, VK_PIPELINE_BIND_POINT_COMPUTE,
             pointShadowCompactPipelineLayout_, 0u,
             static_cast<uint32_t>(sets.size()), sets.data(), 0u, nullptr);
+        stream.bindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE,
+            pointShadowCompactPipelineLayout_, 0u, sets);
         for (const PointShadowFramePacket& shadow : shadows) {
             if (!shadow.update) continue;
             for (uint32_t face = 0; face < 6u; ++face) {
@@ -5049,8 +5148,12 @@ namespace Iridium {
                     pointShadowCompactPipelineLayout_,
                     VK_SHADER_STAGE_COMPUTE_BIT, 0u, sizeof(parameters),
                     parameters.data());
+                stream.pushConstants(pointShadowCompactPipelineLayout_,
+                    VK_SHADER_STAGE_COMPUTE_BIT, 0u, parameters.data(),
+                    sizeof(parameters));
                 vkCmdDispatch(currentCmd,
                     (parameters[0] + 63u) / 64u, 1u, 1u);
+                stream.dispatch((parameters[0] + 63u) / 64u, 1u, 1u);
                 ++frameCounters_.dispatchRecorded;
             }
         }
@@ -5062,6 +5165,9 @@ namespace Iridium {
             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
             VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT, 0u,
             1u, &drawBarrier, 0u, nullptr, 0u, nullptr);
+        stream.barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT, drawBarrier.srcAccessMask,
+            drawBarrier.dstAccessMask);
         return true;
     }
 
@@ -5121,6 +5227,9 @@ namespace Iridium {
             pointShadow_.renderDescriptor(frameIndex);
         VulkanGpuRangeToken gpuRange =
             scheduler.beginGpuRange("gpu.shadow.point");
+        const VulkanIndirectStreamTap drawStream{ indirectValid
+                ? activeIndirectStreamObserver() : nullptr,
+            VulkanIndirectStreamView::PointShadow, frameIndex };
         for (const PointShadowFramePacket& shadow : shadows) {
             if (!shadow.update) continue;
             for (uint32_t face = 0; face < 6u; ++face) {
@@ -5214,6 +5323,18 @@ namespace Iridium {
                                 sizeof(uint32_t),
                             bin.commandCount,
                             sizeof(GpuSceneIndexedIndirectCommand));
+                        drawStream.indirectDraw(pipeline, bin.vertexBuffer,
+                            bin.indexBuffer, bin.indexType, faceSlot,
+                            pointShadowIndirectCommandBuffers_[
+                                frameIndex].buffer,
+                            static_cast<VkDeviceSize>(commandRegion +
+                                bin.commandBegin) *
+                                sizeof(GpuSceneIndexedIndirectCommand),
+                            pointShadowIndirectCountBuffers_[
+                                frameIndex].buffer,
+                            static_cast<VkDeviceSize>(countRegion + binIndex) *
+                                sizeof(uint32_t),
+                            bin.commandCount);
                         ++frameCounters_.shadowPointIndirectBins;
                     }
                     if (shadowOracle != nullptr) {
@@ -5563,12 +5684,23 @@ namespace Iridium {
                     work * commandBegin + bin.commandBegin);
             }
         validation.pending = true;
+        const VulkanIndirectStreamTap stream{ activeIndirectStreamObserver(),
+            VulkanIndirectStreamView::ReflectionProbe, frame };
+        stream.begin(reflectionProbeIndirectCommandBuffers_[frame].buffer,
+            reflectionProbeIndirectCountBuffers_[frame].buffer);
 
         std::memcpy(reflectionProbeIndirectCandidateBuffers_[frame].mapped,
             reflectionProbeIndirectCandidates_.data(),
             reflectionProbeIndirectCandidates_.size() *
                 sizeof(GpuSceneIndirectCandidate));
         std::memset(reflectionProbeIndirectCountBuffers_[frame].mapped, 0,
+            static_cast<size_t>(requiredCounts) * sizeof(uint32_t));
+        stream.hostWrite(VulkanIndirectStreamHostTarget::Candidates,
+            reflectionProbeIndirectCandidateBuffers_[frame].mapped,
+            reflectionProbeIndirectCandidates_.size() *
+                sizeof(GpuSceneIndirectCandidate));
+        stream.hostWrite(VulkanIndirectStreamHostTarget::Counts,
+            reflectionProbeIndirectCountBuffers_[frame].mapped,
             static_cast<size_t>(requiredCounts) * sizeof(uint32_t));
         VkMemoryBarrier hostBarrier{ VK_STRUCTURE_TYPE_MEMORY_BARRIER };
         hostBarrier.srcAccessMask = VK_ACCESS_HOST_WRITE_BIT;
@@ -5577,22 +5709,40 @@ namespace Iridium {
         vkCmdPipelineBarrier(currentCmd, VK_PIPELINE_STAGE_HOST_BIT,
             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0u,
             1u, &hostBarrier, 0u, nullptr, 0u, nullptr);
+        stream.barrier(VK_PIPELINE_STAGE_HOST_BIT,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, hostBarrier.srcAccessMask,
+            hostBarrier.dstAccessMask);
         return true;
     }
 
     void VulkanVertexBackend::recordReflectionProbeIndirectDispatch(
         uint32_t frameIndex, uint32_t faceRecord,
         uint32_t excludedInstanceIndex) {
+        const VulkanIndirectStreamTap stream{ activeIndirectStreamObserver(),
+            VulkanIndirectStreamView::ReflectionProbe, frameIndex };
         vkCmdBindPipeline(currentCmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+            reflectionProbeCompactPipeline_);
+        stream.bindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE,
             reflectionProbeCompactPipeline_);
         reflectionProbeCapturePass_.bindFaceComputeDescriptor(currentCmd,
             reflectionProbeCompactPipelineLayout_, frameIndex, faceRecord);
+        if (stream.observer != nullptr) {
+            const VkDescriptorSet faceSet =
+                reflectionProbeCapturePass_.faceComputeDescriptor(frameIndex);
+            const uint32_t faceOffset =
+                reflectionProbeCapturePass_.faceComputeDynamicOffset(faceRecord);
+            stream.bindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE,
+                reflectionProbeCompactPipelineLayout_, 0u, { &faceSet, 1u },
+                { &faceOffset, 1u });
+        }
         const std::array<VkDescriptorSet, 2> sets{
             gpuSceneDescriptorSets_[frameIndex],
             reflectionProbeIndirectDescriptorSets_[frameIndex] };
         vkCmdBindDescriptorSets(currentCmd, VK_PIPELINE_BIND_POINT_COMPUTE,
             reflectionProbeCompactPipelineLayout_, 1u,
             static_cast<uint32_t>(sets.size()), sets.data(), 0u, nullptr);
+        stream.bindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE,
+            reflectionProbeCompactPipelineLayout_, 1u, sets);
         const uint32_t candidateCount = static_cast<uint32_t>(
             reflectionProbeIndirectCandidates_.size());
         const std::array<uint32_t, 10> parameters{
@@ -5611,7 +5761,11 @@ namespace Iridium {
         vkCmdPushConstants(currentCmd, reflectionProbeCompactPipelineLayout_,
             VK_SHADER_STAGE_COMPUTE_BIT, 0u, sizeof(parameters),
             parameters.data());
+        stream.pushConstants(reflectionProbeCompactPipelineLayout_,
+            VK_SHADER_STAGE_COMPUTE_BIT, 0u, parameters.data(),
+            sizeof(parameters));
         vkCmdDispatch(currentCmd, (candidateCount + 63u) / 64u, 1u, 1u);
+        stream.dispatch((candidateCount + 63u) / 64u, 1u, 1u);
         ++frameCounters_.dispatchRecorded;
         VkMemoryBarrier drawBarrier{ VK_STRUCTURE_TYPE_MEMORY_BARRIER };
         drawBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
@@ -5620,6 +5774,9 @@ namespace Iridium {
             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
             VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT, 0u,
             1u, &drawBarrier, 0u, nullptr, 0u, nullptr);
+        stream.barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT, drawBarrier.srcAccessMask,
+            drawBarrier.dstAccessMask);
     }
 
     void VulkanVertexBackend::submitReflectionProbeCaptures(
@@ -5672,6 +5829,9 @@ namespace Iridium {
         uint32_t faceRecord = 0;
         VulkanGpuRangeToken captureRange =
             scheduler.beginGpuRange("gpu.probe.capture");
+        const VulkanIndirectStreamTap drawStream{ indirectValid
+                ? activeIndirectStreamObserver() : nullptr,
+            VulkanIndirectStreamView::ReflectionProbe, frameIndex };
         for (const ReflectionProbeCaptureScheduleEntry& capture : captures) {
             if (capture.scheduledFaceMask == 0u) continue;
             uint32_t excludedInstanceIndex = InvalidGpuSceneIndex;
@@ -5794,6 +5954,18 @@ namespace Iridium {
                                 sizeof(uint32_t),
                             bin.commandCount,
                             sizeof(GpuSceneIndexedIndirectCommand));
+                        drawStream.indirectDraw(pipeline, bin.vertexBuffer,
+                            bin.indexBuffer, bin.indexType, UINT32_MAX,
+                            reflectionProbeIndirectCommandBuffers_[
+                                frameIndex].buffer,
+                            static_cast<VkDeviceSize>(commandRegion +
+                                bin.commandBegin) *
+                                sizeof(GpuSceneIndexedIndirectCommand),
+                            reflectionProbeIndirectCountBuffers_[
+                                frameIndex].buffer,
+                            static_cast<VkDeviceSize>(countRegion + binIndex) *
+                                sizeof(uint32_t),
+                            bin.commandCount);
                     }
                     if (probeQualificationOracle) {
                         for (size_t casterIndex = 0;
@@ -6312,17 +6484,32 @@ namespace Iridium {
             }
         }
         validation.pending = true;
+        const VulkanIndirectStreamTap stream{ activeIndirectStreamObserver(),
+            VulkanIndirectStreamView::Opaque, frame };
+        stream.begin(opaqueIndirectCommandBuffers_[frame].buffer,
+            opaqueIndirectCountBuffers_[frame].buffer);
         std::memcpy(opaqueIndirectCandidateBuffers_[frame].mapped,
             opaqueIndirectCandidates_.data(),
             opaqueIndirectCandidates_.size() *
                 sizeof(GpuSceneIndirectCandidate));
         std::memset(opaqueIndirectCountBuffers_[frame].mapped, 0,
             opaqueIndirectBins_.size() * sizeof(uint32_t));
+        stream.hostWrite(VulkanIndirectStreamHostTarget::Candidates,
+            opaqueIndirectCandidateBuffers_[frame].mapped,
+            opaqueIndirectCandidates_.size() *
+                sizeof(GpuSceneIndirectCandidate));
+        stream.hostWrite(VulkanIndirectStreamHostTarget::Counts,
+            opaqueIndirectCountBuffers_[frame].mapped,
+            opaqueIndirectBins_.size() * sizeof(uint32_t));
         const uint32_t occlusionQueryCount = static_cast<uint32_t>(
             depthOcclusionQueries_.size());
         if (occlusionQueryCount != 0u) {
             std::memcpy(depthOcclusionQueryBuffers_[frame].mapped,
                 depthOcclusionQueries_.data(),
+                depthOcclusionQueries_.size() *
+                    sizeof(DepthPyramidDeviceQuery));
+            stream.hostWrite(VulkanIndirectStreamHostTarget::OcclusionQueries,
+                depthOcclusionQueryBuffers_[frame].mapped,
                 depthOcclusionQueries_.size() *
                     sizeof(DepthPyramidDeviceQuery));
         }
@@ -6351,13 +6538,18 @@ namespace Iridium {
             (experimentalGpuLodErrorPixels_ > 0.0f ? VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT : 0u),
             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0u,
             1u, &hostBarrier, 0u, nullptr, 0u, nullptr);
+        stream.barrier(VK_PIPELINE_STAGE_HOST_BIT |
+            (experimentalGpuLodErrorPixels_ > 0.0f ? VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT : 0u),
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, hostBarrier.srcAccessMask,
+            hostBarrier.dstAccessMask);
 
         VulkanGpuRangeToken range{};
         const auto recordGpuSceneOcclusion = [&]() {
             if (!validation.gpuSceneOcclusionPending) return;
             range = scheduler.beginGpuRange(
                 "gpu.depth.occlusion-gpu-scene-query");
-            frameCounters_.dispatchRecorded +=
+            stream.gpuRange("gpu.depth.occlusion-gpu-scene-query");
+            const uint64_t queryDispatches =
                 depthPyramid_.recordGpuSceneQueries(
                     currentCmd, frame, retainedRenderView_,
                     globalDescriptorSets[frame],
@@ -6371,6 +6563,13 @@ namespace Iridium {
                     gpuScenePublishedCounts_.instances,
                     gpuScenePublishedCounts_.primitives,
                     gpuScenePublishedCounts_.geometries);
+            frameCounters_.dispatchRecorded += queryDispatches;
+            stream.note(1u, { retainedRenderView_,
+                validation.gpuSceneOcclusionCandidateCount,
+                gpuScenePublishedCounts_.transforms,
+                gpuScenePublishedCounts_.instances,
+                gpuScenePublishedCounts_.primitives,
+                gpuScenePublishedCounts_.geometries, queryDispatches });
             scheduler.endGpuRange(range);
         };
         if (validation.occlusionRejectionApplied) {
@@ -6394,9 +6593,11 @@ namespace Iridium {
             historyWrite.pImageInfo = &historyInfo;
             vkUpdateDescriptorSets(vkContext->getDevice(), 1u,
                 &historyWrite, 0u, nullptr);
+            stream.note(3u, { retainedRenderView_ });
         }
 
         range = scheduler.beginGpuRange("gpu.gpu_scene.frustum_compact");
+        stream.gpuRange("gpu.gpu_scene.frustum_compact");
         const VkPipeline compactPipeline =
             depthOcclusionRejectionEnabled_ &&
                 !validation.occlusionRejectionApplied
@@ -6405,12 +6606,15 @@ namespace Iridium {
             throw std::logic_error("GPU-scene compact pipeline is unavailable");
         vkCmdBindPipeline(currentCmd, VK_PIPELINE_BIND_POINT_COMPUTE,
             compactPipeline);
+        stream.bindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, compactPipeline);
         const std::array<VkDescriptorSet, 3> sets{
             globalDescriptorSets[frame], gpuSceneDescriptorSets_[frame],
             gpuSceneCullDescriptorSets_[frame] };
         vkCmdBindDescriptorSets(currentCmd, VK_PIPELINE_BIND_POINT_COMPUTE,
             gpuSceneCullPipelineLayout_, 0u,
             static_cast<uint32_t>(sets.size()), sets.data(), 0u, nullptr);
+        stream.bindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE,
+            gpuSceneCullPipelineLayout_, 0u, sets);
         const std::array<uint32_t, 11> parameters{
             static_cast<uint32_t>(opaqueIndirectCandidates_.size()),
             gpuScenePublishedCounts_.transforms,
@@ -6425,20 +6629,28 @@ namespace Iridium {
         vkCmdPushConstants(currentCmd, gpuSceneCullPipelineLayout_,
             VK_SHADER_STAGE_COMPUTE_BIT, 0u, sizeof(parameters),
             parameters.data());
+        stream.pushConstants(gpuSceneCullPipelineLayout_,
+            VK_SHADER_STAGE_COMPUTE_BIT, 0u, parameters.data(),
+            sizeof(parameters));
         vkCmdDispatch(currentCmd,
             (parameters[0] + 63u) / 64u, 1u, 1u);
+        stream.dispatch((parameters[0] + 63u) / 64u, 1u, 1u);
         scheduler.endGpuRange(range);
         ++frameCounters_.dispatchRecorded;
 
         if (occlusionQueryCount != 0u) {
             range = scheduler.beginGpuRange("gpu.depth.occlusion-query");
-            frameCounters_.dispatchRecorded += depthPyramid_.recordQueries(
+            stream.gpuRange("gpu.depth.occlusion-query");
+            const uint64_t queryDispatches = depthPyramid_.recordQueries(
                 currentCmd, frame, retainedRenderView_,
                 depthOcclusionQueryBuffers_[frame].buffer,
                 depthOcclusionQueryBuffers_[frame].size,
                 depthOcclusionResultBuffers_[frame].buffer,
                 depthOcclusionResultBuffers_[frame].size,
                 occlusionQueryCount);
+            frameCounters_.dispatchRecorded += queryDispatches;
+            stream.note(2u, { retainedRenderView_, occlusionQueryCount,
+                queryDispatches });
             scheduler.endGpuRange(range);
         }
         if (!validation.occlusionRejectionApplied)
@@ -6451,6 +6663,9 @@ namespace Iridium {
             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
             VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_HOST_BIT, 0u,
             1u, &drawBarrier, 0u, nullptr, 0u, nullptr);
+        stream.barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_HOST_BIT,
+            drawBarrier.srcAccessMask, drawBarrier.dstAccessMask);
         return true;
     }
 
@@ -6549,6 +6764,9 @@ namespace Iridium {
             VkPipelineLayout activeLayout = VK_NULL_HANDLE;
             if (indirectValid) {
                 const uint32_t frame = scheduler.currentFrameIndex();
+                const VulkanIndirectStreamTap drawStream{
+                    activeIndirectStreamObserver(),
+                    VulkanIndirectStreamView::Opaque, frame };
                 uint64_t oracleVisibleCommands = 0;
                 for (uint32_t binIndex = 0;
                         binIndex < opaqueIndirectBins_.size(); ++binIndex) {
@@ -6604,6 +6822,17 @@ namespace Iridium {
                         static_cast<VkDeviceSize>(binIndex) * sizeof(uint32_t),
                         bin.commandCount,
                         sizeof(GpuSceneIndexedIndirectCommand));
+                    drawStream.indirectDraw(record->gpuSceneIndirectPipeline,
+                        geometry->vertexBuffer.buffer,
+                        geometry->indexBuffer.buffer,
+                        toVkIndexType(geometry->indexFormat),
+                        push.padding[0],
+                        opaqueIndirectCommandBuffers_[frame].buffer,
+                        static_cast<VkDeviceSize>(bin.commandBegin) *
+                            sizeof(GpuSceneIndexedIndirectCommand),
+                        opaqueIndirectCountBuffers_[frame].buffer,
+                        static_cast<VkDeviceSize>(binIndex) * sizeof(uint32_t),
+                        bin.commandCount);
                     for (uint32_t command = 0;
                             command < bin.commandCount; ++command) {
                         const DrawPacket& drawn = opaqueQueue[
@@ -7528,6 +7757,14 @@ VkDeviceSize offset = geometry->vertexOffset;
             countBuffers[frameIndex].mapped);
         const auto* commands = static_cast<const GpuSceneIndexedIndirectCommand*>(
             commandBuffers[frameIndex].mapped);
+        VulkanIndirectStreamTap{ activeIndirectStreamObserver(),
+            static_cast<VulkanIndirectStreamView>(viewIndex), frameIndex }
+            .retire({ .counts = counts, .commands = commands,
+                .countCapacities = validation.countCapacities,
+                .commandOffsets = validation.commandOffsets,
+                .primitives = gpuSceneCpuMirrors_[frameIndex].primitives,
+                .instances = gpuSceneCpuMirrors_[frameIndex].instances,
+                .transforms = gpuSceneCpuMirrors_[frameIndex].transforms });
         const GpuSceneCpuMirror& scene = gpuSceneCpuMirrors_[frameIndex];
         uint64_t deviceCommands = 0u;
         uint64_t overflowCommands = 0u;
@@ -8079,6 +8316,15 @@ VkDeviceSize offset = geometry->vertexOffset;
 
         const auto* counts = static_cast<const uint32_t*>(
             opaqueIndirectCountBuffers_[frameIndex].mapped);
+        VulkanIndirectStreamTap{ activeIndirectStreamObserver(),
+            VulkanIndirectStreamView::Opaque, frameIndex }
+            .retire({ .counts = counts,
+                .commands = static_cast<const GpuSceneIndexedIndirectCommand*>(
+                    opaqueIndirectCommandBuffers_[frameIndex].mapped),
+                .countCapacities = validation.binCapacities,
+                .primitives = gpuSceneCpuMirrors_[frameIndex].primitives,
+                .instances = gpuSceneCpuMirrors_[frameIndex].instances,
+                .transforms = gpuSceneCpuMirrors_[frameIndex].transforms });
         // Oracle state exists only for slots that emitted expectations.
         IVulkanIndirectOracle* const lodOracle =
             validation.lodQualificationOracle ? indirectOracle_ : nullptr;

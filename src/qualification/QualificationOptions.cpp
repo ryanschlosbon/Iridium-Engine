@@ -209,6 +209,9 @@ namespace Iridium {
         addSwitch(registry, owner, "--depth-occlusion-qualification-oracle",
             "Repeat fused occlusion projection/query independently for exact qualification",
             [&q] { q.depthOcclusionQualificationOracle = true; });
+        addSwitch(registry, owner, "--qualification-indirect-stream-digest",
+            "Print a digest of every GPU-driven compaction stream per view and frame",
+            [&q] { q.indirectStreamDigest = true; });
         addSwitch(registry, owner, "--validate-depth-pyramid-capture",
             "Read back live depth and verify every pyramid mip",
             [&q, &c] {

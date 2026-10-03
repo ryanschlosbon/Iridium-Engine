@@ -28,6 +28,8 @@ namespace Iridium {
         bool probeLodOracle = false;
         bool depthOcclusionOracle = false;
         bool virtualShadowDepthOracle = false;
+        // Print the indirect command-stream digest (R3a.0).
+        bool indirectStreamDigest = false;
         // Exercise reflection-probe capture-target acquire/promote/retire at
         // backend initialization.
         bool validateProbeCaptureTargets = false;

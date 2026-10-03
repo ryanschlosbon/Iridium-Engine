@@ -2,6 +2,7 @@
 // analyzers, the indirect oracle comparisons, extension hook declarations, and
 // backend-factory attachment. No device is created.
 #include "qualification/vulkan/VulkanIndirectOracle.h"
+#include "qualification/vulkan/VulkanIndirectStreamDigest.h"
 #include "qualification/vulkan/VulkanQualificationExtension.h"
 #include "qualification/vulkan/VulkanReadbackAnalysis.h"
 #include "renderer/rhi/RenderBackendFactory.h"
@@ -13,7 +14,10 @@
 #include <exception>
 #include <iostream>
 #include <span>
+#include <sstream>
 #include <stdexcept>
+#include <string>
+#include <type_traits>
 #include <vector>
 
 namespace {
@@ -492,6 +496,151 @@ namespace {
         return true;
     }
 
+    // R3a.0 command-stream digest: handles hash by first appearance, the
+    // stream's own buffers by role, device regions independent of GPU append
+    // order; any recorded difference changes the stream digest.
+    template<typename Handle>
+    Handle fakeHandle(uint64_t value) {
+        if constexpr (std::is_pointer_v<Handle>)
+            return reinterpret_cast<Handle>(static_cast<uintptr_t>(value));
+        else
+            return static_cast<Handle>(value);
+    }
+
+    struct DigestScript {
+        uint64_t pipeline = 0x100;
+        uint64_t set = 0x200;
+        uint32_t pushWord = 7u;
+        uint64_t commandBuffer = 0x300;
+        uint64_t countBuffer = 0x301;
+        std::array<GpuSceneIndexedIndirectCommand, 3> commands{ {
+            { 30u, 1u, 0u, 0, 5u }, { 60u, 1u, 30u, 0, 2u },
+            { 90u, 1u, 90u, 0, 9u } } };
+        std::array<uint32_t, 2> counts{ 2u, 1u };
+        // Primitive slot -> instance -> transform; slot permutations that
+        // keep the content per command are invisible to the digest.
+        std::array<uint32_t, 10> transformOfPrimitive{
+            0u, 1u, 2u, 3u, 4u, 5u, 6u, 7u, 8u, 9u };
+    };
+
+    uint64_t recordDigestStream(VulkanIndirectStreamDigest& digest,
+        const DigestScript& script) {
+        using View = VulkanIndirectStreamView;
+        const VulkanIndirectStreamTap tap{ &digest, View::SpotShadow, 1u };
+        const VkBuffer commandBuffer = fakeHandle<VkBuffer>(script.commandBuffer);
+        const VkBuffer countBuffer = fakeHandle<VkBuffer>(script.countBuffer);
+        tap.begin(commandBuffer, countBuffer);
+        const std::array<uint32_t, 2> candidates{ 4u, 5u };
+        tap.hostWrite(VulkanIndirectStreamHostTarget::Candidates,
+            candidates.data(), sizeof(candidates));
+        tap.barrier(VK_PIPELINE_STAGE_HOST_BIT,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_HOST_WRITE_BIT,
+            VK_ACCESS_SHADER_READ_BIT);
+        tap.gpuRange("gpu.shadow.spot.compact");
+        tap.bindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE,
+            fakeHandle<VkPipeline>(script.pipeline));
+        const VkDescriptorSet set = fakeHandle<VkDescriptorSet>(script.set);
+        tap.bindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE,
+            fakeHandle<VkPipelineLayout>(0x400), 0u, { &set, 1u });
+        tap.pushConstants(fakeHandle<VkPipelineLayout>(0x400),
+            VK_SHADER_STAGE_COMPUTE_BIT, 0u, &script.pushWord,
+            sizeof(script.pushWord));
+        tap.dispatch(1u, 1u, 1u);
+        tap.indirectDraw(fakeHandle<VkPipeline>(0x500),
+            fakeHandle<VkBuffer>(0x600), fakeHandle<VkBuffer>(0x601),
+            VK_INDEX_TYPE_UINT32, 3u, commandBuffer, 0u, countBuffer, 0u, 2u);
+        const std::array<uint32_t, 2> capacities{ 2u, 1u };
+        const std::array<uint32_t, 2> offsets{ 0u, 2u };
+        std::array<GpuScenePrimitiveRecord, 10> primitives{};
+        std::array<GpuSceneInstanceRecord, 10> instances{};
+        std::array<GpuSceneAffineTransform, 10> transforms{};
+        for (uint32_t index = 0; index < 10u; ++index) {
+            primitives[index].binding.x = index;
+            instances[index].references.x = script.transformOfPrimitive[index];
+            transforms[index].row0.w = static_cast<float>(index);
+        }
+        tap.retire({ .counts = script.counts.data(),
+            .commands = script.commands.data(), .countCapacities = capacities,
+            .commandOffsets = offsets, .primitives = primitives,
+            .instances = instances, .transforms = transforms });
+        return digest.retired().back().digest;
+    }
+
+    bool testIndirectStreamDigest() {
+        const DigestScript base{};
+        VulkanIndirectStreamDigest reference;
+        const uint64_t expected = recordDigestStream(reference, base);
+        CHECK(reference.retired().size() == 1u);
+        CHECK(reference.retired()[0].dispatches == 1u);
+        CHECK(reference.retired()[0].draws == 1u);
+
+        // Different handle values in the same roles: identical digest.
+        DigestScript renamed = base;
+        renamed.pipeline = 0x900; renamed.set = 0x901;
+        renamed.commandBuffer = 0x902; renamed.countBuffer = 0x903;
+        VulkanIndirectStreamDigest second;
+        CHECK(recordDigestStream(second, renamed) == expected);
+
+        // GPU append order inside a (work, bin) region does not matter.
+        DigestScript reordered = base;
+        std::swap(reordered.commands[0], reordered.commands[1]);
+        VulkanIndirectStreamDigest third;
+        CHECK(recordDigestStream(third, reordered) == expected);
+
+        // Content changes do: push bytes, device counts, region membership.
+        DigestScript push = base;
+        push.pushWord = 8u;
+        VulkanIndirectStreamDigest fourth;
+        CHECK(recordDigestStream(fourth, push) != expected);
+        DigestScript count = base;
+        count.counts[1] = 0u;
+        VulkanIndirectStreamDigest fifth;
+        CHECK(recordDigestStream(fifth, count) != expected);
+        DigestScript moved = base;
+        std::swap(moved.commands[1], moved.commands[2]);
+        VulkanIndirectStreamDigest sixth;
+        CHECK(recordDigestStream(sixth, moved) != expected);
+
+        // Entity-to-slot assignment differs per process: a command that names
+        // another slot holding the same instance transform is the same work.
+        DigestScript permuted = base;
+        permuted.commands[0].firstInstance = 1u;
+        permuted.transformOfPrimitive[1] = 5u;
+        VulkanIndirectStreamDigest seventh;
+        CHECK(recordDigestStream(seventh, permuted) == expected);
+        CHECK(seventh.retired()[0].deviceSlotHash !=
+            reference.retired()[0].deviceSlotHash);
+        DigestScript otherInstance = base;
+        otherInstance.commands[0].firstInstance = 1u;
+        VulkanIndirectStreamDigest eighth;
+        CHECK(recordDigestStream(eighth, otherInstance) != expected);
+
+        // Sequence numbers continue per view; events without an open stream
+        // are orphans; the aggregate lines report both.
+        std::ostringstream output;
+        VulkanIndirectStreamDigest printed(&output);
+        (void)recordDigestStream(printed, base);
+        (void)recordDigestStream(printed, base);
+        CHECK(printed.retired()[1].sequence == 1u);
+        printed.dispatch(VulkanIndirectStreamView::Opaque, 0u, 1u, 1u, 1u);
+        printed.finish();
+        const std::string text = output.str();
+        CHECK(text.find("IRIDIUM_INDIRECT_STREAM_DIGEST {\"view\":\"spot\","
+            "\"slot\":1,\"sequence\":1,") != std::string::npos);
+        CHECK(text.find("{\"aggregate\":true,\"view\":\"spot\",\"streams\":2,"
+            "\"orphan_events\":0,\"unretired\":0,") != std::string::npos);
+        CHECK(text.find("{\"aggregate\":true,\"view\":\"all\",\"streams\":2,"
+            "\"orphan_events\":1,\"unretired\":0,") != std::string::npos);
+
+        // The extension serves the observer only when the digest is requested.
+        VulkanQualificationExtension extension;
+        extension.configureQualification({});
+        CHECK(extension.indirectStreamObserver() == nullptr);
+        extension.configureQualification({ .indirectStreamDigest = true });
+        CHECK(extension.indirectStreamObserver() != nullptr);
+        return true;
+    }
+
     class ForeignExtension final : public IRenderBackendExtension {
     public:
         [[nodiscard]] RenderBackendApi api() const noexcept override {
@@ -539,6 +688,7 @@ int main() {
         { "Shadow indirect oracle comparison", testShadowOracleComparison },
         { "Opaque LOD/occlusion oracle", testOpaqueOracleComparison },
         { "Extension hooks and requests", testExtensionHooksAndRequests },
+        { "Indirect command-stream digest", testIndirectStreamDigest },
         { "Factory attachment", testFactoryAttachment },
     };
 

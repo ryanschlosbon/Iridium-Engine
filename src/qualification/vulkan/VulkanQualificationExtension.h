@@ -10,6 +10,7 @@
 
 #include "qualification/QualificationBackend.h"
 #include "qualification/vulkan/VulkanIndirectOracle.h"
+#include "qualification/vulkan/VulkanIndirectStreamDigest.h"
 #include "renderer/vulkan/VulkanBackendExtension.h"
 #include "renderer/vulkan/VulkanResourceAllocator.h"
 
@@ -36,6 +37,14 @@ namespace Iridium {
         void onFrameSlotRetired(uint32_t slot) override;
         [[nodiscard]] IVulkanIndirectOracle* indirectOracle() noexcept override {
             return &oracle_;
+        }
+        [[nodiscard]] IVulkanIndirectStreamObserver*
+            indirectStreamObserver() noexcept override {
+            return indirectStreamDigestEnabled_ ? &indirectStreamDigest_ : nullptr;
+        }
+        [[nodiscard]] const VulkanIndirectStreamDigest&
+            indirectStreamDigest() const noexcept {
+            return indirectStreamDigest_;
         }
         void onBeforeDeviceDestroy() override;
 
@@ -132,6 +141,8 @@ namespace Iridium {
 
         VulkanBackendServices services_{};
         VulkanIndirectOracle oracle_;
+        VulkanIndirectStreamDigest indirectStreamDigest_;
+        bool indirectStreamDigestEnabled_ = false;
         bool validateProbeCaptureTargets_ = false;
 
         std::optional<ArmedFrameCapture> armedFrameCapture_;
