@@ -1,5 +1,7 @@
 #include "renderer/vulkan/VulkanReflectionProbeCaptureTargets.h"
 
+#include "renderer/vulkan/VulkanFrameScheduler.h"
+
 #include <algorithm>
 #include <stdexcept>
 #include <string>
@@ -173,24 +175,39 @@ VulkanReflectionProbeCaptureTargets::acquire(SceneEntityUuid owner,
     return state->staging;
 }
 
+bool VulkanReflectionProbeCaptureTargets::deferDestruction() const noexcept {
+    // Some submitted (or the open) frame may still reference the resource.
+    return scheduler_ != nullptr &&
+        scheduler_->retireValue() > scheduler_->completedSerial();
+}
+
+void VulkanReflectionProbeCaptureTargets::releaseImage(
+    VulkanImageResource& image) noexcept {
+    if (deferDestruction()) {
+        try { scheduler_->retire(image); image = {}; return; }
+        catch (...) {} // Out of queue memory: fall back to an immediate destroy.
+    }
+    if (allocator_ != nullptr) allocator_->destroy(image);
+}
+
+void VulkanReflectionProbeCaptureTargets::releaseView(VkImageView& view) noexcept {
+    if (view == VK_NULL_HANDLE) return;
+    if (deferDestruction()) {
+        try { scheduler_->retireImageView(view); view = VK_NULL_HANDLE; return; }
+        catch (...) {}
+    }
+    if (device_ != VK_NULL_HANDLE) vkDestroyImageView(device_, view, nullptr);
+    view = VK_NULL_HANDLE;
+}
+
 void VulkanReflectionProbeCaptureTargets::destroyStaging(
     VulkanReflectionProbeCaptureStaging& staging) noexcept {
-    if (device_ != VK_NULL_HANDLE) {
-        for (VkImageView view : staging.rawFaceViews)
-            if (view != VK_NULL_HANDLE)
-                vkDestroyImageView(device_, view, nullptr);
-        for (VkImageView view : staging.depthFaceViews)
-            if (view != VK_NULL_HANDLE)
-                vkDestroyImageView(device_, view, nullptr);
-        for (VkImageView view : staging.prefilteredMipArrayViews)
-            if (view != VK_NULL_HANDLE)
-                vkDestroyImageView(device_, view, nullptr);
-    }
-    if (allocator_ != nullptr) {
-        allocator_->destroy(staging.rawRadiance);
-        allocator_->destroy(staging.depth);
-        allocator_->destroy(staging.prefilteredRadiance);
-    }
+    for (VkImageView& view : staging.rawFaceViews) releaseView(view);
+    for (VkImageView& view : staging.depthFaceViews) releaseView(view);
+    for (VkImageView& view : staging.prefilteredMipArrayViews) releaseView(view);
+    releaseImage(staging.rawRadiance);
+    releaseImage(staging.depth);
+    releaseImage(staging.prefilteredRadiance);
     staging = {};
 }
 
@@ -226,26 +243,18 @@ void VulkanReflectionProbeCaptureTargets::promote(SceneEntityUuid owner,
         throw std::overflow_error(
             "Reflection-probe published VRAM budget is exhausted");
     stagingLogicalBytes_ -= state->staging.logicalBytes;
+    // R4c.3: frames in flight may still sample the replaced cube.
     if (state->hasPublished) {
         publishedLogicalBytes_ -= state->publishedLogicalBytes;
-        allocator_->destroy(state->published);
+        releaseImage(state->published);
     }
-    for (VkImageView& view : state->staging.rawFaceViews) {
-        if (view != VK_NULL_HANDLE)
-            vkDestroyImageView(device_, view, nullptr);
-        view = VK_NULL_HANDLE;
-    }
-    for (VkImageView& view : state->staging.depthFaceViews) {
-        if (view != VK_NULL_HANDLE)
-            vkDestroyImageView(device_, view, nullptr);
-        view = VK_NULL_HANDLE;
-    }
-    for (VkImageView view : state->staging.prefilteredMipArrayViews)
-        if (view != VK_NULL_HANDLE)
-            vkDestroyImageView(device_, view, nullptr);
+    for (VkImageView& view : state->staging.rawFaceViews) releaseView(view);
+    for (VkImageView& view : state->staging.depthFaceViews) releaseView(view);
+    for (VkImageView& view : state->staging.prefilteredMipArrayViews)
+        releaseView(view);
     state->staging.prefilteredMipArrayViews.clear();
-    allocator_->destroy(state->staging.rawRadiance);
-    allocator_->destroy(state->staging.depth);
+    releaseImage(state->staging.rawRadiance);
+    releaseImage(state->staging.depth);
     state->published = state->staging.prefilteredRadiance;
     state->staging.prefilteredRadiance = {};
     state->publishedLogicalBytes = newPublishedBytes;
@@ -289,7 +298,7 @@ void VulkanReflectionProbeCaptureTargets::destroyOwner(
     }
     if (owner.hasPublished && allocator_ != nullptr) {
         publishedLogicalBytes_ -= owner.publishedLogicalBytes;
-        allocator_->destroy(owner.published);
+        releaseImage(owner.published);
     }
     owner = {};
 }
@@ -303,6 +312,7 @@ void VulkanReflectionProbeCaptureTargets::remove(
 }
 
 void VulkanReflectionProbeCaptureTargets::cleanup() noexcept {
+    scheduler_ = nullptr;
     for (OwnerState& owner : owners_) destroyOwner(owner);
     owners_.clear();
     stagingLogicalBytes_ = 0;

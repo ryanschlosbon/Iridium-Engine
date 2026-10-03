@@ -256,6 +256,10 @@ namespace Iridium {
         // rebinds the slot's descriptor sets and graph imports.
         void swapRetiredSlot(uint32_t slot);
         std::array<bool, VulkanFrameScheduler::FramesInFlight> importRebindPending_{};
+        // R4c.3: slots whose reflection-probe environment table changed while
+        // they were in flight (rebound at their retirement).
+        std::array<bool, VulkanFrameScheduler::FramesInFlight>
+            probeEnvironmentRebindPending_{};
         [[nodiscard]] VulkanImageResource swapchainGraphImage(
             uint32_t imageIndex) const;
         [[nodiscard]] VulkanProductionGraphFeatures

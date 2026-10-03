@@ -13,6 +13,8 @@
 
 namespace Iridium {
 
+    class VulkanFrameScheduler;
+
     struct VulkanReflectionProbeCaptureTargetConfig {
         uint32_t maximumOwners = 64;
         uint32_t maximumCapturesInFlight = 4;
@@ -37,7 +39,11 @@ namespace Iridium {
     };
 
     // Owns private capture staging and last-known-good published cubemaps. The
-    // caller must perform acquire/abandon/promote only at a fence-safe boundary.
+    // caller must perform acquire/abandon/promote only at a frame boundary.
+    // M7R R4c.3: with a scheduler attached, images and views that frames
+    // submitted so far may still reference (a replaced published cube, a
+    // removed owner's targets) go to its deletion queue instead of being
+    // destroyed at once; with nothing in flight they are destroyed at once.
     class VulkanReflectionProbeCaptureTargets final {
     public:
         VulkanReflectionProbeCaptureTargets() = default;
@@ -49,6 +55,10 @@ namespace Iridium {
         void init(VkDevice device, VkPhysicalDevice physicalDevice,
             VulkanResourceAllocator& allocator,
             VulkanReflectionProbeCaptureTargetConfig config = {});
+        void setDeferredDestruction(VulkanFrameScheduler* scheduler) noexcept {
+            scheduler_ = scheduler;
+        }
+        // Device idle: destroys everything at once.
         void cleanup() noexcept;
 
         [[nodiscard]] const VulkanReflectionProbeCaptureStaging& acquire(
@@ -90,12 +100,16 @@ namespace Iridium {
             uint32_t baseLayer, uint32_t layerCount) const;
         void destroyStaging(VulkanReflectionProbeCaptureStaging& staging)
             noexcept;
+        [[nodiscard]] bool deferDestruction() const noexcept;
+        void releaseImage(VulkanImageResource& image) noexcept;
+        void releaseView(VkImageView& view) noexcept;
         void destroyOwner(OwnerState& owner) noexcept;
         static void validateConfig(
             const VulkanReflectionProbeCaptureTargetConfig& config);
 
         VkDevice device_ = VK_NULL_HANDLE;
         VulkanResourceAllocator* allocator_ = nullptr;
+        VulkanFrameScheduler* scheduler_ = nullptr;
         VulkanReflectionProbeCaptureTargetConfig config_{};
         uint32_t maximumCubeDimension_ = 0;
         uint64_t stagingLogicalBytes_ = 0;

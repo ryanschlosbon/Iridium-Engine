@@ -111,7 +111,11 @@ namespace Iridium {
             return pendingSlots_[slot];
         }
 
-        // IRenderBackend forwards (frame boundary).
+        // IRenderBackend forwards (frame boundary). M7R R4c.3: none of them
+        // drains. finalizeCaptures promotes only captures whose recording
+        // frame has completed (non-blocking fence query); owner removal
+        // retires its targets through the deletion queue; environment-table
+        // changes are rebound per slot by the lighting-set owner.
         void prepare(uint32_t requiredCapacity,
             std::span<const EnvironmentLightingHandles> environments,
             VkExtent2D sceneExtent);
@@ -164,6 +168,9 @@ namespace Iridium {
             VulkanReflectionProbeCaptureReadback bakedReadback;
             uint32_t resolution = 0;
             uint32_t mipLevels = 0;
+            // R4c.3: the frame serial that recorded the prefilter; the capture
+            // is promoted once it has completed.
+            uint64_t recordSerial = 0;
         };
 
         static bool captureActive(void* owner, const VulkanFrameRecordContext& frame);

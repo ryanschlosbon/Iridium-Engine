@@ -318,8 +318,25 @@ namespace Iridium {
                     self.rebindIdleSlotImports();
                 },
                 [](void* owner) {
-                    static_cast<VulkanVertexBackend*>(owner)->
-                        lighting_.bindReflectionProbeEnvironments();
+                    // R4c.3: idle slots rebind the environment table now, the
+                    // others at their retirement (swapRetiredSlot).
+                    auto& self = *static_cast<VulkanVertexBackend*>(owner);
+                    bool anyInFlight = false;
+                    for (uint32_t slot = 0;
+                            slot < VulkanFrameScheduler::FramesInFlight; ++slot) {
+                        self.probeEnvironmentRebindPending_[slot] =
+                            self.scheduler.slotInFlight(slot);
+                        anyInFlight = anyInFlight ||
+                            self.probeEnvironmentRebindPending_[slot];
+                    }
+                    if (!anyInFlight) {
+                        self.lighting_.bindReflectionProbeEnvironments();
+                        return;
+                    }
+                    for (uint32_t slot = 0;
+                            slot < VulkanFrameScheduler::FramesInFlight; ++slot)
+                        if (!self.probeEnvironmentRebindPending_[slot])
+                            self.lighting_.bindReflectionProbeEnvironments(slot);
                 } });
         probes_.create(*featureContext_);
         // R3c.9: the forward owner (render passes, refraction pyramids).
@@ -811,6 +828,7 @@ namespace Iridium {
 
     void VulkanVertexBackend::swapRetiredSlot(uint32_t slot) {
         bool pending = importRebindPending_[slot] ||
+            probeEnvironmentRebindPending_[slot] ||
             gpuScene_.slotSwapPending(slot) || resources_.slotSwapPending(slot) ||
             opaque_.culler().slotSwapPending(slot) ||
             clusterLighting_.slotSwapPending(slot) || probes_.slotSwapPending(slot);
@@ -829,6 +847,10 @@ namespace Iridium {
         if (probes_.swapRetiredSlot(slot)) {
             if (lighting_.sceneSetReady()) lighting_.bindReflectionProbeBuffers(slot);
             imports = true;
+        }
+        if (probeEnvironmentRebindPending_[slot]) {
+            lighting_.bindReflectionProbeEnvironments(slot);
+            probeEnvironmentRebindPending_[slot] = false;
         }
         if (imports) rebindGraphImportedBuffers(slot);
     }

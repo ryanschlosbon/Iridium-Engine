@@ -10,12 +10,16 @@
 //     still be executing. Here it must survive that beginFrame and be destroyed
 //     only once frame N's serial has completed; retiring inside an open frame
 //     keys the frame being recorded.
+//   - R4c.3: reflection-probe capture targets retire a replaced or removed
+//     published cube through the queue while frames are in flight, and
+//     destroy at once when none is.
 
 #include "renderer/vulkan/DescriptorAllocator.h"
 #include "renderer/vulkan/VkContext.h"
 #include "renderer/vulkan/VkSwapchain.h"
 #include "renderer/vulkan/VulkanDeletionQueue.h"
 #include "renderer/vulkan/VulkanFrameScheduler.h"
+#include "renderer/vulkan/VulkanReflectionProbeCaptureTargets.h"
 #include "renderer/vulkan/VulkanResourceAllocator.h"
 
 #include <GLFW/glfw3.h>
@@ -314,6 +318,52 @@ namespace {
         return true;
     }
 
+    bool testCaptureTargetsRetireWhileInFlight() {
+        ValidationCapture validation;
+        {
+            Device device;
+            VulkanFrameScheduler& scheduler = device.scheduler;
+            VulkanReflectionProbeCaptureTargets targets;
+            targets.init(device.context->getDevice(),
+                device.context->getPhysicalDevice(), device.allocator);
+            targets.setDeferredDestruction(&scheduler);
+            const SceneEntityUuid owner = *SceneEntityUuid::parse(
+                "019fb73d-5a80-7000-8000-000000000123");
+
+            // Nothing submitted: promotion destroys the staging at once.
+            (void)targets.acquire(owner, 1, 128);
+            targets.promote(owner, 1);
+            CHECK(scheduler.deletionQueue().empty());
+            CHECK(targets.published(owner) != nullptr);
+
+            // A frame in flight may sample the published cube: replacing it
+            // (and the staging the replacement came from) is deferred.
+            CHECK(recordFrame(device, nullptr));
+            (void)targets.acquire(owner, 2, 128);
+            targets.promote(owner, 2);
+            const size_t afterPromote = scheduler.deletionQueue().size();
+            CHECK(afterPromote > 0u);
+            CHECK(scheduler.deletionQueue().oldestRetireValue() == 1u);
+            targets.remove(owner);
+            CHECK(targets.publishedCount() == 0u);
+            CHECK(targets.publishedLogicalBytes() == 0u);
+            CHECK(scheduler.deletionQueue().size() == afterPromote + 1u);
+
+            // Collected once serial 1 has completed (slot 0's next fence).
+            CHECK(recordFrame(device, nullptr));
+            CHECK(!scheduler.deletionQueue().empty());
+            CHECK(recordFrame(device, nullptr));
+            CHECK(scheduler.deletionQueue().empty());
+            vkDeviceWaitIdle(device.context->getDevice());
+            targets.cleanup();
+        }
+        if (validation.messages() != 0) {
+            std::cout << validation.text();
+            return false;
+        }
+        return true;
+    }
+
     bool testRefreshCompletedSerialDoesNotWait() {
         ValidationCapture validation;
         {
@@ -354,6 +404,8 @@ int main() {
             testRetiredBetweenFramesOutlivesItsFrame },
         { "refreshCompletedSerial does not wait",
             testRefreshCompletedSerialDoesNotWait },
+        { "Capture targets retire while frames are in flight",
+            testCaptureTargetsRetireWhileInFlight },
     };
     size_t failures = 0;
     for (const TestCase& test : tests) {

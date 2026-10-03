@@ -40,6 +40,7 @@ namespace Iridium {
             lightingSetLayout_, context.meshLayouts.getGpuSceneSetLayout());
         captureTargets_.init(context.device, context.vk.getPhysicalDevice(),
             context.allocator);
+        captureTargets_.setDeferredDestruction(&context.scheduler);
     }
 
     void VulkanReflectionProbeFeature::createCuller(const VulkanIndirectViewSetup& setup) {
@@ -329,7 +330,16 @@ namespace Iridium {
         const bool hasRemoved = std::ranges::any_of(capturedSlots_,
             [&](const auto& entry) { return !retained(entry.first); });
         if (!hasRemoved) return;
-        context_->scheduler.waitForAllFrames();
+        // R4c.3: no drain. A removed owner's targets go to the deletion
+        // queue (frames in flight may still sample them); a capture of it
+        // that has not been promoted yet is dropped the same way.
+        for (auto pending = pendingCaptures_.begin(); pending != pendingCaptures_.end();) {
+            if (retained(pending->owner)) { ++pending; continue; }
+            for (VkDescriptorSet set : pending->filterDescriptors)
+                context_->scheduler.retireDescriptorSet(context_->descriptors, set);
+            context_->scheduler.retire(pending->bakedReadback.buffer);
+            pending = pendingCaptures_.erase(pending);
+        }
         for (auto current = capturedSlots_.begin(); current != capturedSlots_.end();) {
             if (retained(current->first)) { ++current; continue; }
             captureTargets_.remove(current->first);
@@ -346,9 +356,18 @@ namespace Iridium {
                 "Reflection-probe captures must finalize before beginFrame");
         std::vector<ReflectionProbeCaptureCompletion> completed;
         if (pendingCaptures_.empty()) return completed;
-        context_->scheduler.waitForAllFrames();
+        // R4c.3: no drain. Only captures whose recording frame has completed
+        // are promoted (their prefilter and readback are then CPU-visible);
+        // the rest stay pending for a later frame.
+        context_->scheduler.refreshCompletedSerial();
+        const uint64_t completedSerial = context_->scheduler.completedSerial();
+        const auto ready = [completedSerial](const PendingCapture& pending) {
+            return pending.recordSerial <= completedSerial;
+        };
+        if (std::ranges::none_of(pendingCaptures_, ready)) return completed;
         completed.reserve(pendingCaptures_.size());
         for (PendingCapture& pending : pendingCaptures_) {
+            if (!ready(pending)) continue;
             capturePass_.releaseDescriptors(pending.filterDescriptors);
             captureTargets_.promote(pending.owner, pending.captureTicket);
             auto found = capturedSlots_.find(pending.owner);
@@ -394,7 +413,7 @@ namespace Iridium {
             }
             completed.push_back(std::move(completion));
         }
-        pendingCaptures_.clear();
+        std::erase_if(pendingCaptures_, ready);
         telemetry_.capturesPublished += static_cast<uint32_t>(completed.size());
         telemetry_.capturesInFlight = captureTargets_.capturesInFlight();
         telemetry_.stagingLogicalBytes = captureTargets_.stagingLogicalBytes();
@@ -447,7 +466,9 @@ namespace Iridium {
                 if (!environment.isValid())
                     throw std::invalid_argument(
                         "Reflection-probe table contains an invalid environment");
-            context_->scheduler.waitForAllFrames();
+            // R4c.3: no drain; each slot rebinds the table before its next
+            // frame (the lighting-set owner), and textures dropped from it
+            // are retired through the deletion queue by freeTexture.
             environments_.assign(environments.begin(), environments.end());
             notifyEnvironmentsChanged();
         }
@@ -821,6 +842,7 @@ namespace Iridium {
                 };
                 if (capture.updateMode == ReflectionProbeUpdateMode::Baked)
                     pending.bakedReadback = capturePass.recordReadback(cmd, target);
+                pending.recordSerial = feature.scheduler.retireValue();
                 self.pendingCaptures_.push_back(std::move(pending));
                 ++captureTelemetry.capturesFiltered;
             }
