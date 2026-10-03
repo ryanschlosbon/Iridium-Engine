@@ -71,14 +71,16 @@ namespace {
             R"({"frame":7,"action":"remove_capture_probe"},)"
             R"({"frame":8,"action":"add_capture_probe"},)"
             R"({"frame":9,"action":"set_capture_probe_resolution","resolution":512},)"
-            R"({"frame":10,"action":"publish_constant_environment","color":[0.5,0,2]}]})");
+            R"({"frame":10,"action":"publish_constant_environment","color":[0.5,0,2]},)"
+            R"({"frame":11,"action":"add_textures","count":8,"resolution":1024}]})");
         CHECK(parsed.id == "all");
-        CHECK(parsed.events.size() == 11u);
+        CHECK(parsed.events.size() == 12u);
         const Action expected[] = { Action::AddInstances, Action::RemoveInstances,
             Action::AddLights, Action::RemoveLights, Action::AddMaterials,
             Action::AddEnvironmentProbes, Action::RemoveEnvironmentProbes,
             Action::RemoveCaptureProbe, Action::AddCaptureProbe,
-            Action::SetCaptureProbeResolution, Action::PublishConstantEnvironment };
+            Action::SetCaptureProbeResolution, Action::PublishConstantEnvironment,
+            Action::AddTextures };
         for (size_t index = 0; index < parsed.events.size(); ++index) {
             CHECK(parsed.events[index].action == expected[index]);
             // Names round-trip.
@@ -95,6 +97,17 @@ namespace {
         CHECK(parsed.events[10].color[0] == 0.5f);
         CHECK(parsed.events[10].color[1] == 0.0f);
         CHECK(parsed.events[10].color[2] == 2.0f);
+        CHECK(parsed.events[11].count == 8u);
+        CHECK(parsed.events[11].resolution == 1024u);
+        // add_textures needs both keys, within bounds.
+        CHECK(rejected(scenario(R"({"frame":0,"action":"add_textures","count":2})"),
+            "requires \"resolution\""));
+        CHECK(rejected(scenario(R"({"frame":0,"action":"add_textures","resolution":64})"),
+            "requires \"count\""));
+        CHECK(rejected(scenario(R"({"frame":0,"action":"add_textures","count":257,"resolution":64})"),
+            "\"count\" must be 1..256"));
+        CHECK(rejected(scenario(R"({"frame":0,"action":"add_textures","count":1,"resolution":100})"),
+            "power of two"));
         return true;
     }
 

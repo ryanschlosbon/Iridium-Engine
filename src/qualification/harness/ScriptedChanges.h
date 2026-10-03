@@ -21,7 +21,9 @@
 //       { "frame": 1500, "action": "publish_constant_environment",
 //         "color": [0.02, 0.03, 0.05] },
 //       { "frame": 2500, "action": "set_capture_probe_resolution",
-//         "resolution": 512 }
+//         "resolution": 512 },
+//       { "frame": 3500, "action": "add_textures", "count": 8,
+//         "resolution": 1024 }
 //     ]
 //   }
 //
@@ -69,6 +71,10 @@ namespace Iridium {
         // A new constant scene environment (probe environment table and the
         // scene image-based lighting).
         PublishConstantEnvironment,
+        // M7R R4d: `count` fresh RGBA8 textures of `resolution` squared with a
+        // full mip chain, uploaded mid-run (the upload queue path); never
+        // sampled, released at shutdown. Pixel data is built at startup.
+        AddTextures,
     };
 
     [[nodiscard]] std::string_view scriptedChangeActionName(
@@ -80,6 +86,8 @@ namespace Iridium {
         // Add/remove count, or the capture resolution for
         // SetCaptureProbeResolution; 0 for the others.
         uint32_t count = 0;
+        // AddTextures: the texture edge (a power of two, 16..4096).
+        uint32_t resolution = 0;
         // PublishConstantEnvironment: linear Rec.709 radiance.
         float color[3]{ 0.0f, 0.0f, 0.0f };
     };

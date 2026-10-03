@@ -24,10 +24,12 @@ namespace Iridium {
             ScriptedChangeAction action;
             std::string_view name;
             // Which payload key the action requires.
-            enum class Payload : uint8_t { None, Count, Resolution, Color } payload;
+            enum class Payload : uint8_t {
+                None, Count, Resolution, Color, CountResolution
+            } payload;
         };
 
-        constexpr std::array<ActionInfo, 11> kActions{ {
+        constexpr std::array<ActionInfo, 12> kActions{ {
             { ScriptedChangeAction::AddInstances, "add_instances",
                 ActionInfo::Payload::Count },
             { ScriptedChangeAction::RemoveInstances, "remove_instances",
@@ -50,11 +52,15 @@ namespace Iridium {
                 "set_capture_probe_resolution", ActionInfo::Payload::Resolution },
             { ScriptedChangeAction::PublishConstantEnvironment,
                 "publish_constant_environment", ActionInfo::Payload::Color },
+            { ScriptedChangeAction::AddTextures, "add_textures",
+                ActionInfo::Payload::CountResolution },
         } };
 
         // Bounds keep a malformed scenario from asking for absurd work.
         constexpr uint64_t kMaximumCount = 65'536;
         constexpr uint64_t kMaximumResolution = 4'096;
+        // add_textures allocates real GPU memory (up to 89 MB per 4096 texture).
+        constexpr uint64_t kMaximumTextureCount = 256;
 
         [[noreturn]] void fail(const std::string& message) {
             throw std::invalid_argument("scripted changes: " + message);
@@ -108,6 +114,23 @@ namespace Iridium {
                     fail(where + " \"resolution\" must be a power of two in 16.." +
                         std::to_string(kMaximumResolution));
                 event.count = static_cast<uint32_t>(resolution);
+                break;
+            }
+            case ActionInfo::Payload::CountResolution: {
+                allowed.insert("count");
+                allowed.insert("resolution");
+                const uint64_t count = requireUnsigned(value, "count", where);
+                if (count == 0 || count > kMaximumTextureCount)
+                    fail(where + " \"count\" must be 1.." +
+                        std::to_string(kMaximumTextureCount));
+                const uint64_t resolution =
+                    requireUnsigned(value, "resolution", where);
+                if (resolution < 16 || resolution > kMaximumResolution ||
+                    (resolution & (resolution - 1u)) != 0u)
+                    fail(where + " \"resolution\" must be a power of two in 16.." +
+                        std::to_string(kMaximumResolution));
+                event.count = static_cast<uint32_t>(count);
+                event.resolution = static_cast<uint32_t>(resolution);
                 break;
             }
             case ActionInfo::Payload::Color: {
@@ -277,6 +300,10 @@ namespace Iridium {
             object["resolution"] = event.count;
         else if (event.action == ScriptedChangeAction::PublishConstantEnvironment)
             object["color"] = { event.color[0], event.color[1], event.color[2] };
+        else if (event.action == ScriptedChangeAction::AddTextures) {
+            object["count"] = event.count;
+            object["resolution"] = event.resolution;
+        }
         else if (event.count != 0)
             object["count"] = event.count;
         object["applied_measured_frame"] = applied.measuredFrame;

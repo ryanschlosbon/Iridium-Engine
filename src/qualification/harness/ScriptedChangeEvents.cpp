@@ -10,6 +10,7 @@
 
 #include <glm/glm.hpp>
 
+#include <algorithm>
 #include <array>
 #include <bit>
 #include <chrono>
@@ -35,6 +36,7 @@
 #include "scene/components/ReflectionProbeComponent.h"
 #include "scene/components/RelationshipComponent.h"
 #include "scene/components/TransformComponent.h"
+#include "core/types/TextureTypes.h"
 #include "utils/Sha256.h"
 
 namespace Iridium {
@@ -61,6 +63,10 @@ namespace Iridium {
         // One per PublishConstantEnvironment event, built at Ready.
         std::vector<LoadedEnvironmentAsset> environments;
         size_t publishedEnvironments = 0;
+        // AddTextures: mip-chained RGBA8 pixels per distinct resolution, built
+        // at Ready, and the textures added so far.
+        std::vector<std::pair<uint32_t, std::vector<std::byte>>> texturePixels;
+        std::vector<TextureHandle> textures;
     };
 
     void ScriptedChangeRunDeleter::operator()(
@@ -111,6 +117,15 @@ namespace Iridium {
             }
         };
         constexpr float kBehindCameraDepthMeters = 25.0f;
+
+        TextureDesc scriptedTextureDesc(uint32_t resolution) {
+            TextureDesc desc{};
+            desc.width = resolution;
+            desc.height = resolution;
+            desc.format = TextureFormat::RGBA8_UNorm;
+            desc.mipLevels = static_cast<uint32_t>(std::bit_width(resolution));
+            return desc;
+        }
 
         bool requiresInstances(ScriptedChangeAction action) {
             return action == ScriptedChangeAction::AddInstances ||
@@ -216,6 +231,23 @@ namespace Iridium {
                     .cookKey = sha256(std::as_bytes(std::span(recipe))),
                     .sections = product.sections,
                 }));
+        }
+        // Texture pixels are built now; the event only allocates and uploads.
+        for (const ScriptedChangeEvent& event : run.scenario.events) {
+            if (event.action != ScriptedChangeAction::AddTextures) continue;
+            if (std::ranges::any_of(run.texturePixels, [&](const auto& entry) {
+                    return entry.first == event.resolution; }))
+                continue;
+            const TextureDesc desc = scriptedTextureDesc(event.resolution);
+            std::vector<std::byte> pixels(
+                static_cast<size_t>(textureDataSize(desc)));
+            uint32_t state = 0x9e3779b9u ^ event.resolution;
+            for (std::byte& value : pixels) {
+                state = state * 1664525u + 1013904223u;
+                value = static_cast<std::byte>(state >> 24);
+            }
+            run.texturePixels.emplace_back(event.resolution, std::move(pixels));
+            run.textures.reserve(run.textures.size() + event.count);
         }
         // One sample per measured frame, plus slack for the final frame.
         run.timeline.reserve(static_cast<size_t>(config.frameLimit) + 2u);
@@ -480,6 +512,16 @@ namespace Iridium {
                 std::move(run.environments[run.publishedEnvironments]));
             return ++run.publishedEnvironments;
         }
+        case ScriptedChangeAction::AddTextures: {
+            const auto pixels = std::ranges::find_if(run.texturePixels,
+                [&](const auto& entry) { return entry.first == event.resolution; });
+            if (pixels == run.texturePixels.end())
+                throw std::logic_error("scripted changes: no prebuilt texture pixels");
+            const TextureDesc desc = scriptedTextureDesc(event.resolution);
+            for (uint32_t added = 0; added < event.count; ++added)
+                run.textures.push_back(backend.allocateTexture(desc, pixels->second));
+            return run.textures.size();
+        }
         }
         throw std::logic_error("scripted changes: unknown action");
     }
@@ -510,6 +552,9 @@ namespace Iridium {
         for (MaterialHandle material : scripted_->materials)
             context.backend->freeMaterial(material);
         scripted_->materials.clear();
+        for (TextureHandle texture : scripted_->textures)
+            context.backend->freeTexture(texture);
+        scripted_->textures.clear();
         if (scripted_->materialTexture.isValid()) {
             context.backend->freeTexture(scripted_->materialTexture);
             scripted_->materialTexture = {};
