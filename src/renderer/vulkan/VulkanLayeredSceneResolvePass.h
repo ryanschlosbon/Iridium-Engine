@@ -25,8 +25,10 @@ namespace Iridium {
         VulkanLayeredSceneResolvePass& operator=(
             const VulkanLayeredSceneResolvePass&) = delete;
 
+        // R4a: the resolve pipeline renders into scene colour (RGBA16F) with
+        // the opaque depth bound read-only (D32), by dynamic rendering.
         void init(VkDevice device, ::DescriptorAllocator& descriptors,
-            VkDescriptorSetLayout globalLayout, VkRenderPass sceneRenderPass);
+            VkDescriptorSetLayout globalLayout);
         void rebuildDescriptors(const VulkanFrameTargets& frameTargets);
         void clearDescriptors() noexcept;
         void cleanup() noexcept;
@@ -47,8 +49,7 @@ namespace Iridium {
     private:
         [[nodiscard]] VkShaderModule createShaderModule(
             const char* relativePath) const;
-        [[nodiscard]] VkPipeline createPipeline(
-            VkRenderPass sceneRenderPass) const;
+        [[nodiscard]] VkPipeline createPipeline() const;
 
         VkDevice device_ = VK_NULL_HANDLE;
         ::DescriptorAllocator* descriptors_ = nullptr;

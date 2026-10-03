@@ -65,6 +65,8 @@ namespace Iridium {
         [[nodiscard]] VkRenderPass forwardRenderPass() const noexcept {
             return forwardPass_->getRenderPass();
         }
+        // R4a: the forward/transparent render passes only back the frame
+        // targets' framebuffers until R4a.final removes both.
         [[nodiscard]] VkRenderPass transparentRenderPass() const noexcept {
             return transparentPass_->getRenderPass();
         }
@@ -108,8 +110,7 @@ namespace Iridium {
         static void executeForward(void* owner, VulkanPassContext& context);
         static bool pyramidsActive(void* owner, const VulkanFrameRecordContext& frame);
         static void executePyramids(void* owner, VulkanPassContext& context);
-        void recordForward(const ForwardPass& pass, VkCommandBuffer commandBuffer,
-            uint32_t frame);
+        void recordForward(const ForwardPass& pass, VulkanPassContext& context);
 
         const VulkanFeatureContext* context_ = nullptr;
         const VulkanLayeredTransparencyFeature* layered_ = nullptr;

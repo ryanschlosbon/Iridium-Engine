@@ -336,7 +336,7 @@ namespace Iridium {
         ui_.create(*featureContext_);
         ui_.setEditorUi(editorUi());
         // R3c.9: the layered-glass owner (capture, composition, resolve).
-        layered_.configure(lighting_.setLayout(), forward_.transparentRenderPass());
+        layered_.configure(lighting_.setLayout());
         layered_.create(*featureContext_);
         // R3c.5: the shadow owners create their maps and cullers; the shared
         // 3-binding indirect set layout outlives every view culler.
@@ -356,15 +356,15 @@ namespace Iridium {
         opaque_.setCullerServices(cullerServices());
         opaque_.create(*featureContext_);
 
-        // R4a: G-buffer material pipelines use dynamic rendering.
+        // R4a: material pipelines use dynamic rendering (formats + layout).
         pipelineLibrary.init(vkContext->getDevice(),
-            { VK_NULL_HANDLE, meshLayouts.getGBufferPipelineLayout(),
+            { vulkanGBufferColorAttachmentFormats(gBufferLayout_),
                 vulkanGBufferFormats(gBufferLayout_).colorAttachmentCount,
-                vulkanGBufferColorAttachmentFormats(gBufferLayout_),
-                VK_FORMAT_D32_SFLOAT },
-            { forward_.forwardRenderPass(), meshLayouts.getForwardPipelineLayout(), 1 },
-            { forward_.transparentRenderPass(),
-                meshLayouts.getForwardPipelineLayout(), 1 },
+                VK_FORMAT_D32_SFLOAT, meshLayouts.getGBufferPipelineLayout() },
+            { { VulkanSceneColorFormat }, 1, VK_FORMAT_D32_SFLOAT,
+                meshLayouts.getForwardPipelineLayout() },
+            { { VulkanSceneColorFormat }, 1, VK_FORMAT_D32_SFLOAT,
+                meshLayouts.getForwardPipelineLayout() },
             gBufferLayout_);
 
         // 5. UI Pass

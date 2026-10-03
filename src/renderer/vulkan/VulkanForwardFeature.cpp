@@ -38,10 +38,13 @@ namespace Iridium {
     }
 
     void VulkanForwardFeature::registerPasses(VulkanRenderGraphExecutor& graph) {
-        // Each forward pass's range wraps its barriers and its draws.
+        // Each forward pass's range wraps its barriers and its draws. R4a:
+        // dynamic rendering; scene.color (and depth between forward-opaque and
+        // compatibility) get the same-access attachment re-barrier that the
+        // render passes' external dependencies used to provide.
         for (ForwardPass& pass : passes_) {
             graph.registerPass(pass.pass, { &pass, &forwardActive, &executeForward,
-                pass.gpuRange, GpuRangePlacement::BeforeBarriers });
+                pass.gpuRange, GpuRangePlacement::BeforeBarriers, true });
         }
         // Declared only while the refraction pyramids are resident.
         if (pyramidPass_.isValid())
@@ -114,7 +117,7 @@ namespace Iridium {
 
     void VulkanForwardFeature::executeForward(void* owner, VulkanPassContext& context) {
         const auto& pass = *static_cast<const ForwardPass*>(owner);
-        pass.self->recordForward(pass, context.commandBuffer, context.frame.frameIndex);
+        pass.self->recordForward(pass, context);
     }
 
     bool VulkanForwardFeature::pyramidsActive(void* owner, const VulkanFrameRecordContext&) {
@@ -135,22 +138,20 @@ namespace Iridium {
     }
 
     void VulkanForwardFeature::recordForward(const ForwardPass& pass,
-        VkCommandBuffer cmd, uint32_t frame) {
+        VulkanPassContext& context) {
+        const VkCommandBuffer cmd = context.commandBuffer;
+        const uint32_t frame = context.frame.frameIndex;
         const VulkanFrameTargets& frameTargets = context_->frameTargets;
         VulkanFrameTelemetry& telemetry = context_->telemetry;
         VulkanResourceRegistry& resources = context_->resources;
         const VulkanPipelineLibrary& pipelineLibrary = context_->pipelines;
-        const VulkanFrameContextTargets& targets = frameTargets.get(frame);
         const std::span<const DrawPacket> queue = this->queue(pass.queue);
 
-        VkRenderPassBeginInfo passInfo{
-            VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
-        passInfo.renderPass = pass.transparent
-            ? transparentPass_->getRenderPass() : forwardPass_->getRenderPass();
-        passInfo.framebuffer = pass.transparent
-            ? targets.transparentFramebuffer : targets.forwardFramebuffer;
-        passInfo.renderArea.extent = frameTargets.extent();
-        vkCmdBeginRenderPass(cmd, &passInfo, VK_SUBPASS_CONTENTS_INLINE);
+        // R4a: scene colour LOAD/STORE; depth LOAD/STORE (forward-opaque,
+        // compatibility) or read-only LOAD/NONE (sorted), from the graph.
+        VulkanRenderingOverrides rendering{};
+        rendering.renderArea = { { 0, 0 }, frameTargets.extent() };
+        context.beginRendering(rendering);
 
         const VkViewport viewport{ 0.0f, 0.0f,
             static_cast<float>(frameTargets.extent().width),
@@ -251,7 +252,7 @@ namespace Iridium {
                 }
             }
         }
-        vkCmdEndRenderPass(cmd);
+        context.endRendering();
     }
 
 } // namespace Iridium

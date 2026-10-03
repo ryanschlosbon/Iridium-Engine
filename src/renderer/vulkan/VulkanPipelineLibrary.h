@@ -17,15 +17,13 @@ namespace Iridium {
     inline constexpr uint32_t VulkanPipelineMaxColorTargets = 5;
 
     // M7R R4a: a material pipeline target is its attachment formats and
-    // pipeline layout (VkPipelineRenderingCreateInfo). R4a interim: a target
-    // that still names a render pass is created against it instead (forward
-    // and transparent until their passes migrate).
+    // pipeline layout; pipelines chain VkPipelineRenderingCreateInfo and are
+    // recorded inside the passes' dynamic-rendering scopes.
     struct VulkanPipelineTarget {
-        VkRenderPass renderPass = VK_NULL_HANDLE;
-        VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
-        uint32_t colorAttachmentCount = 0;
         std::array<VkFormat, VulkanPipelineMaxColorTargets> colorFormats{};
+        uint32_t colorAttachmentCount = 0;
         VkFormat depthFormat = VK_FORMAT_UNDEFINED;
+        VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
     };
 
     struct VulkanPipelineRecord {

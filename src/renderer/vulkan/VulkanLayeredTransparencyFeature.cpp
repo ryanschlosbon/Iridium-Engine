@@ -76,7 +76,7 @@ namespace Iridium {
             context.resources.textureTable().materialViewLayout(),
             context.resources.textureTable().samplerLayout(), lightingSetLayout_);
         sceneResolve_.init(context.device, context.descriptors,
-            meshLayouts.getGlobalSetLayout(), sceneRenderPass_);
+            meshLayouts.getGlobalSetLayout());
         ordinary2Captures_ = { { { this, false }, { this, true } } };
         for (uint32_t tier = 0; tier < deepTiers_.size(); ++tier) {
             DeepTier& deep = deepTiers_[tier];
@@ -116,9 +116,11 @@ namespace Iridium {
             graph.registerPass(ordinary2LocalComposePass_, { this, &ordinary2PassActive,
                 &executeOrdinary2LocalComposition,
                 "gpu.transparency.layered.local-compose", Before, Dynamic });
+            // The compose hook's scene.color write re-barriers after the
+            // sorted forward pass (same ColorAttachment access).
             graph.registerPass(ordinary2ResolvePass_, { this, &ordinary2PassActive,
                 &executeOrdinary2SceneResolve,
-                "gpu.transparency.layered.scene-resolve", Before });
+                "gpu.transparency.layered.scene-resolve", Before, Dynamic });
         }
         for (uint32_t tier = 0; tier < deepTiers_.size(); ++tier) {
             DeepTier& deep = deepTiers_[tier];
@@ -151,7 +153,8 @@ namespace Iridium {
                     ? "gpu.transparency.layered.deep.scene-resolve"
                     : hero4Active
                         ? "gpu.transparency.layered.hero4.scene-resolve"
-                        : "gpu.transparency.layered.cinematic8.scene-resolve", Before });
+                        : "gpu.transparency.layered.cinematic8.scene-resolve", Before,
+                Dynamic });
         }
     }
 
@@ -399,14 +402,6 @@ namespace Iridium {
                     throw std::logic_error(
                         "Ordinary2 capture recording requires resident atlas targets");
                 }
-                const VulkanFrameContextTargets& targets =
-                    context_->frameTargets.get(frameIndex);
-                const VkFramebuffer framebuffer = exitCapture
-                    ? targets.layeredExitFramebuffer
-                    : targets.layeredEntryFramebuffer;
-                if (framebuffer == VK_NULL_HANDLE)
-                    throw std::logic_error(
-                        "Ordinary2 capture framebuffer is unavailable");
             }
             context_->graph.drainRegisteredThrough(
                 exitCapture ? ordinary2ExitPass_ : ordinary2EntryPass_);
@@ -423,10 +418,6 @@ namespace Iridium {
                 throw std::logic_error(
                     "Ordinary2 local composition requires resident atlas targets");
             }
-            if (context_->frameTargets.get(frameIndex)
-                    .layeredLocalCompositionFramebuffer == VK_NULL_HANDLE)
-                throw std::logic_error(
-                    "Ordinary2 local-composition framebuffer is unavailable");
         }
         context_->graph.drainRegisteredThrough(ordinary2LocalComposePass_);
     }
@@ -445,10 +436,6 @@ namespace Iridium {
                 throw std::logic_error(
                     "Ordinary2 scene resolve requires resident atlas descriptors");
             }
-            if (context_->frameTargets.get(frameIndex).transparentFramebuffer ==
-                    VK_NULL_HANDLE)
-                throw std::logic_error(
-                    "Ordinary2 scene resolve requires the scene framebuffer");
         }
         context_->graph.drainRegisteredThrough(ordinary2ResolvePass_);
     }
@@ -472,9 +459,6 @@ namespace Iridium {
                     throw std::logic_error(
                         "Deep layered capture requires a complete resident tier");
                 }
-                if (tier.interfaceFramebuffers[interfaceIndex] == VK_NULL_HANDLE)
-                    throw std::logic_error(
-                        "Deep layered capture framebuffer is unavailable");
             }
             context_->graph.drainRegisteredThrough(deep.ids.interfaceCapture[interfaceIndex]);
             if (deepLayeredTerminationInterface(interfaceIndex, interfaceCount)) {
@@ -500,7 +484,6 @@ namespace Iridium {
             const VulkanFrameContextTargets::DeepLayeredTier& tier =
                 quality == TransparencyQuality::Hero4 ? targets.hero4 : targets.cinematic8;
             if (!tier.active() || tier.interfaceCount != interfaceCount ||
-                tier.localCompositionFramebuffer == VK_NULL_HANDLE ||
                 localComposition_.deepPipeline() == VK_NULL_HANDLE ||
                 localComposition_.deepResidualPipeline() == VK_NULL_HANDLE ||
                 localComposition_.deepDescriptorInterfaceCount(
@@ -536,11 +519,6 @@ namespace Iridium {
             if (sceneResolve_.pipeline() == VK_NULL_HANDLE) {
                 throw std::logic_error(
                     "Deep scene resolve requires a resident pipeline");
-            }
-            if (context_->frameTargets.get(frameIndex).transparentFramebuffer ==
-                    VK_NULL_HANDLE) {
-                throw std::logic_error(
-                    "Deep scene resolve requires resident scene targets");
             }
         }
         resolveRecorded_ = false;
@@ -582,7 +560,7 @@ namespace Iridium {
     void VulkanLayeredTransparencyFeature::executeOrdinary2SceneResolve(void* owner,
         VulkanPassContext& context) {
         static_cast<VulkanLayeredTransparencyFeature*>(owner)->drawOrdinary2SceneResolve(
-            context.commandBuffer, context.frame.frameIndex);
+            context);
     }
 
     bool VulkanLayeredTransparencyFeature::deepTierActive(void* owner,
@@ -626,7 +604,7 @@ namespace Iridium {
     void VulkanLayeredTransparencyFeature::executeDeepSceneResolve(void* owner,
         VulkanPassContext& context) {
         static_cast<VulkanLayeredTransparencyFeature*>(owner)->drawDeepSceneResolve(
-            context.commandBuffer, context.frame.frameIndex);
+            context);
     }
 
     // ------------------------------------------------------------------
@@ -1071,22 +1049,20 @@ namespace Iridium {
         context.endRendering();
     }
 
-    void VulkanLayeredTransparencyFeature::drawOrdinary2SceneResolve(VkCommandBuffer cmd,
-        uint32_t frameIndex) {
+    void VulkanLayeredTransparencyFeature::drawOrdinary2SceneResolve(
+        VulkanPassContext& context) {
+        const VkCommandBuffer cmd = context.commandBuffer;
+        const uint32_t frameIndex = context.frame.frameIndex;
         const VulkanFrameTargets& frameTargets = context_->frameTargets;
         VulkanFrameTelemetry& telemetry = context_->telemetry;
         VulkanResourceRegistry& resources = context_->resources;
         const std::span<const DrawPacket> packets = staged_.compatibilityTransparentQueue;
         const uint32_t debugView = static_cast<uint32_t>(staged_.debugView);
-        const VulkanFrameContextTargets& targets = frameTargets.get(frameIndex);
 
-        VkRenderPassBeginInfo passInfo{
-            VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
-        passInfo.renderPass = sceneRenderPass_;
-        passInfo.framebuffer = targets.transparentFramebuffer;
-        passInfo.renderArea.extent = frameTargets.extent();
-        vkCmdBeginRenderPass(cmd, &passInfo,
-            VK_SUBPASS_CONTENTS_INLINE);
+        // R4a: scene colour LOAD/STORE, opaque depth read-only (LOAD/NONE).
+        VulkanRenderingOverrides rendering{};
+        rendering.renderArea = { { 0, 0 }, frameTargets.extent() };
+        context.beginRendering(rendering);
 
         const VkPipelineLayout layout =
             sceneResolve_.pipelineLayout();
@@ -1162,11 +1138,13 @@ namespace Iridium {
             telemetry.recordDraw(telemetry.counters().ordinary2SceneResolveDraws,
                 packet.indexCount / 3u);
         }
-        vkCmdEndRenderPass(cmd);
+        context.endRendering();
     }
 
-    void VulkanLayeredTransparencyFeature::drawDeepSceneResolve(VkCommandBuffer cmd,
-        uint32_t frameIndex) {
+    void VulkanLayeredTransparencyFeature::drawDeepSceneResolve(
+        VulkanPassContext& context) {
+        const VkCommandBuffer cmd = context.commandBuffer;
+        const uint32_t frameIndex = context.frame.frameIndex;
         const VulkanFrameTargets& frameTargets = context_->frameTargets;
         VulkanFrameTelemetry& telemetry = context_->telemetry;
         VulkanResourceRegistry& resources = context_->resources;
@@ -1174,13 +1152,10 @@ namespace Iridium {
         const uint32_t debugView = static_cast<uint32_t>(staged_.debugView);
         const VulkanFrameContextTargets& targets = frameTargets.get(frameIndex);
 
-        VkRenderPassBeginInfo passInfo{
-            VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
-        passInfo.renderPass = sceneRenderPass_;
-        passInfo.framebuffer = targets.transparentFramebuffer;
-        passInfo.renderArea.extent = frameTargets.extent();
-        vkCmdBeginRenderPass(cmd, &passInfo,
-            VK_SUBPASS_CONTENTS_INLINE);
+        // R4a: scene colour LOAD/STORE, opaque depth read-only (LOAD/NONE).
+        VulkanRenderingOverrides rendering{};
+        rendering.renderArea = { { 0, 0 }, frameTargets.extent() };
+        context.beginRendering(rendering);
 
         const VkPipelineLayout layout =
             sceneResolve_.pipelineLayout();
@@ -1276,7 +1251,7 @@ namespace Iridium {
                 packet.indexCount / 3u);
             ++sceneResolveDrawCounts[layeredQualityTierIndex(draw.quality)];
         }
-        vkCmdEndRenderPass(cmd);
+        context.endRendering();
         resolveDrawCounts_ = sceneResolveDrawCounts;
         resolveRecorded_ = true;
     }

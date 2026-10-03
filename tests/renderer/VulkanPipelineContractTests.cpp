@@ -1,9 +1,11 @@
 // Headless production pipeline creation under the Khronos validation layer.
 // Each production pass is initialised exactly as the backend does (same layouts,
 // same SPIR-V); validation then checks shader/pipeline-layout compatibility,
-// push-constant ranges, vertex-input coverage, render-pass/fragment-output
-// compatibility and the enabled device features. Replaces the Vulkan pass
-// source-text checks of Stage3ArchitectureTests groups 2 and 6.
+// push-constant ranges, vertex-input coverage, rendering-format/fragment-output
+// compatibility (M7R R4a: the main-scene pipelines chain
+// VkPipelineRenderingCreateInfo instead of naming a render pass) and the
+// enabled device features. Replaces the Vulkan pass source-text checks of
+// Stage3ArchitectureTests groups 2 and 6.
 //
 // The lighting descriptor-set layout is owned by VkLightingPipeline, which needs
 // a windowed VkContext; it is rebuilt here from the union of the deferred and
@@ -16,16 +18,17 @@
 
 #include "renderer/rhi/ShadowTypes.h"
 #include "renderer/vulkan/DescriptorAllocator.h"
-#include "renderer/vulkan/VkForwardRenderPass.h"
 #include "renderer/vulkan/VulkanClusteredLightingPipeline.h"
 #include "renderer/vulkan/VulkanDepthPyramid.h"
 #include "renderer/vulkan/VulkanDirectionalShadowMap.h"
 #include "renderer/vulkan/VulkanFrameTargets.h"
+#include "renderer/vulkan/VulkanGBufferLayout.h"
 #include "renderer/vulkan/VulkanIndexedTextureTable.h"
 #include "renderer/vulkan/VulkanLayeredInterfaceCapturePass.h"
 #include "renderer/vulkan/VulkanLayeredLocalCompositionPass.h"
 #include "renderer/vulkan/VulkanLayeredSceneResolvePass.h"
 #include "renderer/vulkan/VulkanMeshLayouts.h"
+#include "renderer/vulkan/VulkanPipelineLibrary.h"
 #include "renderer/vulkan/VulkanPointShadowPools.h"
 #include "renderer/vulkan/VulkanReflectionProbeCapturePass.h"
 #include "renderer/vulkan/VulkanReflectionProbePipeline.h"
@@ -96,44 +99,6 @@ namespace {
         return layout;
     }
 
-    // Same attachment formats/samples as the backend's read-only-depth
-    // transparent VkForwardRenderPass (render-pass compatibility).
-    VkRenderPass createTransparentScenePass(VkDevice device) {
-        std::array<VkAttachmentDescription, 2> attachments{};
-        attachments[0].format = VulkanSceneColorFormat;
-        attachments[0].samples = VK_SAMPLE_COUNT_1_BIT;
-        attachments[0].loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
-        attachments[0].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-        attachments[0].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-        attachments[0].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-        attachments[0].initialLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-        attachments[0].finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-        attachments[1].format = VK_FORMAT_D32_SFLOAT;
-        attachments[1].samples = VK_SAMPLE_COUNT_1_BIT;
-        attachments[1].loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
-        attachments[1].storeOp = VkForwardRenderPass::depthStoreOperation(true);
-        attachments[1].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-        attachments[1].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-        attachments[1].initialLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
-        attachments[1].finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
-        const VkAttachmentReference color{ 0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL };
-        const VkAttachmentReference depth{ 1, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL };
-        VkSubpassDescription subpass{};
-        subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-        subpass.colorAttachmentCount = 1;
-        subpass.pColorAttachments = &color;
-        subpass.pDepthStencilAttachment = &depth;
-        VkRenderPassCreateInfo info{ VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO };
-        info.attachmentCount = static_cast<uint32_t>(attachments.size());
-        info.pAttachments = attachments.data();
-        info.subpassCount = 1;
-        info.pSubpasses = &subpass;
-        VkRenderPass renderPass = VK_NULL_HANDLE;
-        if (vkCreateRenderPass(device, &info, nullptr, &renderPass) != VK_SUCCESS)
-            throw std::runtime_error("transparent scene render pass");
-        return renderPass;
-    }
-
     // The shared production layouts every material pass is created against.
     struct ProductionLayouts {
         explicit ProductionLayouts(const HeadlessVulkanDevice& gpu) : device(gpu.device()) {
@@ -172,7 +137,7 @@ namespace {
         gpu.resetValidationErrors();
         {
             ProductionLayouts layouts(gpu);
-            const VkRenderPass scenePass = createTransparentScenePass(gpu.device());
+            IRIDIUM_CHECK(gpu.hasDynamicRendering());
 
             VulkanLayeredInterfaceCapturePass capture;
             capture.init(gpu.device(), layouts.descriptors,
@@ -194,7 +159,7 @@ namespace {
 
             VulkanLayeredSceneResolvePass resolve;
             resolve.init(gpu.device(), layouts.descriptors,
-                layouts.meshes.getGlobalSetLayout(), scenePass);
+                layouts.meshes.getGlobalSetLayout());
             IRIDIUM_CHECK(resolve.pipeline() != VK_NULL_HANDLE);
             IRIDIUM_CHECK(noValidationErrors("layered scene resolve"));
 
@@ -217,9 +182,50 @@ namespace {
             resolve.cleanup();
             composition.cleanup();
             capture.cleanup();
-            vkDestroyRenderPass(gpu.device(), scenePass, nullptr);
         }
         return noValidationErrors("layered transparency teardown");
+    }
+
+    // The material pipeline library with the backend's rendering-format
+    // targets (the G-buffer formats of each layout + D32; scene colour + D32
+    // for forward and transparent), one pipeline per program/pass class.
+    bool testMaterialPipelineLibrary() {
+        HeadlessVulkanDevice& gpu = *sharedDevice;
+        gpu.resetValidationErrors();
+        for (const GBufferLayout layout : { GBufferLayout::CanonicalReference,
+                GBufferLayout::CanonicalQuality, GBufferLayout::CanonicalCompact }) {
+            ProductionLayouts layouts(gpu);
+            VulkanPipelineLibrary library;
+            library.init(gpu.device(),
+                { vulkanGBufferColorAttachmentFormats(layout),
+                    vulkanGBufferFormats(layout).colorAttachmentCount,
+                    VK_FORMAT_D32_SFLOAT, layouts.meshes.getGBufferPipelineLayout() },
+                { { VulkanSceneColorFormat }, 1, VK_FORMAT_D32_SFLOAT,
+                    layouts.meshes.getForwardPipelineLayout() },
+                { { VulkanSceneColorFormat }, 1, VK_FORMAT_D32_SFLOAT,
+                    layouts.meshes.getForwardPipelineLayout() },
+                layout);
+            PipelineStateDesc gbuffer{};
+            PipelineStateDesc forward{};
+            forward.shaderProgram = ShaderProgram::CanonicalComplexOpaqueForward;
+            forward.renderPass = RenderPassClass::Forward;
+            PipelineStateDesc transparent{};
+            transparent.shaderProgram = ShaderProgram::CanonicalComplexForward;
+            transparent.renderPass = RenderPassClass::Transparent;
+            transparent.blendMode = BlendMode::PremultipliedAlpha;
+            transparent.depthWrite = false;
+            for (const PipelineStateDesc& desc : { gbuffer, forward, transparent }) {
+                const VulkanPipelineRecord* record =
+                    library.get(library.getOrCreatePipeline(desc));
+                IRIDIUM_CHECK(record != nullptr && record->pipeline != VK_NULL_HANDLE);
+                IRIDIUM_CHECK((desc.renderPass == RenderPassClass::GBuffer) ==
+                    (record->gpuSceneIndirectPipeline != VK_NULL_HANDLE));
+            }
+            IRIDIUM_CHECK(library.pipelineCount() == 3u);
+            IRIDIUM_CHECK(noValidationErrors("material pipeline library"));
+            library.cleanup();
+        }
+        return noValidationErrors("material pipeline library teardown");
     }
 
     bool testShadowAndProbePipelines() {
@@ -309,6 +315,7 @@ int main() {
     }
     constexpr Iridium::Test::TestCase tests[] = {
         { "layered transparency pipelines validate", testLayeredTransparencyPipelines },
+        { "material pipeline library validates", testMaterialPipelineLibrary },
         { "shadow, probe and compute pipelines validate", testShadowAndProbePipelines },
     };
     const int result = Iridium::Test::runTests(tests);

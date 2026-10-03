@@ -54,12 +54,9 @@ namespace Iridium {
         VulkanLayeredTransparencyFeature& operator=(const VulkanLayeredTransparencyFeature&) = delete;
 
         // Before create(): the lighting set layout (local composition lights
-        // the captured interfaces) and the scene render pass the resolve
-        // composites into (the transparent forward pass).
-        void configure(VkDescriptorSetLayout lightingSetLayout,
-            VkRenderPass sceneRenderPass) noexcept {
+        // the captured interfaces).
+        void configure(VkDescriptorSetLayout lightingSetLayout) noexcept {
             lightingSetLayout_ = lightingSetLayout;
-            sceneRenderPass_ = sceneRenderPass;
         }
 
         // IVulkanFeature
@@ -179,16 +176,15 @@ namespace Iridium {
         // R4a: these record inside the pass's dynamic-rendering scope.
         void drawOrdinary2Capture(VulkanPassContext& context, bool exit);
         void drawOrdinary2LocalComposition(VulkanPassContext& context);
-        void drawOrdinary2SceneResolve(VkCommandBuffer commandBuffer, uint32_t frame);
+        void drawOrdinary2SceneResolve(VulkanPassContext& context);
         void drawDeepCapture(VulkanPassContext& context, TransparencyQuality quality,
             uint32_t interfaceIndex);
         void drawDeepLocalComposition(VulkanPassContext& context,
             TransparencyQuality quality);
-        void drawDeepSceneResolve(VkCommandBuffer commandBuffer, uint32_t frame);
+        void drawDeepSceneResolve(VulkanPassContext& context);
 
         const VulkanFeatureContext* context_ = nullptr;
         VkDescriptorSetLayout lightingSetLayout_ = VK_NULL_HANDLE;
-        VkRenderPass sceneRenderPass_ = VK_NULL_HANDLE;
         VulkanLayeredInterfaceCapturePass interfaceCapture_;
         VulkanLayeredLocalCompositionPass localComposition_;
         VulkanLayeredSceneResolvePass sceneResolve_;
