@@ -53,6 +53,8 @@ namespace Iridium {
             layeredResidualQueryRecorded{};
         std::array<bool, LayeredResidualQuerySlotCount>
             layeredResidualQueryResultsPending{};
+        // The slot's last submission has not been waited yet (its fence, or
+        // the graphics timeline reaching submissionSerial).
         bool fenceInFlight = false;
         uint64_t submissionSerial = 0;
     };
@@ -68,6 +70,13 @@ namespace Iridium {
     // proves rendering completion; reacquiring the image proves presentation
     // has consumed its semaphore. imagesInFlight_ maps each acquired image to
     // the fence of the frame context that most recently submitted work for it.
+    //
+    // M7R R4d.4: with timeline semaphores every frame submission signals the
+    // graphics timeline with its serial, and slot, image-owner and drain
+    // waits wait on that value (no frame fences are created); the submission
+    // uses vkQueueSubmit2 when synchronization2 is enabled, else vkQueueSubmit
+    // with VkTimelineSemaphoreSubmitInfo. Without timeline semaphores the
+    // fence path is unchanged.
     class VulkanFrameScheduler final {
     public:
         static constexpr uint32_t FramesInFlight = 2;
@@ -81,7 +90,8 @@ namespace Iridium {
             CpuProfiler* cpuProfiler, bool enableGpuProfiling,
             double timestampPeriodNanoseconds, uint32_t timestampValidBits,
             bool enableDebugLabels, bool enableTransparentPipelineStatistics,
-            uint64_t transparentTargetPixelCount);
+            uint64_t transparentTargetPixelCount, bool synchronization2 = false,
+            bool timelineSemaphore = false);
         // The deletion queue's resource destructor (after the allocator is
         // initialized; buffers and images retired before are still queued).
         void attachAllocator(VulkanResourceAllocator& allocator) noexcept {
@@ -180,6 +190,10 @@ namespace Iridium {
         [[nodiscard]] VkCommandBuffer currentCommandBuffer() const noexcept {
             return frames_[currentFrame_].commandBuffer;
         }
+        // VK_NULL_HANDLE on the fence path.
+        [[nodiscard]] VkSemaphore graphicsTimeline() const noexcept {
+            return graphicsTimeline_;
+        }
 
     private:
         VkDevice device_ = VK_NULL_HANDLE;
@@ -189,6 +203,10 @@ namespace Iridium {
 
         std::array<VulkanFrameContext, FramesInFlight> frames_{};
         std::vector<VkFence> imagesInFlight_;
+        // Timeline path: the serial of the last submission per image.
+        std::vector<uint64_t> imageSerials_;
+        VkSemaphore graphicsTimeline_ = VK_NULL_HANDLE;
+        bool synchronization2_ = false;
         std::vector<VkSemaphore> renderFinishedPerImage_;
         uint32_t currentFrame_ = 0;
         uint64_t lastSubmittedSerial_ = 0;
@@ -214,6 +232,9 @@ namespace Iridium {
         PFN_vkCmdEndDebugUtilsLabelEXT endDebugLabel_ = nullptr;
 
         void collectGpuResults(VulkanFrameContext& frame);
+        void waitGraphicsSerial(uint64_t serial, const char* operation);
+        [[nodiscard]] VkResult submitFrame(VulkanFrameContext& frame,
+            VkSemaphore renderFinished);
     };
 
     class VulkanGpuScope final {

@@ -246,7 +246,8 @@ namespace Iridium {
             config.enableTransparentPipelineStatistics &&
                 vkContext->hasPipelineStatistics(),
             static_cast<uint64_t>(sceneExtent_.width) *
-                sceneExtent_.height);
+                sceneExtent_.height,
+            vkContext->hasSynchronization2(), vkContext->hasTimelineSemaphore());
         scheduler.attachAllocator(resourceAllocator);
         // M7R R4d.3: resources written by an upload outlive the frame that
         // waits on it.

@@ -85,7 +85,8 @@ namespace Iridium {
         CpuProfiler* cpuProfiler, bool enableGpuProfiling,
         double timestampPeriodNanoseconds, uint32_t timestampValidBits,
         bool enableDebugLabels, bool enableTransparentPipelineStatistics,
-        uint64_t transparentTargetPixelCount) {
+        uint64_t transparentTargetPixelCount, bool synchronization2,
+        bool timelineSemaphore) {
         if (device == VK_NULL_HANDLE || graphicsQueue == VK_NULL_HANDLE ||
             presentQueue == VK_NULL_HANDLE || swapchainImageCount == 0) {
             throw std::invalid_argument("VulkanFrameScheduler requires valid handles and image count.");
@@ -120,9 +121,23 @@ namespace Iridium {
             }
         }
         imagesInFlight_.assign(swapchainImageCount, VK_NULL_HANDLE);
+        imageSerials_.assign(swapchainImageCount, 0);
+        synchronization2_ = synchronization2;
         deletions_.init(device_, nullptr);
 
         try {
+            if (timelineSemaphore) {
+                VkSemaphoreTypeCreateInfo typeInfo{
+                    VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO };
+                typeInfo.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
+                typeInfo.initialValue = 0;
+                VkSemaphoreCreateInfo timelineInfo{ VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO };
+                timelineInfo.pNext = &typeInfo;
+                const VkResult result = vkCreateSemaphore(device_, &timelineInfo,
+                    nullptr, &graphicsTimeline_);
+                if (result != VK_SUCCESS)
+                    throwVkError("vkCreateSemaphore(graphics timeline)", result);
+            }
             for (VulkanFrameContext& frame : frames_) {
                 VkCommandPoolCreateInfo poolInfo{ VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO };
                 poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
@@ -147,11 +162,13 @@ namespace Iridium {
                     throwVkError("vkCreateSemaphore(imageAvailable)", result);
                 }
 
-                VkFenceCreateInfo fenceInfo{ VK_STRUCTURE_TYPE_FENCE_CREATE_INFO };
-                fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
-                result = vkCreateFence(device_, &fenceInfo, nullptr, &frame.inFlight);
-                if (result != VK_SUCCESS) {
-                    throwVkError("vkCreateFence", result);
+                if (graphicsTimeline_ == VK_NULL_HANDLE) {
+                    VkFenceCreateInfo fenceInfo{ VK_STRUCTURE_TYPE_FENCE_CREATE_INFO };
+                    fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+                    result = vkCreateFence(device_, &fenceInfo, nullptr, &frame.inFlight);
+                    if (result != VK_SUCCESS) {
+                        throwVkError("vkCreateFence", result);
+                    }
                 }
 
                 if (gpuProfilingEnabled_) {
@@ -201,7 +218,12 @@ namespace Iridium {
             for (VulkanFrameContext& frame : frames_) {
                 destroyFrameObjects(device_, frame);
             }
+            if (graphicsTimeline_ != VK_NULL_HANDLE) {
+                vkDestroySemaphore(device_, graphicsTimeline_, nullptr);
+                graphicsTimeline_ = VK_NULL_HANDLE;
+            }
             imagesInFlight_.clear();
+            imageSerials_.clear();
             destroyPresentSemaphores(device_, renderFinishedPerImage_);
             device_ = VK_NULL_HANDLE;
             graphicsQueue_ = VK_NULL_HANDLE;
@@ -238,8 +260,11 @@ namespace Iridium {
         {
             CpuScope waitScope(cpuProfiler_, "cpu.renderer.frame_fence_wait");
             if (frame.fenceInFlight) {
-                result = vkWaitForFences(device_, 1, &frame.inFlight,
-                    VK_TRUE, UINT64_MAX);
+                if (graphicsTimeline_ != VK_NULL_HANDLE)
+                    waitGraphicsSerial(frame.submissionSerial, "vkWaitSemaphores(frame)");
+                else
+                    result = vkWaitForFences(device_, 1, &frame.inFlight,
+                        VK_TRUE, UINT64_MAX);
             }
         }
         if (result != VK_SUCCESS) {
@@ -273,8 +298,17 @@ namespace Iridium {
             throw std::runtime_error("vkAcquireNextImageKHR returned an image without a present semaphore.");
         }
 
+        if (graphicsTimeline_ != VK_NULL_HANDLE) {
+            // The image's previous frame, unless it was this slot's (waited).
+            const uint64_t imageSerial = imageSerials_[imageIndex];
+            if (imageSerial != 0 && imageSerial != frame.submissionSerial) {
+                CpuScope waitScope(cpuProfiler_, "cpu.renderer.frame_fence_wait");
+                waitGraphicsSerial(imageSerial, "vkWaitSemaphores(image owner)");
+            }
+        }
         VkFence imageFence = imagesInFlight_[imageIndex];
-        if (imageFence != VK_NULL_HANDLE && imageFence != frame.inFlight) {
+        if (graphicsTimeline_ == VK_NULL_HANDLE &&
+            imageFence != VK_NULL_HANDLE && imageFence != frame.inFlight) {
             CpuScope waitScope(cpuProfiler_, "cpu.renderer.frame_fence_wait");
             result = vkWaitForFences(device_, 1, &imageFence, VK_TRUE, UINT64_MAX);
             if (result != VK_SUCCESS) {
@@ -354,44 +388,17 @@ namespace Iridium {
                 throwVkError("vkEndCommandBuffer", result);
             }
 
-            // The acquired image, then (R4d.3) the upload timelines.
-            std::array<VkSemaphore, 1 + MaxFrameWaits> waitSemaphores{
-                frame.imageAvailable };
-            std::array<VkPipelineStageFlags, 1 + MaxFrameWaits> waitStages{
-                VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT };
-            std::array<uint64_t, 1 + MaxFrameWaits> waitValues{};
-            for (uint32_t index = 0; index < frameWaitCount_; ++index) {
-                waitSemaphores[1 + index] = frameWaitSemaphores_[index];
-                waitStages[1 + index] = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
-                waitValues[1 + index] = frameWaitValues_[index];
-            }
-            VkTimelineSemaphoreSubmitInfo timelineInfo{
-                VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO };
-            timelineInfo.waitSemaphoreValueCount = 1 + frameWaitCount_;
-            timelineInfo.pWaitSemaphoreValues = waitValues.data();
-            VkSubmitInfo submitInfo{ VK_STRUCTURE_TYPE_SUBMIT_INFO };
-            if (frameWaitCount_ != 0) submitInfo.pNext = &timelineInfo;
-            submitInfo.waitSemaphoreCount = 1 + frameWaitCount_;
-            submitInfo.pWaitSemaphores = waitSemaphores.data();
-            submitInfo.pWaitDstStageMask = waitStages.data();
-            submitInfo.commandBufferCount = 1;
-            submitInfo.pCommandBuffers = &frame.commandBuffer;
-            submitInfo.signalSemaphoreCount = 1;
-            submitInfo.pSignalSemaphores = &renderFinished;
-
-            result = vkResetFences(device_, 1, &frame.inFlight);
+            result = submitFrame(frame, renderFinished);
             if (result != VK_SUCCESS) {
-                throwVkError("vkResetFences", result);
-            }
-            result = vkQueueSubmit(graphicsQueue_, 1, &submitInfo, frame.inFlight);
-            if (result != VK_SUCCESS) {
-                throwVkError("vkQueueSubmit", result);
+                throwVkError(synchronization2_ && graphicsTimeline_ != VK_NULL_HANDLE
+                    ? "vkQueueSubmit2" : "vkQueueSubmit", result);
             }
             frame.fenceInFlight = true;
             frame.submissionSerial = ++lastSubmittedSerial_;
             frameRecording_ = false;
             frameWaitCount_ = 0;
             imagesInFlight_[imageIndex] = frame.inFlight;
+            imageSerials_[imageIndex] = frame.submissionSerial;
             frame.gpuResultsPending = frame.profileFrameId != 0 &&
                 frame.timestampQueryCount != 0;
             frame.transparentPipelineStatisticsResultsPending =
@@ -428,6 +435,94 @@ namespace Iridium {
         return recreate ? FrameStatus::RecreateSwapchain : FrameStatus::Ready;
     }
 
+    VkResult VulkanFrameScheduler::submitFrame(VulkanFrameContext& frame,
+        VkSemaphore renderFinished) {
+        const uint64_t serial = lastSubmittedSerial_ + 1;
+        if (graphicsTimeline_ != VK_NULL_HANDLE && synchronization2_) {
+            // Waits: the acquired image at COLOR_ATTACHMENT_OUTPUT, the upload
+            // timelines at ALL_COMMANDS. Signals: renderFinished (present) and
+            // the graphics timeline = this frame's serial.
+            std::array<VkSemaphoreSubmitInfo, 1 + MaxFrameWaits> waits{};
+            waits[0] = { VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO };
+            waits[0].semaphore = frame.imageAvailable;
+            waits[0].stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+            for (uint32_t index = 0; index < frameWaitCount_; ++index) {
+                VkSemaphoreSubmitInfo& wait = waits[1 + index];
+                wait = { VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO };
+                wait.semaphore = frameWaitSemaphores_[index];
+                wait.value = frameWaitValues_[index];
+                wait.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+            }
+            std::array<VkSemaphoreSubmitInfo, 2> signals{};
+            signals[0] = { VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO };
+            signals[0].semaphore = renderFinished;
+            signals[0].stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+            signals[1] = { VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO };
+            signals[1].semaphore = graphicsTimeline_;
+            signals[1].value = serial;
+            signals[1].stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+            VkCommandBufferSubmitInfo commands{ VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO };
+            commands.commandBuffer = frame.commandBuffer;
+            VkSubmitInfo2 submit{ VK_STRUCTURE_TYPE_SUBMIT_INFO_2 };
+            submit.waitSemaphoreInfoCount = 1 + frameWaitCount_;
+            submit.pWaitSemaphoreInfos = waits.data();
+            submit.commandBufferInfoCount = 1;
+            submit.pCommandBufferInfos = &commands;
+            submit.signalSemaphoreInfoCount = static_cast<uint32_t>(signals.size());
+            submit.pSignalSemaphoreInfos = signals.data();
+            return vkQueueSubmit2(graphicsQueue_, 1, &submit, VK_NULL_HANDLE);
+        }
+
+        // synchronization1: the acquired image, then (R4d.3) the upload
+        // timelines; the graphics timeline when enabled.
+        std::array<VkSemaphore, 1 + MaxFrameWaits> waitSemaphores{
+            frame.imageAvailable };
+        std::array<VkPipelineStageFlags, 1 + MaxFrameWaits> waitStages{
+            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT };
+        std::array<uint64_t, 1 + MaxFrameWaits> waitValues{};
+        for (uint32_t index = 0; index < frameWaitCount_; ++index) {
+            waitSemaphores[1 + index] = frameWaitSemaphores_[index];
+            waitStages[1 + index] = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+            waitValues[1 + index] = frameWaitValues_[index];
+        }
+        const std::array<VkSemaphore, 2> signalSemaphores{ renderFinished,
+            graphicsTimeline_ };
+        const std::array<uint64_t, 2> signalValues{ 0, serial };
+        const bool timeline = graphicsTimeline_ != VK_NULL_HANDLE;
+        VkTimelineSemaphoreSubmitInfo timelineInfo{
+            VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO };
+        timelineInfo.waitSemaphoreValueCount = 1 + frameWaitCount_;
+        timelineInfo.pWaitSemaphoreValues = waitValues.data();
+        timelineInfo.signalSemaphoreValueCount = timeline ? 2u : 0u;
+        timelineInfo.pSignalSemaphoreValues = signalValues.data();
+        VkSubmitInfo submitInfo{ VK_STRUCTURE_TYPE_SUBMIT_INFO };
+        if (frameWaitCount_ != 0 || timeline) submitInfo.pNext = &timelineInfo;
+        submitInfo.waitSemaphoreCount = 1 + frameWaitCount_;
+        submitInfo.pWaitSemaphores = waitSemaphores.data();
+        submitInfo.pWaitDstStageMask = waitStages.data();
+        submitInfo.commandBufferCount = 1;
+        submitInfo.pCommandBuffers = &frame.commandBuffer;
+        submitInfo.signalSemaphoreCount = timeline ? 2u : 1u;
+        submitInfo.pSignalSemaphores = signalSemaphores.data();
+        if (timeline) return vkQueueSubmit(graphicsQueue_, 1, &submitInfo, VK_NULL_HANDLE);
+
+        const VkResult reset = vkResetFences(device_, 1, &frame.inFlight);
+        if (reset != VK_SUCCESS) {
+            throwVkError("vkResetFences", reset);
+        }
+        return vkQueueSubmit(graphicsQueue_, 1, &submitInfo, frame.inFlight);
+    }
+
+    void VulkanFrameScheduler::waitGraphicsSerial(uint64_t serial, const char* operation) {
+        if (serial == 0) return;
+        VkSemaphoreWaitInfo waitInfo{ VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO };
+        waitInfo.semaphoreCount = 1;
+        waitInfo.pSemaphores = &graphicsTimeline_;
+        waitInfo.pValues = &serial;
+        const VkResult result = vkWaitSemaphores(device_, &waitInfo, UINT64_MAX);
+        if (result != VK_SUCCESS) throwVkError(operation, result);
+    }
+
     void VulkanFrameScheduler::addFrameWait(VkSemaphore timeline, uint64_t value) {
         if (timeline == VK_NULL_HANDLE || value == 0) return;
         if (!frameRecording_)
@@ -446,6 +541,16 @@ namespace Iridium {
 
     void VulkanFrameScheduler::refreshCompletedSerial() {
         if (device_ == VK_NULL_HANDLE) return;
+        if (graphicsTimeline_ != VK_NULL_HANDLE) {
+            uint64_t value = 0;
+            const VkResult result = vkGetSemaphoreCounterValue(device_,
+                graphicsTimeline_, &value);
+            if (result != VK_SUCCESS)
+                throwVkError("vkGetSemaphoreCounterValue", result);
+            completedSerial_ = (std::max)(completedSerial_,
+                (std::min)(value, lastSubmittedSerial_));
+            return;
+        }
         for (const VulkanFrameContext& frame : frames_) {
             if (!frame.fenceInFlight ||
                 frame.submissionSerial <= completedSerial_) continue;
@@ -471,6 +576,7 @@ namespace Iridium {
         destroyPresentSemaphores(device_, renderFinishedPerImage_);
         renderFinishedPerImage_ = std::move(replacementSemaphores);
         imagesInFlight_.assign(imageCount, VK_NULL_HANDLE);
+        imageSerials_.assign(imageCount, 0);
     }
 
     void VulkanFrameScheduler::waitForAllFrames() {
@@ -479,18 +585,25 @@ namespace Iridium {
         }
         std::array<VkFence, FramesInFlight> fences{};
         uint32_t fenceCount = 0;
+        uint64_t newestSerial = 0;
         for (VulkanFrameContext& frame : frames_) {
             if (frame.fenceInFlight) {
                 fences[fenceCount++] = frame.inFlight;
+                newestSerial = (std::max)(newestSerial, frame.submissionSerial);
             }
         }
         if (fenceCount != 0) {
             // M7R telemetry: counts frames that drain every in-flight frame.
             CpuScope drainScope(cpuProfiler_, "cpu.renderer.drain_all_frames");
-            const VkResult result = vkWaitForFences(device_, fenceCount,
-                fences.data(), VK_TRUE, UINT64_MAX);
-            if (result != VK_SUCCESS) {
-                throwVkError("vkWaitForFences(all frames)", result);
+            if (graphicsTimeline_ != VK_NULL_HANDLE) {
+                waitGraphicsSerial(newestSerial, "vkWaitSemaphores(all frames)");
+            }
+            else {
+                const VkResult result = vkWaitForFences(device_, fenceCount,
+                    fences.data(), VK_TRUE, UINT64_MAX);
+                if (result != VK_SUCCESS) {
+                    throwVkError("vkWaitForFences(all frames)", result);
+                }
             }
         }
         for (VulkanFrameContext& frame : frames_) {
@@ -802,7 +915,13 @@ namespace Iridium {
         }
 
         imagesInFlight_.clear();
+        imageSerials_.clear();
         destroyPresentSemaphores(device_, renderFinishedPerImage_);
+        if (graphicsTimeline_ != VK_NULL_HANDLE) {
+            vkDestroySemaphore(device_, graphicsTimeline_, nullptr);
+            graphicsTimeline_ = VK_NULL_HANDLE;
+        }
+        synchronization2_ = false;
         device_ = VK_NULL_HANDLE;
         graphicsQueue_ = VK_NULL_HANDLE;
         presentQueue_ = VK_NULL_HANDLE;

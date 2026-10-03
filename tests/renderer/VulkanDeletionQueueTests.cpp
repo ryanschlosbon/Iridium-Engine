@@ -13,6 +13,10 @@
 //   - R4c.3: reflection-probe capture targets retire a replaced or removed
 //     published cube through the queue while frames are in flight, and
 //     destroy at once when none is.
+//   - R4d.4: the scheduler runs on the graphics timeline (vkQueueSubmit2,
+//     timeline waits, no frame fences) when the device supports it; the
+//     retirement ordering and the non-waiting refresh also hold on the fence
+//     path.
 
 #include "renderer/vulkan/DescriptorAllocator.h"
 #include "renderer/vulkan/VkContext.h"
@@ -200,7 +204,7 @@ namespace {
         VulkanResourceAllocator allocator;
         VulkanFrameScheduler scheduler;
 
-        Device() {
+        explicit Device(bool timeline = true) {
             context = std::make_unique<VkContext>(true, false, false,
                 window.get(), true);
             allocator.init(context->getInstance(), context->getPhysicalDevice(),
@@ -209,7 +213,8 @@ namespace {
             scheduler.init(context->getDevice(), context->getGraphicsQueue(),
                 context->getPresentQueue(), context->getGraphicsQueueFamily(),
                 swapchain->getImageCount(), nullptr, false, 0.0, 0, false,
-                false, 0);
+                false, 0, context->hasSynchronization2(),
+                timeline && context->hasTimelineSemaphore());
             scheduler.attachAllocator(allocator);
         }
         ~Device() {
@@ -249,10 +254,14 @@ namespace {
         return true;
     }
 
-    bool testRetiredBetweenFramesOutlivesItsFrame() {
+    bool retiredBetweenFramesOutlivesItsFrame(bool timeline) {
         ValidationCapture validation;
         {
-            Device device;
+            Device device(timeline);
+            if (timeline && device.scheduler.graphicsTimeline() == VK_NULL_HANDLE) {
+                std::cerr << "  the device has no timeline semaphores\n";
+                return false;
+            }
             VulkanFrameScheduler& scheduler = device.scheduler;
             CallbackLog log;
             log.scheduler = &scheduler;
@@ -318,6 +327,13 @@ namespace {
         return true;
     }
 
+    bool testRetiredBetweenFramesOutlivesItsFrame() {
+        return retiredBetweenFramesOutlivesItsFrame(true);
+    }
+    bool testRetiredBetweenFramesFencePath() {
+        return retiredBetweenFramesOutlivesItsFrame(false);
+    }
+
     bool testCaptureTargetsRetireWhileInFlight() {
         ValidationCapture validation;
         {
@@ -364,10 +380,10 @@ namespace {
         return true;
     }
 
-    bool testRefreshCompletedSerialDoesNotWait() {
+    bool refreshCompletedSerialDoesNotWait(bool timeline) {
         ValidationCapture validation;
         {
-            Device device;
+            Device device(timeline);
             VulkanFrameScheduler& scheduler = device.scheduler;
             CHECK(recordFrame(device, nullptr));
             CHECK(recordFrame(device, nullptr));
@@ -386,6 +402,12 @@ namespace {
         }
         return true;
     }
+    bool testRefreshCompletedSerialDoesNotWait() {
+        return refreshCompletedSerialDoesNotWait(true);
+    }
+    bool testRefreshCompletedSerialFencePath() {
+        return refreshCompletedSerialDoesNotWait(false);
+    }
 
     struct TestCase {
         const char* name;
@@ -402,8 +424,12 @@ int main() {
         { "Queue late key only delays", testQueueLateKeyOnlyDelays },
         { "Retired between frames outlives its frame",
             testRetiredBetweenFramesOutlivesItsFrame },
+        { "Retired between frames outlives its frame (fence path)",
+            testRetiredBetweenFramesFencePath },
         { "refreshCompletedSerial does not wait",
             testRefreshCompletedSerialDoesNotWait },
+        { "refreshCompletedSerial does not wait (fence path)",
+            testRefreshCompletedSerialFencePath },
         { "Capture targets retire while frames are in flight",
             testCaptureTargetsRetireWhileInFlight },
     };
