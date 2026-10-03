@@ -28,6 +28,7 @@ add_library(iridium_vulkan STATIC
         VulkanLayeredInterfaceCapturePass.cpp
         VulkanLayeredLocalCompositionPass.cpp
         VulkanLayeredSceneResolvePass.cpp
+        VulkanLocalShadowFeature.cpp
         VulkanMeshLayouts.cpp
         VulkanOutputFeature.cpp
         VulkanOutputPass.cpp
@@ -43,6 +44,8 @@ add_library(iridium_vulkan STATIC
         VulkanResourceRegistry.cpp
         VulkanResourceState.cpp
         VulkanSceneDescriptors.cpp
+        VulkanShadowCasters.cpp
+        VulkanShadowFeature.cpp
         VulkanSpotShadowAtlas.cpp
         VulkanTransparencyPyramid.cpp
         VulkanUploadContext.cpp

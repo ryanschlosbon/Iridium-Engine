@@ -43,12 +43,14 @@ namespace Iridium {
     class VulkanRenderGraphExecutor;
     class VulkanResourceAllocator;
     class VulkanResourceRegistry;
+    class VulkanUploadContext;
 
     // Built once the device exists (backend init); valid until cleanup.
     struct VulkanFeatureContext {
         ::VkContext& vk;
         VkDevice device = VK_NULL_HANDLE;
         VulkanResourceAllocator& allocator;
+        VulkanUploadContext& uploads;
         ::DescriptorAllocator& descriptors;
         VulkanFrameScheduler& scheduler;
         VulkanRenderGraphExecutor& graph;
