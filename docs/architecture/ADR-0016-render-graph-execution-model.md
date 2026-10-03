@@ -62,6 +62,11 @@ describes the execution model that replaces the imperative path.
    - Narrowing stage and access masks is a separate, measured step, checked with
      synchronization validation (`--validation-sync`).
 
+   *As implemented (R4a):* passes on dynamic rendering also re-barrier a physical
+   slot that they write again as an attachment with the same access (load-op
+   ordering), because no render-pass subpass dependency supplies that ordering any
+   more.
+
 4. **Imported resources are bound explicitly** with a synchronization policy:
    - `ExecutorOwned`: the executor emits barriers and tracks state.
    - `RenderPassManaged{initial, final}`: the swapchain and shadow maps, until
@@ -111,6 +116,22 @@ describes the execution model that replaces the imperative path.
 
 9. **Aliasing (R4b)** builds on this model. Owners re-query images after every
    rebuild, and transient first use is always a discard.
+
+   *As implemented (R4b):* the backend-neutral planner (`planTransientAliasing`)
+   places every alias-eligible transient image in an `AliasHeap` from compiled
+   lifetimes and device memory requirements. History, imports and resources marked
+   `excludeFromAliasing` are never aliased. A resource is eligible only when its first
+   use writes it whole; storage first writes declare that with
+   `declareWholeResourceWrite`. The Vulkan executor allocates one VMA block per heap
+   per frame slot and binds images with `vmaCreateAliasingImage2`. At frame begin
+   it resets aliased slots to `Undefined`. A first use transitions from `UNDEFINED`,
+   with the source scope set to the union of the accesses its alias predecessors
+   actually made this frame. Reading or loading an aliased image before its first
+   writer ran that frame throws. Aliasing is on by default; `--render-graph-aliasing
+   off` remains until M7R R6, and `--qualification-alias-poison` fills the heaps with
+   NaN at frame start. At native 4K it saves 341.6 MB across the two frame slots.
+   Synchronization validation does not detect a missing predecessor scope, so the
+   executor's barrier-sink tests and the poison captures are the guard.
 
 ## Consequences
 
