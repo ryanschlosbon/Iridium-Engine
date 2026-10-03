@@ -50,6 +50,7 @@
 #include "VulkanIndirectCullerShared.h"
 #include "VulkanIndirectViewCuller.h"
 #include "VulkanOpaqueIndirectCuller.h"
+#include "VulkanOpaqueFeature.h"
 #include "VulkanRenderGraphExecutor.h"
 #include "VulkanTransparencyPyramid.h"
 #include "VulkanDepthPyramid.h"
@@ -95,18 +96,12 @@ namespace Iridium {
         VulkanPipelineLibrary pipelineLibrary;
         VulkanMeshLayouts meshLayouts;
 
-        // G-Buffer Pass (Opaque)
-        std::unique_ptr<VkRenderPassWrapper> gBufferPass;
-        std::unique_ptr<VkGraphicsPipeline> gBufferPipeline;
-
         // --- MISSING RAW IMAGE ARRAYS ---
         VulkanFrameTargets frameTargets;
         VulkanRenderGraphExecutor renderGraph_;
         // Pass/resource ids of the bound plan, refreshed on every rebuild.
         VulkanProductionGraphIds graphIds_{};
         VulkanTransparencyPyramid transparencyPyramid_;
-        VulkanDepthPyramid depthPyramid_;
-        bool depthPyramidEnabled_ = false;
         VulkanLayeredInterfaceCapturePass layeredInterfaceCapture_;
         VulkanLayeredLocalCompositionPass layeredLocalComposition_;
         VulkanLayeredSceneResolvePass layeredSceneResolve_;
@@ -199,8 +194,9 @@ namespace Iridium {
         VkDescriptorSetLayout indirectCullerSetLayout_ = VK_NULL_HANDLE;
         // Caster scratch shared by the shadow owners and the probe capture.
         VulkanCasterScratch casterScratch_;
-        // Main-view opaque compaction (sibling of the view cullers).
-        VulkanOpaqueIndirectCuller opaqueCuller_;
+        // R3c.7: G-buffer pass and pipelines, the main-view opaque culler,
+        // the G-buffer draw loops and the depth pyramid with its history.
+        VulkanOpaqueFeature opaque_;
         using ResolvedShadowCaster = VulkanResolvedCaster;
 
         // The slot's CPU GPU-scene mirror with the published counts.
@@ -228,22 +224,12 @@ namespace Iridium {
         bool initialized_ = false;
         bool cleaned_ = false;
         bool frameOpen_ = false;
-        ViewHistoryContext currentViewHistory_{};
-        uint64_t currentProjectionRevision_ = 1;
-        uint64_t currentDepthContentRevision_ = 1;
-        DepthPyramidHistoryDecision currentDepthHistoryDecision_{};
-        bool depthHistoryPrepared_ = false;
         bool imguiInitialized_ = false;
         CpuProfiler* cpuProfiler_ = nullptr;
         bool forceDirectGBufferReference_ = false;
         bool forceDirectShadowReference_ = false;
         float experimentalShadowLodErrorTexels_ = 0.0f;
         uint32_t shadowLodMaximumLevel_ = 15u;
-        bool depthOcclusionQueryEnabled_ = false;
-        bool depthOcclusionRejectionEnabled_ = false;
-        float experimentalGpuLodErrorPixels_ = 0.0f;
-        uint32_t gpuLodMaximumLevel_ = 15u;
-        float gpuLodHysteresisFraction_ = 0.15f;
         float experimentalProbeLodErrorPixels_ = 0.0f;
         uint32_t probeLodMaximumLevel_ = 15u;
         glm::mat4 ordinary2ViewProjection_{ 1.0f };
@@ -270,7 +256,6 @@ namespace Iridium {
 
         // Private helpers that Application.cpp no longer needs to worry about
         void createUniformBuffers();
-        void createGpuSceneCullPipeline();
         [[nodiscard]] VulkanCullerServices cullerServices();
         [[nodiscard]] VulkanIndirectViewSettings probeViewSettings() const noexcept;
         // The view cullers in collection order: directional, spot, point,
@@ -283,8 +268,6 @@ namespace Iridium {
         // Device telemetry (+ oracle verdict) of every view's retired slot.
         void collectIndirectViewValidations(uint32_t frameIndex);
 
-        [[nodiscard]] bool prepareOpaqueIndirectSubmission(
-            std::span<const DrawPacket> opaqueQueue);
         void bindLightRecordBuffers();
         void bindSceneClusterBuffers();
         void createNeutralEnvironmentProducts();
@@ -296,9 +279,9 @@ namespace Iridium {
         void bindReflectionProbeBuffers();
         void bindReflectionProbeEnvironments();
         // Feature owners in registration (and graph) order.
-        [[nodiscard]] std::array<IVulkanFeature*, 7> features() noexcept {
-            return { &shadows_, &localShadows_, &probes_, &clusterLighting_,
-                &output_, &oit_, &hooks_ };
+        [[nodiscard]] std::array<IVulkanFeature*, 8> features() noexcept {
+            return { &shadows_, &localShadows_, &probes_, &opaque_,
+                &clusterLighting_, &output_, &oit_, &hooks_ };
         }
         void initFrameTargets();
         void rebuildRenderGraphAfterDeviceIdle();
@@ -307,12 +290,6 @@ namespace Iridium {
         // R3b.7 imported buffers: culler indirect command/count buffers and
         // probe-cluster buffers (per slot). Waits for every frame in flight.
         void bindGraphImportedBuffers();
-        // R3b.9: the depth-pyramid history import follows the retained view;
-        // `reset` after the history images are rebuilt.
-        void bindDepthPyramidHistory(bool reset);
-        uint32_t depthHistoryBoundView_ = UINT32_MAX;
-        std::array<RenderGraph::Access, VulkanDepthPyramid::HistoryViewCount>
-            depthHistoryAccess_{};
         [[nodiscard]] VulkanImageResource swapchainGraphImage(
             uint32_t imageIndex) const;
         [[nodiscard]] VulkanProductionGraphFeatures

@@ -24,6 +24,7 @@ add_library(iridium_vulkan STATIC
         VulkanIndexedTextureTable.cpp
         VulkanIndirectCullerShared.cpp
         VulkanIndirectViewCuller.cpp
+        VulkanOpaqueFeature.cpp
         VulkanOpaqueIndirectCuller.cpp
         VulkanLayeredInterfaceCapturePass.cpp
         VulkanLayeredLocalCompositionPass.cpp

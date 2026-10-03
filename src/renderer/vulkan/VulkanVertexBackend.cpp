@@ -87,26 +87,6 @@ namespace Iridium {
                 swapchain.getImageCount() * bytesPerTexel;
         }
 
-        void appendFnv1a(uint64_t& hash, const void* data,
-            size_t size) noexcept {
-            const auto* bytes = static_cast<const uint8_t*>(data);
-            for (size_t index = 0; index < size; ++index) {
-                hash ^= bytes[index];
-                hash *= 1099511628211ull;
-            }
-        }
-
-        // The history depth was rasterized from a complete camera transform.
-        // Hashing only the projection allowed ordinary camera translation or
-        // rotation to consume depth from a different view pose.
-        uint64_t viewProjectionRevision(const glm::mat4& view,
-            const glm::mat4& projection) noexcept {
-            uint64_t hash = 1469598103934665603ull;
-            appendFnv1a(hash, &view, sizeof(view));
-            appendFnv1a(hash, &projection, sizeof(projection));
-            return hash == 0u ? 1u : hash;
-        }
-
         std::string versionString(uint32_t version) {
             return std::to_string(VK_API_VERSION_MAJOR(version)) + "." +
                 std::to_string(VK_API_VERSION_MINOR(version)) + "." +
@@ -193,13 +173,20 @@ namespace Iridium {
         extensionHooks_.configure(config);
         cpuProfiler_ = config.cpuProfiler;
         gBufferLayout_ = config.gBufferLayout;
-        depthPyramidEnabled_ = config.experimentalDepthPyramid ||
-            config.experimentalDepthOcclusionQuery ||
-            config.experimentalDepthOcclusionRejection;
-        depthOcclusionQueryEnabled_ = config.experimentalDepthOcclusionQuery ||
-            config.experimentalDepthOcclusionRejection;
-        depthOcclusionRejectionEnabled_ =
-            config.experimentalDepthOcclusionRejection;
+        opaque_.configure({
+            .gBufferLayout = config.gBufferLayout,
+            .depthPyramid = config.experimentalDepthPyramid ||
+                config.experimentalDepthOcclusionQuery ||
+                config.experimentalDepthOcclusionRejection,
+            .depthOcclusionQuery = config.experimentalDepthOcclusionQuery ||
+                config.experimentalDepthOcclusionRejection,
+            .depthOcclusionRejection = config.experimentalDepthOcclusionRejection,
+            .lodErrorPixels = config.experimentalGpuLodErrorPixels,
+            .lodMaximumLevel = (std::min)(config.gpuLodMaximumLevel,
+                MaximumGpuSceneLodLevels - 1u),
+            .lodHysteresisFraction = config.gpuLodHysteresisFraction,
+            .forceDirectGBufferReference = config.forceDirectGBufferReference,
+        });
         oit_.configure(config.weightedOitOrderSeed);
         forceDirectGBufferReference_ = config.forceDirectGBufferReference;
         forceDirectShadowReference_ = config.forceDirectShadowReference;
@@ -207,9 +194,6 @@ namespace Iridium {
             config.experimentalShadowLodErrorTexels;
         shadowLodMaximumLevel_ = (std::min)(config.shadowLodMaximumLevel,
             MaximumGpuSceneLodLevels - 1u);
-        experimentalGpuLodErrorPixels_ = config.experimentalGpuLodErrorPixels;
-        gpuLodMaximumLevel_ = (std::min)(config.gpuLodMaximumLevel, MaximumGpuSceneLodLevels - 1u);
-        gpuLodHysteresisFraction_ = config.gpuLodHysteresisFraction;
         experimentalProbeLodErrorPixels_ =
             config.experimentalProbeLodErrorPixels;
         probeLodMaximumLevel_ = (std::min)(config.probeLodMaximumLevel,
@@ -377,7 +361,6 @@ namespace Iridium {
         output_.createPipelines(outputTargetFormat_,
             outputTransport_ == Color::OutputTransport::Hdr10Pq,
             vkSwapchain->getImageFormat());
-        createGpuSceneCullPipeline();
         oit_.create(*featureContext_);
         hooks_.create(*featureContext_);
         hooks_.setFinalCaptureConsumer({ this,
@@ -401,10 +384,6 @@ namespace Iridium {
             transparentPass->getRenderPass());
         transparencyPyramid_.init(vkContext->getDevice(),
             descriptorAllocator, meshLayouts.getGlobalSetLayout());
-        if (depthPyramidEnabled_) depthPyramid_.init(vkContext->getDevice(),
-            descriptorAllocator, resourceAllocator,
-            meshLayouts.getGlobalSetLayout(),
-            meshLayouts.getGpuSceneSetLayout());
         // R3c.5: the shadow owners create their maps and cullers; the shared
         // 3-binding indirect set layout outlives every view culler.
         indirectCullerSetLayout_ = createIndirectSetLayout(
@@ -418,14 +397,13 @@ namespace Iridium {
             { cullerServices(), indirectCullerSetLayout_ });
         localShadows_.create(*featureContext_);
 
-        // 3. G-Buffer Pass
-        gBufferPass = std::make_unique<VkRenderPassWrapper>(vkContext.get(),
-            vkSwapchain.get(), gBufferLayout_);
-        gBufferPipeline = std::make_unique<VkGraphicsPipeline>(vkContext.get(), vkSwapchain.get(), gBufferPass.get(),
-            meshLayouts.getGBufferPipelineLayout(), gBufferLayout_);
+        // 3. G-Buffer Pass (R3c.7: the opaque owner, with its culler and the
+        // depth pyramid).
+        opaque_.setCullerServices(cullerServices());
+        opaque_.create(*featureContext_);
 
         pipelineLibrary.init(vkContext->getDevice(),
-            { gBufferPass->getRenderPass(), meshLayouts.getGBufferPipelineLayout(),
+            { opaque_.gBufferRenderPass(), meshLayouts.getGBufferPipelineLayout(),
                 vulkanGBufferFormats(gBufferLayout_).colorAttachmentCount },
             { forwardPass->getRenderPass(), meshLayouts.getForwardPipelineLayout(), 1 },
             { transparentPass->getRenderPass(),
@@ -474,7 +452,7 @@ namespace Iridium {
         gpuScene_.init(vkContext->getDevice(), resourceAllocator, scheduler,
             cpuProfiler_, frameOpen_, storageRange);
         gpuScene_.createBuffers({ 2u, 1u, 1u, 1u });
-        opaqueCuller_.resize(512u, frameOpen_);
+        opaque_.culler().resize(512u, frameOpen_);
         probes_.createInitialBuffers(sceneExtent_);
 
         // --------------------------------
@@ -485,7 +463,7 @@ namespace Iridium {
             globalDescriptorSets[i] = descriptorAllocator.allocate(meshLayouts.getGlobalSetLayout());
             gpuScene_.setDescriptorSet(static_cast<uint32_t>(i),
                 descriptorAllocator.allocate(meshLayouts.getGpuSceneSetLayout()));
-            opaqueCuller_.allocateSet(static_cast<uint32_t>(i));
+            opaque_.culler().allocateSet(static_cast<uint32_t>(i));
 
             VkDescriptorBufferInfo bufferInfo{};
             bufferInfo.buffer = uniformBuffers[i].buffer;
@@ -503,12 +481,9 @@ namespace Iridium {
             vkUpdateDescriptorSets(vkContext->getDevice(), 1, &descriptorWrite, 0, nullptr);
         }
         gpuScene_.bindBuffers();
-        opaqueCuller_.bindBuffers();
+        opaque_.culler().bindBuffers();
         transparencyPyramid_.rebuild(frameTargets);
-        if (depthPyramidEnabled_) {
-            depthPyramid_.rebuild(frameTargets);
-            bindDepthPyramidHistory(true);
-        }
+        opaque_.rebuildDescriptors();
         layeredInterfaceCapture_.rebuildDescriptors(frameTargets);
         layeredLocalComposition_.rebuildDescriptors(frameTargets);
         layeredSceneResolve_.rebuildDescriptors(frameTargets);
@@ -613,7 +588,7 @@ namespace Iridium {
             .graph = &renderGraph_,
             .frameTargets = &frameTargets,
             .probeCaptureTargets = &probes_.captureTargets(),
-            .depthPyramid = depthPyramidEnabled_ ? &depthPyramid_ : nullptr,
+            .depthPyramid = opaque_.depthPyramidEnabled() ? &opaque_.depthPyramid() : nullptr,
             .profiler = cpuProfiler_,
         };
     }
@@ -823,7 +798,7 @@ namespace Iridium {
         scheduler.waitForAllFrames();
         for (uint32_t frame = 0;
                 frame < VulkanFrameScheduler::FramesInFlight; ++frame)
-            opaqueCuller_.collect(frame);
+            opaque_.culler().collect(frame);
         for (VulkanIndirectViewCuller* culler : indirectViewCullers())
             for (uint32_t frame = 0;
                     frame < VulkanFrameScheduler::FramesInFlight; ++frame)
@@ -859,7 +834,7 @@ namespace Iridium {
 
         sceneDescriptors.cleanup();
         transparencyPyramid_.clearDescriptors();
-        depthPyramid_.clearDescriptors();
+        opaque_.clearDescriptors();
         layeredInterfaceCapture_.clearDescriptors();
         layeredLocalComposition_.clearDescriptors();
         layeredSceneResolve_.clearDescriptors();
@@ -882,7 +857,7 @@ namespace Iridium {
             resourceAllocator.destroy(uniformBuffers[i]);
         }
         gpuScene_.destroy();
-        opaqueCuller_.destroy(device);
+        opaque_.destroy();
 
 
         forwardPass.reset();
@@ -896,11 +871,8 @@ namespace Iridium {
 
         uiPass.reset();
         output_.destroy();
-        gBufferPipeline.reset();
-        gBufferPass.reset();
 
         transparencyPyramid_.cleanup();
-        depthPyramid_.cleanup();
         layeredSceneResolve_.cleanup();
         layeredLocalComposition_.cleanup();
         layeredInterfaceCapture_.cleanup();
@@ -979,7 +951,7 @@ namespace Iridium {
     VulkanProductionGraphFeatures
         VulkanVertexBackend::productionGraphFeatures() const noexcept {
         return {
-            .depthPyramid = depthPyramidEnabled_,
+            .depthPyramid = opaque_.depthPyramidEnabled(),
             .virtualShadowWorkingSetBytes = shadows_.virtualShadows().initialized()
                 ? shadows_.virtualShadows().info().workingSetLayout.totalBytes : 0,
             // The CPU profiler's enabled state is fixed for the process.
@@ -1029,27 +1001,6 @@ namespace Iridium {
                 Access::SampledRead, shadowPolicy);
     }
 
-    void VulkanVertexBackend::bindDepthPyramidHistory(bool reset) {
-        // R3b.9: one executor-owned global import, bound to the retained
-        // view's history image. Switching views keeps each image's tracked
-        // state; a rebuild (fresh images) starts both from Undefined.
-        if (!depthPyramidEnabled_ || !graphIds_.depthPyramidHistory.isValid()) return;
-        if (reset) {
-            depthHistoryAccess_.fill(RenderGraph::Access::Undefined);
-            depthHistoryBoundView_ = UINT32_MAX;
-        }
-        if (depthHistoryBoundView_ == retainedRenderView_) return;
-        if (depthHistoryBoundView_ < depthHistoryAccess_.size())
-            depthHistoryAccess_[depthHistoryBoundView_] = renderGraph_.externalImageAccess(
-                VulkanGlobalBinding, graphIds_.depthPyramidHistory);
-        renderGraph_.bindExternalImage(VulkanGlobalBinding,
-            graphIds_.depthPyramidHistory,
-            depthPyramid_.historyImage(retainedRenderView_),
-            depthHistoryAccess_[retainedRenderView_],
-            ExternalSyncPolicy::executorOwned());
-        depthHistoryBoundView_ = retainedRenderView_;
-    }
-
     void VulkanVertexBackend::bindGraphImportedBuffers() {
         // R3b.7: per-slot indirect command/count buffers of the four drawing
         // cullers and the reflection-probe cluster buffers. Their owners
@@ -1074,8 +1025,8 @@ namespace Iridium {
             { graphIds_.spotIndirect.counts, &localShadows_.spotCuller().buffers().counts },
             { graphIds_.pointIndirect.commands, &localShadows_.pointCuller().buffers().commands },
             { graphIds_.pointIndirect.counts, &localShadows_.pointCuller().buffers().counts },
-            { graphIds_.opaqueIndirect.commands, &opaqueCuller_.buffers().commands },
-            { graphIds_.opaqueIndirect.counts, &opaqueCuller_.buffers().counts },
+            { graphIds_.opaqueIndirect.commands, &opaque_.culler().buffers().commands },
+            { graphIds_.opaqueIndirect.counts, &opaque_.culler().buffers().counts },
             { graphIds_.probeClusterHeaders, &probes_.clusterHeaderBuffers() },
             { graphIds_.probeClusterIndices, &probes_.clusterIndexBuffers() },
         } };
@@ -1121,8 +1072,6 @@ namespace Iridium {
         renderGraph_.setGpuRangeSink(VulkanGpuRangeSink::forScheduler(scheduler));
         bindGraphImportedImages();
         bindGraphImportedBuffers();
-        // The depth-pyramid history is bound after its images are rebuilt.
-        depthHistoryBoundView_ = UINT32_MAX;
         // R3c: feature owners re-query graph resources and register their
         // callbacks on the new plan (a rebuild cleared every registration).
         // The shadow owner binds the VSM working set here (R3c.5).
@@ -1205,7 +1154,7 @@ namespace Iridium {
             sceneDescriptors.cleanup();
             for (IVulkanFeature* feature : features()) feature->onGraphReleased();
             transparencyPyramid_.clearDescriptors();
-            depthPyramid_.clearDescriptors();
+            opaque_.clearDescriptors();
             layeredInterfaceCapture_.clearDescriptors();
             layeredLocalComposition_.clearDescriptors();
             layeredSceneResolve_.clearDescriptors();
@@ -1233,10 +1182,7 @@ namespace Iridium {
             bindReflectionProbeEnvironments();
             sceneDescriptors.rebuild(frameTargets);
             transparencyPyramid_.rebuild(frameTargets);
-            if (depthPyramidEnabled_) {
-                depthPyramid_.rebuild(frameTargets);
-                bindDepthPyramidHistory(true);
-            }
+            opaque_.rebuildDescriptors();
             layeredInterfaceCapture_.rebuildDescriptors(frameTargets);
             layeredLocalComposition_.rebuildDescriptors(frameTargets);
             layeredSceneResolve_.rebuildDescriptors(frameTargets);
@@ -1325,7 +1271,7 @@ namespace Iridium {
                 "Output transport can only change between frames.");
         }
         // 1. Handle Minimization (Pause the engine until it's un-minimized)
-        opaqueCuller_.lodHistory().resetView();
+        opaque_.culler().lodHistory().resetView();
         int width = 0, height = 0;
         glfwGetFramebufferSize(window, &width, &height);
         while (width == 0 || height == 0) {
@@ -1375,7 +1321,7 @@ namespace Iridium {
         // retire the bindings before the buffers and recreate them afterward.
         for (IVulkanFeature* feature : features()) feature->onGraphReleased();
         transparencyPyramid_.clearDescriptors();
-        depthPyramid_.clearDescriptors();
+        opaque_.clearDescriptors();
         layeredInterfaceCapture_.clearDescriptors();
         layeredLocalComposition_.clearDescriptors();
         layeredSceneResolve_.clearDescriptors();
@@ -1434,10 +1380,7 @@ namespace Iridium {
         bindReflectionProbeEnvironments();
         sceneDescriptors.rebuild(frameTargets);
         transparencyPyramid_.rebuild(frameTargets);
-        if (depthPyramidEnabled_) {
-            depthPyramid_.rebuild(frameTargets);
-            bindDepthPyramidHistory(true);
-        }
+        opaque_.rebuildDescriptors();
         layeredInterfaceCapture_.rebuildDescriptors(frameTargets);
         layeredLocalComposition_.rebuildDescriptors(frameTargets);
         layeredSceneResolve_.rebuildDescriptors(frameTargets);
@@ -1483,7 +1426,7 @@ namespace Iridium {
             .limits.maxImageDimension2D;
         if (extent.width < 64 || extent.height < 64 ||
             extent.width > maximum || extent.height > maximum) {
-            if (extent.width == 0 || extent.height == 0) opaqueCuller_.lodHistory().resetView();
+            if (extent.width == 0 || extent.height == 0) opaque_.culler().lodHistory().resetView();
             diagnostic = "Requested scene extent is outside Vulkan image limits";
             return false;
         }
@@ -1493,7 +1436,7 @@ namespace Iridium {
             return true;
         }
 
-        opaqueCuller_.lodHistory().resetView();
+        opaque_.culler().lodHistory().resetView();
 
         // Compile first so invalid graph contracts cannot disturb the active
         // target. Resource allocation is retried with the previous extent if
@@ -1556,7 +1499,7 @@ namespace Iridium {
             sceneDescriptors.cleanup();
             for (IVulkanFeature* feature : features()) feature->onGraphReleased();
             transparencyPyramid_.clearDescriptors();
-            depthPyramid_.clearDescriptors();
+            opaque_.clearDescriptors();
             layeredInterfaceCapture_.clearDescriptors();
             layeredLocalComposition_.clearDescriptors();
             layeredSceneResolve_.clearDescriptors();
@@ -1584,10 +1527,7 @@ namespace Iridium {
             bindReflectionProbeEnvironments();
             sceneDescriptors.rebuild(frameTargets);
             transparencyPyramid_.rebuild(frameTargets);
-            if (depthPyramidEnabled_) {
-                depthPyramid_.rebuild(frameTargets);
-                bindDepthPyramidHistory(true);
-            }
+            opaque_.rebuildDescriptors();
             layeredInterfaceCapture_.rebuildDescriptors(frameTargets);
             layeredLocalComposition_.rebuildDescriptors(frameTargets);
             layeredSceneResolve_.rebuildDescriptors(frameTargets);
@@ -1999,7 +1939,7 @@ namespace Iridium {
 
     void VulkanVertexBackend::initFrameTargets() {
         frameTargets.init(vkContext->getDevice(), *vkSwapchain, sceneExtent_,
-            { gBufferPass->getRenderPass(), lightingRenderPass,
+            { opaque_.gBufferRenderPass(), lightingRenderPass,
                 forwardPass->getRenderPass(), transparentPass->getRenderPass(),
                 layeredInterfaceCapture_.renderPass(),
                 layeredLocalComposition_.renderPass(),
@@ -2035,8 +1975,7 @@ namespace Iridium {
 
     FrameStatus VulkanVertexBackend::beginFrame() {
         frameOpen_ = false;
-        depthHistoryPrepared_ = false;
-        currentDepthHistoryDecision_ = {};
+        opaque_.beginFrame();
         probes_.beginFrame();
         ordinary2ViewProjectionValid_ = false;
         telemetry_.beginFrame();
@@ -2050,13 +1989,10 @@ namespace Iridium {
         // the out-of-date acquire path. Its capture readbacks are now CPU-safe.
         extensionHooks_.onFrameSlotRetired(completedFrameIndex);
         shadows_.collectVirtualShadowRequests(completedFrameIndex);
-        if (depthPyramidEnabled_) {
-            depthPyramid_.onFrameFenceCompleted(completedFrameIndex,
-                scheduler.completedSerial());
-        }
+        opaque_.onFrameFenceCompleted(completedFrameIndex, scheduler.completedSerial());
         for (IVulkanFeature* feature : features())
             feature->onFrameSlotRetired(completedFrameIndex);
-        opaqueCuller_.collect(completedFrameIndex);
+        opaque_.culler().collect(completedFrameIndex);
         collectIndirectViewValidations(completedFrameIndex);
         {
             CpuScope graphScope(cpuProfiler_, "cpu.render_graph.lookup");
@@ -2091,7 +2027,7 @@ namespace Iridium {
         currentCmd = frame.commandBuffer;
         if (frameEnvironments_[scheduler.currentFrameIndex()] != environmentLighting_)
             bindEnvironmentProducts(scheduler.currentFrameIndex());
-        bindDepthPyramidHistory(false);
+        opaque_.bindHistory(false);
         renderGraph_.beginFrameExecution(scheduler.currentFrameIndex());
         renderGraph_.setFrameRecordContext({
             .commandBuffer = currentCmd,
@@ -2143,65 +2079,7 @@ namespace Iridium {
         if (!frameOpen_)
             throw std::logic_error(
                 "Depth-pyramid history preparation requires an open frame");
-
-        currentDepthContentRevision_ = getShadowCasterRevision({
-            .directPackets = opaqueQueue,
-        });
-        const uint64_t forwardRevision =
-            getShadowCasterRevision({
-                .directPackets = opaqueForwardQueue,
-            });
-        appendFnv1a(currentDepthContentRevision_, &forwardRevision,
-            sizeof(forwardRevision));
-        if (currentDepthContentRevision_ == 0u)
-            currentDepthContentRevision_ = 1u;
-        depthHistoryPrepared_ = true;
-
-        if (!depthPyramidEnabled_) {
-            currentDepthHistoryDecision_ = evaluateDepthPyramidHistory({});
-            telemetry_.counters().depthHistoryRejection = static_cast<uint32_t>(
-                currentDepthHistoryDecision_.rejection);
-            return;
-        }
-
-        const auto& view = gpuScene_.views()[scheduler.currentFrameIndex()];
-        bool projectionValid = true;
-        for (uint32_t column = 0; column < 4u; ++column) {
-            for (uint32_t row = 0; row < 4u; ++row) {
-                projectionValid = projectionValid &&
-                    std::isfinite(view.view[column][row]) &&
-                    std::isfinite(view.projection[column][row]);
-            }
-        }
-        const DepthPyramidHistoryOwner currentOwner{
-            .viewIdentity = currentViewHistory_.identity,
-            .sceneEpoch = retainedRenderView_ == 0u
-                ? gpuScene_.publishedEpoch()
-                : currentViewHistory_.identity,
-            .depthContentRevision = currentDepthContentRevision_,
-            .projectionRevision = currentProjectionRevision_,
-            .resetRevision = currentViewHistory_.resetRevision,
-        };
-        const auto& history = depthPyramid_.queuedHistory(
-            retainedRenderView_);
-        const VkExtent2D extent = frameTargets.extent();
-        currentDepthHistoryDecision_ = evaluateDepthPyramidHistory({
-            .currentExtent = {extent.width, extent.height},
-            .historyExtent = history.extent,
-            .currentOwner = currentOwner,
-            .historyOwner = history.owner,
-            .currentFrameSerial = scheduler.lastSubmittedSerial() + 1u,
-            .historyFrameSerial = history.submissionSerial,
-            .currentConvention = DeviceDepthConvention::ForwardZeroToOne,
-            .historyConvention = history.convention,
-            .enabled = true,
-            .historyAvailable = history.available,
-            .projectionValid = projectionValid,
-        });
-        telemetry_.counters().depthHistoryEligible =
-            currentDepthHistoryDecision_.eligible ? 1u : 0u;
-        telemetry_.counters().depthHistoryRejection = static_cast<uint32_t>(
-            currentDepthHistoryDecision_.rejection);
+        opaque_.prepareDepthHistory(opaqueQueue, opaqueForwardQueue);
     }
 
     void VulkanVertexBackend::submitDirectionalShadows(
@@ -2243,332 +2121,23 @@ namespace Iridium {
             sceneDescriptors.get(scheduler.currentFrameIndex()));
     }
 
-    bool VulkanVertexBackend::prepareOpaqueIndirectSubmission(
-        std::span<const DrawPacket> opaqueQueue) {
-        const uint32_t frame = scheduler.currentFrameIndex();
-        if (!opaqueCuller_.plan({
-                .queue = opaqueQueue,
-                .scene = indirectScene(frame),
-                .sceneBuffersMapped = gpuScene_.buffersMapped(frame),
-                .assets = indirectAssets(),
-                .queryOcclusion = depthOcclusionQueryEnabled_ &&
-                    currentDepthHistoryDecision_.eligible,
-                .view = &gpuScene_.views()[frame],
-            }, frame)) {
-            renderGraph_.skipPass(graphIds_.opaqueIndirect.compact);
-            return false;
-        }
-        renderGraph_.beginPass(currentCmd, graphIds_.opaqueIndirect.compact);
-        telemetry_.counters().dispatchRecorded += opaqueCuller_.recordCompaction(
-            currentCmd, frame, {
-                .globalSet = globalDescriptorSets[frame],
-                .gpuSceneSet = gpuScene_.descriptorSets()[frame],
-                .retainedView = retainedRenderView_,
-            });
-        return true;
-    }
-
     void VulkanVertexBackend::submitOpaqueQueue(std::span<const DrawPacket> opaqueQueue,
         std::span<const DrawPacket> selectionQueue, bool isWireframe) {
-        if (depthPyramidEnabled_ && !depthHistoryPrepared_)
+        if (opaque_.depthPyramidEnabled() && !opaque_.historyPrepared())
             throw std::logic_error(
                 "Depth-pyramid history must be prepared before opaque submission");
         selectionOutlineActive_ = !selectionQueue.empty();
         // Frames that never submit probe captures (asset preview) skip the
         // declared pass before the opaque compaction.
         probes_.skipCaptureIfUnhandled();
-        CpuScope recordScope(cpuProfiler_, "cpu.render.record.gbuffer");
-        VulkanFrameContextTargets& targets = frameTargets.get(
-            scheduler.currentFrameIndex());
-        // R3b.7: "gpu-scene.opaque.compact" is begun or skipped here.
-        if (isWireframe) renderGraph_.skipPass(graphIds_.opaqueIndirect.compact);
-        const bool indirectValid = !isWireframe &&
-            prepareOpaqueIndirectSubmission(opaqueQueue);
-        renderGraph_.beginPass(currentCmd, graphIds_.gbuffer);
-        VkRenderPassBeginInfo rpInfo{ VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
-        rpInfo.renderPass = gBufferPass->getRenderPass();
-        rpInfo.framebuffer = frameTargets.get(
-            scheduler.currentFrameIndex()).gBufferFramebuffer;
-        rpInfo.renderArea.extent = frameTargets.extent();
-
-        std::array<VkClearValue, 6> clearValues{};
-        clearValues[0].color = { {0.0f, 0.0f, 0.0f, 1.0f} }; // Normal
-        clearValues[1].color = { {0.0f, 0.0f, 0.0f, 1.0f} }; // Diffuse / albedo
-        clearValues[2].color = { {0.0f, 0.0f, 0.0f, 0.0f} }; // Emissive
-        clearValues[3].color = { {0.0f, 0.0f, 0.0f, 1.0f} }; // F0 / roughness
-        clearValues[4].color.uint32[0] = 0u;                  // Material / flags
-        clearValues[5].depthStencil = { 1.0f, 0 };
-        rpInfo.clearValueCount = 6;
-        rpInfo.pClearValues = clearValues.data();
-
-        vkCmdBeginRenderPass(currentCmd, &rpInfo, VK_SUBPASS_CONTENTS_INLINE);
-
-        // Dynamic Viewport/Scissor
-        VkViewport viewport{};
-        viewport.x = 0.0f;
-        viewport.y = 0.0f;            // Start at the bottom
-        viewport.width = (float)frameTargets.extent().width;
-        viewport.height = (float)frameTargets.extent().height;       // Draw upwards!
-        viewport.minDepth = 0.0f;
-        viewport.maxDepth = 1.0f;
-
-        vkCmdSetViewport(currentCmd, 0, 1, &viewport);
-        VkRect2D scissor{ {0, 0}, rpInfo.renderArea.extent };
-        vkCmdSetScissor(currentCmd, 0, 1, &scissor);
-
-        const VkPipelineLayout meshLayout = meshLayouts.getGBufferPipelineLayout();
-
-        // ==============================================================================
-        // PHASE 1: DRAW OPAQUE SCENE
-        // ==============================================================================
-
-        VulkanGpuRangeToken opaqueGpuRange =
-            scheduler.beginGpuRange("gpu.gbuffer.opaque");
-
-        PipelineHandle lastBoundPipeline{};
-        MaterialHandle lastBoundMaterial{};
-        GeometryHandle lastBoundGeometry{};
-
-        if (isWireframe) {
-            // Editor wireframe is a deliberate fixed override, not a material PSO.
-            vkCmdBindPipeline(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS, gBufferPipeline->getWireframePipeline());
-            telemetry_.recordPipelineBind(pipelineIdentity(FixedPipelineIdentity::GBufferWireframe));
-            vkCmdBindDescriptorSets(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout,
-                0, 1, &globalDescriptorSets[scheduler.currentFrameIndex()], 0, nullptr);
-
-            for (const auto& packet : opaqueQueue) {
-                auto* geometry = resources_.geometries().get(packet.geometry);
-                auto* material = resources_.materials().get(packet.material);
-                if (!geometry || !material) continue;
-
-                if (packet.material != lastBoundMaterial) {
-                    bindMaterialDescriptors(meshLayout);
-                    telemetry_.recordMaterialBind(packet.material);
-                    lastBoundMaterial = packet.material;
-                }
-                if (packet.geometry != lastBoundGeometry) {
-                    VkDeviceSize offset = geometry->vertexOffset;
-                    vkCmdBindVertexBuffers(currentCmd, 0, 1, &geometry->vertexBuffer.buffer, &offset);
-                    vkCmdBindIndexBuffer(currentCmd, geometry->indexBuffer.buffer, 0,
-                        toVkIndexType(geometry->indexFormat));
-                    lastBoundGeometry = packet.geometry;
-                }
-
-                CanonicalMeshPushConstants push{};
-                push.renderMatrix = packet.worldTransform;
-                push.materialIndex = packet.material.getIndex();
-                push.padding[0] = static_cast<uint32_t>(debugView_);
-                vkCmdPushConstants(currentCmd, meshLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                    0, sizeof(push), &push);
-                vkCmdDrawIndexed(currentCmd, packet.indexCount, 1, packet.firstIndex, 0, 0);
-                telemetry_.recordDraw(telemetry_.counters().drawOpaque, packet.indexCount / 3);
-            }
-        }
-        else {
-            VkPipelineLayout activeLayout = VK_NULL_HANDLE;
-            if (indirectValid) {
-                const uint32_t frame = scheduler.currentFrameIndex();
-                const VulkanIndirectStreamTap drawStream{
-                    activeIndirectStreamObserver(),
-                    VulkanIndirectStreamView::Opaque, frame };
-                uint64_t oracleVisibleCommands = 0;
-                for (uint32_t binIndex = 0;
-                        binIndex < opaqueCuller_.bins().size(); ++binIndex) {
-                    const VulkanOpaqueIndirectCuller::Bin& bin =
-                        opaqueCuller_.bins()[binIndex];
-                    const DrawPacket& packet = opaqueQueue[bin.packetBegin];
-                    auto* geometry = resources_.geometries().get(bin.geometry);
-                    const VulkanPipelineRecord* record =
-                        pipelineLibrary.get(bin.pipeline);
-
-                    if (bin.pipeline != lastBoundPipeline) {
-                        vkCmdBindPipeline(currentCmd,
-                            VK_PIPELINE_BIND_POINT_GRAPHICS,
-                            record->gpuSceneIndirectPipeline);
-                        telemetry_.recordPipelineBind(bin.pipeline.id);
-                        activeLayout = record->pipelineLayout;
-                        vkCmdBindDescriptorSets(currentCmd,
-                            VK_PIPELINE_BIND_POINT_GRAPHICS, activeLayout,
-                            0u, 1u, &globalDescriptorSets[frame], 0u, nullptr);
-                        vkCmdBindDescriptorSets(currentCmd,
-                            VK_PIPELINE_BIND_POINT_GRAPHICS, activeLayout,
-                            4u, 1u, &gpuScene_.descriptorSets()[frame],
-                            0u, nullptr);
-                        lastBoundPipeline = bin.pipeline;
-                        lastBoundMaterial = MaterialHandle{};
-                    }
-                    if (bin.material != lastBoundMaterial) {
-                        bindMaterialDescriptors(activeLayout);
-                        telemetry_.recordMaterialBind(bin.material);
-                        lastBoundMaterial = bin.material;
-                    }
-                    // Commands carry exact signed base vertices; children in the
-                    // same physical arena need no per-primitive buffer rebind.
-                    const VkDeviceSize vertexOffset = 0;
-                    vkCmdBindVertexBuffers(currentCmd, 0u, 1u,
-                        &geometry->vertexBuffer.buffer, &vertexOffset);
-                    vkCmdBindIndexBuffer(currentCmd,
-                        geometry->indexBuffer.buffer, 0u,
-                        toVkIndexType(geometry->indexFormat));
-
-                    CanonicalMeshPushConstants push{};
-                    push.materialIndex = bin.material.getIndex();
-                    push.padding[0] = static_cast<uint32_t>(debugView_);
-                    vkCmdPushConstants(currentCmd, activeLayout,
-                        VK_SHADER_STAGE_VERTEX_BIT |
-                            VK_SHADER_STAGE_FRAGMENT_BIT,
-                        0u, sizeof(push), &push);
-                    vkCmdDrawIndexedIndirectCount(currentCmd,
-                        opaqueCuller_.buffers().commands[frame].buffer,
-                        static_cast<VkDeviceSize>(bin.commandBegin) *
-                            sizeof(GpuSceneIndexedIndirectCommand),
-                        opaqueCuller_.buffers().counts[frame].buffer,
-                        static_cast<VkDeviceSize>(binIndex) * sizeof(uint32_t),
-                        bin.commandCount,
-                        sizeof(GpuSceneIndexedIndirectCommand));
-                    drawStream.indirectDraw(record->gpuSceneIndirectPipeline,
-                        geometry->vertexBuffer.buffer,
-                        geometry->indexBuffer.buffer,
-                        toVkIndexType(geometry->indexFormat),
-                        push.padding[0],
-                        opaqueCuller_.buffers().commands[frame].buffer,
-                        static_cast<VkDeviceSize>(bin.commandBegin) *
-                            sizeof(GpuSceneIndexedIndirectCommand),
-                        opaqueCuller_.buffers().counts[frame].buffer,
-                        static_cast<VkDeviceSize>(binIndex) * sizeof(uint32_t),
-                        bin.commandCount);
-                    for (uint32_t command = 0;
-                            command < bin.commandCount; ++command) {
-                        const DrawPacket& drawn = opaqueQueue[
-                            bin.packetBegin + command];
-                        if (cpuVisibilityOracleVisible(drawn)) {
-                            telemetry_.recordDraw(telemetry_.counters().drawOpaque,
-                                drawn.indexCount / 3u);
-                            ++oracleVisibleCommands;
-                        }
-                    }
-                }
-                telemetry_.counters().opaqueIndirectCommands =
-                    oracleVisibleCommands;
-                telemetry_.counters().opaqueIndirectBins = opaqueCuller_.bins().size();
-            }
-            else for (const auto& packet : opaqueQueue) {
-                if (!forceDirectGBufferReference_ && hasGpuScenePrimitive(packet) &&
-                    !cpuVisibilityOracleVisible(packet)) {
-                    continue;
-                }
-                auto* geometry = resources_.geometries().get(packet.geometry);
-                auto* material = resources_.materials().get(packet.material);
-                const VulkanPipelineRecord* record = pipelineLibrary.get(packet.pipeline);
-                if (!geometry || !material) continue;
-
-                // Invalid/stale handles and non-G-buffer records are not drawable here.
-                if (!record || record->pipeline == VK_NULL_HANDLE ||
-                    record->pipelineLayout == VK_NULL_HANDLE ||
-                    record->renderPass != RenderPassClass::GBuffer) {
-                    continue;
-                }
-
-                if (packet.pipeline != lastBoundPipeline) {
-                    vkCmdBindPipeline(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS, record->pipeline);
-                    telemetry_.recordPipelineBind(packet.pipeline.id);
-                    activeLayout = record->pipelineLayout;
-                    vkCmdBindDescriptorSets(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS, activeLayout,
-                        0, 1, &globalDescriptorSets[scheduler.currentFrameIndex()], 0, nullptr);
-                    lastBoundPipeline = packet.pipeline;
-                    lastBoundMaterial = MaterialHandle{};
-                }
-                if (packet.material != lastBoundMaterial) {
-                    bindMaterialDescriptors(activeLayout);
-                    telemetry_.recordMaterialBind(packet.material);
-                    lastBoundMaterial = packet.material;
-                }
-                if (packet.geometry != lastBoundGeometry) {
-VkDeviceSize offset = geometry->vertexOffset;
-                    vkCmdBindVertexBuffers(currentCmd, 0, 1, &geometry->vertexBuffer.buffer, &offset);
-                    vkCmdBindIndexBuffer(currentCmd, geometry->indexBuffer.buffer, 0,
-                        toVkIndexType(geometry->indexFormat));
-                    lastBoundGeometry = packet.geometry;
-                }
-
-                CanonicalMeshPushConstants push{};
-                push.renderMatrix = packet.worldTransform;
-                push.materialIndex = packet.material.getIndex();
-                push.padding[0] = static_cast<uint32_t>(debugView_);
-                vkCmdPushConstants(currentCmd, activeLayout,
-                    VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                    0, sizeof(push), &push);
-                vkCmdDrawIndexed(currentCmd, packet.indexCount, 1, packet.firstIndex, 0, 0);
-                telemetry_.recordDraw(telemetry_.counters().drawOpaque, packet.indexCount / 3);
-            }
-            if (!indirectValid) {
-                telemetry_.counters().opaqueIndirectFallbackPackets = 0u;
-                for (const DrawPacket& packet : opaqueQueue) {
-                    if (forceDirectGBufferReference_ || !hasGpuScenePrimitive(packet) ||
-                        cpuVisibilityOracleVisible(packet)) {
-                        ++telemetry_.counters().opaqueIndirectFallbackPackets;
-                    }
-                }
-                telemetry_.counters().opaqueIndirectFallbackReason =
-                    static_cast<uint32_t>(opaqueCuller_.indirectPlan().fallbackReason ==
-                            GpuSceneIndirectFallbackReason::None
-                        ? GpuSceneIndirectFallbackReason::InvalidPacket
-                        : opaqueCuller_.indirectPlan().fallbackReason);
-            }
-        }
-        scheduler.endGpuRange(opaqueGpuRange);
-
-        // ==============================================================================
-        // PHASE 2: DRAW SELECTION MASKS (Depth Testing Disabled = X-Ray)
-        // ==============================================================================
-
-        if (!selectionQueue.empty()) {
-            VulkanGpuRangeToken selectionGpuRange =
-                scheduler.beginGpuRange("gpu.gbuffer.selection");
-            vkCmdBindPipeline(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS, gBufferPipeline->getOutlinePipeline());
-            telemetry_.recordPipelineBind(pipelineIdentity(FixedPipelineIdentity::SelectionMask));
-            vkCmdBindDescriptorSets(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout,
-                0, 1, &globalDescriptorSets[scheduler.currentFrameIndex()], 0, nullptr);
-
-            lastBoundMaterial = MaterialHandle{};
-            lastBoundGeometry = GeometryHandle{};
-
-            for (const auto& packet : selectionQueue) {
-                auto* geometry = resources_.geometries().get(packet.geometry);
-                auto* material = resources_.materials().get(packet.material);
-
-                if (!geometry || !material) continue;
-
-                CanonicalMeshPushConstants push{};
-                push.renderMatrix = packet.worldTransform;
-                push.materialIndex = packet.material.getIndex();
-                push.padding[0] = packet.selectionFeedback != 0
-                    ? packet.selectionFeedback : 1u;
-
-                if (packet.material != lastBoundMaterial) {
-                    bindMaterialDescriptors(meshLayout);
-                    telemetry_.recordMaterialBind(packet.material);
-                    lastBoundMaterial = packet.material;
-                }
-                if (packet.geometry != lastBoundGeometry) {
-                    VkDeviceSize offset = geometry->vertexOffset;
-                    vkCmdBindVertexBuffers(currentCmd, 0, 1, &geometry->vertexBuffer.buffer, &offset);
-                    vkCmdBindIndexBuffer(currentCmd, geometry->indexBuffer.buffer, 0,
-                        toVkIndexType(geometry->indexFormat));
-                    lastBoundGeometry = packet.geometry;
-                }
-
-                vkCmdPushConstants(currentCmd, meshLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                    0, sizeof(push), &push);
-
-                vkCmdDrawIndexed(currentCmd, packet.indexCount, 1, packet.firstIndex, 0, 0);
-                telemetry_.recordDraw(telemetry_.counters().drawSelection, packet.indexCount / 3);
-            }
-            scheduler.endGpuRange(selectionGpuRange);
-        }
-
-        vkCmdEndRenderPass(currentCmd);
-
+        // R3c.7 drain point: "gpu-scene.opaque.compact" and "gbuffer".
+        opaque_.submit({
+            .opaqueQueue = opaqueQueue,
+            .selectionQueue = selectionQueue,
+            .wireframe = isWireframe,
+            .globalSet = globalDescriptorSets[scheduler.currentFrameIndex()],
+            .debugView = debugView_,
+        });
     }
 
     VulkanCullerServices VulkanVertexBackend::cullerServices() {
@@ -2608,24 +2177,6 @@ VkDeviceSize offset = geometry->vertexOffset;
     void VulkanVertexBackend::collectIndirectViewValidations(uint32_t frameIndex) {
         for (VulkanIndirectViewCuller* culler : indirectViewCullers())
             culler->collect(frameIndex);
-    }
-
-    void VulkanVertexBackend::createGpuSceneCullPipeline() {
-        opaqueCuller_.init(cullerServices(), {
-                .depthOcclusionQuery = depthOcclusionQueryEnabled_,
-                .depthOcclusionRejection = depthOcclusionRejectionEnabled_,
-                .lodErrorPixels = experimentalGpuLodErrorPixels_,
-                .lodMaximumLevel = gpuLodMaximumLevel_,
-                .lodHysteresisFraction = gpuLodHysteresisFraction_,
-                .forceDirectGBufferReference = forceDirectGBufferReference_,
-                .lodOracle = activeIndirectOracle(VulkanIndirectOracleView::OpaqueLod),
-                .occlusionOracle =
-                    activeIndirectOracle(VulkanIndirectOracleView::DepthOcclusion),
-                .depthPyramid = &depthPyramid_,
-            },
-            createOpaqueCullPipelines(vkContext->getDevice(),
-                depthOcclusionRejectionEnabled_, meshLayouts.getGlobalSetLayout(),
-                meshLayouts.getGpuSceneSetLayout()));
     }
 
     void VulkanVertexBackend::bindLightRecordBuffers() {
@@ -2716,11 +2267,11 @@ VkDeviceSize offset = geometry->vertexOffset;
         const uint32_t desiredIndirectCapacity = (std::min)(
             (std::max)(requirements.primitives, 1u),
             MaximumOpaqueIndirectCommandCapacity);
-        if (desiredIndirectCapacity > opaqueCuller_.commandCapacity()) {
+        if (desiredIndirectCapacity > opaque_.culler().commandCapacity()) {
             const uint32_t grownCapacity = nextMaterialTableCapacity(
-                opaqueCuller_.commandCapacity(), desiredIndirectCapacity,
+                opaque_.culler().commandCapacity(), desiredIndirectCapacity,
                 MaximumOpaqueIndirectCommandCapacity);
-            opaqueCuller_.resize(grownCapacity, frameOpen_);
+            opaque_.culler().resize(grownCapacity, frameOpen_);
             shadows_.growIndirectCapacity(grownCapacity);
             localShadows_.growIndirectCapacity(grownCapacity);
             probes_.growIndirectCapacity(grownCapacity);
@@ -2736,20 +2287,17 @@ VkDeviceSize offset = geometry->vertexOffset;
         }
         gpuScene_.validatePublication(scene);
         CpuScope uploadScope(cpuProfiler_, "cpu.gpu_scene.upload");
-        if (experimentalGpuLodErrorPixels_ > 0.0f) opaqueCuller_.lodHistory().publish(scene);
+        opaque_.publishScene(scene);
         gpuScene_.publish(scene, scheduler.currentFrameIndex());
         if (cpuProfiler_ != nullptr) {
             cpuProfiler_->recordCounter("gpu_scene.lod.history_buffer_bytes",
-                opaqueCuller_.lodHistoryBufferBytes(),
+                opaque_.culler().lodHistoryBufferBytes(),
                 ProfileCounterStatus::Exact, ProfileCounterUnit::Bytes);
         }
     }
 
     void VulkanVertexBackend::updateCamera(const ViewTransportRecord& view, ViewHistoryContext history) {
-        currentViewHistory_ = history;
-        currentProjectionRevision_ = viewProjectionRevision(
-            view.view, view.projection);
-        if (experimentalGpuLodErrorPixels_ > 0.0f) opaqueCuller_.lodHistory().updateView(view, history);
+        opaque_.updateView(view, history);
         gpuScene_.views()[scheduler.currentFrameIndex()] = view;
         UniformBufferObject ubo{};
         ubo.model = glm::mat4(1.0f); // Handled individually via push constants
@@ -4208,24 +3756,9 @@ const VkDeviceSize offset = geometry->vertexOffset;
             }
             scheduler.endGpuRange(pyramidGpuRange);
         }
-        if (depthPyramidEnabled_) {
-            auto range = scheduler.beginGpuRange("gpu.depth.occlusion-pyramid");
-            renderGraph_.beginPass(currentCmd, graphIds_.depthPyramidBuild);
-            const DepthPyramidHistoryOwner owner{
-                .viewIdentity = currentViewHistory_.identity,
-                .sceneEpoch = retainedRenderView_ == 0u
-                    ? gpuScene_.publishedEpoch()
-                    : currentViewHistory_.identity,
-                .depthContentRevision = currentDepthContentRevision_,
-                .projectionRevision = currentProjectionRevision_,
-                .resetRevision = currentViewHistory_.resetRevision,
-            };
-            const uint32_t dispatches = depthPyramid_.record(currentCmd,
-                scheduler.currentFrameIndex(), retainedRenderView_, owner,
-                scheduler.lastSubmittedSerial() + 1u);
-            if (telemetry_.collecting())
-                telemetry_.counters().dispatchRecorded += dispatches;
-            scheduler.endGpuRange(range);
+        if (opaque_.depthPyramidEnabled()) {
+            // R3c.7 drain point: "depth.occlusion-pyramid.build".
+            opaque_.recordDepthPyramid();
             // R3c.4 drain point (a no-op unless the hook is declared).
             hooks_.runPassHook(VulkanHookPasses::PassHook::DepthPyramidValidation,
                 { .point = VulkanHookPoint::DepthPyramidValidation,
@@ -4490,6 +4023,7 @@ const VkDeviceSize offset = geometry->vertexOffset;
     void VulkanVertexBackend::prepareRetainedViews(bool enabled, uint32_t renderView) {
         if (renderView >= 2) throw std::out_of_range("Retained view index");
         retainedRenderView_ = renderView;
+        opaque_.setRetainedView(renderView);
         retainedViewsEnabled_ = enabled;
         const auto& output = frameTargets.get(0).output;
         const auto& existing = retainedViewImages_[0];
