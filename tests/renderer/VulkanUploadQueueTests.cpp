@@ -115,7 +115,9 @@ namespace {
         CHECK(ring.retire(0, 0) == 0u);
         CHECK(ring.retire(1, 0) == 1u);                           // tail -> 400
         // Wraps: skips [800,1000) and lands at 0.
+        CHECK(ring.wrapCount() == 0u);
         CHECK(ring.allocate(300, 1) == std::optional<uint64_t>(0));
+        CHECK(ring.wrapCount() == 1u);
         CHECK(ring.usedBytes() == 400u + 200u + 300u);
         ring.close({ 3, 5 });
         // Wrapped: room only between head (300) and tail (400).

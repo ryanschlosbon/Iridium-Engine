@@ -45,6 +45,7 @@ namespace Iridium {
             else if (used_ == 0 || size <= tail_) {
                 offset = 0;
                 consumed = (capacity_ - head_) + size;
+                if (used_ != 0) ++wraps_;
             }
             else {
                 return std::nullopt;

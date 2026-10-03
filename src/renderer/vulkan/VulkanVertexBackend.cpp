@@ -248,6 +248,9 @@ namespace Iridium {
             static_cast<uint64_t>(sceneExtent_.width) *
                 sceneExtent_.height);
         scheduler.attachAllocator(resourceAllocator);
+        // M7R R4d.3: resources written by an upload outlive the frame that
+        // waits on it.
+        scheduler.setRetireFloor(&VulkanUploadContext::retireFloorThunk, &uploadContext);
 
         resources_.init({
             .device = vkContext->getDevice(),
@@ -1417,6 +1420,19 @@ namespace Iridium {
         info.gpuLightUploadBytes = lightUploads.bytes;
         info.gpuLightUploadRanges = lightUploads.ranges;
         info.uploads = uploadContext.telemetry();
+        switch (uploadContext.mode()) {
+        case UploadQueueMode::Auto: info.uploadQueueMode = "auto"; break;
+        case UploadQueueMode::Graphics: info.uploadQueueMode = "graphics"; break;
+        case UploadQueueMode::LegacyBlocking:
+            info.uploadQueueMode = "legacy-blocking";
+            break;
+        }
+        info.uploadQueueKind = uploadContext.usesTransferQueue()
+            ? std::string(vulkanTransferQueueKindName(vkContext->getTransferQueueKind()))
+            : std::string("graphics");
+        info.uploadQueueFamily = uploadContext.usesTransferQueue()
+            ? uploadContext.transferQueueFamily() : vkContext->getGraphicsQueueFamily();
+        info.uploadStagingRingBytes = uploadContext.stagingRingBytes();
         return info;
     }
 
@@ -1642,7 +1658,9 @@ namespace Iridium {
         layered_.beginFrame();
         telemetry_.beginFrame();
         CpuScope beginFrameScope(cpuProfiler_, "cpu.renderer.begin_frame");
-        uploadContext.flush();
+        // M7R R4d.3: submitted without a CPU wait; this frame's submission
+        // waits on the upload timelines instead (legacy-blocking flushes).
+        uploadContext.submitAsync();
         applyTransparencyPyramidTopologyChange();
         const uint32_t completedFrameIndex = scheduler.currentFrameIndex();
         const VulkanFrameBegin frame = scheduler.beginFrame(vkSwapchain->getSwapchain());
@@ -1676,6 +1694,16 @@ namespace Iridium {
         }
         if (frame.status == FrameStatus::RecreateSwapchain) {
             return frame.status;
+        }
+        // M7R R4d.3: queue-family acquires of submitted uploads, before any
+        // pass, and the upload timeline values this frame waits on.
+        {
+            const VulkanUploadContext::FrameWaits uploadWaits =
+                uploadContext.recordFrameAcquires(frame.commandBuffer);
+            scheduler.addFrameWait(uploadWaits.transferTimeline,
+                uploadWaits.transferValue);
+            scheduler.addFrameWait(uploadWaits.graphicsTimeline,
+                uploadWaits.graphicsValue);
         }
 
         if (resources_.textureTable().active()) {

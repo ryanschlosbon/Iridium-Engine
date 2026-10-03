@@ -1,6 +1,7 @@
 #include "VulkanUploadContext.h"
 
 #include "VulkanCommandList.h"
+#include "VulkanResourceState.h"
 #include "profiling/CpuProfiler.h"
 
 #include <algorithm>
@@ -148,6 +149,16 @@ namespace Iridium {
             }
 
             initLane(lanes_[GraphicsLane], queues.graphics, queues.graphicsFamily);
+            // Auto: fresh uploads go to a separate upload family when the
+            // device has one; otherwise the same-family fallback (graphics
+            // lane, no ownership transfer).
+            if (mode_ == UploadQueueMode::Auto && queues.transfer != VK_NULL_HANDLE &&
+                queues.transferFamily != queues.graphicsFamily)
+                initLane(lanes_[TransferLane], queues.transfer, queues.transferFamily);
+            openBufferAcquires_.reserve(64);
+            openImageAcquires_.reserve(64);
+            releasedBufferAcquires_.reserve(64);
+            releasedImageAcquires_.reserve(64);
             const VkDeviceSize ringBytes = (std::max)(options.stagingRingBytes,
                 VkDeviceSize{ 1024 * 1024 });
             ringBuffer_ = allocator.createBuffer(ringBytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
@@ -236,6 +247,12 @@ namespace Iridium {
         ringBuffer_ = {};
         ring_.reset(0);
         for (Lane& lane : lanes_) destroyLane(lane);
+        openBufferAcquires_.clear();
+        openImageAcquires_.clear();
+        releasedBufferAcquires_.clear();
+        releasedImageAcquires_.clear();
+        frameWaitTransfer_ = 0;
+        frameWaitGraphics_ = 0;
 
         if (fence_ != VK_NULL_HANDLE) {
             vkDestroyFence(device_, fence_, nullptr);
@@ -263,7 +280,7 @@ namespace Iridium {
             return batchOpen_ || !stagingBuffers_.empty();
         for (const Lane& lane : lanes_)
             if (lane.recording()) return true;
-        return false;
+        return !releasedBufferAcquires_.empty() || !releasedImageAcquires_.empty();
     }
 
     void VulkanUploadContext::flush() {
@@ -294,7 +311,8 @@ namespace Iridium {
         return commands;
     }
 
-    uint64_t VulkanUploadContext::submitLane(Lane& lane) {
+    uint64_t VulkanUploadContext::submitLane(Lane& lane, VkSemaphore wait,
+        uint64_t waitValue) {
         if (!lane.recording()) return 0;
         VkCommandBuffer commands = lane.commands[lane.open];
         const uint32_t index = lane.open;
@@ -308,7 +326,15 @@ namespace Iridium {
             signal.semaphore = lane.timeline;
             signal.value = value;
             signal.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+            VkSemaphoreSubmitInfo waitInfo{ VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO };
+            waitInfo.semaphore = wait;
+            waitInfo.value = waitValue;
+            waitInfo.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
             VkSubmitInfo2 submit{ VK_STRUCTURE_TYPE_SUBMIT_INFO_2 };
+            if (wait != VK_NULL_HANDLE) {
+                submit.waitSemaphoreInfoCount = 1;
+                submit.pWaitSemaphoreInfos = &waitInfo;
+            }
             submit.commandBufferInfoCount = 1;
             submit.pCommandBufferInfos = &commandInfo;
             submit.signalSemaphoreInfoCount = 1;
@@ -317,12 +343,20 @@ namespace Iridium {
                 "vkQueueSubmit2(upload lane)");
         }
         else {
+            const VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
             VkTimelineSemaphoreSubmitInfo timelineInfo{
                 VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO };
             timelineInfo.signalSemaphoreValueCount = 1;
             timelineInfo.pSignalSemaphoreValues = &value;
             VkSubmitInfo submit{ VK_STRUCTURE_TYPE_SUBMIT_INFO };
             submit.pNext = &timelineInfo;
+            if (wait != VK_NULL_HANDLE) {
+                timelineInfo.waitSemaphoreValueCount = 1;
+                timelineInfo.pWaitSemaphoreValues = &waitValue;
+                submit.waitSemaphoreCount = 1;
+                submit.pWaitSemaphores = &wait;
+                submit.pWaitDstStageMask = &waitStage;
+            }
             submit.commandBufferCount = 1;
             submit.pCommandBuffers = &commands;
             submit.signalSemaphoreCount = 1;
@@ -423,18 +457,125 @@ namespace Iridium {
         return { staging.buffer.buffer, 0 };
     }
 
+    void VulkanUploadContext::submitOpenBatches() {
+        Lane& transfer = lanes_[TransferLane];
+        Lane& graphics = lanes_[GraphicsLane];
+        const uint64_t transferValue = transfer.active() ? submitLane(transfer) : 0;
+        if (transferValue != 0) {
+            // Their releases are submitted: a frame (or a flush) may acquire.
+            releasedBufferAcquires_.insert(releasedBufferAcquires_.end(),
+                openBufferAcquires_.begin(), openBufferAcquires_.end());
+            releasedImageAcquires_.insert(releasedImageAcquires_.end(),
+                openImageAcquires_.begin(), openImageAcquires_.end());
+            openBufferAcquires_.clear();
+            openImageAcquires_.clear();
+            frameWaitTransfer_ = transferValue;
+        }
+        const uint64_t graphicsValue = submitLane(graphics);
+        if (graphicsValue != 0) frameWaitGraphics_ = graphicsValue;
+        if (transferValue != 0 || graphicsValue != 0)
+            sealBatch({ transferValue, graphicsValue });
+    }
+
+    void VulkanUploadContext::recordAcquires(VkCommandBuffer commands) {
+        if (releasedBufferAcquires_.empty() && releasedImageAcquires_.empty()) return;
+        // The frame (or flush) submission waits on the transfer timeline at
+        // ALL_COMMANDS, which orders the releases before these acquires.
+        vkCmdPipelineBarrier(commands, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+            VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr,
+            static_cast<uint32_t>(releasedBufferAcquires_.size()),
+            releasedBufferAcquires_.data(),
+            static_cast<uint32_t>(releasedImageAcquires_.size()),
+            releasedImageAcquires_.data());
+        releasedBufferAcquires_.clear();
+        releasedImageAcquires_.clear();
+    }
+
+    void VulkanUploadContext::submitAsync() {
+        requireInitialized(device_, graphicsQueue_, allocator_);
+        if (mode_ == UploadQueueMode::LegacyBlocking) {
+            flushLegacy();
+            return;
+        }
+        if (ring_.usedBytes() != 0 || !dedicatedStaging_.empty()) reclaim();
+        bool recording = false;
+        for (const Lane& lane : lanes_) recording = recording || lane.recording();
+        if (!recording) return;
+        CpuScope submitScope(cpuProfiler_, "cpu.renderer.upload_submit");
+        const auto submitStart = std::chrono::steady_clock::now();
+        const uint64_t submittedBytes = pendingBytes_;
+        submitOpenBatches();
+        pendingBytes_ = 0;
+        ++asyncSubmits_;
+        ++totalSubmittedBatches_;
+        totalSubmittedBytes_ += submittedBytes;
+        totalSubmitAndWaitNanoseconds_ += static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - submitStart).count());
+        if (cpuProfiler_ != nullptr) {
+            cpuProfiler_->recordCounter("upload.bytes", submittedBytes,
+                ProfileCounterStatus::Exact, ProfileCounterUnit::Bytes);
+            cpuProfiler_->recordCounter("upload.batches", 1);
+        }
+    }
+
+    VulkanUploadContext::FrameWaits VulkanUploadContext::recordFrameAcquires(
+        VkCommandBuffer frameCommands) {
+        FrameWaits waits{};
+        if (mode_ == UploadQueueMode::LegacyBlocking) return waits;
+        recordAcquires(frameCommands);
+        if (frameWaitTransfer_ != 0) {
+            waits.transferTimeline = lanes_[TransferLane].timeline;
+            waits.transferValue = frameWaitTransfer_;
+        }
+        if (frameWaitGraphics_ != 0) {
+            waits.graphicsTimeline = lanes_[GraphicsLane].timeline;
+            waits.graphicsValue = frameWaitGraphics_;
+        }
+        frameWaitTransfer_ = 0;
+        frameWaitGraphics_ = 0;
+        return waits;
+    }
+
+    uint64_t VulkanUploadContext::retireFloor(uint64_t lastSubmittedSerial,
+        bool frameRecording) const noexcept {
+        if (mode_ == UploadQueueMode::LegacyBlocking || device_ == VK_NULL_HANDLE) return 0;
+        bool outstanding = frameWaitTransfer_ != 0 || frameWaitGraphics_ != 0 ||
+            !releasedBufferAcquires_.empty() || !releasedImageAcquires_.empty();
+        for (const Lane& lane : lanes_) outstanding = outstanding || lane.recording();
+        // Open work is submitted at the next beginFrame and waited by the
+        // frame recorded then: the current one is past its acquire point.
+        return outstanding ? lastSubmittedSerial + (frameRecording ? 2u : 1u) : 0u;
+    }
+
     void VulkanUploadContext::flushTimeline() {
-        if (!hasPendingWork()) return;
+        refreshCompleted();
+        bool outstanding = hasPendingWork();
+        bool recording = false;
+        for (const Lane& lane : lanes_) {
+            recording = recording || lane.recording();
+            outstanding = outstanding || (lane.active() && lane.completed < lane.lastSignaled);
+        }
+        if (!outstanding) return;
         CpuScope uploadScope(cpuProfiler_, "cpu.renderer.upload_wait");
         const auto flushStart = std::chrono::steady_clock::now();
         const uint64_t submittedBytes = pendingBytes_;
-        Lane& graphics = lanes_[GraphicsLane];
-        const uint64_t value = submitLane(graphics);
-        sealBatch({ 0, value });
+        submitOpenBatches();
         pendingBytes_ = 0;
-        waitLaneValue(graphics, value);
+        Lane& transfer = lanes_[TransferLane];
+        Lane& graphics = lanes_[GraphicsLane];
+        if (!releasedBufferAcquires_.empty() || !releasedImageAcquires_.empty()) {
+            // Acquire in a graphics batch of its own, after the releases.
+            recordAcquires(beginLane(graphics));
+            (void)submitLane(graphics, transfer.timeline, transfer.lastSignaled);
+        }
+        for (Lane& lane : lanes_)
+            if (lane.active()) waitLaneValue(lane, lane.lastSignaled);
+        frameWaitTransfer_ = 0;
+        frameWaitGraphics_ = 0;
         reclaim();
 
+        if (!recording) return;
         ++totalSubmittedBatches_;
         totalSubmittedBytes_ += submittedBytes;
         totalSubmitAndWaitNanoseconds_ += static_cast<uint64_t>(
@@ -445,6 +586,69 @@ namespace Iridium {
                 ProfileCounterStatus::Exact, ProfileCounterUnit::Bytes);
             cpuProfiler_->recordCounter("upload.batches", 1);
         }
+    }
+
+    void VulkanUploadContext::publish(VkCommandBuffer commands,
+        VulkanBufferResource& destination, ResourceState finalState, bool release) {
+        // After the copy: every later access on the graphics queue (no CPU
+        // wait separates them any more) sees the data.
+        VkBufferMemoryBarrier barrier{ VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER };
+        barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        barrier.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.buffer = destination.buffer;
+        barrier.offset = 0;
+        barrier.size = VK_WHOLE_SIZE;
+        if (release) {
+            barrier.srcQueueFamilyIndex = lanes_[TransferLane].family;
+            barrier.dstQueueFamilyIndex = lanes_[GraphicsLane].family;
+            VkBufferMemoryBarrier acquire = barrier;
+            acquire.srcAccessMask = 0;
+            barrier.dstAccessMask = 0;
+            vkCmdPipelineBarrier(commands, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 1, &barrier,
+                0, nullptr);
+            openBufferAcquires_.push_back(acquire);
+        }
+        else {
+            vkCmdPipelineBarrier(commands, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 1, &barrier,
+                0, nullptr);
+        }
+        destination.state = finalState;
+    }
+
+    void VulkanUploadContext::publish(VkCommandBuffer commands,
+        VulkanImageResource& destination, ResourceState finalState, bool release) {
+        VkImageMemoryBarrier barrier{ VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
+        barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        barrier.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+        barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        barrier.newLayout = getVulkanStateInfo(finalState, destination.aspect).layout;
+        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.image = destination.image;
+        barrier.subresourceRange = { destination.aspect, 0, destination.mipLevels, 0,
+            destination.arrayLayers };
+        if (release) {
+            // The release carries the final layout; the acquire repeats it.
+            barrier.srcQueueFamilyIndex = lanes_[TransferLane].family;
+            barrier.dstQueueFamilyIndex = lanes_[GraphicsLane].family;
+            VkImageMemoryBarrier acquire = barrier;
+            acquire.srcAccessMask = 0;
+            barrier.dstAccessMask = 0;
+            vkCmdPipelineBarrier(commands, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr,
+                1, &barrier);
+            openImageAcquires_.push_back(acquire);
+        }
+        else {
+            vkCmdPipelineBarrier(commands, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 0, nullptr,
+                1, &barrier);
+        }
+        destination.state = finalState;
     }
 
     // ---- enqueue ----------------------------------------------------------------
@@ -464,7 +668,11 @@ namespace Iridium {
         }
 
         const StagingSpan source = stage(data, StagingAlignment);
-        Lane& lane = lanes_[GraphicsLane];
+        // Fresh destinations have no graphics-queue history: the transfer
+        // lane may write them and hand them over.
+        const bool release = destination.state == ResourceState::Undefined &&
+            lanes_[TransferLane].active();
+        Lane& lane = lanes_[release ? TransferLane : GraphicsLane];
         VulkanCommandList commands(beginLane(lane));
         commands.transition(destination, ResourceState::CopyDestination);
         VkBufferCopy region{};
@@ -472,7 +680,7 @@ namespace Iridium {
         region.size = data.size_bytes();
         if (region.size != 0)
             vkCmdCopyBuffer(commands.native(), source.buffer, destination.buffer, 1, &region);
-        commands.transition(destination, finalState);
+        publish(commands.native(), destination, finalState, release);
         pendingBytes_ += static_cast<uint64_t>(data.size_bytes());
     }
 
@@ -498,13 +706,15 @@ namespace Iridium {
 
         const StagingSpan source = stage(data, StagingAlignment);
         for (VkBufferImageCopy& region : imageRegions_) region.bufferOffset += source.offset;
-        Lane& lane = lanes_[GraphicsLane];
+        const bool release = destination.state == ResourceState::Undefined &&
+            lanes_[TransferLane].active();
+        Lane& lane = lanes_[release ? TransferLane : GraphicsLane];
         VulkanCommandList commands(beginLane(lane));
         commands.transition(destination, ResourceState::CopyDestination);
         vkCmdCopyBufferToImage(commands.native(), source.buffer, destination.image,
             VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
             static_cast<uint32_t>(imageRegions_.size()), imageRegions_.data());
-        commands.transition(destination, finalState);
+        publish(commands.native(), destination, finalState, release);
         pendingBytes_ += static_cast<uint64_t>(data.size_bytes());
     }
 

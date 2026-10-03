@@ -322,6 +322,7 @@ namespace Iridium {
         }
 
         frameRecording_ = true;
+        frameWaitCount_ = 0;
         return { FrameStatus::Ready, frame.commandBuffer, imageIndex };
     }
 
@@ -353,11 +354,26 @@ namespace Iridium {
                 throwVkError("vkEndCommandBuffer", result);
             }
 
-            VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+            // The acquired image, then (R4d.3) the upload timelines.
+            std::array<VkSemaphore, 1 + MaxFrameWaits> waitSemaphores{
+                frame.imageAvailable };
+            std::array<VkPipelineStageFlags, 1 + MaxFrameWaits> waitStages{
+                VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT };
+            std::array<uint64_t, 1 + MaxFrameWaits> waitValues{};
+            for (uint32_t index = 0; index < frameWaitCount_; ++index) {
+                waitSemaphores[1 + index] = frameWaitSemaphores_[index];
+                waitStages[1 + index] = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+                waitValues[1 + index] = frameWaitValues_[index];
+            }
+            VkTimelineSemaphoreSubmitInfo timelineInfo{
+                VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO };
+            timelineInfo.waitSemaphoreValueCount = 1 + frameWaitCount_;
+            timelineInfo.pWaitSemaphoreValues = waitValues.data();
             VkSubmitInfo submitInfo{ VK_STRUCTURE_TYPE_SUBMIT_INFO };
-            submitInfo.waitSemaphoreCount = 1;
-            submitInfo.pWaitSemaphores = &frame.imageAvailable;
-            submitInfo.pWaitDstStageMask = &waitStage;
+            if (frameWaitCount_ != 0) submitInfo.pNext = &timelineInfo;
+            submitInfo.waitSemaphoreCount = 1 + frameWaitCount_;
+            submitInfo.pWaitSemaphores = waitSemaphores.data();
+            submitInfo.pWaitDstStageMask = waitStages.data();
             submitInfo.commandBufferCount = 1;
             submitInfo.pCommandBuffers = &frame.commandBuffer;
             submitInfo.signalSemaphoreCount = 1;
@@ -374,6 +390,7 @@ namespace Iridium {
             frame.fenceInFlight = true;
             frame.submissionSerial = ++lastSubmittedSerial_;
             frameRecording_ = false;
+            frameWaitCount_ = 0;
             imagesInFlight_[imageIndex] = frame.inFlight;
             frame.gpuResultsPending = frame.profileFrameId != 0 &&
                 frame.timestampQueryCount != 0;
@@ -409,6 +426,22 @@ namespace Iridium {
         acquireSuboptimal_ = false;
         currentFrame_ = (currentFrame_ + 1) % FramesInFlight;
         return recreate ? FrameStatus::RecreateSwapchain : FrameStatus::Ready;
+    }
+
+    void VulkanFrameScheduler::addFrameWait(VkSemaphore timeline, uint64_t value) {
+        if (timeline == VK_NULL_HANDLE || value == 0) return;
+        if (!frameRecording_)
+            throw std::logic_error("Frame waits are added to a recording frame.");
+        for (uint32_t index = 0; index < frameWaitCount_; ++index) {
+            if (frameWaitSemaphores_[index] != timeline) continue;
+            frameWaitValues_[index] = (std::max)(frameWaitValues_[index], value);
+            return;
+        }
+        if (frameWaitCount_ == MaxFrameWaits)
+            throw std::logic_error("Too many frame timeline waits.");
+        frameWaitSemaphores_[frameWaitCount_] = timeline;
+        frameWaitValues_[frameWaitCount_] = value;
+        ++frameWaitCount_;
     }
 
     void VulkanFrameScheduler::refreshCompletedSerial() {

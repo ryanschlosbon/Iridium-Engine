@@ -125,6 +125,14 @@ namespace Iridium {
         // M7R R4c.4 persisted pipeline cache at backend init.
         std::string pipelineCacheState = "off";
         uint64_t pipelineCacheLoadedBytes = 0;
+        // M7R R4d upload queue (RenderBackendRuntimeInfo).
+        std::string uploadQueueMode = "legacy-blocking";
+        std::string uploadQueueKind = "graphics";
+        uint32_t uploadQueueFamily = 0;
+        uint64_t uploadStagingRingBytes = 0;
+        uint64_t uploadStagingRingWaits = 0;
+        uint64_t uploadDedicatedStagingUploads = 0;
+        uint64_t uploadAsyncSubmits = 0;
         bool refractionPyramidsResident = false;
         std::string modelLoadMode;
         std::string modelLocation;

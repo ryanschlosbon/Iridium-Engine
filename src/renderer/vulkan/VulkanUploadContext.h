@@ -31,6 +31,17 @@ namespace Iridium {
     // timeline has passed the value their batch signalled. When the ring is
     // full the CPU waits for the oldest submitted batch
     // (cpu.renderer.upload_wait).
+    //
+    // Auto with a separate upload family (R4d.3): uploads into fresh
+    // destinations (state Undefined) are recorded on the transfer lane as
+    // copy + release (queue-family ownership transfer to graphics, carrying
+    // the final layout); the matching acquires are recorded at the start of
+    // the next frame command buffer (recordFrameAcquires). Everything else
+    // (non-fresh destinations, layout-only transitions) and every upload in
+    // Graphics mode records on the graphics lane. submitAsync() submits both
+    // lanes without a CPU wait; the frame submission waits on the values
+    // recordFrameAcquires returns. flush() stays bounded and blocking (init,
+    // target rebuilds, error paths, cleanup).
     class VulkanUploadContext final {
     public:
         static constexpr VkDeviceSize DefaultStagingRingBytes =
@@ -69,8 +80,38 @@ namespace Iridium {
             ResourceState finalState);
         void enqueueTransition(VulkanImageResource& destination, ResourceState state);
         // Bounded and blocking: every upload enqueued so far has completed on
-        // return.
+        // return (pending acquires are recorded in a graphics-lane batch).
         void flush();
+
+        // The frame-boundary submit (VulkanVertexBackend::beginFrame): submits
+        // the open lane batches, each signalling its timeline, without a CPU
+        // wait. LegacyBlocking flushes as before.
+        void submitAsync();
+
+        // Timeline values a frame submission must wait on (ALL_COMMANDS);
+        // zero values when nothing is pending.
+        struct FrameWaits {
+            VkSemaphore transferTimeline = VK_NULL_HANDLE;
+            uint64_t transferValue = 0;
+            VkSemaphore graphicsTimeline = VK_NULL_HANDLE;
+            uint64_t graphicsValue = 0;
+        };
+        // Records the queue-family acquires of every submitted release at the
+        // start of `frameCommands` (before any pass) and hands that frame the
+        // waits for every batch submitted so far.
+        [[nodiscard]] FrameWaits recordFrameAcquires(VkCommandBuffer frameCommands);
+
+        // The lowest deletion-queue key that keeps a resource alive until the
+        // frame waiting on every upload enqueued or submitted so far has
+        // completed (0 when no upload is outstanding): that frame is the next
+        // one to begin. VulkanFrameScheduler::setRetireFloor.
+        [[nodiscard]] uint64_t retireFloor(uint64_t lastSubmittedSerial,
+            bool frameRecording) const noexcept;
+        static uint64_t retireFloorThunk(const void* user,
+            uint64_t lastSubmittedSerial, bool frameRecording) noexcept {
+            return static_cast<const VulkanUploadContext*>(user)->retireFloor(
+                lastSubmittedSerial, frameRecording);
+        }
 
         [[nodiscard]] bool hasPendingWork() const noexcept;
         // The mode in effect (LegacyBlocking when timelines are unavailable).
@@ -78,7 +119,8 @@ namespace Iridium {
         [[nodiscard]] BackendUploadTelemetry telemetry() const noexcept {
             return {
                 totalSubmittedBytes_, totalSubmittedBatches_,
-                totalSubmitAndWaitNanoseconds_
+                totalSubmitAndWaitNanoseconds_, ringWaits_,
+                dedicatedStagingUploads_, asyncSubmits_
             };
         }
 
@@ -93,6 +135,17 @@ namespace Iridium {
         [[nodiscard]] size_t liveDedicatedStagingCount() const noexcept {
             return dedicatedStaging_.size();
         }
+        // Whether fresh uploads use the separate transfer lane.
+        [[nodiscard]] bool usesTransferQueue() const noexcept {
+            return lanes_[TransferLane].active();
+        }
+        [[nodiscard]] uint32_t transferQueueFamily() const noexcept {
+            return lanes_[TransferLane].family;
+        }
+        [[nodiscard]] VkDeviceSize stagingRingBytes() const noexcept {
+            return ring_.capacity();
+        }
+        [[nodiscard]] uint64_t asyncSubmitCount() const noexcept { return asyncSubmits_; }
 
     private:
         enum LaneIndex : uint32_t { TransferLane = 0, GraphicsLane = 1, LaneCount = 2 };
@@ -110,7 +163,6 @@ namespace Iridium {
             VkSemaphore timeline = VK_NULL_HANDLE;
             uint64_t lastSignaled = 0;
             uint64_t completed = 0;
-            uint64_t pendingBytes = 0;
 
             [[nodiscard]] bool active() const noexcept { return pool != VK_NULL_HANDLE; }
             [[nodiscard]] bool recording() const noexcept { return open != UINT32_MAX; }
@@ -131,8 +183,17 @@ namespace Iridium {
         void destroyLane(Lane& lane) noexcept;
         VkCommandBuffer beginLane(Lane& lane);
         // Ends and submits the lane's open command buffer, signalling
-        // lastSignaled + 1; returns the value (0 when nothing was open).
-        uint64_t submitLane(Lane& lane);
+        // lastSignaled + 1 (after waiting `wait` >= waitValue when given);
+        // returns the value (0 when nothing was open).
+        uint64_t submitLane(Lane& lane, VkSemaphore wait = VK_NULL_HANDLE,
+            uint64_t waitValue = 0);
+        // Submits the open lane batches and seals their staging.
+        void submitOpenBatches();
+        void recordAcquires(VkCommandBuffer commands);
+        void publish(VkCommandBuffer commands, VulkanBufferResource& destination,
+            ResourceState finalState, bool release);
+        void publish(VkCommandBuffer commands, VulkanImageResource& destination,
+            ResourceState finalState, bool release);
         void refreshCompleted() noexcept;
         void waitLaneValue(Lane& lane, uint64_t value);
         void reclaim() noexcept;
@@ -169,6 +230,16 @@ namespace Iridium {
         std::vector<VkBufferImageCopy> imageRegions_;
         uint64_t ringWaits_ = 0;
         uint64_t dedicatedStagingUploads_ = 0;
+        uint64_t asyncSubmits_ = 0;
+        // Acquires of the releases recorded on the open transfer batch, and of
+        // submitted releases no frame or flush has acquired yet.
+        std::vector<VkBufferMemoryBarrier> openBufferAcquires_;
+        std::vector<VkImageMemoryBarrier> openImageAcquires_;
+        std::vector<VkBufferMemoryBarrier> releasedBufferAcquires_;
+        std::vector<VkImageMemoryBarrier> releasedImageAcquires_;
+        // Submitted lane values no frame submission has waited on yet.
+        uint64_t frameWaitTransfer_ = 0;
+        uint64_t frameWaitGraphics_ = 0;
 
         uint64_t pendingBytes_ = 0;
         uint64_t totalSubmittedBytes_ = 0;

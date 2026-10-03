@@ -5,6 +5,7 @@
 
 #include <vulkan/vulkan.h>
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -103,8 +104,25 @@ namespace Iridium {
         // otherwise the last submitted frame. beginFrame collects entries once
         // completedSerial reaches it; cleanup flushes the rest.
         [[nodiscard]] uint64_t retireValue() const noexcept {
-            return frameRecording_ ? lastSubmittedSerial_ + 1 : lastSubmittedSerial_;
+            const uint64_t value = frameRecording_ ? lastSubmittedSerial_ + 1 :
+                lastSubmittedSerial_;
+            if (retireFloor_ == nullptr) return value;
+            return (std::max)(value, retireFloor_(retireFloorUser_,
+                lastSubmittedSerial_, frameRecording_));
         }
+        // M7R R4d.3: a lower bound on retire values from work the frames do
+        // not see yet (asynchronous uploads: a resource written by an upload
+        // must outlive the frame that waits on that upload).
+        using RetireFloor = uint64_t (*)(const void* user,
+            uint64_t lastSubmittedSerial, bool frameRecording) noexcept;
+        void setRetireFloor(RetireFloor floor, const void* user) noexcept {
+            retireFloor_ = floor;
+            retireFloorUser_ = user;
+        }
+        // M7R R4d.3: a timeline value the next endFrame submission waits on
+        // (ALL_COMMANDS) before any of its commands; value 0 is ignored. Set
+        // after a Ready beginFrame (VulkanUploadContext::recordFrameAcquires).
+        void addFrameWait(VkSemaphore timeline, uint64_t value);
         void retire(const VulkanBufferResource& buffer) {
             deletions_.retire(retireValue(), buffer);
         }
@@ -179,6 +197,12 @@ namespace Iridium {
         bool frameRecording_ = false;
         bool acquireSuboptimal_ = false;
         VulkanDeletionQueue deletions_;
+        RetireFloor retireFloor_ = nullptr;
+        const void* retireFloorUser_ = nullptr;
+        static constexpr uint32_t MaxFrameWaits = 2;
+        std::array<VkSemaphore, MaxFrameWaits> frameWaitSemaphores_{};
+        std::array<uint64_t, MaxFrameWaits> frameWaitValues_{};
+        uint32_t frameWaitCount_ = 0;
         CpuProfiler* cpuProfiler_ = nullptr;
         VulkanGpuRangeToken frameGpuRange_{};
         double timestampPeriodNanoseconds_ = 0.0;

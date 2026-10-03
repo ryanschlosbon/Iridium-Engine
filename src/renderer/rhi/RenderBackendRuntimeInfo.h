@@ -13,6 +13,11 @@ namespace Iridium {
         uint64_t submittedBytes = 0;
         uint64_t submittedBatches = 0;
         uint64_t submitAndWaitNanoseconds = 0;
+        // M7R R4d: CPU waits for a full staging ring, uploads that used
+        // dedicated staging, and batches submitted without a CPU wait.
+        uint64_t stagingRingWaits = 0;
+        uint64_t dedicatedStagingUploads = 0;
+        uint64_t asyncSubmits = 0;
     };
 
     struct RenderBackendRuntimeInfo {
@@ -84,6 +89,13 @@ namespace Iridium {
         // warm or discarded, and the payload bytes loaded.
         std::string pipelineCacheState = "off";
         uint64_t pipelineCacheLoadedBytes = 0;
+        // M7R R4d (--upload-queue): the mode in effect, the queue family
+        // fresh uploads use and its kind (dedicated-transfer, async-compute or
+        // graphics), and the staging ring size (0 in legacy-blocking).
+        std::string uploadQueueMode = "legacy-blocking";
+        std::string uploadQueueKind = "graphics";
+        uint32_t uploadQueueFamily = 0;
+        uint64_t uploadStagingRingBytes = 0;
         uint32_t gpuLightCapacity = 0;
         uint32_t gpuLightActiveCount = 0;
         uint64_t gpuLightUploadBytes = 0;

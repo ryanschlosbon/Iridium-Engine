@@ -49,6 +49,8 @@ namespace Iridium {
         [[nodiscard]] uint64_t usedBytes() const noexcept { return used_; }
         [[nodiscard]] bool hasOpenAllocations() const noexcept { return openBytes_ != 0; }
         [[nodiscard]] size_t sealedBatchCount() const noexcept { return batchCount_; }
+        // Allocations that skipped the tail and restarted at 0 behind live bytes.
+        [[nodiscard]] uint64_t wrapCount() const noexcept { return wraps_; }
         [[nodiscard]] std::optional<StagingRetireKey> oldestSealedKey() const noexcept;
 
     private:
@@ -63,6 +65,7 @@ namespace Iridium {
         uint64_t tail_ = 0;
         uint64_t used_ = 0;
         uint64_t openBytes_ = 0;
+        uint64_t wraps_ = 0;
         std::array<Batch, MaxBatches> batches_{};
         size_t firstBatch_ = 0;
         size_t batchCount_ = 0;
