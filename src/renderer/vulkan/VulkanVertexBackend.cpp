@@ -698,7 +698,7 @@ namespace Iridium {
             Access::SampledRead, ExternalSyncPolicy::executorOwned());
         renderGraph_.bindExternalImage(VulkanGlobalBinding,
             graphIds_.shadowSpotMap, localShadows_.spot().image(), Access::SampledRead,
-            shadowPolicy);
+            ExternalSyncPolicy::executorOwned());
         for (uint32_t tier = 0; tier < graphIds_.shadowPointMaps.size(); ++tier)
             renderGraph_.bindExternalImage(VulkanGlobalBinding,
                 graphIds_.shadowPointMaps[tier], localShadows_.point().image(tier),

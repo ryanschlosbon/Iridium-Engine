@@ -70,8 +70,12 @@ namespace Iridium {
         // drawing passes.
         graph.registerPass(spotCompactPass_, { this, &spotCompactActive,
             &executeSpotCompact });
+        // R4a: dynamic rendering. The executor moves each map whole
+        // SampledRead -> DepthAttachmentWrite (contents kept: tiles and faces
+        // not rendered this frame stay valid); the next reader moves it back.
+        // The spot atlas is one rendering instance with per-tile clears.
         graph.registerPass(spotDrawPass_, { this, &spotDrawActive, &executeSpotDraw,
-            "gpu.shadow.spot", GpuRangePlacement::AfterBarriers });
+            "gpu.shadow.spot", GpuRangePlacement::AfterBarriers, true });
         graph.registerPass(pointCompactPass_, { this, &pointCompactActive,
             &executePointCompact });
         graph.registerPass(pointDrawPass_, { this, &pointDrawActive, &executePointDraw,
@@ -236,6 +240,7 @@ namespace Iridium {
                 }));
         const VkPipelineLayout layout = self.spot_.pipelineLayout();
         const VkDescriptorSet shadowSet = self.spot_.renderDescriptor(frameIndex);
+        context.beginRendering();
         for (const SpotShadowFramePacket& shadow : self.stagedSpot_) {
             if (!shadow.update) continue;
             scratch.visibility.resize(scratch.casters.size());
@@ -311,8 +316,8 @@ namespace Iridium {
                 .drawCounter = &counters.drawShadowSpot,
                 .alphaMaskCounter = &counters.drawShadowSpotAlphaMask,
             }, materialDescriptorsBound);
-            self.spot_.endTile(cmd);
         }
+        context.endRendering();
     }
 
     bool VulkanLocalShadowFeature::pointCompactActive(void* owner,

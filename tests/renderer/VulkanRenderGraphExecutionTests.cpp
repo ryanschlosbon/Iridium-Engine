@@ -1676,7 +1676,7 @@ namespace {
             { ids.shadowDirectionalMap,
                 shadowImage(0xB000, 4096, kDirectionalShadowLayerCount),
                 "shadow.directional", true },
-            { ids.shadowSpotMap, shadowImage(0xB100, 8192, 1), "shadow.spot", false },
+            { ids.shadowSpotMap, shadowImage(0xB100, 8192, 1), "shadow.spot", true },
         };
         for (uint32_t tier = 0; tier < 3; ++tier)
             shadows.push_back({ ids.shadowPointMaps[tier],

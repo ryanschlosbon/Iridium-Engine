@@ -53,65 +53,6 @@ void VulkanSpotShadowAtlas::init(VkDevice device,
         requireSuccess(vkCreateSampler(device_, &sampler, nullptr, &sampler_),
             "vkCreateSampler(spot shadow)");
 
-        VkAttachmentDescription attachment{};
-        attachment.format = VK_FORMAT_D32_SFLOAT;
-        attachment.samples = VK_SAMPLE_COUNT_1_BIT;
-        attachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
-        attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-        attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-        attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-        attachment.initialLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
-        attachment.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
-        const VkAttachmentReference depthReference{
-            0, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL };
-        VkSubpassDescription subpass{};
-        subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-        subpass.pDepthStencilAttachment = &depthReference;
-        std::array<VkSubpassDependency, 2> dependencies{};
-        dependencies[0].srcSubpass = VK_SUBPASS_EXTERNAL;
-        dependencies[0].dstSubpass = 0;
-        dependencies[0].srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-        dependencies[0].dstStageMask = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
-            VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
-        dependencies[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        // LOAD_OP_LOAD reads the attachment (EARLY_FRAGMENT_TESTS,
-        // DEPTH_STENCIL_ATTACHMENT_READ) after the READ_ONLY -> ATTACHMENT
-        // layout transition; the read must be in the destination scope or the
-        // load races the transition (M7R R3.0 sync-validation baseline).
-        dependencies[0].dstAccessMask =
-            VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
-            VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-        dependencies[0].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
-        dependencies[1].srcSubpass = 0;
-        dependencies[1].dstSubpass = VK_SUBPASS_EXTERNAL;
-        dependencies[1].srcStageMask = VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
-        dependencies[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-        dependencies[1].srcAccessMask =
-            VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-        dependencies[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        dependencies[1].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
-        VkRenderPassCreateInfo renderPass{
-            VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO };
-        renderPass.attachmentCount = 1;
-        renderPass.pAttachments = &attachment;
-        renderPass.subpassCount = 1;
-        renderPass.pSubpasses = &subpass;
-        renderPass.dependencyCount = static_cast<uint32_t>(dependencies.size());
-        renderPass.pDependencies = dependencies.data();
-        requireSuccess(vkCreateRenderPass(device_, &renderPass, nullptr,
-            &renderPass_), "vkCreateRenderPass(spot shadow)");
-
-        VkFramebufferCreateInfo framebuffer{
-            VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO };
-        framebuffer.renderPass = renderPass_;
-        framebuffer.attachmentCount = 1;
-        framebuffer.pAttachments = &image_.view;
-        framebuffer.width = resolution;
-        framebuffer.height = resolution;
-        framebuffer.layers = 1;
-        requireSuccess(vkCreateFramebuffer(device_, &framebuffer, nullptr,
-            &framebuffer_), "vkCreateFramebuffer(spot shadow)");
-
         const VkDescriptorSetLayoutBinding shadowBinding{ 0,
             VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1,
             VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_COMPUTE_BIT, nullptr };
@@ -179,10 +120,6 @@ void VulkanSpotShadowAtlas::cleanup() noexcept {
             if (set != VK_NULL_HANDLE) descriptors_->free(set);
     if (renderSetLayout_ != VK_NULL_HANDLE)
         vkDestroyDescriptorSetLayout(device_, renderSetLayout_, nullptr);
-    if (framebuffer_ != VK_NULL_HANDLE)
-        vkDestroyFramebuffer(device_, framebuffer_, nullptr);
-    if (renderPass_ != VK_NULL_HANDLE)
-        vkDestroyRenderPass(device_, renderPass_, nullptr);
     if (sampler_ != VK_NULL_HANDLE)
         vkDestroySampler(device_, sampler_, nullptr);
     if (allocator_ != nullptr) {
@@ -194,8 +131,6 @@ void VulkanSpotShadowAtlas::cleanup() noexcept {
     renderSets_ = {};
     image_ = {};
     sampler_ = VK_NULL_HANDLE;
-    renderPass_ = VK_NULL_HANDLE;
-    framebuffer_ = VK_NULL_HANDLE;
     renderSetLayout_ = VK_NULL_HANDLE;
     pipelineLayout_ = VK_NULL_HANDLE;
     descriptors_ = nullptr;
@@ -249,11 +184,8 @@ void VulkanSpotShadowAtlas::updateFrame(uint32_t frameIndex,
 
 void VulkanSpotShadowAtlas::beginTile(VkCommandBuffer commandBuffer,
     const SpotShadowFramePacket& packet) const {
-    VkRenderPassBeginInfo begin{ VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
-    begin.renderPass = renderPass_;
-    begin.framebuffer = framebuffer_;
-    begin.renderArea.extent = { resolution_, resolution_ };
-    vkCmdBeginRenderPass(commandBuffer, &begin, VK_SUBPASS_CONTENTS_INLINE);
+    // Inside the pass's single rendering instance (LOAD): clear only this
+    // tile, then restrict raster to its guard-free interior.
     const VkClearAttachment attachment{ VK_IMAGE_ASPECT_DEPTH_BIT, 0,
         { .depthStencil = { 1.0f, 0u } } };
     const VkClearRect clear{ { { static_cast<int32_t>(packet.atlasX),
@@ -270,10 +202,6 @@ void VulkanSpotShadowAtlas::beginTile(VkCommandBuffer commandBuffer,
     vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
     vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
     vkCmdSetDepthBias(commandBuffer, 0.5f, 0.0f, 1.0f);
-}
-
-void VulkanSpotShadowAtlas::endTile(VkCommandBuffer commandBuffer) const {
-    vkCmdEndRenderPass(commandBuffer);
 }
 
 VkPipeline VulkanSpotShadowAtlas::pipeline(bool alphaMasked,
@@ -395,7 +323,12 @@ VkPipeline VulkanSpotShadowAtlas::createPipeline(bool alphaMasked,
         create.pColorBlendState = &blend;
         create.pDynamicState = &dynamic;
         create.layout = pipelineLayout_;
-        create.renderPass = renderPass_;
+        // M7R R4a: dynamic rendering, depth only.
+        VkPipelineRenderingCreateInfo rendering{
+            VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO };
+        rendering.depthAttachmentFormat = VK_FORMAT_D32_SFLOAT;
+        create.pNext = &rendering;
+        create.renderPass = VK_NULL_HANDLE;
         VkPipeline result = VK_NULL_HANDLE;
         requireSuccess(vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1,
             &create, nullptr, &result),
