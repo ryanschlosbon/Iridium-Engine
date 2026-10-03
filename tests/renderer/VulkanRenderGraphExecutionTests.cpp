@@ -2,6 +2,7 @@
 // recording goes through a VulkanBarrierSink against fake resources, so no
 // device is needed.
 
+#include "profiling/CpuAllocationProfile.h"
 #include "renderer/vulkan/VulkanProductionRenderGraph.h"
 #include "renderer/vulkan/VulkanRenderGraphExecutor.h"
 
@@ -11,6 +12,7 @@
 #include <exception>
 #include <iostream>
 #include <limits>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -1170,6 +1172,525 @@ namespace {
         return true;
     }
 
+    // ---- R3b.10: History lifetime -----------------------------------------------
+
+    // scene -> resolve (reads taa.previous, writes taa.current) -> post (copies
+    // taa.current out, so the slot ends in TransferSource).
+    RenderGraph::CompiledGraph historyGraph(uint32_t width = 64) {
+        RenderGraph::RenderGraphBuilder builder;
+        RenderGraph::ResourceDesc desc = imageDesc();
+        desc.image.extent.width = width;
+        const auto history = builder.createHistory("taa", desc);
+        auto scene = builder.createResource("scene", desc);
+        auto output = builder.createResource("output", desc);
+        const auto scenePass = builder.addPass("scene");
+        const auto resolve = builder.addPass("resolve");
+        const auto post = builder.addPass("post", RenderGraph::QueueClass::Transfer);
+        scene = builder.write(scenePass, scene, Access::ColorAttachment, RenderGraph::LoadOp::Clear);
+        builder.read(resolve, scene, Access::SampledRead);
+        builder.read(resolve, history.previous, Access::SampledRead);
+        const auto current = builder.write(resolve, history.current, Access::ColorAttachment,
+            RenderGraph::LoadOp::Clear);
+        builder.read(post, current, Access::TransferSource);
+        output = builder.write(post, output, Access::TransferDestination);
+        builder.exportResource(output, Access::TransferDestination);
+        RenderGraph::CompileResult result = builder.compile();
+        if (!result.succeeded()) throw std::runtime_error("history graph failed to compile");
+        return std::move(*result.graph);
+    }
+
+    struct HistoryFixture {
+        FakeResourceFactory factory;
+        RecordingBarrierSink sink;
+        VulkanRenderGraphExecutor executor;
+        RenderGraph::GraphResourceId previous;
+        RenderGraph::GraphResourceId current;
+
+        explicit HistoryFixture(uint32_t width = 64) {
+            executor.setBarrierSink(&sink);
+            executor.init(factory, 2);
+            executor.setBarrierApi(VulkanBarrierApi::Synchronization2);
+            rebuild(width);
+        }
+        void rebuild(uint32_t width) {
+            executor.rebuild(historyGraph(width));
+            previous = executor.resourceId("taa.previous");
+            current = executor.resourceId("taa.current");
+        }
+        // The barrier recorded for `image` by the pass just begun, if any.
+        const RecordedBarrier* barrierFor(VkImage image) const {
+            for (const RecordedBarrier& barrier : sink.recorded())
+                if (barrier.handle == reinterpret_cast<uint64_t>(image)) return &barrier;
+            return nullptr;
+        }
+    };
+
+    struct HistoryFrame {
+        VkImage previous = VK_NULL_HANDLE;
+        VkImage current = VK_NULL_HANDLE;
+        bool valid = false;
+        RecordedBarrier previousBarrier{};
+        bool previousBarriered = false;
+    };
+
+    // Runs one frame on slot frame % 2; `runResolve` false skips the writer.
+    HistoryFrame runHistoryFrame(HistoryFixture& fixture, uint32_t frame,
+        RenderGraph::ViewHistoryContext view, bool runResolve = true) {
+        auto& executor = fixture.executor;
+        const uint32_t slot = frame % 2;
+        executor.onFrameFenceCompleted(slot);
+        executor.beginFrameExecution(slot, view);
+        HistoryFrame result{};
+        result.previous = executor.image(slot, fixture.previous).image;
+        result.current = executor.image(slot, fixture.current).image;
+        result.valid = executor.historyValid(fixture.previous);
+        executor.beginPass(FakeCommandBuffer, executor.passId("scene"));
+        if (runResolve) {
+            fixture.sink.clear();
+            executor.beginPass(FakeCommandBuffer, executor.passId("resolve"));
+            if (const RecordedBarrier* barrier = fixture.barrierFor(result.previous)) {
+                result.previousBarrier = *barrier;
+                result.previousBarriered = true;
+            }
+            // The flip at the writer keeps the frame's mapping stable.
+            if (executor.image(slot, fixture.previous).image != result.previous ||
+                executor.image(slot, fixture.current).image != result.current)
+                result.previous = result.current = VK_NULL_HANDLE;
+            executor.beginPass(FakeCommandBuffer, executor.passId("post"));
+        }
+        else {
+            executor.skipPass(executor.passId("resolve"));
+            executor.skipPass(executor.passId("post"));
+        }
+        executor.finishFrameExecution();
+        return result;
+    }
+
+    bool testHistoryPairLifetime() {
+        HistoryFixture fixture;
+        auto& executor = fixture.executor;
+        const RenderGraph::CompiledGraph& graph = *executor.compiledGraph();
+        CHECK(graph.historyPairs().size() == 1);
+        CHECK(graph.historySlots().size() == 2);
+        CHECK(graph.resources()[fixture.previous.logical].physicalSlot == RenderGraph::InvalidIndex);
+        CHECK(graph.resources()[fixture.current.logical].physicalSlot == RenderGraph::InvalidIndex);
+        CHECK(executor.stats().historySlotCount == 2);
+        CHECK(executor.stats().physicalSlotCount == graph.physicalSlots().size());
+        CHECK(fixture.factory.createCount == graph.physicalSlots().size() * 2 + 2);
+
+        // The pair is distinct from every per-frame resource.
+        std::vector<VkImage> images;
+        for (uint32_t slot = 0; slot < 2; ++slot) {
+            images.push_back(executor.image(slot, executor.resourceId("scene")).image);
+            images.push_back(executor.image(slot, executor.resourceId("output")).image);
+        }
+        images.push_back(executor.image(0, fixture.previous).image);
+        images.push_back(executor.image(0, fixture.current).image);
+        std::vector<VkImage> sorted = images;
+        std::sort(sorted.begin(), sorted.end());
+        CHECK(std::adjacent_find(sorted.begin(), sorted.end()) == sorted.end());
+        // Global: both frame slots see the same pair images.
+        CHECK(executor.image(0, fixture.previous).image == executor.image(1, fixture.previous).image);
+
+        std::vector<HistoryFrame> frames;
+        for (uint32_t frame = 0; frame < 6; ++frame)
+            frames.push_back(runHistoryFrame(fixture, frame, { 1, 0 }));
+        CHECK(!frames[0].valid);
+        for (uint32_t frame = 0; frame < frames.size(); ++frame) {
+            CHECK(frames[frame].previous != VK_NULL_HANDLE);   // stable within the frame
+            CHECK(frames[frame].previous != frames[frame].current);
+            if (frame == 0) continue;
+            CHECK(frames[frame].valid);
+            // previous(N+1) == current(N): the pair alternates.
+            CHECK(frames[frame].previous == frames[frame - 1].current);
+            CHECK(frames[frame].current == frames[frame - 1].previous);
+        }
+        // Frame 0: nothing valid, the previous slot starts undefined.
+        CHECK(frames[0].previousBarriered);
+        CHECK(frames[0].previousBarrier.oldLayout == VK_IMAGE_LAYOUT_UNDEFINED);
+        // Frame 1 (the other frame slot) continues from the state frame 0 left:
+        // the slot was copied from (TransferSource), not reset per slot.
+        CHECK(frames[1].previousBarriered);
+        CHECK(frames[1].previousBarrier.oldLayout == VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+        CHECK(frames[1].previousBarrier.srcAccess == VK_ACCESS_2_TRANSFER_READ_BIT);
+        CHECK(frames[1].previousBarrier.newLayout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        CHECK(throws([&] { (void)executor.historyValid(executor.resourceId("scene")); }));
+        executor.cleanupAfterDeviceIdle();
+        CHECK(fixture.factory.destroyCount == fixture.factory.createCount);
+        return true;
+    }
+
+    bool testHistoryValidity() {
+        HistoryFixture fixture;
+        auto& executor = fixture.executor;
+        uint32_t frame = 0;
+        const auto next = [&](RenderGraph::ViewHistoryContext view, bool writer = true) {
+            return runHistoryFrame(fixture, frame++, view, writer);
+        };
+        CHECK(!next({ 1, 0 }).valid);                 // first frame
+        CHECK(next({ 1, 0 }).valid);                  // after a written frame
+        const HistoryFrame reset = next({ 1, 1 });    // reset revision changed
+        CHECK(!reset.valid);
+        // Invalid previous contents are discarded: UNDEFINED, but the source
+        // scope still covers the slot's last (transfer) access.
+        CHECK(reset.previousBarriered);
+        CHECK(reset.previousBarrier.oldLayout == VK_IMAGE_LAYOUT_UNDEFINED);
+        CHECK(reset.previousBarrier.srcStages == VK_PIPELINE_STAGE_2_TRANSFER_BIT);
+        CHECK(reset.previousBarrier.srcAccess == VK_ACCESS_2_TRANSFER_READ_BIT);
+        CHECK(next({ 1, 1 }).valid);
+        CHECK(!next({ 2, 1 }).valid);                 // view identity changed
+        const HistoryFrame beforeSkip = next({ 2, 1 }, false);   // writer skipped
+        CHECK(beforeSkip.valid);
+        const HistoryFrame afterSkip = next({ 2, 1 });
+        CHECK(!afterSkip.valid);                      // previous is two frames old
+        CHECK(afterSkip.previous == beforeSkip.previous);        // no flip on a skip
+        CHECK(next({ 2, 1 }).valid);
+        // The single-argument begin reuses the last view: no invalidation.
+        executor.onFrameFenceCompleted(frame % 2);
+        executor.beginFrameExecution(frame % 2);
+        CHECK(executor.historyValid(fixture.previous));
+        for (const char* pass : { "scene", "resolve", "post" })
+            executor.beginPass(FakeCommandBuffer, executor.passId(pass));
+        executor.finishFrameExecution();
+        ++frame;
+
+        fixture.rebuild(64);                          // rebuild
+        CHECK(!next({ 2, 1 }).valid);
+        CHECK(next({ 2, 1 }).valid);
+        fixture.rebuild(128);                         // resize
+        CHECK(!next({ 2, 1 }).valid);
+        CHECK(next({ 2, 1 }).valid);
+        executor.cleanupAfterDeviceIdle();
+        return true;
+    }
+
+    bool testHistoryRetirement() {
+        HistoryFixture fixture;
+        auto& executor = fixture.executor;
+        const size_t poolSlots = executor.compiledGraph()->physicalSlots().size();
+        (void)runHistoryFrame(fixture, 0, { 1, 0 });
+        const size_t destroyedBefore = fixture.factory.destroyCount;
+        fixture.rebuild(64);
+        CHECK(fixture.factory.destroyCount == destroyedBefore);
+        CHECK(executor.stats().historySlotCount == 2);
+        executor.onFrameFenceCompleted(0);
+        // Slot 0's pool resources go; the old pair waits for every slot.
+        CHECK(fixture.factory.destroyCount == destroyedBefore + poolSlots);
+        executor.onFrameFenceCompleted(1);
+        CHECK(fixture.factory.destroyCount == destroyedBefore + poolSlots * 2 + 2);
+        executor.cleanupAfterDeviceIdle();
+        CHECK(fixture.factory.destroyCount == fixture.factory.createCount);
+        return true;
+    }
+
+    bool testProductionDeclaresNoHistory() {
+        for (const NamedTopology& topology : productionTopologies()) {
+            CHECK(topology.graph.historyPairs().empty());
+            CHECK(topology.graph.historySlots().empty());
+            CHECK(topology.graph.historyResources().empty());
+        }
+        return true;
+    }
+
+    // ---- R3b.6 groundwork: imported images and variable-size buffers ------------
+
+    RenderGraph::ResourceDesc importedImage(Access initial,
+        RenderGraph::Format format = RenderGraph::Format::Rgba16Float) {
+        RenderGraph::ResourceDesc desc = imageDesc(format);
+        desc.lifetime = RenderGraph::ResourceLifetime::External;
+        desc.imported = true;
+        desc.initialAccess = initial;
+        return desc;
+    }
+
+    VulkanImageResource fakeImage(uintptr_t handle,
+        VkFormat format = VK_FORMAT_R16G16B16A16_SFLOAT) {
+        VulkanImageResource image{};
+        image.image = reinterpret_cast<VkImage>(handle);
+        image.view = reinterpret_cast<VkImageView>(handle + 1);
+        image.format = format;
+        image.extent = { 64, 32 };
+        return image;
+    }
+
+    RenderGraph::CompiledGraph importGraph() {
+        RenderGraph::RenderGraphBuilder builder;
+        auto owned = builder.createResource("ext.owned", importedImage(Access::SampledRead));
+        auto renderPass = builder.createResource("ext.render-pass", importedImage(Access::Present));
+        auto owner = builder.createResource("ext.owner", importedImage(Access::SampledRead));
+        const auto write = builder.addPass("write");
+        const auto read = builder.addPass("read");
+        owned = builder.write(write, owned, Access::StorageWrite);
+        renderPass = builder.write(write, renderPass, Access::ColorAttachment, RenderGraph::LoadOp::Clear);
+        owner = builder.write(write, owner, Access::TransferDestination);
+        builder.read(read, owned, Access::SampledRead);
+        builder.read(read, renderPass, Access::SampledRead);
+        builder.read(read, owner, Access::SampledRead);
+        RenderGraph::CompileResult result = builder.compile();
+        if (!result.succeeded()) throw std::runtime_error("import graph failed to compile");
+        return std::move(*result.graph);
+    }
+
+    bool testExternalImagePolicies() {
+        FakeResourceFactory factory;
+        RecordingBarrierSink sink;
+        VulkanRenderGraphExecutor executor;
+        executor.setBarrierSink(&sink);
+        executor.init(factory, 2);
+        executor.setBarrierApi(VulkanBarrierApi::Synchronization2);
+        executor.rebuild(importGraph());
+        const auto owned = executor.resourceId("ext.owned");
+        const auto renderPass = executor.resourceId("ext.render-pass");
+        const auto owner = executor.resourceId("ext.owner");
+        const VulkanImageResource ownedImage = fakeImage(0x5000);
+        const auto rendering = ExternalSyncPolicy::renderPassManaged(Access::Undefined,
+            Access::SampledRead);
+
+        // Validation of the binding itself.
+        CHECK(throws([&] { executor.bindExternalImage(0, owned,
+            fakeImage(0x5100, VK_FORMAT_R8G8B8A8_UNORM), Access::SampledRead); }));
+        VulkanImageResource layered = fakeImage(0x5200);
+        layered.arrayLayers = 6;
+        CHECK(throws([&] { executor.bindExternalImage(0, owned, layered, Access::SampledRead); }));
+        CHECK(throws([&] { executor.bindExternalImage(2, owned, ownedImage, Access::SampledRead); }));
+        CHECK(throws([&] { executor.bindExternalImage(0, RenderGraph::GraphResourceId{ 9 },
+            ownedImage, Access::SampledRead); }));
+        CHECK(throws([&] { executor.bindExternalImage(0, renderPass, fakeImage(0x5300),
+            Access::Undefined, ExternalSyncPolicy::renderPassManaged(Access::Undefined,
+                Access::Undefined)); }));
+
+        executor.bindExternalImage(VulkanGlobalBinding, owned, ownedImage, Access::SampledRead);
+        CHECK(throws([&] { executor.bindExternalImage(0, owned, ownedImage, Access::SampledRead); }));
+        CHECK(throws([&] { executor.bindExternalImage(0, owner, ownedImage, Access::SampledRead,
+            ExternalSyncPolicy::ownerManaged()); }));   // aliases ext.owned
+        executor.bindExternalImage(0, renderPass, fakeImage(0x6000), Access::Undefined, rendering);
+        CHECK(!executor.validateFrame(1));           // per-frame import unbound on slot 1
+        executor.bindExternalImage(1, renderPass, fakeImage(0x6100), Access::Undefined, rendering);
+        executor.bindExternalImage(0, owner, fakeImage(0x7000), Access::SampledRead,
+            ExternalSyncPolicy::ownerManaged());
+        executor.bindExternalImage(1, owner, fakeImage(0x7000), Access::SampledRead,
+            ExternalSyncPolicy::ownerManaged());     // non-executor-owned may share slots
+        CHECK(executor.validateFrame(0) && executor.validateFrame(1));
+        CHECK(executor.image(1, owned).image == ownedImage.image);
+        CHECK(executor.image(1, renderPass).image == reinterpret_cast<VkImage>(uintptr_t{ 0x6100 }));
+
+        // Frame 0: only the executor-owned import is barriered.
+        executor.beginFrameExecution(0);
+        CHECK(throws([&] { executor.bindExternalImage(VulkanGlobalBinding, owned, ownedImage,
+            Access::SampledRead); }));
+        CHECK(throws([&] { executor.bindExternalImage(0, renderPass, fakeImage(0x6000),
+            Access::Undefined, rendering); }));
+        sink.clear();
+        executor.beginPass(FakeCommandBuffer, executor.passId("write"));
+        CHECK(sink.recorded().size() == 1);
+        CHECK(sink.recorded()[0].handle == 0x5000);
+        CHECK(sink.recorded()[0].oldLayout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        CHECK(sink.recorded()[0].newLayout == VK_IMAGE_LAYOUT_GENERAL);
+        CHECK(sink.recorded()[0].range.aspectMask == VK_IMAGE_ASPECT_COLOR_BIT);
+        CHECK(executor.externalImageAccess(0, renderPass) == Access::SampledRead);
+        sink.clear();
+        executor.beginPass(FakeCommandBuffer, executor.passId("read"));
+        CHECK(sink.recorded().size() == 1);
+        CHECK(sink.recorded()[0].newLayout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        executor.finishFrameExecution();
+        CHECK(executor.externalImageAccess(VulkanGlobalBinding, owned) == Access::SampledRead);
+        CHECK(executor.externalImageAccess(0, owner) == Access::SampledRead);
+
+        // Frame 1 (slot 1): the global binding's state carried over.
+        executor.beginFrameExecution(1);
+        sink.clear();
+        executor.beginPass(FakeCommandBuffer, executor.passId("write"));
+        CHECK(sink.recorded().size() == 1);
+        CHECK(sink.recorded()[0].oldLayout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        executor.beginPass(FakeCommandBuffer, executor.passId("read"));
+        executor.finishFrameExecution();
+
+        // Frame 2 (slot 0) rebinds the render-pass import per frame (like a
+        // swapchain image after acquire); without that its initial state fails.
+        executor.onFrameFenceCompleted(0);
+        executor.bindExternalImage(0, renderPass, fakeImage(0x6000), Access::Undefined, rendering);
+        executor.beginFrameExecution(0);
+        executor.beginPass(FakeCommandBuffer, executor.passId("write"));
+        executor.beginPass(FakeCommandBuffer, executor.passId("read"));
+        executor.finishFrameExecution();
+        executor.onFrameFenceCompleted(1);
+        executor.beginFrameExecution(1);
+        CHECK(throws([&] { executor.beginPass(FakeCommandBuffer, executor.passId("write")); }));
+        executor.cleanupAfterDeviceIdle();
+        CHECK(factory.createCount == 0);
+        return true;
+    }
+
+    bool testRenderPassManagedReadLayout() {
+        RenderGraph::RenderGraphBuilder builder;
+        auto shadow = builder.createResource("shadow",
+            importedImage(Access::SampledRead, RenderGraph::Format::D32Float));
+        const auto draw = builder.addPass("draw");
+        const auto sample = builder.addPass("sample");
+        shadow = builder.write(draw, shadow, Access::DepthAttachmentWrite, RenderGraph::LoadOp::Clear);
+        builder.read(sample, shadow, Access::SampledRead);
+        builder.read(builder.addPass("copy"), shadow, Access::TransferSource);
+        const auto compiled = builder.compile();
+        CHECK(compiled.succeeded());
+        FakeResourceFactory factory;
+        RecordingBarrierSink sink;
+        VulkanRenderGraphExecutor executor;
+        executor.setBarrierSink(&sink);
+        executor.init(factory, 1);
+        executor.rebuild(*compiled.graph);
+        // Shadow maps: the render pass goes read-only -> read-only.
+        executor.bindExternalImage(VulkanGlobalBinding, executor.resourceId("shadow"),
+            fakeImage(0x8000, VK_FORMAT_D32_SFLOAT), Access::SampledRead,
+            ExternalSyncPolicy::renderPassManaged(Access::SampledRead, Access::SampledRead));
+        executor.beginFrameExecution(0);
+        executor.beginPass(FakeCommandBuffer, executor.passId("draw"));
+        executor.beginPass(FakeCommandBuffer, executor.passId("sample"));
+        CHECK(sink.recorded().empty());
+        // A read in a layout the render pass did not leave is rejected.
+        CHECK(throws([&] { executor.beginPass(FakeCommandBuffer, executor.passId("copy")); }));
+        executor.cleanupAfterDeviceIdle();
+        return true;
+    }
+
+    bool testVariableSizeImportedBuffer() {
+        const auto build = [](bool variable) {
+            RenderGraph::RenderGraphBuilder builder;
+            RenderGraph::ResourceDesc desc = bufferDesc(256);
+            desc.lifetime = RenderGraph::ResourceLifetime::External;
+            desc.imported = true;
+            desc.initialAccess = Access::StorageRead;
+            desc.buffer.variableSize = variable;
+            auto buffer = builder.createResource("commands", desc);
+            buffer = builder.write(builder.addPass("compact"), buffer, Access::StorageWrite);
+            builder.read(builder.addPass("draw"), buffer, Access::IndirectRead);
+            return std::move(*builder.compile().graph);
+        };
+        const RenderGraph::CompiledGraph fixed = build(false);
+        const RenderGraph::CompiledGraph variable = build(true);
+        CHECK(fixed.topologyHash() != variable.topologyHash());
+        RenderGraph::RenderGraphBuilder rejecting;
+        RenderGraph::ResourceDesc transient = bufferDesc();
+        transient.buffer.variableSize = true;
+        CHECK(throws([&] { (void)rejecting.createResource("bad", transient); }));
+
+        for (const bool isVariable : { false, true }) {
+            FakeResourceFactory factory;
+            RecordingBarrierSink sink;
+            VulkanRenderGraphExecutor executor;
+            executor.setBarrierSink(&sink);
+            executor.init(factory, 1);
+            executor.rebuild(isVariable ? variable : fixed);
+            const auto id = executor.resourceId("commands");
+            CHECK(throws([&] { executor.bindExternalBuffer(0, id,
+                reinterpret_cast<VkBuffer>(uintptr_t{ 0x900 }), 128, Access::StorageRead); }));
+            executor.bindExternalBuffer(0, id, reinterpret_cast<VkBuffer>(uintptr_t{ 0x900 }),
+                4096, Access::StorageRead);
+            executor.beginFrameExecution(0);
+            executor.beginPass(FakeCommandBuffer, executor.passId("compact"));
+            executor.beginPass(FakeCommandBuffer, executor.passId("draw"));
+            executor.finishFrameExecution();
+            CHECK(sink.recorded().size() == 2);
+            for (const RecordedBarrier& barrier : sink.recorded())
+                CHECK(barrier.size == (isVariable ? 4096u : 256u));
+            executor.cleanupAfterDeviceIdle();
+        }
+        return true;
+    }
+
+    // Steady frames with everything R3b adds (History, a callback pass with a
+    // GPU range, imported image and buffer, batched barriers) allocate nothing.
+    struct AllocationOwner {
+        uint32_t executions = 0;
+    };
+
+    bool testSteadyFramesAllocateNothing() {
+        RenderGraph::RenderGraphBuilder builder;
+        RenderGraph::ResourceDesc desc = imageDesc();
+        const auto history = builder.createHistory("taa", desc);
+        auto scene = builder.createResource("scene", desc);
+        auto output = builder.createResource("output", desc);
+        auto depth = builder.createResource("imported.depth",
+            importedImage(Access::SampledRead, RenderGraph::Format::D32Float));
+        RenderGraph::ResourceDesc bufferImport = bufferDesc(256);
+        bufferImport.lifetime = RenderGraph::ResourceLifetime::External;
+        bufferImport.imported = true;
+        bufferImport.initialAccess = Access::StorageRead;
+        bufferImport.buffer.variableSize = true;
+        auto commands = builder.createResource("imported.commands", bufferImport);
+        const auto scenePass = builder.addPass("scene");
+        const auto resolve = builder.addPass("resolve");
+        const auto post = builder.addPass("post");
+        scene = builder.write(scenePass, scene, Access::ColorAttachment, RenderGraph::LoadOp::Clear);
+        builder.read(scenePass, depth, Access::SampledRead);
+        builder.read(resolve, scene, Access::SampledRead);
+        builder.read(resolve, history.previous, Access::SampledRead);
+        const auto current = builder.write(resolve, history.current, Access::ColorAttachment,
+            RenderGraph::LoadOp::Clear);
+        builder.read(post, current, Access::TransferSource);
+        output = builder.write(post, output, Access::TransferDestination);
+        commands = builder.write(post, commands, Access::StorageWrite);
+        builder.exportResource(output, Access::TransferDestination);
+        const auto compiled = builder.compile();
+        CHECK(compiled.succeeded());
+
+        FakeResourceFactory factory;
+        RecordingBarrierSink sink;
+        EventLog ranges;
+        VulkanRenderGraphExecutor executor;
+        executor.setBarrierSink(&sink);
+        executor.init(factory, 2);
+        executor.setBarrierApi(VulkanBarrierApi::Synchronization2);
+        executor.rebuild(*compiled.graph);
+        executor.setGpuRangeSink(rangeSinkFor(ranges));
+        AllocationOwner owner;
+        VulkanPassCallbacks callbacks{};
+        callbacks.owner = &owner;
+        callbacks.execute = [](void* self, VulkanPassContext&) {
+            ++static_cast<AllocationOwner*>(self)->executions;
+        };
+        callbacks.gpuRange = "gpu.post";
+        callbacks.placement = GpuRangePlacement::AfterBarriers;
+        const auto scenePassId = executor.passId("scene");
+        const auto resolveId = executor.passId("resolve");
+        const auto postId = executor.passId("post");
+        const auto previousId = executor.resourceId("taa.previous");
+        executor.registerPass(postId, callbacks);
+        executor.bindExternalImage(VulkanGlobalBinding, executor.resourceId("imported.depth"),
+            fakeImage(0xA000, VK_FORMAT_D32_SFLOAT), Access::SampledRead);
+        for (uint32_t slot = 0; slot < 2; ++slot)
+            executor.bindExternalBuffer(slot, executor.resourceId("imported.commands"),
+                reinterpret_cast<VkBuffer>(uintptr_t{ 0xB000 + slot }), 1024, Access::StorageRead);
+
+        const auto frame = [&](uint32_t index) {
+            const uint32_t slot = index % 2;
+            sink.clear();
+            ranges.count = 0;
+            executor.onFrameFenceCompleted(slot);
+            executor.beginFrameExecution(slot, { 3, 0 });
+            (void)executor.historyValid(previousId);
+            (void)executor.image(slot, previousId);
+            executor.beginPass(FakeCommandBuffer, scenePassId);
+            if (index % 3 == 2) executor.skipPass(resolveId);
+            else executor.beginPass(FakeCommandBuffer, resolveId);
+            executor.finishFrameExecution();   // drains the registered post pass
+        };
+        for (uint32_t index = 0; index < 4; ++index) frame(index);
+        // The profiler is live in this binary (not vacuously zero).
+        beginCpuAllocationFrame();
+        auto probe = std::make_unique<std::array<uint8_t, 64>>();
+        CHECK(endCpuAllocationFrame().allocationCount == 1 && probe != nullptr);
+        beginCpuAllocationFrame();
+        for (uint32_t index = 4; index < 40; ++index) frame(index);
+        const CpuAllocationFrameSample sample = endCpuAllocationFrame();
+        CHECK(owner.executions == 40);
+        CHECK(sink.overflow == 0);
+        std::cout << "  36 steady frames: " << sample.allocationCount << " allocations, "
+            << sample.requestedBytes << " bytes\n";
+        CHECK(sample.allocationCount == 0);
+        executor.cleanupAfterDeviceIdle();
+        return true;
+    }
+
 } // namespace
 
 int main() {
@@ -1192,6 +1713,14 @@ int main() {
         { "finish drains and rollback", testFinishDrainsAndRollback },
         { "GPU range placement and groups", testGpuRangePlacementAndGroups },
         { "callback context and reentry", testCallbackContextAndReentry },
+        { "History pair lifetime", testHistoryPairLifetime },
+        { "History validity", testHistoryValidity },
+        { "History retirement", testHistoryRetirement },
+        { "production declares no History", testProductionDeclaresNoHistory },
+        { "external image policies", testExternalImagePolicies },
+        { "render-pass-managed read layout", testRenderPassManagedReadLayout },
+        { "variable-size imported buffer", testVariableSizeImportedBuffer },
+        { "steady frames allocate nothing", testSteadyFramesAllocateNothing },
     };
 
     size_t passed = 0;

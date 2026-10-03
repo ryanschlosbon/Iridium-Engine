@@ -45,6 +45,11 @@ namespace {
         hashValue(hash, desc.initialAccess);
         const uint8_t imported = desc.imported ? 1 : 0;
         hashValue(hash, imported);
+        // Hashed only when set, so graphs without the flag keep their hashes.
+        if (desc.buffer.variableSize) {
+            const uint8_t variableSize = 1;
+            hashValue(hash, variableSize);
+        }
     }
 
     bool isPowerOfTwo(uint32_t value) noexcept {
@@ -90,7 +95,10 @@ namespace {
         return resource.desc.buffer == slot.buffer;
     }
 
-    bool initialVersionReadable(const ResourceDesc& desc) noexcept {
+    bool initialVersionReadable(const ResourceDesc& desc,
+        HistoryRole role = HistoryRole::None) noexcept {
+        // A pair's `current` holds nothing until this frame's writer runs.
+        if (role == HistoryRole::Current) return false;
         return desc.imported || desc.initialAccess != Access::Undefined ||
             desc.lifetime == ResourceLifetime::History;
     }
@@ -122,6 +130,7 @@ void RenderGraphBuilder::reset() {
     m_resourceVersions.clear();
     m_usages.clear();
     m_dependencies.clear();
+    m_historyPairCount = 0;
     ++m_generation;
     if (m_generation == 0) {
         m_generation = 1;
@@ -144,6 +153,37 @@ ResourceHandle RenderGraphBuilder::createResource(std::string name,
     const uint32_t versionIndex = static_cast<uint32_t>(m_resourceVersions.size());
     m_resourceVersions.push_back({ logicalIndex });
     return { versionIndex, m_generation };
+}
+
+RenderGraphBuilder::HistoryHandles RenderGraphBuilder::createHistory(
+    std::string name, const ResourceDesc& desc) {
+    ResourceDesc history = desc;
+    if (history.imported || history.lifetime == ResourceLifetime::External)
+        throw GraphBuildError("History resources cannot be imported");
+    if (history.initialAccess != Access::Undefined)
+        throw GraphBuildError("History resources start undefined");
+    history.lifetime = ResourceLifetime::History;
+    validateDescriptor(history);
+    requireCapacity(m_logicalResources.size() + 2 <= m_capacity.maxLogicalResources,
+        "logical resources");
+    requireCapacity(m_resourceVersions.size() + 2 <= m_capacity.maxResourceVersions,
+        "resource versions");
+    if (name.empty()) {
+        throw GraphBuildError("Render graph resource name must not be empty");
+    }
+    const uint32_t pair = m_historyPairCount++;
+    HistoryHandles handles{};
+    handles.pair = pair;
+    for (const HistoryRole role : { HistoryRole::Previous, HistoryRole::Current }) {
+        const uint32_t logicalIndex = static_cast<uint32_t>(m_logicalResources.size());
+        m_logicalResources.push_back({ name + (role == HistoryRole::Previous
+            ? ".previous" : ".current"), history, pair, role });
+        const uint32_t versionIndex = static_cast<uint32_t>(m_resourceVersions.size());
+        m_resourceVersions.push_back({ logicalIndex });
+        (role == HistoryRole::Previous ? handles.previous : handles.current) =
+            { versionIndex, m_generation };
+    }
+    return handles;
 }
 
 PassHandle RenderGraphBuilder::addPass(std::string name, QueueClass queue) {
@@ -190,6 +230,10 @@ ResourceHandle RenderGraphBuilder::write(PassHandle pass,
 
     const ResourceVersionRecord& previous =
         m_resourceVersions[previousVersion.index];
+    if (m_logicalResources[previous.logicalResourceIndex].historyRole ==
+        HistoryRole::Previous) {
+        throw GraphBuildError("History 'previous' resources are read-only");
+    }
     const uint32_t versionIndex = static_cast<uint32_t>(m_resourceVersions.size());
     ResourceVersionRecord version{};
     version.logicalResourceIndex = previous.logicalResourceIndex;
@@ -246,6 +290,10 @@ void RenderGraphBuilder::validateDescriptor(const ResourceDesc& desc) const {
         throw GraphBuildError("Invalid render graph buffer descriptor");
     }
 
+    if (desc.buffer.variableSize &&
+        (desc.type != ResourceType::Buffer || !desc.imported)) {
+        throw GraphBuildError("Only imported buffers can have a variable size");
+    }
     if (desc.imported && desc.lifetime != ResourceLifetime::External) {
         throw GraphBuildError("Imported resource must have external lifetime");
     }
@@ -318,7 +366,8 @@ struct CompilerAccess {
                 else {
                     const ResourceDesc& desc = builder.m_logicalResources[
                         version.logicalResourceIndex].desc;
-                    if (!initialVersionReadable(desc)) {
+                    if (!initialVersionReadable(desc, builder.m_logicalResources[
+                            version.logicalResourceIndex].historyRole)) {
                         result.diagnostics.push_back({ DiagnosticCode::ReadBeforeWrite,
                             "Resource '" + builder.m_logicalResources[
                                 version.logicalResourceIndex].name +
@@ -350,7 +399,8 @@ struct CompilerAccess {
                 previous.producerPassIndex == InvalidIndex) {
                 const ResourceDesc& desc = builder.m_logicalResources[
                     previous.logicalResourceIndex].desc;
-                if (!initialVersionReadable(desc)) {
+                if (!initialVersionReadable(desc, builder.m_logicalResources[
+                        previous.logicalResourceIndex].historyRole)) {
                     result.diagnostics.push_back({ DiagnosticCode::ReadBeforeWrite,
                         "Load operation for resource '" + builder.m_logicalResources[
                             previous.logicalResourceIndex].name +
@@ -439,6 +489,8 @@ struct CompilerAccess {
             resource.logicalResourceIndex = logicalIndex;
             resource.name = source.name;
             resource.desc = source.desc;
+            resource.historyPair = source.historyPair;
+            resource.historyRole = source.historyRole;
             if (exportedVersions[logicalIndex] != InvalidIndex) {
                 const auto& version =
                     builder.m_resourceVersions[exportedVersions[logicalIndex]];
@@ -513,8 +565,10 @@ struct CompilerAccess {
         std::vector<uint32_t> reusableResources;
         reusableResources.reserve(logicalCount);
         for (CompiledResource& resource : graph.m_resources) {
+            // History pairs live outside the per-frame pool (below).
             if (resource.firstUse == InvalidIndex ||
-                resource.desc.lifetime == ResourceLifetime::External) {
+                resource.desc.lifetime == ResourceLifetime::External ||
+                resource.historyPair != InvalidIndex) {
                 continue;
             }
             if (resource.desc.lifetime == ResourceLifetime::Transient &&
@@ -571,10 +625,53 @@ struct CompilerAccess {
             resource.physicalSlot = selected->slotIndex;
         }
 
+        // History pairs: two non-reusable slots each, outside the per-frame
+        // pool; pair p owns history slots 2p and 2p+1.
+        graph.m_historyPairs.resize(builder.m_historyPairCount);
+        for (const CompiledResource& resource : graph.m_resources) {
+            if (resource.historyPair == InvalidIndex) continue;
+            CompiledHistoryPair& pair = graph.m_historyPairs[resource.historyPair];
+            if (resource.historyRole == HistoryRole::Previous) {
+                pair.previousLogical = resource.logicalResourceIndex;
+                constexpr std::string_view Suffix = ".previous";
+                pair.name = resource.name.substr(0, resource.name.size() - Suffix.size());
+            }
+            else {
+                pair.currentLogical = resource.logicalResourceIndex;
+            }
+        }
+        graph.m_historySlots.reserve(graph.m_historyPairs.size() * 2);
+        for (uint32_t pairIndex = 0; pairIndex < graph.m_historyPairs.size(); ++pairIndex) {
+            CompiledHistoryPair& pair = graph.m_historyPairs[pairIndex];
+            const CompiledResource& previous = graph.m_resources[pair.previousLogical];
+            const CompiledResource& current = graph.m_resources[pair.currentLogical];
+            for (uint32_t half = 0; half < 2; ++half) {
+                PhysicalResourceSlot slot{};
+                slot.slotIndex = pairIndex * 2 + half;
+                slot.type = current.desc.type;
+                slot.image = current.desc.image;
+                slot.buffer = current.desc.buffer;
+                // Each slot is written as `current` and read as `previous`.
+                slot.usages = previous.usages | current.usages;
+                slot.lastUse = previous.lastUse == InvalidIndex ? current.lastUse
+                    : current.lastUse == InvalidIndex ? previous.lastUse
+                    : std::max(previous.lastUse, current.lastUse);
+                slot.transientReusable = false;
+                slot.logicalResources = { pair.previousLogical, pair.currentLogical };
+                pair.slots[half] = slot.slotIndex;
+                graph.m_historySlots.push_back(std::move(slot));
+            }
+        }
+
         uint64_t hash = FnvOffset;
         for (const auto& resource : builder.m_logicalResources) {
             hashString(hash, resource.name);
             hashResourceDesc(hash, resource.desc);
+            // Only pair members hash pair data, so other graphs keep their hashes.
+            if (resource.historyPair != InvalidIndex) {
+                hashValue(hash, resource.historyPair);
+                hashValue(hash, resource.historyRole);
+            }
         }
         for (const auto& pass : builder.m_passes) {
             hashString(hash, pass.name);
@@ -647,13 +744,35 @@ void HistoryValidityTracker::resetForGraph(const CompiledGraph& graph) {
     m_topologyHash = graph.topologyHash();
     m_validity.assign(graph.resources().size(), 0);
     m_isHistory.assign(graph.resources().size(), 0);
+    m_pairOfLogical.assign(graph.resources().size(), InvalidIndex);
     for (const HistoryResourceRecord& history : graph.historyResources()) {
         m_isHistory[history.logicalResourceIndex] = 1;
+    }
+    m_pairs.assign(graph.historyPairs().size(), PairState{});
+    for (uint32_t pairIndex = 0; pairIndex < graph.historyPairs().size(); ++pairIndex) {
+        const CompiledHistoryPair& pair = graph.historyPairs()[pairIndex];
+        m_pairOfLogical[pair.previousLogical] = pairIndex;
+        m_pairOfLogical[pair.currentLogical] = pairIndex;
+        const ResourceDesc& desc = graph.resources()[pair.currentLogical].desc;
+        PairState& state = m_pairs[pairIndex];
+        if (desc.type == ResourceType::Image) {
+            state.extent = desc.image.extent;
+            state.format = desc.image.format;
+        }
+        else {
+            state.extent = { static_cast<uint32_t>(desc.buffer.size),
+                static_cast<uint32_t>(desc.buffer.size >> 32), 1 };
+        }
     }
 }
 
 void HistoryValidityTracker::invalidateAll() noexcept {
     std::fill(m_validity.begin(), m_validity.end(), uint8_t{ 0 });
+    for (PairState& pair : m_pairs) {
+        pair.valid = false;
+        pair.written = false;
+        pair.writtenLastFrame = false;
+    }
 }
 
 void HistoryValidityTracker::setValid(uint32_t logicalResourceIndex, bool valid) {
@@ -661,13 +780,59 @@ void HistoryValidityTracker::setValid(uint32_t logicalResourceIndex, bool valid)
         m_isHistory[logicalResourceIndex] == 0) {
         throw GraphBuildError("History validity update targets a non-history resource");
     }
+    const uint32_t pair = m_pairOfLogical[logicalResourceIndex];
+    if (pair != InvalidIndex) {
+        m_pairs[pair].valid = valid;
+        if (!valid) m_pairs[pair].writtenLastFrame = false;
+        return;
+    }
     m_validity[logicalResourceIndex] = valid ? 1 : 0;
 }
 
 bool HistoryValidityTracker::isValid(uint32_t logicalResourceIndex) const noexcept {
-    return logicalResourceIndex < m_validity.size() &&
-        m_isHistory[logicalResourceIndex] != 0 &&
-        m_validity[logicalResourceIndex] != 0;
+    if (logicalResourceIndex >= m_validity.size() ||
+        m_isHistory[logicalResourceIndex] == 0) {
+        return false;
+    }
+    const uint32_t pair = m_pairOfLogical[logicalResourceIndex];
+    return pair != InvalidIndex ? m_pairs[pair].valid
+                                : m_validity[logicalResourceIndex] != 0;
+}
+
+void HistoryValidityTracker::beginFrame(const ViewHistoryContext& view) {
+    for (PairState& pair : m_pairs) {
+        const HistoryValidityKey key{ view.identity, view.resetRevision,
+            pair.extent, pair.format, m_topologyHash };
+        pair.valid = pair.keyed && pair.key == key && pair.writtenLastFrame;
+        pair.key = key;
+        pair.keyed = true;
+        pair.written = false;
+    }
+}
+
+void HistoryValidityTracker::markWritten(uint32_t pair) {
+    if (pair >= m_pairs.size()) {
+        throw GraphBuildError("History write targets an unknown pair");
+    }
+    m_pairs[pair].written = true;
+}
+
+void HistoryValidityTracker::endFrame() noexcept {
+    for (PairState& pair : m_pairs) {
+        pair.writtenLastFrame = pair.written;
+        pair.written = false;
+    }
+}
+
+bool HistoryValidityTracker::pairValid(uint32_t pair) const noexcept {
+    return pair < m_pairs.size() && m_pairs[pair].valid;
+}
+
+const HistoryValidityKey& HistoryValidityTracker::pairKey(uint32_t pair) const {
+    if (pair >= m_pairs.size()) {
+        throw GraphBuildError("History key requested for an unknown pair");
+    }
+    return m_pairs[pair].key;
 }
 
 } // namespace Iridium::RenderGraph

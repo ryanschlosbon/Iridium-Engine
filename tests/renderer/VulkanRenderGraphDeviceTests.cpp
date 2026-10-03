@@ -116,6 +116,69 @@ namespace {
             executeTopology("all features sync1", build(false, layered, features), true);
     }
 
+    // History pairs on real images: alternating slots, an invalid previous
+    // discarded from UNDEFINED (reset revision), and a skipped writer.
+    bool testHistoryPairBarriers() {
+        HeadlessVulkanDevice& gpu = *sharedDevice;
+        gpu.resetValidationErrors();
+        RenderGraph::RenderGraphBuilder builder;
+        RenderGraph::ResourceDesc desc{};
+        desc.image.format = RenderGraph::Format::Rgba16Float;
+        desc.image.extent = { 256, 128, 1 };
+        const auto history = builder.createHistory("taa", desc);
+        auto scene = builder.createResource("scene", desc);
+        auto output = builder.createResource("output", desc);
+        const auto draw = builder.addPass("scene");
+        const auto resolve = builder.addPass("resolve");
+        const auto post = builder.addPass("post");
+        scene = builder.write(draw, scene, RenderGraph::Access::ColorAttachment,
+            RenderGraph::LoadOp::Clear);
+        builder.read(resolve, scene, RenderGraph::Access::SampledRead);
+        builder.read(resolve, history.previous, RenderGraph::Access::SampledRead);
+        const auto current = builder.write(resolve, history.current,
+            RenderGraph::Access::ColorAttachment, RenderGraph::LoadOp::Clear);
+        builder.read(post, current, RenderGraph::Access::TransferSource);
+        output = builder.write(post, output, RenderGraph::Access::TransferDestination);
+        // An image view needs a view-compatible usage besides TRANSFER_DST.
+        builder.read(builder.addPass("display"), output, RenderGraph::Access::SampledRead);
+        builder.exportResource(output, RenderGraph::Access::SampledRead);
+        auto compiled = builder.compile();
+        IRIDIUM_CHECK(compiled.succeeded());
+
+        VulkanResourceAllocator allocator;
+        allocator.init(gpu.physicalDevice(), gpu.device(), gpu.hasMemoryBudget());
+        {
+            VulkanRenderGraphExecutor executor;
+            executor.init(allocator, 2);
+            executor.rebuild(std::move(*compiled.graph));
+            const RenderGraph::ViewHistoryContext views[] = {
+                { 1, 0 }, { 1, 0 }, { 1, 1 }, { 1, 1 }, { 1, 1 }, { 1, 1 }, { 2, 1 }, { 2, 1 } };
+            for (uint32_t frame = 0; frame < std::size(views); ++frame) {
+                const uint32_t slot = frame % 2;
+                executor.onFrameFenceCompleted(slot);
+                executor.beginFrameExecution(slot, views[frame]);
+                gpu.submitAndWait([&](VkCommandBuffer commandBuffer) {
+                    executor.beginPass(commandBuffer, executor.passId("scene"));
+                    if (frame == 4) {
+                        executor.skipPass(executor.passId("resolve"));
+                        executor.skipPass(executor.passId("post"));
+                    }
+                    else {
+                        executor.beginPass(commandBuffer, executor.passId("resolve"));
+                        executor.beginPass(commandBuffer, executor.passId("post"));
+                    }
+                    executor.beginPass(commandBuffer, executor.passId("display"));
+                });
+                executor.finishFrameExecution();
+            }
+            executor.cleanupAfterDeviceIdle();
+        }
+        allocator.cleanup();
+        IRIDIUM_CHECK_MSG(gpu.validationErrors() == 0,
+            gpu.validationErrors() << " validation errors");
+        return true;
+    }
+
 } // namespace
 
 int main() {
@@ -131,6 +194,7 @@ int main() {
     constexpr Iridium::Test::TestCase tests[] = {
         { "base topology barriers validate", testBaseTopology },
         { "all-features topology barriers validate", testAllFeaturesTopology },
+        { "History pair barriers validate", testHistoryPairBarriers },
     };
     const int result = Iridium::Test::runTests(tests);
     sharedDevice.reset();

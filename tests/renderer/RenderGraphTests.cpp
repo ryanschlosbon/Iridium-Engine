@@ -138,6 +138,131 @@ namespace {
         return true;
     }
 
+    // M7R R3b.10: createHistory declares a linked previous/current pair on two
+    // non-reusable slots outside the per-frame pool.
+    bool testHistoryPairDeclaration() {
+        RenderGraphBuilder builder;
+        const auto history = builder.createHistory("taa", imageDesc());
+        CHECK(history.pair == 0);
+        ResourceHandle scene = builder.createResource("scene", imageDesc());
+        const PassHandle draw = builder.addPass("draw");
+        const PassHandle resolve = builder.addPass("resolve");
+        const PassHandle post = builder.addPass("post");
+        scene = builder.write(draw, scene, Access::ColorAttachment, LoadOp::Clear);
+        builder.read(resolve, scene, Access::SampledRead);
+        builder.read(resolve, history.previous, Access::SampledRead);
+        const ResourceHandle current = builder.write(resolve, history.current,
+            Access::ColorAttachment, LoadOp::Clear);
+        builder.read(post, current, Access::SampledRead);
+        // `previous` is read-only.
+        CHECK(throwsBuildError([&] {
+            (void)builder.write(post, history.previous, Access::StorageWrite); }));
+
+        const CompileResult result = builder.compile();
+        CHECK(result.succeeded());
+        const CompiledGraph& graph = *result.graph;
+        CHECK(graph.historyPairs().size() == 1);
+        const CompiledHistoryPair& pair = graph.historyPairs()[0];
+        CHECK(pair.name == "taa");
+        CHECK(graph.resources()[pair.previousLogical].name == "taa.previous");
+        CHECK(graph.resources()[pair.currentLogical].name == "taa.current");
+        CHECK(graph.resources()[pair.previousLogical].historyRole == HistoryRole::Previous);
+        CHECK(graph.resources()[pair.currentLogical].historyPair == 0);
+        CHECK(graph.resources()[pair.previousLogical].desc.lifetime ==
+            ResourceLifetime::History);
+        // Two history slots, never in the per-frame pool, never shared.
+        CHECK(graph.historySlots().size() == 2);
+        CHECK(pair.slots[0] == 0 && pair.slots[1] == 1);
+        CHECK(graph.resources()[pair.previousLogical].physicalSlot == InvalidIndex);
+        CHECK(graph.resources()[pair.currentLogical].physicalSlot == InvalidIndex);
+        for (const PhysicalResourceSlot& slot : graph.physicalSlots()) {
+            for (const uint32_t logical : slot.logicalResources) {
+                CHECK(graph.resources()[logical].historyPair == InvalidIndex);
+            }
+        }
+        for (const PhysicalResourceSlot& slot : graph.historySlots()) {
+            CHECK(!slot.transientReusable);
+            CHECK((slot.usages & usageBit(Access::ColorAttachment)) != 0);
+            CHECK((slot.usages & usageBit(Access::SampledRead)) != 0);
+            CHECK(slot.image == imageDesc().image);
+        }
+        CHECK(graph.historyResources().size() == 2);
+
+        // `current` holds nothing until this frame's writer has run.
+        RenderGraphBuilder early;
+        const auto earlyHistory = early.createHistory("taa", imageDesc());
+        early.read(early.addPass("too-early"), earlyHistory.current, Access::SampledRead);
+        CHECK(hasDiagnostic(early.compile(), DiagnosticCode::ReadBeforeWrite));
+
+        // History cannot be imported.
+        ResourceDesc imported = imageDesc(Format::Rgba16Float, ResourceLifetime::External);
+        imported.imported = true;
+        imported.initialAccess = Access::SampledRead;
+        CHECK(throwsBuildError([&] { (void)builder.createHistory("bad", imported); }));
+
+        // Pair data is hashed; graphs without pairs keep their former hashes
+        // (only pair members hash pair fields).
+        RenderGraphBuilder single;
+        const ResourceHandle lone = single.createResource("taa.previous",
+            imageDesc(Format::Rgba16Float, ResourceLifetime::History));
+        single.read(single.addPass("resolve"), lone, Access::SampledRead);
+        CHECK(single.compile().graph->topologyHash() != graph.topologyHash());
+        return true;
+    }
+
+    bool testHistoryValidityKeys() {
+        const auto build = [](uint32_t width) {
+            RenderGraphBuilder builder;
+            ResourceDesc desc = imageDesc();
+            desc.image.extent.width = width;
+            const auto history = builder.createHistory("taa", desc);
+            const PassHandle resolve = builder.addPass("resolve");
+            builder.read(resolve, history.previous, Access::SampledRead);
+            (void)builder.write(resolve, history.current, Access::ColorAttachment,
+                LoadOp::Clear);
+            return *builder.compile().graph;
+        };
+        const CompiledGraph graph = build(1920);
+        HistoryValidityTracker tracker;
+        tracker.resetForGraph(graph);
+        CHECK(tracker.pairCount() == 1);
+        const uint32_t previous = graph.historyPairs()[0].previousLogical;
+        const auto frame = [&](ViewHistoryContext view, bool written) {
+            tracker.beginFrame(view);
+            const bool valid = tracker.pairValid(0);
+            if (written) tracker.markWritten(0);
+            tracker.endFrame();
+            return valid;
+        };
+        CHECK(!frame({ 7, 0 }, true));        // first frame
+        CHECK(tracker.pairKey(0).extent.width == 1920);
+        CHECK(tracker.pairKey(0).format == Format::Rgba16Float);
+        CHECK(tracker.pairKey(0).topologyHash == graph.topologyHash());
+        CHECK(frame({ 7, 0 }, true));         // written last frame, same key
+        CHECK(tracker.isValid(previous));     // pair members report pair validity
+        CHECK(!frame({ 7, 1 }, true));        // reset revision
+        CHECK(frame({ 7, 1 }, false));        // writer skipped this frame...
+        CHECK(!frame({ 7, 1 }, true));        // ...so the next frame is invalid
+        CHECK(frame({ 7, 1 }, true));
+        CHECK(!frame({ 8, 1 }, true));        // view identity
+        CHECK(frame({ 8, 1 }, true));
+        tracker.invalidateAll();
+        CHECK(!frame({ 8, 1 }, true));
+        CHECK(frame({ 8, 1 }, true));
+        tracker.setValid(previous, false);
+        CHECK(!tracker.pairValid(0));
+        tracker.resetForGraph(graph);         // rebuild
+        CHECK(!frame({ 8, 1 }, true));
+        const CompiledGraph resized = build(1280);
+        CHECK(resized.topologyHash() != graph.topologyHash());
+        tracker.resetForGraph(resized);       // resize
+        CHECK(!frame({ 8, 1 }, true));
+        CHECK(tracker.pairKey(0).extent.width == 1280);
+        CHECK(frame({ 8, 1 }, true));
+        CHECK(throwsBuildError([&] { tracker.markWritten(1); }));
+        return true;
+    }
+
     bool testDiscardedContentsAndStaleExportAreRejected() {
         {
             RenderGraphBuilder builder;
@@ -352,6 +477,8 @@ int main() {
         { "Read-before-write diagnostic", testReadBeforeWriteDiagnostic },
         { "Imported/exported states", testImportedAndExportedStates },
         { "History invalidation", testInvalidHistoryIsExplicit },
+        { "History pair declaration", testHistoryPairDeclaration },
+        { "History validity keys", testHistoryValidityKeys },
         { "Discarded content and stale export", testDiscardedContentsAndStaleExportAreRejected },
         { "Nonoverlap reuse", testNonoverlappingResourcesReuseSlot },
         { "Overlap and incompatibility", testOverlappingAndIncompatibleResourcesDoNotReuse },

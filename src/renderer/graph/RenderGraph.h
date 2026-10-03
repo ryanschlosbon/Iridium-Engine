@@ -149,6 +149,9 @@ namespace Iridium::RenderGraph {
     struct BufferDesc {
         uint64_t size = 0;
         uint32_t alignment = 1;
+        // Imported buffers only (R3b): `size` is the minimum; barriers cover the
+        // bound size, so capacity growth leaves the topology hash unchanged.
+        bool variableSize = false;
 
         friend constexpr bool operator==(const BufferDesc&, const BufferDesc&) = default;
     };
@@ -207,16 +210,36 @@ namespace Iridium::RenderGraph {
         StoreOp storeOp = StoreOp::Store;
     };
 
+    // R3b.10: the two logical halves of a History pair.
+    enum class HistoryRole : uint8_t {
+        None,
+        Previous,   // read-only: last frame's `current`
+        Current,    // written this frame
+    };
+
     struct CompiledResource {
         uint32_t logicalResourceIndex = InvalidIndex;
         std::string name;
         ResourceDesc desc{};
         uint32_t firstUse = InvalidIndex;
         uint32_t lastUse = InvalidIndex;
+        // Per-frame pool slot; InvalidIndex for imported and History-pair resources.
         uint32_t physicalSlot = InvalidIndex;
         UsageMask usages = 0;
         bool exported = false;
         Access finalAccess = Access::Undefined;
+        uint32_t historyPair = InvalidIndex;
+        HistoryRole historyRole = HistoryRole::None;
+    };
+
+    // A History pair: two linked logical resources over two non-reusable
+    // physical slots outside the per-frame pool (CompiledGraph::historySlots).
+    // Which slot is `current` alternates each frame the writer runs.
+    struct CompiledHistoryPair {
+        std::string name;
+        uint32_t previousLogical = InvalidIndex;
+        uint32_t currentLogical = InvalidIndex;
+        std::array<uint32_t, 2> slots{ InvalidIndex, InvalidIndex };
     };
 
     struct CompiledTransition {
@@ -262,6 +285,13 @@ namespace Iridium::RenderGraph {
         [[nodiscard]] const std::vector<HistoryResourceRecord>& historyResources() const noexcept {
             return m_historyResources;
         }
+        [[nodiscard]] const std::vector<CompiledHistoryPair>& historyPairs() const noexcept {
+            return m_historyPairs;
+        }
+        // Two per pair (pair p owns slots 2p and 2p+1); never in physicalSlots().
+        [[nodiscard]] const std::vector<PhysicalResourceSlot>& historySlots() const noexcept {
+            return m_historySlots;
+        }
 
     private:
         friend struct CompileResult;
@@ -275,6 +305,8 @@ namespace Iridium::RenderGraph {
         std::vector<CompiledTransition> m_transitions;
         std::vector<PhysicalResourceSlot> m_physicalSlots;
         std::vector<HistoryResourceRecord> m_historyResources;
+        std::vector<CompiledHistoryPair> m_historyPairs;
+        std::vector<PhysicalResourceSlot> m_historySlots;
     };
 
     struct CompileResult {
@@ -293,6 +325,16 @@ namespace Iridium::RenderGraph {
         void reset();
 
         [[nodiscard]] ResourceHandle createResource(std::string name,
+            const ResourceDesc& desc);
+        // R3b.10 History lifetime: "<name>.previous" (read-only, last frame's
+        // contents) and "<name>.current" (must be written before it is read).
+        // `desc` must not be imported; its lifetime becomes History.
+        struct HistoryHandles {
+            ResourceHandle previous;
+            ResourceHandle current;
+            uint32_t pair = InvalidIndex;
+        };
+        [[nodiscard]] HistoryHandles createHistory(std::string name,
             const ResourceDesc& desc);
         [[nodiscard]] PassHandle addPass(std::string name,
             QueueClass queue = QueueClass::Graphics);
@@ -317,6 +359,8 @@ namespace Iridium::RenderGraph {
         struct LogicalResourceRecord {
             std::string name;
             ResourceDesc desc{};
+            uint32_t historyPair = InvalidIndex;
+            HistoryRole historyRole = HistoryRole::None;
         };
 
         struct ResourceVersionRecord {
@@ -356,6 +400,7 @@ namespace Iridium::RenderGraph {
         std::vector<ResourceVersionRecord> m_resourceVersions;
         std::vector<UsageRecord> m_usages;
         std::vector<DependencyRecord> m_dependencies;
+        uint32_t m_historyPairCount = 0;
     };
 
     class CompiledGraphCache {
@@ -373,18 +418,66 @@ namespace Iridium::RenderGraph {
         size_t m_nextReplacement = 0;
     };
 
+    // The view a frame's History belongs to. `identity` is a stable view id
+    // (camera/viewport); bumping `resetRevision` discards history (cuts,
+    // teleports, settings changes).
+    struct ViewHistoryContext {
+        uint64_t identity = 0;
+        uint64_t resetRevision = 0;
+
+        friend constexpr bool operator==(const ViewHistoryContext&,
+            const ViewHistoryContext&) = default;
+    };
+
+    // A pair's previous contents are valid only under the key they were
+    // written with. Buffers use extent {low32(size), high32(size), 1}.
+    struct HistoryValidityKey {
+        uint64_t identity = 0;
+        uint64_t resetRevision = 0;
+        Extent3D extent{};
+        Format format = Format::Undefined;
+        uint64_t topologyHash = 0;
+
+        friend constexpr bool operator==(const HistoryValidityKey&,
+            const HistoryValidityKey&) = default;
+    };
+
     class HistoryValidityTracker {
     public:
+        // Also resets every History pair: nothing is valid after a rebuild.
         void resetForGraph(const CompiledGraph& graph);
         void invalidateAll() noexcept;
         void setValid(uint32_t logicalResourceIndex, bool valid);
+        // For a pair member this is the pair's validity (pairValid).
         [[nodiscard]] bool isValid(uint32_t logicalResourceIndex) const noexcept;
         [[nodiscard]] uint64_t topologyHash() const noexcept { return m_topologyHash; }
 
+        // Pair lifetime (R3b.10). A pair's previous contents are valid in a
+        // frame iff its writer ran in the immediately preceding frame under an
+        // identical key; beginFrame invalidates on any key change.
+        void beginFrame(const ViewHistoryContext& view);
+        void markWritten(uint32_t pair);
+        void endFrame() noexcept;
+        [[nodiscard]] bool pairValid(uint32_t pair) const noexcept;
+        [[nodiscard]] size_t pairCount() const noexcept { return m_pairs.size(); }
+        [[nodiscard]] const HistoryValidityKey& pairKey(uint32_t pair) const;
+
     private:
+        struct PairState {
+            Extent3D extent{};
+            Format format = Format::Undefined;
+            HistoryValidityKey key{};
+            bool keyed = false;
+            bool valid = false;
+            bool written = false;
+            bool writtenLastFrame = false;
+        };
+
         uint64_t m_topologyHash = 0;
         std::vector<uint8_t> m_validity;
         std::vector<uint8_t> m_isHistory;
+        std::vector<uint32_t> m_pairOfLogical;
+        std::vector<PairState> m_pairs;
     };
 
 } // namespace Iridium::RenderGraph

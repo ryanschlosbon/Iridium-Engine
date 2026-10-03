@@ -115,6 +115,41 @@ namespace Iridium {
         uint64_t committedBytes = 0;
         uint64_t rebuildCount = 0;
         uint64_t cacheMissCount = 0;
+        // History-pair slots (two per pair, global; included in the bytes).
+        uint32_t historySlotCount = 0;
+    };
+
+    // bindExternalImage target for a binding shared by every frame slot; its
+    // tracked state persists across slots (persistent and history-like imports).
+    inline constexpr uint32_t VulkanGlobalBinding = UINT32_MAX;
+
+    enum class ExternalSyncMode : uint8_t {
+        // The executor emits the barriers and tracks the state (default).
+        ExecutorOwned,
+        // No barriers: a render pass transitions the image. Each writing pass
+        // asserts the tracked state is `initial` and leaves it `final`; reading
+        // passes assert the tracked layout matches their access. Swapchain
+        // (Undefined -> Present) and shadow maps (SampledRead both ways).
+        RenderPassManaged,
+        // Declared for ordering only; the owning pass records its own barriers.
+        OwnerManaged,
+    };
+
+    struct ExternalSyncPolicy {
+        ExternalSyncMode mode = ExternalSyncMode::ExecutorOwned;
+        RenderGraph::Access initial = RenderGraph::Access::Undefined;
+        RenderGraph::Access final = RenderGraph::Access::Undefined;
+
+        [[nodiscard]] static constexpr ExternalSyncPolicy executorOwned() noexcept {
+            return {};
+        }
+        [[nodiscard]] static constexpr ExternalSyncPolicy renderPassManaged(
+            RenderGraph::Access initial, RenderGraph::Access final) noexcept {
+            return { ExternalSyncMode::RenderPassManaged, initial, final };
+        }
+        [[nodiscard]] static constexpr ExternalSyncPolicy ownerManaged() noexcept {
+            return { ExternalSyncMode::OwnerManaged };
+        }
     };
 
     // M7R R3b: the executor records every graph barrier through this seam.
@@ -218,6 +253,7 @@ namespace Iridium {
     class VulkanRenderGraphExecutor final {
     public:
         VulkanRenderGraphExecutor() = default;
+        ~VulkanRenderGraphExecutor();
         VulkanRenderGraphExecutor(const VulkanRenderGraphExecutor&) = delete;
         VulkanRenderGraphExecutor& operator=(const VulkanRenderGraphExecutor&) = delete;
 
@@ -233,9 +269,29 @@ namespace Iridium {
         void rebuild(RenderGraph::CompiledGraph graph);
         void onFrameFenceCompleted(uint32_t frameIndex);
         [[nodiscard]] bool validateFrame(uint32_t frameIndex) noexcept;
+        // The single-argument form reuses the last view context (initially
+        // {0, 0}), so it never invalidates History by itself.
         void beginFrameExecution(uint32_t frameIndex);
+        // R3b.10: History validity is re-keyed per frame; a key change (view
+        // identity, reset revision, extent, format, topology) invalidates.
+        void beginFrameExecution(uint32_t frameIndex,
+            const RenderGraph::ViewHistoryContext& view);
+        // Whether `id`'s History pair holds valid previous contents this frame.
+        // An invalid `previous` is transitioned from UNDEFINED on first use.
+        [[nodiscard]] bool historyValid(RenderGraph::GraphResourceId id) const;
+        // Non-owning imported image (R3b.6 wires the production imports).
+        // frameOrGlobal is a frame slot (bind after its fence retired) or
+        // VulkanGlobalBinding (bind outside frame execution). `current` is the
+        // image's state now; the binding's tracked state then follows `policy`.
+        void bindExternalImage(uint32_t frameOrGlobal, RenderGraph::GraphResourceId id,
+            const VulkanImageResource& image, RenderGraph::Access current,
+            ExternalSyncPolicy policy = {});
+        [[nodiscard]] RenderGraph::Access externalImageAccess(uint32_t frameOrGlobal,
+            RenderGraph::GraphResourceId id) const;
         // Non-owning, opt-in synchronization for persistent per-slot buffers.
         // Bind only after the slot fence retires; handles must be slot-distinct.
+        // `size` must cover the declared size; for a variableSize declaration
+        // the barriers cover the bound size.
         void bindExternalBuffer(uint32_t frameIndex, std::string_view logicalName,
             VkBuffer buffer, VkDeviceSize size,
             RenderGraph::Access initialAccess = RenderGraph::Access::Undefined);
@@ -368,6 +424,32 @@ namespace Iridium {
         bool inCallback_ = false;
         uint32_t openGroup_ = RenderGraph::InvalidIndex;
         VulkanGpuRangeToken groupToken_{};
+        // History lifetime (R3b.10). Slots are global (not per frame slot);
+        // their access state persists across frame slots.
+        VulkanGraphResourceFactory* factory_ = nullptr;
+        std::vector<VulkanGraphPhysicalResource> historyResources_;
+        std::vector<RenderGraph::Access> historyAccess_;
+        std::vector<uint8_t> historyParity_;        // slot most recently written
+        std::vector<uint8_t> historyWriterBegun_;   // this frame
+        std::vector<uint8_t> historyDiscarded_;     // invalid previous already UNDEFINED
+        std::vector<uint32_t> passHistoryWrites_;   // pairs written, flat by pass
+        std::vector<uint32_t> passHistoryWriteFirst_;   // passCount + 1 offsets
+        struct RetiredHistory {
+            VulkanGraphPhysicalResource resource;
+            uint32_t pendingFrames = 0;   // bit per frame slot still to retire
+        };
+        std::vector<RetiredHistory> retiredHistory_;
+        RenderGraph::HistoryValidityTracker historyValidity_;
+        RenderGraph::ViewHistoryContext lastView_{};
+        struct ExternalImageBinding {
+            VulkanImageResource image{};
+            RenderGraph::Access access = RenderGraph::Access::Undefined;
+            ExternalSyncPolicy policy{};
+            bool bound = false;
+        };
+        // [frameCount + 1][logical]; the last row holds global bindings.
+        std::vector<std::vector<ExternalImageBinding>> externalImages_;
+        std::vector<uint8_t> externalImageScope_;   // 0 none, 1 per frame, 2 global
 
         [[nodiscard]] const RenderGraph::CompiledGraph& executingGraph() const;
         [[nodiscard]] const RenderGraph::CompiledGraph& boundGraph() const;
@@ -383,6 +465,14 @@ namespace Iridium {
         void drainRegisteredBefore(uint32_t passOrder);
         void drainRegisteredAtCursor();
         void runRegisteredPass(uint32_t passOrder);
+        [[nodiscard]] uint32_t historySlot(const RenderGraph::CompiledResource& resource) const noexcept;
+        void queueHistoryUsage(const RenderGraph::CompiledResource& resource,
+            RenderGraph::Access access);
+        void queueExternalImageUsage(ExternalImageBinding& binding,
+            const RenderGraph::CompiledUsage& usage);
+        [[nodiscard]] const ExternalImageBinding* externalImageBinding(
+            uint32_t frameIndex, uint32_t logical) const noexcept;
+        void destroyHistoryResources() noexcept;
     };
 
 } // namespace Iridium
