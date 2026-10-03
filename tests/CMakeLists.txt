@@ -201,6 +201,12 @@ iridium_add_test(RenderGraphTests
         SOURCES renderer/RenderGraphTests.cpp
         LIBS iridium_graph)
 
+# M7R R4b.3: the backend-neutral transient-memory aliasing planner, on
+# synthetic graphs and the production topologies (CPU only).
+iridium_add_test(RenderGraphAliasingTests
+        SOURCES renderer/RenderGraphAliasingTests.cpp
+        LIBS iridium_vulkan)
+
 iridium_add_executable(RenderGraphBenchmark
         SOURCES renderer/RenderGraphBenchmark.cpp
         LIBS iridium_graph

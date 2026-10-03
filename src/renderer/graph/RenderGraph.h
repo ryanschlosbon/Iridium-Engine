@@ -265,6 +265,25 @@ namespace Iridium::RenderGraph {
         Current,    // written this frame
     };
 
+    // R4b.3: whether a logical resource's memory may be aliased with other
+    // transients (RenderGraphAliasing.h). Only Eligible resources are placed;
+    // every other value names the first rule that excludes the resource.
+    enum class AliasEligibility : uint8_t {
+        Eligible,
+        Unused,          // never used by a pass
+        Imported,        // External lifetime: memory owned outside the graph
+        History,         // a History pair member (persists across frames)
+        NotTransient,    // Persistent lifetime
+        Exported,        // contents leave the graph
+        Buffer,          // buffers stay dedicated (images only for now)
+        // The first use neither clears nor is a declared whole-resource
+        // DontCare write (RenderGraphBuilder::declareWholeResourceWrite), so
+        // the first user could observe the previous occupant's bytes.
+        FirstUseNotDiscard,
+    };
+
+    [[nodiscard]] const char* aliasEligibilityName(AliasEligibility eligibility) noexcept;
+
     struct CompiledResource {
         uint32_t logicalResourceIndex = InvalidIndex;
         std::string name;
@@ -278,6 +297,8 @@ namespace Iridium::RenderGraph {
         Access finalAccess = Access::Undefined;
         uint32_t historyPair = InvalidIndex;
         HistoryRole historyRole = HistoryRole::None;
+        // R4b.3: computed for every compile, whatever CompileOptions say.
+        AliasEligibility aliasEligibility = AliasEligibility::Unused;
     };
 
     // A History pair: two linked logical resources over two non-reusable
@@ -305,6 +326,10 @@ namespace Iridium::RenderGraph {
         UsageMask usages = 0;
         uint32_t lastUse = InvalidIndex;
         bool transientReusable = false;
+        // R4b.3 (CompileOptions::transientAliasing only): the slot holds exactly
+        // one aliasing-eligible transient image, whose memory the aliasing
+        // planner places in an alias heap instead of a dedicated allocation.
+        bool aliased = false;
         std::vector<uint32_t> logicalResources;
     };
 
@@ -357,6 +382,15 @@ namespace Iridium::RenderGraph {
         std::vector<PhysicalResourceSlot> m_historySlots;
     };
 
+    struct CompileOptions {
+        // R4b.3: give every aliasing-eligible transient image its own physical
+        // slot (PhysicalResourceSlot::aliased) so the aliasing planner can share
+        // memory between them; exact-descriptor slot reuse then applies only to
+        // the remaining transients. Off (the default) compiles exactly as
+        // before. Part of the topology hash only when set.
+        bool transientAliasing = false;
+    };
+
     struct CompileResult {
         std::optional<CompiledGraph> graph;
         std::vector<GraphDiagnostic> diagnostics;
@@ -400,8 +434,15 @@ namespace Iridium::RenderGraph {
             StoreOp storeOp, const ClearValue& clearValue);
         void addDependency(PassHandle before, PassHandle after);
         void exportResource(ResourceHandle resource, Access finalAccess);
+        // R4b.3: asserts that the write producing `writtenVersion` overwrites
+        // every texel of every subresource before anything (including the
+        // writing pass itself) reads it, so the previous contents never matter.
+        // A transient image whose first use is such a write may be aliased.
+        // The write must not load (LoadOp::Load). Hashed only when declared.
+        void declareWholeResourceWrite(ResourceHandle writtenVersion);
 
         [[nodiscard]] CompileResult compile() const;
+        [[nodiscard]] CompileResult compile(const CompileOptions& options) const;
         [[nodiscard]] uint32_t generation() const noexcept { return m_generation; }
 
     private:
@@ -424,6 +465,7 @@ namespace Iridium::RenderGraph {
             bool preservePrevious = false;
             bool exported = false;
             Access finalAccess = Access::Undefined;
+            bool wholeResourceWrite = false;
         };
 
         struct UsageRecord {

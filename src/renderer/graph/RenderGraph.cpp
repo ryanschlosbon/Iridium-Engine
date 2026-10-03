@@ -110,7 +110,51 @@ namespace {
             desc.lifetime == ResourceLifetime::History;
     }
 
+    // The first usage of a logical resource in compiled order. A pass holds at
+    // most one usage of a resource whose first use is a write (a second write
+    // or a read of its own product would be a self-dependency).
+    struct FirstUsage {
+        bool seen = false;
+        bool write = false;
+        LoadOp loadOp = LoadOp::DontCare;
+        bool wholeResource = false;
+    };
+
+    AliasEligibility classifyAliasing(const CompiledResource& resource,
+        const FirstUsage& first) noexcept {
+        if (resource.firstUse == InvalidIndex || !first.seen)
+            return AliasEligibility::Unused;
+        if (resource.desc.imported ||
+            resource.desc.lifetime == ResourceLifetime::External)
+            return AliasEligibility::Imported;
+        if (resource.historyPair != InvalidIndex ||
+            resource.desc.lifetime == ResourceLifetime::History)
+            return AliasEligibility::History;
+        if (resource.desc.lifetime != ResourceLifetime::Transient)
+            return AliasEligibility::NotTransient;
+        if (resource.exported) return AliasEligibility::Exported;
+        if (resource.desc.type != ResourceType::Image) return AliasEligibility::Buffer;
+        const bool discards = first.write && (first.loadOp == LoadOp::Clear ||
+            (first.loadOp == LoadOp::DontCare && first.wholeResource));
+        return discards ? AliasEligibility::Eligible
+                        : AliasEligibility::FirstUseNotDiscard;
+    }
+
 } // namespace
+
+const char* aliasEligibilityName(AliasEligibility eligibility) noexcept {
+    switch (eligibility) {
+    case AliasEligibility::Eligible: return "eligible";
+    case AliasEligibility::Unused: return "unused";
+    case AliasEligibility::Imported: return "imported";
+    case AliasEligibility::History: return "history";
+    case AliasEligibility::NotTransient: return "not-transient";
+    case AliasEligibility::Exported: return "exported";
+    case AliasEligibility::Buffer: return "buffer";
+    case AliasEligibility::FirstUseNotDiscard: return "first-use-not-discard";
+    }
+    return "invalid";
+}
 
 RenderGraphBuilder::RenderGraphBuilder(GraphCapacity capacity)
     : m_capacity(capacity) {
@@ -280,6 +324,20 @@ void RenderGraphBuilder::exportResource(ResourceHandle resource,
     version.finalAccess = finalAccess;
 }
 
+void RenderGraphBuilder::declareWholeResourceWrite(ResourceHandle writtenVersion) {
+    validate(writtenVersion);
+    ResourceVersionRecord& version = m_resourceVersions[writtenVersion.index];
+    if (version.producerPassIndex == InvalidIndex) {
+        throw GraphBuildError(
+            "Whole-resource write declaration requires a written version");
+    }
+    if (version.preservePrevious) {
+        throw GraphBuildError(
+            "A whole-resource write cannot load its previous contents");
+    }
+    version.wholeResourceWrite = true;
+}
+
 void RenderGraphBuilder::validate(PassHandle pass) const {
     if (pass.generation != m_generation || pass.index >= m_passes.size()) {
         throw GraphBuildError("Stale or invalid render graph pass handle");
@@ -334,7 +392,8 @@ void RenderGraphBuilder::requireCapacity(bool condition,
 }
 
 struct CompilerAccess {
-    static CompileResult compile(const RenderGraphBuilder& builder) {
+    static CompileResult compile(const RenderGraphBuilder& builder,
+        const CompileOptions& options) {
         CompileResult result;
         const uint32_t passCount = static_cast<uint32_t>(builder.m_passes.size());
         const uint32_t logicalCount =
@@ -533,6 +592,7 @@ struct CompilerAccess {
         }
 
         graph.m_usages.reserve(builder.m_usages.size());
+        std::vector<FirstUsage> firstUsages(logicalCount);
         for (uint32_t orderIndex = 0; orderIndex < passCount; ++orderIndex) {
             CompiledPass& pass = graph.m_passes[orderIndex];
             pass.firstUsage = static_cast<uint32_t>(graph.m_usages.size());
@@ -540,8 +600,14 @@ struct CompilerAccess {
                 if (usage.passIndex != pass.sourcePassIndex) {
                     continue;
                 }
-                const uint32_t logicalIndex = builder.m_resourceVersions[
-                    usage.resourceVersionIndex].logicalResourceIndex;
+                const auto& usageVersion =
+                    builder.m_resourceVersions[usage.resourceVersionIndex];
+                const uint32_t logicalIndex = usageVersion.logicalResourceIndex;
+                FirstUsage& first = firstUsages[logicalIndex];
+                if (!first.seen) {
+                    first = { true, usage.write, usage.loadOp,
+                        usage.write && usageVersion.wholeResourceWrite };
+                }
                 // R4a: a read-only depth attachment preserves its contents
                 // (LOAD) and is never stored (NONE).
                 const bool readOnlyDepth = !usage.write &&
@@ -583,6 +649,11 @@ struct CompilerAccess {
             }
         }
 
+        for (CompiledResource& resource : graph.m_resources) {
+            resource.aliasEligibility = classifyAliasing(resource,
+                firstUsages[resource.logicalResourceIndex]);
+        }
+
         std::vector<uint32_t> reusableResources;
         reusableResources.reserve(logicalCount);
         for (CompiledResource& resource : graph.m_resources) {
@@ -592,7 +663,11 @@ struct CompilerAccess {
                 resource.historyPair != InvalidIndex) {
                 continue;
             }
-            if (resource.desc.lifetime == ResourceLifetime::Transient &&
+            // R4b.3: with transient aliasing, an eligible image keeps its own
+            // slot; the aliasing planner shares its memory instead.
+            const bool aliased = options.transientAliasing &&
+                resource.aliasEligibility == AliasEligibility::Eligible;
+            if (!aliased && resource.desc.lifetime == ResourceLifetime::Transient &&
                 !resource.exported) {
                 reusableResources.push_back(resource.logicalResourceIndex);
                 continue;
@@ -606,6 +681,7 @@ struct CompilerAccess {
             slot.usages = resource.usages;
             slot.lastUse = resource.lastUse;
             slot.transientReusable = false;
+            slot.aliased = aliased;
             slot.logicalResources.push_back(resource.logicalResourceIndex);
             resource.physicalSlot = slot.slotIndex;
             graph.m_physicalSlots.push_back(std::move(slot));
@@ -707,6 +783,11 @@ struct CompilerAccess {
             hashValue(hash, preserve);
             hashValue(hash, exported);
             hashValue(hash, version.finalAccess);
+            // R4b.3: hashed only when declared, so other graphs keep their hashes.
+            if (version.wholeResourceWrite) {
+                const uint8_t wholeResource = 0x57;
+                hashValue(hash, wholeResource);
+            }
         }
         for (const auto& usage : builder.m_usages) {
             hashValue(hash, usage.passIndex);
@@ -724,6 +805,12 @@ struct CompilerAccess {
             hashValue(hash, dependency.beforePassIndex);
             hashValue(hash, dependency.afterPassIndex);
         }
+        // R4b.3: aliased slots are a different physical layout; hashed only
+        // when on, so the default compile keeps its hash.
+        if (options.transientAliasing) {
+            const uint8_t transientAliasing = 0xA1;
+            hashValue(hash, transientAliasing);
+        }
         graph.m_topologyHash = hash == 0 ? 1 : hash;
         result.graph = std::move(graph);
         return result;
@@ -731,7 +818,11 @@ struct CompilerAccess {
 };
 
 CompileResult RenderGraphBuilder::compile() const {
-    return CompilerAccess::compile(*this);
+    return CompilerAccess::compile(*this, CompileOptions{});
+}
+
+CompileResult RenderGraphBuilder::compile(const CompileOptions& options) const {
+    return CompilerAccess::compile(*this, options);
 }
 
 void CompiledGraphCache::store(CompiledGraph graph) {
