@@ -1429,8 +1429,8 @@ namespace Iridium {
             break;
         }
         info.uploadQueueKind = uploadContext.usesTransferQueue()
-            ? std::string(vulkanTransferQueueKindName(vkContext->getTransferQueueKind()))
-            : std::string("graphics");
+            ? vulkanTransferQueueKindName(vkContext->getTransferQueueKind())
+            : std::string_view("graphics");
         info.uploadQueueFamily = uploadContext.usesTransferQueue()
             ? uploadContext.transferQueueFamily() : vkContext->getGraphicsQueueFamily();
         info.uploadStagingRingBytes = uploadContext.stagingRingBytes();

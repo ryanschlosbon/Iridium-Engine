@@ -5,6 +5,7 @@
 #include <array>
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace Iridium {
@@ -91,9 +92,10 @@ namespace Iridium {
         uint64_t pipelineCacheLoadedBytes = 0;
         // M7R R4d (--upload-queue): the mode in effect, the queue family
         // fresh uploads use and its kind (dedicated-transfer, async-compute or
-        // graphics), and the staging ring size (0 in legacy-blocking).
-        std::string uploadQueueMode = "legacy-blocking";
-        std::string uploadQueueKind = "graphics";
+        // graphics), and the staging ring size (0 in legacy-blocking). Static
+        // names: qualification validators read this struct every frame.
+        std::string_view uploadQueueMode = "legacy-blocking";
+        std::string_view uploadQueueKind = "graphics";
         uint32_t uploadQueueFamily = 0;
         uint64_t uploadStagingRingBytes = 0;
         uint32_t gpuLightCapacity = 0;

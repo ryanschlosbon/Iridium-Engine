@@ -473,8 +473,8 @@ namespace Iridium {
             runtimeInfo_.frameTopologyPrewarmChanged;
         metadata.pipelineCacheState = runtimeInfo_.pipelineCacheState;
         metadata.pipelineCacheLoadedBytes = runtimeInfo_.pipelineCacheLoadedBytes;
-        metadata.uploadQueueMode = runtimeInfo_.uploadQueueMode;
-        metadata.uploadQueueKind = runtimeInfo_.uploadQueueKind;
+        metadata.uploadQueueMode = std::string(runtimeInfo_.uploadQueueMode);
+        metadata.uploadQueueKind = std::string(runtimeInfo_.uploadQueueKind);
         metadata.uploadQueueFamily = runtimeInfo_.uploadQueueFamily;
         metadata.uploadStagingRingBytes = runtimeInfo_.uploadStagingRingBytes;
         metadata.uploadStagingRingWaits = runtimeInfo_.uploads.stagingRingWaits;
