@@ -27,14 +27,15 @@ namespace Iridium {
             throw std::runtime_error(
                 "Vulkan uniform-buffer range cannot hold the spot shadow table");
         }
-        spot_.init(context.device, context.allocator, context.uploads,
+        spot_.init(context.device, context.pipelineCache, context.allocator, context.uploads,
             context.descriptors, materialLayout, samplerLayout, gpuSceneLayout,
             spotAtlasResolution_);
         if (setup_.indirectLayout == VK_NULL_HANDLE)
             throw std::logic_error(
                 "spot-shadow indirect resources require the shared shadow layout");
         spotCuller_.init(setup_.services, IndirectViewKind::SpotShadow,
-            createIndirectViewPipeline(context.device, IndirectViewKind::SpotShadow,
+            createIndirectViewPipeline(context.device, context.pipelineCache,
+                IndirectViewKind::SpotShadow,
                 spot_.renderSetLayout(), gpuSceneLayout, setup_.indirectLayout),
             setup_.indirectLayout,
             activeIndirectOracle(context.extensions, VulkanIndirectOracleView::SpotShadow));
@@ -44,14 +45,15 @@ namespace Iridium {
             throw std::runtime_error(
                 "Vulkan uniform-buffer range cannot hold the point shadow table");
         }
-        point_.init(context.device, context.allocator, context.uploads,
+        point_.init(context.device, context.pipelineCache, context.allocator, context.uploads,
             context.descriptors, materialLayout, samplerLayout, gpuSceneLayout,
             pointPoolCapacities_);
         if (setup_.indirectLayout == VK_NULL_HANDLE)
             throw std::logic_error(
                 "point-shadow indirect resources require the shared shadow layout");
         pointCuller_.init(setup_.services, IndirectViewKind::PointShadow,
-            createIndirectViewPipeline(context.device, IndirectViewKind::PointShadow,
+            createIndirectViewPipeline(context.device, context.pipelineCache,
+                IndirectViewKind::PointShadow,
                 point_.renderSetLayout(), gpuSceneLayout, setup_.indirectLayout),
             setup_.indirectLayout,
             activeIndirectOracle(context.extensions, VulkanIndirectOracleView::PointShadow));

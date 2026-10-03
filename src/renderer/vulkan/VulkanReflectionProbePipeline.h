@@ -18,7 +18,7 @@ namespace Iridium {
             const VulkanReflectionProbePipeline&) = delete;
         ~VulkanReflectionProbePipeline();
 
-        void init(VkDevice device, ::DescriptorAllocator& allocator);
+        void init(VkDevice device, VkPipelineCache pipelineCache, ::DescriptorAllocator& allocator);
         void rebuildDescriptors(
             std::span<const VkDescriptorBufferInfo> records,
             std::span<const VkDescriptorBufferInfo> activeSlots,
@@ -40,6 +40,7 @@ namespace Iridium {
 
     private:
         VkDevice device_ = VK_NULL_HANDLE;
+        VkPipelineCache pipelineCache_ = VK_NULL_HANDLE;
         ::DescriptorAllocator* allocator_ = nullptr;
         VkDescriptorSetLayout descriptorSetLayout_ = VK_NULL_HANDLE;
         VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;

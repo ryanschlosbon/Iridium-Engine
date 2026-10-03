@@ -19,20 +19,22 @@
 namespace Iridium {
 
     void VulkanShadowFeature::initVirtualShadows(VkDevice device,
-        VulkanResourceAllocator& allocator, const VkPhysicalDeviceLimits& limits,
+        VkPipelineCache pipelineCache, VulkanResourceAllocator& allocator,
+        const VkPhysicalDeviceLimits& limits,
         const VirtualShadowResourceConfig& config) {
         clipPageSize_ = config.pageSizeTexels;
-        virtualShadows_.init(device, allocator, limits, config, FrameCount);
+        virtualShadows_.init(device, pipelineCache, allocator, limits, config,
+            FrameCount);
     }
 
     void VulkanShadowFeature::create(const VulkanFeatureContext& context) {
         context_ = &context;
-        map_.init(context.device, context.allocator, context.uploads,
+        map_.init(context.device, context.pipelineCache, context.allocator, context.uploads,
             context.descriptors, context.resources.textureTable().materialViewLayout(),
             context.resources.textureTable().samplerLayout(),
             context.meshLayouts.getGpuSceneSetLayout(), resolution_);
         culler_.init(setup_.services, IndirectViewKind::DirectionalShadow,
-            createIndirectViewPipeline(context.device,
+            createIndirectViewPipeline(context.device, context.pipelineCache,
                 IndirectViewKind::DirectionalShadow, map_.renderSetLayout(),
                 context.meshLayouts.getGpuSceneSetLayout(), setup_.indirectLayout),
             setup_.indirectLayout,

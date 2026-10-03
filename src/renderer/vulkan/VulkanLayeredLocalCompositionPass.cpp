@@ -22,7 +22,7 @@ namespace {
 
 } // namespace
 
-void VulkanLayeredLocalCompositionPass::init(VkDevice device,
+void VulkanLayeredLocalCompositionPass::init(VkDevice device, VkPipelineCache pipelineCache,
     ::DescriptorAllocator& descriptors, VkDescriptorSetLayout globalLayout,
     VkDescriptorSetLayout materialLayout,
     VkDescriptorSetLayout samplerLayout,
@@ -34,6 +34,7 @@ void VulkanLayeredLocalCompositionPass::init(VkDevice device,
             "Invalid layered local-composition initialization");
     }
     device_ = device;
+    pipelineCache_ = pipelineCache;
     descriptors_ = &descriptors;
     try {
         std::array<VkDescriptorSetLayoutBinding, 4> bindings{};
@@ -195,7 +196,7 @@ VkPipeline VulkanLayeredLocalCompositionPass::createPipeline(
         pipelineInfo.pNext = &rendering;
         pipelineInfo.renderPass = VK_NULL_HANDLE;
         VkPipeline pipeline = VK_NULL_HANDLE;
-        requireSuccess(vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1u,
+        requireSuccess(vkCreateGraphicsPipelines(device_, pipelineCache_, 1u,
             &pipelineInfo, nullptr, &pipeline),
             "vkCreateGraphicsPipelines(layered local composition)");
         vkDestroyShaderModule(device_, fragment, nullptr);

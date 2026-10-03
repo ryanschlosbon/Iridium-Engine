@@ -46,6 +46,8 @@ namespace Iridium {
         VkDevice device = VK_NULL_HANDLE;
         uint32_t queueFamily = 0;
         VkQueue queue = VK_NULL_HANDLE;
+        // R4c.4: the backend's persisted pipeline cache (may be null).
+        VkPipelineCache pipelineCache = VK_NULL_HANDLE;
         VulkanResourceAllocator* allocator = nullptr;
         VulkanFrameScheduler* scheduler = nullptr;
         VulkanFrameTargets* frameTargets = nullptr;

@@ -12,12 +12,14 @@ void require(VkResult result) {
     if (result != VK_SUCCESS) throw std::runtime_error("Depth pyramid Vulkan failure: " + std::to_string(result));
 }
 }
-void VulkanDepthPyramid::init(VkDevice device, ::DescriptorAllocator& descriptors,
+void VulkanDepthPyramid::init(VkDevice device, VkPipelineCache pipelineCache,
+    ::DescriptorAllocator& descriptors,
     VulkanResourceAllocator& resources, VkDescriptorSetLayout globalLayout,
     VkDescriptorSetLayout gpuSceneLayout) {
     if (!device || device_ || !globalLayout || !gpuSceneLayout)
         throw std::logic_error("Invalid depth pyramid initialization");
     device_ = device;
+    pipelineCache_ = pipelineCache;
     descriptorAllocator_ = &descriptors;
     resourceAllocator_ = &resources;
     try {
@@ -39,7 +41,7 @@ void VulkanDepthPyramid::init(VkDevice device, ::DescriptorAllocator& descriptor
         VkComputePipelineCreateInfo compute{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
         compute.stage = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,nullptr,0,VK_SHADER_STAGE_COMPUTE_BIT,shader,"main",nullptr};
         compute.layout = layout_;
-        const auto result = vkCreateComputePipelines(device_,VK_NULL_HANDLE,1,&compute,nullptr,&pipeline_);
+        const auto result = vkCreateComputePipelines(device_,pipelineCache_,1,&compute,nullptr,&pipeline_);
         vkDestroyShaderModule(device_,shader,nullptr); require(result);
 
         const std::array queryBindings{
@@ -68,7 +70,7 @@ void VulkanDepthPyramid::init(VkDevice device, ::DescriptorAllocator& descriptor
             nullptr,0,VK_SHADER_STAGE_COMPUTE_BIT,shader,"main",nullptr};
         compute.layout = queryLayout_;
         const auto queryResult = vkCreateComputePipelines(device_,
-            VK_NULL_HANDLE,1,&compute,nullptr,&queryPipeline_);
+            pipelineCache_,1,&compute,nullptr,&queryPipeline_);
         vkDestroyShaderModule(device_,shader,nullptr); require(queryResult);
 
         const std::array gpuSceneQueryBindings{
@@ -106,7 +108,7 @@ void VulkanDepthPyramid::init(VkDevice device, ::DescriptorAllocator& descriptor
             nullptr,0,VK_SHADER_STAGE_COMPUTE_BIT,shader,"main",nullptr};
         compute.layout = gpuSceneQueryLayout_;
         const auto gpuSceneQueryResult = vkCreateComputePipelines(device_,
-            VK_NULL_HANDLE,1,&compute,nullptr,&gpuSceneQueryPipeline_);
+            pipelineCache_,1,&compute,nullptr,&gpuSceneQueryPipeline_);
         vkDestroyShaderModule(device_,shader,nullptr);
         require(gpuSceneQueryResult);
         VkSamplerCreateInfo sampler{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};

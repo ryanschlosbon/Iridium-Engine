@@ -52,16 +52,17 @@ namespace Iridium {
                     VulkanIndirectOracleView::DepthOcclusion),
                 .depthPyramid = &depthPyramid_,
             },
-            createOpaqueCullPipelines(context.device,
+            createOpaqueCullPipelines(context.device, context.pipelineCache,
                 settings_.depthOcclusionRejection,
                 context.meshLayouts.getGlobalSetLayout(),
                 context.meshLayouts.getGpuSceneSetLayout()));
-        if (settings_.depthPyramid) depthPyramid_.init(context.device,
+        if (settings_.depthPyramid) depthPyramid_.init(context.device, context.pipelineCache,
             context.descriptors, context.allocator,
             context.meshLayouts.getGlobalSetLayout(),
             context.meshLayouts.getGpuSceneSetLayout());
         // The fixed wireframe/selection pipelines never read the swapchain.
-        gBufferPipeline_ = std::make_unique<VkGraphicsPipeline>(&context.vk, nullptr,
+        gBufferPipeline_ = std::make_unique<VkGraphicsPipeline>(&context.vk,
+            context.pipelineCache, nullptr,
             context.meshLayouts.getGBufferPipelineLayout(), settings_.gBufferLayout);
     }
 

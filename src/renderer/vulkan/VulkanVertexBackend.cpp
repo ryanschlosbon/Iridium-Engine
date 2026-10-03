@@ -194,6 +194,10 @@ namespace Iridium {
             config.enableGpuProfiling,
             config.enableTransparentPipelineStatistics, window,
             config.enableValidation && config.enableSynchronizationValidation);
+        // R4c.4: before any pipeline is created.
+        pipelineCache_.init(vkContext->getDevice(),
+            VulkanPipelineCacheIdentity::of(vkContext->getPhysicalDevice()),
+            config.pipelineCacheDirectory);
         if (!vkContext->hasDescriptorIndexing()) {
             throw std::runtime_error(
                 "Indexed material descriptors are required for the production path, "
@@ -206,7 +210,8 @@ namespace Iridium {
         // resources.
         if (config.experimentalVirtualShadowResources ||
             activeIndirectOracle(VulkanIndirectOracleView::VirtualShadowDepth)) {
-            shadows_.initVirtualShadows(vkContext->getDevice(), resourceAllocator,
+            shadows_.initVirtualShadows(vkContext->getDevice(),
+                pipelineCache_.handle(), resourceAllocator,
                 vkContext->getPhysicalDeviceProperties().limits,
                 config.virtualShadowResources);
         }
@@ -242,6 +247,7 @@ namespace Iridium {
         featureContext_.emplace(VulkanFeatureContext{
             .vk = *vkContext,
             .device = vkContext->getDevice(),
+            .pipelineCache = pipelineCache_.handle(),
             .allocator = resourceAllocator,
             .uploads = uploadContext,
             .descriptors = descriptorAllocator,
@@ -384,7 +390,7 @@ namespace Iridium {
         opaque_.create(*featureContext_);
 
         // R4a: material pipelines use dynamic rendering (formats + layout).
-        pipelineLibrary.init(vkContext->getDevice(),
+        pipelineLibrary.init(vkContext->getDevice(), pipelineCache_.handle(),
             { vulkanGBufferColorAttachmentFormats(gBufferLayout_),
                 vulkanGBufferFormats(gBufferLayout_).colorAttachmentCount,
                 VK_FORMAT_D32_SFLOAT, meshLayouts.getGBufferPipelineLayout() },
@@ -465,6 +471,7 @@ namespace Iridium {
                 .device = vkContext->getDevice(),
                 .queueFamily = vkContext->getGraphicsQueueFamily(),
                 .queue = vkContext->getGraphicsQueue(),
+                .pipelineCache = pipelineCache_.handle(),
                 .allocator = &resourceAllocator,
                 .scheduler = &scheduler,
                 .frameTargets = &frameTargets,
@@ -620,6 +627,9 @@ namespace Iridium {
         resourceAllocator.cleanup();
 
         vkSwapchain.reset();
+        // R4c.4: every pipeline is destroyed and the device is idle.
+        pipelineCache_.save();
+        pipelineCache_.destroy();
         vkContext.reset();
         initialized_ = false;
         frameOpen_ = false;
@@ -1357,6 +1367,9 @@ namespace Iridium {
         info.frameTopologyPrewarmChanged = frameTopologyPrewarm_.changed;
         info.frameTopologyPrewarmNanoseconds =
             frameTopologyPrewarm_.durationNanoseconds;
+        info.pipelineCacheState =
+            std::string(pipelineCacheStateName(pipelineCache_.stats().state));
+        info.pipelineCacheLoadedBytes = pipelineCache_.stats().loadedBytes;
         const LightingUploadTelemetry lightUploads = clusterLighting_.uploadTelemetry();
         info.gpuLightCapacity = lightUploads.capacity;
         info.gpuLightActiveCount = lightUploads.activeLights;

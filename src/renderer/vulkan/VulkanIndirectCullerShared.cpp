@@ -382,8 +382,9 @@ namespace Iridium {
         return layout;
     }
 
-    VkPipeline createComputePipeline(VkDevice device, VkPipelineLayout layout,
-        const char* shaderRelativePath, const char* objectName) {
+    VkPipeline createComputePipeline(VkDevice device, VkPipelineCache pipelineCache,
+        VkPipelineLayout layout, const char* shaderRelativePath,
+        const char* objectName) {
         const std::vector<char> code = readFile(std::string(PROJECT_ROOT_DIR) +
             shaderRelativePath);
         VkShaderModuleCreateInfo moduleInfo{
@@ -404,7 +405,7 @@ namespace Iridium {
         pipelineInfo.stage = stage;
         pipelineInfo.layout = layout;
         VkPipeline pipeline = VK_NULL_HANDLE;
-        const VkResult result = vkCreateComputePipelines(device, VK_NULL_HANDLE,
+        const VkResult result = vkCreateComputePipelines(device, pipelineCache,
             1u, &pipelineInfo, nullptr, &pipeline);
         vkDestroyShaderModule(device, module, nullptr);
         if (result != VK_SUCCESS)

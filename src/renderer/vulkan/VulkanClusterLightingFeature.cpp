@@ -18,8 +18,8 @@ namespace Iridium {
 
     void VulkanClusterLightingFeature::create(const VulkanFeatureContext& context) {
         context_ = &context;
-        clusters_.init(context.device, context.descriptors);
-        probeClusters_.init(context.device, context.descriptors);
+        clusters_.init(context.device, context.pipelineCache, context.descriptors);
+        probeClusters_.init(context.device, context.pipelineCache, context.descriptors);
     }
 
     void VulkanClusterLightingFeature::onGraphRebuilt(

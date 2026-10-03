@@ -14,7 +14,7 @@ namespace Iridium {
 
     void VulkanForwardFeature::create(const VulkanFeatureContext& context) {
         context_ = &context;
-        pyramid_.init(context.device, context.descriptors,
+        pyramid_.init(context.device, context.pipelineCache, context.descriptors,
             context.meshLayouts.getGlobalSetLayout());
         passes_[static_cast<size_t>(Queue::OpaqueForward)] = { this, Queue::OpaqueForward,
             {}, "gpu.forward.opaque", false, RenderPassClass::Forward, false, false };

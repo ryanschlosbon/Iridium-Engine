@@ -16,10 +16,11 @@ namespace Iridium {
 
     void VulkanOutputFeature::createPipelines(VkFormat outputFormat,
         bool hdr10Composition, VkFormat swapchainFormat) {
-        outputPass_.init(context_->vk, context_->descriptors, outputFormat);
+        outputPass_.init(context_->vk, context_->pipelineCache,
+            context_->descriptors, outputFormat);
         if (hdr10Composition) {
-            hdrEncodePass_.init(context_->vk, context_->descriptors,
-                swapchainFormat);
+            hdrEncodePass_.init(context_->vk, context_->pipelineCache,
+                context_->descriptors, swapchainFormat);
         }
     }
 

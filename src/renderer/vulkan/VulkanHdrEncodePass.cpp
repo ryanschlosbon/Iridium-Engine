@@ -22,9 +22,10 @@ namespace Iridium {
 
     VulkanHdrEncodePass::~VulkanHdrEncodePass() { cleanup(); }
 
-    void VulkanHdrEncodePass::init(VkContext& context,
+    void VulkanHdrEncodePass::init(VkContext& context, VkPipelineCache pipelineCache,
         DescriptorAllocator& allocator, VkFormat swapchainFormat) {
         device_ = context.getDevice();
+        pipelineCache_ = pipelineCache;
         allocator_ = &allocator;
         VkDescriptorSetLayoutBinding binding{};
         binding.binding = 0;
@@ -104,7 +105,7 @@ namespace Iridium {
         rendering.pColorAttachmentFormats = &swapchainFormat;
         pipelineInfo.pNext = &rendering;
         pipelineInfo.layout = pipelineLayout_; pipelineInfo.renderPass = VK_NULL_HANDLE;
-        const VkResult result = vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1,
+        const VkResult result = vkCreateGraphicsPipelines(device_, pipelineCache_, 1,
             &pipelineInfo, nullptr, &pipeline_);
         vkDestroyShaderModule(device_, fragment, nullptr);
         vkDestroyShaderModule(device_, vertex, nullptr);

@@ -46,12 +46,13 @@ namespace Iridium {
         cleanup();
     }
 
-    void VulkanOutputPass::init(VkContext& context,
+    void VulkanOutputPass::init(VkContext& context, VkPipelineCache pipelineCache,
         ::DescriptorAllocator& allocator, VkFormat outputFormat) {
         if (device_ != VK_NULL_HANDLE || outputFormat == VK_FORMAT_UNDEFINED) {
             throw std::logic_error("Output pass initialized incorrectly.");
         }
         device_ = context.getDevice();
+        pipelineCache_ = pipelineCache;
         allocator_ = &allocator;
 
         try {
@@ -153,7 +154,7 @@ namespace Iridium {
                 rendering.pColorAttachmentFormats = &outputFormat;
                 pipelineInfo.pNext = &rendering;
                 pipelineInfo.renderPass = VK_NULL_HANDLE;
-                if (vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1,
+                if (vkCreateGraphicsPipelines(device_, pipelineCache_, 1,
                     &pipelineInfo, nullptr, &pipeline_) != VK_SUCCESS) {
                     throw std::runtime_error("Failed to create output pipeline.");
                 }

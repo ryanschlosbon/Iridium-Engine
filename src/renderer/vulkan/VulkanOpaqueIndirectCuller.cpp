@@ -27,7 +27,8 @@ namespace Iridium {
     }
 
     VulkanOpaqueCullPipelines createOpaqueCullPipelines(VkDevice device,
-        bool depthOcclusionRejection, VkDescriptorSetLayout globalLayout,
+        VkPipelineCache pipelineCache, bool depthOcclusionRejection,
+        VkDescriptorSetLayout globalLayout,
         VkDescriptorSetLayout gpuSceneLayout) {
         VulkanOpaqueCullPipelines result{};
         std::array<VkDescriptorSetLayoutBinding, 6> bindings{};
@@ -59,12 +60,12 @@ namespace Iridium {
                 "assets/shaders/gpu_scene_frustum_compact_comp.spv";
             constexpr const char* fusedShader =
                 "assets/shaders/gpu_scene_frustum_occlusion_compact_comp.spv";
-            result.cull = createComputePipeline(device, result.layout,
-                depthOcclusionRejection ? fusedShader : baseShader,
+            result.cull = createComputePipeline(device, pipelineCache,
+                result.layout, depthOcclusionRejection ? fusedShader : baseShader,
                 "GPU-scene cull");
             if (depthOcclusionRejection)
-                result.fallback = createComputePipeline(device, result.layout,
-                    baseShader, "GPU-scene cull");
+                result.fallback = createComputePipeline(device, pipelineCache,
+                    result.layout, baseShader, "GPU-scene cull");
         }
         catch (...) {
             result.destroy(device);

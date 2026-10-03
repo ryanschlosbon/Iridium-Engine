@@ -32,7 +32,7 @@ namespace {
 
 } // namespace
 
-void VulkanReflectionProbeCapturePass::init(VkDevice device,
+void VulkanReflectionProbeCapturePass::init(VkDevice device, VkPipelineCache pipelineCache,
     VkPhysicalDevice physicalDevice, VulkanResourceAllocator& allocator,
     ::DescriptorAllocator& descriptors, VkDescriptorSetLayout materialLayout,
     VkDescriptorSetLayout samplerLayout, VkDescriptorSetLayout sceneLayout,
@@ -44,6 +44,7 @@ void VulkanReflectionProbeCapturePass::init(VkDevice device,
         throw std::invalid_argument(
             "Invalid reflection-probe capture-pass initialization");
     device_ = device;
+    pipelineCache_ = pipelineCache;
     allocator_ = &allocator;
     descriptors_ = &descriptors;
     try {
@@ -148,7 +149,7 @@ void VulkanReflectionProbeCapturePass::init(VkDevice device,
             VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO, nullptr, 0,
             stage, filterPipelineLayout_, VK_NULL_HANDLE, -1 };
         const VkResult filterResult = vkCreateComputePipelines(device_,
-            VK_NULL_HANDLE, 1, &filterPipeline, nullptr, &filterPipeline_);
+            pipelineCache_, 1, &filterPipeline, nullptr, &filterPipeline_);
         vkDestroyShaderModule(device_, filterShader, nullptr);
         requireSuccess(filterResult,
             "vkCreateComputePipelines(reflection probe prefilter)");
@@ -271,7 +272,7 @@ VkPipeline VulkanReflectionProbeCapturePass::createGraphicsPipeline(bool sky,
         rendering.depthAttachmentFormat = VK_FORMAT_D32_SFLOAT;
         pipeline.pNext = &rendering;
         pipeline.renderPass = VK_NULL_HANDLE;
-        requireSuccess(vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1,
+        requireSuccess(vkCreateGraphicsPipelines(device_, pipelineCache_, 1,
             &pipeline, nullptr, &result),
             "vkCreateGraphicsPipelines(reflection probe capture)");
     }

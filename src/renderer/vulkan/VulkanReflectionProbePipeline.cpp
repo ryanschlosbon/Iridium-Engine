@@ -12,12 +12,13 @@ namespace Iridium {
         cleanup();
     }
 
-    void VulkanReflectionProbePipeline::init(VkDevice device,
+    void VulkanReflectionProbePipeline::init(VkDevice device, VkPipelineCache pipelineCache,
         ::DescriptorAllocator& allocator) {
         if (device == VK_NULL_HANDLE || device_ != VK_NULL_HANDLE)
             throw std::logic_error(
                 "Reflection-probe pipeline initialized in an invalid state");
         device_ = device;
+        pipelineCache_ = pipelineCache;
         allocator_ = &allocator;
         try {
             std::array<VkDescriptorSetLayoutBinding, 5> bindings{};
@@ -68,7 +69,7 @@ namespace Iridium {
             pipelineInfo.stage.module = module;
             pipelineInfo.stage.pName = "main";
             const VkResult result = vkCreateComputePipelines(device_,
-                VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &pipeline_);
+                pipelineCache_, 1, &pipelineInfo, nullptr, &pipeline_);
             vkDestroyShaderModule(device_, module, nullptr);
             if (result != VK_SUCCESS)
                 throw std::runtime_error(

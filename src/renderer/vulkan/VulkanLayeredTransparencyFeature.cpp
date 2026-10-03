@@ -67,15 +67,15 @@ namespace Iridium {
     void VulkanLayeredTransparencyFeature::create(const VulkanFeatureContext& context) {
         context_ = &context;
         const VulkanMeshLayouts& meshLayouts = context.meshLayouts;
-        interfaceCapture_.init(context.device, context.descriptors,
+        interfaceCapture_.init(context.device, context.pipelineCache, context.descriptors,
             meshLayouts.getGlobalSetLayout(),
             context.resources.textureTable().materialViewLayout(),
             context.resources.textureTable().samplerLayout());
-        localComposition_.init(context.device, context.descriptors,
+        localComposition_.init(context.device, context.pipelineCache, context.descriptors,
             meshLayouts.getGlobalSetLayout(),
             context.resources.textureTable().materialViewLayout(),
             context.resources.textureTable().samplerLayout(), lightingSetLayout_);
-        sceneResolve_.init(context.device, context.descriptors,
+        sceneResolve_.init(context.device, context.pipelineCache, context.descriptors,
             meshLayouts.getGlobalSetLayout());
         ordinary2Captures_ = { { { this, false }, { this, true } } };
         for (uint32_t tier = 0; tier < deepTiers_.size(); ++tier) {

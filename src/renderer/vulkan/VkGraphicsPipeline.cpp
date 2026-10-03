@@ -6,9 +6,10 @@
 #include <iostream>
 #include <array>
 
-VkGraphicsPipeline::VkGraphicsPipeline(VkContext* context, VkSwapchain* swapchain,
+VkGraphicsPipeline::VkGraphicsPipeline(VkContext* context,
+    VkPipelineCache pipelineCache, VkSwapchain* swapchain,
     VkPipelineLayout pipelineLayout, Iridium::GBufferLayout layout)
-	: context(context), pipelineLayout(pipelineLayout) {
+	: context(context), pipelineCache(pipelineCache), pipelineLayout(pipelineLayout) {
 
     wireframePipeline = createPipeline(swapchain, true, false, layout);
     outlinePipeline = createPipeline(swapchain, false, true, layout);
@@ -210,7 +211,7 @@ VkPipeline VkGraphicsPipeline::createPipeline(VkSwapchain* swapchain,
     pipelineInfo.pDynamicState = &dynamicState;
 
     VkPipeline newPipeline;
-    if (vkCreateGraphicsPipelines(context->getDevice(), VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &newPipeline) != VK_SUCCESS) {
+    if (vkCreateGraphicsPipelines(context->getDevice(), pipelineCache, 1, &pipelineInfo, nullptr, &newPipeline) != VK_SUCCESS) {
         throw std::runtime_error("failed to create graphics pipeline!");
     }
 

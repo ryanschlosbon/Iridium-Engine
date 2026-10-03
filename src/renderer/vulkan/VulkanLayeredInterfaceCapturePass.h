@@ -22,7 +22,8 @@ namespace Iridium {
     // enabling an already prepared atlas never compiles a pipeline mid-frame.
     class VulkanLayeredInterfaceCapturePass final {
     public:
-        void init(VkDevice device, ::DescriptorAllocator& descriptors,
+        void init(VkDevice device, VkPipelineCache pipelineCache,
+            ::DescriptorAllocator& descriptors,
             VkDescriptorSetLayout globalLayout,
             VkDescriptorSetLayout materialLayout,
             VkDescriptorSetLayout samplerLayout);
@@ -58,6 +59,7 @@ namespace Iridium {
         [[nodiscard]] VkPipeline createPipeline() const;
 
         VkDevice device_ = VK_NULL_HANDLE;
+        VkPipelineCache pipelineCache_ = VK_NULL_HANDLE;
         ::DescriptorAllocator* descriptors_ = nullptr;
         VkDescriptorSetLayout captureLayout_ = VK_NULL_HANDLE;
         VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;

@@ -112,7 +112,8 @@ namespace Iridium {
         }
     }
 
-    void VulkanPipelineLibrary::init(VkDevice device, VulkanPipelineTarget gBufferTarget,
+    void VulkanPipelineLibrary::init(VkDevice device, VkPipelineCache pipelineCache,
+        VulkanPipelineTarget gBufferTarget,
         VulkanPipelineTarget forwardTarget,
         VulkanPipelineTarget transparentTarget,
         GBufferLayout gBufferLayout) {
@@ -142,6 +143,7 @@ namespace Iridium {
         }
 
         device_ = device;
+        pipelineCache_ = pipelineCache;
         gBufferTarget_ = gBufferTarget;
         forwardTarget_ = forwardTarget;
         transparentTarget_ = transparentTarget;
@@ -333,7 +335,7 @@ namespace Iridium {
             pipelineInfo.subpass = 0;
 
             VkPipeline pipeline = VK_NULL_HANDLE;
-            if (vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &pipeline) != VK_SUCCESS) {
+            if (vkCreateGraphicsPipelines(device_, pipelineCache_, 1, &pipelineInfo, nullptr, &pipeline) != VK_SUCCESS) {
                 throw std::runtime_error("failed to create Vulkan graphics pipeline");
             }
 

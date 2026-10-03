@@ -12,7 +12,7 @@ public:
     ~VulkanVirtualShadowFullViewPass() { cleanup(); }
     VulkanVirtualShadowFullViewPass(const VulkanVirtualShadowFullViewPass&) = delete;
     VulkanVirtualShadowFullViewPass& operator=(const VulkanVirtualShadowFullViewPass&) = delete;
-    void init(VkDevice device, std::span<const VkBuffer> workingSets,
+    void init(VkDevice device, VkPipelineCache pipelineCache, std::span<const VkBuffer> workingSets,
         const VirtualShadowGpuWorkingSetLayout& layout,
         const std::filesystem::path& shaderDirectory);
     // Binding changes require completion of this frame slot. The caller owns
@@ -26,6 +26,7 @@ public:
     void cleanup() noexcept;
 private:
     VkDevice device_{};
+    VkPipelineCache pipelineCache_ = VK_NULL_HANDLE;
     VkDescriptorPool pool_{};
     VkDescriptorSetLayout setLayout_{};
     VkPipelineLayout layout_{};

@@ -73,6 +73,10 @@ namespace Iridium {
         bool frameTopologyPrewarmRequested = false;
         bool frameTopologyPrewarmChanged = false;
         uint64_t frameTopologyPrewarmNanoseconds = 0;
+        // Persisted pipeline cache at backend init (M7R R4c.4): off, cold,
+        // warm or discarded, and the payload bytes loaded.
+        std::string pipelineCacheState = "off";
+        uint64_t pipelineCacheLoadedBytes = 0;
         uint32_t gpuLightCapacity = 0;
         uint32_t gpuLightActiveCount = 0;
         uint64_t gpuLightUploadBytes = 0;

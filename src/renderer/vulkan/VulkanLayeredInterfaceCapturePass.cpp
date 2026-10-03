@@ -21,7 +21,7 @@ namespace {
 
 } // namespace
 
-void VulkanLayeredInterfaceCapturePass::init(VkDevice device,
+void VulkanLayeredInterfaceCapturePass::init(VkDevice device, VkPipelineCache pipelineCache,
     ::DescriptorAllocator& descriptors, VkDescriptorSetLayout globalLayout,
     VkDescriptorSetLayout materialLayout,
     VkDescriptorSetLayout samplerLayout) {
@@ -32,6 +32,7 @@ void VulkanLayeredInterfaceCapturePass::init(VkDevice device,
             "Invalid layered-interface capture-pass initialization");
     }
     device_ = device;
+    pipelineCache_ = pipelineCache;
     descriptors_ = &descriptors;
     try {
         std::array<VkDescriptorSetLayoutBinding, 4> bindings{};
@@ -105,7 +106,7 @@ void VulkanLayeredInterfaceCapturePass::init(VkDevice device,
             terminationStage, tileTerminationPipelineLayout_,
             VK_NULL_HANDLE, -1 };
         const VkResult terminationResult = vkCreateComputePipelines(device_,
-            VK_NULL_HANDLE, 1u, &terminationPipelineInfo, nullptr,
+            pipelineCache_, 1u, &terminationPipelineInfo, nullptr,
             &tileTerminationPipeline_);
         vkDestroyShaderModule(device_, terminationShader, nullptr);
         requireSuccess(terminationResult,
@@ -196,7 +197,7 @@ VkPipeline VulkanLayeredInterfaceCapturePass::createPipeline() const {
         pipelineInfo.pNext = &rendering;
         pipelineInfo.renderPass = VK_NULL_HANDLE;
         VkPipeline pipeline = VK_NULL_HANDLE;
-        requireSuccess(vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1u,
+        requireSuccess(vkCreateGraphicsPipelines(device_, pipelineCache_, 1u,
             &pipelineInfo, nullptr, &pipeline),
             "vkCreateGraphicsPipelines(layered interface capture)");
         vkDestroyShaderModule(device_, fragment, nullptr);

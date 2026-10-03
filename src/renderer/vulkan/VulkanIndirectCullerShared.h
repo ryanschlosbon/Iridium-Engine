@@ -255,7 +255,7 @@ namespace Iridium {
         std::span<const VkDescriptorSetLayout> setLayouts, uint32_t pushWords,
         const char* objectName);
     [[nodiscard]] VkPipeline createComputePipeline(VkDevice device,
-        VkPipelineLayout layout, const char* shaderRelativePath,
-        const char* objectName);
+        VkPipelineCache pipelineCache, VkPipelineLayout layout,
+        const char* shaderRelativePath, const char* objectName);
 
 } // namespace Iridium

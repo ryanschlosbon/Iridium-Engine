@@ -7,6 +7,7 @@
 #include "renderer/rhi/VirtualShadowMap.h"
 
 #include <cstdint>
+#include <filesystem>
 
 namespace Iridium {
 
@@ -16,6 +17,9 @@ namespace Iridium {
         bool enableValidation = false;
         // Adds Khronos synchronization validation when enableValidation is set.
         bool enableSynchronizationValidation = false;
+        // Directory of the persisted pipeline cache (<vendor>-<device>.ircache,
+        // M7R R4c.4). Empty: no pipeline cache.
+        std::filesystem::path pipelineCacheDirectory;
         // M7.6 build-only qualification: no history consumption or occlusion rejection.
         bool experimentalDepthPyramid = false;
         // M7.8 live depth-demand qualification; virtual raster/sampling stay off.

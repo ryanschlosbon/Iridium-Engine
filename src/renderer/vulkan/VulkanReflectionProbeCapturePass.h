@@ -36,7 +36,7 @@ namespace Iridium {
         static constexpr uint32_t MaximumFaceRecords =
             4u * kReflectionProbeCaptureFaceCount;
 
-        void init(VkDevice device, VkPhysicalDevice physicalDevice,
+        void init(VkDevice device, VkPipelineCache pipelineCache, VkPhysicalDevice physicalDevice,
             VulkanResourceAllocator& allocator,
             ::DescriptorAllocator& descriptors,
             VkDescriptorSetLayout materialLayout,
@@ -102,6 +102,7 @@ namespace Iridium {
             uint32_t recordIndex) const;
 
         VkDevice device_ = VK_NULL_HANDLE;
+        VkPipelineCache pipelineCache_ = VK_NULL_HANDLE;
         VulkanResourceAllocator* allocator_ = nullptr;
         ::DescriptorAllocator* descriptors_ = nullptr;
         VkDescriptorSetLayout captureLayout_ = VK_NULL_HANDLE;

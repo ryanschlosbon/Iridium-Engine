@@ -21,7 +21,7 @@ namespace {
 
 } // namespace
 
-void VulkanLayeredSceneResolvePass::init(VkDevice device,
+void VulkanLayeredSceneResolvePass::init(VkDevice device, VkPipelineCache pipelineCache,
     ::DescriptorAllocator& descriptors, VkDescriptorSetLayout globalLayout) {
     if (device_ != VK_NULL_HANDLE || device == VK_NULL_HANDLE ||
         globalLayout == VK_NULL_HANDLE) {
@@ -29,6 +29,7 @@ void VulkanLayeredSceneResolvePass::init(VkDevice device,
             "Invalid layered scene-resolve initialization");
     }
     device_ = device;
+    pipelineCache_ = pipelineCache;
     descriptors_ = &descriptors;
     try {
         const std::array<VkDescriptorSetLayoutBinding, 2> bindings{{
@@ -156,7 +157,7 @@ VkPipeline VulkanLayeredSceneResolvePass::createPipeline() const {
         pipelineInfo.pNext = &rendering;
         pipelineInfo.renderPass = VK_NULL_HANDLE;
         VkPipeline pipeline = VK_NULL_HANDLE;
-        requireSuccess(vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1u,
+        requireSuccess(vkCreateGraphicsPipelines(device_, pipelineCache_, 1u,
             &pipelineInfo, nullptr, &pipeline),
             "vkCreateGraphicsPipelines(layered scene resolve)");
         vkDestroyShaderModule(device_, fragment, nullptr);

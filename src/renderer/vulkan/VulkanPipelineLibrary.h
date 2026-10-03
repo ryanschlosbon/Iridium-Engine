@@ -65,7 +65,8 @@ namespace Iridium {
         VulkanPipelineLibrary(VulkanPipelineLibrary&&) = delete;
         VulkanPipelineLibrary& operator=(VulkanPipelineLibrary&&) = delete;
 
-        void init(VkDevice device, VulkanPipelineTarget gBufferTarget,
+        void init(VkDevice device, VkPipelineCache pipelineCache,
+            VulkanPipelineTarget gBufferTarget,
             VulkanPipelineTarget forwardTarget,
             VulkanPipelineTarget transparentTarget,
             GBufferLayout gBufferLayout);
@@ -77,6 +78,7 @@ namespace Iridium {
 
     private:
         VkDevice device_ = VK_NULL_HANDLE;
+        VkPipelineCache pipelineCache_ = VK_NULL_HANDLE;
         VulkanPipelineTarget gBufferTarget_{};
         VulkanPipelineTarget forwardTarget_{};
         VulkanPipelineTarget transparentTarget_{};

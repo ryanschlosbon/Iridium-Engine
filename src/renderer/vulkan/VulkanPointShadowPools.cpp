@@ -30,7 +30,7 @@ uint32_t VulkanPointShadowPools::poolIndex(uint32_t resolution) {
     throw std::invalid_argument("Point shadow resolution has no pool");
 }
 
-void VulkanPointShadowPools::init(VkDevice device,
+void VulkanPointShadowPools::init(VkDevice device, VkPipelineCache pipelineCache,
     VulkanResourceAllocator& allocator, VulkanUploadContext& uploads,
     ::DescriptorAllocator& descriptors, VkDescriptorSetLayout materialLayout,
     VkDescriptorSetLayout samplerLayout,
@@ -43,6 +43,7 @@ void VulkanPointShadowPools::init(VkDevice device,
             [](uint32_t value) { return value == 0u; }))
         throw std::invalid_argument("Invalid point shadow pool initialization");
     device_ = device;
+    pipelineCache_ = pipelineCache;
     allocator_ = &allocator;
     descriptors_ = &descriptors;
     capacities_ = capacities;
@@ -393,7 +394,7 @@ VkPipeline VulkanPointShadowPools::createPipeline(bool alphaMasked,
         create.pNext = &rendering;
         create.renderPass = VK_NULL_HANDLE;
         VkPipeline result = VK_NULL_HANDLE;
-        requireSuccess(vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1,
+        requireSuccess(vkCreateGraphicsPipelines(device_, pipelineCache_, 1,
             &create, nullptr, &result),
             "vkCreateGraphicsPipelines(point shadow)");
         if (fragment != VK_NULL_HANDLE)

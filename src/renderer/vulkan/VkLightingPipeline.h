@@ -20,8 +20,8 @@ static_assert(sizeof(LightingPushConstants) == 160);
 class VkLightingPipeline {
 public:
     // M7R R4a: dynamic rendering into one colour attachment of `colorFormat`.
-    VkLightingPipeline(VkContext* context, VkFormat colorFormat,
-        Iridium::GBufferLayout gBufferLayout);
+    VkLightingPipeline(VkContext* context, VkPipelineCache pipelineCache,
+        VkFormat colorFormat, Iridium::GBufferLayout gBufferLayout);
     ~VkLightingPipeline();
 
     VkPipeline getPipeline() const { return pipeline; }
@@ -30,6 +30,7 @@ public:
 
 private:
     VkContext* context;
+    VkPipelineCache pipelineCache = VK_NULL_HANDLE;
     VkPipeline pipeline;
     VkPipelineLayout pipelineLayout;
     VkDescriptorSetLayout descriptorSetLayout;

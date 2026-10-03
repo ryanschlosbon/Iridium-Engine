@@ -55,7 +55,7 @@ namespace Iridium {
 
     // The cull set layout has 4 bindings, or 6 with fused occlusion rejection.
     [[nodiscard]] VulkanOpaqueCullPipelines createOpaqueCullPipelines(
-        VkDevice device, bool depthOcclusionRejection,
+        VkDevice device, VkPipelineCache pipelineCache, bool depthOcclusionRejection,
         VkDescriptorSetLayout globalLayout, VkDescriptorSetLayout gpuSceneLayout);
 
     struct OpaqueIndirectInputs {

@@ -20,8 +20,8 @@ namespace Iridium {
         VulkanOutputPass& operator=(const VulkanOutputPass&) = delete;
         ~VulkanOutputPass();
 
-        void init(VkContext& context, ::DescriptorAllocator& allocator,
-            VkFormat outputFormat);
+        void init(VkContext& context, VkPipelineCache pipelineCache,
+            ::DescriptorAllocator& allocator, VkFormat outputFormat);
         void rebuildDescriptors(const VulkanFrameTargets& frameTargets,
             VkImageView lutView = VK_NULL_HANDLE,
             VkSampler lutSampler = VK_NULL_HANDLE);
@@ -38,6 +38,7 @@ namespace Iridium {
 
     private:
         VkDevice device_ = VK_NULL_HANDLE;
+        VkPipelineCache pipelineCache_ = VK_NULL_HANDLE;
         ::DescriptorAllocator* allocator_ = nullptr;
         VkDescriptorSetLayout descriptorSetLayout_ = VK_NULL_HANDLE;
         VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;

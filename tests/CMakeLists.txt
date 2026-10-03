@@ -344,6 +344,12 @@ iridium_add_test(EditorRenderBridgeTests
         SOURCES renderer/EditorRenderBridgeTests.cpp
         LIBS iridium_vulkan_imgui)
 
+# M7R R4c.4: the persisted pipeline cache's file checks and atomic save
+# (device-free; the device round trip is in VulkanPipelineContractTests).
+iridium_add_test(VulkanPipelineCacheFileTests
+        SOURCES renderer/VulkanPipelineCacheFileTests.cpp
+        LIBS iridium_vulkan iridium_platform)
+
 # Hardware qualification: these create a Vulkan device and load SPIR-V from
 # assets/shaders, so they carry the `vulkan` label and depend on iridium_shaders.
 # Both exceed 5 s in Debug (VulkanVirtualShadowMarkingTests ~95 s), hence `slow`.

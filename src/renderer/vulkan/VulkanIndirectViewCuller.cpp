@@ -273,7 +273,7 @@ namespace Iridium {
     }
 
     VulkanCompactPipeline createIndirectViewPipeline(VkDevice device,
-        IndirectViewKind kind, VkDescriptorSetLayout set0Layout,
+        VkPipelineCache pipelineCache, IndirectViewKind kind, VkDescriptorSetLayout set0Layout,
         VkDescriptorSetLayout gpuSceneLayout, VkDescriptorSetLayout indirectLayout) {
         const IndirectViewKindConfig& config = indirectViewKindConfig(kind);
         const std::array<VkDescriptorSetLayout, 3> setLayouts{
@@ -282,8 +282,8 @@ namespace Iridium {
         result.layout = createComputePipelineLayout(device, setLayouts,
             config.pushWords, config.pipelineName);
         try {
-            result.pipeline = createComputePipeline(device, result.layout,
-                config.shader, config.pipelineName);
+            result.pipeline = createComputePipeline(device, pipelineCache,
+                result.layout, config.shader, config.pipelineName);
         }
         catch (...) {
             result.destroy(device);

@@ -44,7 +44,8 @@ namespace Iridium {
         VulkanSpotShadowAtlas() = default;
         VulkanSpotShadowAtlas(const VulkanSpotShadowAtlas&) = delete;
         VulkanSpotShadowAtlas& operator=(const VulkanSpotShadowAtlas&) = delete;
-        void init(VkDevice device, VulkanResourceAllocator& allocator,
+        void init(VkDevice device, VkPipelineCache pipelineCache,
+            VulkanResourceAllocator& allocator,
             VulkanUploadContext& uploads, ::DescriptorAllocator& descriptors,
             VkDescriptorSetLayout materialLayout,
             VkDescriptorSetLayout samplerLayout,
@@ -88,6 +89,7 @@ namespace Iridium {
         VkShaderModule createShaderModule(const char* relativePath) const;
 
         VkDevice device_ = VK_NULL_HANDLE;
+        VkPipelineCache pipelineCache_ = VK_NULL_HANDLE;
         VulkanResourceAllocator* allocator_ = nullptr;
         VulkanImageResource image_;
         VkSampler sampler_ = VK_NULL_HANDLE;

@@ -21,7 +21,8 @@ namespace Iridium {
         VulkanWeightedOitPass(const VulkanWeightedOitPass&) = delete;
         VulkanWeightedOitPass& operator=(const VulkanWeightedOitPass&) = delete;
 
-        void init(VkDevice device, ::DescriptorAllocator& descriptors,
+        void init(VkDevice device, VkPipelineCache pipelineCache,
+            ::DescriptorAllocator& descriptors,
             VkPipelineLayout forwardPipelineLayout);
         void rebuildDescriptors(const VulkanFrameTargets& frameTargets);
         void clearDescriptors() noexcept;
@@ -53,6 +54,7 @@ namespace Iridium {
             const char* relativePath) const;
 
         VkDevice device_ = VK_NULL_HANDLE;
+        VkPipelineCache pipelineCache_ = VK_NULL_HANDLE;
         ::DescriptorAllocator* descriptors_ = nullptr;
         VkPipelineLayout accumulationPipelineLayout_ = VK_NULL_HANDLE;
         VkDescriptorSetLayout resolveDescriptorLayout_ = VK_NULL_HANDLE;

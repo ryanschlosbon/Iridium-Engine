@@ -25,7 +25,9 @@ param(
     [string] $DataRoot = '',
     [string[]] $Only = @(),
     [int] $TimeoutSeconds = 600,
-    [switch] $AllowImplicitLayers
+    [switch] $AllowImplicitLayers,
+    # 'off' (default) or a cache directory; see Get-M7RPipelineCacheArgs.
+    [string] $PipelineCache = 'off'
 )
 $ErrorActionPreference = 'Stop'
 $Only = @($Only | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
@@ -38,6 +40,7 @@ Push-Location $root
 try {
     $exePath = (Resolve-Path $Exe).Path
     $cookPath = (Resolve-Path $Cook).Path
+    $cacheArgs = @(Get-M7RPipelineCacheArgs $exePath $PipelineCache)
     $outDir = Join-Path $DataRoot "out/m7r/sweeps/$Label"
     if (Test-Path $outDir) { throw "Sweep label already exists: $outDir (sweeps are never overwritten)" }
     New-Item -ItemType Directory -Force $outDir | Out-Null
@@ -54,7 +57,7 @@ try {
     foreach ($entry in $selected) {
         $entryDir = Join-Path $outDir $entry.Key
         New-Item -ItemType Directory -Force $entryDir | Out-Null
-        $arguments = Get-M7RSweepArguments $entry $inputs $entryDir
+        $arguments = @(Get-M7RSweepArguments $entry $inputs $entryDir) + $cacheArgs
         $log = Join-Path $entryDir 'engine.log'
         $commandLine = Format-M7RCommandLine $exePath $arguments
         Set-Content -Encoding utf8 (Join-Path $entryDir 'command.txt') $commandLine

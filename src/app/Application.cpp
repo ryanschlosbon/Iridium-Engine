@@ -51,6 +51,7 @@
 #include "editor/EditorPreviewImageFit.h"
 #include "assets/environment/EnvironmentProduct.h"
 #include "editor/EditorSceneActions.h"
+#include "platform/UserCacheDirectory.h"
 
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
@@ -83,6 +84,17 @@ namespace Iridium {
         // arbitrary oversized model/texture publications.
         constexpr uint64_t EditorEnvironmentPublicationLimitBytes =
             640ull * 1024ull * 1024ull;
+        // --pipeline-cache (M7R R4c.4): empty disables the cache.
+        std::filesystem::path pipelineCacheDirectory(const ApplicationConfig& config) {
+            if (!config.pipelineCacheEnabled) return {};
+            if (!config.pipelineCacheDirectory.empty()) {
+                std::error_code error;
+                const std::filesystem::path absolute =
+                    std::filesystem::absolute(config.pipelineCacheDirectory, error);
+                return error ? config.pipelineCacheDirectory : absolute;
+            }
+            return userCacheDirectory("PipelineCache");
+        }
         struct ModelSourceReimportContext {
             std::filesystem::path assetRoot;
             std::filesystem::path sourceRelativePath;
@@ -351,6 +363,7 @@ namespace Iridium {
             .enableValidation = config_.enableValidation,
             .enableSynchronizationValidation =
                 config_.enableSynchronizationValidation,
+            .pipelineCacheDirectory = pipelineCacheDirectory(config_),
             .experimentalDepthPyramid = config_.experimentalDepthPyramid,
             .experimentalVirtualShadowResources =
                 config_.experimentalVirtualShadowResources,

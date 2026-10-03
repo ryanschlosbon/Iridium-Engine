@@ -176,6 +176,8 @@ namespace {
         field("benchmarkId", c.benchmarkId);
         field("benchmarkManifest", c.benchmarkManifest.generic_string());
         field("weightedOitOrderSeed", exact(c.weightedOitOrderSeed));
+        field("pipelineCacheDirectory", c.pipelineCacheDirectory.generic_string());
+        flag("pipelineCacheEnabled", c.pipelineCacheEnabled);
         field("cookedModelArtifact", c.cookedModelArtifact.generic_string());
         field("cookedEnvironmentArtifact", c.cookedEnvironmentArtifact.generic_string());
         field("editorAssetViewerGuid", c.editorAssetViewerGuid
@@ -329,7 +331,7 @@ namespace {
                 { { "", "--open-asset-viewer requires an asset GUID" },
                   { "not-a-guid", "--open-asset-viewer requires a non-nil asset GUID" },
                   { kNilGuid, "--open-asset-viewer requires a non-nil asset GUID" } } },
-            // --- renderer (29) ---
+            // --- renderer (30) ---
             { "--cluster-tile-size", G, "16", {}, [](C& c) { c.clusterTileSize = 16; },
                 "--cluster-tile-size requires 16 or 32",
                 { { "8", "--cluster-tile-size requires 16 or 32" },
@@ -449,6 +451,11 @@ namespace {
                 c.experimentalDepthPyramid = true;
                 c.experimentalDepthOcclusionQuery = true;
                 c.experimentalDepthOcclusionRejection = true; }, {}, {} },
+            // M7R R4c.4 (after the frozen parser): `off` is checked separately.
+            { "--pipeline-cache", G, "out/m7r/pipeline-cache", {}, [](C& c) {
+                c.pipelineCacheDirectory = "out/m7r/pipeline-cache"; },
+                "--pipeline-cache requires a directory or off",
+                { { "", "--pipeline-cache requires a directory or off" } } },
             // --- qualification (38) ---
             { "--validate-texture-residency-churn", Q, {}, {}, [](C& c) {
                 c.validateTextureResidencyChurn = true; }, {}, {} },
@@ -580,8 +587,8 @@ namespace {
         Cli::CliOptionRegistry registry;
         registerEngineOptions(registry, scratch);
 
-        CHECK(table.size() == 85);
-        CHECK(registry.options().size() == 85);
+        CHECK(table.size() == 86);
+        CHECK(registry.options().size() == 86);
         std::set<std::string_view> names;
         std::map<std::string_view, size_t> ownerCounts;
         for (const FlagCase& row : table) {
@@ -623,9 +630,19 @@ namespace {
         }
         CHECK(newOutcome({ "--qualification-scripted-changes", "hitch.json" }) ==
             error("--qualification-scripted-changes requires --profile-cpu-output"));
+        {
+            // --pipeline-cache off disables the cache; a later path re-enables it.
+            CombinedConfig off{};
+            off.pipelineCacheEnabled = false;
+            CHECK(newOutcome({ "--pipeline-cache", "off" }) == "OK:" + describe(off));
+            CombinedConfig path{};
+            path.pipelineCacheDirectory = "cache";
+            CHECK(newOutcome({ "--pipeline-cache", "off", "--pipeline-cache", "cache" }) ==
+                "OK:" + describe(path));
+        }
         CHECK(ownerCounts[R] == 14);
         CHECK(ownerCounts[E] == 4);
-        CHECK(ownerCounts[G] == 29);
+        CHECK(ownerCounts[G] == 30);
         CHECK(ownerCounts[Q] == 38);
         std::cout << "  owners: runtime " << ownerCounts[R] << ", editor " << ownerCounts[E]
                   << ", renderer " << ownerCounts[G] << ", qualification "
@@ -677,7 +694,7 @@ namespace {
     bool testUsageParity() {
         const std::string usage = engineUsage();
         CHECK(usage.starts_with("Usage: IridiumEngine [options]\n"));
-        CHECK(optionLines(usage).size() == 85);
+        CHECK(optionLines(usage).size() == 86);
         // Groups appear in owner order: runtime, editor, renderer, qualification.
         const size_t runtime = usage.find("runtime options:");
         const size_t editor = usage.find("editor options:");
@@ -696,7 +713,7 @@ namespace {
         AppCli::registerRuntimeOptions(registry, config);
         AppCli::registerEditorOptions(registry, config);
         AppCli::registerRendererOptions(registry, config);
-        CHECK(registry.options().size() == 47);
+        CHECK(registry.options().size() == 48);
         try {
             registry.parse(Args{ "--benchmark", "material_lab_v1" });
             CHECK(false);
@@ -752,7 +769,7 @@ int main() {
     };
 
     constexpr TestCase tests[] = {
-        { "Per-flag table (85 flags)", testFlagTable },
+        { "Per-flag table (86 flags)", testFlagTable },
         { "Aliases and removed flags", testAliasesAndRemovedFlags },
         { "Usage parity", testUsageParity },
         { "Registry without qualification", testRegistryWithoutQualification },

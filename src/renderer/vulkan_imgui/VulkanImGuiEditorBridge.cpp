@@ -144,7 +144,7 @@ namespace Iridium {
             initInfo.Device = device_.device;
             initInfo.QueueFamily = device_.queueFamily;
             initInfo.Queue = device_.queue;
-            initInfo.PipelineCache = VK_NULL_HANDLE;
+            initInfo.PipelineCache = device_.pipelineCache;
             initInfo.DescriptorPool = pool_;
             initInfo.MinImageCount = presentation.imageCount;
             initInfo.ImageCount = presentation.imageCount;

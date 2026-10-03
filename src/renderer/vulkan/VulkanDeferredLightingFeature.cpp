@@ -18,7 +18,7 @@ namespace Iridium {
     void VulkanDeferredLightingFeature::create(const VulkanFeatureContext& context) {
         context_ = &context;
         pipeline_ = std::make_unique<VkLightingPipeline>(&context.vk,
-            VulkanSceneColorFormat, gBufferLayout_);
+            context.pipelineCache, VulkanSceneColorFormat, gBufferLayout_);
     }
 
     void VulkanDeferredLightingFeature::onGraphRebuilt(const VulkanProductionGraphIds& ids) {

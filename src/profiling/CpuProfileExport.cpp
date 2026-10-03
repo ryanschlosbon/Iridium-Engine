@@ -253,6 +253,10 @@ namespace Iridium {
                     metadata.frameTopologyPrewarmRequested },
                 { "frame_topology_prewarm_changed",
                     metadata.frameTopologyPrewarmChanged },
+                { "pipeline_cache", {
+                    { "state", metadata.pipelineCacheState },
+                    { "loaded_bytes", metadata.pipelineCacheLoadedBytes },
+                } },
                 { "refraction_pyramids_resident",
                     metadata.refractionPyramidsResident },
                 { "model_load_mode", metadata.modelLoadMode },

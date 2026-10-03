@@ -19,7 +19,7 @@ public:
 
     using PublishedHistory = DepthPyramidHistoryPublication;
 
-    void init(VkDevice device, ::DescriptorAllocator& descriptors,
+    void init(VkDevice device, VkPipelineCache pipelineCache, ::DescriptorAllocator& descriptors,
         VulkanResourceAllocator& resources,
         VkDescriptorSetLayout globalLayout,
         VkDescriptorSetLayout gpuSceneLayout);
@@ -57,6 +57,7 @@ public:
     [[nodiscard]] VkSampler historySampler() const noexcept { return sampler_; }
 private:
     VkDevice device_{};
+    VkPipelineCache pipelineCache_ = VK_NULL_HANDLE;
     ::DescriptorAllocator* descriptorAllocator_{};
     VulkanResourceAllocator* resourceAllocator_{};
     VkDescriptorSetLayout descriptorLayout_{};

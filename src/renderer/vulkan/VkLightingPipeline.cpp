@@ -3,9 +3,10 @@
 #include <stdexcept>
 #include <array>
 
-VkLightingPipeline::VkLightingPipeline(VkContext* context, VkFormat colorFormat,
+VkLightingPipeline::VkLightingPipeline(VkContext* context,
+    VkPipelineCache pipelineCache, VkFormat colorFormat,
     Iridium::GBufferLayout gBufferLayout)
-    : context(context) {
+    : context(context), pipelineCache(pipelineCache) {
     createDescriptorSetLayout();
     createPipeline(colorFormat, gBufferLayout);
 }
@@ -170,7 +171,7 @@ void VkLightingPipeline::createPipeline(VkFormat colorFormat,
     pipelineInfo.subpass = 0;
     pipelineInfo.pDynamicState = &dynamicState;
 
-    if (vkCreateGraphicsPipelines(context->getDevice(), VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &pipeline) != VK_SUCCESS) {
+    if (vkCreateGraphicsPipelines(context->getDevice(), pipelineCache, 1, &pipelineInfo, nullptr, &pipeline) != VK_SUCCESS) {
         throw std::runtime_error("failed to create lighting pipeline!");
     }
 

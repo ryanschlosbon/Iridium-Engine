@@ -56,6 +56,28 @@ $M7RTimingRoutes = @(
 
 function Get-M7RRepoRoot { (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path }
 
+# Persisted pipeline cache (M7R R4c.4, --pipeline-cache DIR|off). Every M7R run script
+# takes -PipelineCache and defaults to 'off': no VkPipelineCache, exactly the pipeline
+# creation of builds before R4c.4, and independent of what earlier runs left on disk.
+#   captures, digests, sweeps  'off': evidence never depends on cache state.
+#   timing pairs, hitch runs   'off': both sides create pipelines the same way (a
+#                              pre-R4c.4 baseline has no cache at all); pipeline
+#                              creation in mid-run events stays comparable.
+# Pass a directory (e.g. out/m7r/pipeline-cache/<label>) for an explicitly warm run; it
+# is made absolute, because an engine resolves relative paths against its own working
+# directory. Executables built before R4c.4 lack the flag and get no argument.
+$M7RPipelineCacheSupport = @{}
+function Get-M7RPipelineCacheArgs([string] $exe, [string] $mode) {
+    if (-not $mode) { return @() }
+    if (-not $M7RPipelineCacheSupport.ContainsKey($exe)) {
+        $usage = (cmd /c "`"$exe`" --help 2>&1") -join "`n"
+        $M7RPipelineCacheSupport[$exe] = [bool]($usage -match '--pipeline-cache')
+    }
+    if (-not $M7RPipelineCacheSupport[$exe]) { return @() }
+    if ($mode -eq 'off') { return @('--pipeline-cache', 'off') }
+    return @('--pipeline-cache', $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($mode))
+}
+
 # Runs the engine with stdout and stderr merged into $log (Windows PowerShell 5.1
 # would otherwise turn native stderr into terminating errors). Returns the exit code.
 function Invoke-M7REngine([string] $exe, [string[]] $arguments, [string] $log) {

@@ -33,7 +33,7 @@ namespace Iridium {
 
     void VulkanReflectionProbeFeature::create(const VulkanFeatureContext& context) {
         context_ = &context;
-        capturePass_.init(context.device, context.vk.getPhysicalDevice(),
+        capturePass_.init(context.device, context.pipelineCache, context.vk.getPhysicalDevice(),
             context.allocator, context.descriptors,
             context.resources.textureTable().materialViewLayout(),
             context.resources.textureTable().samplerLayout(),
@@ -49,7 +49,7 @@ namespace Iridium {
             throw std::logic_error(
                 "reflection-probe indirect resources require capture and command layouts");
         culler_.init(setup.services, IndirectViewKind::ReflectionProbe,
-            createIndirectViewPipeline(context_->device,
+            createIndirectViewPipeline(context_->device, context_->pipelineCache,
                 IndirectViewKind::ReflectionProbe, capturePass_.captureSetLayout(),
                 context_->meshLayouts.getGpuSceneSetLayout(), setup.indirectLayout),
             setup.indirectLayout,

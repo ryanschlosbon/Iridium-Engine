@@ -62,6 +62,11 @@ namespace Iridium {
         bool warmupFrameCountSpecified = false;
         bool frameLimitSpecified = false;
         RenderDebugView debugView = RenderDebugView::Final;
+        // --pipeline-cache (M7R R4c.4): the persisted pipeline cache's
+        // directory; empty is the user cache directory
+        // (%LOCALAPPDATA%/Iridium/PipelineCache), and `off` disables it.
+        std::filesystem::path pipelineCacheDirectory;
+        bool pipelineCacheEnabled = true;
         std::filesystem::path cookedModelArtifact;
         std::filesystem::path cookedEnvironmentArtifact;
         std::optional<AssetGuid> editorAssetViewerGuid;

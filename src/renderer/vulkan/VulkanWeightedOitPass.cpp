@@ -64,7 +64,7 @@ namespace {
 
 } // namespace
 
-void VulkanWeightedOitPass::init(VkDevice device,
+void VulkanWeightedOitPass::init(VkDevice device, VkPipelineCache pipelineCache,
     ::DescriptorAllocator& descriptors,
     VkPipelineLayout forwardPipelineLayout) {
     if (device_ != VK_NULL_HANDLE || device == VK_NULL_HANDLE ||
@@ -72,6 +72,7 @@ void VulkanWeightedOitPass::init(VkDevice device,
         throw std::invalid_argument("Invalid WeightedOIT initialization");
     }
     device_ = device;
+    pipelineCache_ = pipelineCache;
     descriptors_ = &descriptors;
     accumulationPipelineLayout_ = forwardPipelineLayout;
     try {
@@ -202,7 +203,7 @@ VkPipeline VulkanWeightedOitPass::createAccumulationPipeline() const {
         info.pNext = &rendering;
         info.renderPass = VK_NULL_HANDLE;
         VkPipeline pipeline = VK_NULL_HANDLE;
-        requireSuccess(vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1u,
+        requireSuccess(vkCreateGraphicsPipelines(device_, pipelineCache_, 1u,
             &info, nullptr, &pipeline),
             "vkCreateGraphicsPipelines(WeightedOIT accumulation)");
         vkDestroyShaderModule(device_, fragment, nullptr);
@@ -281,7 +282,7 @@ VkPipeline VulkanWeightedOitPass::createResolvePipeline() const {
         info.pNext = &rendering;
         info.renderPass = VK_NULL_HANDLE;
         VkPipeline pipeline = VK_NULL_HANDLE;
-        requireSuccess(vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1u,
+        requireSuccess(vkCreateGraphicsPipelines(device_, pipelineCache_, 1u,
             &info, nullptr, &pipeline),
             "vkCreateGraphicsPipelines(WeightedOIT resolve)");
         vkDestroyShaderModule(device_, fragment, nullptr);

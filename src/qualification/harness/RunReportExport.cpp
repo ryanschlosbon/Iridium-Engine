@@ -462,6 +462,8 @@ namespace Iridium {
             runtimeInfo_.frameTopologyPrewarmRequested;
         metadata.frameTopologyPrewarmChanged =
             runtimeInfo_.frameTopologyPrewarmChanged;
+        metadata.pipelineCacheState = runtimeInfo_.pipelineCacheState;
+        metadata.pipelineCacheLoadedBytes = runtimeInfo_.pipelineCacheLoadedBytes;
         metadata.refractionPyramidsResident =
             runtimeInfo_.refractionPyramidsResident;
         metadata.modelLoadMode =

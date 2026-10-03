@@ -23,7 +23,7 @@ namespace Iridium {
             const VulkanClusteredLightingPipeline&) = delete;
         ~VulkanClusteredLightingPipeline();
 
-        void init(VkDevice device, ::DescriptorAllocator& allocator);
+        void init(VkDevice device, VkPipelineCache pipelineCache, ::DescriptorAllocator& allocator);
         void rebuildDescriptors(const VulkanRenderGraphExecutor& graph,
             const VulkanClusterGraphIds& ids,
             std::span<const VkDescriptorBufferInfo> lightRecords,
@@ -65,6 +65,7 @@ namespace Iridium {
         static void computeBarrier(VkCommandBuffer commandBuffer);
 
         VkDevice device_ = VK_NULL_HANDLE;
+        VkPipelineCache pipelineCache_ = VK_NULL_HANDLE;
         ::DescriptorAllocator* allocator_ = nullptr;
         VkDescriptorSetLayout descriptorSetLayout_ = VK_NULL_HANDLE;
         VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;

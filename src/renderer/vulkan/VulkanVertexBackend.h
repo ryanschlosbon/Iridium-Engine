@@ -21,6 +21,7 @@
 // Pipelines & Passes
 #include "VkGraphicsPipeline.h"
 #include "VkLightingPipeline.h"
+#include "VulkanPipelineCache.h"
 #include "VulkanPipelineLibrary.h"
 #include "VulkanMeshLayouts.h"
 #include "VulkanResourceAllocator.h"
@@ -175,6 +176,9 @@ namespace Iridium {
         VulkanGpuSceneState gpuScene_;
         VulkanFrameTelemetry telemetry_;
         VulkanExtensionHooks extensionHooks_;
+        // R4c.4: created right after the device, saved and destroyed at
+        // cleanup before the device.
+        VulkanPipelineCache pipelineCache_;
         std::optional<VulkanFeatureContext> featureContext_;
 
 

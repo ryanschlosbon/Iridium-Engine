@@ -47,7 +47,8 @@ namespace Iridium {
             setup_ = setup;
         }
         // M7.8 VSM (default-off), right after the allocator exists.
-        void initVirtualShadows(VkDevice device, VulkanResourceAllocator& allocator,
+        void initVirtualShadows(VkDevice device, VkPipelineCache pipelineCache,
+            VulkanResourceAllocator& allocator,
             const VkPhysicalDeviceLimits& limits,
             const VirtualShadowResourceConfig& config);
 

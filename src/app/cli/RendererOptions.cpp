@@ -293,6 +293,24 @@ namespace Iridium::AppCli {
                 c.experimentalDepthOcclusionRejection = true;
             });
 
+        addValueOption(registry, owner, "--pipeline-cache", "DIR|off",
+            "Pipeline cache directory (default: user cache), or off",
+            "--pipeline-cache requires a directory or off",
+            [&c](std::string_view value) {
+                if (value.empty()) {
+                    throw std::invalid_argument(
+                        "--pipeline-cache requires a directory or off");
+                }
+                if (value == "off") {
+                    c.pipelineCacheEnabled = false;
+                    c.pipelineCacheDirectory.clear();
+                }
+                else {
+                    c.pipelineCacheEnabled = true;
+                    c.pipelineCacheDirectory = std::filesystem::path(value);
+                }
+            });
+
         registry.addValidator(std::string(owner), [&c] {
             if (c.outputTransport != Color::OutputTransport::SdrSrgb &&
                 c.outputOperator != OutputTransformOperator::Aces2) {

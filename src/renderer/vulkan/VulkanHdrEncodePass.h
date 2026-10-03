@@ -12,8 +12,8 @@ namespace Iridium {
     class VulkanHdrEncodePass final {
     public:
         ~VulkanHdrEncodePass();
-        void init(VkContext& context, DescriptorAllocator& allocator,
-            VkFormat swapchainFormat);
+        void init(VkContext& context, VkPipelineCache pipelineCache,
+            DescriptorAllocator& allocator, VkFormat swapchainFormat);
         void rebuild(const VulkanFrameTargets& targets);
         void clearTargets();
         // Records the encode draw; the caller has begun dynamic rendering on
@@ -26,6 +26,7 @@ namespace Iridium {
 
     private:
         VkDevice device_ = VK_NULL_HANDLE;
+        VkPipelineCache pipelineCache_ = VK_NULL_HANDLE;
         DescriptorAllocator* allocator_ = nullptr;
         VkDescriptorSetLayout descriptorSetLayout_ = VK_NULL_HANDLE;
         VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;

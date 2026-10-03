@@ -46,7 +46,8 @@ namespace Iridium {
         VulkanPointShadowPools(const VulkanPointShadowPools&) = delete;
         VulkanPointShadowPools& operator=(const VulkanPointShadowPools&) = delete;
 
-        void init(VkDevice device, VulkanResourceAllocator& allocator,
+        void init(VkDevice device, VkPipelineCache pipelineCache,
+            VulkanResourceAllocator& allocator,
             VulkanUploadContext& uploads, ::DescriptorAllocator& descriptors,
             VkDescriptorSetLayout materialLayout,
             VkDescriptorSetLayout samplerLayout,
@@ -105,6 +106,7 @@ namespace Iridium {
         VkShaderModule createShaderModule(const char* relativePath) const;
 
         VkDevice device_ = VK_NULL_HANDLE;
+        VkPipelineCache pipelineCache_ = VK_NULL_HANDLE;
         VulkanResourceAllocator* allocator_ = nullptr;
         std::array<Pool, 3> pools_{};
         std::array<uint32_t, 3> capacities_{};

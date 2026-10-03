@@ -11,7 +11,9 @@ param(
     [switch] $SyncValidation,
     [string[]] $Only = @(),
     [string[]] $Points = @('scene', 'final-sdr'),
-    [string[]] $ExtraArgs = @()
+    [string[]] $ExtraArgs = @(),
+    # 'off' (default) or a cache directory; see Get-M7RPipelineCacheArgs.
+    [string] $PipelineCache = 'off'
 )
 $ErrorActionPreference = 'Stop'
 # powershell -File passes comma lists as one string; accept both forms.
@@ -23,6 +25,7 @@ $root = Get-M7RRepoRoot
 Push-Location $root
 try {
     $exePath = (Resolve-Path $Exe).Path
+    $cacheArgs = @(Get-M7RPipelineCacheArgs $exePath $PipelineCache)
     $outDir = Join-Path $root "out/m7r/captures/$Label"
     if (Test-Path $outDir) { throw "Output directory already exists: $outDir (captures are never overwritten)" }
     New-Item -ItemType Directory -Force $outDir | Out-Null
@@ -46,7 +49,7 @@ try {
                 '--capture-frame', '4', '--capture-directory', $captureDir,
                 '--capture-point', $point, '--require-capture-signal',
                 $(if ($SyncValidation) { '--validation-sync' } elseif ($Validation) { '--validation' } else { '--no-validation' })
-            ) + $fixture.Args + $ExtraArgs
+            ) + $cacheArgs + $fixture.Args + $ExtraArgs
             if ($fixture.Environment) {
                 $arguments += @('--cooked-environment-artifact', (Join-Path $root (Get-M7RModelArtifact $root $fixture.Environment)))
             }
@@ -77,7 +80,8 @@ try {
     $exeSha = (Get-FileHash $exePath -Algorithm SHA256).Hash.ToLowerInvariant()
     $report = [pscustomobject]@{
         label = $Label; commit = $git; dirtyTrackedFiles = $dirty; executable = $Exe; executableSha256 = $exeSha
-        validation = [bool]($Validation -or $SyncValidation); syncValidation = [bool]$SyncValidation; extraArgs = $ExtraArgs; captured = (Get-Date).ToString('o'); results = $results
+        validation = [bool]($Validation -or $SyncValidation); syncValidation = [bool]$SyncValidation; extraArgs = $ExtraArgs
+        pipelineCacheArgs = $cacheArgs; captured = (Get-Date).ToString('o'); results = $results
     }
     $report | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 (Join-Path $outDir 'hashes.json')
 

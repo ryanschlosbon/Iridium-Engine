@@ -680,10 +680,10 @@ namespace {
         for (const auto& source : sourceLevels) packedClips.push_back(pack(source));
         const std::array buffers{storage.handle};
         const auto shaders = std::filesystem::path(PROJECT_ROOT_DIR) / "assets/shaders";
-        VulkanVirtualShadowDepthReceiverPass producer; producer.init(device.logical, buffers, working, shaders);
-        VulkanVirtualShadowMarkingPass chain; chain.init(device.logical, buffers, working, config, shaders);
+        VulkanVirtualShadowDepthReceiverPass producer; producer.init(device.logical, VK_NULL_HANDLE, buffers, working, shaders);
+        VulkanVirtualShadowMarkingPass chain; chain.init(device.logical, VK_NULL_HANDLE, buffers, working, config, shaders);
         VulkanVirtualShadowFullViewPass full;
-        if (fullView) full.init(device.logical, buffers, working, shaders);
+        if (fullView) full.init(device.logical, VK_NULL_HANDLE, buffers, working, shaders);
         producer.bindDepth(0, view, sampler, {Width, Height}, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         if (fullView) full.bindDepth(0, view, sampler, {Width, Height}, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         VkQueryPool queryPool{};
@@ -821,7 +821,7 @@ namespace {
             device.createDeviceBuffer(layout.totalBytes)};
         const std::array buffers{slots[0].handle, slots[1].handle};
         VulkanVirtualShadowMarkingPass pass;
-        pass.init(device.logical, buffers, layout, config,
+        pass.init(device.logical, VK_NULL_HANDLE, buffers, layout, config,
             std::filesystem::path(PROJECT_ROOT_DIR) / "assets/shaders");
         Buffer upload = device.createBuffer(layout.totalBytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
         Buffer readback = device.createBuffer(layout.totalBytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT);

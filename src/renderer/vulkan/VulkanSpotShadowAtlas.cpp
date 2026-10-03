@@ -21,7 +21,7 @@ namespace {
 
 } // namespace
 
-void VulkanSpotShadowAtlas::init(VkDevice device,
+void VulkanSpotShadowAtlas::init(VkDevice device, VkPipelineCache pipelineCache,
     VulkanResourceAllocator& allocator, VulkanUploadContext& uploads,
     ::DescriptorAllocator& descriptors, VkDescriptorSetLayout materialLayout,
     VkDescriptorSetLayout samplerLayout, VkDescriptorSetLayout gpuSceneLayout,
@@ -31,6 +31,7 @@ void VulkanSpotShadowAtlas::init(VkDevice device,
         gpuSceneLayout == VK_NULL_HANDLE)
         throw std::invalid_argument("Invalid spot shadow atlas initialization");
     device_ = device;
+    pipelineCache_ = pipelineCache;
     allocator_ = &allocator;
     descriptors_ = &descriptors;
     resolution_ = resolution;
@@ -330,7 +331,7 @@ VkPipeline VulkanSpotShadowAtlas::createPipeline(bool alphaMasked,
         create.pNext = &rendering;
         create.renderPass = VK_NULL_HANDLE;
         VkPipeline result = VK_NULL_HANDLE;
-        requireSuccess(vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1,
+        requireSuccess(vkCreateGraphicsPipelines(device_, pipelineCache_, 1,
             &create, nullptr, &result),
             "vkCreateGraphicsPipelines(spot shadow)");
         if (fragment != VK_NULL_HANDLE)

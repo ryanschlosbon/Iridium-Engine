@@ -114,7 +114,7 @@ namespace Iridium {
     // Set 0 (the view's own layout), the GPU-scene tables, the shared
     // 3-binding indirect set.
     [[nodiscard]] VulkanCompactPipeline createIndirectViewPipeline(VkDevice device,
-        IndirectViewKind kind, VkDescriptorSetLayout set0Layout,
+        VkPipelineCache pipelineCache, IndirectViewKind kind, VkDescriptorSetLayout set0Layout,
         VkDescriptorSetLayout gpuSceneLayout, VkDescriptorSetLayout indirectLayout);
 
     struct IndirectViewInputs {

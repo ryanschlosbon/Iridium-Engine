@@ -16,7 +16,7 @@ namespace Iridium {
 
     void VulkanWeightedOitFeature::create(const VulkanFeatureContext& context) {
         context_ = &context;
-        pass_.init(context.device, context.descriptors,
+        pass_.init(context.device, context.pipelineCache, context.descriptors,
             context.meshLayouts.getForwardPipelineLayout());
     }
 

@@ -21,13 +21,14 @@ VulkanClusteredLightingPipeline::~VulkanClusteredLightingPipeline() {
     cleanup();
 }
 
-void VulkanClusteredLightingPipeline::init(VkDevice device,
+void VulkanClusteredLightingPipeline::init(VkDevice device, VkPipelineCache pipelineCache,
     ::DescriptorAllocator& allocator) {
     if (device == VK_NULL_HANDLE || device_ != VK_NULL_HANDLE) {
         throw std::logic_error(
             "Clustered-lighting pipeline initialized in an invalid state");
     }
     device_ = device;
+    pipelineCache_ = pipelineCache;
     allocator_ = &allocator;
     try {
         std::array<VkDescriptorSetLayoutBinding, BindingCount> bindings{};
@@ -102,7 +103,7 @@ VkPipeline VulkanClusteredLightingPipeline::createPipeline(
     pipelineInfo.stage.module = module;
     pipelineInfo.stage.pName = "main";
     VkPipeline pipeline = VK_NULL_HANDLE;
-    const VkResult result = vkCreateComputePipelines(device_, VK_NULL_HANDLE,
+    const VkResult result = vkCreateComputePipelines(device_, pipelineCache_,
         1, &pipelineInfo, nullptr, &pipeline);
     vkDestroyShaderModule(device_, module, nullptr);
     if (result != VK_SUCCESS) {

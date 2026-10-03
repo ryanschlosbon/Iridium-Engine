@@ -1,6 +1,8 @@
-# iridium_platform: native file dialogs and system profile queries.
+# iridium_platform: native file dialogs, system profile queries and the
+# per-user cache directory.
 add_library(iridium_platform STATIC
         SystemProfile.cpp
+        UserCacheDirectory.cpp
 )
 if(APPLE)
     enable_language(OBJCXX)

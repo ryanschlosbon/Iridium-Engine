@@ -28,6 +28,7 @@
 #include "renderer/vulkan/VulkanLayeredLocalCompositionPass.h"
 #include "renderer/vulkan/VulkanLayeredSceneResolvePass.h"
 #include "renderer/vulkan/VulkanMeshLayouts.h"
+#include "renderer/vulkan/VulkanPipelineCache.h"
 #include "renderer/vulkan/VulkanPipelineLibrary.h"
 #include "renderer/vulkan/VulkanPointShadowPools.h"
 #include "renderer/vulkan/VulkanReflectionProbeCapturePass.h"
@@ -39,6 +40,9 @@
 #include "renderer/vulkan/VulkanWeightedOitPass.h"
 
 #include <array>
+#include <chrono>
+#include <filesystem>
+#include <fstream>
 #include <map>
 #include <memory>
 #include <stdexcept>
@@ -126,6 +130,13 @@ namespace {
 
     std::unique_ptr<HeadlessVulkanDevice> sharedDevice;
 
+    // M7R R4c.4: every production pass creates its pipelines through one
+    // persisted cache, as the backend does; the last test saves and reloads it.
+    std::filesystem::path sharedCacheDirectory;
+    std::unique_ptr<VulkanPipelineCache> sharedCache;
+
+    VkPipelineCache pipelineCache() { return sharedCache->handle(); }
+
     bool noValidationErrors(const char* stage) {
         IRIDIUM_CHECK_MSG(sharedDevice->validationErrors() == 0u, stage << ": "
             << sharedDevice->validationErrors() << " validation errors");
@@ -140,7 +151,7 @@ namespace {
             IRIDIUM_CHECK(gpu.hasDynamicRendering());
 
             VulkanLayeredInterfaceCapturePass capture;
-            capture.init(gpu.device(), layouts.descriptors,
+            capture.init(gpu.device(), pipelineCache(), layouts.descriptors,
                 layouts.meshes.getGlobalSetLayout(), layouts.textures.materialViewLayout(),
                 layouts.textures.samplerLayout());
             IRIDIUM_CHECK(capture.pipeline() != VK_NULL_HANDLE);
@@ -148,7 +159,7 @@ namespace {
             IRIDIUM_CHECK(noValidationErrors("layered interface capture"));
 
             VulkanLayeredLocalCompositionPass composition;
-            composition.init(gpu.device(), layouts.descriptors,
+            composition.init(gpu.device(), pipelineCache(), layouts.descriptors,
                 layouts.meshes.getGlobalSetLayout(), layouts.textures.materialViewLayout(),
                 layouts.textures.samplerLayout(), layouts.lighting);
             IRIDIUM_CHECK(composition.pipeline() != VK_NULL_HANDLE);
@@ -157,20 +168,20 @@ namespace {
             IRIDIUM_CHECK(noValidationErrors("layered local composition"));
 
             VulkanLayeredSceneResolvePass resolve;
-            resolve.init(gpu.device(), layouts.descriptors,
+            resolve.init(gpu.device(), pipelineCache(), layouts.descriptors,
                 layouts.meshes.getGlobalSetLayout());
             IRIDIUM_CHECK(resolve.pipeline() != VK_NULL_HANDLE);
             IRIDIUM_CHECK(noValidationErrors("layered scene resolve"));
 
             VulkanWeightedOitPass weighted;
-            weighted.init(gpu.device(), layouts.descriptors,
+            weighted.init(gpu.device(), pipelineCache(), layouts.descriptors,
                 layouts.meshes.getForwardPipelineLayout());
             IRIDIUM_CHECK(weighted.accumulationPipeline() != VK_NULL_HANDLE);
             IRIDIUM_CHECK(weighted.resolvePipeline() != VK_NULL_HANDLE);
             IRIDIUM_CHECK(noValidationErrors("weighted OIT"));
 
             VulkanTransparencyPyramid pyramid;
-            pyramid.init(gpu.device(), layouts.descriptors,
+            pyramid.init(gpu.device(), pipelineCache(), layouts.descriptors,
                 layouts.meshes.getGlobalSetLayout());
             IRIDIUM_CHECK(noValidationErrors("transparency pyramid"));
 
@@ -193,7 +204,7 @@ namespace {
                 GBufferLayout::CanonicalQuality, GBufferLayout::CanonicalCompact }) {
             ProductionLayouts layouts(gpu);
             VulkanPipelineLibrary library;
-            library.init(gpu.device(),
+            library.init(gpu.device(), pipelineCache(),
                 { vulkanGBufferColorAttachmentFormats(layout),
                     vulkanGBufferFormats(layout).colorAttachmentCount,
                     VK_FORMAT_D32_SFLOAT, layouts.meshes.getGBufferPipelineLayout() },
@@ -239,15 +250,15 @@ namespace {
             // Opaque variants bind position-only vertex input; validation fails
             // pipeline creation if the shader consumed an unprovided location.
             VulkanDirectionalShadowMap directional;
-            directional.init(gpu.device(), allocator, uploads, layouts.descriptors,
+            directional.init(gpu.device(), pipelineCache(), allocator, uploads, layouts.descriptors,
                 layouts.textures.materialViewLayout(), layouts.textures.samplerLayout(),
                 layouts.meshes.getGpuSceneSetLayout(), 256);
             VulkanSpotShadowAtlas spot;
-            spot.init(gpu.device(), allocator, uploads, layouts.descriptors,
+            spot.init(gpu.device(), pipelineCache(), allocator, uploads, layouts.descriptors,
                 layouts.textures.materialViewLayout(), layouts.textures.samplerLayout(),
                 layouts.meshes.getGpuSceneSetLayout(), 512);
             VulkanPointShadowPools point;
-            point.init(gpu.device(), allocator, uploads, layouts.descriptors,
+            point.init(gpu.device(), pipelineCache(), allocator, uploads, layouts.descriptors,
                 layouts.textures.materialViewLayout(), layouts.textures.samplerLayout(),
                 layouts.meshes.getGpuSceneSetLayout(), { 1u, 1u, 1u });
             // The backend flushes initial target transitions after init.
@@ -265,7 +276,7 @@ namespace {
             IRIDIUM_CHECK(noValidationErrors("shadow pipelines"));
 
             VulkanReflectionProbeCapturePass probeCapture;
-            probeCapture.init(gpu.device(), gpu.physicalDevice(), allocator,
+            probeCapture.init(gpu.device(), pipelineCache(), gpu.physicalDevice(), allocator,
                 layouts.descriptors, layouts.textures.materialViewLayout(),
                 layouts.textures.samplerLayout(), layouts.lighting,
                 layouts.meshes.getGpuSceneSetLayout());
@@ -276,11 +287,11 @@ namespace {
             IRIDIUM_CHECK(noValidationErrors("reflection-probe capture"));
 
             VulkanClusteredLightingPipeline clusters;
-            clusters.init(gpu.device(), layouts.descriptors);
+            clusters.init(gpu.device(), pipelineCache(), layouts.descriptors);
             VulkanReflectionProbePipeline probeClusters;
-            probeClusters.init(gpu.device(), layouts.descriptors);
+            probeClusters.init(gpu.device(), pipelineCache(), layouts.descriptors);
             VulkanDepthPyramid depthPyramid;
-            depthPyramid.init(gpu.device(), layouts.descriptors, allocator,
+            depthPyramid.init(gpu.device(), pipelineCache(), layouts.descriptors, allocator,
                 layouts.meshes.getGlobalSetLayout(),
                 layouts.meshes.getGpuSceneSetLayout());
             IRIDIUM_CHECK(noValidationErrors("compute pipelines"));
@@ -300,6 +311,82 @@ namespace {
         return noValidationErrors("shadow and probe teardown");
     }
 
+    // The cache the tests above filled is saved atomically, reloaded warm
+    // (non-empty, byte-identical payload) and used again; a corrupted file is
+    // discarded and the cache starts empty.
+    bool testPersistedPipelineCache() {
+        HeadlessVulkanDevice& gpu = *sharedDevice;
+        gpu.resetValidationErrors();
+        const VulkanPipelineCacheIdentity identity =
+            VulkanPipelineCacheIdentity::of(gpu.physicalDevice());
+        IRIDIUM_CHECK(sharedCache->stats().state == PipelineCacheState::Cold);
+        IRIDIUM_CHECK(sharedCache->handle() != VK_NULL_HANDLE);
+        IRIDIUM_CHECK(sharedCache->save());
+        const uint64_t savedBytes = sharedCache->stats().savedBytes;
+        IRIDIUM_CHECK(savedBytes > kPipelineCacheFileHeaderBytes + 32u);
+        const std::filesystem::path file = sharedCache->stats().file;
+        IRIDIUM_CHECK(file.filename() == pipelineCacheFileName(identity));
+        IRIDIUM_CHECK(std::filesystem::file_size(file) == savedBytes);
+        size_t liveSize = 0;
+        IRIDIUM_CHECK(vkGetPipelineCacheData(gpu.device(), sharedCache->handle(),
+            &liveSize, nullptr) == VK_SUCCESS);
+        sharedCache->destroy();
+
+        VulkanPipelineCache warm;
+        warm.init(gpu.device(), identity, sharedCacheDirectory);
+        IRIDIUM_CHECK(warm.stats().state == PipelineCacheState::Warm);
+        IRIDIUM_CHECK(warm.handle() != VK_NULL_HANDLE);
+        IRIDIUM_CHECK(warm.stats().loadedBytes == savedBytes - kPipelineCacheFileHeaderBytes);
+        IRIDIUM_CHECK(warm.stats().loadedBytes == liveSize);
+        size_t warmSize = 0;
+        IRIDIUM_CHECK(vkGetPipelineCacheData(gpu.device(), warm.handle(), &warmSize,
+            nullptr) == VK_SUCCESS);
+        IRIDIUM_CHECK(warmSize > 32u);
+        {
+            // Pipelines created from the warm cache still validate.
+            ProductionLayouts layouts(gpu);
+            VulkanClusteredLightingPipeline clusters;
+            clusters.init(gpu.device(), warm.handle(), layouts.descriptors);
+            IRIDIUM_CHECK(noValidationErrors("warm-cache compute pipelines"));
+            clusters.cleanup();
+        }
+        IRIDIUM_CHECK(warm.save());
+        IRIDIUM_CHECK(warm.stats().saveSkippedUnchanged || warm.stats().savedBytes > 0u);
+        warm.destroy();
+
+        // Flip one payload byte: the FNV-64 check discards the file.
+        {
+            std::fstream stream(file, std::ios::in | std::ios::out | std::ios::binary);
+            stream.seekg(static_cast<std::streamoff>(kPipelineCacheFileHeaderBytes + 40u));
+            char value = 0;
+            stream.read(&value, 1);
+            value = static_cast<char>(value ^ 0x5a);
+            stream.seekp(static_cast<std::streamoff>(kPipelineCacheFileHeaderBytes + 40u));
+            stream.write(&value, 1);
+        }
+        VulkanPipelineCache discarded;
+        discarded.init(gpu.device(), identity, sharedCacheDirectory);
+        IRIDIUM_CHECK(discarded.stats().state == PipelineCacheState::Discarded);
+        IRIDIUM_CHECK(discarded.stats().discardReason == PipelineCacheFileStatus::HashMismatch);
+        IRIDIUM_CHECK(discarded.handle() != VK_NULL_HANDLE);
+        IRIDIUM_CHECK(discarded.stats().loadedBytes == 0u);
+        // The next save replaces the corrupt file with a valid one.
+        IRIDIUM_CHECK(discarded.save());
+        discarded.destroy();
+        VulkanPipelineCache repaired;
+        repaired.init(gpu.device(), identity, sharedCacheDirectory);
+        IRIDIUM_CHECK(repaired.stats().state == PipelineCacheState::Warm);
+        repaired.destroy();
+
+        // No directory: no cache object at all (pre-R4c.4 behavior).
+        VulkanPipelineCache off;
+        off.init(gpu.device(), identity, {});
+        IRIDIUM_CHECK(off.stats().state == PipelineCacheState::Off);
+        IRIDIUM_CHECK(off.handle() == VK_NULL_HANDLE);
+        IRIDIUM_CHECK(off.save());
+        return noValidationErrors("persisted pipeline cache");
+    }
+
 } // namespace
 
 int main() {
@@ -310,12 +397,25 @@ int main() {
         std::cerr << "headless Vulkan device unavailable: " << exception.what() << '\n';
         return 1;
     }
+    std::error_code error;
+    sharedCacheDirectory = std::filesystem::temp_directory_path(error) /
+        ("iridium-pipeline-contract-" + std::to_string(
+            std::chrono::steady_clock::now().time_since_epoch().count()));
+    std::filesystem::remove_all(sharedCacheDirectory, error);
+    sharedCache = std::make_unique<VulkanPipelineCache>();
+    sharedCache->init(sharedDevice->device(),
+        VulkanPipelineCacheIdentity::of(sharedDevice->physicalDevice()),
+        sharedCacheDirectory);
     constexpr Iridium::Test::TestCase tests[] = {
         { "layered transparency pipelines validate", testLayeredTransparencyPipelines },
         { "material pipeline library validates", testMaterialPipelineLibrary },
         { "shadow, probe and compute pipelines validate", testShadowAndProbePipelines },
+        { "persisted pipeline cache saves, reloads warm and discards corruption",
+            testPersistedPipelineCache },
     };
     const int result = Iridium::Test::runTests(tests);
+    sharedCache.reset();
     sharedDevice.reset();
+    std::filesystem::remove_all(sharedCacheDirectory, error);
     return result;
 }

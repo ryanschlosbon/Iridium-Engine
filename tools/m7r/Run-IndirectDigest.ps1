@@ -19,7 +19,9 @@ param(
     [switch] $NoRun,
     [string[]] $Only = @(),
     [switch] $Extended,
-    [string] $DataRoot = ''
+    [string] $DataRoot = '',
+    # 'off' (default) or a cache directory; see Get-M7RPipelineCacheArgs.
+    [string] $PipelineCache = 'off'
 )
 $ErrorActionPreference = 'Stop'
 $Only = @($Only | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
@@ -60,6 +62,7 @@ if (-not $NoRun) {
         $exePath = (Resolve-Path (Join-Path $repo $Exe) -ErrorAction SilentlyContinue)
         if (-not $exePath) { $exePath = Resolve-Path $Exe }
         $exePath = $exePath.Path
+        $cacheArgs = @(Get-M7RPipelineCacheArgs $exePath $PipelineCache)
         $fixtures = @()
         foreach ($fixture in $digestSet) {
             if ($Only.Count -gt 0 -and $Only -notcontains $fixture.Key) { continue }
@@ -70,7 +73,7 @@ if (-not $NoRun) {
                 '--window-size', '3840x2160', '--hidden-window', '--borderless-window',
                 '--output-transport', 'sdr', '--warmup-frames', '12', '--frame-limit', '6',
                 '--no-validation', '--qualification-indirect-stream-digest'
-            ) + $fixture.Args
+            ) + $cacheArgs + $fixture.Args
             if ($fixture.Environment) {
                 $arguments += @('--cooked-environment-artifact', (Join-Path $DataRoot (Get-M7RModelArtifact $DataRoot $fixture.Environment)))
             }

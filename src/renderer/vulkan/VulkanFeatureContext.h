@@ -51,6 +51,9 @@ namespace Iridium {
     struct VulkanFeatureContext {
         ::VkContext& vk;
         VkDevice device = VK_NULL_HANDLE;
+        // R4c.4: the persisted cache every pipeline creation passes
+        // (VK_NULL_HANDLE when `--pipeline-cache off`).
+        VkPipelineCache pipelineCache = VK_NULL_HANDLE;
         VulkanResourceAllocator& allocator;
         VulkanUploadContext& uploads;
         ::DescriptorAllocator& descriptors;

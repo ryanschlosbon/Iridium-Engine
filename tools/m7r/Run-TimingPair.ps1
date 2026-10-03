@@ -12,7 +12,9 @@ param(
     [int] $Warmup = 500,
     [int] $Frames = 10000,
     [string[]] $Only = @(),
-    [string[]] $ExtraArgs = @()
+    [string[]] $ExtraArgs = @(),
+    # 'off' (default) or a cache directory; see Get-M7RPipelineCacheArgs.
+    [string] $PipelineCache = 'off'
 )
 $ErrorActionPreference = 'Stop'
 # powershell -File passes comma lists as one string; accept both forms.
@@ -45,7 +47,7 @@ foreach ($route in $M7RTimingRoutes) {
             '--profile-cpu', '--profile-gpu', '--profile-cpu-output', $profile,
             '--cache-state', 'fresh-process-os-driver-cache-uncontrolled',
             '--warmup-frames', "$Warmup", '--frame-limit', "$Frames"
-        ) + $route.Args + $ExtraArgs
+        ) + @(Get-M7RPipelineCacheArgs $exe $PipelineCache) + $route.Args + $ExtraArgs
         Push-Location $roots[$side]
         try { $exit = Invoke-M7REngine $exe $arguments $log } finally { Pop-Location }
         Write-Host ("{0,-11} run {1} side {2} exit {3}" -f $route.Key, $index, $side, $exit)

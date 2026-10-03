@@ -38,6 +38,7 @@ add_library(iridium_vulkan STATIC
         VulkanOutputFeature.cpp
         VulkanOutputPass.cpp
         VulkanOutputTransport.cpp
+        VulkanPipelineCache.cpp
         VulkanPipelineLibrary.cpp
         VulkanPointShadowPools.cpp
         VulkanProductionRenderGraph.cpp

@@ -117,6 +117,9 @@ namespace Iridium {
         uint64_t frameTopologyPrewarmNanoseconds = 0;
         bool frameTopologyPrewarmRequested = false;
         bool frameTopologyPrewarmChanged = false;
+        // M7R R4c.4 persisted pipeline cache at backend init.
+        std::string pipelineCacheState = "off";
+        uint64_t pipelineCacheLoadedBytes = 0;
         bool refractionPyramidsResident = false;
         std::string modelLoadMode;
         std::string modelLocation;

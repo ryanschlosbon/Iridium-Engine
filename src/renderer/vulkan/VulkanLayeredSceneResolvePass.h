@@ -27,7 +27,8 @@ namespace Iridium {
 
         // R4a: the resolve pipeline renders into scene colour (RGBA16F) with
         // the opaque depth bound read-only (D32), by dynamic rendering.
-        void init(VkDevice device, ::DescriptorAllocator& descriptors,
+        void init(VkDevice device, VkPipelineCache pipelineCache,
+            ::DescriptorAllocator& descriptors,
             VkDescriptorSetLayout globalLayout);
         void rebuildDescriptors(const VulkanFrameTargets& frameTargets);
         void clearDescriptors() noexcept;
@@ -52,6 +53,7 @@ namespace Iridium {
         [[nodiscard]] VkPipeline createPipeline() const;
 
         VkDevice device_ = VK_NULL_HANDLE;
+        VkPipelineCache pipelineCache_ = VK_NULL_HANDLE;
         ::DescriptorAllocator* descriptors_ = nullptr;
         VkDescriptorSetLayout localColorLayout_ = VK_NULL_HANDLE;
         VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;

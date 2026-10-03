@@ -22,7 +22,9 @@ param(
     [string[]] $Only = @(),
     [string] $ArtifactRoot = '',
     [string] $OutRoot = '',
-    [string[]] $ExtraArgs = @()
+    [string[]] $ExtraArgs = @(),
+    # 'off' (default) or a cache directory; see Get-M7RPipelineCacheArgs.
+    [string] $PipelineCache = 'off'
 )
 $ErrorActionPreference = 'Stop'
 # powershell -File passes comma lists as one string; accept both forms.
@@ -76,7 +78,7 @@ foreach ($route in $M7RHitchRoutes) {
             '--cache-state', 'fresh-process-os-driver-cache-uncontrolled',
             '--warmup-frames', "$warmup", '--frame-limit', "$frames",
             '--qualification-scripted-changes', $scenarioPath
-        ) + $fixture.Args + $ExtraArgs
+        ) + @(Get-M7RPipelineCacheArgs $exe $PipelineCache) + $fixture.Args + $ExtraArgs
         if ($fixture.Environment) {
             $arguments += @('--cooked-environment-artifact', (Join-Path $ArtifactRoot (Get-M7RModelArtifact $ArtifactRoot $fixture.Environment)))
         }

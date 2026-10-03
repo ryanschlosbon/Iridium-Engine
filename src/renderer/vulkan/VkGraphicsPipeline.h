@@ -10,8 +10,9 @@ class VkGraphicsPipeline {
 public:
     // M7R R4a: the fixed wireframe/selection pipelines record with dynamic
     // rendering into the G-buffer attachments of `layout` (+ D32 depth).
-	VkGraphicsPipeline(VkContext* context, VkSwapchain* swapchain,
-        VkPipelineLayout pipelineLayout, Iridium::GBufferLayout layout);
+	VkGraphicsPipeline(VkContext* context, VkPipelineCache pipelineCache,
+        VkSwapchain* swapchain, VkPipelineLayout pipelineLayout,
+        Iridium::GBufferLayout layout);
     ~VkGraphicsPipeline();
 
     VkPipeline getWireframePipeline() { return wireframePipeline; }
@@ -20,6 +21,7 @@ public:
 
 private:
     VkContext* context;
+    VkPipelineCache pipelineCache = VK_NULL_HANDLE;
     VkPipeline wireframePipeline;
     VkPipeline outlinePipeline;
     VkPipelineLayout pipelineLayout; // Holds "Global Variables" definitions
