@@ -50,6 +50,7 @@ add_library(iridium_vulkan STATIC
         VulkanVirtualShadowFullViewPass.cpp
         VulkanVirtualShadowMarkingPass.cpp
         VulkanVirtualShadowResources.cpp
+        VulkanWeightedOitFeature.cpp
         VulkanWeightedOitPass.cpp
 )
 target_link_libraries(iridium_vulkan PUBLIC

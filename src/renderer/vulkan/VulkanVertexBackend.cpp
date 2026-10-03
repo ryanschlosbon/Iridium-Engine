@@ -252,7 +252,7 @@ namespace Iridium {
             config.experimentalDepthOcclusionRejection;
         depthOcclusionRejectionEnabled_ =
             config.experimentalDepthOcclusionRejection;
-        weightedOitOrderSeed_ = config.weightedOitOrderSeed;
+        oit_.configure(config.weightedOitOrderSeed);
         forceDirectGBufferReference_ = config.forceDirectGBufferReference;
         forceDirectShadowReference_ = config.forceDirectShadowReference;
         experimentalShadowLodErrorTexels_ =
@@ -426,8 +426,7 @@ namespace Iridium {
             outputTransport_ == Color::OutputTransport::Hdr10Pq,
             vkSwapchain->getImageFormat());
         createGpuSceneCullPipeline();
-        weightedOit_.init(vkContext->getDevice(), descriptorAllocator,
-            meshLayouts.getForwardPipelineLayout());
+        oit_.create(*featureContext_);
         layeredInterfaceCapture_.init(vkContext->getDevice(),
             descriptorAllocator, meshLayouts.getGlobalSetLayout(),
             resources_.textureTable().materialViewLayout(),
@@ -597,7 +596,7 @@ namespace Iridium {
         layeredInterfaceCapture_.rebuildDescriptors(frameTargets);
         layeredLocalComposition_.rebuildDescriptors(frameTargets);
         layeredSceneResolve_.rebuildDescriptors(frameTargets);
-        weightedOit_.rebuildDescriptors(frameTargets);
+        oit_.rebuildDescriptors();
 
         // 3. Lighting descriptors (one set per frame context).
         const uint32_t imgCount = vkSwapchain->getImageCount();
@@ -961,7 +960,7 @@ namespace Iridium {
         layeredInterfaceCapture_.clearDescriptors();
         layeredLocalComposition_.clearDescriptors();
         layeredSceneResolve_.clearDescriptors();
-        weightedOit_.clearDescriptors();
+        oit_.clearDescriptors();
         frameTargets.cleanup();
         renderGraph_.cleanupAfterDeviceIdle();
         directionalCuller_.destroy(device);
@@ -993,8 +992,6 @@ namespace Iridium {
         for (size_t i = 0; i < uniformBuffers.size(); i++) {
             resourceAllocator.destroy(uniformBuffers[i]);
         }
-        for (VulkanBufferResource& buffer : weightedOitInstanceBuffers_)
-            resourceAllocator.destroy(buffer);
         gpuScene_.destroy();
         opaqueCuller_.destroy(device);
         for (VulkanBufferResource& buffer : reflectionProbeRecordBuffers_)
@@ -1030,7 +1027,7 @@ namespace Iridium {
         layeredSceneResolve_.cleanup();
         layeredLocalComposition_.cleanup();
         layeredInterfaceCapture_.cleanup();
-        weightedOit_.cleanup();
+        oit_.destroy();
 
         meshLayouts.cleanup();
         resources_.textureTable().cleanup();
@@ -1060,7 +1057,6 @@ namespace Iridium {
         outputTransport_ = Color::OutputTransport::SdrSrgb;
         outputTargetFormat_ = VulkanSdrOutputFormat;
         resources_.reset();
-        weightedOitInstanceCapacity_ = 0;
         gpuScene_.reset();
         environmentLighting_ = {};
         reflectionProbeEnvironments_.clear();
@@ -1086,7 +1082,7 @@ namespace Iridium {
         const VulkanIndexedTextureTable& table = resources_.textureTable();
         telemetry_.emit({
             .weightedOitResident = weightedOitResidency_.enabled(),
-            .weightedOitOrderSeed = weightedOitOrderSeed_,
+            .weightedOitOrderSeed = oit_.orderSeed(),
             .refractionPyramidsResident = transparencyPyramidResidency_.enabled(),
             .texturesResident = resources_.textures().activeCount() -
                 resources_.retiredTextureCount(),
@@ -1275,40 +1271,6 @@ namespace Iridium {
         }
     }
 
-    void VulkanVertexBackend::setWeightedOitInstanceCapacity(uint32_t capacity) {
-        if (capacity == weightedOitInstanceCapacity_) return;
-        if (capacity > kWeightedOitMaximumInstanceCount) {
-            throw std::out_of_range(
-                "WeightedOIT instance capacity exceeds the production bound");
-        }
-
-        std::array<VulkanBufferResource,
-            VulkanFrameScheduler::FramesInFlight> replacement{};
-        if (capacity != 0u) {
-            try {
-                const VkDeviceSize bytes = static_cast<VkDeviceSize>(
-                    weightedOitInstanceStreamBytes(capacity));
-                for (VulkanBufferResource& buffer : replacement) {
-                    buffer = resourceAllocator.createBuffer(bytes,
-                        VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-                        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                            VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                        true, ProfileMemoryCategory::Uniform);
-                }
-            }
-            catch (...) {
-                for (VulkanBufferResource& buffer : replacement)
-                    resourceAllocator.destroy(buffer);
-                throw;
-            }
-        }
-
-        for (VulkanBufferResource& buffer : weightedOitInstanceBuffers_)
-            resourceAllocator.destroy(buffer);
-        weightedOitInstanceBuffers_ = replacement;
-        weightedOitInstanceCapacity_ = capacity;
-    }
-
     void VulkanVertexBackend::applyTransparencyPyramidTopologyChange(
         std::optional<VkExtent2D> requestedOrdinary2AtlasExtent,
         std::optional<VkExtent2D> requestedHero4AtlasExtent,
@@ -1384,7 +1346,7 @@ namespace Iridium {
             layeredInterfaceCapture_.clearDescriptors();
             layeredLocalComposition_.clearDescriptors();
             layeredSceneResolve_.clearDescriptors();
-            weightedOit_.clearDescriptors();
+            oit_.clearDescriptors();
             frameTargets.cleanup();
             renderGraph_.cleanupAfterDeviceIdle();
         };
@@ -1415,7 +1377,7 @@ namespace Iridium {
             layeredInterfaceCapture_.rebuildDescriptors(frameTargets);
             layeredLocalComposition_.rebuildDescriptors(frameTargets);
             layeredSceneResolve_.rebuildDescriptors(frameTargets);
-            weightedOit_.rebuildDescriptors(frameTargets);
+            oit_.rebuildDescriptors();
             output_.rebuildDescriptors();
             uiSceneTextures.resize(frameTargets.size());
             uiDepthTextures.resize(frameTargets.size());
@@ -1448,7 +1410,7 @@ namespace Iridium {
             hero4AtlasResidency_.publishRequested();
             cinematic8AtlasResidency_.publishRequested();
             weightedOitResidency_.publishRequested();
-            setWeightedOitInstanceCapacity(weightedOitResidency_.enabled()
+            oit_.setInstanceCapacity(weightedOitResidency_.enabled()
                 ? kWeightedOitMaximumInstanceCount : 0u);
             ordinary2AtlasExtent_ = nextOrdinary2AtlasExtent;
             hero4AtlasExtent_ = nextHero4AtlasExtent;
@@ -1469,7 +1431,7 @@ namespace Iridium {
                 hero4AtlasResidency_.restore(previousHero4Enabled);
                 cinematic8AtlasResidency_.restore(previousCinematic8Enabled);
                 weightedOitResidency_.restore(previousWeightedOitEnabled);
-                setWeightedOitInstanceCapacity(previousWeightedOitEnabled
+                oit_.setInstanceCapacity(previousWeightedOitEnabled
                     ? kWeightedOitMaximumInstanceCount : 0u);
                 ordinary2AtlasExtent_ = previousOrdinary2AtlasExtent;
                 hero4AtlasExtent_ = previousHero4AtlasExtent;
@@ -1554,7 +1516,7 @@ namespace Iridium {
         layeredInterfaceCapture_.clearDescriptors();
         layeredLocalComposition_.clearDescriptors();
         layeredSceneResolve_.clearDescriptors();
-        weightedOit_.clearDescriptors();
+        oit_.clearDescriptors();
         frameTargets.cleanup();
 		renderGraph_.cleanupAfterDeviceIdle();
         output_.destroyPipelines();
@@ -1616,7 +1578,7 @@ namespace Iridium {
         layeredInterfaceCapture_.rebuildDescriptors(frameTargets);
         layeredLocalComposition_.rebuildDescriptors(frameTargets);
         layeredSceneResolve_.rebuildDescriptors(frameTargets);
-        weightedOit_.rebuildDescriptors(frameTargets);
+        oit_.rebuildDescriptors();
         output_.rebuildDescriptors();
         if (newImageCount != oldImageCount) {
             ImGui_ImplVulkan_SetMinImageCount(newImageCount);
@@ -1735,7 +1697,7 @@ namespace Iridium {
             layeredInterfaceCapture_.clearDescriptors();
             layeredLocalComposition_.clearDescriptors();
             layeredSceneResolve_.clearDescriptors();
-            weightedOit_.clearDescriptors();
+            oit_.clearDescriptors();
             frameTargets.cleanup();
             renderGraph_.cleanupAfterDeviceIdle();
         };
@@ -1766,7 +1728,7 @@ namespace Iridium {
             layeredInterfaceCapture_.rebuildDescriptors(frameTargets);
             layeredLocalComposition_.rebuildDescriptors(frameTargets);
             layeredSceneResolve_.rebuildDescriptors(frameTargets);
-            weightedOit_.rebuildDescriptors(frameTargets);
+            oit_.rebuildDescriptors();
             output_.rebuildDescriptors();
             uiSceneTextures.resize(frameTargets.size());
             uiDepthTextures.resize(frameTargets.size());
@@ -2178,8 +2140,8 @@ namespace Iridium {
                 forwardPass->getRenderPass(), transparentPass->getRenderPass(),
                 layeredInterfaceCapture_.renderPass(),
                 layeredLocalComposition_.renderPass(),
-                weightedOit_.accumulationRenderPass(),
-                weightedOit_.resolveRenderPass(), output_.outputRenderPass(),
+                oit_.accumulationRenderPass(),
+                oit_.resolveRenderPass(), output_.outputRenderPass(),
                 uiPass->getRenderPass() },
             VulkanFrameScheduler::FramesInFlight,
             outputTransport_ == Color::OutputTransport::Hdr10Pq,
@@ -5752,7 +5714,7 @@ const VkDeviceSize offset = geometry->vertexOffset;
         weightedOitResidency_.observe(weightedOitPacketCount != 0u);
         const bool weightedOitExecutionEnabled =
             weightedOitResidency_.enabled() &&
-            weightedOitInstanceCount <= weightedOitInstanceCapacity_;
+            weightedOitInstanceCount <= oit_.instanceCapacity();
         if (telemetry_.collecting()) {
             telemetry_.counters().weightedOitPackets = weightedOitPacketCount;
             telemetry_.counters().weightedOitSortedFallbackPackets =
@@ -6198,245 +6160,19 @@ const VkDeviceSize offset = geometry->vertexOffset;
             forwardPass->getRenderPass(), targets.forwardFramebuffer,
             RenderPassClass::Forward, true, false);
 
-        if (weightedOitResidency_.enabled() &&
-            (!weightedOitExecutionEnabled || weightedOitPacketCount == 0u)) {
-            renderGraph_.skipPass(graphIds_.oitAccumulate);
-            renderGraph_.skipPass(graphIds_.oitResolve);
-        }
-        else if (weightedOitExecutionEnabled) {
+        // R3c.3 drain point: "transparent.oit.{accumulate,resolve}", inside
+        // the transparent pipeline-statistics bracket as before.
+        {
             const uint32_t oitFrameIndex = scheduler.currentFrameIndex();
-            const VulkanFrameContextTargets& oitTargets =
-                frameTargets.get(oitFrameIndex);
-            const VkExtent2D oitExtent = frameTargets.extent();
-            const VkViewport viewport{ 0.0f, 0.0f,
-                static_cast<float>(oitExtent.width),
-                static_cast<float>(oitExtent.height), 0.0f, 1.0f };
-            const VkRect2D scissor{ { 0, 0 }, oitExtent };
-            VulkanBufferResource& instanceBuffer =
-                weightedOitInstanceBuffers_[oitFrameIndex];
-            if (instanceBuffer.mapped == nullptr ||
-                instanceBuffer.size < weightedOitInstanceStreamBytes(
-                    weightedOitInstanceCapacity_)) {
-                throw std::logic_error(
-                    "WeightedOIT instance stream is not resident");
-            }
-            const uint32_t oitQueueSize = static_cast<uint32_t>(
-                sortedSurfaceQueue.size());
-            uint32_t preparedInstanceCount = 0u;
-            for (uint32_t ordinal = 0u; ordinal < oitQueueSize; ++ordinal) {
-                const uint32_t packetIndex = weightedOitPermutationIndex(
-                    ordinal, oitQueueSize, weightedOitOrderSeed_);
-                const DrawPacket& packet = sortedSurfaceQueue[packetIndex];
-                if (!isWeightedOitPacket(packet) ||
-                    resources_.geometries().get(packet.geometry) == nullptr ||
-                    resources_.materials().get(packet.material) == nullptr) {
-                    continue;
-                }
-                if (packet.firstInstanceTransform == UINT32_MAX) {
-                    std::memcpy(static_cast<std::byte*>(instanceBuffer.mapped) +
-                            weightedOitInstanceStreamBytes(
-                                preparedInstanceCount),
-                        &packet.worldTransform, sizeof(packet.worldTransform));
-                }
-                else {
-                    std::memcpy(static_cast<std::byte*>(instanceBuffer.mapped) +
-                            weightedOitInstanceStreamBytes(
-                                preparedInstanceCount),
-                        instanceTransforms.data() +
-                            packet.firstInstanceTransform,
-                        weightedOitInstanceStreamBytes(packet.instanceCount));
-                }
-                preparedInstanceCount += packet.instanceCount;
-            }
-            if (telemetry_.collecting()) {
-                telemetry_.counters().weightedOitInstances = preparedInstanceCount;
-                telemetry_.counters().weightedOitInstanceUploadBytes =
-                    weightedOitInstanceStreamBytes(preparedInstanceCount);
-            }
-
-            renderGraph_.beginPass(currentCmd, graphIds_.oitAccumulate);
-            VulkanGpuRangeToken accumulationRange = scheduler.beginGpuRange(
-                "gpu.transparency.oit.accumulate");
-            std::array<VkClearValue, 2> clears{};
-            clears[0].color = { { 0.0f, 0.0f, 0.0f, 0.0f } };
-            clears[1].color = { { 1.0f, 0.0f, 0.0f, 0.0f } };
-            VkRenderPassBeginInfo accumulationInfo{
-                VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
-            accumulationInfo.renderPass =
-                weightedOit_.accumulationRenderPass();
-            accumulationInfo.framebuffer =
-                oitTargets.weightedOitAccumulationFramebuffer;
-            accumulationInfo.renderArea.extent = oitExtent;
-            accumulationInfo.clearValueCount = static_cast<uint32_t>(
-                clears.size());
-            accumulationInfo.pClearValues = clears.data();
-            vkCmdBeginRenderPass(currentCmd, &accumulationInfo,
-                VK_SUBPASS_CONTENTS_INLINE);
-            vkCmdSetViewport(currentCmd, 0u, 1u, &viewport);
-            vkCmdSetScissor(currentCmd, 0u, 1u, &scissor);
-
-            const VkPipelineLayout accumulationLayout =
-                weightedOit_.accumulationPipelineLayout();
-            vkCmdBindPipeline(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                weightedOit_.accumulationPipeline());
-            telemetry_.recordPipelineBind(pipelineIdentity(
-                FixedPipelineIdentity::WeightedOitAccumulation));
-            const VkDescriptorSet globalSet =
-                globalDescriptorSets[oitFrameIndex];
-            const VkDescriptorSet sceneSet = sceneDescriptors.get(
-                oitFrameIndex);
-            vkCmdBindDescriptorSets(currentCmd,
-                VK_PIPELINE_BIND_POINT_GRAPHICS, accumulationLayout,
-                0u, 1u, &globalSet, 0u, nullptr);
-            vkCmdBindDescriptorSets(currentCmd,
-                VK_PIPELINE_BIND_POINT_GRAPHICS, accumulationLayout,
-                3u, 1u, &sceneSet, 0u, nullptr);
-
-            const VkDeviceSize instanceOffset = 0u;
-            vkCmdBindVertexBuffers(currentCmd, 1u, 1u,
-                &instanceBuffer.buffer, &instanceOffset);
-            MaterialHandle lastMaterial{};
-            GeometryHandle lastGeometry{};
-            const DrawPacket* batchPacket = nullptr;
-            VulkanGeometryPayload* batchGeometry = nullptr;
-            VulkanMaterialPayload* batchMaterial = nullptr;
-            uint32_t batchFirstInstance = 0u;
-            uint32_t batchInstanceCount = 0u;
-            const auto sameBatchState = [](const DrawPacket& lhs,
-                    const DrawPacket& rhs) {
-                constexpr uint32_t MirroredMask = TransparentWorkMirrored;
-                return lhs.geometry == rhs.geometry &&
-                    lhs.material == rhs.material &&
-                    lhs.indexCount == rhs.indexCount &&
-                    lhs.firstIndex == rhs.firstIndex &&
-                    (lhs.transparentWorkFlags & MirroredMask) ==
-                        (rhs.transparentWorkFlags & MirroredMask);
-            };
-            const auto flushBatch = [&] {
-                if (batchInstanceCount == 0u || batchPacket == nullptr ||
-                    batchGeometry == nullptr || batchMaterial == nullptr) {
-                    return;
-                }
-                if (batchPacket->material != lastMaterial) {
-                    bindMaterialDescriptors(accumulationLayout);
-                    telemetry_.recordMaterialBind(batchPacket->material);
-                    lastMaterial = batchPacket->material;
-                }
-                if (batchPacket->geometry != lastGeometry) {
-                    const VkDeviceSize offset = batchGeometry->vertexOffset;
-                    vkCmdBindVertexBuffers(currentCmd, 0u, 1u,
-                        &batchGeometry->vertexBuffer.buffer, &offset);
-                    vkCmdBindIndexBuffer(currentCmd,
-                        batchGeometry->indexBuffer.buffer, 0u,
-                        toVkIndexType(batchGeometry->indexFormat));
-                    lastGeometry = batchPacket->geometry;
-                }
-                const bool mirrored = (batchPacket->transparentWorkFlags &
-                    TransparentWorkMirrored) != 0u;
-                CanonicalMeshPushConstants push{};
-                push.renderMatrix = glm::mat4(1.0f);
-                push.materialIndex = batchPacket->material.getIndex();
-                push.padding[0] = static_cast<uint32_t>(debugView_);
-                push.padding[1] = mirrored ? 1u : 0u;
-                vkCmdPushConstants(currentCmd, accumulationLayout,
-                    VK_SHADER_STAGE_VERTEX_BIT |
-                        VK_SHADER_STAGE_FRAGMENT_BIT,
-                    0u, sizeof(push), &push);
-                vkCmdDrawIndexed(currentCmd, batchPacket->indexCount,
-                    batchInstanceCount, batchPacket->firstIndex, 0,
-                    batchFirstInstance);
-                telemetry_.recordDraw(telemetry_.counters().drawWeightedOitAccumulation,
-                    static_cast<uint64_t>(batchPacket->indexCount / 3u) *
-                        batchInstanceCount);
-                if (telemetry_.collecting()) {
-                    const MaterialClosureClass closure =
-                        static_cast<MaterialClosureClass>(
-                            batchMaterial->packed.closureClass);
-                    if (closure == MaterialClosureClass::StandardForward)
-                        ++telemetry_.counters().drawStandardForward;
-                    else if (closure == MaterialClosureClass::ComplexForward) {
-                        ++telemetry_.counters().drawComplexForward;
-                        for (uint32_t lobe = 0u;
-                            lobe < batchMaterial->packed.complexLobeCount; ++lobe) {
-                            const uint32_t type =
-                                batchMaterial->packed.complexLobes[lobe].type;
-                            if (type < telemetry_.counters().complexLobeDraws.size())
-                                ++telemetry_.counters().complexLobeDraws[type];
-                        }
-                    }
-                    else if (closure == MaterialClosureClass::Unlit)
-                        ++telemetry_.counters().drawUnlitForward;
-                }
-                batchPacket = nullptr;
-                batchGeometry = nullptr;
-                batchMaterial = nullptr;
-                batchInstanceCount = 0u;
-            };
-            uint32_t instanceCursor = 0u;
-            for (uint32_t ordinal = 0u; ordinal < oitQueueSize; ++ordinal) {
-                const uint32_t packetIndex = weightedOitPermutationIndex(
-                    ordinal, oitQueueSize, weightedOitOrderSeed_);
-                const DrawPacket& packet = sortedSurfaceQueue[packetIndex];
-                if (!isWeightedOitPacket(packet)) continue;
-                VulkanGeometryPayload* geometry = resources_.geometries().get(
-                    packet.geometry);
-                VulkanMaterialPayload* material = resources_.materials().get(
-                    packet.material);
-                if (geometry == nullptr || material == nullptr) continue;
-                if (batchPacket != nullptr &&
-                    !sameBatchState(*batchPacket, packet)) {
-                    flushBatch();
-                }
-                if (batchPacket == nullptr) {
-                    batchPacket = &packet;
-                    batchGeometry = geometry;
-                    batchMaterial = material;
-                    batchFirstInstance = instanceCursor;
-                }
-                batchInstanceCount += packet.instanceCount;
-                instanceCursor += packet.instanceCount;
-            }
-            flushBatch();
-            if (instanceCursor != preparedInstanceCount) {
-                throw std::logic_error(
-                    "WeightedOIT instance preparation changed during recording");
-            }
-            vkCmdEndRenderPass(currentCmd);
-            scheduler.endGpuRange(accumulationRange);
-
-            renderGraph_.beginPass(currentCmd, graphIds_.oitResolve);
-            VulkanGpuRangeToken resolveRange = scheduler.beginGpuRange(
-                "gpu.transparency.oit.resolve");
-            VkRenderPassBeginInfo resolveInfo{
-                VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
-            resolveInfo.renderPass = weightedOit_.resolveRenderPass();
-            resolveInfo.framebuffer =
-                oitTargets.weightedOitResolveFramebuffer;
-            resolveInfo.renderArea.extent = oitExtent;
-            vkCmdBeginRenderPass(currentCmd, &resolveInfo,
-                VK_SUBPASS_CONTENTS_INLINE);
-            vkCmdSetViewport(currentCmd, 0u, 1u, &viewport);
-            vkCmdSetScissor(currentCmd, 0u, 1u, &scissor);
-            vkCmdBindPipeline(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                weightedOit_.resolvePipeline());
-            telemetry_.recordPipelineBind(pipelineIdentity(
-                FixedPipelineIdentity::WeightedOitResolve));
-            const VkPipelineLayout resolveLayout =
-                weightedOit_.resolvePipelineLayout();
-            const VkDescriptorSet resolveSet =
-                weightedOit_.resolveDescriptorSet(oitFrameIndex);
-            vkCmdBindDescriptorSets(currentCmd,
-                VK_PIPELINE_BIND_POINT_GRAPHICS, resolveLayout,
-                0u, 1u, &resolveSet, 0u, nullptr);
-            const uint32_t resolveDebugView =
-                static_cast<uint32_t>(debugView_);
-            vkCmdPushConstants(currentCmd, resolveLayout,
-                VK_SHADER_STAGE_FRAGMENT_BIT, 0u,
-                sizeof(resolveDebugView), &resolveDebugView);
-            vkCmdDraw(currentCmd, 3u, 1u, 0u, 0u);
-            telemetry_.recordDraw(telemetry_.counters().drawWeightedOitResolve, 1u);
-            vkCmdEndRenderPass(currentCmd);
-            scheduler.endGpuRange(resolveRange);
+            oit_.record({
+                .sortedSurfaceQueue = sortedSurfaceQueue,
+                .instanceTransforms = instanceTransforms,
+                .execute = weightedOitExecutionEnabled &&
+                    weightedOitPacketCount != 0u,
+                .globalSet = globalDescriptorSets[oitFrameIndex],
+                .sceneSet = sceneDescriptors.get(oitFrameIndex),
+                .debugView = debugView_,
+            });
         }
 
         if (pipelineStatisticsActive) {

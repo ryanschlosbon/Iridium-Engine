@@ -1,0 +1,98 @@
+#pragma once
+
+// M7R R3c.3: explicit WeightedOIT as a feature owner. Owns the accumulation
+// and resolve passes and pipelines, the per-slot instance streams and their
+// capacity, and the deterministic order seed; registers the callbacks of
+// "transparent.oit.accumulate" and "transparent.oit.resolve". Residency (the
+// graph topology that declares the passes) stays with the backend's
+// transparency topology state.
+
+#include "renderer/rhi/DrawPacket.h"
+#include "renderer/rhi/RenderDebugView.h"
+
+#include "VulkanFeatureContext.h"
+#include "VulkanFrameScheduler.h"
+#include "VulkanRenderGraphExecutor.h"
+#include "VulkanResourceAllocator.h"
+#include "VulkanWeightedOitPass.h"
+
+#include <glm/glm.hpp>
+#include <vulkan/vulkan.h>
+
+#include <array>
+#include <cstdint>
+#include <span>
+
+namespace Iridium {
+
+    class VulkanWeightedOitFeature final : public IVulkanFeature {
+    public:
+        static constexpr uint32_t FrameCount = VulkanFrameScheduler::FramesInFlight;
+
+        // Per-frame inputs (submitForwardQueues), valid until the drain.
+        struct FrameInputs {
+            std::span<const DrawPacket> sortedSurfaceQueue{};
+            std::span<const glm::mat4> instanceTransforms{};
+            // WeightedOIT is resident, every instance fits, and the queue
+            // holds at least one WeightedOIT packet.
+            bool execute = false;
+            VkDescriptorSet globalSet = VK_NULL_HANDLE;
+            VkDescriptorSet sceneSet = VK_NULL_HANDLE;
+            RenderDebugView debugView = RenderDebugView::Final;
+        };
+
+        VulkanWeightedOitFeature() = default;
+        VulkanWeightedOitFeature(const VulkanWeightedOitFeature&) = delete;
+        VulkanWeightedOitFeature& operator=(const VulkanWeightedOitFeature&) = delete;
+
+        void configure(uint64_t orderSeed) noexcept { orderSeed_ = orderSeed; }
+        [[nodiscard]] uint64_t orderSeed() const noexcept { return orderSeed_; }
+
+        // IVulkanFeature
+        void create(const VulkanFeatureContext& context) override;
+        void onGraphRebuilt(const VulkanProductionGraphIds& ids) override;
+        void registerPasses(VulkanRenderGraphExecutor& graph) override;
+        void destroy() noexcept override;
+
+        // Render passes for the frame targets; descriptors after they rebuild.
+        [[nodiscard]] VkRenderPass accumulationRenderPass() const noexcept {
+            return pass_.accumulationRenderPass();
+        }
+        [[nodiscard]] VkRenderPass resolveRenderPass() const noexcept {
+            return pass_.resolveRenderPass();
+        }
+        void rebuildDescriptors();
+        void clearDescriptors() noexcept { pass_.clearDescriptors(); }
+
+        // Instance-stream capacity (topology changes only).
+        void setInstanceCapacity(uint32_t capacity);
+        [[nodiscard]] uint32_t instanceCapacity() const noexcept {
+            return instanceCapacity_;
+        }
+
+        // Drain point: prepares the slot's instance stream when executing,
+        // then runs accumulate and resolve (both skipped otherwise).
+        void record(const FrameInputs& inputs);
+
+    private:
+        void prepareInstances(uint32_t frameIndex);
+        void recordAccumulation(VulkanPassContext& context);
+        void recordResolve(VulkanPassContext& context);
+        static bool active(void* owner, const VulkanFrameRecordContext& frame);
+        static void executeAccumulation(void* owner, VulkanPassContext& context);
+        static void executeResolve(void* owner, VulkanPassContext& context);
+
+        const VulkanFeatureContext* context_ = nullptr;
+        VulkanWeightedOitPass pass_;
+        std::array<VulkanBufferResource, FrameCount> instanceBuffers_{};
+        uint32_t instanceCapacity_ = 0u;
+        uint64_t orderSeed_ = 0;
+        RenderGraph::PassId accumulatePass_{};
+        RenderGraph::PassId resolvePass_{};
+
+        // Staged for the frame's callbacks (see VulkanFeatureContext.h).
+        FrameInputs staged_{};
+        uint32_t preparedInstanceCount_ = 0u;
+    };
+
+} // namespace Iridium

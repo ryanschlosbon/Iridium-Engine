@@ -36,6 +36,7 @@
 #include "VulkanBackendExtension.h"
 #include "VulkanClusterLightingFeature.h"
 #include "VulkanOutputFeature.h"
+#include "VulkanWeightedOitFeature.h"
 #include "VulkanExtensionHooks.h"
 #include "VulkanFeatureContext.h"
 #include "VulkanFrameTelemetry.h"
@@ -104,10 +105,8 @@ namespace Iridium {
         VulkanLayeredInterfaceCapturePass layeredInterfaceCapture_;
         VulkanLayeredLocalCompositionPass layeredLocalComposition_;
         VulkanLayeredSceneResolvePass layeredSceneResolve_;
-        VulkanWeightedOitPass weightedOit_;
-        std::array<VulkanBufferResource, VulkanFrameScheduler::FramesInFlight>
-            weightedOitInstanceBuffers_{};
-        uint32_t weightedOitInstanceCapacity_ = 0u;
+        // R3c.3: WeightedOIT accumulation/resolve and instance capacity.
+        VulkanWeightedOitFeature oit_;
         TransparencyPyramidResidency transparencyPyramidResidency_;
         TransparencyPyramidResidency ordinary2AtlasResidency_;
         TransparencyPyramidResidency hero4AtlasResidency_;
@@ -288,7 +287,6 @@ namespace Iridium {
         bool depthHistoryPrepared_ = false;
         bool imguiInitialized_ = false;
         CpuProfiler* cpuProfiler_ = nullptr;
-        uint64_t weightedOitOrderSeed_ = 0;
         bool forceDirectGBufferReference_ = false;
         bool forceDirectShadowReference_ = false;
         float experimentalShadowLodErrorTexels_ = 0.0f;
@@ -382,8 +380,8 @@ namespace Iridium {
             const glm::mat4& view, const glm::mat4& projection,
             float nearPlane, float farPlane, uint32_t activeProbeCount);
         // Feature owners in registration (and graph) order.
-        [[nodiscard]] std::array<IVulkanFeature*, 2> features() noexcept {
-            return { &clusterLighting_, &output_ };
+        [[nodiscard]] std::array<IVulkanFeature*, 3> features() noexcept {
+            return { &clusterLighting_, &output_, &oit_ };
         }
         void initFrameTargets();
         void rebuildRenderGraphAfterDeviceIdle();
@@ -409,7 +407,6 @@ namespace Iridium {
                 std::nullopt,
             std::optional<VkExtent2D> requestedCinematic8AtlasExtent =
                 std::nullopt);
-        void setWeightedOitInstanceCapacity(uint32_t capacity);
         void updateUniformBuffer(const glm::mat4& view, const glm::mat4& proj);
         void createLightingRenderPass();
         void emitFrameCounters();
