@@ -3,12 +3,14 @@
 // M7R R3c.3: explicit WeightedOIT as a feature owner. Owns the accumulation
 // and resolve passes and pipelines, the per-slot instance streams and their
 // capacity, and the deterministic order seed; registers the callbacks of
-// "transparent.oit.accumulate" and "transparent.oit.resolve". Residency (the
-// graph topology that declares the passes) stays with the backend's
-// transparency topology state.
+// "transparent.oit.accumulate" and "transparent.oit.resolve". Since R3c.9 it
+// also owns the WeightedOIT residency (the topology that declares the passes,
+// switched by the backend's transparency topology change) and the per-frame
+// packet/instance-capacity decision.
 
 #include "renderer/rhi/DrawPacket.h"
 #include "renderer/rhi/RenderDebugView.h"
+#include "renderer/transparency/TransparencyPyramidResidency.h"
 
 #include "VulkanFeatureContext.h"
 #include "VulkanFrameScheduler.h"
@@ -41,6 +43,13 @@ namespace Iridium {
             RenderDebugView debugView = RenderDebugView::Final;
         };
 
+        // The frame's WeightedOIT demand (observe).
+        struct FrameDecision {
+            uint64_t packetCount = 0;
+            // Resident and every instance fits the instance stream.
+            bool executionEnabled = false;
+        };
+
         VulkanWeightedOitFeature() = default;
         VulkanWeightedOitFeature(const VulkanWeightedOitFeature&) = delete;
         VulkanWeightedOitFeature& operator=(const VulkanWeightedOitFeature&) = delete;
@@ -70,6 +79,17 @@ namespace Iridium {
             return instanceCapacity_;
         }
 
+        // Residency (topology changes publish or restore it).
+        [[nodiscard]] TransparencyPyramidResidency& residency() noexcept { return residency_; }
+        [[nodiscard]] const TransparencyPyramidResidency& residency() const noexcept {
+            return residency_;
+        }
+        // Per frame (submitForwardQueues): validates the sorted queue's
+        // WeightedOIT packets, observes the residency demand and records the
+        // fallback counters.
+        [[nodiscard]] FrameDecision observe(std::span<const DrawPacket> sortedSurfaceQueue,
+            std::span<const glm::mat4> instanceTransforms);
+
         // Drain point: prepares the slot's instance stream when executing,
         // then runs accumulate and resolve (both skipped otherwise).
         void record(const FrameInputs& inputs);
@@ -87,6 +107,7 @@ namespace Iridium {
         std::array<VulkanBufferResource, FrameCount> instanceBuffers_{};
         uint32_t instanceCapacity_ = 0u;
         uint64_t orderSeed_ = 0;
+        TransparencyPyramidResidency residency_;
         RenderGraph::PassId accumulatePass_{};
         RenderGraph::PassId resolvePass_{};
 

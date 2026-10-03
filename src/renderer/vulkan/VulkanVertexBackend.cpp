@@ -37,39 +37,6 @@
 namespace Iridium {
 
     namespace {
-        constexpr std::array<const char*, 4> Hero4CaptureGpuRanges{
-            "gpu.transparency.layered.hero4.interface.0.capture",
-            "gpu.transparency.layered.hero4.interface.1.capture",
-            "gpu.transparency.layered.hero4.interface.2.capture",
-            "gpu.transparency.layered.hero4.interface.3.capture",
-        };
-        constexpr std::array<const char*, 8> Cinematic8CaptureGpuRanges{
-            "gpu.transparency.layered.cinematic8.interface.0.capture",
-            "gpu.transparency.layered.cinematic8.interface.1.capture",
-            "gpu.transparency.layered.cinematic8.interface.2.capture",
-            "gpu.transparency.layered.cinematic8.interface.3.capture",
-            "gpu.transparency.layered.cinematic8.interface.4.capture",
-            "gpu.transparency.layered.cinematic8.interface.5.capture",
-            "gpu.transparency.layered.cinematic8.interface.6.capture",
-            "gpu.transparency.layered.cinematic8.interface.7.capture",
-        };
-        constexpr std::array<const char*, 4> Hero4TerminationGpuRanges{
-            "gpu.transparency.layered.hero4.interface.0.terminate-tiles",
-            "gpu.transparency.layered.hero4.interface.1.terminate-tiles",
-            "gpu.transparency.layered.hero4.interface.2.terminate-tiles",
-            "gpu.transparency.layered.hero4.interface.3.terminate-tiles",
-        };
-        constexpr std::array<const char*, 8> Cinematic8TerminationGpuRanges{
-            "gpu.transparency.layered.cinematic8.interface.0.terminate-tiles",
-            "gpu.transparency.layered.cinematic8.interface.1.terminate-tiles",
-            "gpu.transparency.layered.cinematic8.interface.2.terminate-tiles",
-            "gpu.transparency.layered.cinematic8.interface.3.terminate-tiles",
-            "gpu.transparency.layered.cinematic8.interface.4.terminate-tiles",
-            "gpu.transparency.layered.cinematic8.interface.5.terminate-tiles",
-            "gpu.transparency.layered.cinematic8.interface.6.terminate-tiles",
-            "gpu.transparency.layered.cinematic8.interface.7.terminate-tiles",
-        };
-
         uint64_t swapchainRequestedBytes(const VkSwapchain& swapchain) noexcept {
             uint64_t bytesPerTexel = 0;
             switch (swapchain.getImageFormat()) {
@@ -354,10 +321,9 @@ namespace Iridium {
                         lighting_.bindReflectionProbeEnvironments();
                 } });
         probes_.create(*featureContext_);
-        forwardPass = std::make_unique<VkForwardRenderPass>(vkContext.get(),
-            VulkanSceneColorFormat, VK_FORMAT_D32_SFLOAT);
-        transparentPass = std::make_unique<VkForwardRenderPass>(vkContext.get(),
-            VulkanSceneColorFormat, VK_FORMAT_D32_SFLOAT, true);
+        // R3c.9: the forward owner (render passes, refraction pyramids).
+        forward_.configure(layered_);
+        forward_.create(*featureContext_);
         output_.create(*featureContext_);
         output_.createPipelines(outputTargetFormat_,
             outputTransport_ == Color::OutputTransport::Hdr10Pq,
@@ -371,20 +337,9 @@ namespace Iridium {
             [](void* owner, VkCommandBuffer commandBuffer) {
                 static_cast<VulkanVertexBackend*>(owner)->copyRetainedView(commandBuffer);
             } });
-        layeredInterfaceCapture_.init(vkContext->getDevice(),
-            descriptorAllocator, meshLayouts.getGlobalSetLayout(),
-            resources_.textureTable().materialViewLayout(),
-            resources_.textureTable().samplerLayout());
-        layeredLocalComposition_.init(vkContext->getDevice(),
-            descriptorAllocator, meshLayouts.getGlobalSetLayout(),
-            resources_.textureTable().materialViewLayout(),
-            resources_.textureTable().samplerLayout(),
-            lighting_.setLayout());
-        layeredSceneResolve_.init(vkContext->getDevice(),
-            descriptorAllocator, meshLayouts.getGlobalSetLayout(),
-            transparentPass->getRenderPass());
-        transparencyPyramid_.init(vkContext->getDevice(),
-            descriptorAllocator, meshLayouts.getGlobalSetLayout());
+        // R3c.9: the layered-glass owner (capture, composition, resolve).
+        layered_.configure(lighting_.setLayout(), forward_.transparentRenderPass());
+        layered_.create(*featureContext_);
         // R3c.5: the shadow owners create their maps and cullers; the shared
         // 3-binding indirect set layout outlives every view culler.
         indirectCullerSetLayout_ = createIndirectSetLayout(
@@ -406,8 +361,8 @@ namespace Iridium {
         pipelineLibrary.init(vkContext->getDevice(),
             { opaque_.gBufferRenderPass(), meshLayouts.getGBufferPipelineLayout(),
                 vulkanGBufferFormats(gBufferLayout_).colorAttachmentCount },
-            { forwardPass->getRenderPass(), meshLayouts.getForwardPipelineLayout(), 1 },
-            { transparentPass->getRenderPass(),
+            { forward_.forwardRenderPass(), meshLayouts.getForwardPipelineLayout(), 1 },
+            { forward_.transparentRenderPass(),
                 meshLayouts.getForwardPipelineLayout(), 1 },
             gBufferLayout_);
 
@@ -468,11 +423,9 @@ namespace Iridium {
         }
         gpuScene_.bindBuffers();
         opaque_.culler().bindBuffers();
-        transparencyPyramid_.rebuild(frameTargets);
+        forward_.rebuildDescriptors();
         opaque_.rebuildDescriptors();
-        layeredInterfaceCapture_.rebuildDescriptors(frameTargets);
-        layeredLocalComposition_.rebuildDescriptors(frameTargets);
-        layeredSceneResolve_.rebuildDescriptors(frameTargets);
+        layered_.rebuildDescriptors();
         oit_.rebuildDescriptors();
 
         // 3. Lighting descriptors (one set per frame context).
@@ -639,11 +592,9 @@ namespace Iridium {
         }
 
         lighting_.releaseSceneSet();
-        transparencyPyramid_.clearDescriptors();
+        forward_.clearDescriptors();
         opaque_.clearDescriptors();
-        layeredInterfaceCapture_.clearDescriptors();
-        layeredLocalComposition_.clearDescriptors();
-        layeredSceneResolve_.clearDescriptors();
+        layered_.clearDescriptors();
         oit_.clearDescriptors();
         frameTargets.cleanup();
         renderGraph_.cleanupAfterDeviceIdle();
@@ -664,18 +615,13 @@ namespace Iridium {
         opaque_.destroy();
 
 
-        forwardPass.reset();
-        transparentPass.reset();
-
         lighting_.destroy();
 
         uiPass.reset();
         output_.destroy();
 
-        transparencyPyramid_.cleanup();
-        layeredSceneResolve_.cleanup();
-        layeredLocalComposition_.cleanup();
-        layeredInterfaceCapture_.cleanup();
+        forward_.destroy();
+        layered_.destroy();
         oit_.destroy();
         hooks_.destroy();
 
@@ -692,14 +638,14 @@ namespace Iridium {
         vkContext.reset();
         initialized_ = false;
         frameOpen_ = false;
-        transparencyPyramidResidency_.restore(false);
-        ordinary2AtlasResidency_.restore(false);
-        hero4AtlasResidency_.restore(false);
-        cinematic8AtlasResidency_.restore(false);
-        weightedOitResidency_.restore(false);
-        ordinary2AtlasExtent_ = {};
-        hero4AtlasExtent_ = {};
-        cinematic8AtlasExtent_ = {};
+        forward_.pyramidResidency().restore(false);
+        layered_.ordinary2Residency().restore(false);
+        layered_.hero4Residency().restore(false);
+        layered_.cinematic8Residency().restore(false);
+        oit_.residency().restore(false);
+        layered_.ordinary2Extent() = {};
+        layered_.hero4Extent() = {};
+        layered_.cinematic8Extent() = {};
         frameTopologyPrewarm_ = {};
         cpuProfiler_ = nullptr;
         telemetry_.cleanup();
@@ -717,9 +663,9 @@ namespace Iridium {
         }
         const VulkanIndexedTextureTable& table = resources_.textureTable();
         telemetry_.emit({
-            .weightedOitResident = weightedOitResidency_.enabled(),
+            .weightedOitResident = oit_.residency().enabled(),
             .weightedOitOrderSeed = oit_.orderSeed(),
-            .refractionPyramidsResident = transparencyPyramidResidency_.enabled(),
+            .refractionPyramidsResident = forward_.pyramidResidency().enabled(),
             .texturesResident = resources_.textures().activeCount() -
                 resources_.retiredTextureCount(),
             .texturesRetired = resources_.retiredTextureCount(),
@@ -852,10 +798,10 @@ namespace Iridium {
                 Color::OutputTransport::Hdr10Pq, gBufferLayout_,
             clusterConfig_, directionalShadowResolution_,
             spotShadowAtlasResolution_,
-            transparencyPyramidResidency_.enabled(),
-            VulkanLayeredGraphConfig{ ordinary2AtlasExtent_,
-                hero4AtlasExtent_, cinematic8AtlasExtent_,
-                weightedOitResidency_.enabled() }, productionGraphFeatures()));
+            forward_.pyramidResidency().enabled(),
+            VulkanLayeredGraphConfig{ layered_.ordinary2Extent(),
+                layered_.hero4Extent(), layered_.cinematic8Extent(),
+                oit_.residency().enabled() }, productionGraphFeatures()));
         // R3b.4: ids are resolved once per plan; the barrier API follows the
         // device feature explicitly; callback passes record GPU ranges through
         // the scheduler.
@@ -882,10 +828,10 @@ namespace Iridium {
         std::optional<VkExtent2D> requestedHero4AtlasExtent,
         std::optional<VkExtent2D> requestedCinematic8AtlasExtent) {
         const VkExtent2D previousOrdinary2AtlasExtent =
-            ordinary2AtlasExtent_;
-        const VkExtent2D previousHero4AtlasExtent = hero4AtlasExtent_;
+            layered_.ordinary2Extent();
+        const VkExtent2D previousHero4AtlasExtent = layered_.hero4Extent();
         const VkExtent2D previousCinematic8AtlasExtent =
-            cinematic8AtlasExtent_;
+            layered_.cinematic8Extent();
         const auto requestedExtent = [&](std::optional<VkExtent2D> explicitExtent,
                 const TransparencyPyramidResidency& residency,
                 TransparencyQuality quality) {
@@ -896,13 +842,13 @@ namespace Iridium {
             return VkExtent2D{ capacity.width, capacity.height };
         };
         const VkExtent2D nextOrdinary2AtlasExtent = requestedExtent(
-            requestedOrdinary2AtlasExtent, ordinary2AtlasResidency_,
+            requestedOrdinary2AtlasExtent, layered_.ordinary2Residency(),
             TransparencyQuality::Ordinary2);
         const VkExtent2D nextHero4AtlasExtent = requestedExtent(
-            requestedHero4AtlasExtent, hero4AtlasResidency_,
+            requestedHero4AtlasExtent, layered_.hero4Residency(),
             TransparencyQuality::Hero4);
         const VkExtent2D nextCinematic8AtlasExtent = requestedExtent(
-            requestedCinematic8AtlasExtent, cinematic8AtlasResidency_,
+            requestedCinematic8AtlasExtent, layered_.cinematic8Residency(),
             TransparencyQuality::Cinematic8);
         const auto extentChanged = [](VkExtent2D lhs, VkExtent2D rhs) {
             return lhs.width != rhs.width || lhs.height != rhs.height;
@@ -913,11 +859,11 @@ namespace Iridium {
             previousHero4AtlasExtent, nextHero4AtlasExtent);
         const bool cinematic8AtlasChange = extentChanged(
             previousCinematic8AtlasExtent, nextCinematic8AtlasExtent);
-        if (!transparencyPyramidResidency_.changePending() &&
-            !ordinary2AtlasResidency_.changePending() &&
-            !hero4AtlasResidency_.changePending() &&
-            !cinematic8AtlasResidency_.changePending() &&
-            !weightedOitResidency_.changePending() &&
+        if (!forward_.pyramidResidency().changePending() &&
+            !layered_.ordinary2Residency().changePending() &&
+            !layered_.hero4Residency().changePending() &&
+            !layered_.cinematic8Residency().changePending() &&
+            !oit_.residency().changePending() &&
             !ordinary2AtlasChange && !hero4AtlasChange &&
             !cinematic8AtlasChange)
             return;
@@ -926,14 +872,14 @@ namespace Iridium {
             "cpu.renderer.transparency_topology_change");
 
         const bool previousEnabled =
-            transparencyPyramidResidency_.enabled();
+            forward_.pyramidResidency().enabled();
         const bool previousOrdinary2Enabled =
-            ordinary2AtlasResidency_.enabled();
-        const bool previousHero4Enabled = hero4AtlasResidency_.enabled();
+            layered_.ordinary2Residency().enabled();
+        const bool previousHero4Enabled = layered_.hero4Residency().enabled();
         const bool previousCinematic8Enabled =
-            cinematic8AtlasResidency_.enabled();
+            layered_.cinematic8Residency().enabled();
         const bool previousWeightedOitEnabled =
-            weightedOitResidency_.enabled();
+            oit_.residency().enabled();
         const auto releaseTargets = [&] { releaseFrameTargets(); };
         const auto createTargets = [&] {
             createFrameTargets();
@@ -951,16 +897,16 @@ namespace Iridium {
             CpuScope rebuildScope(cpuProfiler_,
                 "cpu.renderer.transparency_topology_rebuild");
             releaseTargets();
-            transparencyPyramidResidency_.publishRequested();
-            ordinary2AtlasResidency_.publishRequested();
-            hero4AtlasResidency_.publishRequested();
-            cinematic8AtlasResidency_.publishRequested();
-            weightedOitResidency_.publishRequested();
-            oit_.setInstanceCapacity(weightedOitResidency_.enabled()
+            forward_.pyramidResidency().publishRequested();
+            layered_.ordinary2Residency().publishRequested();
+            layered_.hero4Residency().publishRequested();
+            layered_.cinematic8Residency().publishRequested();
+            oit_.residency().publishRequested();
+            oit_.setInstanceCapacity(oit_.residency().enabled()
                 ? kWeightedOitMaximumInstanceCount : 0u);
-            ordinary2AtlasExtent_ = nextOrdinary2AtlasExtent;
-            hero4AtlasExtent_ = nextHero4AtlasExtent;
-            cinematic8AtlasExtent_ = nextCinematic8AtlasExtent;
+            layered_.ordinary2Extent() = nextOrdinary2AtlasExtent;
+            layered_.hero4Extent() = nextHero4AtlasExtent;
+            layered_.cinematic8Extent() = nextCinematic8AtlasExtent;
             createTargets();
             if (telemetry_.collecting())
                 ++telemetry_.counters().transparencyPyramidTopologyRebuilds;
@@ -972,16 +918,16 @@ namespace Iridium {
                 CpuScope restoreScope(cpuProfiler_,
                     "cpu.renderer.transparency_topology_restore");
                 releaseTargets();
-                transparencyPyramidResidency_.restore(previousEnabled);
-                ordinary2AtlasResidency_.restore(previousOrdinary2Enabled);
-                hero4AtlasResidency_.restore(previousHero4Enabled);
-                cinematic8AtlasResidency_.restore(previousCinematic8Enabled);
-                weightedOitResidency_.restore(previousWeightedOitEnabled);
+                forward_.pyramidResidency().restore(previousEnabled);
+                layered_.ordinary2Residency().restore(previousOrdinary2Enabled);
+                layered_.hero4Residency().restore(previousHero4Enabled);
+                layered_.cinematic8Residency().restore(previousCinematic8Enabled);
+                oit_.residency().restore(previousWeightedOitEnabled);
                 oit_.setInstanceCapacity(previousWeightedOitEnabled
                     ? kWeightedOitMaximumInstanceCount : 0u);
-                ordinary2AtlasExtent_ = previousOrdinary2AtlasExtent;
-                hero4AtlasExtent_ = previousHero4AtlasExtent;
-                cinematic8AtlasExtent_ = previousCinematic8AtlasExtent;
+                layered_.ordinary2Extent() = previousOrdinary2AtlasExtent;
+                layered_.hero4Extent() = previousHero4AtlasExtent;
+                layered_.cinematic8Extent() = previousCinematic8AtlasExtent;
                 createTargets();
             }
             catch (const std::exception& restoreException) {
@@ -1032,10 +978,10 @@ namespace Iridium {
                 Color::OutputTransport::Hdr10Pq, gBufferLayout_,
             clusterConfig_, directionalShadowResolution_,
             spotShadowAtlasResolution_,
-            transparencyPyramidResidency_.enabled(),
-            VulkanLayeredGraphConfig{ ordinary2AtlasExtent_,
-                hero4AtlasExtent_, cinematic8AtlasExtent_,
-                weightedOitResidency_.enabled() }, productionGraphFeatures());
+            forward_.pyramidResidency().enabled(),
+            VulkanLayeredGraphConfig{ layered_.ordinary2Extent(),
+                layered_.hero4Extent(), layered_.cinematic8Extent(),
+                oit_.residency().enabled() }, productionGraphFeatures());
 
         // Resize is the one accepted global stall, after candidate validation.
         vkDeviceWaitIdle(vkContext->getDevice());
@@ -1122,10 +1068,10 @@ namespace Iridium {
         // target. Resource allocation is retried with the previous extent if
         // the replacement fails after the fence-safe cutover begins.
         const VkExtent2D previousOrdinary2AtlasExtent =
-            ordinary2AtlasExtent_;
-        const VkExtent2D previousHero4AtlasExtent = hero4AtlasExtent_;
+            layered_.ordinary2Extent();
+        const VkExtent2D previousHero4AtlasExtent = layered_.hero4Extent();
         const VkExtent2D previousCinematic8AtlasExtent =
-            cinematic8AtlasExtent_;
+            layered_.cinematic8Extent();
         VkExtent2D requestedOrdinary2AtlasExtent{};
         VkExtent2D requestedHero4AtlasExtent{};
         VkExtent2D requestedCinematic8AtlasExtent{};
@@ -1136,12 +1082,12 @@ namespace Iridium {
                 requested.width, requested.height, quality);
             atlasExtent = { capacity.width, capacity.height };
         };
-        resizeTier(ordinary2AtlasResidency_.enabled(),
+        resizeTier(layered_.ordinary2Residency().enabled(),
             TransparencyQuality::Ordinary2,
             requestedOrdinary2AtlasExtent);
-        resizeTier(hero4AtlasResidency_.enabled(),
+        resizeTier(layered_.hero4Residency().enabled(),
             TransparencyQuality::Hero4, requestedHero4AtlasExtent);
-        resizeTier(cinematic8AtlasResidency_.enabled(),
+        resizeTier(layered_.cinematic8Residency().enabled(),
             TransparencyQuality::Cinematic8,
             requestedCinematic8AtlasExtent);
         try {
@@ -1151,11 +1097,11 @@ namespace Iridium {
                     Color::OutputTransport::Hdr10Pq, gBufferLayout_,
                 clusterConfig_, directionalShadowResolution_,
                 spotShadowAtlasResolution_,
-                transparencyPyramidResidency_.enabled(),
+                forward_.pyramidResidency().enabled(),
                 VulkanLayeredGraphConfig{ requestedOrdinary2AtlasExtent,
                     requestedHero4AtlasExtent,
                     requestedCinematic8AtlasExtent,
-                    weightedOitResidency_.enabled() }, productionGraphFeatures());
+                    oit_.residency().enabled() }, productionGraphFeatures());
         }
         catch (const std::exception& exception) {
             diagnostic = exception.what();
@@ -1175,9 +1121,9 @@ namespace Iridium {
         scheduler.waitForAllFrames();
         releaseTargets();
         sceneExtent_ = requested;
-        ordinary2AtlasExtent_ = requestedOrdinary2AtlasExtent;
-        hero4AtlasExtent_ = requestedHero4AtlasExtent;
-        cinematic8AtlasExtent_ = requestedCinematic8AtlasExtent;
+        layered_.ordinary2Extent() = requestedOrdinary2AtlasExtent;
+        layered_.hero4Extent() = requestedHero4AtlasExtent;
+        layered_.cinematic8Extent() = requestedCinematic8AtlasExtent;
         try {
             createTargets();
             return true;
@@ -1187,9 +1133,9 @@ namespace Iridium {
                 exception.what();
             releaseTargets();
             sceneExtent_ = previous;
-            ordinary2AtlasExtent_ = previousOrdinary2AtlasExtent;
-            hero4AtlasExtent_ = previousHero4AtlasExtent;
-            cinematic8AtlasExtent_ = previousCinematic8AtlasExtent;
+            layered_.ordinary2Extent() = previousOrdinary2AtlasExtent;
+            layered_.hero4Extent() = previousHero4AtlasExtent;
+            layered_.cinematic8Extent() = previousCinematic8AtlasExtent;
             try {
                 createTargets();
             }
@@ -1329,22 +1275,22 @@ namespace Iridium {
         info.renderGraphRebuildCount = graphStats.rebuildCount;
         info.renderGraphCacheMissCount = graphStats.cacheMissCount;
         info.refractionPyramidsResident =
-            transparencyPyramidResidency_.enabled();
-        info.ordinary2AtlasResident = ordinary2AtlasResidency_.enabled() &&
-            ordinary2AtlasExtent_.width != 0u &&
-            ordinary2AtlasExtent_.height != 0u;
-        info.ordinary2AtlasWidth = ordinary2AtlasExtent_.width;
-        info.ordinary2AtlasHeight = ordinary2AtlasExtent_.height;
-        info.hero4AtlasResident = hero4AtlasResidency_.enabled() &&
-            hero4AtlasExtent_.width != 0u && hero4AtlasExtent_.height != 0u;
-        info.hero4AtlasWidth = hero4AtlasExtent_.width;
-        info.hero4AtlasHeight = hero4AtlasExtent_.height;
-        info.cinematic8AtlasResident = cinematic8AtlasResidency_.enabled() &&
-            cinematic8AtlasExtent_.width != 0u &&
-            cinematic8AtlasExtent_.height != 0u;
-        info.cinematic8AtlasWidth = cinematic8AtlasExtent_.width;
-        info.cinematic8AtlasHeight = cinematic8AtlasExtent_.height;
-        info.weightedOitResident = weightedOitResidency_.enabled();
+            forward_.pyramidResidency().enabled();
+        info.ordinary2AtlasResident = layered_.ordinary2Residency().enabled() &&
+            layered_.ordinary2Extent().width != 0u &&
+            layered_.ordinary2Extent().height != 0u;
+        info.ordinary2AtlasWidth = layered_.ordinary2Extent().width;
+        info.ordinary2AtlasHeight = layered_.ordinary2Extent().height;
+        info.hero4AtlasResident = layered_.hero4Residency().enabled() &&
+            layered_.hero4Extent().width != 0u && layered_.hero4Extent().height != 0u;
+        info.hero4AtlasWidth = layered_.hero4Extent().width;
+        info.hero4AtlasHeight = layered_.hero4Extent().height;
+        info.cinematic8AtlasResident = layered_.cinematic8Residency().enabled() &&
+            layered_.cinematic8Extent().width != 0u &&
+            layered_.cinematic8Extent().height != 0u;
+        info.cinematic8AtlasWidth = layered_.cinematic8Extent().width;
+        info.cinematic8AtlasHeight = layered_.cinematic8Extent().height;
+        info.weightedOitResident = oit_.residency().enabled();
         info.frameTopologyPrewarmRequested =
             frameTopologyPrewarm_.requested;
         info.frameTopologyPrewarmChanged = frameTopologyPrewarm_.changed;
@@ -1374,20 +1320,20 @@ namespace Iridium {
                 requirements.weightedOit,
         };
         const bool previousPyramids =
-            transparencyPyramidResidency_.enabled();
+            forward_.pyramidResidency().enabled();
         const VkExtent2D previousOrdinary2AtlasExtent =
-            ordinary2AtlasExtent_;
-        const VkExtent2D previousHero4AtlasExtent = hero4AtlasExtent_;
+            layered_.ordinary2Extent();
+        const VkExtent2D previousHero4AtlasExtent = layered_.hero4Extent();
         const VkExtent2D previousCinematic8AtlasExtent =
-            cinematic8AtlasExtent_;
-        const bool previousWeightedOit = weightedOitResidency_.enabled();
+            layered_.cinematic8Extent();
+        const bool previousWeightedOit = oit_.residency().enabled();
         const bool requirePyramids = requirements.refractionPyramids ||
             requirements.ordinary2LayeredInterfaces ||
             requirements.hero4LayeredInterfaces ||
             requirements.cinematic8LayeredInterfaces;
-        VkExtent2D requestedOrdinary2AtlasExtent = ordinary2AtlasExtent_;
-        VkExtent2D requestedHero4AtlasExtent = hero4AtlasExtent_;
-        VkExtent2D requestedCinematic8AtlasExtent = cinematic8AtlasExtent_;
+        VkExtent2D requestedOrdinary2AtlasExtent = layered_.ordinary2Extent();
+        VkExtent2D requestedHero4AtlasExtent = layered_.hero4Extent();
+        VkExtent2D requestedCinematic8AtlasExtent = layered_.cinematic8Extent();
         const auto requireTier = [&](bool required,
                 TransparencyQuality quality, VkExtent2D& requestedExtent,
                 const char* name) {
@@ -1412,31 +1358,31 @@ namespace Iridium {
             return lhs.width != rhs.width || lhs.height != rhs.height;
         };
         const bool ordinary2Change = extentChanged(
-            requestedOrdinary2AtlasExtent, ordinary2AtlasExtent_);
+            requestedOrdinary2AtlasExtent, layered_.ordinary2Extent());
         const bool hero4Change = extentChanged(
-            requestedHero4AtlasExtent, hero4AtlasExtent_);
+            requestedHero4AtlasExtent, layered_.hero4Extent());
         const bool cinematic8Change = extentChanged(
-            requestedCinematic8AtlasExtent, cinematic8AtlasExtent_);
+            requestedCinematic8AtlasExtent, layered_.cinematic8Extent());
         if (!requirePyramids && !requirements.weightedOit) {
             frameTopologyPrewarm_ = result;
             return result;
         }
 
         if (requirePyramids) {
-            transparencyPyramidResidency_.observe(true);
-            ordinary2AtlasResidency_.observe(
+            forward_.pyramidResidency().observe(true);
+            layered_.ordinary2Residency().observe(
                 requirements.ordinary2LayeredInterfaces);
-            hero4AtlasResidency_.observe(
+            layered_.hero4Residency().observe(
                 requirements.hero4LayeredInterfaces);
-            cinematic8AtlasResidency_.observe(
+            layered_.cinematic8Residency().observe(
                 requirements.cinematic8LayeredInterfaces);
         }
-        weightedOitResidency_.observe(requirements.weightedOit);
-        if (!transparencyPyramidResidency_.changePending() &&
-            !ordinary2AtlasResidency_.changePending() &&
-            !hero4AtlasResidency_.changePending() &&
-            !cinematic8AtlasResidency_.changePending() &&
-            !weightedOitResidency_.changePending() &&
+        oit_.residency().observe(requirements.weightedOit);
+        if (!forward_.pyramidResidency().changePending() &&
+            !layered_.ordinary2Residency().changePending() &&
+            !layered_.hero4Residency().changePending() &&
+            !layered_.cinematic8Residency().changePending() &&
+            !oit_.residency().changePending() &&
             !ordinary2Change && !hero4Change && !cinematic8Change) {
             frameTopologyPrewarm_ = result;
             return result;
@@ -1450,16 +1396,16 @@ namespace Iridium {
             std::chrono::duration_cast<std::chrono::nanoseconds>(
                 std::chrono::steady_clock::now() - start).count());
         result.changed =
-            previousPyramids != transparencyPyramidResidency_.enabled() ||
-            previousOrdinary2AtlasExtent.width != ordinary2AtlasExtent_.width ||
-            previousOrdinary2AtlasExtent.height != ordinary2AtlasExtent_.height ||
-            previousHero4AtlasExtent.width != hero4AtlasExtent_.width ||
-            previousHero4AtlasExtent.height != hero4AtlasExtent_.height ||
+            previousPyramids != forward_.pyramidResidency().enabled() ||
+            previousOrdinary2AtlasExtent.width != layered_.ordinary2Extent().width ||
+            previousOrdinary2AtlasExtent.height != layered_.ordinary2Extent().height ||
+            previousHero4AtlasExtent.width != layered_.hero4Extent().width ||
+            previousHero4AtlasExtent.height != layered_.hero4Extent().height ||
             previousCinematic8AtlasExtent.width !=
-                cinematic8AtlasExtent_.width ||
+                layered_.cinematic8Extent().width ||
             previousCinematic8AtlasExtent.height !=
-                cinematic8AtlasExtent_.height ||
-            previousWeightedOit != weightedOitResidency_.enabled();
+                layered_.cinematic8Extent().height ||
+            previousWeightedOit != oit_.residency().enabled();
         frameTopologyPrewarm_ = result;
         return result;
     }
@@ -1548,11 +1494,9 @@ namespace Iridium {
         releaseEditorTargetTextures();
         lighting_.releaseSceneSet();
         for (IVulkanFeature* feature : features()) feature->onGraphReleased();
-        transparencyPyramid_.clearDescriptors();
+        forward_.clearDescriptors();
         opaque_.clearDescriptors();
-        layeredInterfaceCapture_.clearDescriptors();
-        layeredLocalComposition_.clearDescriptors();
-        layeredSceneResolve_.clearDescriptors();
+        layered_.clearDescriptors();
         oit_.clearDescriptors();
         frameTargets.cleanup();
         renderGraph_.cleanupAfterDeviceIdle();
@@ -1569,11 +1513,9 @@ namespace Iridium {
         // the editor) reference them.
         uploadContext.flush();
         lighting_.rebuildSceneSet();
-        transparencyPyramid_.rebuild(frameTargets);
+        forward_.rebuildDescriptors();
         opaque_.rebuildDescriptors();
-        layeredInterfaceCapture_.rebuildDescriptors(frameTargets);
-        layeredLocalComposition_.rebuildDescriptors(frameTargets);
-        layeredSceneResolve_.rebuildDescriptors(frameTargets);
+        layered_.rebuildDescriptors();
         oit_.rebuildDescriptors();
         output_.rebuildDescriptors();
     }
@@ -1581,18 +1523,18 @@ namespace Iridium {
     void VulkanVertexBackend::initFrameTargets() {
         frameTargets.init(vkContext->getDevice(), *vkSwapchain, sceneExtent_,
             { opaque_.gBufferRenderPass(), lighting_.renderPass(),
-                forwardPass->getRenderPass(), transparentPass->getRenderPass(),
-                layeredInterfaceCapture_.renderPass(),
-                layeredLocalComposition_.renderPass(),
+                forward_.forwardRenderPass(), forward_.transparentRenderPass(),
+                layered_.interfaceCaptureRenderPass(),
+                layered_.localCompositionRenderPass(),
                 oit_.accumulationRenderPass(),
                 oit_.resolveRenderPass(), output_.outputRenderPass(),
                 uiPass->getRenderPass() },
             VulkanFrameScheduler::FramesInFlight,
             outputTransport_ == Color::OutputTransport::Hdr10Pq,
-            transparencyPyramidResidency_.enabled(),
-            VulkanLayeredGraphConfig{ ordinary2AtlasExtent_,
-                hero4AtlasExtent_, cinematic8AtlasExtent_,
-                weightedOitResidency_.enabled() },
+            forward_.pyramidResidency().enabled(),
+            VulkanLayeredGraphConfig{ layered_.ordinary2Extent(),
+                layered_.hero4Extent(), layered_.cinematic8Extent(),
+                oit_.residency().enabled() },
             renderGraph_, graphIds_);
     }
 
@@ -1604,7 +1546,7 @@ namespace Iridium {
         frameOpen_ = false;
         opaque_.beginFrame();
         probes_.beginFrame();
-        ordinary2ViewProjectionValid_ = false;
+        layered_.beginFrame();
         telemetry_.beginFrame();
         CpuScope beginFrameScope(cpuProfiler_, "cpu.renderer.begin_frame");
         uploadContext.flush();
@@ -1895,7 +1837,7 @@ namespace Iridium {
         opaque_.updateView(view, history);
         gpuScene_.views()[scheduler.currentFrameIndex()] = view;
         view_.update(scheduler.currentFrameIndex(), view,
-            transparencyPyramidResidency_.enabled(), debugView_);
+            forward_.pyramidResidency().enabled(), debugView_);
     }
 
     void VulkanVertexBackend::submitLightingPass(const glm::vec3& cameraPos,
@@ -1904,8 +1846,7 @@ namespace Iridium {
         const LightingFramePacket& lights,
         const ReflectionProbeGpuFramePacket& reflectionProbes) {
         CpuScope recordScope(cpuProfiler_, "cpu.render.record.lighting");
-        ordinary2ViewProjection_ = proj * view;
-        ordinary2ViewProjectionValid_ = true;
+        layered_.setViewProjection(proj * view);
         const uint32_t frameIndex = scheduler.currentFrameIndex();
         clusterLighting_.uploadFrame(frameIndex, view, proj, nearPlane, farPlane,
             lights, sceneExtent_, lighting_.environmentSettings());
@@ -1934,988 +1875,16 @@ namespace Iridium {
         });
     }
 
-    void VulkanVertexBackend::recordOrdinary2InterfaceCapture(
-        std::span<const DrawPacket> packets,
-        std::span<const Ordinary2CaptureDraw> draws,
-        bool exitCapture) {
-        const RenderGraph::PassId pass = exitCapture
-            ? graphIds_.ordinary2ExitCapture : graphIds_.ordinary2EntryCapture;
-        if (draws.empty()) {
-            renderGraph_.skipPass(pass);
-            return;
-        }
-        if (ordinary2AtlasExtent_.width == 0u ||
-            ordinary2AtlasExtent_.height == 0u ||
-            layeredInterfaceCapture_.pipeline() == VK_NULL_HANDLE ||
-            layeredInterfaceCapture_.descriptorFrameCount() <=
-                scheduler.currentFrameIndex()) {
-            throw std::logic_error(
-                "Ordinary2 capture recording requires resident atlas targets");
-        }
-
-        VulkanFrameContextTargets& targets = frameTargets.get(
-            scheduler.currentFrameIndex());
-        const VkFramebuffer framebuffer = exitCapture
-            ? targets.layeredExitFramebuffer
-            : targets.layeredEntryFramebuffer;
-        if (framebuffer == VK_NULL_HANDLE)
-            throw std::logic_error(
-                "Ordinary2 capture framebuffer is unavailable");
-
-        VulkanGpuRangeToken gpuRange = scheduler.beginGpuRange(exitCapture
-            ? "gpu.transparency.layered.exit.capture"
-            : "gpu.transparency.layered.entry.capture");
-        renderGraph_.beginPass(currentCmd, pass);
-        std::array<VkClearValue, 2> clears{};
-        clears[0].color.uint32[0] = 0u;
-        clears[1].depthStencil = { 1.0f, 0u };
-        VkRenderPassBeginInfo passInfo{
-            VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
-        passInfo.renderPass = layeredInterfaceCapture_.renderPass();
-        passInfo.framebuffer = framebuffer;
-        passInfo.renderArea.extent = ordinary2AtlasExtent_;
-        passInfo.clearValueCount = static_cast<uint32_t>(clears.size());
-        passInfo.pClearValues = clears.data();
-        vkCmdBeginRenderPass(currentCmd, &passInfo,
-            VK_SUBPASS_CONTENTS_INLINE);
-
-        const VkPipelineLayout layout =
-            layeredInterfaceCapture_.pipelineLayout();
-        vkCmdBindPipeline(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-            layeredInterfaceCapture_.pipeline());
-        telemetry_.recordPipelineBind(pipelineIdentity(
-            FixedPipelineIdentity::LayeredInterfaceCapture));
-        const VkDescriptorSet globalSet = view_.globalSet(
-            scheduler.currentFrameIndex());
-        vkCmdBindDescriptorSets(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-            layout, 0u, 1u, &globalSet, 0u, nullptr);
-        bindMaterialDescriptors(layout);
-        const VkDescriptorSet captureSet =
-            layeredInterfaceCapture_.descriptorSet(
-                scheduler.currentFrameIndex(), exitCapture);
-        vkCmdBindDescriptorSets(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-            layout, 3u, 1u, &captureSet, 0u, nullptr);
-
-        GeometryHandle lastGeometry{};
-        for (const Ordinary2CaptureDraw& draw : draws) {
-            if (draw.packetIndex >= packets.size())
-                continue;
-            const DrawPacket& packet = packets[draw.packetIndex];
-            const VulkanGeometryPayload* geometry =
-                resources_.geometries().get(packet.geometry);
-            if (geometry == nullptr || resources_.materials().get(packet.material) == nullptr)
-                continue;
-            const VkViewport viewport{
-                -static_cast<float>(draw.viewportOffsetX),
-                -static_cast<float>(draw.viewportOffsetY),
-                static_cast<float>(frameTargets.extent().width),
-                static_cast<float>(frameTargets.extent().height),
-                0.0f, 1.0f };
-            const VkRect2D scissor{
-                { static_cast<int32_t>(draw.atlasX),
-                    static_cast<int32_t>(draw.atlasY) },
-                { draw.width, draw.height } };
-            vkCmdSetViewport(currentCmd, 0u, 1u, &viewport);
-            vkCmdSetScissor(currentCmd, 0u, 1u, &scissor);
-            if (packet.geometry != lastGeometry) {
-                const VkDeviceSize offset = geometry->vertexOffset;
-                vkCmdBindVertexBuffers(currentCmd, 0u, 1u,
-                    &geometry->vertexBuffer.buffer, &offset);
-                vkCmdBindIndexBuffer(currentCmd, geometry->indexBuffer.buffer,
-                    0u, toVkIndexType(geometry->indexFormat));
-                lastGeometry = packet.geometry;
-            }
-            LayeredInterfaceCapturePushConstants push{};
-            push.renderMatrix = packet.worldTransform;
-            push.materialIndex = packet.material.getIndex();
-            push.workTableIndex = draw.workTableIndex;
-            push.flags |= kLayeredCaptureRequirePairedOrientation;
-            if ((packet.transparentWorkFlags &
-                    TransparentWorkMirrored) != 0u)
-                push.flags |= kLayeredCaptureMirrored;
-            if (exitCapture)
-                push.flags |= kLayeredCaptureHasPrevious;
-            push.packedViewportOffset = packLayeredViewportOffset(
-                draw.viewportOffsetX, draw.viewportOffsetY);
-            vkCmdPushConstants(currentCmd, layout,
-                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                0u, sizeof(push), &push);
-            vkCmdDrawIndexed(currentCmd, packet.indexCount, 1u,
-                packet.firstIndex, 0, 0u);
-            if (exitCapture) {
-                telemetry_.recordDraw(telemetry_.counters().ordinary2CaptureExitDraws,
-                    packet.indexCount / 3u);
-            }
-            else {
-                telemetry_.recordDraw(telemetry_.counters().ordinary2CaptureEntryDraws,
-                    packet.indexCount / 3u);
-            }
-        }
-        vkCmdEndRenderPass(currentCmd);
-        scheduler.endGpuRange(gpuRange);
-    }
-
-    void VulkanVertexBackend::recordOrdinary2Captures(
-        std::span<const DrawPacket> packets,
-        std::span<const Ordinary2CaptureDraw> draws) {
-        recordOrdinary2InterfaceCapture(packets, draws, false);
-        recordOrdinary2InterfaceCapture(packets, draws, true);
-    }
-
-    void VulkanVertexBackend::recordDeepLayeredInterfaceCapture(
-        std::span<const DrawPacket> packets,
-        std::span<const LayeredCaptureDraw> draws,
-        TransparencyQuality quality, uint32_t interfaceIndex) {
-        const std::span<const RenderGraph::PassId> passes = quality ==
-                TransparencyQuality::Hero4
-            ? std::span<const RenderGraph::PassId>(
-                graphIds_.hero4.interfaceCapture).first(4u)
-            : quality == TransparencyQuality::Cinematic8
-                ? std::span<const RenderGraph::PassId>(
-                    graphIds_.cinematic8.interfaceCapture).first(8u)
-                : std::span<const RenderGraph::PassId>{};
-        const std::span<const char* const> gpuRanges = quality ==
-                TransparencyQuality::Hero4
-            ? std::span<const char* const>(Hero4CaptureGpuRanges)
-            : quality == TransparencyQuality::Cinematic8
-                ? std::span<const char* const>(Cinematic8CaptureGpuRanges)
-                : std::span<const char* const>{};
-        if (interfaceIndex >= passes.size() ||
-            interfaceIndex >= gpuRanges.size()) {
-            throw std::out_of_range(
-                "Deep layered interface index is invalid");
-        }
-        const RenderGraph::PassId pass = passes[interfaceIndex];
-        const bool hasTierDraws = std::ranges::any_of(draws,
-            [quality](const LayeredCaptureDraw& draw) {
-                return draw.quality == quality;
-            });
-        if (!hasTierDraws) {
-            renderGraph_.skipPass(pass);
-            return;
-        }
-
-        const uint32_t frameIndex = scheduler.currentFrameIndex();
-        VulkanFrameContextTargets& targets = frameTargets.get(frameIndex);
-        VulkanFrameContextTargets::DeepLayeredTier* tier = quality ==
-                TransparencyQuality::Hero4
-            ? &targets.hero4 : &targets.cinematic8;
-        if (!tier->active() || interfaceIndex >= tier->interfaceCount ||
-            layeredInterfaceCapture_.pipeline() == VK_NULL_HANDLE ||
-            layeredInterfaceCapture_.descriptorInterfaceCount(
-                frameIndex, quality) != tier->interfaceCount) {
-            throw std::logic_error(
-                "Deep layered capture requires a complete resident tier");
-        }
-        const VkFramebuffer framebuffer =
-            tier->interfaceFramebuffers[interfaceIndex];
-        if (framebuffer == VK_NULL_HANDLE)
-            throw std::logic_error(
-                "Deep layered capture framebuffer is unavailable");
-
-        VulkanGpuRangeToken gpuRange = scheduler.beginGpuRange(
-            gpuRanges[interfaceIndex]);
-        renderGraph_.beginPass(currentCmd, pass);
-        std::array<VkClearValue, 2> clears{};
-        clears[0].color.uint32[0] = 0u;
-        clears[1].depthStencil = { 1.0f, 0u };
-        VkRenderPassBeginInfo passInfo{
-            VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
-        passInfo.renderPass = layeredInterfaceCapture_.renderPass();
-        passInfo.framebuffer = framebuffer;
-        passInfo.renderArea.extent = tier->atlasExtent;
-        passInfo.clearValueCount = static_cast<uint32_t>(clears.size());
-        passInfo.pClearValues = clears.data();
-        vkCmdBeginRenderPass(currentCmd, &passInfo,
-            VK_SUBPASS_CONTENTS_INLINE);
-
-        const VkPipelineLayout layout =
-            layeredInterfaceCapture_.pipelineLayout();
-        vkCmdBindPipeline(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-            layeredInterfaceCapture_.pipeline());
-        telemetry_.recordPipelineBind(pipelineIdentity(
-            FixedPipelineIdentity::LayeredInterfaceCapture));
-        const VkDescriptorSet globalSet = view_.globalSet(frameIndex);
-        vkCmdBindDescriptorSets(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-            layout, 0u, 1u, &globalSet, 0u, nullptr);
-        bindMaterialDescriptors(layout);
-        const VkDescriptorSet captureSet =
-            layeredInterfaceCapture_.descriptorSet(frameIndex, quality,
-                interfaceIndex);
-        vkCmdBindDescriptorSets(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-            layout, 3u, 1u, &captureSet, 0u, nullptr);
-
-        GeometryHandle lastGeometry{};
-        for (const LayeredCaptureDraw& draw : draws) {
-            if (draw.quality != quality || draw.packetIndex >= packets.size())
-                continue;
-            const DrawPacket& packet = packets[draw.packetIndex];
-            const VulkanGeometryPayload* geometry =
-                resources_.geometries().get(packet.geometry);
-            if (geometry == nullptr ||
-                resources_.materials().get(packet.material) == nullptr) {
-                continue;
-            }
-            const VkViewport viewport{
-                -static_cast<float>(draw.viewportOffsetX),
-                -static_cast<float>(draw.viewportOffsetY),
-                static_cast<float>(frameTargets.extent().width),
-                static_cast<float>(frameTargets.extent().height),
-                0.0f, 1.0f };
-            const VkRect2D scissor{
-                { static_cast<int32_t>(draw.atlasX),
-                    static_cast<int32_t>(draw.atlasY) },
-                { draw.width, draw.height } };
-            vkCmdSetViewport(currentCmd, 0u, 1u, &viewport);
-            vkCmdSetScissor(currentCmd, 0u, 1u, &scissor);
-            if (packet.geometry != lastGeometry) {
-const VkDeviceSize offset = geometry->vertexOffset;
-                vkCmdBindVertexBuffers(currentCmd, 0u, 1u,
-                    &geometry->vertexBuffer.buffer, &offset);
-                vkCmdBindIndexBuffer(currentCmd,
-                    geometry->indexBuffer.buffer, 0u,
-                    toVkIndexType(geometry->indexFormat));
-                lastGeometry = packet.geometry;
-            }
-            LayeredInterfaceCapturePushConstants push{};
-            push.renderMatrix = packet.worldTransform;
-            push.materialIndex = packet.material.getIndex();
-            push.workTableIndex = draw.workTableIndex;
-            if ((packet.transparentWorkFlags &
-                    TransparentWorkMirrored) != 0u) {
-                push.flags |= kLayeredCaptureMirrored;
-            }
-            if (interfaceIndex != 0u)
-                push.flags |= kLayeredCaptureHasPrevious;
-            if (interfaceIndex >= 2u)
-                push.flags |= kLayeredCaptureHasTerminationMask;
-            push.packedViewportOffset = packLayeredViewportOffset(
-                draw.viewportOffsetX, draw.viewportOffsetY);
-            vkCmdPushConstants(currentCmd, layout,
-                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                0u, sizeof(push), &push);
-            vkCmdDrawIndexed(currentCmd, packet.indexCount, 1u,
-                packet.firstIndex, 0, 0u);
-            telemetry_.recordDraw(telemetry_.counters().deepLayeredInterfaceDraws,
-                packet.indexCount / 3u);
-        }
-        vkCmdEndRenderPass(currentCmd);
-        scheduler.endGpuRange(gpuRange);
-    }
-
-    void VulkanVertexBackend::recordDeepLayeredCaptures(
-        std::span<const DrawPacket> packets,
-        std::span<const LayeredCaptureDraw> draws,
-        TransparencyQuality quality) {
-        const uint32_t interfaceCount = layeredQualityTierContract(
-            quality).maximumInterfaceCount;
-        for (uint32_t interfaceIndex = 0u;
-            interfaceIndex < interfaceCount; ++interfaceIndex) {
-            recordDeepLayeredInterfaceCapture(packets, draws, quality,
-                interfaceIndex);
-            if (deepLayeredTerminationInterface(interfaceIndex,
-                    interfaceCount)) {
-                recordDeepLayeredTileTermination(draws, quality,
-                    interfaceIndex);
-            }
-        }
-    }
-
-    void VulkanVertexBackend::recordDeepLayeredTileTermination(
-        std::span<const LayeredCaptureDraw> draws,
-        TransparencyQuality quality, uint32_t interfaceIndex) {
-        const char* tierName = quality == TransparencyQuality::Hero4
-            ? "hero4" : quality == TransparencyQuality::Cinematic8
-                ? "cinematic8" : nullptr;
-        if (tierName == nullptr)
-            throw std::invalid_argument(
-                "Tile termination requires Hero4 or Cinematic8");
-        const uint32_t interfaceCount = layeredQualityTierContract(
-            quality).maximumInterfaceCount;
-        if (interfaceIndex >= interfaceCount)
-            throw std::out_of_range(
-                "Layered tile-termination interface is invalid");
-        const uint32_t frameIndex = scheduler.currentFrameIndex();
-        VulkanFrameContextTargets& targets = frameTargets.get(frameIndex);
-        VulkanFrameContextTargets::DeepLayeredTier& tier = quality ==
-                TransparencyQuality::Hero4
-            ? targets.hero4 : targets.cinematic8;
-        if (!tier.active() ||
-            layeredInterfaceCapture_.tileTerminationPipeline() ==
-                VK_NULL_HANDLE) {
-            throw std::logic_error(
-                "Layered tile termination requires a resident tier");
-        }
-        const RenderGraph::PassId pass = quality == TransparencyQuality::Hero4
-            ? graphIds_.hero4.terminateTiles[interfaceIndex]
-            : graphIds_.cinematic8.terminateTiles[interfaceIndex];
-        const bool hasTierDraws = std::ranges::any_of(draws,
-            [quality](const LayeredCaptureDraw& draw) {
-                return draw.quality == quality;
-            });
-        if (!hasTierDraws) {
-            renderGraph_.skipPass(pass);
-            return;
-        }
-        const char* gpuRangeName = quality == TransparencyQuality::Hero4
-            ? Hero4TerminationGpuRanges[interfaceIndex]
-            : Cinematic8TerminationGpuRanges[interfaceIndex];
-        VulkanGpuRangeToken gpuRange = scheduler.beginGpuRange(
-            gpuRangeName);
-        renderGraph_.beginPass(currentCmd, pass);
-        layeredInterfaceCapture_.recordTileTermination(currentCmd,
-            frameIndex, quality, interfaceIndex, tier.atlasExtent);
-        telemetry_.recordPipelineBind(pipelineIdentity(
-            FixedPipelineIdentity::LayeredTileTermination));
-        scheduler.endGpuRange(gpuRange);
-    }
-
-    void VulkanVertexBackend::recordDeepLayeredLocalComposition(
-        std::span<const DrawPacket> packets,
-        std::span<const LayeredCaptureDraw> draws,
-        TransparencyQuality quality) {
-        const LayeredQualityTierContract tierContract =
-            layeredQualityTierContract(quality);
-        if (quality != TransparencyQuality::Hero4 &&
-            quality != TransparencyQuality::Cinematic8) {
-            throw std::invalid_argument(
-                "Deep local composition requires Hero4 or Cinematic8");
-        }
-        const uint32_t interfaceCount =
-            tierContract.maximumInterfaceCount;
-        const RenderGraph::PassId pass = quality == TransparencyQuality::Hero4
-            ? graphIds_.hero4.localCompose : graphIds_.cinematic8.localCompose;
-        const bool hasTierDraws = std::ranges::any_of(draws,
-            [quality](const LayeredCaptureDraw& draw) {
-                return draw.quality == quality;
-            });
-        if (!hasTierDraws) {
-            renderGraph_.skipPass(pass);
-            return;
-        }
-
-        const uint32_t frameIndex = scheduler.currentFrameIndex();
-        VulkanFrameContextTargets& targets = frameTargets.get(frameIndex);
-        VulkanFrameContextTargets::DeepLayeredTier& tier = quality ==
-                TransparencyQuality::Hero4
-            ? targets.hero4 : targets.cinematic8;
-        if (!tier.active() || tier.interfaceCount != interfaceCount ||
-            tier.localCompositionFramebuffer == VK_NULL_HANDLE ||
-            layeredLocalComposition_.deepPipeline() == VK_NULL_HANDLE ||
-            layeredLocalComposition_.deepResidualPipeline() ==
-                VK_NULL_HANDLE ||
-            layeredLocalComposition_.deepDescriptorInterfaceCount(
-                frameIndex, quality) != interfaceCount) {
-            throw std::logic_error(
-                "Deep local composition requires a complete resident tier");
-        }
-
-        const char* gpuRangeName = quality == TransparencyQuality::Hero4
-            ? "gpu.transparency.layered.hero4.local-compose"
-            : "gpu.transparency.layered.cinematic8.local-compose";
-        VulkanGpuRangeToken gpuRange = scheduler.beginGpuRange(gpuRangeName);
-        renderGraph_.beginPass(currentCmd, pass);
-        VkClearValue clear{};
-        clear.color = { { 0.0f, 0.0f, 0.0f, 0.0f } };
-        VkRenderPassBeginInfo passInfo{
-            VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
-        passInfo.renderPass = layeredLocalComposition_.renderPass();
-        passInfo.framebuffer = tier.localCompositionFramebuffer;
-        passInfo.renderArea.extent = tier.atlasExtent;
-        passInfo.clearValueCount = 1u;
-        passInfo.pClearValues = &clear;
-        vkCmdBeginRenderPass(currentCmd, &passInfo,
-            VK_SUBPASS_CONTENTS_INLINE);
-
-        const VkPipelineLayout layout =
-            layeredLocalComposition_.deepPipelineLayout();
-        const VkDescriptorSet globalSet = view_.globalSet(frameIndex);
-        vkCmdBindDescriptorSets(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-            layout, 0u, 1u, &globalSet, 0u, nullptr);
-        bindMaterialDescriptors(layout);
-        const VkDescriptorSet sceneSet = lighting_.sceneSet(frameIndex);
-        vkCmdBindDescriptorSets(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-            layout, 3u, 1u, &sceneSet, 0u, nullptr);
-        const VkDescriptorSet interfaceSet =
-            layeredLocalComposition_.deepDescriptorSet(frameIndex, quality);
-        vkCmdBindDescriptorSets(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-            layout, 4u, 1u, &interfaceSet, 0u, nullptr);
-
-        GeometryHandle lastGeometry{};
-        // The bounded tail is evaluated first into the cleared local atlas.
-        // Only semantic entries strictly behind the final stored interface
-        // survive the residual shader. This compresses arbitrarily many
-        // uncaptured interfaces into deterministic non-refractive operators
-        // without adding another interface image or per-frame allocation.
-        vkCmdBindPipeline(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-            layeredLocalComposition_.deepResidualPipeline());
-        telemetry_.recordPipelineBind(pipelineIdentity(
-            FixedPipelineIdentity::LayeredResidualComposition));
-        const uint32_t residualQuerySlot = quality ==
-                TransparencyQuality::Hero4
-            ? 0u : 1u;
-        const bool residualQueryActive =
-            scheduler.beginLayeredResidualQuery(residualQuerySlot);
-        for (const LayeredCaptureDraw& draw : draws) {
-            if (draw.quality != quality || draw.packetIndex >= packets.size())
-                continue;
-            const DrawPacket& packet = packets[draw.packetIndex];
-            const VulkanGeometryPayload* geometry =
-                resources_.geometries().get(packet.geometry);
-            if (geometry == nullptr ||
-                resources_.materials().get(packet.material) == nullptr) {
-                continue;
-            }
-            const VkViewport viewport{
-                -static_cast<float>(draw.viewportOffsetX),
-                -static_cast<float>(draw.viewportOffsetY),
-                static_cast<float>(frameTargets.extent().width),
-                static_cast<float>(frameTargets.extent().height),
-                0.0f, 1.0f };
-            const VkRect2D scissor{
-                { static_cast<int32_t>(draw.atlasX),
-                    static_cast<int32_t>(draw.atlasY) },
-                { draw.width, draw.height } };
-            vkCmdSetViewport(currentCmd, 0u, 1u, &viewport);
-            vkCmdSetScissor(currentCmd, 0u, 1u, &scissor);
-            if (packet.geometry != lastGeometry) {
-                const VkDeviceSize offset = geometry->vertexOffset;
-                vkCmdBindVertexBuffers(currentCmd, 0u, 1u,
-                    &geometry->vertexBuffer.buffer, &offset);
-                vkCmdBindIndexBuffer(currentCmd,
-                    geometry->indexBuffer.buffer, 0u,
-                    toVkIndexType(geometry->indexFormat));
-                lastGeometry = packet.geometry;
-            }
-            CanonicalMeshPushConstants push{};
-            push.renderMatrix = packet.worldTransform;
-            push.materialIndex = packet.material.getIndex();
-            push.padding[0] = draw.workTableIndex;
-            const uint32_t mirrored = (packet.transparentWorkFlags &
-                TransparentWorkMirrored) != 0u ? 1u : 0u;
-            push.padding[1] = mirrored | (interfaceCount << 16u) |
-                (static_cast<uint32_t>(debugView_) << 24u);
-            push.padding[2] = packLayeredViewportOffset(
-                draw.viewportOffsetX, draw.viewportOffsetY);
-            vkCmdPushConstants(currentCmd, layout,
-                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                0u, sizeof(push), &push);
-            vkCmdDrawIndexed(currentCmd, packet.indexCount, 1u,
-                packet.firstIndex, 0, 0u);
-            telemetry_.recordDraw(telemetry_.counters().deepLayeredResidualProbeDraws,
-                packet.indexCount / 3u);
-        }
-        if (residualQueryActive)
-            scheduler.endLayeredResidualQuery(residualQuerySlot);
-
-        vkCmdBindPipeline(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-            layeredLocalComposition_.deepPipeline());
-        telemetry_.recordPipelineBind(pipelineIdentity(
-            FixedPipelineIdentity::LayeredLocalComposition));
-        // Captured slots are front-to-back. Rerasterizing them in reverse
-        // makes premultiplied over blending deterministic per pixel without a
-        // global object sort. The fragment shader accepts entry slots only and
-        // validates the exact captured depth before evaluating shared transport.
-        for (uint32_t interfaceIndex = interfaceCount;
-            interfaceIndex-- > 0u;) {
-            for (const LayeredCaptureDraw& draw : draws) {
-                if (draw.quality != quality ||
-                    draw.packetIndex >= packets.size()) {
-                    continue;
-                }
-                const DrawPacket& packet = packets[draw.packetIndex];
-                const VulkanGeometryPayload* geometry =
-                    resources_.geometries().get(packet.geometry);
-                if (geometry == nullptr ||
-                    resources_.materials().get(packet.material) == nullptr) {
-                    continue;
-                }
-                const VkViewport viewport{
-                    -static_cast<float>(draw.viewportOffsetX),
-                    -static_cast<float>(draw.viewportOffsetY),
-                    static_cast<float>(frameTargets.extent().width),
-                    static_cast<float>(frameTargets.extent().height),
-                    0.0f, 1.0f };
-                const VkRect2D scissor{
-                    { static_cast<int32_t>(draw.atlasX),
-                        static_cast<int32_t>(draw.atlasY) },
-                    { draw.width, draw.height } };
-                vkCmdSetViewport(currentCmd, 0u, 1u, &viewport);
-                vkCmdSetScissor(currentCmd, 0u, 1u, &scissor);
-                if (packet.geometry != lastGeometry) {
-                    const VkDeviceSize offset = geometry->vertexOffset;
-                    vkCmdBindVertexBuffers(currentCmd, 0u, 1u,
-                        &geometry->vertexBuffer.buffer, &offset);
-                    vkCmdBindIndexBuffer(currentCmd,
-                        geometry->indexBuffer.buffer, 0u,
-                        toVkIndexType(geometry->indexFormat));
-                    lastGeometry = packet.geometry;
-                }
-                CanonicalMeshPushConstants push{};
-                push.renderMatrix = packet.worldTransform;
-                push.materialIndex = packet.material.getIndex();
-                push.padding[0] = draw.workTableIndex;
-                const uint32_t mirrored = (packet.transparentWorkFlags &
-                    TransparentWorkMirrored) != 0u ? 1u : 0u;
-                push.padding[1] = mirrored | (interfaceIndex << 8u) |
-                    (interfaceCount << 16u) |
-                    (static_cast<uint32_t>(debugView_) << 24u);
-                push.padding[2] = packLayeredViewportOffset(
-                    draw.viewportOffsetX, draw.viewportOffsetY);
-                vkCmdPushConstants(currentCmd, layout,
-                    VK_SHADER_STAGE_VERTEX_BIT |
-                        VK_SHADER_STAGE_FRAGMENT_BIT,
-                    0u, sizeof(push), &push);
-                vkCmdDrawIndexed(currentCmd, packet.indexCount, 1u,
-                    packet.firstIndex, 0, 0u);
-                telemetry_.recordDraw(telemetry_.counters().deepLayeredLocalCompositionDraws,
-                    packet.indexCount / 3u);
-            }
-        }
-        vkCmdEndRenderPass(currentCmd);
-        scheduler.endGpuRange(gpuRange);
-    }
-
-    void VulkanVertexBackend::recordOrdinary2LocalComposition(
-        std::span<const DrawPacket> packets,
-        std::span<const Ordinary2CaptureDraw> draws) {
-        if (draws.empty()) {
-            renderGraph_.skipPass(graphIds_.ordinary2LocalCompose);
-            return;
-        }
-        const uint32_t frameIndex = scheduler.currentFrameIndex();
-        if (ordinary2AtlasExtent_.width == 0u ||
-            ordinary2AtlasExtent_.height == 0u ||
-            layeredLocalComposition_.pipeline() == VK_NULL_HANDLE ||
-            layeredLocalComposition_.descriptorFrameCount() <= frameIndex) {
-            throw std::logic_error(
-                "Ordinary2 local composition requires resident atlas targets");
-        }
-        VulkanFrameContextTargets& targets = frameTargets.get(frameIndex);
-        if (targets.layeredLocalCompositionFramebuffer == VK_NULL_HANDLE)
-            throw std::logic_error(
-                "Ordinary2 local-composition framebuffer is unavailable");
-
-        VulkanGpuRangeToken gpuRange = scheduler.beginGpuRange(
-            "gpu.transparency.layered.local-compose");
-        renderGraph_.beginPass(currentCmd, graphIds_.ordinary2LocalCompose);
-        VkClearValue clear{};
-        clear.color = { { 0.0f, 0.0f, 0.0f, 0.0f } };
-        VkRenderPassBeginInfo passInfo{
-            VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
-        passInfo.renderPass = layeredLocalComposition_.renderPass();
-        passInfo.framebuffer =
-            targets.layeredLocalCompositionFramebuffer;
-        passInfo.renderArea.extent = ordinary2AtlasExtent_;
-        passInfo.clearValueCount = 1u;
-        passInfo.pClearValues = &clear;
-        vkCmdBeginRenderPass(currentCmd, &passInfo,
-            VK_SUBPASS_CONTENTS_INLINE);
-
-        const VkPipelineLayout layout =
-            layeredLocalComposition_.pipelineLayout();
-        vkCmdBindPipeline(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-            layeredLocalComposition_.pipeline());
-        telemetry_.recordPipelineBind(pipelineIdentity(
-            FixedPipelineIdentity::LayeredLocalComposition));
-        const VkDescriptorSet globalSet = view_.globalSet(frameIndex);
-        vkCmdBindDescriptorSets(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-            layout, 0u, 1u, &globalSet, 0u, nullptr);
-        bindMaterialDescriptors(layout);
-        const VkDescriptorSet sceneSet = lighting_.sceneSet(frameIndex);
-        vkCmdBindDescriptorSets(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-            layout, 3u, 1u, &sceneSet, 0u, nullptr);
-        const VkDescriptorSet interfaceSet =
-            layeredLocalComposition_.descriptorSet(frameIndex);
-        vkCmdBindDescriptorSets(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-            layout, 4u, 1u, &interfaceSet, 0u, nullptr);
-
-        GeometryHandle lastGeometry{};
-        // Reverse the stable capture order. Ordinary2 stores one shell, while
-        // this order is the bounded back-to-front contract extended by M6.6.
-        for (auto iterator = draws.rbegin(); iterator != draws.rend();
-            ++iterator) {
-            const Ordinary2CaptureDraw& draw = *iterator;
-            if (draw.packetIndex >= packets.size())
-                continue;
-            const DrawPacket& packet = packets[draw.packetIndex];
-            const VulkanGeometryPayload* geometry =
-                resources_.geometries().get(packet.geometry);
-            if (geometry == nullptr ||
-                resources_.materials().get(packet.material) == nullptr)
-                continue;
-            const VkViewport viewport{
-                -static_cast<float>(draw.viewportOffsetX),
-                -static_cast<float>(draw.viewportOffsetY),
-                static_cast<float>(frameTargets.extent().width),
-                static_cast<float>(frameTargets.extent().height),
-                0.0f, 1.0f };
-            const VkRect2D scissor{
-                { static_cast<int32_t>(draw.atlasX),
-                    static_cast<int32_t>(draw.atlasY) },
-                { draw.width, draw.height } };
-            vkCmdSetViewport(currentCmd, 0u, 1u, &viewport);
-            vkCmdSetScissor(currentCmd, 0u, 1u, &scissor);
-            if (packet.geometry != lastGeometry) {
-                const VkDeviceSize offset = geometry->vertexOffset;
-                vkCmdBindVertexBuffers(currentCmd, 0u, 1u,
-                    &geometry->vertexBuffer.buffer, &offset);
-                vkCmdBindIndexBuffer(currentCmd,
-                    geometry->indexBuffer.buffer, 0u,
-                    toVkIndexType(geometry->indexFormat));
-                lastGeometry = packet.geometry;
-            }
-            CanonicalMeshPushConstants push{};
-            push.renderMatrix = packet.worldTransform;
-            push.materialIndex = packet.material.getIndex();
-            push.padding[0] = draw.workTableIndex;
-            push.padding[1] = (packet.transparentWorkFlags &
-                TransparentWorkMirrored) != 0u ? 1u : 0u;
-            push.padding[2] = packLayeredViewportOffset(
-                draw.viewportOffsetX, draw.viewportOffsetY);
-            vkCmdPushConstants(currentCmd, layout,
-                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                0u, sizeof(push), &push);
-            vkCmdDrawIndexed(currentCmd, packet.indexCount, 1u,
-                packet.firstIndex, 0, 0u);
-            telemetry_.recordDraw(telemetry_.counters().ordinary2LocalCompositionDraws,
-                packet.indexCount / 3u);
-        }
-        vkCmdEndRenderPass(currentCmd);
-        scheduler.endGpuRange(gpuRange);
-    }
-
-    void VulkanVertexBackend::prepareOrdinary2ResolvedPacketIndices(
-        std::span<const Ordinary2CaptureDraw> draws) {
-        ordinary2ResolvedPacketCount_ = static_cast<uint32_t>((std::min)(
-            draws.size(), ordinary2ResolvedDraws_.size()));
-        std::copy_n(draws.begin(), ordinary2ResolvedPacketCount_,
-            ordinary2ResolvedDraws_.begin());
-        std::sort(ordinary2ResolvedDraws_.begin(),
-            ordinary2ResolvedDraws_.begin() + ordinary2ResolvedPacketCount_,
-            [](const Ordinary2CaptureDraw& lhs,
-                const Ordinary2CaptureDraw& rhs) {
-                return lhs.packetIndex < rhs.packetIndex;
-            });
-    }
-
-    bool VulkanVertexBackend::isOrdinary2PacketResolved(
-        uint32_t packetIndex) const noexcept {
-        const auto begin = ordinary2ResolvedDraws_.begin();
-        const auto end = begin + ordinary2ResolvedPacketCount_;
-        const auto found = std::lower_bound(begin, end, packetIndex,
-            [](const Ordinary2CaptureDraw& draw, uint32_t index) {
-                return draw.packetIndex < index;
-            });
-        return found != end && found->packetIndex == packetIndex;
-    }
-
-    void VulkanVertexBackend::prepareDeepResolvedPacketIndices(
-        std::span<const LayeredCaptureDraw> draws) {
-        deepResolvedPacketCount_ = 0u;
-        for (const LayeredCaptureDraw& draw : draws) {
-            if ((draw.quality != TransparencyQuality::Hero4 &&
-                    draw.quality != TransparencyQuality::Cinematic8) ||
-                deepResolvedPacketCount_ >= deepResolvedDraws_.size()) {
-                continue;
-            }
-            deepResolvedDraws_[deepResolvedPacketCount_++] = draw;
-        }
-        std::sort(deepResolvedDraws_.begin(),
-            deepResolvedDraws_.begin() + deepResolvedPacketCount_,
-            [](const LayeredCaptureDraw& lhs,
-                const LayeredCaptureDraw& rhs) {
-                return lhs.packetIndex < rhs.packetIndex;
-            });
-    }
-
-    bool VulkanVertexBackend::isDeepPacketResolved(
-        uint32_t packetIndex) const noexcept {
-        const auto begin = deepResolvedDraws_.begin();
-        const auto end = begin + deepResolvedPacketCount_;
-        const auto found = std::lower_bound(begin, end, packetIndex,
-            [](const LayeredCaptureDraw& draw, uint32_t index) {
-                return draw.packetIndex < index;
-            });
-        return found != end && found->packetIndex == packetIndex;
-    }
-
-    bool VulkanVertexBackend::isLayeredPacketResolved(
-        uint32_t packetIndex) const noexcept {
-        return isOrdinary2PacketResolved(packetIndex) ||
-            isDeepPacketResolved(packetIndex);
-    }
-
-    void VulkanVertexBackend::recordOrdinary2SceneResolve(
-        std::span<const DrawPacket> packets,
-        std::span<const Ordinary2CaptureDraw> draws) {
-        if (draws.empty()) {
-            renderGraph_.skipPass(graphIds_.ordinary2ComposeHook);
-            return;
-        }
-        const uint32_t frameIndex = scheduler.currentFrameIndex();
-        if (layeredSceneResolve_.pipeline() == VK_NULL_HANDLE ||
-            layeredSceneResolve_.descriptorFrameCount() <= frameIndex) {
-            throw std::logic_error(
-                "Ordinary2 scene resolve requires resident atlas descriptors");
-        }
-        VulkanFrameContextTargets& targets = frameTargets.get(frameIndex);
-        if (targets.transparentFramebuffer == VK_NULL_HANDLE)
-            throw std::logic_error(
-                "Ordinary2 scene resolve requires the scene framebuffer");
-
-        VulkanGpuRangeToken gpuRange = scheduler.beginGpuRange(
-            "gpu.transparency.layered.scene-resolve");
-        renderGraph_.beginPass(currentCmd, graphIds_.ordinary2ComposeHook);
-        VkRenderPassBeginInfo passInfo{
-            VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
-        passInfo.renderPass = transparentPass->getRenderPass();
-        passInfo.framebuffer = targets.transparentFramebuffer;
-        passInfo.renderArea.extent = frameTargets.extent();
-        vkCmdBeginRenderPass(currentCmd, &passInfo,
-            VK_SUBPASS_CONTENTS_INLINE);
-
-        const VkPipelineLayout layout =
-            layeredSceneResolve_.pipelineLayout();
-        vkCmdBindPipeline(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-            layeredSceneResolve_.pipeline());
-        telemetry_.recordPipelineBind(pipelineIdentity(
-            FixedPipelineIdentity::LayeredSceneResolve));
-        const VkDescriptorSet globalSet = view_.globalSet(frameIndex);
-        vkCmdBindDescriptorSets(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-            layout, 0u, 1u, &globalSet, 0u, nullptr);
-        const VkDescriptorSet localSet =
-            layeredSceneResolve_.descriptorSet(frameIndex);
-        vkCmdBindDescriptorSets(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-            layout, 1u, 1u, &localSet, 0u, nullptr);
-
-        GeometryHandle lastGeometry{};
-        const VkExtent2D sceneExtent = frameTargets.extent();
-        // Packet-index order is the frontend's stable back-to-front order.
-        for (uint32_t resolvedIndex = 0u;
-            resolvedIndex < ordinary2ResolvedPacketCount_; ++resolvedIndex) {
-            const Ordinary2CaptureDraw& draw =
-                ordinary2ResolvedDraws_[resolvedIndex];
-            if (draw.packetIndex >= packets.size())
-                continue;
-            const DrawPacket& packet = packets[draw.packetIndex];
-            const VulkanGeometryPayload* geometry =
-                resources_.geometries().get(packet.geometry);
-            if (geometry == nullptr)
-                continue;
-            const int64_t screenX = static_cast<int64_t>(draw.atlasX) +
-                draw.viewportOffsetX;
-            const int64_t screenY = static_cast<int64_t>(draw.atlasY) +
-                draw.viewportOffsetY;
-            if (screenX < 0 || screenY < 0 ||
-                screenX >= sceneExtent.width || screenY >= sceneExtent.height)
-                continue;
-            const uint32_t scissorWidth = (std::min)(draw.width,
-                sceneExtent.width - static_cast<uint32_t>(screenX));
-            const uint32_t scissorHeight = (std::min)(draw.height,
-                sceneExtent.height - static_cast<uint32_t>(screenY));
-            if (scissorWidth == 0u || scissorHeight == 0u)
-                continue;
-            const VkViewport viewport{ 0.0f, 0.0f,
-                static_cast<float>(sceneExtent.width),
-                static_cast<float>(sceneExtent.height), 0.0f, 1.0f };
-            const VkRect2D scissor{
-                { static_cast<int32_t>(screenX),
-                    static_cast<int32_t>(screenY) },
-                { scissorWidth, scissorHeight } };
-            vkCmdSetViewport(currentCmd, 0u, 1u, &viewport);
-            vkCmdSetScissor(currentCmd, 0u, 1u, &scissor);
-            if (packet.geometry != lastGeometry) {
-                const VkDeviceSize offset = geometry->vertexOffset;
-                vkCmdBindVertexBuffers(currentCmd, 0u, 1u,
-                    &geometry->vertexBuffer.buffer, &offset);
-                vkCmdBindIndexBuffer(currentCmd, geometry->indexBuffer.buffer,
-                    0u, toVkIndexType(geometry->indexFormat));
-                lastGeometry = packet.geometry;
-            }
-            CanonicalMeshPushConstants push{};
-            push.renderMatrix = packet.worldTransform;
-            push.materialIndex = draw.workTableIndex;
-            push.padding[0] =
-                (static_cast<uint32_t>(debugView_) << 8u) | (2u << 16u);
-            push.padding[1] = (packet.transparentWorkFlags &
-                TransparentWorkMirrored) != 0u ? 1u : 0u;
-            push.padding[2] = packLayeredViewportOffset(
-                draw.viewportOffsetX, draw.viewportOffsetY);
-            vkCmdPushConstants(currentCmd, layout,
-                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                0u, sizeof(push), &push);
-            vkCmdDrawIndexed(currentCmd, packet.indexCount, 1u,
-                packet.firstIndex, 0, 0u);
-            telemetry_.recordDraw(telemetry_.counters().ordinary2SceneResolveDraws,
-                packet.indexCount / 3u);
-        }
-        vkCmdEndRenderPass(currentCmd);
-        scheduler.endGpuRange(gpuRange);
-    }
-
-    void VulkanVertexBackend::recordDeepLayeredSceneResolve(
-        std::span<const DrawPacket> packets,
-        std::span<const LayeredCaptureDraw> draws) {
-        const bool hero4Active = hero4AtlasExtent_.width != 0u &&
-            hero4AtlasExtent_.height != 0u;
-        const bool cinematic8Active = cinematic8AtlasExtent_.width != 0u &&
-            cinematic8AtlasExtent_.height != 0u;
-        if (draws.empty() || deepResolvedPacketCount_ == 0u) {
-            renderGraph_.skipPass(graphIds_.deepComposeHook);
-            return;
-        }
-        const uint32_t frameIndex = scheduler.currentFrameIndex();
-        if (layeredSceneResolve_.pipeline() == VK_NULL_HANDLE) {
-            throw std::logic_error(
-                "Deep scene resolve requires a resident pipeline");
-        }
-        VulkanFrameContextTargets& targets = frameTargets.get(frameIndex);
-        if (targets.transparentFramebuffer == VK_NULL_HANDLE) {
-            throw std::logic_error(
-                "Deep scene resolve requires resident scene targets");
-        }
-
-        VulkanGpuRangeToken gpuRange = scheduler.beginGpuRange(
-            hero4Active && cinematic8Active
-                ? "gpu.transparency.layered.deep.scene-resolve"
-                : hero4Active
-                    ? "gpu.transparency.layered.hero4.scene-resolve"
-                    : "gpu.transparency.layered.cinematic8.scene-resolve");
-        renderGraph_.beginPass(currentCmd, graphIds_.deepComposeHook);
-        VkRenderPassBeginInfo passInfo{
-            VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
-        passInfo.renderPass = transparentPass->getRenderPass();
-        passInfo.framebuffer = targets.transparentFramebuffer;
-        passInfo.renderArea.extent = frameTargets.extent();
-        vkCmdBeginRenderPass(currentCmd, &passInfo,
-            VK_SUBPASS_CONTENTS_INLINE);
-
-        const VkPipelineLayout layout =
-            layeredSceneResolve_.pipelineLayout();
-        vkCmdBindPipeline(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-            layeredSceneResolve_.pipeline());
-        telemetry_.recordPipelineBind(pipelineIdentity(
-            FixedPipelineIdentity::LayeredSceneResolve));
-        const VkDescriptorSet globalSet = view_.globalSet(frameIndex);
-        vkCmdBindDescriptorSets(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-            layout, 0u, 1u, &globalSet, 0u, nullptr);
-        GeometryHandle lastGeometry{};
-        TransparencyQuality lastQuality = TransparencyQuality::Ordinary2;
-        const VkExtent2D sceneExtent = frameTargets.extent();
-        std::array<uint32_t, kLayeredQualityTierCount>
-            sceneResolveDrawCounts{};
-        for (uint32_t resolvedIndex = 0u;
-            resolvedIndex < deepResolvedPacketCount_; ++resolvedIndex) {
-            const LayeredCaptureDraw& draw =
-                deepResolvedDraws_[resolvedIndex];
-            const bool tierActive = draw.quality ==
-                    TransparencyQuality::Hero4
-                ? targets.hero4.active()
-                : draw.quality == TransparencyQuality::Cinematic8 &&
-                    targets.cinematic8.active();
-            if (!tierActive ||
-                layeredSceneResolve_.descriptorFrameCount(draw.quality) <=
-                    frameIndex) {
-                throw std::logic_error(
-                    "Deep scene resolve requires resident tier descriptors");
-            }
-            if (draw.packetIndex >= packets.size()) continue;
-            const DrawPacket& packet = packets[draw.packetIndex];
-            const VulkanGeometryPayload* geometry =
-                resources_.geometries().get(packet.geometry);
-            if (geometry == nullptr) continue;
-            const int64_t screenX = static_cast<int64_t>(draw.atlasX) +
-                draw.viewportOffsetX;
-            const int64_t screenY = static_cast<int64_t>(draw.atlasY) +
-                draw.viewportOffsetY;
-            if (screenX < 0 || screenY < 0 ||
-                screenX >= sceneExtent.width || screenY >= sceneExtent.height) {
-                continue;
-            }
-            const uint32_t scissorWidth = (std::min)(draw.width,
-                sceneExtent.width - static_cast<uint32_t>(screenX));
-            const uint32_t scissorHeight = (std::min)(draw.height,
-                sceneExtent.height - static_cast<uint32_t>(screenY));
-            if (scissorWidth == 0u || scissorHeight == 0u) continue;
-            const VkViewport viewport{ 0.0f, 0.0f,
-                static_cast<float>(sceneExtent.width),
-                static_cast<float>(sceneExtent.height), 0.0f, 1.0f };
-            const VkRect2D scissor{
-                { static_cast<int32_t>(screenX),
-                    static_cast<int32_t>(screenY) },
-                { scissorWidth, scissorHeight } };
-            vkCmdSetViewport(currentCmd, 0u, 1u, &viewport);
-            vkCmdSetScissor(currentCmd, 0u, 1u, &scissor);
-            if (draw.quality != lastQuality) {
-                const VkDescriptorSet localSet =
-                    layeredSceneResolve_.descriptorSet(frameIndex,
-                        draw.quality);
-                vkCmdBindDescriptorSets(currentCmd,
-                    VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 1u, 1u,
-                    &localSet, 0u, nullptr);
-                lastQuality = draw.quality;
-            }
-            if (packet.geometry != lastGeometry) {
-                const VkDeviceSize offset = geometry->vertexOffset;
-                vkCmdBindVertexBuffers(currentCmd, 0u, 1u,
-                    &geometry->vertexBuffer.buffer, &offset);
-                vkCmdBindIndexBuffer(currentCmd,
-                    geometry->indexBuffer.buffer, 0u,
-                    toVkIndexType(geometry->indexFormat));
-                lastGeometry = packet.geometry;
-            }
-            CanonicalMeshPushConstants push{};
-            push.renderMatrix = packet.worldTransform;
-            push.materialIndex = draw.workTableIndex;
-            push.padding[0] = 1u |
-                (static_cast<uint32_t>(debugView_) << 8u) |
-                (layeredQualityTierContract(draw.quality).
-                    maximumInterfaceCount << 16u);
-            push.padding[1] = (packet.transparentWorkFlags &
-                TransparentWorkMirrored) != 0u ? 1u : 0u;
-            push.padding[2] = packLayeredViewportOffset(
-                draw.viewportOffsetX, draw.viewportOffsetY);
-            vkCmdPushConstants(currentCmd, layout,
-                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                0u, sizeof(push), &push);
-            vkCmdDrawIndexed(currentCmd, packet.indexCount, 1u,
-                packet.firstIndex, 0, 0u);
-            telemetry_.recordDraw(telemetry_.counters().deepLayeredSceneResolveDraws,
-                packet.indexCount / 3u);
-            ++sceneResolveDrawCounts[layeredQualityTierIndex(draw.quality)];
-        }
-        vkCmdEndRenderPass(currentCmd);
-        scheduler.endGpuRange(gpuRange);
-        extensionHooks_.notify({ .point = VulkanHookPoint::DeepLayeredResolveCounts,
-            .cmd = currentCmd, .slot = frameIndex,
-            .payload = VulkanDeepResolveCountsPayload{ sceneResolveDrawCounts } });
-    }
-
     void VulkanVertexBackend::recordDeepLayeredValidationHook(
-        std::span<const LayeredCaptureDraw> draws,
         TransparencyQuality quality) {
         if (!extensionHooks_.graphHooks().layeredValidation) return;
-        const uint32_t interfaceCount = layeredQualityTierContract(
-            quality).maximumInterfaceCount;
-        if (quality != TransparencyQuality::Hero4 &&
-            quality != TransparencyQuality::Cinematic8) {
-            throw std::invalid_argument(
-                "Deep validation requires Hero4 or Cinematic8");
-        }
-        const uint32_t drawCount = static_cast<uint32_t>(
-            std::ranges::count_if(draws,
-                [quality](const LayeredCaptureDraw& draw) {
-                    return draw.quality == quality;
-                }));
+        const VulkanDeepLayeredHookPayload payload = layered_.deepHookPayload(quality);
         hooks_.runPassHook(quality == TransparencyQuality::Hero4
                 ? VulkanHookPasses::PassHook::Hero4Validation
                 : VulkanHookPasses::PassHook::Cinematic8Validation,
             { .point = VulkanHookPoint::DeepLayeredValidation,
                 .cmd = currentCmd, .slot = scheduler.currentFrameIndex(),
-                .payload = VulkanDeepLayeredHookPayload{ quality, interfaceCount,
-                    drawCount, static_cast<uint32_t>(
-                        deepLayeredAtlasPlan_.workIdentities().size()) } });
+                .payload = payload });
     }
 
     void VulkanVertexBackend::submitForwardQueues(
@@ -2936,371 +1905,37 @@ const VkDeviceSize offset = geometry->vertexOffset;
         const bool pipelineStatisticsActive =
             scheduler.beginTransparentPipelineStatistics();
 
-        const bool ordinary2CaptureTopologyActive =
-            ordinary2AtlasExtent_.width != 0u &&
-            ordinary2AtlasExtent_.height != 0u;
-        const bool requiresOrdinary2Atlas = std::ranges::any_of(
-            compatibilityTransparentQueue, isOrdinary2LayeredGlassPacket);
-        ordinary2AtlasResidency_.observe(requiresOrdinary2Atlas);
-        const bool requiresHero4Atlas = std::ranges::any_of(
-            compatibilityTransparentQueue, [](const DrawPacket& packet) {
-                return isLayeredGlassPacket(packet,
-                    TransparencyQuality::Hero4);
-            });
-        const bool requiresCinematic8Atlas = std::ranges::any_of(
-            compatibilityTransparentQueue, [](const DrawPacket& packet) {
-                return isLayeredGlassPacket(packet,
-                    TransparencyQuality::Cinematic8);
-            });
-        hero4AtlasResidency_.observe(requiresHero4Atlas);
-        cinematic8AtlasResidency_.observe(requiresCinematic8Atlas);
-        const uint64_t weightedOitPacketCount = static_cast<uint64_t>(
-            std::ranges::count_if(sortedSurfaceQueue,
-                [](const DrawPacket& packet) {
-                    return isWeightedOitPacket(packet);
-                }));
-        uint64_t weightedOitInstanceCount = 0u;
-        for (const DrawPacket& packet : sortedSurfaceQueue) {
-            if (!isWeightedOitPacket(packet)) continue;
-            if (packet.instanceCount == 0u) {
-                throw std::logic_error(
-                    "WeightedOIT packet has zero instances");
-            }
-            if (packet.firstInstanceTransform != UINT32_MAX) {
-                const uint64_t rangeEnd = static_cast<uint64_t>(
-                    packet.firstInstanceTransform) + packet.instanceCount;
-                if (rangeEnd > instanceTransforms.size()) {
-                    throw std::logic_error(
-                        "WeightedOIT packet instance range is invalid");
-                }
-            }
-            else if (packet.instanceCount != 1u) {
-                throw std::logic_error(
-                    "WeightedOIT multi-instance packet has no transform range");
-            }
-            weightedOitInstanceCount += packet.instanceCount;
-        }
-        weightedOitResidency_.observe(weightedOitPacketCount != 0u);
-        const bool weightedOitExecutionEnabled =
-            weightedOitResidency_.enabled() &&
-            weightedOitInstanceCount <= oit_.instanceCapacity();
-        if (telemetry_.collecting()) {
-            telemetry_.counters().weightedOitPackets = weightedOitPacketCount;
-            telemetry_.counters().weightedOitSortedFallbackPackets =
-                weightedOitExecutionEnabled ? 0u : weightedOitPacketCount;
-            telemetry_.counters().weightedOitInstanceCapacityFallbackPackets =
-                weightedOitResidency_.enabled() &&
-                    !weightedOitExecutionEnabled
-                ? weightedOitPacketCount : 0u;
-        }
-        bool ordinary2PreparedThisFrame = false;
-        // Active Ordinary2 topology prepares the fixed-capacity draw plan every
-        // frame. When inactive, profiler frames retain the earlier demand probe
-        // without changing topology or recording commands.
-        if ((ordinary2CaptureTopologyActive || telemetry_.collecting()) &&
-            ordinary2ViewProjectionValid_) {
-            CpuScope preparationScope(cpuProfiler_,
-                ordinary2CaptureTopologyActive
-                    ? "cpu.render.prepare.ordinary2"
-                    : "cpu.render.prepare.ordinary2_probe");
-            const VkExtent2D extent = frameTargets.extent();
-            ordinary2RequestCollector_.collect(compatibilityTransparentQueue,
-                ordinary2ViewProjection_, extent.width, extent.height);
-            (void)ordinary2AtlasPlan_.prepare(
-                ordinary2RequestCollector_.requests(),
-                extent.width, extent.height);
-            (void)ordinary2CaptureDrawPlan_.prepare(
-                ordinary2AtlasPlan_.decisions(),
-                compatibilityTransparentQueue,
-                ordinary2AtlasPlan_.atlasExtent());
-            ordinary2PreparedThisFrame = true;
-            if (telemetry_.collecting()) {
-                const Ordinary2RequestCollectionStats& collection =
-                    ordinary2RequestCollector_.stats();
-                const Ordinary2AtlasStats& atlas = ordinary2AtlasPlan_.stats();
-                const Ordinary2CaptureDrawStats& capture =
-                    ordinary2CaptureDrawPlan_.stats();
-                ++telemetry_.counters().ordinary2ProbeFrames;
-                telemetry_.counters().ordinary2CandidatePackets =
-                    collection.candidatePacketCount;
-                telemetry_.counters().ordinary2ProjectedPackets =
-                    collection.projectedPacketCount;
-                telemetry_.counters().ordinary2ProjectionCulledPackets =
-                    collection.culledPacketCount;
-                telemetry_.counters().ordinary2InvalidBoundsFallbackPackets =
-                    collection.invalidBoundsFallbackCount;
-                telemetry_.counters().ordinary2NearPlaneFallbackPackets =
-                    collection.nearPlaneFallbackCount;
-                telemetry_.counters().ordinary2UnsafeProjectionFallbackPackets =
-                    collection.unsafeProjectionFallbackCount;
-                telemetry_.counters().ordinary2RequestCapacityFallbackPackets =
-                    collection.requestCapacityFallbackCount;
-                telemetry_.counters().ordinary2AtlasAcceptedPackets =
-                    atlas.acceptedPacketCount;
-                telemetry_.counters().ordinary2AtlasAcceptedIslands =
-                    atlas.acceptedIslandCount;
-                telemetry_.counters().ordinary2AtlasRejectedPackets =
-                    atlas.requestCount - atlas.acceptedPacketCount;
-                telemetry_.counters().ordinary2AtlasAllocatedTexels =
-                    atlas.allocatedTexelCount;
-                telemetry_.counters().ordinary2CapturePreparedDraws =
-                    capture.preparedDrawCount;
-                telemetry_.counters().ordinary2CapturePreparationFallbackPackets =
-                    capture.invalidPacketIndexCount +
-                    capture.incompatiblePacketCount +
-                    capture.invalidPlacementCount;
-            }
-        }
+        // Residency demand (layered tiers, WeightedOIT), then the frame's
+        // layered plans; the owners stage their inputs for the drains below.
+        layered_.observe(compatibilityTransparentQueue);
+        const VulkanWeightedOitFeature::FrameDecision weightedOit =
+            oit_.observe(sortedSurfaceQueue, instanceTransforms);
+        const uint32_t frameIndex = scheduler.currentFrameIndex();
+        const VkDescriptorSet globalSet = view_.globalSet(frameIndex);
+        const VkDescriptorSet sceneSet = lighting_.sceneSet(frameIndex);
+        layered_.prepare({
+            .compatibilityTransparentQueue = compatibilityTransparentQueue,
+            .commandBuffer = currentCmd,
+            .globalSet = globalSet,
+            .sceneSet = sceneSet,
+            .debugView = debugView_,
+        });
+        forward_.stage({
+            .opaqueForwardQueue = opaqueForwardQueue,
+            .sortedSurfaceQueue = sortedSurfaceQueue,
+            .compatibilityTransparentQueue = compatibilityTransparentQueue,
+            .skipWeightedOit = weightedOit.executionEnabled,
+            .globalSet = globalSet,
+            .sceneSet = sceneSet,
+            .debugView = debugView_,
+        });
 
-        std::span<const Ordinary2CaptureDraw> captureDraws{};
-        if (ordinary2CaptureTopologyActive && ordinary2PreparedThisFrame)
-            captureDraws = ordinary2CaptureDrawPlan_.draws();
-        prepareOrdinary2ResolvedPacketIndices(captureDraws);
-
-        const bool hero4CaptureTopologyActive =
-            hero4AtlasExtent_.width != 0u && hero4AtlasExtent_.height != 0u;
-        const bool cinematic8CaptureTopologyActive =
-            cinematic8AtlasExtent_.width != 0u &&
-            cinematic8AtlasExtent_.height != 0u;
-        std::span<const LayeredCaptureDraw> deepCaptureDraws{};
-        if ((hero4CaptureTopologyActive || cinematic8CaptureTopologyActive) &&
-            ordinary2ViewProjectionValid_) {
-            CpuScope preparationScope(cpuProfiler_,
-                "cpu.render.prepare.layered_deep");
-            uint32_t activeTierMask = 0u;
-            if (hero4CaptureTopologyActive)
-                activeTierMask |= 1u << layeredQualityTierIndex(
-                    TransparencyQuality::Hero4);
-            if (cinematic8CaptureTopologyActive)
-                activeTierMask |= 1u << layeredQualityTierIndex(
-                    TransparencyQuality::Cinematic8);
-            const VkExtent2D extent = frameTargets.extent();
-            deepLayeredRequestCollector_.collect(
-                compatibilityTransparentQueue, ordinary2ViewProjection_,
-                extent.width, extent.height, activeTierMask);
-            (void)deepLayeredAtlasPlan_.prepare(
-                deepLayeredRequestCollector_.requests(),
-                extent.width, extent.height);
-            const std::array<Ordinary2AtlasExtent,
-                kLayeredQualityTierCount> residentExtents{
-                Ordinary2AtlasExtent{},
-                { hero4AtlasExtent_.width, hero4AtlasExtent_.height },
-                { cinematic8AtlasExtent_.width,
-                    cinematic8AtlasExtent_.height },
-            };
-            (void)deepLayeredCaptureDrawPlan_.prepare(
-                deepLayeredAtlasPlan_.decisions(),
-                compatibilityTransparentQueue, residentExtents);
-            deepCaptureDraws = deepLayeredCaptureDrawPlan_.draws();
-            if (telemetry_.collecting()) {
-                const LayeredRequestCollectionStats& collection =
-                    deepLayeredRequestCollector_.stats();
-                const LayeredAtlasStats& atlas =
-                    deepLayeredAtlasPlan_.stats();
-                const LayeredCaptureDrawStats& capture =
-                    deepLayeredCaptureDrawPlan_.stats();
-                telemetry_.counters().deepLayeredCandidatePackets =
-                    collection.candidatePacketCount;
-                telemetry_.counters().deepLayeredProjectedPackets =
-                    collection.projectedPacketCount;
-                telemetry_.counters().deepLayeredAtlasAcceptedPackets =
-                    atlas.acceptedPacketCount;
-                telemetry_.counters().deepLayeredAtlasAcceptedIslands =
-                    atlas.acceptedIslandCount;
-                telemetry_.counters().deepLayeredAtlasRejectedPackets =
-                    atlas.requestCount - atlas.acceptedPacketCount;
-                telemetry_.counters().deepLayeredCapturePreparedDraws =
-                    capture.preparedDrawCount;
-                telemetry_.counters().deepLayeredCapturePreparationFallbackPackets =
-                    capture.invalidPacketIndexCount +
-                    capture.incompatiblePacketCount +
-                    capture.invalidPlacementCount;
-            }
-        }
-        prepareDeepResolvedPacketIndices(deepCaptureDraws);
-
-        const auto recordForwardPass = [&](std::span<const DrawPacket> queue,
-            RenderGraph::PassId pass, std::string_view gpuRangeName,
-            VkRenderPass renderPass, VkFramebuffer framebuffer,
-            RenderPassClass expectedPassClass,
-            bool skipResolvedLayered, bool skipWeightedOit) {
-            bool hasPackets = false;
-            for (size_t packetIndex = 0u;
-                packetIndex < queue.size(); ++packetIndex) {
-                const DrawPacket& packet = queue[packetIndex];
-                if (skipWeightedOit && isWeightedOitPacket(packet))
-                    continue;
-                if (skipResolvedLayered && isLayeredPacketResolved(
-                        static_cast<uint32_t>(packetIndex)))
-                    continue;
-                hasPackets = true;
-                break;
-            }
-            if (!hasPackets) {
-                renderGraph_.skipPass(pass);
-                return;
-            }
-
-            VulkanGpuRangeToken forwardGpuRange =
-                scheduler.beginGpuRange(gpuRangeName.data());
-            renderGraph_.beginPass(currentCmd, pass);
-            VkRenderPassBeginInfo passInfo{
-                VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
-            passInfo.renderPass = renderPass;
-            passInfo.framebuffer = framebuffer;
-            passInfo.renderArea.extent = frameTargets.extent();
-            vkCmdBeginRenderPass(currentCmd, &passInfo,
-                VK_SUBPASS_CONTENTS_INLINE);
-
-            const VkViewport viewport{ 0.0f, 0.0f,
-                static_cast<float>(frameTargets.extent().width),
-                static_cast<float>(frameTargets.extent().height),
-                0.0f, 1.0f };
-            const VkRect2D scissor{ { 0, 0 }, frameTargets.extent() };
-            vkCmdSetViewport(currentCmd, 0, 1, &viewport);
-            vkCmdSetScissor(currentCmd, 0, 1, &scissor);
-
-            PipelineHandle lastBoundPipeline{};
-            MaterialHandle lastBoundMaterial{};
-            GeometryHandle lastBoundGeometry{};
-            VkPipelineLayout activeLayout = VK_NULL_HANDLE;
-            const VkDescriptorSet sceneSet = lighting_.sceneSet(
-                scheduler.currentFrameIndex());
-            const VkDescriptorSet globalSet = view_.globalSet(
-                scheduler.currentFrameIndex());
-
-            for (const DrawPacket& packet : queue) {
-                if (skipWeightedOit && isWeightedOitPacket(packet))
-                    continue;
-                if (skipResolvedLayered) {
-                    const uint32_t packetIndex = static_cast<uint32_t>(
-                        &packet - compatibilityTransparentQueue.data());
-                    if (isLayeredPacketResolved(packetIndex))
-                        continue;
-                }
-                auto* geometry = resources_.geometries().get(packet.geometry);
-                auto* material = resources_.materials().get(packet.material);
-                const bool mirrored = (packet.transparentWorkFlags &
-                    TransparentWorkMirrored) != 0;
-                const PipelineHandle effectivePipeline = mirrored
-                    ? material ? material->mirroredPipeline : PipelineHandle{}
-                    : packet.pipeline;
-                const VulkanPipelineRecord* record =
-                    pipelineLibrary.get(effectivePipeline);
-                if (!geometry || !material || !record ||
-                    record->pipeline == VK_NULL_HANDLE ||
-                    record->pipelineLayout == VK_NULL_HANDLE ||
-                    record->renderPass != expectedPassClass) {
-                    continue;
-                }
-
-                if (effectivePipeline != lastBoundPipeline) {
-                    vkCmdBindPipeline(currentCmd,
-                        VK_PIPELINE_BIND_POINT_GRAPHICS, record->pipeline);
-                    telemetry_.recordPipelineBind(effectivePipeline.id);
-                    activeLayout = record->pipelineLayout;
-                    vkCmdBindDescriptorSets(currentCmd,
-                        VK_PIPELINE_BIND_POINT_GRAPHICS, activeLayout,
-                        0, 1, &globalSet, 0, nullptr);
-                    vkCmdBindDescriptorSets(currentCmd,
-                        VK_PIPELINE_BIND_POINT_GRAPHICS, activeLayout,
-                        3u,
-                        1, &sceneSet, 0, nullptr);
-                    lastBoundPipeline = effectivePipeline;
-                    lastBoundMaterial = MaterialHandle{};
-                }
-                if (packet.material != lastBoundMaterial) {
-                    bindMaterialDescriptors(activeLayout);
-                    telemetry_.recordMaterialBind(packet.material);
-                    lastBoundMaterial = packet.material;
-                }
-                if (packet.geometry != lastBoundGeometry) {
-                    const VkDeviceSize offset = geometry->vertexOffset;
-                    vkCmdBindVertexBuffers(currentCmd, 0, 1,
-                        &geometry->vertexBuffer.buffer, &offset);
-                    vkCmdBindIndexBuffer(currentCmd,
-                        geometry->indexBuffer.buffer, 0,
-                        toVkIndexType(geometry->indexFormat));
-                    lastBoundGeometry = packet.geometry;
-                }
-
-                CanonicalMeshPushConstants push{};
-                push.renderMatrix = packet.worldTransform;
-                push.materialIndex = packet.material.getIndex();
-                push.padding[0] = static_cast<uint32_t>(debugView_);
-                push.padding[1] = mirrored ? 1u : 0u;
-                vkCmdPushConstants(currentCmd, activeLayout,
-                    VK_SHADER_STAGE_VERTEX_BIT |
-                        VK_SHADER_STAGE_FRAGMENT_BIT,
-                    0, sizeof(push), &push);
-                vkCmdDrawIndexed(currentCmd, packet.indexCount, 1,
-                    packet.firstIndex, 0, 0);
-                telemetry_.recordDraw(telemetry_.counters().drawTransparentForward,
-                    packet.indexCount / 3);
-                if (telemetry_.collecting()) {
-                    const MaterialClosureClass closure =
-                        static_cast<MaterialClosureClass>(
-                            material->packed.closureClass);
-                    if (closure == MaterialClosureClass::StandardForward) {
-                        ++telemetry_.counters().drawStandardForward;
-                    }
-                    else if (closure == MaterialClosureClass::ComplexForward) {
-                        ++telemetry_.counters().drawComplexForward;
-                        for (uint32_t lobe = 0;
-                            lobe < material->packed.complexLobeCount; ++lobe) {
-                            const uint32_t type =
-                                material->packed.complexLobes[lobe].type;
-                            if (type < telemetry_.counters().complexLobeDraws.size()) {
-                                ++telemetry_.counters().complexLobeDraws[type];
-                            }
-                        }
-                    }
-                    else if (closure == MaterialClosureClass::Unlit) {
-                        ++telemetry_.counters().drawUnlitForward;
-                    }
-                }
-            }
-            vkCmdEndRenderPass(currentCmd);
-            scheduler.endGpuRange(forwardGpuRange);
-        };
-
-        const VulkanFrameContextTargets& targets = frameTargets.get(
-            scheduler.currentFrameIndex());
-        recordForwardPass(opaqueForwardQueue, graphIds_.forwardOpaque,
-            "gpu.forward.opaque", forwardPass->getRenderPass(),
-            targets.forwardFramebuffer, RenderPassClass::Forward, false,
-            false);
-
+        // R3c.9 drain point: "forward-opaque".
+        forward_.recordOpaque();
         // R3c.5 drain point: VSM depth-demand marking and request readback.
         shadows_.recordVirtualShadowDemand();
-
-        const bool requiresRefractionPyramids =
-            !compatibilityTransparentQueue.empty();
-        transparencyPyramidResidency_.observe(requiresRefractionPyramids);
-        if (transparencyPyramidResidency_.requiresFallback(
-                requiresRefractionPyramids) && telemetry_.collecting()) {
-            ++telemetry_.counters().transparencyPyramidFallbackFrames;
-        }
-        if (transparencyPyramidResidency_.enabled() &&
-            !requiresRefractionPyramids) {
-            renderGraph_.skipPass(graphIds_.refractionPyramids);
-        }
-        else if (transparencyPyramidResidency_.enabled()) {
-            VulkanGpuRangeToken pyramidGpuRange = scheduler.beginGpuRange(
-                "gpu.transparency.refraction-pyramids");
-            renderGraph_.beginPass(currentCmd, graphIds_.refractionPyramids);
-            const uint32_t dispatches = transparencyPyramid_.record(
-                currentCmd, scheduler.currentFrameIndex(),
-                view_.globalSet(scheduler.currentFrameIndex()),
-                frameTargets);
-            if (telemetry_.collecting())
-                telemetry_.counters().dispatchRecorded += dispatches;
-            if (telemetry_.collecting()) {
-                ++telemetry_.counters().transparencyPyramidBuilds;
-                telemetry_.counters().transparencyPyramidMipDispatches += dispatches;
-            }
-            scheduler.endGpuRange(pyramidGpuRange);
-        }
+        // R3c.9 drain point: "transparent.refraction-pyramids".
+        forward_.recordRefractionPyramids(!compatibilityTransparentQueue.empty());
         if (opaque_.depthPyramidEnabled()) {
             // R3c.7 drain point: "depth.occlusion-pyramid.build".
             opaque_.recordDepthPyramid();
@@ -3310,77 +1945,54 @@ const VkDeviceSize offset = geometry->vertexOffset;
                     .cmd = currentCmd, .slot = scheduler.currentFrameIndex(),
                     .payload = VulkanDepthPyramidHookPayload{ retainedRenderView_ } });
         }
-        recordForwardPass(sortedSurfaceQueue, graphIds_.sortedForward,
-            "gpu.transparency.sorted.forward", transparentPass->getRenderPass(),
-            targets.transparentFramebuffer, RenderPassClass::Transparent,
-            false, weightedOitExecutionEnabled);
+        // R3c.9 drain point: "transparent.sorted.forward".
+        forward_.recordSorted();
         if (telemetry_.collecting()) {
             telemetry_.counters().transparentSortedPackets = sortedSurfaceQueue.size() -
-                (weightedOitExecutionEnabled
-                    ? weightedOitPacketCount : 0u);
+                (weightedOit.executionEnabled
+                    ? weightedOit.packetCount : 0u);
         }
-        if (ordinary2CaptureTopologyActive) {
-            recordOrdinary2Captures(compatibilityTransparentQueue,
-                captureDraws);
-            recordOrdinary2LocalComposition(compatibilityTransparentQueue,
-                captureDraws);
+        // R3c.9 drain points: the layered tiers, with the validation hooks
+        // between them.
+        if (layered_.ordinary2Active()) {
+            layered_.recordOrdinary2Captures();
+            layered_.recordOrdinary2LocalComposition();
             hooks_.runPassHook(VulkanHookPasses::PassHook::Ordinary2Validation,
                 { .point = VulkanHookPoint::Ordinary2Validation,
                     .cmd = currentCmd, .slot = scheduler.currentFrameIndex(),
-                    .payload = VulkanOrdinary2HookPayload{ ordinary2AtlasExtent_,
-                        static_cast<uint32_t>(captureDraws.size()),
-                        static_cast<uint32_t>(
-                            ordinary2AtlasPlan_.workIdentities().size()) } });
-            recordOrdinary2SceneResolve(compatibilityTransparentQueue,
-                captureDraws);
+                    .payload = layered_.ordinary2HookPayload() });
+            layered_.recordOrdinary2SceneResolve();
         }
-
-        if (hero4CaptureTopologyActive) {
-            recordDeepLayeredCaptures(compatibilityTransparentQueue,
-                deepCaptureDraws, TransparencyQuality::Hero4);
-            recordDeepLayeredLocalComposition(compatibilityTransparentQueue,
-                deepCaptureDraws, TransparencyQuality::Hero4);
-            recordDeepLayeredValidationHook(deepCaptureDraws,
-                TransparencyQuality::Hero4);
+        const bool hero4Active = layered_.deepActive(TransparencyQuality::Hero4);
+        const bool cinematic8Active =
+            layered_.deepActive(TransparencyQuality::Cinematic8);
+        for (const TransparencyQuality quality :
+                { TransparencyQuality::Hero4, TransparencyQuality::Cinematic8 }) {
+            if (!layered_.deepActive(quality)) continue;
+            layered_.recordDeepCaptures(quality);
+            layered_.recordDeepLocalComposition(quality);
+            recordDeepLayeredValidationHook(quality);
         }
-        if (cinematic8CaptureTopologyActive) {
-            recordDeepLayeredCaptures(compatibilityTransparentQueue,
-                deepCaptureDraws, TransparencyQuality::Cinematic8);
-            recordDeepLayeredLocalComposition(compatibilityTransparentQueue,
-                deepCaptureDraws, TransparencyQuality::Cinematic8);
-            recordDeepLayeredValidationHook(deepCaptureDraws,
-                TransparencyQuality::Cinematic8);
-        }
-        if (hero4CaptureTopologyActive || cinematic8CaptureTopologyActive) {
-            recordDeepLayeredSceneResolve(compatibilityTransparentQueue,
-                deepCaptureDraws);
-        }
+        if (hero4Active || cinematic8Active) layered_.recordDeepSceneResolve();
 
         if (telemetry_.collecting()) {
             telemetry_.counters().transparentBackgroundPackets = 0u;
             telemetry_.counters().transparentForegroundPackets = 0u;
             telemetry_.counters().transparentNonemptyBuckets = 0u;
         }
-        recordForwardPass(compatibilityTransparentQueue,
-            graphIds_.compatibilityForward,
-            "gpu.transparency.compatibility.forward",
-            forwardPass->getRenderPass(), targets.forwardFramebuffer,
-            RenderPassClass::Forward, true, false);
+        // R3c.9 drain point: "transparent.compatibility.forward".
+        forward_.recordCompatibility();
 
         // R3c.3 drain point: "transparent.oit.{accumulate,resolve}", inside
         // the transparent pipeline-statistics bracket as before.
-        {
-            const uint32_t oitFrameIndex = scheduler.currentFrameIndex();
-            oit_.record({
-                .sortedSurfaceQueue = sortedSurfaceQueue,
-                .instanceTransforms = instanceTransforms,
-                .execute = weightedOitExecutionEnabled &&
-                    weightedOitPacketCount != 0u,
-                .globalSet = view_.globalSet(oitFrameIndex),
-                .sceneSet = lighting_.sceneSet(oitFrameIndex),
-                .debugView = debugView_,
-            });
-        }
+        oit_.record({
+            .sortedSurfaceQueue = sortedSurfaceQueue,
+            .instanceTransforms = instanceTransforms,
+            .execute = weightedOit.executionEnabled && weightedOit.packetCount != 0u,
+            .globalSet = globalSet,
+            .sceneSet = sceneSet,
+            .debugView = debugView_,
+        });
 
         if (pipelineStatisticsActive) {
             scheduler.endTransparentPipelineStatistics();

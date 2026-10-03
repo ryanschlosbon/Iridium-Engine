@@ -16,6 +16,7 @@ add_library(iridium_vulkan STATIC
         VulkanDepthPyramid.cpp
         VulkanDirectionalShadowMap.cpp
         VulkanExtensionHooks.cpp
+        VulkanForwardFeature.cpp
         VulkanFrameScheduler.cpp
         VulkanFrameTargets.cpp
         VulkanFrameTelemetry.cpp
@@ -30,6 +31,7 @@ add_library(iridium_vulkan STATIC
         VulkanLayeredInterfaceCapturePass.cpp
         VulkanLayeredLocalCompositionPass.cpp
         VulkanLayeredSceneResolvePass.cpp
+        VulkanLayeredTransparencyFeature.cpp
         VulkanLocalShadowFeature.cpp
         VulkanMeshLayouts.cpp
         VulkanOutputFeature.cpp

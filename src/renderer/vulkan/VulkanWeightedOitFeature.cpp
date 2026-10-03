@@ -8,6 +8,7 @@
 #include "renderer/rhi/Mesh.h"
 #include "renderer/transparency/WeightedOit.h"
 
+#include <algorithm>
 #include <cstring>
 #include <stdexcept>
 
@@ -80,6 +81,52 @@ namespace Iridium {
             context_->allocator.destroy(buffer);
         instanceBuffers_ = replacement;
         instanceCapacity_ = capacity;
+    }
+
+    VulkanWeightedOitFeature::FrameDecision VulkanWeightedOitFeature::observe(
+        std::span<const DrawPacket> sortedSurfaceQueue,
+        std::span<const glm::mat4> instanceTransforms) {
+        VulkanFrameTelemetry& telemetry = context_->telemetry;
+        const uint64_t weightedOitPacketCount = static_cast<uint64_t>(
+            std::ranges::count_if(sortedSurfaceQueue,
+                [](const DrawPacket& packet) {
+                    return isWeightedOitPacket(packet);
+                }));
+        uint64_t weightedOitInstanceCount = 0u;
+        for (const DrawPacket& packet : sortedSurfaceQueue) {
+            if (!isWeightedOitPacket(packet)) continue;
+            if (packet.instanceCount == 0u) {
+                throw std::logic_error(
+                    "WeightedOIT packet has zero instances");
+            }
+            if (packet.firstInstanceTransform != UINT32_MAX) {
+                const uint64_t rangeEnd = static_cast<uint64_t>(
+                    packet.firstInstanceTransform) + packet.instanceCount;
+                if (rangeEnd > instanceTransforms.size()) {
+                    throw std::logic_error(
+                        "WeightedOIT packet instance range is invalid");
+                }
+            }
+            else if (packet.instanceCount != 1u) {
+                throw std::logic_error(
+                    "WeightedOIT multi-instance packet has no transform range");
+            }
+            weightedOitInstanceCount += packet.instanceCount;
+        }
+        residency_.observe(weightedOitPacketCount != 0u);
+        const bool weightedOitExecutionEnabled =
+            residency_.enabled() &&
+            weightedOitInstanceCount <= instanceCapacity_;
+        if (telemetry.collecting()) {
+            telemetry.counters().weightedOitPackets = weightedOitPacketCount;
+            telemetry.counters().weightedOitSortedFallbackPackets =
+                weightedOitExecutionEnabled ? 0u : weightedOitPacketCount;
+            telemetry.counters().weightedOitInstanceCapacityFallbackPackets =
+                residency_.enabled() &&
+                    !weightedOitExecutionEnabled
+                ? weightedOitPacketCount : 0u;
+        }
+        return { weightedOitPacketCount, weightedOitExecutionEnabled };
     }
 
     void VulkanWeightedOitFeature::record(const FrameInputs& inputs) {

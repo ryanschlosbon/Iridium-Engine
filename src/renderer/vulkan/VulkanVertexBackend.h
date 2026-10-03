@@ -53,6 +53,8 @@
 #include "VulkanOpaqueFeature.h"
 #include "VulkanDeferredLightingFeature.h"
 #include "VulkanViewUniforms.h"
+#include "VulkanForwardFeature.h"
+#include "VulkanLayeredTransparencyFeature.h"
 #include "VulkanRenderGraphExecutor.h"
 #include "VulkanTransparencyPyramid.h"
 #include "VulkanDepthPyramid.h"
@@ -103,34 +105,13 @@ namespace Iridium {
         VulkanRenderGraphExecutor renderGraph_;
         // Pass/resource ids of the bound plan, refreshed on every rebuild.
         VulkanProductionGraphIds graphIds_{};
-        VulkanTransparencyPyramid transparencyPyramid_;
-        VulkanLayeredInterfaceCapturePass layeredInterfaceCapture_;
-        VulkanLayeredLocalCompositionPass layeredLocalComposition_;
-        VulkanLayeredSceneResolvePass layeredSceneResolve_;
+        // R3c.9: forward surfaces and refraction pyramids; layered glass.
+        VulkanForwardFeature forward_;
+        VulkanLayeredTransparencyFeature layered_;
         // R3c.3: WeightedOIT accumulation/resolve and instance capacity.
         VulkanWeightedOitFeature oit_;
         // R3c.4: validation readback, scene-color and final capture hooks.
         VulkanHookPasses hooks_;
-        TransparencyPyramidResidency transparencyPyramidResidency_;
-        TransparencyPyramidResidency ordinary2AtlasResidency_;
-        TransparencyPyramidResidency hero4AtlasResidency_;
-        TransparencyPyramidResidency cinematic8AtlasResidency_;
-        TransparencyPyramidResidency weightedOitResidency_;
-        VkExtent2D ordinary2AtlasExtent_{};
-        VkExtent2D hero4AtlasExtent_{};
-        VkExtent2D cinematic8AtlasExtent_{};
-        Ordinary2RequestCollector ordinary2RequestCollector_;
-        Ordinary2AtlasPlan ordinary2AtlasPlan_;
-        Ordinary2CaptureDrawPlan ordinary2CaptureDrawPlan_;
-        LayeredRequestCollector deepLayeredRequestCollector_;
-        LayeredAtlasPlan deepLayeredAtlasPlan_;
-        LayeredCaptureDrawPlan deepLayeredCaptureDrawPlan_;
-        std::array<Ordinary2CaptureDraw, kOrdinary2MaximumWorkCount>
-            ordinary2ResolvedDraws_{};
-        uint32_t ordinary2ResolvedPacketCount_ = 0u;
-        std::array<LayeredCaptureDraw, kOrdinary2MaximumWorkCount>
-            deepResolvedDraws_{};
-        uint32_t deepResolvedPacketCount_ = 0u;
         FrameTopologyPreparation frameTopologyPrewarm_{};
 
         // G-Buffer Raw Images
@@ -151,11 +132,6 @@ namespace Iridium {
         // Translucency Pass Raw Images
 
         // Depth Pass
-
-        // Translucency Passes
-
-        std::unique_ptr<VkForwardRenderPass> forwardPass;
-        std::unique_ptr<VkForwardRenderPass> transparentPass;
 
         // R3c.2: output transform, HDR10 encode, LUT, exposure, grid overlay.
         VulkanOutputFeature output_;
@@ -224,8 +200,6 @@ namespace Iridium {
         uint32_t shadowLodMaximumLevel_ = 15u;
         float experimentalProbeLodErrorPixels_ = 0.0f;
         uint32_t probeLodMaximumLevel_ = 15u;
-        glm::mat4 ordinary2ViewProjection_{ 1.0f };
-        bool ordinary2ViewProjectionValid_ = false;
         uint64_t externalSwapchainRequestedPeakBytes_ = 0;
         uint64_t externalSwapchainPeakImageCount_ = 0;
         RenderDebugView debugView_ = RenderDebugView::Final;
@@ -259,9 +233,10 @@ namespace Iridium {
         void collectIndirectViewValidations(uint32_t frameIndex);
 
         // Feature owners in registration (and graph) order.
-        [[nodiscard]] std::array<IVulkanFeature*, 9> features() noexcept {
+        [[nodiscard]] std::array<IVulkanFeature*, 11> features() noexcept {
             return { &shadows_, &localShadows_, &probes_, &opaque_,
-                &clusterLighting_, &lighting_, &output_, &oit_, &hooks_ };
+                &clusterLighting_, &lighting_, &forward_, &layered_, &output_,
+                &oit_, &hooks_ };
         }
         // Between frames, after every slot retired (resize, transport and
         // topology changes): release and recreate the graph, the frame
@@ -291,50 +266,8 @@ namespace Iridium {
                 std::nullopt);
         void emitFrameCounters();
         void bindMaterialDescriptors(VkPipelineLayout layout);
-        void recordOrdinary2InterfaceCapture(
-            std::span<const DrawPacket> packets,
-            std::span<const Ordinary2CaptureDraw> draws,
-            bool exitCapture);
-        void recordOrdinary2Captures(
-            std::span<const DrawPacket> packets,
-            std::span<const Ordinary2CaptureDraw> draws);
-        void recordDeepLayeredInterfaceCapture(
-            std::span<const DrawPacket> packets,
-            std::span<const LayeredCaptureDraw> draws,
-            TransparencyQuality quality, uint32_t interfaceIndex);
-        void recordDeepLayeredTileTermination(
-            std::span<const LayeredCaptureDraw> draws,
-            TransparencyQuality quality, uint32_t interfaceIndex);
-        void recordDeepLayeredCaptures(
-            std::span<const DrawPacket> packets,
-            std::span<const LayeredCaptureDraw> draws,
-            TransparencyQuality quality);
-        void recordDeepLayeredLocalComposition(
-            std::span<const DrawPacket> packets,
-            std::span<const LayeredCaptureDraw> draws,
-            TransparencyQuality quality);
-        void recordDeepLayeredSceneResolve(
-            std::span<const DrawPacket> packets,
-            std::span<const LayeredCaptureDraw> draws);
-        void recordOrdinary2LocalComposition(
-            std::span<const DrawPacket> packets,
-            std::span<const Ordinary2CaptureDraw> draws);
-        void recordOrdinary2SceneResolve(
-            std::span<const DrawPacket> packets,
-            std::span<const Ordinary2CaptureDraw> draws);
-        void prepareOrdinary2ResolvedPacketIndices(
-            std::span<const Ordinary2CaptureDraw> draws);
-        [[nodiscard]] bool isOrdinary2PacketResolved(
-            uint32_t packetIndex) const noexcept;
-        void prepareDeepResolvedPacketIndices(
-            std::span<const LayeredCaptureDraw> draws);
-        [[nodiscard]] bool isDeepPacketResolved(
-            uint32_t packetIndex) const noexcept;
-        [[nodiscard]] bool isLayeredPacketResolved(
-            uint32_t packetIndex) const noexcept;
-        void recordDeepLayeredValidationHook(
-            std::span<const LayeredCaptureDraw> draws,
-            TransparencyQuality quality);
+        // The deep tier's validation readback hook (layered payload).
+        void recordDeepLayeredValidationHook(TransparencyQuality quality);
         // The capture source of a capture point (scene-linear: scene.color;
         // final: the output target).
         [[nodiscard]] VulkanCaptureHookPayload captureSource(
