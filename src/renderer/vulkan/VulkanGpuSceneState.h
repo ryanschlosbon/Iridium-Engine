@@ -46,11 +46,20 @@ namespace Iridium {
         void init(VkDevice device, VulkanResourceAllocator& allocator,
             VulkanFrameScheduler& scheduler, CpuProfiler* profiler,
             const bool& frameOpen, uint64_t maxStorageBufferRange);
+        // Frame boundary only. M7R R4c.2: the replacement tables are created
+        // at once; a slot that is not in flight swaps now, an in-flight slot
+        // keeps its tables until swapRetiredSlot (no drain).
         void createBuffers(const GpuSceneCapacityRequirements& capacity);
         void setDescriptorSet(uint32_t frame, VkDescriptorSet set) {
             descriptorSets_.at(frame) = set;
         }
         void bindBuffers();
+        // At `slot`'s retirement: installs its parked tables and rewrites its
+        // set. True when the slot changed.
+        bool swapRetiredSlot(uint32_t slot);
+        [[nodiscard]] bool slotSwapPending(uint32_t slot) const noexcept {
+            return pendingSlots_[slot];
+        }
         // Grows every table geometrically to cover `requirements` (frame
         // boundary only).
         void prepare(const GpuSceneCapacityRequirements& requirements);
@@ -92,6 +101,9 @@ namespace Iridium {
         void reset() noexcept;
 
     private:
+        void bindSlot(uint32_t frame);
+        void destroySlot(std::array<FrameBuffers*, 4> tables, uint32_t frame) noexcept;
+
         VkDevice device_ = VK_NULL_HANDLE;
         VulkanResourceAllocator* allocator_ = nullptr;
         VulkanFrameScheduler* scheduler_ = nullptr;
@@ -102,6 +114,12 @@ namespace Iridium {
         FrameBuffers instanceBuffers_{};
         FrameBuffers primitiveBuffers_{};
         FrameBuffers geometryBuffers_{};
+        // R4c.2: replacements parked for in-flight slots.
+        FrameBuffers pendingTransformBuffers_{};
+        FrameBuffers pendingInstanceBuffers_{};
+        FrameBuffers pendingPrimitiveBuffers_{};
+        FrameBuffers pendingGeometryBuffers_{};
+        std::array<bool, FrameCount> pendingSlots_{};
         std::array<VkDescriptorSet, FrameCount> descriptorSets_{};
         std::array<CpuMirror, FrameCount> cpuMirrors_;
         std::array<ViewTransportRecord, FrameCount> cpuViews_;

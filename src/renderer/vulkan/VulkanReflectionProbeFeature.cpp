@@ -99,10 +99,14 @@ namespace Iridium {
                 context_->allocator.destroy(pending.bakedReadback.buffer);
             }
             for (auto* buffers : { &recordBuffers_, &activeSlotBuffers_,
-                    &parameterBuffers_, &clusterHeaderBuffers_, &clusterIndexBuffers_ })
+                    &parameterBuffers_, &clusterHeaderBuffers_, &clusterIndexBuffers_,
+                    &pendingRecordBuffers_, &pendingActiveSlotBuffers_,
+                    &pendingParameterBuffers_, &pendingClusterHeaderBuffers_,
+                    &pendingClusterIndexBuffers_ })
                 for (VulkanBufferResource& buffer : *buffers)
                     context_->allocator.destroy(buffer);
         }
+        pendingSlots_ = {};
         pendingCaptures_.clear();
         captureTargets_.cleanup();
         capturePass_.cleanup();
@@ -121,9 +125,10 @@ namespace Iridium {
             culler_.resize(primitiveCapacity, context_->frameOpen);
     }
 
-    void VulkanReflectionProbeFeature::notifyBuffersReplaced() const {
+    void VulkanReflectionProbeFeature::notifyBuffersReplaced(
+        uint32_t swappedSlots) const {
         if (bindings_.buffersReplaced != nullptr)
-            bindings_.buffersReplaced(bindings_.owner);
+            bindings_.buffersReplaced(bindings_.owner, swappedSlots);
     }
 
     void VulkanReflectionProbeFeature::notifyEnvironmentsChanged() const {
@@ -200,18 +205,35 @@ namespace Iridium {
             }
             throw;
         }
-        if (recordCapacity_ != 0) context_->scheduler.waitForAllFrames();
+        // R4c.2: no drain. A slot that is not in flight swaps now; an
+        // in-flight slot parks its replacement (an older parked one was never
+        // used) until its retirement. With every slot idle (startup) the
+        // probe-clustering sets are rebuilt as before.
+        const std::array<FrameBuffers*, 5> current{ &recordBuffers_,
+            &activeSlotBuffers_, &parameterBuffers_, &clusterHeaderBuffers_,
+            &clusterIndexBuffers_ };
+        const std::array<FrameBuffers*, 5> pending{ &pendingRecordBuffers_,
+            &pendingActiveSlotBuffers_, &pendingParameterBuffers_,
+            &pendingClusterHeaderBuffers_, &pendingClusterIndexBuffers_ };
+        const std::array<FrameBuffers*, 5> replacement{ &records, &active,
+            &parameters, &headers, &indices };
+        uint32_t swappedSlots = 0;
+        for (uint32_t frame = 0; frame < FrameCount; ++frame) {
+            for (FrameBuffers* buffers : pending) allocator.destroy((*buffers)[frame]);
+            pendingSlots_[frame] = context_->scheduler.slotInFlight(frame);
+            if (!pendingSlots_[frame]) swappedSlots |= 1u << frame;
+        }
         // The probe-clustering sets reference the replaced buffers.
-        clusters_->probeClusterPipeline().clearDescriptors();
-        for (auto* buffers : { &recordBuffers_, &activeSlotBuffers_,
-                &parameterBuffers_, &clusterHeaderBuffers_, &clusterIndexBuffers_ })
-            for (VulkanBufferResource& buffer : *buffers)
-                allocator.destroy(buffer);
-        recordBuffers_ = records;
-        activeSlotBuffers_ = active;
-        parameterBuffers_ = parameters;
-        clusterHeaderBuffers_ = headers;
-        clusterIndexBuffers_ = indices;
+        if (swappedSlots == AllSlots)
+            clusters_->probeClusterPipeline().clearDescriptors();
+        for (uint32_t frame = 0; frame < FrameCount; ++frame) {
+            for (size_t table = 0; table < current.size(); ++table) {
+                FrameBuffers& target = pendingSlots_[frame]
+                    ? *pending[table] : *current[table];
+                if (!pendingSlots_[frame]) allocator.destroy(target[frame]);
+                target[frame] = (*replacement[table])[frame];
+            }
+        }
         recordCapacity_ = recordCapacity;
         clusterCapacity_ = clusterCapacity;
         referenceCapacity_ = referenceCapacity;
@@ -219,7 +241,22 @@ namespace Iridium {
             revisions.assign(recordCapacity, uint64_t{ 0 });
         uploadedActiveListRevisions_.fill(0);
         uploadRanges_.reserve(recordCapacity);
-        notifyBuffersReplaced();
+        notifyBuffersReplaced(swappedSlots);
+    }
+
+    bool VulkanReflectionProbeFeature::swapRetiredSlot(uint32_t slot) {
+        if (!pendingSlots_[slot]) return false;
+        for (auto [target, source] : { std::pair{ &recordBuffers_, &pendingRecordBuffers_ },
+                std::pair{ &activeSlotBuffers_, &pendingActiveSlotBuffers_ },
+                std::pair{ &parameterBuffers_, &pendingParameterBuffers_ },
+                std::pair{ &clusterHeaderBuffers_, &pendingClusterHeaderBuffers_ },
+                std::pair{ &clusterIndexBuffers_, &pendingClusterIndexBuffers_ } }) {
+            context_->allocator.destroy((*target)[slot]);
+            (*target)[slot] = (*source)[slot];
+            (*source)[slot] = {};
+        }
+        pendingSlots_[slot] = false;
+        return true;
     }
 
     VulkanReflectionProbeFeature::BufferDescriptors

@@ -124,7 +124,15 @@ namespace Iridium {
         void setMaterialTableMaximumCapacity(uint32_t maximumCapacity) noexcept {
             canonicalMaterialMaximumCapacity_ = maximumCapacity;
         }
+        // M7R R4c.2: a slot that is not in flight swaps at once; an in-flight
+        // slot keeps its table until swapRetiredSlot (no drain).
         void createCanonicalMaterialBuffers(uint32_t capacity);
+        // At `slot`'s retirement: installs its parked material table and
+        // rebinds the slot's material set. True when the slot changed.
+        bool swapRetiredSlot(uint32_t slot);
+        [[nodiscard]] bool slotSwapPending(uint32_t slot) const noexcept {
+            return pendingMaterialSlots_[slot];
+        }
         void ensureCanonicalMaterialCapacity(uint32_t requiredCapacity);
         void uploadCanonicalMaterialsForFrame(uint32_t frameIndex);
         [[nodiscard]] uint32_t materialTableCapacity() const noexcept {
@@ -186,6 +194,10 @@ namespace Iridium {
         VulkanIndexedTextureTable indexedTextureTable_;
         std::array<VulkanBufferResource, VulkanFrameScheduler::FramesInFlight>
             canonicalMaterialBuffers_{};
+        std::array<VulkanBufferResource, VulkanFrameScheduler::FramesInFlight>
+            pendingMaterialBuffers_{};
+        std::array<bool, VulkanFrameScheduler::FramesInFlight>
+            pendingMaterialSlots_{};
         uint32_t canonicalMaterialCapacity_ = 0;
         uint32_t canonicalMaterialMaximumCapacity_ = 0;
     };

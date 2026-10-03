@@ -31,6 +31,11 @@ namespace Iridium {
             std::span<const VkDescriptorBufferInfo> fallbackCandidates,
             std::span<const VkDescriptorBufferInfo> parameters);
         void clearDescriptors();
+        // M7R R4c.2: rewrites one retired slot's light-record and active-slot
+        // bindings in place (no-op before the sets exist).
+        void rewriteLightBuffers(uint32_t frameIndex,
+            const VkDescriptorBufferInfo& lightRecords,
+            const VkDescriptorBufferInfo& activeSlots);
         // One stage per graph pass ("lighting.cluster.{clear,count,scan,fill,
         // finalize}", R3c.1); the executor begins each pass. Each returns its
         // dispatch count.

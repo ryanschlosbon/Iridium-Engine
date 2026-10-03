@@ -53,10 +53,21 @@ namespace Iridium {
         void onFrameSlotRetired(uint32_t frameIndex) override;
         void destroy() noexcept override;
 
-        // Light-record capacity (frame boundary only). Returns true when the
-        // record buffers were replaced, so the lighting set must rebind them.
+        // Light-record capacity (frame boundary only). prepare returns true
+        // when the record buffers were replaced, so the lighting set must
+        // rebind them. M7R R4c.2: a slot that is not in flight swaps at once
+        // (the caller rebinds the lighting set for every slot without a
+        // pending swap); an in-flight slot keeps its buffers until
+        // swapRetiredSlot (no drain).
         void createLightRecordBuffers(uint32_t capacity);
         [[nodiscard]] bool prepare(uint32_t requiredCapacity);
+        // At `slot`'s retirement: installs its parked record/active buffers
+        // and rewrites its cluster set. True when the slot changed (the
+        // lighting set's slot must rebind its light records).
+        bool swapRetiredSlot(uint32_t slot);
+        [[nodiscard]] bool slotSwapPending(uint32_t slot) const noexcept {
+            return pendingSlots_[slot];
+        }
 
         // Shadow-data slot of each light, published by the spot/point shadow
         // submissions; a change re-uploads every light record.
@@ -140,6 +151,10 @@ namespace Iridium {
 
         std::array<VulkanBufferResource, FrameCount> lightRecordBuffers_{};
         std::array<VulkanBufferResource, FrameCount> activeLightSlotBuffers_{};
+        // R4c.2: replacements parked for in-flight slots.
+        std::array<VulkanBufferResource, FrameCount> pendingLightRecordBuffers_{};
+        std::array<VulkanBufferResource, FrameCount> pendingActiveLightSlotBuffers_{};
+        std::array<bool, FrameCount> pendingSlots_{};
         std::array<VulkanBufferResource, FrameCount> fallbackCandidateBuffers_{};
         std::array<VulkanBufferResource, FrameCount> parameterBuffers_{};
         std::array<VulkanBufferResource, FrameCount> diagnosticReadbackBuffers_{};

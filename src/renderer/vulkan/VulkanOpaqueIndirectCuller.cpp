@@ -87,37 +87,52 @@ namespace Iridium {
     }
 
     void VulkanOpaqueIndirectCuller::bindBuffers() {
+        for (uint32_t frame = 0; frame < kIndirectCullerFramesInFlight; ++frame)
+            bindSlot(frame);
+    }
+
+    void VulkanOpaqueIndirectCuller::bindSlot(uint32_t frame) {
         const VulkanCullerResources& resources = services_.resources;
-        for (uint32_t frame = 0; frame < kIndirectCullerFramesInFlight; ++frame) {
-            const std::array<VkDescriptorBufferInfo, 4> infos{ {
-                { buffers_.candidates[frame].buffer, 0,
-                    buffers_.candidates[frame].size },
-                { buffers_.commands[frame].buffer, 0,
-                    buffers_.commands[frame].size },
-                { buffers_.counts[frame].buffer, 0, buffers_.counts[frame].size },
-                { lodHistoryBuffer_.buffer, 0, lodHistoryBuffer_.size },
-            } };
-            resources.writeStorageBuffers(resources.user, sets_[frame], 0u, infos);
-            if (config_.depthOcclusionRejection) {
-                const VkDescriptorBufferInfo occlusionInfo{
-                    gpuSceneOcclusionResultBuffers_[frame].buffer, 0,
-                    gpuSceneOcclusionResultBuffers_[frame].size };
-                resources.writeStorageBuffers(resources.user, sets_[frame], 4u,
-                    { &occlusionInfo, 1u });
-            }
+        const std::array<VkDescriptorBufferInfo, 4> infos{ {
+            { buffers_.candidates[frame].buffer, 0,
+                buffers_.candidates[frame].size },
+            { buffers_.commands[frame].buffer, 0,
+                buffers_.commands[frame].size },
+            { buffers_.counts[frame].buffer, 0, buffers_.counts[frame].size },
+            { lodHistoryBuffer_.buffer, 0, lodHistoryBuffer_.size },
+        } };
+        resources.writeStorageBuffers(resources.user, sets_[frame], 0u, infos);
+        if (config_.depthOcclusionRejection) {
+            const VkDescriptorBufferInfo occlusionInfo{
+                gpuSceneOcclusionResultBuffers_[frame].buffer, 0,
+                gpuSceneOcclusionResultBuffers_[frame].size };
+            resources.writeStorageBuffers(resources.user, sets_[frame], 4u,
+                { &occlusionInfo, 1u });
         }
+    }
+
+    void VulkanOpaqueIndirectCuller::destroySlot(uint32_t frame) noexcept {
+        const VulkanCullerResources& resources = services_.resources;
+        buffers_.destroySlot(resources, frame);
+        for (Buffers* group : { &occlusionQueryBuffers_,
+                &occlusionResultBuffers_, &gpuSceneOcclusionResultBuffers_ })
+            resources.destroyBuffer(resources.user, (*group)[frame]);
     }
 
     void VulkanOpaqueIndirectCuller::destroy(VkDevice device) noexcept {
         if (services_.resources.destroyBuffer != nullptr) {
             const VulkanCullerResources& resources = services_.resources;
             buffers_.destroy(resources);
+            pendingBuffers_.destroy(resources);
             for (Buffers* group : { &occlusionQueryBuffers_,
-                    &occlusionResultBuffers_, &gpuSceneOcclusionResultBuffers_ })
+                    &occlusionResultBuffers_, &gpuSceneOcclusionResultBuffers_,
+                    &pendingOcclusionQueryBuffers_, &pendingOcclusionResultBuffers_,
+                    &pendingGpuSceneOcclusionResultBuffers_ })
                 for (VulkanBufferResource& buffer : *group)
                     resources.destroyBuffer(resources.user, buffer);
             resources.destroyBuffer(resources.user, lodHistoryBuffer_);
         }
+        pendingSlots_ = {};
         pipelines_.destroy(device);
         sets_ = {};
         lodHistory_ = {};
@@ -190,30 +205,68 @@ namespace Iridium {
                     resources.destroyBuffer(resources.user, buffer);
             throw;
         }
-        if (commandCapacity_ != 0u) {
-            resources.waitForAllFrames(resources.user);
-            for (uint32_t frame = 0; frame < kIndirectCullerFramesInFlight; ++frame)
-                collect(frame);
+        // R4c.2: no drain. A slot that is not in flight is collected and
+        // swapped now; an in-flight slot parks its replacement (an older
+        // parked set was never used) until its retirement.
+        std::array<bool, kIndirectCullerFramesInFlight> swappedNow{};
+        bool anyInFlight = false;
+        for (uint32_t frame = 0; frame < kIndirectCullerFramesInFlight; ++frame) {
+            pendingBuffers_.destroySlot(resources, frame);
+            for (Buffers* group : { &pendingOcclusionQueryBuffers_,
+                    &pendingOcclusionResultBuffers_,
+                    &pendingGpuSceneOcclusionResultBuffers_ })
+                resources.destroyBuffer(resources.user, (*group)[frame]);
+            pendingSlots_[frame] = false;
+            if (resources.inFlight(frame)) {
+                anyInFlight = true;
+                pendingBuffers_.takeSlot(buffers, frame);
+                pendingOcclusionQueryBuffers_[frame] = occlusionQueries[frame];
+                pendingOcclusionResultBuffers_[frame] = occlusionResults[frame];
+                pendingGpuSceneOcclusionResultBuffers_[frame] =
+                    gpuSceneOcclusionResults[frame];
+                pendingSlots_[frame] = true;
+                continue;
+            }
+            if (commandCapacity_ != 0u) collect(frame);
+            destroySlot(frame);
+            buffers_.takeSlot(buffers, frame);
+            occlusionQueryBuffers_[frame] = occlusionQueries[frame];
+            occlusionResultBuffers_[frame] = occlusionResults[frame];
+            gpuSceneOcclusionResultBuffers_[frame] = gpuSceneOcclusionResults[frame];
+            swappedNow[frame] = true;
         }
-        buffers_.destroy(resources);
-        for (Buffers* group : { &occlusionQueryBuffers_, &occlusionResultBuffers_,
-                &gpuSceneOcclusionResultBuffers_ })
-            for (VulkanBufferResource& buffer : *group)
-                resources.destroyBuffer(resources.user, buffer);
-        buffers_ = buffers;
-        occlusionQueryBuffers_ = occlusionQueries;
-        occlusionResultBuffers_ = occlusionResults;
-        gpuSceneOcclusionResultBuffers_ = gpuSceneOcclusionResults;
         commandCapacity_ = capacity;
         bins_.reserve(capacity);
         indirectPlan_.commands.reserve(capacity);
         indirectPlan_.packetIndices.reserve(capacity);
         candidates_.reserve(capacity);
         if (standaloneOcclusionOracle) occlusionQueries_.reserve(capacity);
-        resources.destroyBuffer(resources.user, lodHistoryBuffer_);
+        // The history is one table shared by both slots: an in-flight slot
+        // may still write the old one.
+        if (anyInFlight && resources.retireBuffer != nullptr)
+            resources.retireBuffer(resources.user, lodHistoryBuffer_);
+        else
+            resources.destroyBuffer(resources.user, lodHistoryBuffer_);
         lodHistoryBuffer_ = history;
         lodHistory_.resize(historyCapacity);
-        if (sets_[0] != VK_NULL_HANDLE) bindBuffers();
+        for (uint32_t frame = 0; frame < kIndirectCullerFramesInFlight; ++frame)
+            if (swappedNow[frame] && sets_[frame] != VK_NULL_HANDLE) bindSlot(frame);
+    }
+
+    bool VulkanOpaqueIndirectCuller::swapRetiredSlot(uint32_t slot) {
+        if (!pendingSlots_[slot]) return false;
+        destroySlot(slot);
+        buffers_.takeSlot(pendingBuffers_, slot);
+        occlusionQueryBuffers_[slot] = pendingOcclusionQueryBuffers_[slot];
+        occlusionResultBuffers_[slot] = pendingOcclusionResultBuffers_[slot];
+        gpuSceneOcclusionResultBuffers_[slot] =
+            pendingGpuSceneOcclusionResultBuffers_[slot];
+        pendingOcclusionQueryBuffers_[slot] = {};
+        pendingOcclusionResultBuffers_[slot] = {};
+        pendingGpuSceneOcclusionResultBuffers_[slot] = {};
+        pendingSlots_[slot] = false;
+        if (sets_[slot] != VK_NULL_HANDLE) bindSlot(slot);
+        return true;
     }
 
     bool VulkanOpaqueIndirectCuller::plan(const OpaqueIndirectInputs& inputs,

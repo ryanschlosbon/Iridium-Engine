@@ -242,8 +242,20 @@ namespace Iridium {
         // R3b.6 imported images: swapchain (per frame) and shadow maps (global).
         void bindGraphImportedImages();
         // R3b.7 imported buffers: culler indirect command/count buffers and
-        // probe-cluster buffers (per slot). Waits for every frame in flight.
+        // probe-cluster buffers (per slot). Every slot, after a graph rebuild
+        // (device idle).
         void bindGraphImportedBuffers();
+        // M7R R4c.2: one retired slot's imported buffers (the owners' current
+        // buffers of that slot).
+        void rebindGraphImportedBuffers(uint32_t slot);
+        // After capacity growth: rebinds every slot that is not in flight now;
+        // an in-flight slot rebinds at its retirement.
+        void rebindIdleSlotImports();
+        // beginFrame, after `slot`'s fence, collects and the executor's
+        // retirement: swaps every owner's parked per-slot replacement, then
+        // rebinds the slot's descriptor sets and graph imports.
+        void swapRetiredSlot(uint32_t slot);
+        std::array<bool, VulkanFrameScheduler::FramesInFlight> importRebindPending_{};
         [[nodiscard]] VulkanImageResource swapchainGraphImage(
             uint32_t imageIndex) const;
         [[nodiscard]] VulkanProductionGraphFeatures

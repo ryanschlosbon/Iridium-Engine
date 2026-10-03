@@ -512,35 +512,50 @@ namespace Iridium {
             throw;
         }
 
-        if (canonicalMaterialCapacity_ != 0) {
-            if (frameOpen()) {
-                for (VulkanBufferResource& buffer :
-                    replacement) {
-                    allocator_->destroy(buffer);
-                }
-                throw std::logic_error(
-                    "canonical material buffers may grow only at a frame boundary");
+        if (canonicalMaterialCapacity_ != 0 && frameOpen()) {
+            for (VulkanBufferResource& buffer :
+                replacement) {
+                allocator_->destroy(buffer);
             }
-            scheduler_->waitForAllFrames();
+            throw std::logic_error(
+                "canonical material buffers may grow only at a frame boundary");
         }
-        for (VulkanBufferResource& buffer :
-            canonicalMaterialBuffers_) {
-            allocator_->destroy(buffer);
-        }
-        canonicalMaterialBuffers_ = replacement;
-        canonicalMaterialCapacity_ = capacity;
+        // R4c.2: no drain. A slot that is not in flight swaps now; an
+        // in-flight slot parks its replacement until its retirement (its
+        // next upload follows the swap).
         for (uint32_t frame = 0;
             frame < VulkanFrameScheduler::FramesInFlight;
             ++frame) {
+            allocator_->destroy(pendingMaterialBuffers_[frame]);
+            pendingMaterialSlots_[frame] = scheduler_->slotInFlight(frame);
+            if (pendingMaterialSlots_[frame]) {
+                pendingMaterialBuffers_[frame] = replacement[frame];
+                continue;
+            }
+            allocator_->destroy(canonicalMaterialBuffers_[frame]);
+            canonicalMaterialBuffers_[frame] = replacement[frame];
             indexedTextureTable_.bindMaterialBuffer(
                 frame,
                 canonicalMaterialBuffers_[frame].buffer,
                 canonicalMaterialBuffers_[frame].size);
         }
+        canonicalMaterialCapacity_ = capacity;
         materialVault_.forEach(
             [](VulkanMaterialPayload& material) {
                 material.uploadedPackedRevisions.fill(0);
             });
+    }
+
+    bool VulkanResourceRegistry::swapRetiredSlot(uint32_t slot) {
+        if (!pendingMaterialSlots_[slot]) return false;
+        allocator_->destroy(canonicalMaterialBuffers_[slot]);
+        canonicalMaterialBuffers_[slot] = pendingMaterialBuffers_[slot];
+        pendingMaterialBuffers_[slot] = {};
+        pendingMaterialSlots_[slot] = false;
+        indexedTextureTable_.bindMaterialBuffer(slot,
+            canonicalMaterialBuffers_[slot].buffer,
+            canonicalMaterialBuffers_[slot].size);
+        return true;
     }
 
     void VulkanResourceRegistry::ensureCanonicalMaterialCapacity(
@@ -699,6 +714,9 @@ namespace Iridium {
         cleanupSamplerCache();
         for (VulkanBufferResource& buffer : canonicalMaterialBuffers_)
             allocator_->destroy(buffer);
+        for (VulkanBufferResource& buffer : pendingMaterialBuffers_)
+            allocator_->destroy(buffer);
+        pendingMaterialSlots_ = {};
     }
 
     void VulkanResourceRegistry::reset() noexcept {

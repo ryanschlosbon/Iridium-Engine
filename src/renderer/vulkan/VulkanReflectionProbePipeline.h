@@ -26,6 +26,14 @@ namespace Iridium {
             std::span<const VkDescriptorBufferInfo> headers,
             std::span<const VkDescriptorBufferInfo> indices);
         void clearDescriptors();
+        // M7R R4c.2: rewrites one retired slot's five bindings in place
+        // (no-op before the sets exist).
+        void rewriteDescriptors(uint32_t frameIndex,
+            const VkDescriptorBufferInfo& records,
+            const VkDescriptorBufferInfo& activeSlots,
+            const VkDescriptorBufferInfo& parameters,
+            const VkDescriptorBufferInfo& headers,
+            const VkDescriptorBufferInfo& indices);
         [[nodiscard]] uint32_t record(VkCommandBuffer commandBuffer,
             uint32_t frameIndex, uint32_t clusterCount);
         void cleanup() noexcept;

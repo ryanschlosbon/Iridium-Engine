@@ -95,7 +95,19 @@ namespace Iridium {
         void bindBuffers();
         // Destroys buffers and pipelines; the sets return with the pool.
         void destroy(VkDevice device) noexcept;
+        // Frame boundary only. M7R R4c.2: new per-slot buffers and the
+        // shared LOD history are created at once; a slot that is not in
+        // flight is collected and swapped now, an in-flight slot keeps its
+        // buffers until swapRetiredSlot. The replaced history buffer goes to
+        // the deletion queue while any slot is in flight.
         void resize(uint32_t capacity, bool frameOpen);
+        // At `slot`'s retirement (after collect): installs its parked
+        // buffers and rewrites its set (including the current history).
+        // True when the slot's command/count buffers changed.
+        bool swapRetiredSlot(uint32_t slot);
+        [[nodiscard]] bool slotSwapPending(uint32_t slot) const noexcept {
+            return pendingSlots_[slot];
+        }
 
         // CPU visibility/LOD/occlusion planning, oracle expectations and the
         // host writes. False selects the direct fallback.
@@ -146,6 +158,8 @@ namespace Iridium {
         [[nodiscard]] bool lodEnabled() const noexcept {
             return config_.lodErrorPixels > 0.0f;
         }
+        void bindSlot(uint32_t frame);
+        void destroySlot(uint32_t frame) noexcept;
 
         VulkanCullerServices services_{};
         VulkanOpaqueCullerConfig config_{};
@@ -155,6 +169,12 @@ namespace Iridium {
         Buffers occlusionQueryBuffers_{};
         Buffers occlusionResultBuffers_{};
         Buffers gpuSceneOcclusionResultBuffers_{};
+        // R4c.2: replacements parked for in-flight slots.
+        VulkanIndirectBufferSet pendingBuffers_{};
+        Buffers pendingOcclusionQueryBuffers_{};
+        Buffers pendingOcclusionResultBuffers_{};
+        Buffers pendingGpuSceneOcclusionResultBuffers_{};
+        std::array<bool, kIndirectCullerFramesInFlight> pendingSlots_{};
         // Shared across the ordered graphics queue, not replicated per frame.
         VulkanBufferResource lodHistoryBuffer_{};
         GpuSceneLodHistory lodHistory_;

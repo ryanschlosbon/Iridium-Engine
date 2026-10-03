@@ -313,8 +313,11 @@ namespace Iridium {
             set = VK_NULL_HANDLE;
         }
         pipeline_.destroy(device);
-        if (services_.resources.destroyBuffer != nullptr)
+        if (services_.resources.destroyBuffer != nullptr) {
             buffers_.destroy(services_.resources);
+            pendingBuffers_.destroy(services_.resources);
+        }
+        pendingSlots_ = {};
         primitiveCapacity_ = 0;
         commandCapacity_ = 0;
         countCapacity_ = 0;
@@ -340,14 +343,26 @@ namespace Iridium {
                 static_cast<uint64_t>(kLocalShadowIndirectMaximumCommandCount)))
             : primitiveCapacity * config_->maximumWorkCount;
         const uint32_t countCapacity = commandCapacity;
+        const VulkanCullerResources& resources = services_.resources;
         VulkanIndirectBufferSet buffers = VulkanIndirectBufferSet::create(
-            services_.resources, commandCapacity, countCapacity, primitiveCapacity);
-        if (primitiveCapacity_ != 0u)
-            services_.resources.waitForAllFrames(services_.resources.user);
-        for (uint32_t frame = 0; frame < kIndirectCullerFramesInFlight; ++frame)
+            resources, commandCapacity, countCapacity, primitiveCapacity);
+        // R4c.2: no drain. A slot that is not in flight is collected and
+        // swapped now; an in-flight slot parks the replacement (an older
+        // parked set was never used) until its retirement.
+        for (uint32_t frame = 0; frame < kIndirectCullerFramesInFlight; ++frame) {
+            pendingBuffers_.destroySlot(resources, frame);
+            pendingSlots_[frame] = false;
+            if (resources.inFlight(frame)) {
+                pendingBuffers_.takeSlot(buffers, frame);
+                pendingSlots_[frame] = true;
+                continue;
+            }
             collect(frame);
-        buffers_.destroy(services_.resources);
-        buffers_ = buffers;
+            buffers_.destroySlot(resources, frame);
+            buffers_.takeSlot(buffers, frame);
+            if (sets_[frame] != VK_NULL_HANDLE)
+                bindIndirectBufferSlot(resources, sets_[frame], buffers_, frame);
+        }
         primitiveCapacity_ = primitiveCapacity;
         commandCapacity_ = commandCapacity;
         countCapacity_ = countCapacity;
@@ -357,8 +372,17 @@ namespace Iridium {
         unsortedCandidates_.reserve(primitiveCapacity);
         binCursorScratch_.reserve(primitiveCapacity);
         primitiveBinScratch_.reserve(primitiveCapacity);
-        if (sets_[0] != VK_NULL_HANDLE)
-            bindIndirectBufferSet(services_.resources, sets_, buffers_);
+    }
+
+    bool VulkanIndirectViewCuller::swapRetiredSlot(uint32_t slot) {
+        if (!pendingSlots_[slot]) return false;
+        const VulkanCullerResources& resources = services_.resources;
+        buffers_.destroySlot(resources, slot);
+        buffers_.takeSlot(pendingBuffers_, slot);
+        pendingSlots_[slot] = false;
+        if (sets_[slot] != VK_NULL_HANDLE)
+            bindIndirectBufferSlot(resources, sets_[slot], buffers_, slot);
+        return true;
     }
 
     bool VulkanIndirectViewCuller::reject(GpuSceneIndirectFallbackReason reason) {

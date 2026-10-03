@@ -124,8 +124,11 @@ namespace Iridium {
             write.pImageInfo = &info;
             vkUpdateDescriptorSets(device(user).device, 1u, &write, 0u, nullptr);
         }
-        void deviceWaitForAllFrames(void* user) {
-            device(user).scheduler->waitForAllFrames();
+        bool deviceSlotInFlight(void* user, uint32_t slot) {
+            return device(user).scheduler->slotInFlight(slot);
+        }
+        void deviceRetireBuffer(void* user, const VulkanBufferResource& buffer) {
+            device(user).scheduler->retire(buffer);
         }
     }
 
@@ -155,7 +158,8 @@ namespace Iridium {
             .freeSet = deviceFreeSet,
             .writeStorageBuffers = deviceWriteStorageBuffers,
             .writeCombinedImageSampler = deviceWriteCombinedImageSampler,
-            .waitForAllFrames = deviceWaitForAllFrames,
+            .slotInFlight = deviceSlotInFlight,
+            .retireBuffer = deviceRetireBuffer,
         };
     }
 
@@ -300,19 +304,41 @@ namespace Iridium {
             resources.destroyBuffer(resources.user, buffer);
     }
 
+    void VulkanIndirectBufferSet::destroySlot(
+        const VulkanCullerResources& resources, uint32_t slot) noexcept {
+        resources.destroyBuffer(resources.user, commands[slot]);
+        resources.destroyBuffer(resources.user, counts[slot]);
+        resources.destroyBuffer(resources.user, candidates[slot]);
+    }
+
+    void VulkanIndirectBufferSet::takeSlot(VulkanIndirectBufferSet& source,
+        uint32_t slot) noexcept {
+        commands[slot] = source.commands[slot];
+        counts[slot] = source.counts[slot];
+        candidates[slot] = source.candidates[slot];
+        source.commands[slot] = {};
+        source.counts[slot] = {};
+        source.candidates[slot] = {};
+    }
+
+    void bindIndirectBufferSlot(const VulkanCullerResources& resources,
+        VkDescriptorSet set, const VulkanIndirectBufferSet& buffers,
+        uint32_t slot) {
+        const std::array<VkDescriptorBufferInfo, 3> infos{ {
+            { buffers.candidates[slot].buffer, 0,
+                buffers.candidates[slot].size },
+            { buffers.commands[slot].buffer, 0,
+                buffers.commands[slot].size },
+            { buffers.counts[slot].buffer, 0, buffers.counts[slot].size },
+        } };
+        resources.writeStorageBuffers(resources.user, set, 0u, infos);
+    }
+
     void bindIndirectBufferSet(const VulkanCullerResources& resources,
         std::span<const VkDescriptorSet, kIndirectCullerFramesInFlight> sets,
         const VulkanIndirectBufferSet& buffers) {
-        for (uint32_t frame = 0; frame < kIndirectCullerFramesInFlight; ++frame) {
-            const std::array<VkDescriptorBufferInfo, 3> infos{ {
-                { buffers.candidates[frame].buffer, 0,
-                    buffers.candidates[frame].size },
-                { buffers.commands[frame].buffer, 0,
-                    buffers.commands[frame].size },
-                { buffers.counts[frame].buffer, 0, buffers.counts[frame].size },
-            } };
-            resources.writeStorageBuffers(resources.user, sets[frame], 0u, infos);
-        }
+        for (uint32_t frame = 0; frame < kIndirectCullerFramesInFlight; ++frame)
+            bindIndirectBufferSlot(resources, sets[frame], buffers, frame);
     }
 
     VkDescriptorSetLayout createIndirectSetLayout(VkDevice device,

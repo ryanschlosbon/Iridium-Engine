@@ -68,13 +68,19 @@ namespace Iridium {
             const VulkanDirectionalShadowDescriptors& shadow);
         void setSpotShadow(const VulkanSpotShadowDescriptors& shadow);
         void setPointShadow(const VulkanPointShadowDescriptors& shadow);
-        void setLightBuffers(std::span<const VkDescriptorBufferInfo> buffers);
+        // M7R R4c: `frame` != UINT32_MAX writes one retired slot only (the
+        // stored per-slot descriptors are replaced whole either way).
+        void setLightBuffers(std::span<const VkDescriptorBufferInfo> buffers,
+            uint32_t frame = UINT32_MAX);
         void setClusterBuffers(
-            std::span<const VulkanClusterSceneBufferDescriptors> buffers);
+            std::span<const VulkanClusterSceneBufferDescriptors> buffers,
+            uint32_t frame = UINT32_MAX);
         void setReflectionProbeBuffers(std::span<const
-            VulkanReflectionProbeBufferDescriptors> buffers);
+            VulkanReflectionProbeBufferDescriptors> buffers,
+            uint32_t frame = UINT32_MAX);
         void setReflectionProbeImages(
-            std::span<const VkDescriptorImageInfo> images);
+            std::span<const VkDescriptorImageInfo> images,
+            uint32_t frame = UINT32_MAX);
         void cleanup();
 
         [[nodiscard]] VkDescriptorSet get(uint32_t frameIndex) const;

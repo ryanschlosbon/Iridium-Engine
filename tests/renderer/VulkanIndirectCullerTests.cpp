@@ -50,7 +50,10 @@ namespace {
         std::vector<std::string> log;
         std::vector<std::unique_ptr<std::vector<std::byte>>> memory;
         uint64_t nextHandle = 0x1000;
-        uint32_t waits = 0;
+        // R4c.2: frame slots reported in flight, and buffers sent to the
+        // deletion queue.
+        std::array<bool, kIndirectCullerFramesInFlight> inFlight{};
+        std::vector<VkBuffer> retired;
         uint32_t descriptorWrites = 0;
 
         void add(std::string line) { log.push_back(std::move(line)); }
@@ -172,7 +175,12 @@ namespace {
                 VkSampler, VkImageView, VkImageLayout) {
                 ++Recorder::of(user).descriptorWrites;
             },
-            .waitForAllFrames = [](void* user) { ++Recorder::of(user).waits; },
+            .slotInFlight = [](void* user, uint32_t slot) {
+                return Recorder::of(user).inFlight[slot];
+            },
+            .retireBuffer = [](void* user, const VulkanBufferResource& buffer) {
+                Recorder::of(user).retired.push_back(buffer.buffer);
+            },
         };
     }
 
@@ -567,12 +575,32 @@ namespace {
         CHECK(rig.culler.fallbackReason() == GpuSceneIndirectFallbackReason::CapacityExceeded);
         CHECK(rig.context.recorder.log.empty());
 
-        // Growth drains and collects, then rebinds.
+        // R4c.2 growth without a drain: an idle slot is collected, swapped
+        // and rebound at once; an in-flight slot keeps its buffers until its
+        // retirement. A second growth before then replaces the parked set.
         const uint32_t writes = rig.context.recorder.descriptorWrites;
+        const VkBuffer idleCommands = rig.culler.buffers().commands[0].buffer;
+        const VkBuffer busyCommands = rig.culler.buffers().commands[1].buffer;
+        const VkDeviceSize commandBytes = rig.culler.buffers().commands[0].size;
+        rig.context.recorder.inFlight = { false, true };
         rig.culler.resize(128u, false);
-        CHECK(rig.context.recorder.waits == 1u);
-        CHECK(rig.context.recorder.descriptorWrites == writes + 2u);
+        CHECK(rig.context.recorder.descriptorWrites == writes + 1u);
         CHECK(rig.culler.primitiveCapacity() == 128u);
+        CHECK(rig.culler.buffers().commands[0].buffer != idleCommands);
+        CHECK(rig.culler.buffers().commands[0].size == commandBytes * 2u);
+        CHECK(rig.culler.buffers().commands[1].buffer == busyCommands);
+        CHECK(!rig.culler.slotSwapPending(0u) && rig.culler.slotSwapPending(1u));
+        rig.culler.resize(256u, false);
+        CHECK(rig.culler.buffers().commands[1].buffer == busyCommands);
+        CHECK(rig.context.recorder.descriptorWrites == writes + 2u);
+        CHECK(!rig.culler.swapRetiredSlot(0u));
+        CHECK(rig.culler.swapRetiredSlot(1u));
+        CHECK(rig.culler.buffers().commands[1].buffer != busyCommands);
+        CHECK(rig.culler.buffers().commands[1].size == commandBytes * 4u);
+        CHECK(rig.context.recorder.descriptorWrites == writes + 3u);
+        CHECK(!rig.culler.slotSwapPending(1u));
+        CHECK(!rig.culler.swapRetiredSlot(1u));
+        CHECK(rig.context.recorder.retired.empty());
         return true;
     }
 
@@ -809,6 +837,31 @@ namespace {
         CHECK(sameBytes(culler.buffers().candidates[0].mapped, expected.data(),
             expected.size() * sizeof(GpuSceneIndirectCandidate)));
         CHECK(context.recorder.log.empty());
+
+        // R4c.2 growth while slot 1 is in flight: slot 0 swaps at once, the
+        // shared LOD history is replaced for both slots and the old one goes
+        // to the deletion queue; slot 1 swaps at its retirement.
+        {
+            const VkBuffer busyCommands = culler.buffers().commands[1].buffer;
+            const uint32_t writes = context.recorder.descriptorWrites;
+            context.recorder.inFlight = { false, true };
+            culler.resize(128u, false);
+            CHECK(context.recorder.retired.size() == 1u);
+            CHECK(context.recorder.descriptorWrites == writes + 1u);
+            CHECK(culler.commandCapacity() == 128u);
+            CHECK(culler.buffers().commands[1].buffer == busyCommands);
+            CHECK(culler.slotSwapPending(1u));
+            CHECK(culler.swapRetiredSlot(1u));
+            CHECK(culler.buffers().commands[1].buffer != busyCommands);
+            CHECK(context.recorder.descriptorWrites == writes + 2u);
+            context.recorder.inFlight = {};
+            // Every slot idle: the replaced history is destroyed at once.
+            culler.resize(256u, false);
+            CHECK(context.recorder.retired.size() == 1u);
+            CHECK(context.recorder.descriptorWrites == writes + 4u);
+            CHECK(culler.plan({ .queue = queue, .scene = context.scene.view(),
+                .sceneBuffersMapped = true, .assets = fakeAssets(), .view = &view }, 0u));
+        }
 
         CHECK(culler.recordCompaction(nullptr, 0u, {
             .globalSet = fake<VkDescriptorSet>(0x30),

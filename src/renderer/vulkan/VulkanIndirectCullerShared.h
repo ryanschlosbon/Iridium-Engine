@@ -8,7 +8,8 @@
 // tables. VulkanCullerCommands is the command-buffer seam (pipeline/set binds,
 // push constants, dispatches, memory barriers, indirect draws and GPU ranges);
 // VulkanCullerResources is the device-object seam (buffers, descriptor sets and
-// writes, frame drains). Both default to the real Vulkan calls. They are
+// writes, frame-slot state, deferred deletion). Both default to the real
+// Vulkan calls. They are
 // Vulkan-side seams, not RHI hooks: a device-free test can replace them to log
 // the exact command stream.
 
@@ -97,8 +98,17 @@ namespace Iridium {
         void (*writeCombinedImageSampler)(void* user, VkDescriptorSet set,
             uint32_t binding, VkSampler sampler, VkImageView view,
             VkImageLayout layout) = nullptr;
-        // Waits for every frame in flight (capacity growth).
-        void (*waitForAllFrames)(void* user) = nullptr;
+        // M7R R4c.2 (capacity growth without a drain): whether a frame
+        // slot's last submission may still execute. Such a slot keeps its
+        // per-slot buffers until its retirement (swapRetiredSlot).
+        bool (*slotInFlight)(void* user, uint32_t slot) = nullptr;
+        // Destroys a buffer once every frame submitted so far has completed
+        // (buffers shared by both slots).
+        void (*retireBuffer)(void* user, const VulkanBufferResource& buffer) = nullptr;
+
+        [[nodiscard]] bool inFlight(uint32_t slot) const {
+            return slotInFlight != nullptr && slotInFlight(user, slot);
+        }
     };
 
     // The objects VulkanCullerResources::vulkan forwards to; owned by the
@@ -221,12 +231,21 @@ namespace Iridium {
             const VulkanCullerResources& resources, uint32_t commandCapacity,
             uint32_t countCapacity, uint32_t candidateCapacity);
         void destroy(const VulkanCullerResources& resources) noexcept;
+        // One slot's three buffers (R4c.2 slot-retirement swap).
+        void destroySlot(const VulkanCullerResources& resources,
+            uint32_t slot) noexcept;
+        // Moves `source`'s slot buffers here (the slot must be destroyed).
+        void takeSlot(VulkanIndirectBufferSet& source, uint32_t slot) noexcept;
     };
 
     // The shared 3-binding compute set: candidates, commands, counts.
     void bindIndirectBufferSet(const VulkanCullerResources& resources,
         std::span<const VkDescriptorSet, kIndirectCullerFramesInFlight> sets,
         const VulkanIndirectBufferSet& buffers);
+    // One slot of bindIndirectBufferSet.
+    void bindIndirectBufferSlot(const VulkanCullerResources& resources,
+        VkDescriptorSet set, const VulkanIndirectBufferSet& buffers,
+        uint32_t slot);
 
     [[nodiscard]] VkDescriptorSetLayout createIndirectSetLayout(VkDevice device,
         const char* subject);

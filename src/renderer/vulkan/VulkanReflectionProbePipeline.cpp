@@ -125,6 +125,30 @@ namespace Iridium {
         }
     }
 
+    void VulkanReflectionProbePipeline::rewriteDescriptors(uint32_t frameIndex,
+        const VkDescriptorBufferInfo& records,
+        const VkDescriptorBufferInfo& activeSlots,
+        const VkDescriptorBufferInfo& parameters,
+        const VkDescriptorBufferInfo& headers,
+        const VkDescriptorBufferInfo& indices) {
+        if (frameIndex >= descriptorSets_.size()) return;
+        const std::array<VkDescriptorBufferInfo, 5> buffers{
+            records, activeSlots, parameters, headers, indices };
+        std::array<VkWriteDescriptorSet, 5> writes{};
+        for (uint32_t binding = 0; binding < writes.size(); ++binding) {
+            writes[binding].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[binding].dstSet = descriptorSets_[frameIndex];
+            writes[binding].dstBinding = binding;
+            writes[binding].descriptorType = binding == 2
+                ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER
+                : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            writes[binding].descriptorCount = 1;
+            writes[binding].pBufferInfo = &buffers[binding];
+        }
+        vkUpdateDescriptorSets(device_, static_cast<uint32_t>(writes.size()),
+            writes.data(), 0, nullptr);
+    }
+
     void VulkanReflectionProbePipeline::clearDescriptors() {
         if (allocator_ != nullptr && !descriptorSets_.empty())
             allocator_->free(std::span<const VkDescriptorSet>(descriptorSets_));

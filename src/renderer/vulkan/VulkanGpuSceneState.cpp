@@ -86,19 +86,30 @@ namespace Iridium {
                     allocator_->destroy(buffer);
             throw;
         }
-        if (capacity_.instances != 0) scheduler_->waitForAllFrames();
-        for (Buffers* buffers : { &transformBuffers_,
-                &instanceBuffers_, &primitiveBuffers_,
-                &geometryBuffers_ })
-            for (VulkanBufferResource& buffer : *buffers)
-                allocator_->destroy(buffer);
-        transformBuffers_ = transforms;
-        instanceBuffers_ = instances;
-        primitiveBuffers_ = primitives;
-        geometryBuffers_ = geometries;
+        // R4c.2: no drain. A slot that is not in flight swaps now; an
+        // in-flight slot parks its replacement (an older parked one was never
+        // used) until its retirement. Its next publication follows the swap.
+        for (uint32_t frame = 0;
+            frame < VulkanFrameScheduler::FramesInFlight; ++frame) {
+            destroySlot({ &pendingTransformBuffers_, &pendingInstanceBuffers_,
+                &pendingPrimitiveBuffers_, &pendingGeometryBuffers_ }, frame);
+            pendingSlots_[frame] = scheduler_->slotInFlight(frame);
+            if (pendingSlots_[frame]) {
+                pendingTransformBuffers_[frame] = transforms[frame];
+                pendingInstanceBuffers_[frame] = instances[frame];
+                pendingPrimitiveBuffers_[frame] = primitives[frame];
+                pendingGeometryBuffers_[frame] = geometries[frame];
+                continue;
+            }
+            destroySlot({ &transformBuffers_, &instanceBuffers_,
+                &primitiveBuffers_, &geometryBuffers_ }, frame);
+            transformBuffers_[frame] = transforms[frame];
+            instanceBuffers_[frame] = instances[frame];
+            primitiveBuffers_[frame] = primitives[frame];
+            geometryBuffers_[frame] = geometries[frame];
+            if (descriptorSets_[frame] != VK_NULL_HANDLE) bindSlot(frame);
+        }
         capacity_ = capacity;
-        if (descriptorSets_[0] != VK_NULL_HANDLE)
-            bindBuffers();
         for (uint32_t frame = 0;
             frame < VulkanFrameScheduler::FramesInFlight; ++frame) {
             uploadedTransformRevisions_[frame].assign(
@@ -120,9 +131,37 @@ namespace Iridium {
             capacity.instances, capacity.primitives, capacity.geometries }));
     }
 
+    void VulkanGpuSceneState::destroySlot(std::array<FrameBuffers*, 4> tables,
+        uint32_t frame) noexcept {
+        for (FrameBuffers* buffers : tables)
+            allocator_->destroy((*buffers)[frame]);
+    }
+
+    bool VulkanGpuSceneState::swapRetiredSlot(uint32_t slot) {
+        if (!pendingSlots_[slot]) return false;
+        destroySlot({ &transformBuffers_, &instanceBuffers_,
+            &primitiveBuffers_, &geometryBuffers_ }, slot);
+        transformBuffers_[slot] = pendingTransformBuffers_[slot];
+        instanceBuffers_[slot] = pendingInstanceBuffers_[slot];
+        primitiveBuffers_[slot] = pendingPrimitiveBuffers_[slot];
+        geometryBuffers_[slot] = pendingGeometryBuffers_[slot];
+        pendingTransformBuffers_[slot] = {};
+        pendingInstanceBuffers_[slot] = {};
+        pendingPrimitiveBuffers_[slot] = {};
+        pendingGeometryBuffers_[slot] = {};
+        pendingSlots_[slot] = false;
+        if (descriptorSets_[slot] != VK_NULL_HANDLE) bindSlot(slot);
+        return true;
+    }
+
     void VulkanGpuSceneState::bindBuffers() {
         for (uint32_t frame = 0;
-                frame < VulkanFrameScheduler::FramesInFlight; ++frame) {
+                frame < VulkanFrameScheduler::FramesInFlight; ++frame)
+            bindSlot(frame);
+    }
+
+    void VulkanGpuSceneState::bindSlot(uint32_t frame) {
+        {
             const std::array<VkDescriptorBufferInfo, 4> infos{{
                 { transformBuffers_[frame].buffer, 0,
                     transformBuffers_[frame].size },
@@ -281,9 +320,12 @@ namespace Iridium {
 
     void VulkanGpuSceneState::destroy() noexcept {
         for (FrameBuffers* buffers : { &transformBuffers_, &instanceBuffers_,
-                &primitiveBuffers_, &geometryBuffers_ })
+                &primitiveBuffers_, &geometryBuffers_,
+                &pendingTransformBuffers_, &pendingInstanceBuffers_,
+                &pendingPrimitiveBuffers_, &pendingGeometryBuffers_ })
             for (VulkanBufferResource& buffer : *buffers)
                 allocator_->destroy(buffer);
+        pendingSlots_ = {};
     }
 
     void VulkanGpuSceneState::reset() noexcept {

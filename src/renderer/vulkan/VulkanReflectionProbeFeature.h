@@ -47,11 +47,15 @@ namespace Iridium {
 
         // The lighting-set owner rebinds when the probe buffers are replaced
         // or the environment table changes (same points as before R3c.6).
+        // M7R R4c.2: buffersReplaced names the slots that swapped at once
+        // (bit per slot; every slot when none was in flight); the others
+        // swap at their retirement (swapRetiredSlot).
         struct Bindings {
             void* owner = nullptr;
-            void (*buffersReplaced)(void* owner) = nullptr;
+            void (*buffersReplaced)(void* owner, uint32_t swappedSlots) = nullptr;
             void (*environmentsChanged)(void* owner) = nullptr;
         };
+        static constexpr uint32_t AllSlots = (1u << FrameCount) - 1u;
 
         struct BufferDescriptors {
             std::array<VulkanReflectionProbeBufferDescriptors, FrameCount> scene{};
@@ -99,6 +103,13 @@ namespace Iridium {
         // Capacity growth (frame boundary; the caller rebinds the graph's
         // imported buffers afterwards).
         void growIndirectCapacity(uint32_t primitiveCapacity);
+        // At `slot`'s retirement: installs the slot's parked probe buffers.
+        // True when they changed (the lighting set, the probe-clustering set
+        // and the graph imports of the slot must rebind).
+        bool swapRetiredSlot(uint32_t slot);
+        [[nodiscard]] bool slotSwapPending(uint32_t slot) const noexcept {
+            return pendingSlots_[slot];
+        }
 
         // IRenderBackend forwards (frame boundary).
         void prepare(uint32_t requiredCapacity,
@@ -160,7 +171,7 @@ namespace Iridium {
 
         void createBuffers(uint32_t recordCapacity, uint32_t clusterCapacity,
             uint32_t referenceCapacity);
-        void notifyBuffersReplaced() const;
+        void notifyBuffersReplaced(uint32_t swappedSlots) const;
         void notifyEnvironmentsChanged() const;
         void uploadRecords(uint32_t frameIndex,
             const ReflectionProbeGpuFramePacket& probes);
@@ -189,6 +200,13 @@ namespace Iridium {
         FrameBuffers parameterBuffers_{};
         FrameBuffers clusterHeaderBuffers_{};
         FrameBuffers clusterIndexBuffers_{};
+        // R4c.2: replacements parked for in-flight slots.
+        FrameBuffers pendingRecordBuffers_{};
+        FrameBuffers pendingActiveSlotBuffers_{};
+        FrameBuffers pendingParameterBuffers_{};
+        FrameBuffers pendingClusterHeaderBuffers_{};
+        FrameBuffers pendingClusterIndexBuffers_{};
+        std::array<bool, FrameCount> pendingSlots_{};
         std::array<std::vector<uint64_t>, FrameCount> uploadedRevisions_{};
         std::array<uint64_t, FrameCount> uploadedActiveListRevisions_{};
         std::vector<ReflectionProbeRecordRange> uploadRanges_;

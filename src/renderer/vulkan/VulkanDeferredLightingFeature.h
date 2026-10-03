@@ -102,9 +102,10 @@ namespace Iridium {
         }
         // Light-record/cluster replacement (prepareLighting), probe-buffer
         // replacement and environment-table changes (the probe owner).
-        void bindLightBuffers();
-        void bindReflectionProbeBuffers();
-        void bindReflectionProbeEnvironments();
+        // M7R R4c: `frame` != UINT32_MAX rebinds one retired (or idle) slot.
+        void bindLightBuffers(uint32_t frame = UINT32_MAX);
+        void bindReflectionProbeBuffers(uint32_t frame = UINT32_MAX);
+        void bindReflectionProbeEnvironments(uint32_t frame = UINT32_MAX);
 
         // Drain point: "lighting".
         void record(const FrameInputs& inputs);

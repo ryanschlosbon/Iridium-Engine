@@ -177,7 +177,17 @@ namespace Iridium {
         // Capacity growth at a frame boundary: allocates, drains every frame
         // when replacing live buffers, collects this view's pending slots,
         // replaces the buffers and rebinds. The only deferred-deletion site.
+        // Frame boundary only. M7R R4c.2: new per-slot buffers are created
+        // at once; a slot that is not in flight is collected and swapped now,
+        // an in-flight slot keeps its buffers until swapRetiredSlot.
         void resize(uint32_t primitiveCapacity, bool frameOpen);
+        // At `slot`'s retirement (after collect): installs its parked
+        // buffers and rewrites its set. True when the slot's command/count
+        // buffers changed (the graph imports must be rebound).
+        bool swapRetiredSlot(uint32_t slot);
+        [[nodiscard]] bool slotSwapPending(uint32_t slot) const noexcept {
+            return pendingSlots_[slot];
+        }
 
         // False selects the direct fallback for this frame (fallbackReason()).
         [[nodiscard]] bool plan(const IndirectViewInputs& inputs,
@@ -240,6 +250,9 @@ namespace Iridium {
         VulkanCompactPipeline pipeline_{};
         std::array<VkDescriptorSet, kIndirectCullerFramesInFlight> sets_{};
         VulkanIndirectBufferSet buffers_{};
+        // R4c.2: replacements parked for in-flight slots.
+        VulkanIndirectBufferSet pendingBuffers_{};
+        std::array<bool, kIndirectCullerFramesInFlight> pendingSlots_{};
         uint32_t primitiveCapacity_ = 0;
         uint32_t commandCapacity_ = 0;
         uint32_t countCapacity_ = 0;

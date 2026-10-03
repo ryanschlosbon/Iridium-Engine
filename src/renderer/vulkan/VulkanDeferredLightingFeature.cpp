@@ -187,9 +187,9 @@ namespace Iridium {
         scene_.rebuild(context_->frameTargets);
     }
 
-    void VulkanDeferredLightingFeature::bindLightBuffers() {
-        scene_.setLightBuffers(sources_.clusters->lightRecordDescriptors());
-        scene_.setClusterBuffers(sources_.clusters->sceneClusterDescriptors());
+    void VulkanDeferredLightingFeature::bindLightBuffers(uint32_t frame) {
+        scene_.setLightBuffers(sources_.clusters->lightRecordDescriptors(), frame);
+        scene_.setClusterBuffers(sources_.clusters->sceneClusterDescriptors(), frame);
     }
 
     void VulkanDeferredLightingFeature::bindShadows() {
@@ -216,15 +216,26 @@ namespace Iridium {
             std::move(frameData) });
     }
 
-    void VulkanDeferredLightingFeature::bindReflectionProbeBuffers() {
+    void VulkanDeferredLightingFeature::bindReflectionProbeBuffers(uint32_t frame) {
         const VulkanReflectionProbeFeature::BufferDescriptors buffers =
             sources_.probes->bufferDescriptors();
-        scene_.setReflectionProbeBuffers(buffers.scene);
-        sources_.clusters->probeClusterPipeline().rebuildDescriptors(buffers.records,
-            buffers.active, buffers.parameters, buffers.headers, buffers.indices);
+        scene_.setReflectionProbeBuffers(buffers.scene, frame);
+        if (frame == UINT32_MAX) {
+            sources_.clusters->probeClusterPipeline().rebuildDescriptors(
+                buffers.records, buffers.active, buffers.parameters,
+                buffers.headers, buffers.indices);
+            return;
+        }
+        // One slot: rewrite its probe-clustering set in place (the other
+        // slot's set may still be in use).
+        sources_.clusters->probeClusterPipeline().rewriteDescriptors(frame,
+            buffers.records[frame], buffers.active[frame],
+            buffers.parameters[frame], buffers.headers[frame],
+            buffers.indices[frame]);
     }
 
-    void VulkanDeferredLightingFeature::bindReflectionProbeEnvironments() {
+    void VulkanDeferredLightingFeature::bindReflectionProbeEnvironments(
+        uint32_t frame) {
         const VulkanTexturePayload* neutral = context_->resources.textures().get(
             neutralCube_);
         if (neutral == nullptr || neutral->retired ||
@@ -233,7 +244,8 @@ namespace Iridium {
                 "Neutral reflection-probe environment is unavailable");
         const VkDescriptorImageInfo fallback{ neutral->sampler,
             neutral->image.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
-        scene_.setReflectionProbeImages(sources_.probes->environmentImages(fallback));
+        scene_.setReflectionProbeImages(
+            sources_.probes->environmentImages(fallback), frame);
     }
 
     void VulkanDeferredLightingFeature::record(const FrameInputs& inputs) {

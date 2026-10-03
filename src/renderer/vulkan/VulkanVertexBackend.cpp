@@ -302,11 +302,20 @@ namespace Iridium {
         // R3c.6: the probe owner's capture pass and targets.
         probes_.configure(clusterConfig_, probeViewSettings(), casterScratch_,
             lighting_.setLayout(), clusterLighting_, { this,
-                [](void* owner) {
+                [](void* owner, uint32_t swappedSlots) {
+                    // R4c.2: the slots that swapped at once rebind now; the
+                    // others rebind at their retirement (swapRetiredSlot).
                     auto& self = *static_cast<VulkanVertexBackend*>(owner);
-                    if (self.lighting_.sceneSetReady())
-                        self.lighting_.bindReflectionProbeBuffers();
-                    self.bindGraphImportedBuffers();
+                    if (self.lighting_.sceneSetReady()) {
+                        if (swappedSlots == VulkanReflectionProbeFeature::AllSlots)
+                            self.lighting_.bindReflectionProbeBuffers();
+                        else
+                            for (uint32_t slot = 0;
+                                    slot < VulkanFrameScheduler::FramesInFlight; ++slot)
+                                if ((swappedSlots & (1u << slot)) != 0u)
+                                    self.lighting_.bindReflectionProbeBuffers(slot);
+                    }
+                    self.rebindIdleSlotImports();
                 },
                 [](void* owner) {
                     static_cast<VulkanVertexBackend*>(owner)->
@@ -703,23 +712,27 @@ namespace Iridium {
                 Access::SampledRead, ExternalSyncPolicy::executorOwned());
     }
 
-    void VulkanVertexBackend::bindGraphImportedBuffers() {
-        // R3b.7: per-slot indirect command/count buffers of the four drawing
-        // cullers and the reflection-probe cluster buffers. Their owners
-        // replace them on capacity growth, so every slot is unbound before
-        // any is rebound (a recycled handle must not meet a destroyed one).
-        if (renderGraph_.compiledGraph() == nullptr) return;
-        if (frameOpen_)
-            throw std::logic_error(
-                "Graph imported buffers rebind only at a frame boundary");
-        scheduler.waitForAllFrames();
-        for (uint32_t frame = 0; frame < VulkanFrameScheduler::FramesInFlight; ++frame)
-            renderGraph_.onFrameFenceCompleted(frame);
-        struct Binding {
+    namespace {
+        struct ImportedBufferBinding {
             RenderGraph::GraphResourceId id;
             const std::array<VulkanBufferResource,
                 VulkanFrameScheduler::FramesInFlight>* buffers;
         };
+    }
+
+    void VulkanVertexBackend::bindGraphImportedBuffers() {
+        // R3b.7: per-slot indirect command/count buffers of the four drawing
+        // cullers and the reflection-probe cluster buffers. After a graph
+        // rebuild (device idle; M7R R4c.2 removed the drain that capacity
+        // growth used to reach here): every slot is unbound before any is
+        // rebound (a recycled handle must not meet a destroyed one).
+        if (renderGraph_.compiledGraph() == nullptr) return;
+        if (frameOpen_)
+            throw std::logic_error(
+                "Graph imported buffers rebind only at a frame boundary");
+        for (uint32_t frame = 0; frame < VulkanFrameScheduler::FramesInFlight; ++frame)
+            renderGraph_.onFrameFenceCompleted(frame);
+        using Binding = ImportedBufferBinding;
         const std::array<Binding, 10> bindings{ {
             { graphIds_.directionalIndirect.commands, &shadows_.culler().buffers().commands },
             { graphIds_.directionalIndirect.counts, &shadows_.culler().buffers().counts },
@@ -746,6 +759,78 @@ namespace Iridium {
                     buffer.size);
             }
         }
+        importRebindPending_ = {};
+    }
+
+    void VulkanVertexBackend::rebindGraphImportedBuffers(uint32_t slot) {
+        // R4c.2: one retired slot. Its replacement buffers were created while
+        // the old ones were alive, so they cannot alias a handle still bound
+        // in the other slot.
+        if (renderGraph_.compiledGraph() == nullptr) return;
+        if (frameOpen_)
+            throw std::logic_error(
+                "Graph imported buffers rebind only at a frame boundary");
+        using Binding = ImportedBufferBinding;
+        const std::array<Binding, 10> bindings{ {
+            { graphIds_.directionalIndirect.commands, &shadows_.culler().buffers().commands },
+            { graphIds_.directionalIndirect.counts, &shadows_.culler().buffers().counts },
+            { graphIds_.spotIndirect.commands, &localShadows_.spotCuller().buffers().commands },
+            { graphIds_.spotIndirect.counts, &localShadows_.spotCuller().buffers().counts },
+            { graphIds_.pointIndirect.commands, &localShadows_.pointCuller().buffers().commands },
+            { graphIds_.pointIndirect.counts, &localShadows_.pointCuller().buffers().counts },
+            { graphIds_.opaqueIndirect.commands, &opaque_.culler().buffers().commands },
+            { graphIds_.opaqueIndirect.counts, &opaque_.culler().buffers().counts },
+            { graphIds_.probeClusterHeaders, &probes_.clusterHeaderBuffers() },
+            { graphIds_.probeClusterIndices, &probes_.clusterIndexBuffers() },
+        } };
+        for (const Binding& binding : bindings)
+            if (binding.id.isValid()) renderGraph_.unbindExternalBuffer(slot, binding.id);
+        for (const Binding& binding : bindings) {
+            if (!binding.id.isValid()) continue;
+            const VulkanBufferResource& buffer = (*binding.buffers)[slot];
+            if (buffer.buffer == VK_NULL_HANDLE) continue;
+            renderGraph_.bindExternalBuffer(slot, binding.id, buffer.buffer,
+                buffer.size);
+        }
+        importRebindPending_[slot] = false;
+    }
+
+    void VulkanVertexBackend::rebindIdleSlotImports() {
+        if (renderGraph_.compiledGraph() == nullptr) return;
+        for (uint32_t slot = 0; slot < VulkanFrameScheduler::FramesInFlight; ++slot) {
+            if (scheduler.slotInFlight(slot)) {
+                importRebindPending_[slot] = true;
+                continue;
+            }
+            // The slot's fence has been waited (possibly by a bounded stall
+            // outside beginFrame): retire it in the executor before binding.
+            renderGraph_.onFrameFenceCompleted(slot);
+            rebindGraphImportedBuffers(slot);
+        }
+    }
+
+    void VulkanVertexBackend::swapRetiredSlot(uint32_t slot) {
+        bool pending = importRebindPending_[slot] ||
+            gpuScene_.slotSwapPending(slot) || resources_.slotSwapPending(slot) ||
+            opaque_.culler().slotSwapPending(slot) ||
+            clusterLighting_.slotSwapPending(slot) || probes_.slotSwapPending(slot);
+        for (VulkanIndirectViewCuller* culler : indirectViewCullers())
+            pending = pending || culler->slotSwapPending(slot);
+        if (!pending) return;
+        CpuScope swapScope(cpuProfiler_, "cpu.renderer.slot_swap");
+        bool imports = importRebindPending_[slot];
+        (void)gpuScene_.swapRetiredSlot(slot);
+        (void)resources_.swapRetiredSlot(slot);
+        imports = opaque_.culler().swapRetiredSlot(slot) || imports;
+        for (VulkanIndirectViewCuller* culler : indirectViewCullers())
+            imports = culler->swapRetiredSlot(slot) || imports;
+        if (clusterLighting_.swapRetiredSlot(slot) && lighting_.sceneSetReady())
+            lighting_.bindLightBuffers(slot);
+        if (probes_.swapRetiredSlot(slot)) {
+            if (lighting_.sceneSetReady()) lighting_.bindReflectionProbeBuffers(slot);
+            imports = true;
+        }
+        if (imports) rebindGraphImportedBuffers(slot);
     }
 
     void VulkanVertexBackend::rebuildRenderGraphAfterDeviceIdle() {
@@ -1499,6 +1584,8 @@ namespace Iridium {
         {
             CpuScope graphScope(cpuProfiler_, "cpu.render_graph.lookup");
             renderGraph_.onFrameFenceCompleted(completedFrameIndex);
+            // R4c.2: capacity-growth replacements parked for this slot.
+            swapRetiredSlot(completedFrameIndex);
             // The acquired swapchain image for this slot (R3b.6).
             if (frame.status != FrameStatus::RecreateSwapchain) {
                 renderGraph_.bindExternalImage(frameSlot, graphIds_.swapchain,
@@ -1773,8 +1860,12 @@ namespace Iridium {
             throw std::logic_error(
                 "Lighting capacity must be prepared before beginFrame");
         }
+        // R4c.2: slots that swapped at once rebind now; the others at their
+        // retirement (swapRetiredSlot).
         if (clusterLighting_.prepare(requiredCapacity) && lighting_.sceneSetReady())
-            lighting_.bindLightBuffers();
+            for (uint32_t slot = 0; slot < VulkanFrameScheduler::FramesInFlight; ++slot)
+                if (!clusterLighting_.slotSwapPending(slot))
+                    lighting_.bindLightBuffers(slot);
     }
 
     void VulkanVertexBackend::prepareGpuScene(
@@ -1798,7 +1889,7 @@ namespace Iridium {
             shadows_.growIndirectCapacity(grownCapacity);
             localShadows_.growIndirectCapacity(grownCapacity);
             probes_.growIndirectCapacity(grownCapacity);
-            bindGraphImportedBuffers();
+            rebindIdleSlotImports();
         }
     }
 

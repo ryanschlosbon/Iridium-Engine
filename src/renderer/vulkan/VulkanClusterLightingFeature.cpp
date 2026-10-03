@@ -68,10 +68,12 @@ namespace Iridium {
         if (context_ != nullptr) {
             for (auto* buffers : { &lightRecordBuffers_, &activeLightSlotBuffers_,
                     &fallbackCandidateBuffers_, &parameterBuffers_,
-                    &diagnosticReadbackBuffers_ })
+                    &diagnosticReadbackBuffers_, &pendingLightRecordBuffers_,
+                    &pendingActiveLightSlotBuffers_ })
                 for (VulkanBufferResource& buffer : *buffers)
                     context_->allocator.destroy(buffer);
         }
+        pendingSlots_ = {};
         clusters_.cleanup();
         probeClusters_.cleanup();
         lightRecordCapacity_ = 0;
@@ -242,15 +244,29 @@ namespace Iridium {
             }
             throw;
         }
-        if (lightRecordCapacity_ != 0) context_->scheduler.waitForAllFrames();
-        clusters_.clearDescriptors();
-        for (VulkanBufferResource& buffer : lightRecordBuffers_) {
-            context_->allocator.destroy(buffer);
+        // R4c.2: no drain. A slot that is not in flight swaps now; an
+        // in-flight slot parks its replacement (an older parked one was never
+        // used) until its retirement. With every slot idle (startup) the
+        // cluster sets are rebuilt as before.
+        bool allIdle = true;
+        for (uint32_t frame = 0; frame < FrameCount; ++frame) {
+            context_->allocator.destroy(pendingLightRecordBuffers_[frame]);
+            context_->allocator.destroy(pendingActiveLightSlotBuffers_[frame]);
+            pendingSlots_[frame] = context_->scheduler.slotInFlight(frame);
+            allIdle = allIdle && !pendingSlots_[frame];
         }
-        for (VulkanBufferResource& buffer : activeLightSlotBuffers_)
-            context_->allocator.destroy(buffer);
-        lightRecordBuffers_ = recordReplacement;
-        activeLightSlotBuffers_ = activeReplacement;
+        if (allIdle) clusters_.clearDescriptors();
+        for (uint32_t frame = 0; frame < FrameCount; ++frame) {
+            if (pendingSlots_[frame]) {
+                pendingLightRecordBuffers_[frame] = recordReplacement[frame];
+                pendingActiveLightSlotBuffers_[frame] = activeReplacement[frame];
+                continue;
+            }
+            context_->allocator.destroy(lightRecordBuffers_[frame]);
+            context_->allocator.destroy(activeLightSlotBuffers_[frame]);
+            lightRecordBuffers_[frame] = recordReplacement[frame];
+            activeLightSlotBuffers_[frame] = activeReplacement[frame];
+        }
         if (createParameters) {
             fallbackCandidateBuffers_ = fallbackReplacement;
             parameterBuffers_ = parameterReplacement;
@@ -266,7 +282,33 @@ namespace Iridium {
         diagnosticReadbackPending_.fill(false);
         lightUploadRanges_.reserve(capacity);
         fallbackSelectionScratch_.reserve(capacity);
-        rebuildClusterDescriptors();
+        if (allIdle) {
+            rebuildClusterDescriptors();
+            return;
+        }
+        for (uint32_t frame = 0; frame < FrameCount; ++frame)
+            if (!pendingSlots_[frame])
+                clusters_.rewriteLightBuffers(frame,
+                    { lightRecordBuffers_[frame].buffer, 0,
+                        lightRecordBuffers_[frame].size },
+                    { activeLightSlotBuffers_[frame].buffer, 0,
+                        activeLightSlotBuffers_[frame].size });
+    }
+
+    bool VulkanClusterLightingFeature::swapRetiredSlot(uint32_t slot) {
+        if (!pendingSlots_[slot]) return false;
+        context_->allocator.destroy(lightRecordBuffers_[slot]);
+        context_->allocator.destroy(activeLightSlotBuffers_[slot]);
+        lightRecordBuffers_[slot] = pendingLightRecordBuffers_[slot];
+        activeLightSlotBuffers_[slot] = pendingActiveLightSlotBuffers_[slot];
+        pendingLightRecordBuffers_[slot] = {};
+        pendingActiveLightSlotBuffers_[slot] = {};
+        pendingSlots_[slot] = false;
+        clusters_.rewriteLightBuffers(slot,
+            { lightRecordBuffers_[slot].buffer, 0, lightRecordBuffers_[slot].size },
+            { activeLightSlotBuffers_[slot].buffer, 0,
+                activeLightSlotBuffers_[slot].size });
+        return true;
     }
 
     void VulkanClusterLightingFeature::uploadFrame(uint32_t frameIndex,
