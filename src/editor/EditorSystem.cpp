@@ -200,7 +200,7 @@ void EditorSystem::update(Registry& registry, Iridium::AssetManager* assetManage
     float sceneAspect) {
 
     // NOTE: ImGui_ImplVulkan_NewFrame(), ImGui_ImplGlfw_NewFrame(), and ImGui::NewFrame()
-    // are now handled by renderBackend->beginUI() in Application.cpp BEFORE calling this function!
+    // are now handled by the editor bridge's beginUI() in Application.cpp BEFORE calling this function!
 
     selection_.reconcile(registry);
     const ImGuiViewport* mainViewport =

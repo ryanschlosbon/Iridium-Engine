@@ -1,9 +1,9 @@
 #pragma once
 
 // M7R R3c.0: the attached backend extensions (R2.7) as one service: their
-// graph-hook declarations, the oracle and digest services they provide, and
-// hook dispatch. Moved out of VulkanVertexBackend unchanged; feature owners
-// reach it through VulkanFeatureContext.
+// graph-hook declarations, the oracle, digest and editor-UI services they
+// provide, and hook dispatch. Moved out of VulkanVertexBackend unchanged;
+// feature owners reach it through VulkanFeatureContext.
 
 #include "VulkanBackendExtension.h"
 
@@ -31,6 +31,10 @@ namespace Iridium {
             const noexcept {
             return indirectStreamObserver_;
         }
+        // Null without an attached editor bridge (headless and test hosts).
+        [[nodiscard]] IVulkanEditorUi* editorUi() const noexcept {
+            return editorUi_;
+        }
         [[nodiscard]] std::span<IVulkanBackendExtension* const> extensions()
             const noexcept {
             return extensions_;
@@ -48,6 +52,7 @@ namespace Iridium {
         std::vector<IVulkanBackendExtension*> extensions_;
         IVulkanIndirectOracle* indirectOracle_ = nullptr;
         IVulkanIndirectStreamObserver* indirectStreamObserver_ = nullptr;
+        IVulkanEditorUi* editorUi_ = nullptr;
         VulkanGraphHooks graphHooks_ = VulkanGraphHooks::none();
     };
 

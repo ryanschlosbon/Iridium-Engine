@@ -127,10 +127,6 @@ namespace IridiumTest {
 
         void submitOutputPass() override {}
         void submitUIPass() override {}
-        void beginUI() override {}
-        void* getLitSceneTextureID() override { return nullptr; }
-        void* getGlassDepthTextureID() override { return nullptr; }
-        void* getEditorTextureID(TextureHandle) override { return nullptr; }
         FrameStatus endFrame() override { return FrameStatus::Ready; }
 
         GeometryHandle allocateGeometry(const GeometryDesc&,

@@ -5,9 +5,9 @@
 // skipped unless an attached extension wants the hook; otherwise its GPU
 // range wraps the barriers and the extension work), and the two capture
 // hooks: "scene-color-capture-hook" (scene-linear captures) and
-// "final-capture-hook" (final-output captures and the editor's retained
-// views, which consume the pass through a VulkanFinalCaptureConsumer until
-// the editor bridge owns them in R3c.10).
+// "final-capture-hook" (final-output captures and the editor bridge's
+// retained views, which consume the pass through a VulkanFinalCaptureConsumer;
+// R3c.10).
 
 #include "VulkanBackendExtension.h"
 #include "VulkanFeatureContext.h"

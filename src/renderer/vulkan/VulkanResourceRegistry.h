@@ -42,7 +42,7 @@ namespace Iridium {
         VulkanImageResource image;
         VkSampler sampler = VK_NULL_HANDLE;
         uint32_t samplerCacheIndex = UINT32_MAX;
-        VkDescriptorSet imguiDescriptor = VK_NULL_HANDLE;
+        VkDescriptorSet editorDescriptor = VK_NULL_HANDLE;
         TextureFormat format = TextureFormat::RGBA8_UNorm;
         uint32_t width = 0;
         uint32_t height = 0;
@@ -81,7 +81,7 @@ namespace Iridium {
         VulkanResourceRegistry& operator=(const VulkanResourceRegistry&) = delete;
 
         void init(const Services& services);
-        // Releases an editor (ImGui) descriptor when a retired texture is
+        // Releases an editor-bridge descriptor when a retired texture is
         // finally destroyed; the registry itself has no editor dependency.
         void setEditorDescriptorRelease(void* owner,
             void (*release)(void* owner, VkDescriptorSet descriptor)) noexcept {

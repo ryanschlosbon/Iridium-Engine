@@ -1248,8 +1248,8 @@ namespace Iridium {
     }
 
     void* AssetManager::getMaterialTexturePreview(TextureHandle texture) const {
-        return renderBackend != nullptr && texture.isValid()
-            ? renderBackend->getEditorTextureID(texture) : nullptr;
+        return editorBridge_ != nullptr && texture.isValid()
+            ? editorBridge_->editorTextureId(texture) : nullptr;
     }
 
     std::optional<AssetGuid>
@@ -1394,9 +1394,9 @@ namespace Iridium {
         }
         found->second.lastUseSerial =
             ++editorThumbnailSerial_;
-        return renderBackend != nullptr &&
+        return editorBridge_ != nullptr &&
             found->second.texture.isValid()
-            ? renderBackend->getEditorTextureID(
+            ? editorBridge_->editorTextureId(
                 found->second.texture)
             : nullptr;
     }
@@ -1413,8 +1413,8 @@ namespace Iridium {
         editorDetailThumbnail_
             .lastUseSerial =
                 ++editorThumbnailSerial_;
-        return renderBackend != nullptr
-            ? renderBackend->getEditorTextureID(
+        return editorBridge_ != nullptr
+            ? editorBridge_->editorTextureId(
                 editorDetailThumbnail_
                     .texture)
             : nullptr;

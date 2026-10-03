@@ -29,6 +29,7 @@
 namespace Iridium {
 
     class CpuProfiler;
+    class IVulkanEditorUi;
     class VulkanResourceAllocator;
     class VulkanFrameScheduler;
     class VulkanRenderGraphExecutor;
@@ -428,6 +429,11 @@ namespace Iridium {
         // before the backend is created).
         [[nodiscard]] virtual IVulkanIndirectStreamObserver*
             indirectStreamObserver() noexcept {
+            return nullptr;
+        }
+        // The editor UI contributor (M7R R3c.10, renderer/vulkan_imgui); the
+        // first extension providing one serves it.
+        [[nodiscard]] virtual IVulkanEditorUi* editorUi() noexcept {
             return nullptr;
         }
         // After the device is idle and the oracles have drained, before any

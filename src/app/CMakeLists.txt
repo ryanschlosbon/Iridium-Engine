@@ -12,6 +12,7 @@ add_library(iridium_app STATIC
 )
 target_link_libraries(iridium_app PUBLIC
         iridium_vulkan
+        iridium_vulkan_imgui
         iridium_editor
         iridium_lighting
         iridium_scene

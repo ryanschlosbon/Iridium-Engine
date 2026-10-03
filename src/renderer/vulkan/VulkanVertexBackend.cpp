@@ -10,12 +10,7 @@
 #include "renderer/lighting/ShadowCasterCulling.h"
 #include "renderer/lighting/DirectionalShadow.h"
 #include "renderer/lighting/ClusteredReflectionProbes.h"
-#include "imgui.h"
-#include "backends/imgui_impl_vulkan.h"
-#include "backends/imgui_impl_glfw.h"
-#include "vendor/imguizmo/ImGuizmo.h"
 #include "profiling/CpuProfiler.h"
-#include "utils/File.h"
 #include <algorithm>
 #include <stdexcept>
 #include <array>
@@ -242,11 +237,6 @@ namespace Iridium {
             .profiler = cpuProfiler_,
             .frameOpen = &frameOpen_,
         });
-        resources_.setEditorDescriptorRelease(this,
-            [](void* owner, VkDescriptorSet descriptor) {
-                if (static_cast<VulkanVertexBackend*>(owner)->imguiInitialized_)
-                    ImGui_ImplVulkan_RemoveTexture(descriptor);
-            });
         featureContext_.emplace(VulkanFeatureContext{
             .vk = *vkContext,
             .device = vkContext->getDevice(),
@@ -330,13 +320,20 @@ namespace Iridium {
             vkSwapchain->getImageFormat());
         oit_.create(*featureContext_);
         hooks_.create(*featureContext_);
-        hooks_.setFinalCaptureConsumer({ this,
-            [](void* owner, VkCommandBuffer commandBuffer) {
-                static_cast<VulkanVertexBackend*>(owner)->initializeRetainedViews(commandBuffer);
-            },
-            [](void* owner, VkCommandBuffer commandBuffer) {
-                static_cast<VulkanVertexBackend*>(owner)->copyRetainedView(commandBuffer);
-            } });
+        // R3c.10: the editor bridge's retained views consume the final
+        // capture hook; without a bridge there are no retained views.
+        if (IVulkanEditorUi* editor = editorUi()) {
+            hooks_.setFinalCaptureConsumer({ editor,
+                [](void* owner, VkCommandBuffer commandBuffer) {
+                    static_cast<IVulkanEditorUi*>(owner)->
+                        prepareRetainedViewImages(commandBuffer);
+                },
+                [](void* owner, VkCommandBuffer commandBuffer) {
+                    static_cast<IVulkanEditorUi*>(owner)->copyRetainedView(commandBuffer);
+                } });
+        }
+        ui_.create(*featureContext_);
+        ui_.setEditorUi(editorUi());
         // R3c.9: the layered-glass owner (capture, composition, resolve).
         layered_.configure(lighting_.setLayout(), forward_.transparentRenderPass());
         layered_.create(*featureContext_);
@@ -369,9 +366,8 @@ namespace Iridium {
         // 5. UI Pass
         const bool hdr10Composition = outputTransport_ ==
             Color::OutputTransport::Hdr10Pq;
-        uiPass = std::make_unique<VkUIRenderPass>(vkContext.get(),
-            hdr10Composition ? VK_FORMAT_R16G16B16A16_SFLOAT
-                : vkSwapchain->getImageFormat(), !hdr10Composition);
+        ui_.createRenderPass(hdr10Composition ? VK_FORMAT_R16G16B16A16_SFLOAT
+            : vkSwapchain->getImageFormat(), hdr10Composition);
 
         // 7. Render Targets
         rebuildRenderGraphAfterDeviceIdle();
@@ -381,8 +377,8 @@ namespace Iridium {
                 vkSwapchain->getExtent());
         }
         // Target descriptors declare shader-read layouts, so submit their initial
-        // Undefined -> ShaderResource transitions before any descriptor or ImGui
-        // registration can reference those images.
+        // Undefined -> ShaderResource transitions before any descriptor or
+        // editor registration can reference those images.
         lighting_.createNeutralEnvironment();
         uploadContext.flush();
 
@@ -429,64 +425,31 @@ namespace Iridium {
         oit_.rebuildDescriptors();
 
         // 3. Lighting descriptors (one set per frame context).
-        const uint32_t imgCount = vkSwapchain->getImageCount();
         lighting_.rebuildSceneSet();
         output_.rebuildDescriptors();
 
-        // 4. ImGui Initialization & UI Textures
-        // Create a small pool specifically for ImGui's internal fonts and textures
-        VkDescriptorPoolSize pool_sizes[] = {
-            {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 4096} };
-        VkDescriptorPoolCreateInfo pool_info = { VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO };
-        pool_info.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
-        pool_info.maxSets = 4096;
-        pool_info.poolSizeCount = 1;
-        pool_info.pPoolSizes = pool_sizes;
-        vkCreateDescriptorPool(vkContext->getDevice(), &pool_info, nullptr, &imguiPool);
-
-        // Init ImGui contexts
-        ImGui::CreateContext();
-        ImGuiIO& io = ImGui::GetIO();
-        io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
-        io.ConfigWindowsMoveFromTitleBarOnly = true;
-        ImGui_ImplGlfw_InitForVulkan(window, true);
-
-        ImGui_ImplVulkan_InitInfo init_info = {};
-        init_info.Instance = vkContext->getInstance();
-        init_info.PhysicalDevice = vkContext->getPhysicalDevice();
-        init_info.Device = vkContext->getDevice();
-        init_info.QueueFamily = vkContext->getGraphicsQueueFamily();
-        init_info.Queue = vkContext->getGraphicsQueue();
-        init_info.PipelineCache = VK_NULL_HANDLE;
-        init_info.DescriptorPool = imguiPool;
-        init_info.MinImageCount = imgCount;
-        init_info.ImageCount = imgCount;
-        init_info.PipelineInfoMain.RenderPass = uiPass->getRenderPass();
-        const std::vector<char> imguiFragmentBytes = readFile(
-            std::string(PROJECT_ROOT_DIR) +
-            "assets/shaders/imgui_color_managed_frag.spv");
-        if (imguiFragmentBytes.empty() ||
-            imguiFragmentBytes.size() % sizeof(uint32_t) != 0) {
-            throw std::runtime_error("Color-managed ImGui shader is invalid.");
+        // 4. The editor bridge (R3c.10): its UI device state, then the
+        // viewport textures over the frame targets.
+        if (IVulkanEditorUi* editor = editorUi()) {
+            editor->onUiDeviceReady({
+                .instance = vkContext->getInstance(),
+                .physicalDevice = vkContext->getPhysicalDevice(),
+                .device = vkContext->getDevice(),
+                .queueFamily = vkContext->getGraphicsQueueFamily(),
+                .queue = vkContext->getGraphicsQueue(),
+                .allocator = &resourceAllocator,
+                .scheduler = &scheduler,
+                .frameTargets = &frameTargets,
+                .resources = &resources_,
+                .telemetry = &telemetry_,
+                .backend = this,
+                .selectRetainedView = [](void* backend, uint32_t view) {
+                    auto& self = *static_cast<VulkanVertexBackend*>(backend);
+                    self.retainedRenderView_ = view;
+                    self.opaque_.setRetainedView(view);
+                },
+            }, editorUiPresentation());
         }
-        imguiFragmentShaderCode_.resize(
-            imguiFragmentBytes.size() / sizeof(uint32_t));
-        std::memcpy(imguiFragmentShaderCode_.data(), imguiFragmentBytes.data(),
-            imguiFragmentBytes.size());
-        init_info.CustomShaderFragCreateInfo = {
-            VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO };
-        init_info.CustomShaderFragCreateInfo.codeSize =
-            imguiFragmentShaderCode_.size() * sizeof(uint32_t);
-        init_info.CustomShaderFragCreateInfo.pCode =
-            imguiFragmentShaderCode_.data();
-        init_info.DisplayColorScale = outputTransport_ ==
-            Color::OutputTransport::ScRgb ? paperWhiteNits_ / 80.0f : 1.0f;
-        init_info.OutputColorSpace = outputTransport_ ==
-            Color::OutputTransport::Hdr10Pq ? 1u : 0u;
-        ImGui_ImplVulkan_Init(&init_info);
-        imguiInitialized_ = true;
-
-        // Create the initial ImGui textures for the viewport!
         registerEditorTargetTextures();
 
         initialized_ = true;
@@ -548,12 +511,8 @@ namespace Iridium {
         paperWhiteNits_ = paperWhiteNits;
         peakNits_ = peakNits;
         if (vkSwapchain) vkSwapchain->setHdrMetadata(peakNits_);
-        if (imguiInitialized_) {
-            ImGui_ImplVulkan_SetDisplayColorConfiguration(
-                outputTransport_ == Color::OutputTransport::ScRgb
-                    ? paperWhiteNits_ / 80.0f : 1.0f,
-                outputTransport_ == Color::OutputTransport::Hdr10Pq ? 1u : 0u);
-        }
+        if (IVulkanEditorUi* editor = editorUi())
+            editor->onDisplayColorChanged(outputTransport_, paperWhiteNits_);
     }
 
     void VulkanVertexBackend::cleanup() {
@@ -577,19 +536,9 @@ namespace Iridium {
 
         pipelineLibrary.cleanup();
 
-        releaseEditorTargetTextures();
-        destroyRetainedViews();
-        if (imguiInitialized_) {
-            ImGui_ImplVulkan_Shutdown();
-            ImGui_ImplGlfw_Shutdown();
-            ImGui::DestroyContext();
-            imguiInitialized_ = false;
-        }
-        imguiFragmentShaderCode_.clear();
-        if (imguiPool != VK_NULL_HANDLE) {
-            vkDestroyDescriptorPool(device, imguiPool, nullptr);
-            imguiPool = VK_NULL_HANDLE;
-        }
+        // The editor bridge releases its textures and retained views and
+        // shuts ImGui down while every backend resource still exists.
+        if (IVulkanEditorUi* editor = editorUi()) editor->onUiShutdown();
 
         lighting_.releaseSceneSet();
         forward_.clearDescriptors();
@@ -617,7 +566,7 @@ namespace Iridium {
 
         lighting_.destroy();
 
-        uiPass.reset();
+        ui_.destroy();
         output_.destroy();
 
         forward_.destroy();
@@ -990,7 +939,7 @@ namespace Iridium {
         // them before the graph is rebuilt, and recreate them afterward.
         releaseFrameTargets();
         output_.destroyPipelines();
-        uiPass.reset();
+        ui_.destroyRenderPass();
 
         vkSwapchain = std::move(candidate);
 		requestedOutputTransport_ = requestedTransport;
@@ -1002,30 +951,22 @@ namespace Iridium {
             vkSwapchain->getImageFormat());
         const bool hdr10Composition = outputTransport_ ==
             Color::OutputTransport::Hdr10Pq;
-        uiPass = std::make_unique<VkUIRenderPass>(vkContext.get(),
-            hdr10Composition ? VK_FORMAT_R16G16B16A16_SFLOAT
-                : vkSwapchain->getImageFormat(), !hdr10Composition);
-        if (imguiInitialized_) {
-            ImGui_ImplVulkan_PipelineInfo pipelineInfo{};
-            pipelineInfo.RenderPass = uiPass->getRenderPass();
-            pipelineInfo.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
-            ImGui_ImplVulkan_CreateMainPipeline(&pipelineInfo);
-            ImGui_ImplVulkan_SetDisplayColorConfiguration(
-                outputTransport_ == Color::OutputTransport::ScRgb
-                    ? paperWhiteNits_ / 80.0f : 1.0f,
-                outputTransport_ == Color::OutputTransport::Hdr10Pq ? 1u : 0u);
-        }
+        ui_.createRenderPass(hdr10Composition ? VK_FORMAT_R16G16B16A16_SFLOAT
+            : vkSwapchain->getImageFormat(), hdr10Composition);
+        if (IVulkanEditorUi* editor = editorUi())
+            editor->onPresentationChanged(editorUiPresentation());
         const uint32_t newImageCount = vkSwapchain->getImageCount();
         scheduler.resetSwapchainImages(newImageCount);
         scheduler.setTransparentTargetPixelCount(
             static_cast<uint64_t>(sceneExtent_.width) *
             sceneExtent_.height);
         // The replacement target images are referenced by descriptor sets and
-        // ImGui immediately below; createFrameTargets establishes their
+        // the editor immediately below; createFrameTargets establishes their
         // declared layouts (upload flush) first.
         createFrameTargets();
         if (newImageCount != oldImageCount) {
-            ImGui_ImplVulkan_SetMinImageCount(newImageCount);
+            if (IVulkanEditorUi* editor = editorUi())
+                editor->onSwapchainImageCountChanged(newImageCount);
         }
         registerEditorTargetTextures();
     }
@@ -1461,31 +1402,18 @@ namespace Iridium {
     // --- PRIVATE HELPERS ---
 
     void VulkanVertexBackend::releaseEditorTargetTextures() {
-        for (VkDescriptorSet texture : uiSceneTextures) {
-            if (texture != VK_NULL_HANDLE)
-                ImGui_ImplVulkan_RemoveTexture(texture);
-        }
-        for (VkDescriptorSet texture : uiDepthTextures) {
-            if (texture != VK_NULL_HANDLE)
-                ImGui_ImplVulkan_RemoveTexture(texture);
-        }
-        uiSceneTextures.clear();
-        uiDepthTextures.clear();
+        if (IVulkanEditorUi* editor = editorUi()) editor->onFrameTargetsReleased();
     }
 
     void VulkanVertexBackend::registerEditorTargetTextures() {
-        uiSceneTextures.resize(frameTargets.size());
-        uiDepthTextures.resize(frameTargets.size());
-        for (size_t index = 0; index < frameTargets.size(); ++index) {
-            const VulkanFrameContextTargets& targets = frameTargets.get(index);
-            uiSceneTextures[index] = ImGui_ImplVulkan_AddTexture(
-                frameTargets.sampler(), targets.output.view,
-                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-            const VkImageView editorDepthView = targets.depth.view;
-            uiDepthTextures[index] = ImGui_ImplVulkan_AddTexture(
-                frameTargets.sampler(), editorDepthView,
-                VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
-        }
+        if (IVulkanEditorUi* editor = editorUi()) editor->onFrameTargetsCreated();
+    }
+
+    VulkanEditorUiPresentation VulkanVertexBackend::editorUiPresentation()
+        const noexcept {
+        return { .renderPass = ui_.renderPass(),
+            .imageCount = vkSwapchain->getImageCount(),
+            .transport = outputTransport_, .paperWhiteNits = paperWhiteNits_ };
     }
 
     void VulkanVertexBackend::releaseFrameTargets() {
@@ -1528,7 +1456,7 @@ namespace Iridium {
                 layered_.localCompositionRenderPass(),
                 oit_.accumulationRenderPass(),
                 oit_.resolveRenderPass(), output_.outputRenderPass(),
-                uiPass->getRenderPass() },
+                ui_.renderPass() },
             VulkanFrameScheduler::FramesInFlight,
             outputTransport_ == Color::OutputTransport::Hdr10Pq,
             forward_.pyramidResidency().enabled(),
@@ -2027,82 +1955,17 @@ namespace Iridium {
             .selectionOutline = selectionOutlineActive_,
         });
         // R3c.4 drain point: final-output captures and the retained views.
+        const IVulkanEditorUi* editor = editorUi();
         hooks_.runFinalCapture(currentCmd,
             captureSource(outputTransport_ == Color::OutputTransport::SdrSrgb
                 ? FrameCapturePoint::FinalSdr : FrameCapturePoint::FinalOutput),
-            retainedViewsEnabled_);
+            editor != nullptr && editor->retainedViewsEnabled());
     }
 
     void VulkanVertexBackend::submitUIPass() {
         CpuScope recordScope(cpuProfiler_, "cpu.render.record.ui");
-        renderGraph_.beginPass(currentCmd, graphIds_.ui);
-        {
-        VulkanGpuScope gpuScope(scheduler, "gpu.ui");
-        ImGui::Render();
-        VkRenderPassBeginInfo uiPassInfo{ VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
-        uiPassInfo.renderPass = uiPass->getRenderPass();
-        uiPassInfo.framebuffer = outputTransport_ == Color::OutputTransport::Hdr10Pq
-            ? frameTargets.get(scheduler.currentFrameIndex()).uiCompositionFramebuffer
-            : frameTargets.uiFramebuffer(currentImageIndex);
-        uiPassInfo.renderArea.extent = vkSwapchain->getExtent();
-
-        VkClearValue uiClearColor = { {{0.0f, 0.0f, 0.0f, 1.0f}} };
-        uiPassInfo.clearValueCount = 1;
-        uiPassInfo.pClearValues = &uiClearColor;
-
-        vkCmdBeginRenderPass(currentCmd, &uiPassInfo, VK_SUBPASS_CONTENTS_INLINE);
-
-        // Because we abstracted the UI pass, the backend just asks ImGui to record 
-        // its internal vertex buffers into the current command buffer.
-        ImDrawData* draw_data = ImGui::GetDrawData();
-        if (draw_data) {
-            const int framebufferWidth = static_cast<int>(
-                draw_data->DisplaySize.x * draw_data->FramebufferScale.x);
-            const int framebufferHeight = static_cast<int>(
-                draw_data->DisplaySize.y * draw_data->FramebufferScale.y);
-            if (telemetry_.collecting() && framebufferWidth > 0 && framebufferHeight > 0) {
-                telemetry_.recordPipelineBind(pipelineIdentity(FixedPipelineIdentity::ImGui));
-                const ImVec2 clipOffset = draw_data->DisplayPos;
-                const ImVec2 clipScale = draw_data->FramebufferScale;
-                for (const ImDrawList* drawList : draw_data->CmdLists) {
-                    for (const ImDrawCmd& command : drawList->CmdBuffer) {
-                        if (command.UserCallback != nullptr) {
-                            if (command.UserCallback == ImDrawCallback_ResetRenderState) {
-                                telemetry_.recordPipelineBind(
-                                    pipelineIdentity(FixedPipelineIdentity::ImGui));
-                            }
-                            else {
-                                ++telemetry_.counters().uiUntrackedCallbacks;
-                            }
-                            continue;
-                        }
-
-                        ImVec2 clipMinimum{
-                            (command.ClipRect.x - clipOffset.x) * clipScale.x,
-                            (command.ClipRect.y - clipOffset.y) * clipScale.y };
-                        ImVec2 clipMaximum{
-                            (command.ClipRect.z - clipOffset.x) * clipScale.x,
-                            (command.ClipRect.w - clipOffset.y) * clipScale.y };
-                        clipMinimum.x = std::max(clipMinimum.x, 0.0f);
-                        clipMinimum.y = std::max(clipMinimum.y, 0.0f);
-                        clipMaximum.x = std::min(clipMaximum.x,
-                            static_cast<float>(framebufferWidth));
-                        clipMaximum.y = std::min(clipMaximum.y,
-                            static_cast<float>(framebufferHeight));
-                        if (clipMaximum.x <= clipMinimum.x ||
-                            clipMaximum.y <= clipMinimum.y) {
-                            continue;
-                        }
-
-                        telemetry_.recordDraw(telemetry_.counters().drawUi, command.ElemCount / 3);
-                    }
-                }
-            }
-            ImGui_ImplVulkan_RenderDrawData(draw_data, currentCmd);
-        }
-
-        vkCmdEndRenderPass(currentCmd);
-        }
+        // R3c.10 drain point: the UI pass (clear, the editor bridge's UI).
+        ui_.record(vkSwapchain->getExtent());
         // R3c.2 drain point: "hdr10-encode-present" (declared for HDR10
         // composition only; otherwise a no-op).
         output_.recordHdr10Encode(vkSwapchain->getExtent(), paperWhiteNits_,
@@ -2144,107 +2007,4 @@ namespace Iridium {
         return result;
     }
 
-    // ==============================================================================
-    // 4. EDITOR & UI ABSTRACTIONS
-    // ==============================================================================
-
-    void VulkanVertexBackend::beginUI() {
-        // We initialize the specific backend frames here so the high-level 
-        // EditorSystem doesn't need to know we are using Vulkan or GLFW.
-        ImGui_ImplVulkan_NewFrame();
-        ImGui_ImplGlfw_NewFrame();
-        ImGui::NewFrame();
-        ImGuizmo::BeginFrame();
-    }
-
-    void* VulkanVertexBackend::getLitSceneTextureID() {
-        // uiSceneTextures is the std::vector<VkDescriptorSet> we registered with ImGui during init().
-        // We cast it to void* so it can securely cross the API boundary into your ViewportPanel.
-        return (void*)uiSceneTextures[scheduler.currentFrameIndex()];
-    }
-
-    void* VulkanVertexBackend::getGlassDepthTextureID() {
-        return (void*)uiDepthTextures[scheduler.currentFrameIndex()];
-    }
-
-    void VulkanVertexBackend::destroyRetainedViews() {
-        for (size_t i = 0; i < retainedViewImages_.size(); ++i) {
-            if (retainedViewDescriptors_[i]) ImGui_ImplVulkan_RemoveTexture(retainedViewDescriptors_[i]);
-            retainedViewDescriptors_[i] = VK_NULL_HANDLE;
-            resourceAllocator.destroy(retainedViewImages_[i]);
-        }
-        if (retainedViewSampler_) vkDestroySampler(vkContext->getDevice(), retainedViewSampler_, nullptr);
-        retainedViewSampler_ = VK_NULL_HANDLE;
-    }
-
-    void VulkanVertexBackend::prepareRetainedViews(bool enabled, uint32_t renderView) {
-        if (renderView >= 2) throw std::out_of_range("Retained view index");
-        retainedRenderView_ = renderView;
-        opaque_.setRetainedView(renderView);
-        retainedViewsEnabled_ = enabled;
-        const auto& output = frameTargets.get(0).output;
-        const auto& existing = retainedViewImages_[0];
-        if (enabled && existing.isValid() && existing.extent.width == output.extent.width &&
-            existing.extent.height == output.extent.height && existing.format == output.format) return;
-        if (!enabled && !existing.isValid()) return;
-        scheduler.waitForAllFrames();
-        destroyRetainedViews();
-        if (!enabled) return;
-        VkSamplerCreateInfo sampler{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
-        sampler.magFilter = sampler.minFilter = VK_FILTER_LINEAR;
-        sampler.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
-        sampler.addressModeU = sampler.addressModeV = sampler.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-        if (vkCreateSampler(vkContext->getDevice(), &sampler, nullptr, &retainedViewSampler_) != VK_SUCCESS)
-            throw std::runtime_error("Retained view sampler allocation failed");
-        try {
-            for (size_t i = 0; i < retainedViewImages_.size(); ++i) {
-                retainedViewImages_[i] = resourceAllocator.createImage2D(output.extent, output.format,
-                    VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_IMAGE_ASPECT_COLOR_BIT, ProfileMemoryCategory::Texture);
-                retainedViewDescriptors_[i] = ImGui_ImplVulkan_AddTexture(retainedViewSampler_,
-                    retainedViewImages_[i].view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-            }
-        } catch (...) { destroyRetainedViews(); throw; }
-    }
-
-    void* VulkanVertexBackend::getRetainedViewTextureID(uint32_t view) {
-        return view < 2 ? reinterpret_cast<void*>(retainedViewDescriptors_[view]) : nullptr;
-    }
-
-    void VulkanVertexBackend::initializeRetainedViews(VkCommandBuffer commandBuffer) {
-        VulkanCommandList commands(commandBuffer);
-        for (auto& image : retainedViewImages_) if (image.state == ResourceState::Undefined) {
-            commands.transition(image, ResourceState::CopyDestination);
-            const VkClearColorValue black{};
-            const VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-            vkCmdClearColorImage(commandBuffer, image.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &black, 1, &range);
-            commands.transition(image, ResourceState::ShaderResource);
-        }
-    }
-
-    void VulkanVertexBackend::copyRetainedView(VkCommandBuffer commandBuffer) {
-        VulkanCommandList commands(commandBuffer);
-        auto& target = retainedViewImages_[retainedRenderView_];
-        commands.transition(target, ResourceState::CopyDestination);
-        VkImageCopy copy{};
-        copy.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        copy.dstSubresource = copy.srcSubresource;
-        copy.extent = {target.extent.width, target.extent.height, 1};
-        commands.copyImage(frameTargets.get(scheduler.currentFrameIndex()).output, target, copy);
-        commands.transition(target, ResourceState::ShaderResource);
-    }
-
-    void* VulkanVertexBackend::getEditorTextureID(TextureHandle texture) {
-        VulkanTexturePayload* payload = resources_.textures().get(texture);
-        if (payload == nullptr || payload->retired || !imguiInitialized_) {
-            return nullptr;
-        }
-        if (payload->imguiDescriptor == VK_NULL_HANDLE) {
-            payload->imguiDescriptor = ImGui_ImplVulkan_AddTexture(payload->sampler,
-                payload->image.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-        }
-        return reinterpret_cast<void*>(payload->imguiDescriptor);
-    }
-
-} 
-
-// namespace Iridium
+} // namespace Iridium

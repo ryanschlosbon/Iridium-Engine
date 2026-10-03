@@ -359,14 +359,14 @@ namespace Iridium {
                     scheduler_->currentFrameIndex());
             }
             const uint32_t samplerCacheIndex = payload->samplerCacheIndex;
-            VkDescriptorSet imguiDescriptor = payload->imguiDescriptor;
+            VkDescriptorSet editorDescriptor = payload->editorDescriptor;
             VulkanImageResource image = payload->image;
             payload->retired = true;
             ++retiredTextureCount_;
 
-            scheduler_->defer([this, handle, imguiDescriptor, image]() mutable {
-                if (imguiDescriptor != VK_NULL_HANDLE && editorRelease_ != nullptr)
-                    editorRelease_(editorReleaseOwner_, imguiDescriptor);
+            scheduler_->defer([this, handle, editorDescriptor, image]() mutable {
+                if (editorDescriptor != VK_NULL_HANDLE && editorRelease_ != nullptr)
+                    editorRelease_(editorReleaseOwner_, editorDescriptor);
                 allocator_->destroy(image);
                 textureVault_.free(handle);
                 if (retiredTextureCount_ != 0) --retiredTextureCount_;

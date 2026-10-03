@@ -285,6 +285,44 @@ if(TARGET iridium_qualification)
             LIBS iridium_qualification)
 endif()
 
+# M7R R3c.10: the editor UI lives in iridium_vulkan_imgui. The backend and the
+# RHI must not reach ImGui through any link dependency (configure-time check).
+function(_iridium_assert_no_link_path target forbidden visited)
+    if(NOT TARGET ${target} OR "${target}" IN_LIST ${visited})
+        return()
+    endif()
+    list(APPEND ${visited} ${target})
+    set(${visited} "${${visited}}" PARENT_SCOPE)
+    get_target_property(_type ${target} TYPE)
+    set(_links "")
+    if(NOT _type STREQUAL "INTERFACE_LIBRARY")
+        get_target_property(_direct ${target} LINK_LIBRARIES)
+        if(_direct)
+            list(APPEND _links ${_direct})
+        endif()
+    endif()
+    get_target_property(_interface ${target} INTERFACE_LINK_LIBRARIES)
+    if(_interface)
+        list(APPEND _links ${_interface})
+    endif()
+    foreach(_link IN LISTS _links)
+        if(_link STREQUAL forbidden)
+            message(FATAL_ERROR "${target} links ${forbidden}; the editor UI belongs "
+                "to iridium_vulkan_imgui (M7R R3c.10)")
+        endif()
+        _iridium_assert_no_link_path(${_link} ${forbidden} ${visited})
+        set(${visited} "${${visited}}" PARENT_SCOPE)
+    endforeach()
+endfunction()
+foreach(_ui_free_target IN ITEMS iridium_rhi iridium_vulkan)
+    set(_iridium_visited "")
+    _iridium_assert_no_link_path(${_ui_free_target} iridium_vendor_imgui _iridium_visited)
+endforeach()
+
+iridium_add_test(EditorRenderBridgeTests
+        SOURCES renderer/EditorRenderBridgeTests.cpp
+        LIBS iridium_vulkan_imgui)
+
 # Hardware qualification: these create a Vulkan device and load SPIR-V from
 # assets/shaders, so they carry the `vulkan` label and depend on iridium_shaders.
 # Both exceed 5 s in Debug (VulkanVirtualShadowMarkingTests ~95 s), hence `slow`.
@@ -329,6 +367,14 @@ if(TARGET iridium_shaders)
             SOURCES renderer/VulkanRenderGraphDeviceTests.cpp
             LIBS iridium_test_vulkan_support iridium_vulkan
             LABELS vulkan)
+
+    # M7R R3c.10: the production backend on a hidden window, with and
+    # without the ImGui editor bridge, under synchronization validation.
+    iridium_add_test(VulkanBackendFrameTests
+            SOURCES renderer/VulkanBackendFrameTests.cpp
+            LIBS iridium_vulkan_imgui
+            LABELS vulkan)
+    add_dependencies(VulkanBackendFrameTests iridium_shaders)
 
     iridium_add_test(VulkanShaderParityTests
             SOURCES renderer/VulkanShaderParityTests.cpp

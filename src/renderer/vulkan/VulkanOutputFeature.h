@@ -7,7 +7,7 @@
 // bloom), "output-transform" and, for HDR10 composition,
 // "hdr10-encode-present". The swapchain, transport selection and paper-white
 // and peak luminance stay with the backend (they also drive the swapchain
-// metadata and ImGui) and are staged per frame.
+// metadata and the editor bridge's display colour) and are staged per frame.
 
 #include "renderer/color/OutputTransformConfig.h"
 #include "renderer/rhi/IRenderBackend.h"

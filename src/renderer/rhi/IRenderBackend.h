@@ -242,15 +242,11 @@ namespace Iridium {
         // Pass 4: Maps scene-linear color into the selected display output.
         virtual void submitOutputPass() = 0;
 
-        // Pass 5: Draws the ImGui editor and final UI elements to the swapchain.
+        // Pass 5: The UI pass: clears the presentation target, records the
+        // attached editor bridge's UI (IEditorRenderBridge, M7R R3c.10) and
+        // presents. The editor's texture ids and retained views are bridge
+        // services, not part of this interface.
         virtual void submitUIPass() = 0;
-
-        virtual void beginUI() = 0;
-
-        // ImGui uses 'void*' for its abstract texture IDs
-        virtual void* getLitSceneTextureID() = 0;
-        virtual void* getGlassDepthTextureID() = 0;
-        virtual void* getEditorTextureID(TextureHandle texture) = 0;
 
         // Submits the command buffers to the GPU and presents to the monitor
         virtual FrameStatus endFrame() = 0;
@@ -292,10 +288,6 @@ namespace Iridium {
         virtual void setEnvironmentLighting(
             const EnvironmentLightingHandles& environment) = 0;
         [[nodiscard]] virtual EnvironmentLightingHandles getEnvironmentLighting() const { return {}; }
-        // Serially rendered views share transient work, retaining independent outputs.
-        // Preparation is a between-frames operation; view indices are 0 and 1.
-        virtual void prepareRetainedViews(bool enabled, uint32_t renderView) {}
-        [[nodiscard]] virtual void* getRetainedViewTextureID(uint32_t view) { return nullptr; }
         virtual void setEnvironmentLightingSettings(
             const EnvironmentLightingSettings&) {}
         virtual void setOutputTransformLut(TextureHandle lutHandle) = 0;

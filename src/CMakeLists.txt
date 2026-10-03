@@ -16,7 +16,8 @@
 #   iridium_scene         scene/** except authoring (JSON-free runtime)     -> ecs, assets, rhi, core
 #   iridium_scene_authoring scene/authoring (JSON source scenes)            -> scene, nlohmann_json
 #   iridium_lighting      renderer/lighting                                -> scene, rhi
-#   iridium_vulkan        renderer/vulkan                                  -> lighting, transparency, rhi, graph, profiling, color, Vulkan, glfw, imgui
+#   iridium_vulkan        renderer/vulkan                                  -> lighting, transparency, rhi, graph, profiling, color, Vulkan, glfw
+#   iridium_vulkan_imgui  renderer/vulkan_imgui (IEditorRenderBridge)      -> vulkan, imgui, glfw
 #   iridium_editor        editor/**                                        -> scene, assets, rhi, platform, profiling, imgui
 #   iridium_app           app/* except main.cpp (runtime/editor/renderer CLI) -> everything above except capture, benchmarks
 #   IridiumEngine         app/main.cpp                                     -> app, allocation profile, shaders (+ qualification when ON)

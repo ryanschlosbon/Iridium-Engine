@@ -33,6 +33,7 @@
 
 // --- THE NEW RENDERING ARCHITECTURE ---
 #include "renderer/rhi/IRenderBackend.h"
+#include "renderer/rhi/EditorRenderBridge.h"
 #include "renderer/rhi/DrawPacket.h"
 #include "renderer/rhi/RenderBackendRuntimeInfo.h"
 #include "renderer/lighting/LightExtractor.h"
@@ -81,6 +82,10 @@ namespace Iridium {
         AppFrameRequests frameRequests_{};
 
         // --- THE GRAPHICS ABSTRACTION ---
+        // The editor bridge (M7R R3c.10) is attached to the backend as an
+        // extension and must outlive it, so it is declared first.
+        std::unique_ptr<IEditorRenderBridge> editorBridge_;
+        std::vector<IRenderBackendExtension*> backendExtensions_;
         // This single pointer replaces 40+ Vulkan variables!
         std::unique_ptr<IRenderBackend> renderBackend;
 

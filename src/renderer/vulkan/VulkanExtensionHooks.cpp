@@ -25,6 +25,8 @@ namespace Iridium {
             indirectOracle_ = vulkanExtension->indirectOracle();
         if (indirectStreamObserver_ == nullptr)
             indirectStreamObserver_ = vulkanExtension->indirectStreamObserver();
+        if (editorUi_ == nullptr)
+            editorUi_ = vulkanExtension->editorUi();
     }
 
     void VulkanExtensionHooks::configure(const RenderBackendConfig& config) {

@@ -23,6 +23,7 @@
 #include "core/BuildInfo.h"
 #include "profiling/CpuAllocationProfile.h"
 #include "renderer/rhi/RenderBackendFactory.h"
+#include "renderer/vulkan_imgui/VulkanImGuiEditorBridge.h"
 #include "scene/components/MeshComponent.h"
 #include "scene/components/RenderInstanceBatchComponent.h"
 #include "scene/components/LightComponent.h"
@@ -332,13 +333,18 @@ namespace Iridium {
         notifyStartup(StartupPhase::Configure, startup);
         // 1. Instantiate the RHI (The Strategy Pattern in action)
         const auto backendStart = std::chrono::steady_clock::now();
-        // Production runs attach no extension; the qualification harness
-        // supplies its own (M7R R2.9).
+        // The editor UI is a backend extension (M7R R3c.10), attached after
+        // the qualification harness's own extensions (M7R R2.9).
+        editorBridge_ = createVulkanImGuiEditorBridge(window);
+        backendExtensions_.clear();
+        if (observer_) {
+            for (IRenderBackendExtension* extension : observer_->backendExtensions())
+                backendExtensions_.push_back(extension);
+        }
+        backendExtensions_.push_back(&editorBridge_->backendExtension());
         renderBackend = createRenderBackend(RenderBackendCreateInfo{
             .api = RenderBackendApi::Vulkan,
-            .extensions = observer_
-                ? observer_->backendExtensions()
-                : std::span<IRenderBackendExtension* const>{},
+            .extensions = backendExtensions_,
         });
         const AppRenderRouting& routing = policy_.routing;
         renderBackend->init(window, {
@@ -408,6 +414,7 @@ namespace Iridium {
         assetManager = std::make_unique<AssetManager>(renderBackend.get(),
             runtimeTransparencyExecutionMode,
             policy_.routing.gpuLodMinimumResidentLevel);
+        assetManager->setEditorRenderBridge(editorBridge_.get());
         // Qualification probe allocations made here shift texture and material
         // indices, so they precede every asset service.
         startup.backend = renderBackend.get();
@@ -1526,9 +1533,9 @@ namespace Iridium {
         }
         if (desiredEnvironment.isValid() && desiredEnvironment != renderBackend->getEnvironmentLighting())
             renderBackend->setEnvironmentLighting(desiredEnvironment);
-        renderBackend->prepareRetainedViews(dualViews, renderView);
-        editor.retainedSceneTexture = dualViews ? renderBackend->getRetainedViewTextureID(0) : nullptr;
-        editor.retainedAssetTexture = dualViews ? renderBackend->getRetainedViewTextureID(1) : nullptr;
+        editorBridge_->prepareRetainedViews(dualViews, renderView);
+        editor.retainedSceneTexture = dualViews ? editorBridge_->retainedViewTextureId(0) : nullptr;
+        editor.retainedAssetTexture = dualViews ? editorBridge_->retainedViewTextureId(1) : nullptr;
         // If the window was resized, OR acquire requests a swapchain rebuild:
         if (framebufferResized || renderBackend->beginFrame() == FrameStatus::RecreateSwapchain) {
             framebufferResized = false;
@@ -1609,13 +1616,13 @@ namespace Iridium {
         // can sample a different target that has not yet been transitioned.
         {
             CpuScope editorScope(cpuProfiler_, "cpu.editor.build");
-            renderBackend->beginUI();
+            editorBridge_->beginUI();
             if (!policy_.fullscreenScenePresentation) {
                 glm::mat4 sceneProjection = glm::perspective(glm::radians(camera_.verticalFovDegrees), aspect, camera_.nearPlane, camera_.farPlane);
                 sceneProjection[1][1] *= -1.0f;
                 editor.update(registry, assetManager.get(), glm::lookAt(camera_.position, camera_.position + camera_.front, camera_.up), sceneProjection,
-                    renderBackend->getLitSceneTextureID(),
-                    renderBackend->getGlassDepthTextureID(),
+                    editorBridge_->sceneTextureId(),
+                    editorBridge_->glassDepthTextureId(),
                     aspect);
                 EditorOutputSettings outputSettings{};
                 if (editor.consumeOutputSettings(outputSettings)) {
@@ -1693,7 +1700,7 @@ namespace Iridium {
                     ImGuiWindowFlags_NoBringToFrontOnFocus;
                 ImGui::Begin("Benchmark Output", nullptr, flags);
                 ImGui::Image(reinterpret_cast<ImTextureID>(
-                    renderBackend->getLitSceneTextureID()), ImGui::GetContentRegionAvail());
+                    editorBridge_->sceneTextureId()), ImGui::GetContentRegionAvail());
                 ImGui::End();
                 ImGui::PopStyleVar();
                 if (policy_.colorValidationOverlay) {
@@ -3046,6 +3053,8 @@ namespace Iridium {
             renderBackend->cleanup();
             renderBackend.reset();
         }
+        backendExtensions_.clear();
+        editorBridge_.reset();
 
         if (window != nullptr) {
             glfwDestroyWindow(window);

@@ -23,7 +23,6 @@
 #include "VkLightingPipeline.h"
 #include "VkRenderPass.h"
 #include "VkForwardRenderPass.h"
-#include "VkUIRenderPass.h"
 #include "VulkanPipelineLibrary.h"
 #include "VulkanMeshLayouts.h"
 #include "VulkanResourceAllocator.h"
@@ -34,6 +33,7 @@
 #include "VulkanSceneDescriptors.h"
 #include "VulkanProductionRenderGraph.h"
 #include "VulkanBackendExtension.h"
+#include "VulkanEditorUi.h"
 #include "VulkanClusterLightingFeature.h"
 #include "VulkanOutputFeature.h"
 #include "VulkanWeightedOitFeature.h"
@@ -55,6 +55,7 @@
 #include "VulkanViewUniforms.h"
 #include "VulkanForwardFeature.h"
 #include "VulkanLayeredTransparencyFeature.h"
+#include "VulkanUiFeature.h"
 #include "VulkanRenderGraphExecutor.h"
 #include "VulkanTransparencyPyramid.h"
 #include "VulkanDepthPyramid.h"
@@ -136,24 +137,17 @@ namespace Iridium {
         // R3c.2: output transform, HDR10 encode, LUT, exposure, grid overlay.
         VulkanOutputFeature output_;
 
-        // UI Pass
-        std::unique_ptr<VkUIRenderPass> uiPass;
-
-        // --- IMGUI STATE ---
-        VkDescriptorPool imguiPool = VK_NULL_HANDLE;
-        std::vector<VkDescriptorSet> uiSceneTextures;
-        std::array<VulkanImageResource, 2> retainedViewImages_{};
-        std::array<VkDescriptorSet, 2> retainedViewDescriptors_{};
-        VkSampler retainedViewSampler_ = VK_NULL_HANDLE;
+        // R3c.10: the UI pass (clear, the editor bridge's contribution,
+        // present). The editor bridge (renderer/vulkan_imgui) is an attached
+        // extension; it owns ImGui, the editor textures and the retained
+        // views. The depth-pyramid history follows the retained view it
+        // selects.
+        VulkanUiFeature ui_;
         uint32_t retainedRenderView_ = 0;
-        bool retainedViewsEnabled_ = false;
-        void destroyRetainedViews();
-        // The final-capture-hook consumer (R3c.4): initialize newly created
-        // view images, then copy the output into the retained view.
-        void initializeRetainedViews(VkCommandBuffer commandBuffer);
-        void copyRetainedView(VkCommandBuffer commandBuffer);
-        std::vector<VkDescriptorSet> uiDepthTextures;
-        std::vector<uint32_t> imguiFragmentShaderCode_;
+        [[nodiscard]] IVulkanEditorUi* editorUi() const noexcept {
+            return extensionHooks_.editorUi();
+        }
+        [[nodiscard]] VulkanEditorUiPresentation editorUiPresentation() const noexcept;
 
         // GPU-driven shadow/probe caster compaction (M7R R3a). The shared
         // 3-binding indirect set layout is owned here; each culler owns its
@@ -192,7 +186,6 @@ namespace Iridium {
         bool initialized_ = false;
         bool cleaned_ = false;
         bool frameOpen_ = false;
-        bool imguiInitialized_ = false;
         CpuProfiler* cpuProfiler_ = nullptr;
         bool forceDirectGBufferReference_ = false;
         bool forceDirectShadowReference_ = false;
@@ -233,15 +226,15 @@ namespace Iridium {
         void collectIndirectViewValidations(uint32_t frameIndex);
 
         // Feature owners in registration (and graph) order.
-        [[nodiscard]] std::array<IVulkanFeature*, 11> features() noexcept {
+        [[nodiscard]] std::array<IVulkanFeature*, 12> features() noexcept {
             return { &shadows_, &localShadows_, &probes_, &opaque_,
                 &clusterLighting_, &lighting_, &forward_, &layered_, &output_,
-                &oit_, &hooks_ };
+                &oit_, &hooks_, &ui_ };
         }
         // Between frames, after every slot retired (resize, transport and
         // topology changes): release and recreate the graph, the frame
         // targets and every descriptor set over them, and the editor's
-        // target textures.
+        // target textures (the editor bridge's onFrameTargets* events).
         void releaseFrameTargets();
         void createFrameTargets();
         void releaseEditorTargetTextures();
@@ -390,11 +383,6 @@ namespace Iridium {
         void submitOutputPass() override;
         void submitUIPass() override;
 
-        void beginUI() override;
-        void* getLitSceneTextureID() override;
-        void* getGlassDepthTextureID() override;
-        void* getEditorTextureID(TextureHandle texture) override;
-
         FrameStatus endFrame() override;
 
         // Resource Allocation
@@ -424,8 +412,6 @@ namespace Iridium {
         [[nodiscard]] EnvironmentLightingHandles getEnvironmentLighting() const override {
             return lighting_.environment();
         }
-        void prepareRetainedViews(bool enabled, uint32_t renderView) override;
-        [[nodiscard]] void* getRetainedViewTextureID(uint32_t view) override;
         void setEnvironmentLightingSettings(
             const EnvironmentLightingSettings& settings) override;
         void setOutputTransformLut(TextureHandle lutHandle) override;

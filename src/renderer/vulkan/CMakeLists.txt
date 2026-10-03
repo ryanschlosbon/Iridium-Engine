@@ -1,5 +1,7 @@
 # iridium_vulkan: the Vulkan backend (device, frame lifecycle, passes, graph
 # executor) and RenderBackendFactory, which implements the rhi-declared factory.
+# It has no editor-UI dependency (M7R R3c.10): the ImGui editor bridge is
+# iridium_vulkan_imgui (renderer/vulkan_imgui).
 add_library(iridium_vulkan STATIC
         DescriptorAllocator.cpp
         RenderBackendFactory.cpp
@@ -53,6 +55,7 @@ add_library(iridium_vulkan STATIC
         VulkanShadowFeature.cpp
         VulkanSpotShadowAtlas.cpp
         VulkanTransparencyPyramid.cpp
+        VulkanUiFeature.cpp
         VulkanUploadContext.cpp
         VulkanVertexBackend.cpp
         VulkanViewUniforms.cpp
@@ -70,7 +73,6 @@ target_link_libraries(iridium_vulkan PUBLIC
         iridium_graph
         iridium_profiling
         iridium_color
-        iridium_vendor_imgui
         Vulkan::Vulkan
         glfw)
 iridium_target_pch(iridium_vulkan ENGINE VULKAN)

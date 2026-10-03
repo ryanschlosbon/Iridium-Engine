@@ -92,7 +92,7 @@ namespace Iridium {
 
     // Owns scene-sized offscreen images and framebuffers by frame context.
     // Swapchain UI framebuffers are tracked separately by acquired image. It never
-    // owns swapchain images/views, render passes, descriptors, ImGui IDs, pipelines,
+    // owns swapchain images/views, render passes, descriptors, editor texture IDs, pipelines,
     // or the allocator.
     class VulkanFrameTargets final {
     public:
