@@ -582,8 +582,7 @@ void VulkanRenderGraphExecutor::rebuild(RenderGraph::CompiledGraph graph) {
     for (uint32_t index = 0; index < graph_->resources().size(); ++index)
         resourceNames_.try_emplace(graph_->resources()[index].name, index);
 
-    // A pass emits at most one barrier per usage (fewer after collapsing);
-    // the out-of-plan transitionImage needs one.
+    // A pass emits at most one barrier per usage (fewer after collapsing).
     uint32_t batchCapacity = 1;
     for (const RenderGraph::CompiledPass& pass : graph_->passes())
         batchCapacity = std::max(batchCapacity, pass.usageCount);
@@ -1327,23 +1326,6 @@ VulkanGpuRangeSink VulkanGpuRangeSink::forScheduler(
         [](void* owner, VulkanGpuRangeToken& token) {
             static_cast<VulkanFrameScheduler*>(owner)->endGpuRange(token);
         } };
-}
-
-void VulkanRenderGraphExecutor::transitionImage(VkCommandBuffer commandBuffer,
-    RenderGraph::GraphResourceId id, RenderGraph::Access access) {
-    const RenderGraph::CompiledGraph& graph = executingGraph();
-    if (id.logical >= graph.resources().size() ||
-        graph.resources()[id.logical].physicalSlot == RenderGraph::InvalidIndex) {
-        throw std::out_of_range("Render-graph transition resource was not found");
-    }
-    const RenderGraph::CompiledResource& found = graph.resources()[id.logical];
-    if (found.desc.type != RenderGraph::ResourceType::Image) {
-        throw std::logic_error("Named image transition expected an image resource");
-    }
-    if (commandBuffer == VK_NULL_HANDLE)
-        throw std::out_of_range("Render-graph resource transition is out of range");
-    queuePhysicalTransition(found.physicalSlot, access);
-    flushBarriers(commandBuffer);
 }
 
 void VulkanRenderGraphExecutor::destroyHistoryResources() noexcept {

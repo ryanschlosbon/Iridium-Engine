@@ -7975,25 +7975,30 @@ const VkDeviceSize offset = geometry->vertexOffset;
         Record&& record) {
         const VulkanCaptureHookPayload source = captureSource(point);
         if (point == FrameCapturePoint::SceneLinear) {
-            renderGraph_.transitionImage(currentCmd, graphIds_.sceneColor,
-                RenderGraph::Access::TransferSource);
+            // R3b.5: the declared hook pass moves scene.color to
+            // TransferSource; output-transform's begin returns it.
+            if (!graphHooks_.sceneColorCapture)
+                throw std::logic_error(
+                    "Scene-linear capture requires the scene-color-capture-hook pass");
+            renderGraph_.beginPass(currentCmd, graphIds_.sceneColorCaptureHook);
         }
         else if (!finalCaptureHookRecorded_) {
             renderGraph_.beginPass(currentCmd, graphIds_.finalCaptureHook);
             finalCaptureHookRecorded_ = true;
         }
         record(source);
-        if (point == FrameCapturePoint::SceneLinear) {
-            renderGraph_.transitionImage(currentCmd, graphIds_.sceneColor,
-                RenderGraph::Access::SampledRead);
-        }
     }
 
     void VulkanVertexBackend::runCaptureHook(VulkanHookPoint point,
         FrameCapturePoint capturePoint) {
         VulkanHookContext context{ .point = point, .cmd = currentCmd,
             .slot = scheduler.currentFrameIndex() };
-        if (!anyExtensionWants(context)) return;
+        if (!anyExtensionWants(context)) {
+            if (capturePoint == FrameCapturePoint::SceneLinear &&
+                graphHooks_.sceneColorCapture)
+                renderGraph_.skipPass(graphIds_.sceneColorCaptureHook);
+            return;
+        }
         recordCaptureCopy(capturePoint, [&](const VulkanCaptureHookPayload& source) {
             context.payload = source;
             notifyHook(context);

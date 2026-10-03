@@ -402,19 +402,6 @@ namespace {
         CHECK(second[1].oldLayout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
         CHECK(second[2].srcAccess == (VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT));
 
-        // Out-of-plan transitions go through the sink as well.
-        sink.clear();
-        executor.onFrameFenceCompleted(1);
-        executor.beginFrameExecution(1);
-        executor.transitionImage(FakeCommandBuffer, color, Access::TransferSource);
-        executor.transitionImage(FakeCommandBuffer, color, Access::TransferSource);
-        CHECK(throws([&] { executor.transitionImage(FakeCommandBuffer,
-            RenderGraph::GraphResourceId{}, Access::TransferSource); }));
-        CHECK(sink.recorded().size() == 1);
-        CHECK(sink.recorded()[0].newLayout == VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
-        for (const auto& pass : graph.passes())
-            executor.skipPass(executor.passId(pass.name));
-        executor.finishFrameExecution();
         executor.cleanupAfterDeviceIdle();
         return true;
     }

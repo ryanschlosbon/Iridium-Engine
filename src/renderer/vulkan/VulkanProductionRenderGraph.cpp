@@ -767,6 +767,15 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
             Access::ColorAttachment, LoadOp::Load);
     }
 
+    // Scene-linear capture copies (R3b.5) read the final scene colour after
+    // its last writer and before bloom; output-transform's begin returns it
+    // to SampledRead.
+    if (features.hooks.sceneColorCapture) {
+        const RenderGraph::PassHandle sceneCapture = graph.addPass(
+            "scene-color-capture-hook", RenderGraph::QueueClass::Transfer);
+        graph.read(sceneCapture, litScene, Access::TransferSource);
+    }
+
     const RenderGraph::PassHandle bloomHook = graph.addPass("bloom-hook");
     graph.read(bloomHook, litScene, Access::SampledRead);
 
@@ -891,6 +900,7 @@ VulkanProductionGraphIds resolveVulkanProductionGraphIds(
     ids.compatibilityForward = pass("transparent.compatibility.forward");
     ids.oitAccumulate = pass("transparent.oit.accumulate");
     ids.oitResolve = pass("transparent.oit.resolve");
+    ids.sceneColorCaptureHook = pass("scene-color-capture-hook");
     ids.bloomHook = pass("bloom-hook");
     ids.outputTransform = pass("output-transform");
     ids.finalCaptureHook = pass("final-capture-hook");

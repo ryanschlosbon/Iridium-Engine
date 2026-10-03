@@ -153,7 +153,8 @@ namespace {
     bool testProductionTopologyContract() {
         const RenderGraph::CompiledGraph graph = buildVulkanProductionRenderGraph(
             { 3840, 2160 }, VK_FORMAT_B8G8R8A8_SRGB);
-        CHECK(graph.passes().size() == 19);
+        // R3b.5: the default hooks declare scene-color-capture-hook.
+        CHECK(graph.passes().size() == 20);
         CHECK(graph.resources().size() == 26);
         CHECK(!graph.transitions().empty());
         CHECK(graph.passes().front().name == "shadow.directional");
@@ -170,6 +171,9 @@ namespace {
         CHECK(graph.passes()[13].name == "transparent.sorted.forward");
         CHECK(graph.passes()[14].name ==
             "transparent.compatibility.forward");
+        CHECK(graph.passes()[15].name == "scene-color-capture-hook");
+        CHECK(graph.passes()[15].queue == RenderGraph::QueueClass::Transfer);
+        CHECK(graph.passes()[16].name == "bloom-hook");
         bool sortedReadsDepth = false;
         bool sortedLoadsSceneColor = false;
         const RenderGraph::CompiledPass& sortedPass = graph.passes()[13];
@@ -338,9 +342,9 @@ namespace {
         const RenderGraph::CompiledGraph graph = buildVulkanProductionRenderGraph(
             { 3840, 2160 }, VK_FORMAT_A2B10G10R10_UNORM_PACK32,
             VK_FORMAT_R16G16B16A16_SFLOAT, true);
-        CHECK(graph.passes().size() == 20);
+        CHECK(graph.passes().size() == 21);
         CHECK(graph.resources().size() == 27);
-        CHECK(graph.passes()[18].name == "ui-compose");
+        CHECK(graph.passes()[19].name == "ui-compose");
         CHECK(graph.passes().back().name == "hdr10-encode-present");
         const auto composition = std::find_if(graph.resources().begin(),
             graph.resources().end(), [](const RenderGraph::CompiledResource& resource) {
@@ -962,7 +966,7 @@ namespace {
 
         const VulkanGraphStats stats = executor.stats();
         CHECK(stats.enabled);
-        CHECK(stats.passCount == 19);
+        CHECK(stats.passCount == 20);
         CHECK(stats.logicalResourceCount == 26);
         CHECK(stats.physicalSlotCount == 19);
         CHECK(stats.barrierCount == transitionCount);
@@ -1000,6 +1004,7 @@ namespace {
             "transparent.refraction-pyramids",
             "transparent.sorted.forward",
             "transparent.compatibility.forward",
+            "scene-color-capture-hook",
             "bloom-hook",
             "output-transform",
             "final-capture-hook",
@@ -1131,11 +1136,12 @@ namespace {
         };
         const auto declared = passNames(build({}));
         const auto none = passNames(build(VulkanGraphHooks::none()));
-        constexpr std::array<std::string_view, 4> hookPasses{
+        constexpr std::array<std::string_view, 5> hookPasses{
             "depth.occlusion-pyramid.validation-readback-hook",
             "transparent.layered.validation-readback-hook",
             "transparent.layered.hero4.validation-readback-hook",
-            "transparent.layered.cinematic8.validation-readback-hook" };
+            "transparent.layered.cinematic8.validation-readback-hook",
+            "scene-color-capture-hook" };
         for (std::string_view hook : hookPasses) {
             CHECK(has(declared, hook));
             CHECK(!has(none, hook));

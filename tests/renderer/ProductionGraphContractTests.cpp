@@ -204,7 +204,8 @@ namespace {
                 ++hookCount;
                 const std::string_view name = pass.name;
                 IRIDIUM_CHECK_MSG(name.find("readback") != std::string_view::npos ||
-                    name == "final-capture-hook", name);
+                    name == "final-capture-hook" ||
+                    name == "scene-color-capture-hook", name);
                 for (const auto& usage : graph.usages(pass)) {
                     if (!usage.write) continue;
                     const auto* resource = graph.resourceAt(usage.logicalResourceIndex);
@@ -215,8 +216,13 @@ namespace {
                         name << " writes " << resource->name);
                 }
             }
-            // Ordinary2, both deep tiers, depth pyramid and the final capture.
-            IRIDIUM_CHECK(hookCount >= 5u);
+            // Ordinary2, both deep tiers, depth pyramid, the scene-linear and
+            // the final capture.
+            IRIDIUM_CHECK(hookCount >= 6u);
+            IRIDIUM_CHECK(graph.reads("scene-color-capture-hook", "scene.color",
+                Access::TransferSource));
+            IRIDIUM_CHECK(graph.pass("scene-color-capture-hook")->queue ==
+                RenderGraph::QueueClass::Transfer);
             IRIDIUM_CHECK(graph.hasPass("final-capture-hook"));
             IRIDIUM_CHECK(graph.reads("final-capture-hook", "scene.color",
                 Access::TransferSource));
@@ -243,12 +249,17 @@ namespace {
                 if (*graph.passOrder(user) <= transform) continue;
                 IRIDIUM_CHECK_MSG(user == "final-capture-hook", user);
             }
+            // The scene-linear capture reads the last scene writer's output.
+            for (const std::string_view writer : graph.writers("scene.color"))
+                IRIDIUM_CHECK_MSG(*graph.passOrder(writer) <
+                    *graph.passOrder("scene-color-capture-hook"), writer);
             const auto* sceneColor = graph.resource("scene.color");
             IRIDIUM_CHECK(sceneColor != nullptr &&
                 sceneColor->desc.image.format == RenderGraph::Format::Rgba16Float);
             // Scene-linear capture, output transform, final capture, then UI.
-            IRIDIUM_CHECK(graph.ordered({ "bloom-hook", "output-transform",
-                "final-capture-hook", hdr10 ? "ui-compose" : "ui-present" }));
+            IRIDIUM_CHECK(graph.ordered({ "scene-color-capture-hook", "bloom-hook",
+                "output-transform", "final-capture-hook",
+                hdr10 ? "ui-compose" : "ui-present" }));
             if (hdr10) {
                 IRIDIUM_CHECK(graph.ordered({ "output-transform", "ui-compose",
                     "hdr10-encode-present" }));
@@ -304,8 +315,9 @@ namespace {
     // M7R R2.9: a backend with no extension attached (every production run,
     // and every IRIDIUM_QUALIFICATION=OFF build) declares no hook passes.
     // The graph then differs from the qualification graph only by the
-    // validation readback hooks; final-capture-hook stays (retained editor
-    // views use it). The VSM depth snapshot changes a usage, not a pass.
+    // validation readback hooks and the scene-linear capture hook (R3b.5);
+    // final-capture-hook stays (retained editor views use it). The VSM depth
+    // snapshot changes a usage, not a pass.
     bool testNullExtensionGraphDiffersOnlyByHooks() {
         const auto passNames = [](const RenderGraph::CompiledGraph& compiled) {
             std::vector<std::string> names;
@@ -315,7 +327,8 @@ namespace {
         };
         // What VulkanQualificationExtension declares without the VSM oracle.
         constexpr VulkanGraphHooks qualificationHooks{ .depthPyramidValidation = true,
-            .layeredValidation = true, .virtualShadowDepthSnapshot = false };
+            .layeredValidation = true, .virtualShadowDepthSnapshot = false,
+            .sceneColorCapture = true };
         const std::array<VulkanLayeredGraphConfig, 2> layeredConfigs{
             VulkanLayeredGraphConfig{},
             VulkanLayeredGraphConfig{ Ordinary2Atlas, Hero4Atlas, Cinematic8Atlas, true } };
@@ -333,15 +346,21 @@ namespace {
                         passNames(layeredGraph(layered, features, hdr10));
                     std::vector<std::string> onWithoutHooks;
                     for (const std::string& name : on)
-                        if (!name.ends_with("validation-readback-hook"))
+                        if (!name.ends_with("validation-readback-hook") &&
+                            name != "scene-color-capture-hook")
                             onWithoutHooks.push_back(name);
                     IRIDIUM_CHECK(off == onWithoutHooks);
                     IRIDIUM_CHECK(std::ranges::find(off, std::string("final-capture-hook"))
                         != off.end());
-                    // The default (empty-scene) graph is identical.
+                    IRIDIUM_CHECK(std::ranges::find(on,
+                        std::string("scene-color-capture-hook")) != on.end());
+                    IRIDIUM_CHECK(std::ranges::find(off,
+                        std::string("scene-color-capture-hook")) == off.end());
+                    // The default (empty-scene) graph differs only by the
+                    // scene-linear capture hook.
                     const bool optionalProducts = depthPyramid ||
                         layered.ordinary2AtlasExtent.width != 0u;
-                    IRIDIUM_CHECK(optionalProducts || on == off);
+                    IRIDIUM_CHECK(optionalProducts || on.size() == off.size() + 1u);
                 }
             }
         }

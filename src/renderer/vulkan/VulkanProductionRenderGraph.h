@@ -104,15 +104,20 @@ namespace Iridium {
         // Scene depth as a transfer source of the VSM request readback so the
         // depth qualification oracle can copy it.
         bool virtualShadowDepthSnapshot = true;
+        // "scene-color-capture-hook" (M7R R3b.5): scene-linear capture copies
+        // read scene.color as a transfer source after the last scene writer;
+        // output-transform's begin returns it to SampledRead.
+        bool sceneColorCapture = true;
 
         [[nodiscard]] static constexpr VulkanGraphHooks none() noexcept {
-            return { false, false, false };
+            return { false, false, false, false };
         }
         [[nodiscard]] constexpr VulkanGraphHooks operator|(
             const VulkanGraphHooks& other) const noexcept {
             return { depthPyramidValidation || other.depthPyramidValidation,
                 layeredValidation || other.layeredValidation,
-                virtualShadowDepthSnapshot || other.virtualShadowDepthSnapshot };
+                virtualShadowDepthSnapshot || other.virtualShadowDepthSnapshot,
+                sceneColorCapture || other.sceneColorCapture };
         }
     };
 

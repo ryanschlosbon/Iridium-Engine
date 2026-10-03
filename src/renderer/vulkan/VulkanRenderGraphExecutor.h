@@ -328,8 +328,6 @@ namespace Iridium {
         // Context for drained callbacks this frame. Without it, the first
         // beginPass of the frame supplies {commandBuffer, frameIndex}.
         void setFrameRecordContext(const VulkanFrameRecordContext& context);
-        void transitionImage(VkCommandBuffer commandBuffer,
-            RenderGraph::GraphResourceId id, RenderGraph::Access access);
         void cleanupAfterDeviceIdle() noexcept;
 
         // nullptr restores the Vulkan command sink.

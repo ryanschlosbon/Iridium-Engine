@@ -416,6 +416,7 @@ namespace {
         qualification.configureQualification({});
         VulkanGraphHooks hooks = extension.graphHooks();
         CHECK(hooks.depthPyramidValidation && hooks.layeredValidation);
+        CHECK(hooks.sceneColorCapture);
         CHECK(!hooks.virtualShadowDepthSnapshot);
         for (const VulkanIndirectOracleView view : {
                 VulkanIndirectOracleView::DirectionalShadow,

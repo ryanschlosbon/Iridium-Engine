@@ -696,8 +696,9 @@ namespace Iridium {
         void runPassHook(const VulkanHookContext& context, bool declared,
             RenderGraph::PassId pass, const char* gpuRangeName);
         void notifyHook(const VulkanHookContext& context);
-        // Brackets a capture copy: scene-linear transitions scene.color to
-        // TransferSource and back; final output runs in final-capture-hook.
+        // Brackets a capture copy: scene-linear copies run in the declared
+        // scene-color-capture-hook pass (output-transform returns scene.color
+        // to SampledRead); final output runs in final-capture-hook.
         template<typename Record>
         void recordCaptureCopy(FrameCapturePoint point, Record&& record);
         void runCaptureHook(VulkanHookPoint point, FrameCapturePoint capturePoint);

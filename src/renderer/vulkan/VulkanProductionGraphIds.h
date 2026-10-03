@@ -74,6 +74,7 @@ namespace Iridium {
         RenderGraph::PassId compatibilityForward;
         RenderGraph::PassId oitAccumulate;
         RenderGraph::PassId oitResolve;
+        RenderGraph::PassId sceneColorCaptureHook;
         RenderGraph::PassId bloomHook;
         RenderGraph::PassId outputTransform;
         RenderGraph::PassId finalCaptureHook;

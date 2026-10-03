@@ -115,7 +115,8 @@ namespace Iridium {
         // with its oracle.
         return { .depthPyramidValidation = true, .layeredValidation = true,
             .virtualShadowDepthSnapshot =
-                oracle_.enabled(VulkanIndirectOracleView::VirtualShadowDepth) };
+                oracle_.enabled(VulkanIndirectOracleView::VirtualShadowDepth),
+            .sceneColorCapture = true };
     }
 
     void VulkanQualificationExtension::onBackendInitialized(
