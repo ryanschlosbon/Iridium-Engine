@@ -3,11 +3,11 @@
 #include <stdexcept>
 #include <array>
 
-VkLightingPipeline::VkLightingPipeline(VkContext* context, VkRenderPass renderPass,
+VkLightingPipeline::VkLightingPipeline(VkContext* context, VkFormat colorFormat,
     Iridium::GBufferLayout gBufferLayout)
     : context(context) {
     createDescriptorSetLayout();
-    createPipeline(renderPass, gBufferLayout);
+    createPipeline(colorFormat, gBufferLayout);
 }
 
 VkLightingPipeline::~VkLightingPipeline() {
@@ -59,7 +59,7 @@ void VkLightingPipeline::createDescriptorSetLayout() {
     }
 }
 
-void VkLightingPipeline::createPipeline(VkRenderPass renderPass,
+void VkLightingPipeline::createPipeline(VkFormat colorFormat,
     Iridium::GBufferLayout gBufferLayout) {
     auto vertCode = readFile(std::string(PROJECT_ROOT_DIR) + "assets/shaders/lighting_vert.spv");
     const char* fragmentPath = nullptr;
@@ -162,7 +162,11 @@ void VkLightingPipeline::createPipeline(VkRenderPass renderPass,
     pipelineInfo.pDepthStencilState = &depthStencil;
     pipelineInfo.pColorBlendState = &colorBlending;
     pipelineInfo.layout = pipelineLayout;
-    pipelineInfo.renderPass = renderPass;
+    VkPipelineRenderingCreateInfo rendering{ VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO };
+    rendering.colorAttachmentCount = 1;
+    rendering.pColorAttachmentFormats = &colorFormat;
+    pipelineInfo.pNext = &rendering;
+    pipelineInfo.renderPass = VK_NULL_HANDLE;
     pipelineInfo.subpass = 0;
     pipelineInfo.pDynamicState = &dynamicState;
 

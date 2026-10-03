@@ -20,8 +20,8 @@ static_assert(sizeof(LightingPushConstants) == 160);
 
 class VkLightingPipeline {
 public:
-    // Notice we don't need the swapchain here, just the render pass it will draw to!
-    VkLightingPipeline(VkContext* context, VkRenderPass renderPass,
+    // M7R R4a: dynamic rendering into one colour attachment of `colorFormat`.
+    VkLightingPipeline(VkContext* context, VkFormat colorFormat,
         Iridium::GBufferLayout gBufferLayout);
     ~VkLightingPipeline();
 
@@ -37,5 +37,5 @@ private:
 
     VkShaderModule createShaderModule(const std::vector<char>& code);
     void createDescriptorSetLayout();
-    void createPipeline(VkRenderPass renderPass, Iridium::GBufferLayout gBufferLayout);
+    void createPipeline(VkFormat colorFormat, Iridium::GBufferLayout gBufferLayout);
 };

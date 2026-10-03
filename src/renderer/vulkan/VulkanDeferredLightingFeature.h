@@ -71,6 +71,7 @@ namespace Iridium {
         void registerPasses(VulkanRenderGraphExecutor& graph) override;
         void destroy() noexcept override;
 
+        // R4a: only the lighting framebuffer still uses it.
         [[nodiscard]] VkRenderPass renderPass() const noexcept { return renderPass_; }
         [[nodiscard]] VkDescriptorSetLayout setLayout() const noexcept {
             return pipeline_->getDescriptorSetLayout();
@@ -112,7 +113,7 @@ namespace Iridium {
 
     private:
         static void executeLighting(void* owner, VulkanPassContext& context);
-        void recordLighting(VkCommandBuffer commandBuffer, uint32_t frame);
+        void recordLighting(VulkanPassContext& context);
         void createRenderPass();
         void bindEnvironmentProducts(uint32_t frame = UINT32_MAX);
         void bindShadows();

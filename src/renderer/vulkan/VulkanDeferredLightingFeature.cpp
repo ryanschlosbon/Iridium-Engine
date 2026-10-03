@@ -18,12 +18,13 @@ namespace Iridium {
     void VulkanDeferredLightingFeature::create(const VulkanFeatureContext& context) {
         context_ = &context;
         createRenderPass();
-        pipeline_ = std::make_unique<VkLightingPipeline>(&context.vk, renderPass_,
-            gBufferLayout_);
+        pipeline_ = std::make_unique<VkLightingPipeline>(&context.vk,
+            VulkanSceneColorFormat, gBufferLayout_);
     }
 
     void VulkanDeferredLightingFeature::createRenderPass() {
-        // This pass writes the evaluated lighting to the frame-context lit-scene target.
+        // R4a: the pass records with dynamic rendering; this render pass only
+        // backs the lighting framebuffer until R4a.final removes both.
         VkAttachmentDescription colorAttachment{};
         colorAttachment.format = VulkanSceneColorFormat;
         colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
@@ -71,7 +72,11 @@ namespace Iridium {
     }
 
     void VulkanDeferredLightingFeature::registerPasses(VulkanRenderGraphExecutor& graph) {
-        graph.registerPass(lightingPass_, { this, nullptr, &executeLighting });
+        // R4a: dynamic rendering. The executor's transition of scene.color to
+        // ColorAttachment (and the G-buffer reads) replaces the render pass's
+        // external dependency.
+        graph.registerPass(lightingPass_, { this, nullptr, &executeLighting, nullptr,
+            GpuRangePlacement::BeforeBarriers, true });
     }
 
     void VulkanDeferredLightingFeature::destroy() noexcept {
@@ -288,26 +293,20 @@ namespace Iridium {
 
     void VulkanDeferredLightingFeature::executeLighting(void* owner,
         VulkanPassContext& context) {
-        static_cast<VulkanDeferredLightingFeature*>(owner)->recordLighting(
-            context.commandBuffer, context.frame.frameIndex);
+        static_cast<VulkanDeferredLightingFeature*>(owner)->recordLighting(context);
     }
 
-    void VulkanDeferredLightingFeature::recordLighting(VkCommandBuffer cmd,
-        uint32_t frame) {
+    void VulkanDeferredLightingFeature::recordLighting(VulkanPassContext& context) {
+        const VkCommandBuffer cmd = context.commandBuffer;
+        const uint32_t frame = context.frame.frameIndex;
         VulkanFrameScheduler& scheduler = context_->scheduler;
         const VulkanFrameTargets& frameTargets = context_->frameTargets;
         VulkanFrameTelemetry& telemetry = context_->telemetry;
 
-        VkRenderPassBeginInfo lightingPassInfo{ VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
-        lightingPassInfo.renderPass = renderPass_;
-        lightingPassInfo.framebuffer = frameTargets.get(frame).lightingFramebuffer;
-        lightingPassInfo.renderArea.extent = frameTargets.extent();
-
-        VkClearValue lightingClearColor = { {{0.0f, 0.0f, 0.0f, 1.0f}} };
-        lightingPassInfo.clearValueCount = 1;
-        lightingPassInfo.pClearValues = &lightingClearColor;
-
-        vkCmdBeginRenderPass(cmd, &lightingPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+        // scene.color: CLEAR (0,0,0,1) / STORE from the graph declaration.
+        VulkanRenderingOverrides rendering{};
+        rendering.renderArea = { { 0, 0 }, frameTargets.extent() };
+        context.beginRendering(rendering);
         VulkanGpuRangeToken deferredGpuRange =
             scheduler.beginGpuRange("gpu.lighting.deferred");
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_->getPipeline());
@@ -332,7 +331,7 @@ namespace Iridium {
         telemetry.recordDraw(telemetry.counters().drawLighting, 1);
         scheduler.endGpuRange(deferredGpuRange);
 
-        vkCmdEndRenderPass(cmd);
+        context.endRendering();
     }
 
 } // namespace Iridium
