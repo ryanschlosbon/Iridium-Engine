@@ -3140,6 +3140,7 @@ namespace Iridium {
         depthHistoryPrepared_ = false;
         currentDepthHistoryDecision_ = {};
         finalCaptureHookRecorded_ = false;
+        probeCaptureHandled_ = false;
         ordinary2ViewProjectionValid_ = false;
         collectFrameCounters_ = cpuProfiler_ != nullptr && cpuProfiler_->isFrameOpen();
         if (collectFrameCounters_ && uniqueMaterialIds_.capacity() == 0) {
@@ -4281,9 +4282,16 @@ namespace Iridium {
             [](const ReflectionProbeCaptureScheduleEntry& capture) {
                 return capture.scheduledFaceMask != 0u;
             });
-        if (!hasWork) return;
+        // R3b.8: "probe.capture" (reads the shadow maps; staging and the
+        // per-face compaction keep their barriers inside the pass).
+        probeCaptureHandled_ = true;
+        if (!hasWork) {
+            renderGraph_.skipPass(graphIds_.probeCapture);
+            return;
+        }
         CpuScope recordScope(cpuProfiler_,
             "cpu.render.record.probe_capture");
+        renderGraph_.beginPass(currentCmd, graphIds_.probeCapture);
         const uint32_t frameIndex = scheduler.currentFrameIndex();
         uploadLightsForFrame(frameIndex, lights);
         const VkDescriptorSet sceneSet = sceneDescriptors.get(frameIndex);
@@ -4615,6 +4623,12 @@ namespace Iridium {
             throw std::logic_error(
                 "Depth-pyramid history must be prepared before opaque submission");
         selectionOutlineActive_ = !selectionQueue.empty();
+        // Frames that never submit probe captures (asset preview) skip the
+        // declared pass before the opaque compaction.
+        if (!probeCaptureHandled_) {
+            renderGraph_.skipPass(graphIds_.probeCapture);
+            probeCaptureHandled_ = true;
+        }
         CpuScope recordScope(cpuProfiler_, "cpu.render.record.gbuffer");
         VulkanFrameContextTargets& targets = frameTargets.get(
             scheduler.currentFrameIndex());

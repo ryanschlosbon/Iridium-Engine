@@ -538,6 +538,8 @@ namespace Iridium {
         uint64_t retiredTextureCount_ = 0;
         TextureHandle outputTransformLut_{};
         bool finalCaptureHookRecorded_ = false;
+        // "probe.capture" begun or skipped this frame (R3b.8).
+        bool probeCaptureHandled_ = false;
 
         // --- 4. EXTENSIONS (M7R R2.7) ---
         // Attached by the factory before init(); not owned (each must outlive

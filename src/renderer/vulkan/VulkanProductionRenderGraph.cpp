@@ -430,6 +430,16 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
         pointShadow = graph.write(pointShadowPass, pointShadow,
             Access::DepthAttachmentWrite, LoadOp::Load);
 
+    // M7R R3b.8: reflection-probe capture lights its faces with this frame's
+    // shadow maps. Its staging targets and per-face indirect buffers vary per
+    // capture, so they stay owner-managed (barriers inside the pass) rather
+    // than graph resources.
+    const RenderGraph::PassHandle probeCapture = graph.addPass("probe.capture");
+    graph.read(probeCapture, directionalShadow, Access::SampledRead);
+    graph.read(probeCapture, spotShadow, Access::SampledRead);
+    for (const RenderGraph::ResourceHandle pointShadow : pointShadows)
+        graph.read(probeCapture, pointShadow, Access::SampledRead);
+
     RenderGraph::PassHandle gbuffer{};
     addCompaction("gpu-scene.opaque", gbuffer, "gbuffer");
     normal = graph.write(gbuffer, normal, Access::ColorAttachment, LoadOp::Clear);
@@ -899,6 +909,7 @@ VulkanProductionGraphIds resolveVulkanProductionGraphIds(
     ids.shadowSpot = pass("shadow.spot");
     ids.pointIndirect = producer("shadow.point");
     ids.shadowPoint = pass("shadow.point");
+    ids.probeCapture = pass("probe.capture");
     ids.opaqueIndirect = producer("gpu-scene.opaque");
     ids.gbuffer = pass("gbuffer");
     ids.probeCluster = pass("lighting.probe-cluster");

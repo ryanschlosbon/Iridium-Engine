@@ -61,6 +61,7 @@ namespace Iridium {
         RenderGraph::PassId shadowSpot;
         VulkanIndirectProducerGraphIds pointIndirect;
         RenderGraph::PassId shadowPoint;
+        RenderGraph::PassId probeCapture;
         VulkanIndirectProducerGraphIds opaqueIndirect;
         RenderGraph::PassId gbuffer;
         RenderGraph::PassId probeCluster;

@@ -397,9 +397,9 @@ namespace {
         };
         return golden;
     }
-    constexpr std::array<std::string_view, 5> DeclaredSinceR3b6{
+    constexpr std::array<std::string_view, 6> DeclaredSinceR3b6{
         "shadow.directional.compact", "shadow.spot.compact", "shadow.point.compact",
-        "gpu-scene.opaque.compact", "lighting.probe-cluster" };
+        "gpu-scene.opaque.compact", "lighting.probe-cluster", "probe.capture" };
 
     bool testDeclaredWorkKeepsOrderAndSlots() {
         const VulkanLayeredGraphConfig all{ Ordinary2Atlas, Hero4Atlas, Cinematic8Atlas, true };
@@ -463,6 +463,17 @@ namespace {
             }
             IRIDIUM_CHECK(graph.ordered({ "gbuffer", "lighting.probe-cluster",
                 "lighting.cluster.clear" }));
+            // R3b.8: probe capture runs after the shadow passes whose maps it
+            // samples and before the opaque compaction.
+            IRIDIUM_CHECK(*graph.passOrder("shadow.point") + 1u ==
+                *graph.passOrder("probe.capture"));
+            IRIDIUM_CHECK(*graph.passOrder("probe.capture") + 1u ==
+                *graph.passOrder("gpu-scene.opaque.compact"));
+            for (const char* shadow : { "shadow.directional", "shadow.spot",
+                    "shadow.point.256", "shadow.point.512", "shadow.point.1024" })
+                IRIDIUM_CHECK_MSG(graph.reads("probe.capture", shadow,
+                    Access::SampledRead), shadow);
+            IRIDIUM_CHECK(graph.usages(*graph.pass("probe.capture")).size() == 5u);
             for (const char* buffer : { "lighting.probe-cluster.headers",
                     "lighting.probe-cluster.indices" }) {
                 IRIDIUM_CHECK(graph.writes("lighting.probe-cluster", buffer,
