@@ -111,6 +111,28 @@ describes the execution model that replaces the imperative path.
    queue-family ownership transfers and later async compute, which is gated on
    timeline evidence.
 
+   *As implemented (R4d):* graph passes still run on the graphics queue only;
+   uploads moved off the frame's critical path. `VkContext` selects an upload
+   family (a dedicated transfer family with (1,1,1) image granularity, else a
+   graphics-free compute family, else graphics; family 1, dedicated transfer, on
+   the reference RTX 4090) and enables timeline semaphores. Uploads stage through
+   one persistently mapped 64 MiB ring (dedicated staging above a quarter of it, or
+   when the open batch fills it) whose batches retire by upload-timeline value.
+   Uploads into fresh resources record on the transfer queue as copy plus a release
+   that carries the final layout; the matching acquires are recorded at the start
+   of the next frame command buffer, before any pass. Other uploads and layout-only
+   transitions stay on the graphics queue. `beginFrame` submits both upload lanes
+   without a CPU wait. The frame submission (`vkQueueSubmit2`, with a
+   synchronization1 fallback) waits on the acquired image at
+   COLOR_ATTACHMENT_OUTPUT and on the upload timelines at ALL_COMMANDS. It signals
+   the present semaphore and a graphics timeline equal to the frame serial, which
+   replaces the frame fences and feeds the deletion queue. A retire floor keeps
+   a resource an outstanding upload writes alive until the frame that waits on that
+   upload. Blocking flushes (init, frame-target rebuilds, registry error paths,
+   cleanup) stay bounded. `--upload-queue graphics` keeps the asynchronous path on
+   the graphics queue; `--upload-queue legacy-blocking` is the pre-R4d path. Async
+   compute remains a later candidate.
+
 8. **GPU ranges.** Each pass places its range before or after its barriers,
    preserving the profile semantics. A `RangeGroup` spans several passes.
 
