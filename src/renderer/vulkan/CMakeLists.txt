@@ -55,6 +55,7 @@ add_library(iridium_vulkan STATIC
         VulkanShadowCasters.cpp
         VulkanShadowFeature.cpp
         VulkanSpotShadowAtlas.cpp
+        VulkanStagingRing.cpp
         VulkanTransparencyPyramid.cpp
         VulkanUiFeature.cpp
         VulkanUploadContext.cpp

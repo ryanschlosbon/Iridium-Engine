@@ -221,8 +221,16 @@ namespace Iridium {
             << " (" << vulkanTransferQueueKindName(vkContext->getTransferQueueKind())
             << "), timeline semaphores "
             << (vkContext->hasTimelineSemaphore() ? "on" : "off") << '\n';
-        uploadContext.init(vkContext->getDevice(), vkContext->getGraphicsQueue(),
-            vkContext->getGraphicsQueueFamily(), resourceAllocator, cpuProfiler_);
+        uploadContext.init(vkContext->getDevice(), VulkanUploadContext::Queues{
+                .graphics = vkContext->getGraphicsQueue(),
+                .graphicsFamily = vkContext->getGraphicsQueueFamily(),
+                .transfer = vkContext->getTransferQueue(),
+                .transferFamily = vkContext->getTransferQueueFamily(),
+            }, resourceAllocator, cpuProfiler_, VulkanUploadContext::Options{
+                .mode = uploadQueueMode_,
+                .timelineSemaphore = vkContext->hasTimelineSemaphore(),
+                .synchronization2 = vkContext->hasSynchronization2(),
+            });
 		vkSwapchain = std::make_unique<VkSwapchain>(vkContext.get(), window,
 			outputTransport_);
 		sceneExtent_ = vkSwapchain->getExtent();

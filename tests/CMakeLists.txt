@@ -409,6 +409,13 @@ if(TARGET iridium_shaders)
             LIBS iridium_test_vulkan_support iridium_vulkan
             LABELS vulkan)
 
+    # M7R R4d: the upload context (legacy, staging ring, transfer queue with
+    # queue-family ownership transfers) under synchronization validation.
+    iridium_add_test(VulkanUploadContextTests
+            SOURCES renderer/VulkanUploadContextTests.cpp
+            LIBS iridium_test_vulkan_support iridium_vulkan
+            LABELS vulkan)
+
     # M7R R4c.1: the fence-keyed deletion queue, and the frame scheduler's
     # retire/collect ordering on a hidden window under synchronization
     # validation.
