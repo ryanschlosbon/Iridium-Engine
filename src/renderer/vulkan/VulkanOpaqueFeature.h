@@ -84,6 +84,7 @@ namespace Iridium {
             return settings_.lodErrorPixels > 0.0f;
         }
         [[nodiscard]] VkRenderPass gBufferRenderPass() const noexcept {
+            // R4a: only the G-buffer framebuffer still uses it.
             return gBufferPass_ ? gBufferPass_->getRenderPass() : VK_NULL_HANDLE;
         }
         [[nodiscard]] VulkanOpaqueIndirectCuller& culler() noexcept { return culler_; }
@@ -123,7 +124,7 @@ namespace Iridium {
         static void executeCompact(void* owner, VulkanPassContext& context);
         static void executeGBuffer(void* owner, VulkanPassContext& context);
         static void executeDepthPyramid(void* owner, VulkanPassContext& context);
-        void recordGBuffer(VkCommandBuffer commandBuffer, uint32_t frame);
+        void recordGBuffer(VulkanPassContext& context);
         [[nodiscard]] DepthPyramidHistoryOwner historyOwner() const noexcept;
 
         const VulkanFeatureContext* context_ = nullptr;

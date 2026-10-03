@@ -64,8 +64,7 @@ namespace Iridium {
         gBufferPass_ = std::make_unique<VkRenderPassWrapper>(&context.vk, nullptr,
             settings_.gBufferLayout);
         gBufferPipeline_ = std::make_unique<VkGraphicsPipeline>(&context.vk, nullptr,
-            gBufferPass_.get(), context.meshLayouts.getGBufferPipelineLayout(),
-            settings_.gBufferLayout);
+            context.meshLayouts.getGBufferPipelineLayout(), settings_.gBufferLayout);
     }
 
     void VulkanOpaqueFeature::onGraphRebuilt(const VulkanProductionGraphIds& ids) {
@@ -80,7 +79,12 @@ namespace Iridium {
     void VulkanOpaqueFeature::registerPasses(VulkanRenderGraphExecutor& graph) {
         // R3b.7: the compute -> indirect barrier is the executor's, at "gbuffer".
         graph.registerPass(compactPass_, { this, &compactActive, &executeCompact });
-        graph.registerPass(gBufferPassId_, { this, nullptr, &executeGBuffer });
+        // R4a: dynamic rendering. The executor's transitions of the five
+        // G-buffer targets and depth (from last frame's readers) replace the
+        // render pass's external dependencies; its 0 -> EXTERNAL dependency is
+        // the readers' own barriers (lighting, pyramids, captures).
+        graph.registerPass(gBufferPassId_, { this, nullptr, &executeGBuffer, nullptr,
+            GpuRangePlacement::BeforeBarriers, true });
         // Declared only with the depth pyramid.
         if (depthPyramidPass_.isValid())
             graph.registerPass(depthPyramidPass_, { this, nullptr, &executeDepthPyramid,
@@ -251,8 +255,7 @@ namespace Iridium {
     }
 
     void VulkanOpaqueFeature::executeGBuffer(void* owner, VulkanPassContext& context) {
-        static_cast<VulkanOpaqueFeature*>(owner)->recordGBuffer(context.commandBuffer,
-            context.frame.frameIndex);
+        static_cast<VulkanOpaqueFeature*>(owner)->recordGBuffer(context);
     }
 
     void VulkanOpaqueFeature::executeDepthPyramid(void* owner, VulkanPassContext& context) {
@@ -265,7 +268,9 @@ namespace Iridium {
             telemetry.counters().dispatchRecorded += dispatches;
     }
 
-    void VulkanOpaqueFeature::recordGBuffer(VkCommandBuffer cmd, uint32_t frame) {
+    void VulkanOpaqueFeature::recordGBuffer(VulkanPassContext& context) {
+        const VkCommandBuffer cmd = context.commandBuffer;
+        const uint32_t frame = context.frame.frameIndex;
         VulkanFrameScheduler& scheduler = context_->scheduler;
         const VulkanFrameTargets& frameTargets = context_->frameTargets;
         VulkanFrameTelemetry& telemetry = context_->telemetry;
@@ -276,22 +281,11 @@ namespace Iridium {
         const VkDescriptorSet globalSet = staged_.globalSet;
         const uint32_t debugView = static_cast<uint32_t>(staged_.debugView);
 
-        VkRenderPassBeginInfo rpInfo{ VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
-        rpInfo.renderPass = gBufferPass_->getRenderPass();
-        rpInfo.framebuffer = frameTargets.get(frame).gBufferFramebuffer;
-        rpInfo.renderArea.extent = frameTargets.extent();
-
-        std::array<VkClearValue, 6> clearValues{};
-        clearValues[0].color = { {0.0f, 0.0f, 0.0f, 1.0f} }; // Normal
-        clearValues[1].color = { {0.0f, 0.0f, 0.0f, 1.0f} }; // Diffuse / albedo
-        clearValues[2].color = { {0.0f, 0.0f, 0.0f, 0.0f} }; // Emissive
-        clearValues[3].color = { {0.0f, 0.0f, 0.0f, 1.0f} }; // F0 / roughness
-        clearValues[4].color.uint32[0] = 0u;                  // Material / flags
-        clearValues[5].depthStencil = { 1.0f, 0 };
-        rpInfo.clearValueCount = 6;
-        rpInfo.pClearValues = clearValues.data();
-
-        vkCmdBeginRenderPass(cmd, &rpInfo, VK_SUBPASS_CONTENTS_INLINE);
+        // Normal (0,0,0,1), albedo (0,0,0,1), emissive (0,0,0,0), F0/roughness
+        // (0,0,0,1), flags uint 0 and depth 1.0: CLEAR/STORE from the graph.
+        VulkanRenderingOverrides rendering{};
+        rendering.renderArea = { { 0, 0 }, frameTargets.extent() };
+        context.beginRendering(rendering);
 
         VkViewport viewport{};
         viewport.x = 0.0f;
@@ -302,7 +296,7 @@ namespace Iridium {
         viewport.maxDepth = 1.0f;
 
         vkCmdSetViewport(cmd, 0, 1, &viewport);
-        VkRect2D scissor{ {0, 0}, rpInfo.renderArea.extent };
+        VkRect2D scissor{ {0, 0}, rendering.renderArea.extent };
         vkCmdSetScissor(cmd, 0, 1, &scissor);
 
         const VkPipelineLayout meshLayout =
@@ -552,7 +546,7 @@ namespace Iridium {
             scheduler.endGpuRange(selectionGpuRange);
         }
 
-        vkCmdEndRenderPass(cmd);
+        context.endRendering();
     }
 
 } // namespace Iridium

@@ -119,8 +119,17 @@ namespace Iridium {
         if (device_ != VK_NULL_HANDLE) {
             throw std::logic_error("VulkanPipelineLibrary is already initialized");
         }
+        const auto hasAttachments = [](const VulkanPipelineTarget& target) {
+            if (target.renderPass != VK_NULL_HANDLE) return true;
+            if (target.colorAttachmentCount > target.colorFormats.size() ||
+                target.depthFormat == VK_FORMAT_UNDEFINED)
+                return false;
+            for (uint32_t index = 0; index < target.colorAttachmentCount; ++index)
+                if (target.colorFormats[index] == VK_FORMAT_UNDEFINED) return false;
+            return true;
+        };
         if (device == VK_NULL_HANDLE
-            || gBufferTarget.renderPass == VK_NULL_HANDLE
+            || !hasAttachments(gBufferTarget)
             || gBufferTarget.pipelineLayout == VK_NULL_HANDLE
             || (gBufferTarget.colorAttachmentCount != 3 &&
                 gBufferTarget.colorAttachmentCount != 5)
@@ -316,6 +325,11 @@ namespace Iridium {
             pipelineInfo.pColorBlendState = &colorBlending;
             pipelineInfo.pDynamicState = &dynamicState;
             pipelineInfo.layout = target.pipelineLayout;
+            VkPipelineRenderingCreateInfo rendering{ VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO };
+            rendering.colorAttachmentCount = target.colorAttachmentCount;
+            rendering.pColorAttachmentFormats = target.colorFormats.data();
+            rendering.depthAttachmentFormat = target.depthFormat;
+            if (target.renderPass == VK_NULL_HANDLE) pipelineInfo.pNext = &rendering;
             pipelineInfo.renderPass = target.renderPass;
             pipelineInfo.subpass = 0;
 

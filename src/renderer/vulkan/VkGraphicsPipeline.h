@@ -9,7 +9,9 @@
 
 class VkGraphicsPipeline {
 public:
-	VkGraphicsPipeline(VkContext* context, VkSwapchain* swapchain, VkRenderPassWrapper* renderPass,
+    // M7R R4a: the fixed wireframe/selection pipelines record with dynamic
+    // rendering into the G-buffer attachments of `layout` (+ D32 depth).
+	VkGraphicsPipeline(VkContext* context, VkSwapchain* swapchain,
         VkPipelineLayout pipelineLayout, Iridium::GBufferLayout layout);
     ~VkGraphicsPipeline();
 
@@ -25,9 +27,6 @@ private:
 
     // Helper to wrap shader code into a Vulkan module
     VkShaderModule createShaderModule(const std::vector<char>& code);
-	VkPipeline createPipeline(VkSwapchain* swapchain, VkRenderPassWrapper* renderPass,
+	VkPipeline createPipeline(VkSwapchain* swapchain,
         bool isWireframe, bool isOutline, Iridium::GBufferLayout layout);
-
-    // The main builder
-    void createGraphicsPipeline(VkSwapchain* swapchain, VkRenderPassWrapper* renderPass);
 };

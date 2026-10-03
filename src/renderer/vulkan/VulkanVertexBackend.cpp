@@ -356,9 +356,12 @@ namespace Iridium {
         opaque_.setCullerServices(cullerServices());
         opaque_.create(*featureContext_);
 
+        // R4a: G-buffer material pipelines use dynamic rendering.
         pipelineLibrary.init(vkContext->getDevice(),
-            { opaque_.gBufferRenderPass(), meshLayouts.getGBufferPipelineLayout(),
-                vulkanGBufferFormats(gBufferLayout_).colorAttachmentCount },
+            { VK_NULL_HANDLE, meshLayouts.getGBufferPipelineLayout(),
+                vulkanGBufferFormats(gBufferLayout_).colorAttachmentCount,
+                vulkanGBufferColorAttachmentFormats(gBufferLayout_),
+                VK_FORMAT_D32_SFLOAT },
             { forward_.forwardRenderPass(), meshLayouts.getForwardPipelineLayout(), 1 },
             { forward_.transparentRenderPass(),
                 meshLayouts.getForwardPipelineLayout(), 1 },
