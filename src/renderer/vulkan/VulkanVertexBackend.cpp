@@ -675,24 +675,22 @@ namespace Iridium {
     }
 
     void VulkanVertexBackend::bindGraphImportedImages() {
-        // R3b.6. Render passes own these layouts until dynamic rendering
-        // (R4a); the executor asserts them. The swapchain is rebound per frame
-        // after acquire (every slot starts on image 0 so validateFrame holds
-        // before a slot's first acquire); its render passes go UNDEFINED ->
-        // PRESENT. Shadow maps persist across slots and their render passes go
-        // READ_ONLY -> READ_ONLY.
+        // R3b.6. The swapchain is rebound per frame after acquire (every slot
+        // starts on image 0 so validateFrame holds before a slot's first
+        // acquire); its render passes go UNDEFINED -> PRESENT and the
+        // executor asserts them.
         using RenderGraph::Access;
         for (uint32_t frame = 0; frame < VulkanFrameScheduler::FramesInFlight; ++frame)
             renderGraph_.bindExternalImage(frame, graphIds_.swapchain,
                 swapchainGraphImage(0), Access::Undefined,
                 ExternalSyncPolicy::renderPassManaged(Access::Undefined,
                     Access::Present));
-        const ExternalSyncPolicy shadowPolicy =
-            ExternalSyncPolicy::renderPassManaged(Access::SampledRead,
-                Access::SampledRead);
-        // R4a: shadow maps on dynamic rendering are executor-owned globals.
-        // Every frame that writes one also runs lighting, which samples it,
-        // so a frame (and therefore a rebuild) always leaves it SampledRead.
+        // R4a: the shadow maps (dynamic rendering) are executor-owned
+        // globals; their state persists across slots. Each writing pass moves
+        // a whole map to DepthAttachmentWrite with its contents kept, and the
+        // next reader moves it back. Every frame that writes one also runs
+        // lighting, which samples it, so a frame (and therefore a rebuild)
+        // always leaves it SampledRead.
         renderGraph_.bindExternalImage(VulkanGlobalBinding,
             graphIds_.shadowDirectionalMap, shadows_.map().image(),
             Access::SampledRead, ExternalSyncPolicy::executorOwned());
@@ -702,7 +700,7 @@ namespace Iridium {
         for (uint32_t tier = 0; tier < graphIds_.shadowPointMaps.size(); ++tier)
             renderGraph_.bindExternalImage(VulkanGlobalBinding,
                 graphIds_.shadowPointMaps[tier], localShadows_.point().image(tier),
-                Access::SampledRead, shadowPolicy);
+                Access::SampledRead, ExternalSyncPolicy::executorOwned());
     }
 
     void VulkanVertexBackend::bindGraphImportedBuffers() {

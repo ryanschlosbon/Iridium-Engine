@@ -56,9 +56,18 @@ namespace Iridium {
 
         void updateFrame(uint32_t frameIndex,
             std::span<const PointShadowFramePacket> packets);
+        // M7R R4a: the shadow owner begins dynamic rendering per face on the
+        // face's layer view (LOAD), using the pass plan's depth candidate
+        // `depthIndex` (the pools are declared 256, 512, 1024); beginFace
+        // then clears the face and sets its viewport, scissor and bias.
+        struct FaceTarget {
+            uint32_t depthIndex = 0;
+            VkImageView view = VK_NULL_HANDLE;
+        };
+        [[nodiscard]] FaceTarget faceTarget(const PointShadowFramePacket& packet,
+            uint32_t face) const;
         void beginFace(VkCommandBuffer commandBuffer,
-            const PointShadowFramePacket& packet, uint32_t face) const;
-        void endFace(VkCommandBuffer commandBuffer) const;
+            const PointShadowFramePacket& packet) const;
 
         [[nodiscard]] VkPipeline pipeline(bool alphaMasked,
             bool doubleSided, bool gpuSceneIndirect = false) const noexcept;
@@ -88,7 +97,6 @@ namespace Iridium {
             uint32_t capacity = 0;
             VulkanImageResource image;
             std::vector<VkImageView> layerViews;
-            std::vector<VkFramebuffer> framebuffers;
         };
 
         [[nodiscard]] static uint32_t poolIndex(uint32_t resolution);
@@ -101,7 +109,6 @@ namespace Iridium {
         std::array<Pool, 3> pools_{};
         std::array<uint32_t, 3> capacities_{};
         VkSampler sampler_ = VK_NULL_HANDLE;
-        VkRenderPass renderPass_ = VK_NULL_HANDLE;
         VkDescriptorSetLayout renderSetLayout_ = VK_NULL_HANDLE;
         VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;
         std::array<VkPipeline, 8> pipelines_{};

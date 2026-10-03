@@ -78,8 +78,9 @@ namespace Iridium {
             "gpu.shadow.spot", GpuRangePlacement::AfterBarriers, true });
         graph.registerPass(pointCompactPass_, { this, &pointCompactActive,
             &executePointCompact });
+        // Point faces are distinct layers: one rendering instance per face.
         graph.registerPass(pointDrawPass_, { this, &pointDrawActive, &executePointDraw,
-            "gpu.shadow.point", GpuRangePlacement::AfterBarriers });
+            "gpu.shadow.point", GpuRangePlacement::AfterBarriers, true });
     }
 
     void VulkanLocalShadowFeature::destroy() noexcept {
@@ -386,7 +387,13 @@ namespace Iridium {
                         counters.shadowPointCastersCulled += visible ? 0u : 1u;
                     }
                 }
-                self.point_.beginFace(cmd, shadow, face);
+                const VulkanPointShadowPools::FaceTarget target =
+                    self.point_.faceTarget(shadow, face);
+                VulkanRenderingOverrides rendering{};
+                rendering.depthIndex = target.depthIndex;
+                rendering.depthView = target.view;
+                context.beginRendering(rendering);
+                self.point_.beginFace(cmd, shadow);
                 vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout,
                     0, 1, &shadowSet, 0, nullptr);
                 const uint32_t faceSlot = shadow.shadowDataSlot * 6u + face;
@@ -439,7 +446,7 @@ namespace Iridium {
                     .drawCounter = &counters.drawShadowPoint,
                     .alphaMaskCounter = &counters.drawShadowPointAlphaMask,
                 }, materialDescriptorsBound);
-                self.point_.endFace(cmd);
+                context.endRendering();
             }
         }
     }

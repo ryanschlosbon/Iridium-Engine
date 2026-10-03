@@ -1681,7 +1681,7 @@ namespace {
         for (uint32_t tier = 0; tier < 3; ++tier)
             shadows.push_back({ ids.shadowPointMaps[tier],
                 shadowImage(0xB200 + 0x10 * tier, PointResolutions[tier],
-                    PointCapacities[tier] * 6u), "shadow.point", false });
+                    PointCapacities[tier] * 6u), "shadow.point", true });
         executor.bindExternalImage(0, ids.swapchain, swapchain(0xA000), Access::Undefined,
             present);
         executor.bindExternalImage(1, ids.swapchain, swapchain(0xA000), Access::Undefined,
