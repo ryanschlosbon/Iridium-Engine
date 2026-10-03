@@ -44,6 +44,30 @@ if(IRIDIUM_VULKAN_SDK_VERSION STREQUAL "")
     set(IRIDIUM_VULKAN_SDK_VERSION "unavailable")
 endif()
 
+# C2. Vulkan Memory Allocator (MIT, header-only; M7R R4b). Only the INTERFACE
+# target GPUOpen::VulkanMemoryAllocator is used: install, and with it the samples
+# and documentation options, stay off. iridium_vulkan compiles the implementation
+# in one translation unit (VulkanMemoryAllocatorImpl.cpp). SYSTEM (CMake 3.25+)
+# keeps its header's warnings out of engine builds. The short dependency name keeps
+# the FetchContent stamp paths under MAX_PATH in nested worktrees.
+message(STATUS "Downloading Vulkan Memory Allocator...")
+set(_iridium_vma_system)
+if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.25)
+    set(_iridium_vma_system SYSTEM)
+endif()
+FetchContent_Declare(
+        vma
+        GIT_REPOSITORY https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator.git
+        GIT_TAG v3.4.0
+        GIT_SHALLOW TRUE
+        ${_iridium_vma_system}
+)
+unset(_iridium_vma_system)
+set(VMA_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
+set(VMA_BUILD_SAMPLES OFF CACHE BOOL "" FORCE)
+set(VMA_BUILD_DOCUMENTATION OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(vma)
+
 # D. JSON
 message(STATUS "Downloading nlohmann/json...")
 FetchContent_Declare(

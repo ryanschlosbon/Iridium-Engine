@@ -35,6 +35,7 @@ add_library(iridium_vulkan STATIC
         VulkanLayeredSceneResolvePass.cpp
         VulkanLayeredTransparencyFeature.cpp
         VulkanLocalShadowFeature.cpp
+        VulkanMemoryAllocatorImpl.cpp
         VulkanMeshLayouts.cpp
         VulkanOutputFeature.cpp
         VulkanOutputPass.cpp
@@ -75,4 +76,10 @@ target_link_libraries(iridium_vulkan PUBLIC
         iridium_color
         Vulkan::Vulkan
         glfw)
+# VMA stays private: VulkanResourceAllocator.h only forward-declares its handles.
+target_link_libraries(iridium_vulkan PRIVATE GPUOpen::VulkanMemoryAllocator)
 iridium_target_pch(iridium_vulkan ENGINE VULKAN)
+# The VMA implementation TU (M7R R4b) is third-party code: no PCH, and its
+# warnings are suppressed inside the file.
+set_source_files_properties(VulkanMemoryAllocatorImpl.cpp PROPERTIES
+        SKIP_PRECOMPILE_HEADERS ON)

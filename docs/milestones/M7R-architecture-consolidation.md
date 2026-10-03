@@ -521,7 +521,7 @@ Hitch baseline decision: the R0 worktree predates `IFrameObserver`, so the scrip
 
 | Library | Status | Pin |
 |---|---|---|
-| VMA (MIT) | Explained by the director; adopt in R4b behind `VulkanResourceAllocator`. | Exact release tag, recorded at adoption. |
+| VMA (MIT) | Explained by the director; adopted in R4b.1 behind `VulkanResourceAllocator` (FetchContent, header-only, one implementation TU; never vendored). | **v3.4.0** (`3aa9212`, the latest stable release on 2026-10-03; the design expected v3.3.0). |
 | enkiTS (zlib) / Taskflow (MIT) | Evaluate in R5b with a frame-plus-background-cook benchmark; decide in ADR-0015. | Exact tag. |
 | Tracy (BSD-3) | Optional; decided in R5b; compiled out by default. | Exact tag. |
 
