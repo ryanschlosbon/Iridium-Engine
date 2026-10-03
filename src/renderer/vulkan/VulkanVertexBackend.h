@@ -35,6 +35,7 @@
 #include "VulkanProductionRenderGraph.h"
 #include "VulkanBackendExtension.h"
 #include "VulkanIndirectCullerShared.h"
+#include "VulkanIndirectViewCuller.h"
 #include "VulkanRenderGraphExecutor.h"
 #include "VulkanTransparencyPyramid.h"
 #include "VulkanDepthPyramid.h"
@@ -348,19 +349,12 @@ namespace Iridium {
             opaqueIndirectCountBuffers_{};
         std::array<VulkanBufferResource, VulkanFrameScheduler::FramesInFlight>
             opaqueIndirectCandidateBuffers_{};
-        std::array<VulkanBufferResource, VulkanFrameScheduler::FramesInFlight>
-            directionalShadowIndirectCommandBuffers_{};
-        std::array<VulkanBufferResource, VulkanFrameScheduler::FramesInFlight>
-            directionalShadowIndirectCountBuffers_{};
-        std::array<VulkanBufferResource, VulkanFrameScheduler::FramesInFlight>
-            directionalShadowIndirectCandidateBuffers_{};
-        std::array<VkDescriptorSet, VulkanFrameScheduler::FramesInFlight>
-            directionalShadowIndirectDescriptorSets_{};
-        VkDescriptorSetLayout directionalShadowIndirectSetLayout_ =
-            VK_NULL_HANDLE;
-        VkPipelineLayout directionalShadowCompactPipelineLayout_ =
-            VK_NULL_HANDLE;
-        VkPipeline directionalShadowCompactPipeline_ = VK_NULL_HANDLE;
+        // GPU-driven shadow/probe caster compaction (M7R R3a). The shared
+        // 3-binding indirect set layout is owned here; each culler owns its
+        // pipeline, sets, buffers, scratch and validation slots.
+        VulkanCullerDevice cullerDevice_{};
+        VkDescriptorSetLayout indirectCullerSetLayout_ = VK_NULL_HANDLE;
+        VulkanIndirectViewCuller directionalCuller_;
         std::array<VulkanBufferResource, VulkanFrameScheduler::FramesInFlight>
             spotShadowIndirectCommandBuffers_{};
         std::array<VulkanBufferResource, VulkanFrameScheduler::FramesInFlight>
@@ -456,16 +450,6 @@ namespace Iridium {
         std::vector<uint32_t> pointShadowMappingScratch_;
         std::vector<ResolvedShadowCaster> shadowCasterScratch_;
         std::vector<uint8_t> directionalShadowCasterMaskScratch_;
-        std::vector<ShadowIndirectBin>
-            directionalShadowIndirectBins_;
-        std::vector<GpuSceneIndirectCandidate>
-            directionalShadowIndirectCandidates_;
-        std::vector<GpuSceneIndirectCandidate>
-            directionalShadowIndirectUnsortedCandidates_;
-        std::vector<uint32_t> directionalShadowIndirectBinCursorScratch_;
-        std::vector<uint32_t> directionalShadowIndirectPrimitiveBinScratch_;
-        std::array<uint32_t, kDirectionalShadowLayerCount>
-            directionalShadowIndirectWorkIndices_{};
         // Device telemetry for one shadow/probe consumer's compaction; the
         // qualification oracle owns the expected commands (R2.8).
         struct PendingShadowIndirectValidation {
@@ -474,15 +458,6 @@ namespace Iridium {
             std::vector<uint32_t> commandOffsets;
             bool pending = false;
         };
-        std::array<PendingShadowIndirectValidation,
-            VulkanFrameScheduler::FramesInFlight>
-            pendingDirectionalShadowIndirectValidations_{};
-        uint32_t directionalShadowIndirectPrimitiveCapacity_ = 0;
-        uint32_t directionalShadowIndirectCommandCapacity_ = 0;
-        uint32_t directionalShadowIndirectCountCapacity_ = 0;
-        uint64_t directionalShadowMembershipRevision_ = 0;
-        uint32_t directionalShadowMembershipLodErrorBits_ = 0;
-        uint32_t directionalShadowMembershipMaximumLod_ = 0;
         std::vector<ShadowIndirectBin> spotShadowIndirectBins_;
         std::vector<GpuSceneIndirectCandidate>
             spotShadowIndirectCandidates_;
@@ -728,9 +703,8 @@ namespace Iridium {
         void bindGpuSceneBuffers();
         void createOpaqueIndirectBuffers(uint32_t capacity);
         void createGpuSceneCullPipeline();
+        [[nodiscard]] VulkanCullerServices cullerServices();
         void createDirectionalShadowIndirectPipeline();
-        void createDirectionalShadowIndirectBuffers(uint32_t primitiveCapacity);
-        void bindDirectionalShadowIndirectBuffers();
         [[nodiscard]] bool prepareDirectionalShadowIndirectSubmission(
             const ShadowCasterSubmission& shadowCasters,
             std::span<const DirectionalShadowFramePacket> shadows);
