@@ -35,6 +35,11 @@ $vsm = 'assets/m7-virtual-shadow-depth-qualification-manifest.v1.json'
 $materialGpu = 'assets/benchmarks/m2/material-gpu-manifest.v1.json'
 $scene = @{ Frame = 2; Point = 'scene' }
 $sdr = @{ Frame = 2; Point = 'final-sdr' }
+# Probe-capture routes run without warm-up. Since R4c.3 a probe capture is promoted only
+# after its frame serial completes (no drain), so frame 2 can see the probe either before
+# or after promotion. Frame 4 is past FramesInFlight (2) plus the recording frame.
+$probeSceneCapture = @{ Frame = 4; Point = 'scene' }
+$probeSdr = @{ Frame = 4; Point = 'final-sdr' }
 $lodRoute = @('--experimental-gpu-lod-error-pixels', '2', '--gpu-lod-max-level', '15')
 $hizRoute = @('--experimental-depth-pyramid', '--experimental-depth-occlusion-rejection')
 # Probe validation scene: the M7.7 compact/direct probe-capture qualification setup. Probe
@@ -48,7 +53,7 @@ $M7RQualificationSweep = @(
     @{ Key = 'V01-residency-churn'; Capability = '--validate-texture-residency-churn'; Id = 'ordinary2_lit_closed_v1'; Manifest = $m6; Model = 'ordinary2'
        Warmup = 8; Frames = 4; Validation = $true; Args = @('--validate-texture-residency-churn'); ExpectTags = @('IRIDIUM_TEXTURE_RESIDENCY_CHURN') }
     ($probeScene + @{ Key = 'V02-reflection-probes'; Capability = '--validate-reflection-probes'
-       Warmup = 0; Frames = 4; Validation = $true; Capture = $scene; Args = @('--validate-reflection-probes')
+       Warmup = 0; Frames = 6; Validation = $true; Capture = $probeSceneCapture; Args = @('--validate-reflection-probes')
        RequireCounters = @('probe.capture.casters.gpu_scene', 'probe.capture.published') })
     @{ Key = 'V03-ord2-capture'; Capability = '--validate-ordinary2-capture'; Id = 'ordinary2_lit_closed_v1'; Manifest = $m6; Model = 'ordinary2'
        Warmup = 8; Frames = 4; Validation = $true; Capture = $scene; Args = @('--validate-ordinary2-capture'); ExpectTags = @('IRIDIUM_ORDINARY2_CAPTURE_VALIDATION') }
@@ -111,13 +116,13 @@ $M7RQualificationSweep = @(
     # final-SDR, which M7.7 (independent probe visibility) recorded byte-identical. At R2.0 the
     # direct probe-capture routes (R01, R03) differ by at most 1 code on about 0.3% of pixels,
     # so they use $probeDirectSdr (the WeightedOIT final-SDR envelope); R02 must be identical.
-    ($probeScene + @{ Key = 'R00-auto-probe-sdr'; Capability = 'automatic (reference for R01-R03)'; Warmup = 0; Frames = 4; Validation = $true; Capture = $sdr
+    ($probeScene + @{ Key = 'R00-auto-probe-sdr'; Capability = 'automatic (reference for R01-R03)'; Warmup = 0; Frames = 6; Validation = $true; Capture = $probeSdr
        Args = @('--validate-reflection-probes') })
-    ($probeScene + @{ Key = 'R01-ref-direct-gbuffer'; Capability = '--reference-direct-gbuffer'; Warmup = 0; Frames = 4; Validation = $true; Capture = $sdr
+    ($probeScene + @{ Key = 'R01-ref-direct-gbuffer'; Capability = '--reference-direct-gbuffer'; Warmup = 0; Frames = 6; Validation = $true; Capture = $probeSdr
        Args = @('--validate-reflection-probes', '--reference-direct-gbuffer'); MatchCapture = 'R00-auto-probe-sdr'; MatchTolerance = $probeDirectSdr; RequireCounters = @('probe.capture.casters.direct_fallback') })
-    ($probeScene + @{ Key = 'R02-ref-direct-shadows'; Capability = '--reference-direct-shadows'; Warmup = 0; Frames = 4; Validation = $true; Capture = $sdr
+    ($probeScene + @{ Key = 'R02-ref-direct-shadows'; Capability = '--reference-direct-shadows'; Warmup = 0; Frames = 6; Validation = $true; Capture = $probeSdr
        Args = @('--validate-reflection-probes', '--reference-direct-shadows'); MatchCapture = 'R00-auto-probe-sdr' })
-    ($probeScene + @{ Key = 'R03-ref-direct-probe'; Capability = '--reference-direct-probe-capture'; Warmup = 0; Frames = 4; Validation = $true; Capture = $sdr
+    ($probeScene + @{ Key = 'R03-ref-direct-probe'; Capability = '--reference-direct-probe-capture'; Warmup = 0; Frames = 6; Validation = $true; Capture = $probeSdr
        Args = @('--validate-reflection-probes', '--reference-direct-probe-capture'); MatchCapture = 'R00-auto-probe-sdr'; MatchTolerance = $probeDirectSdr; RequireCounters = @('probe.capture.casters.direct_fallback') })
     # Probe-free dense scene (M7 lit requalification): scene-linear PFM byte-identical.
     @{ Key = 'R04-auto-dense-scene'; Capability = 'automatic (reference for R05)'; Id = 'm7_three_dense_all_visible_v1'; Manifest = $threeDense; Model = $alfa
