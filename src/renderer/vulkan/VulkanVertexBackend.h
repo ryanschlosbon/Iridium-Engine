@@ -40,6 +40,7 @@
 #include "VulkanHookPasses.h"
 #include "VulkanShadowFeature.h"
 #include "VulkanLocalShadowFeature.h"
+#include "VulkanReflectionProbeFeature.h"
 #include "VulkanShadowCasters.h"
 #include "VulkanExtensionHooks.h"
 #include "VulkanFeatureContext.h"
@@ -141,8 +142,8 @@ namespace Iridium {
         VulkanSceneDescriptors sceneDescriptors;
         // R3c.1: clustered lighting and probe clustering.
         VulkanClusterLightingFeature clusterLighting_;
-        VulkanReflectionProbeCapturePass reflectionProbeCapturePass_;
-        VulkanReflectionProbeCaptureTargets reflectionProbeCaptureTargets_;
+        // R3c.6: probe capture, probe buffers and environment tables.
+        VulkanReflectionProbeFeature probes_;
         // R3c.5: directional cascades + M7.8 VSM, and spot/point shadows.
         VulkanShadowFeature shadows_;
         VulkanLocalShadowFeature localShadows_;
@@ -196,21 +197,10 @@ namespace Iridium {
         // pipeline, sets, buffers, scratch and validation slots.
         VulkanCullerDevice cullerDevice_{};
         VkDescriptorSetLayout indirectCullerSetLayout_ = VK_NULL_HANDLE;
-        VulkanIndirectViewCuller probeCuller_;
         // Caster scratch shared by the shadow owners and the probe capture.
         VulkanCasterScratch casterScratch_;
         // Main-view opaque compaction (sibling of the view cullers).
         VulkanOpaqueIndirectCuller opaqueCuller_;
-        std::array<VulkanBufferResource, VulkanFrameScheduler::FramesInFlight>
-            reflectionProbeRecordBuffers_{};
-        std::array<VulkanBufferResource, VulkanFrameScheduler::FramesInFlight>
-            reflectionProbeActiveSlotBuffers_{};
-        std::array<VulkanBufferResource, VulkanFrameScheduler::FramesInFlight>
-            reflectionProbeParameterBuffers_{};
-        std::array<VulkanBufferResource, VulkanFrameScheduler::FramesInFlight>
-            reflectionProbeClusterHeaderBuffers_{};
-        std::array<VulkanBufferResource, VulkanFrameScheduler::FramesInFlight>
-            reflectionProbeClusterIndexBuffers_{};
         using ResolvedShadowCaster = VulkanResolvedCaster;
 
         // The slot's CPU GPU-scene mirror with the published counts.
@@ -220,32 +210,6 @@ namespace Iridium {
         [[nodiscard]] VulkanIndirectAssetResolver indirectAssets() const noexcept;
         [[nodiscard]] VulkanIndirectViewSettings shadowViewSettings() const noexcept;
         static constexpr uint32_t MaximumOpaqueIndirectCommandCapacity = 65536u;
-        std::array<std::vector<uint64_t>, VulkanFrameScheduler::FramesInFlight>
-            uploadedReflectionProbeRevisions_{};
-        std::array<uint64_t, VulkanFrameScheduler::FramesInFlight>
-            uploadedReflectionProbeActiveListRevisions_{};
-        std::vector<ReflectionProbeRecordRange>
-            reflectionProbeUploadRanges_;
-        std::vector<EnvironmentLightingHandles>
-            reflectionProbeEnvironments_;
-        uint32_t reflectionProbeRecordCapacity_ = 0;
-        uint32_t reflectionProbeRecordMaximumCapacity_ = 0;
-        uint32_t reflectionProbeClusterCapacity_ = 0;
-        uint32_t reflectionProbeReferenceCapacity_ = 0;
-        struct PendingReflectionProbeCapture {
-            SceneEntityUuid owner;
-            uint64_t captureTicket = 0;
-            std::vector<VkDescriptorSet> filterDescriptors;
-            VulkanReflectionProbeCaptureReadback bakedReadback;
-            uint32_t resolution = 0;
-            uint32_t mipLevels = 0;
-        };
-        std::vector<PendingReflectionProbeCapture>
-            pendingReflectionProbeCaptures_;
-        std::unordered_map<SceneEntityUuid, uint32_t, SceneEntityUuidHash>
-            capturedReflectionProbeSlots_;
-        ReflectionProbeCaptureTelemetry reflectionProbeCaptureTelemetry_{};
-        uint32_t reflectionProbePrefilterSampleCount_ = 256;
 
         // --- 2. SHARED STATE (M7R R3c.0) ---
         // Vaults, samplers and material descriptors; the GPU-scene tables;
@@ -302,29 +266,22 @@ namespace Iridium {
         float paperWhiteNits_ = 203.0f;
         float peakNits_ = 1000.0f;
         bool selectionOutlineActive_ = false;
-        // "probe.capture" begun or skipped this frame (R3b.8).
-        bool probeCaptureHandled_ = false;
 
 
         // Private helpers that Application.cpp no longer needs to worry about
         void createUniformBuffers();
         void createGpuSceneCullPipeline();
         [[nodiscard]] VulkanCullerServices cullerServices();
-        void createReflectionProbeIndirectPipeline();
+        [[nodiscard]] VulkanIndirectViewSettings probeViewSettings() const noexcept;
         // The view cullers in collection order: directional, spot, point,
         // reflection probe.
         [[nodiscard]] std::array<VulkanIndirectViewCuller*, kIndirectViewKindCount>
             indirectViewCullers() noexcept {
             return { &shadows_.culler(), &localShadows_.spotCuller(),
-                &localShadows_.pointCuller(), &probeCuller_ };
+                &localShadows_.pointCuller(), &probes_.culler() };
         }
         // Device telemetry (+ oracle verdict) of every view's retired slot.
         void collectIndirectViewValidations(uint32_t frameIndex);
-        [[nodiscard]] bool prepareReflectionProbeIndirectSubmission(
-            const ReflectionProbeCasterSubmission& probeCasters,
-            std::span<const ReflectionProbeCaptureScheduleEntry> captures);
-        void recordReflectionProbeIndirectDispatch(uint32_t frameIndex,
-            uint32_t faceRecord, uint32_t excludedInstanceIndex);
 
         [[nodiscard]] bool prepareOpaqueIndirectSubmission(
             std::span<const DrawPacket> opaqueQueue);
@@ -336,19 +293,12 @@ namespace Iridium {
         void bindDirectionalShadowDescriptors();
         void bindSpotShadowDescriptors();
         void bindPointShadowDescriptors();
-        void createReflectionProbeBuffers(uint32_t recordCapacity,
-            uint32_t clusterCapacity, uint32_t referenceCapacity);
         void bindReflectionProbeBuffers();
         void bindReflectionProbeEnvironments();
-        void uploadReflectionProbesForFrame(uint32_t frameIndex,
-            const ReflectionProbeGpuFramePacket& probes);
-        void updateReflectionProbeParameters(uint32_t frameIndex,
-            const glm::mat4& view, const glm::mat4& projection,
-            float nearPlane, float farPlane, uint32_t activeProbeCount);
         // Feature owners in registration (and graph) order.
-        [[nodiscard]] std::array<IVulkanFeature*, 6> features() noexcept {
-            return { &shadows_, &localShadows_, &clusterLighting_, &output_,
-                &oit_, &hooks_ };
+        [[nodiscard]] std::array<IVulkanFeature*, 7> features() noexcept {
+            return { &shadows_, &localShadows_, &probes_, &clusterLighting_,
+                &output_, &oit_, &hooks_ };
         }
         void initFrameTargets();
         void rebuildRenderGraphAfterDeviceIdle();
@@ -510,7 +460,7 @@ namespace Iridium {
             const LightingFramePacket& lights) override;
         [[nodiscard]] ReflectionProbeCaptureTelemetry
             getReflectionProbeCaptureTelemetry() const noexcept override {
-            return reflectionProbeCaptureTelemetry_;
+            return probes_.telemetry();
         }
         [[nodiscard]] uint64_t getShadowCasterRevision(
             const ShadowCasterSubmission& shadowCasters) const noexcept override;

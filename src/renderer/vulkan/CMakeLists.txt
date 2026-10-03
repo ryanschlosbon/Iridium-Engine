@@ -38,6 +38,7 @@ add_library(iridium_vulkan STATIC
         VulkanProductionRenderGraph.cpp
         VulkanReflectionProbeCapturePass.cpp
         VulkanReflectionProbeCaptureTargets.cpp
+        VulkanReflectionProbeFeature.cpp
         VulkanReflectionProbePipeline.cpp
         VulkanRenderGraphExecutor.cpp
         VulkanResourceAllocator.cpp

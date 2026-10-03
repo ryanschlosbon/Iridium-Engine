@@ -235,7 +235,7 @@ namespace Iridium {
             config.pointShadowPool256Capacity,
             config.pointShadowPool512Capacity,
             config.pointShadowPool1024Capacity };
-        configureReflectionProbeCaptures(config.reflectionProbeSettings);
+        probes_.configureCaptures(config.reflectionProbeSettings);
         if (std::ranges::any_of(pointShadowCapacities_,
                 [](uint32_t value) { return value == 0u; }) ||
             pointShadowCapacities_[0] > kPointShadowPool256Capacity ||
@@ -355,15 +355,20 @@ namespace Iridium {
             lightingPipeline->getDescriptorSetLayout(),
             resources_.textureTable().materialViewLayout(),
             resources_.textureTable().samplerLayout());
-        reflectionProbeCapturePass_.init(vkContext->getDevice(),
-            vkContext->getPhysicalDevice(), resourceAllocator,
-            descriptorAllocator, resources_.textureTable().materialViewLayout(),
-            resources_.textureTable().samplerLayout(),
-            lightingPipeline->getDescriptorSetLayout(),
-            meshLayouts.getGpuSceneSetLayout());
-        reflectionProbeCaptureTargets_.init(vkContext->getDevice(),
-            vkContext->getPhysicalDevice(), resourceAllocator,
-            reflectionProbeCapturePass_.renderPass());
+        // R3c.6: the probe owner's capture pass and targets.
+        probes_.configure(clusterConfig_, probeViewSettings(), casterScratch_,
+            lightingPipeline->getDescriptorSetLayout(), clusterLighting_, { this,
+                [](void* owner) {
+                    auto& self = *static_cast<VulkanVertexBackend*>(owner);
+                    if (self.sceneDescriptors.size() != 0)
+                        self.bindReflectionProbeBuffers();
+                    self.bindGraphImportedBuffers();
+                },
+                [](void* owner) {
+                    static_cast<VulkanVertexBackend*>(owner)->
+                        bindReflectionProbeEnvironments();
+                } });
+        probes_.create(*featureContext_);
         forwardPass = std::make_unique<VkForwardRenderPass>(vkContext.get(),
             VulkanSceneColorFormat, VK_FORMAT_D32_SFLOAT);
         transparentPass = std::make_unique<VkForwardRenderPass>(vkContext.get(),
@@ -407,8 +412,7 @@ namespace Iridium {
         shadows_.configure(directionalShadowResolution_, shadowViewSettings(),
             casterScratch_, { cullerServices(), indirectCullerSetLayout_ });
         shadows_.create(*featureContext_);
-        createReflectionProbeIndirectPipeline();
-        probeCuller_.resize(512u, frameOpen_);
+        probes_.createCuller({ cullerServices(), indirectCullerSetLayout_ });
         localShadows_.configure(spotShadowAtlasResolution_, pointShadowCapacities_,
             shadowViewSettings(), casterScratch_,
             { cullerServices(), indirectCullerSetLayout_ });
@@ -471,28 +475,7 @@ namespace Iridium {
             cpuProfiler_, frameOpen_, storageRange);
         gpuScene_.createBuffers({ 2u, 1u, 1u, 1u });
         opaqueCuller_.resize(512u, frameOpen_);
-        reflectionProbeRecordMaximumCapacity_ = (std::min)(
-            static_cast<uint32_t>(
-                vkContext->getPhysicalDeviceProperties()
-                    .limits.maxStorageBufferRange /
-                sizeof(PackedGpuReflectionProbe)),
-            kMaximumGpuReflectionProbeCapacity);
-        if (reflectionProbeRecordMaximumCapacity_ == 0)
-            throw std::runtime_error(
-                "Vulkan storage-buffer range cannot hold one reflection probe");
-        const ClusterGridDimensions initialProbeGrid = clusterGridDimensions(
-            clusterConfig_, { sceneExtent_.width, sceneExtent_.height,
-                0.1f, 100.0f, glm::mat4(1.0f), glm::mat4(1.0f) });
-        const uint32_t initialProbeClusters = static_cast<uint32_t>(
-            initialProbeGrid.clusterCount());
-        const uint32_t initialProbeReferences = static_cast<uint32_t>(
-            (std::min)(initialProbeGrid.clusterCount() *
-                kMaximumReflectionProbesPerCluster,
-                static_cast<uint64_t>(kMaximumClusterProbeReferences)));
-        createReflectionProbeBuffers((std::min)(
-            kInitialGpuReflectionProbeCapacity,
-            reflectionProbeRecordMaximumCapacity_),
-            initialProbeClusters, initialProbeReferences);
+        probes_.createInitialBuffers(sceneExtent_);
 
         // --------------------------------
 
@@ -629,7 +612,7 @@ namespace Iridium {
             .scheduler = &scheduler,
             .graph = &renderGraph_,
             .frameTargets = &frameTargets,
-            .probeCaptureTargets = &reflectionProbeCaptureTargets_,
+            .probeCaptureTargets = &probes_.captureTargets(),
             .depthPyramid = depthPyramidEnabled_ ? &depthPyramid_ : nullptr,
             .profiler = cpuProfiler_,
         };
@@ -885,22 +868,13 @@ namespace Iridium {
         renderGraph_.cleanupAfterDeviceIdle();
         shadows_.destroy();
         localShadows_.destroy();
-        probeCuller_.destroy(device);
+        probes_.destroy();
 
         if (indirectCullerSetLayout_ != VK_NULL_HANDLE) {
             vkDestroyDescriptorSetLayout(device,
                 indirectCullerSetLayout_, nullptr);
             indirectCullerSetLayout_ = VK_NULL_HANDLE;
         }
-        for (PendingReflectionProbeCapture& pending :
-                pendingReflectionProbeCaptures_) {
-            reflectionProbeCapturePass_.releaseDescriptors(
-                pending.filterDescriptors);
-            resourceAllocator.destroy(pending.bakedReadback.buffer);
-        }
-        pendingReflectionProbeCaptures_.clear();
-        reflectionProbeCaptureTargets_.cleanup();
-        reflectionProbeCapturePass_.cleanup();
 
         resources_.destroyResources();
 
@@ -909,18 +883,6 @@ namespace Iridium {
         }
         gpuScene_.destroy();
         opaqueCuller_.destroy(device);
-        for (VulkanBufferResource& buffer : reflectionProbeRecordBuffers_)
-            resourceAllocator.destroy(buffer);
-        for (VulkanBufferResource& buffer : reflectionProbeActiveSlotBuffers_)
-            resourceAllocator.destroy(buffer);
-        for (VulkanBufferResource& buffer : reflectionProbeParameterBuffers_)
-            resourceAllocator.destroy(buffer);
-        for (VulkanBufferResource& buffer :
-                reflectionProbeClusterHeaderBuffers_)
-            resourceAllocator.destroy(buffer);
-        for (VulkanBufferResource& buffer :
-                reflectionProbeClusterIndexBuffers_)
-            resourceAllocator.destroy(buffer);
 
 
         forwardPass.reset();
@@ -975,13 +937,6 @@ namespace Iridium {
         resources_.reset();
         gpuScene_.reset();
         environmentLighting_ = {};
-        reflectionProbeEnvironments_.clear();
-        capturedReflectionProbeSlots_.clear();
-        reflectionProbeCaptureTelemetry_ = {};
-        reflectionProbeRecordCapacity_ = 0;
-        reflectionProbeRecordMaximumCapacity_ = 0;
-        reflectionProbeClusterCapacity_ = 0;
-        reflectionProbeReferenceCapacity_ = 0;
 
 
 
@@ -1121,8 +1076,8 @@ namespace Iridium {
             { graphIds_.pointIndirect.counts, &localShadows_.pointCuller().buffers().counts },
             { graphIds_.opaqueIndirect.commands, &opaqueCuller_.buffers().commands },
             { graphIds_.opaqueIndirect.counts, &opaqueCuller_.buffers().counts },
-            { graphIds_.probeClusterHeaders, &reflectionProbeClusterHeaderBuffers_ },
-            { graphIds_.probeClusterIndices, &reflectionProbeClusterIndexBuffers_ },
+            { graphIds_.probeClusterHeaders, &probes_.clusterHeaderBuffers() },
+            { graphIds_.probeClusterIndices, &probes_.clusterIndexBuffers() },
         } };
         for (const Binding& binding : bindings) {
             if (!binding.id.isValid()) continue;
@@ -2082,7 +2037,7 @@ namespace Iridium {
         frameOpen_ = false;
         depthHistoryPrepared_ = false;
         currentDepthHistoryDecision_ = {};
-        probeCaptureHandled_ = false;
+        probes_.beginFrame();
         ordinary2ViewProjectionValid_ = false;
         telemetry_.beginFrame();
         CpuScope beginFrameScope(cpuProfiler_, "cpu.renderer.begin_frame");
@@ -2275,41 +2230,6 @@ namespace Iridium {
         localShadows_.submitPoint(shadowCasters, shadows, clusterLighting_);
     }
 
-    bool VulkanVertexBackend::prepareReflectionProbeIndirectSubmission(
-        const ReflectionProbeCasterSubmission& probeCasters,
-        std::span<const ReflectionProbeCaptureScheduleEntry> captures) {
-        const uint32_t frame = scheduler.currentFrameIndex();
-        if (!probeCuller_.plan({
-                .primitiveIndices = probeCasters.gpuScenePrimitiveIndices,
-                .membershipRevision = probeCasters.membershipRevision,
-                .lodErrorThreshold = experimentalProbeLodErrorPixels_,
-                .lodMaximumLevel = probeLodMaximumLevel_,
-                .forceDirectGBufferReference = forceDirectGBufferReference_,
-                .forceDirectShadowReference = forceDirectShadowReference_,
-                .scene = indirectScene(frame),
-                .assets = indirectAssets(),
-            }, reflectionProbeWork(captures), frame))
-            return false;
-        // Per-face dispatches follow in recordReflectionProbeIndirectDispatch.
-        telemetry_.counters().dispatchRecorded +=
-            probeCuller_.recordCompaction(currentCmd, frame, {});
-        return true;
-    }
-
-    void VulkanVertexBackend::recordReflectionProbeIndirectDispatch(
-        uint32_t frameIndex, uint32_t faceRecord,
-        uint32_t excludedInstanceIndex) {
-        telemetry_.counters().dispatchRecorded += probeCuller_.recordWorkItem(
-            currentCmd, frameIndex, {
-                .set0 = reflectionProbeCapturePass_.faceComputeDescriptor(
-                    frameIndex),
-                .set0DynamicOffset =
-                    reflectionProbeCapturePass_.faceComputeDynamicOffset(
-                        faceRecord),
-                .gpuScene = gpuScene_.descriptorSets()[frameIndex],
-            }, { excludedInstanceIndex, faceRecord, 0u });
-    }
-
     void VulkanVertexBackend::submitReflectionProbeCaptures(
         const ReflectionProbeCasterSubmission& probeCasters,
         std::span<const ReflectionProbeCaptureScheduleEntry> captures,
@@ -2317,310 +2237,10 @@ namespace Iridium {
         if (!frameOpen_)
             throw std::logic_error(
                 "Reflection-probe capture requires an open frame");
-        const bool hasWork = std::ranges::any_of(captures,
-            [](const ReflectionProbeCaptureScheduleEntry& capture) {
-                return capture.scheduledFaceMask != 0u;
-            });
-        // R3b.8: "probe.capture" (reads the shadow maps; staging and the
-        // per-face compaction keep their barriers inside the pass).
-        probeCaptureHandled_ = true;
-        if (!hasWork) {
-            renderGraph_.skipPass(graphIds_.probeCapture);
-            return;
-        }
-        CpuScope recordScope(cpuProfiler_,
-            "cpu.render.record.probe_capture");
-        renderGraph_.beginPass(currentCmd, graphIds_.probeCapture);
-        const uint32_t frameIndex = scheduler.currentFrameIndex();
-        clusterLighting_.uploadLights(frameIndex, lights);
-        const VkDescriptorSet sceneSet = sceneDescriptors.get(frameIndex);
-        const VkPipelineLayout layout =
-            reflectionProbeCapturePass_.graphicsLayout();
-        const VkPipelineLayout gpuSceneLayout =
-            reflectionProbeCapturePass_.gpuSceneGraphicsLayout();
-        resolveCasters(indirectScene(frameIndex), probeCasters,
-            GpuSceneConsumerProbe, casterScratch_);
-        const bool indirectValid =
-            prepareReflectionProbeIndirectSubmission(probeCasters, captures);
-        IVulkanIndirectOracle* const shadowOracle =
-            activeIndirectOracle(VulkanIndirectOracleView::ReflectionProbe);
-        const bool probeQualificationOracle =
-            shadowOracle != nullptr;
-        const uint64_t resolvedGpuSceneCasters =
-            std::ranges::count_if(casterScratch_.casters,
-                [](const ResolvedShadowCaster& caster) {
-                    return caster.gpuScenePrimitiveIndex !=
-                        InvalidGpuSceneIndex;
-                });
-        const uint64_t resolvedDirectCasters =
-            casterScratch_.casters.size() - resolvedGpuSceneCasters;
-        uint64_t casterFaceTests = 0;
-        uint64_t casterFacesCulled = 0;
-        uint64_t casterFaceDraws = 0;
-        uint64_t gpuSceneFaceDraws = 0;
-        uint64_t directFaceDraws = 0;
-        uint64_t ownerFaceExclusions = 0;
-        uint32_t faceRecord = 0;
-        VulkanGpuRangeToken captureRange =
-            scheduler.beginGpuRange("gpu.probe.capture");
-        for (const ReflectionProbeCaptureScheduleEntry& capture : captures) {
-            if (capture.scheduledFaceMask == 0u) continue;
-            uint32_t excludedInstanceIndex = InvalidGpuSceneIndex;
-            uint32_t gpuOwnerPrimitiveCount = 0u;
-            if (indirectValid) {
-                const VulkanGpuSceneState::CpuMirror& scene =
-                    gpuScene_.mirror(frameIndex);
-                for (uint32_t primitiveIndex :
-                        probeCasters.gpuScenePrimitiveIndices) {
-                    if (primitiveIndex >= scene.primitives.size() ||
-                        primitiveIndex >= scene.primitiveIdentities.size() ||
-                        scene.primitiveIdentities[primitiveIndex].owner !=
-                            capture.owner)
-                        continue;
-                    const uint32_t instanceIndex =
-                        scene.primitives[primitiveIndex].binding.x;
-                    if (excludedInstanceIndex != InvalidGpuSceneIndex &&
-                        excludedInstanceIndex != instanceIndex)
-                        throw std::logic_error(
-                            "Reflection-probe owner spans multiple GPU-scene instances");
-                    excludedInstanceIndex = instanceIndex;
-                    ++gpuOwnerPrimitiveCount;
-                }
-                if (!probeQualificationOracle)
-                    ownerFaceExclusions +=
-                        static_cast<uint64_t>(gpuOwnerPrimitiveCount) *
-                        std::popcount(static_cast<uint32_t>(
-                            capture.scheduledFaceMask));
-            }
-            const VulkanReflectionProbeCaptureStaging& target =
-                reflectionProbeCaptureTargets_.acquire(capture.owner,
-                    capture.captureTicket, capture.resolution);
-            for (uint32_t face = 0;
-                face < kReflectionProbeCaptureFaceCount; ++face) {
-                const uint8_t bit = static_cast<uint8_t>(1u << face);
-                if ((capture.scheduledFaceMask & bit) == 0u) continue;
-                if (faceRecord >=
-                    VulkanReflectionProbeCapturePass::MaximumFaceRecords)
-                    throw std::overflow_error(
-                        "Reflection-probe capture face records are exhausted");
-                reflectionProbeCapturePass_.writeFace(frameIndex, faceRecord,
-                    capture.faces[face], capture.position,
-                    capture.nearPlane, lights.stats.activeLightCount,
-                    capture.captureSky, capture.resolution);
-                if (indirectValid)
-                    recordReflectionProbeIndirectDispatch(frameIndex,
-                        faceRecord, excludedInstanceIndex);
-                casterScratch_.visibility.assign(
-                    casterScratch_.casters.size(), 0u);
-                const size_t cpuVisibilityBegin = indirectValid &&
-                        !probeQualificationOracle
-                    ? static_cast<size_t>(resolvedGpuSceneCasters) : 0u;
-                for (size_t casterIndex = cpuVisibilityBegin;
-                        casterIndex < casterScratch_.casters.size();
-                        ++casterIndex) {
-                    const ResolvedShadowCaster& caster =
-                        casterScratch_.casters[casterIndex];
-                    if (caster.owner == capture.owner) {
-                        ++ownerFaceExclusions;
-                        continue;
-                    }
-                    ++casterFaceTests;
-                    const bool visible =
-                        shadowCasterSphereIntersectsClipVolume(
-                            capture.faces[face].worldToClip,
-                            caster.boundsSphereCenterWorld,
-                            caster.boundsSphereRadiusWorld);
-                    casterScratch_.visibility[casterIndex] =
-                        visible ? 1u : 0u;
-                    casterFacesCulled += visible ? 0u : 1u;
-                }
-                reflectionProbeCapturePass_.beginFace(currentCmd, target,
-                    face, frameIndex, faceRecord, sceneSet);
-                reflectionProbeCapturePass_.bindFaceDescriptors(currentCmd,
-                    frameIndex, faceRecord, sceneSet);
-                // Both capture layouts have an identical set 0-3 prefix. Bind
-                // the shared tables through the longer layout once so compact
-                // GPU-scene draws and explicit fallback packets can interleave.
-                bindMaterialDescriptors(gpuSceneLayout);
-                vkCmdBindDescriptorSets(currentCmd,
-                    VK_PIPELINE_BIND_POINT_GRAPHICS, gpuSceneLayout,
-                    4u, 1u, &gpuScene_.descriptorSets()[frameIndex],
-                    0u, nullptr);
-                VkPipeline activePipeline = VK_NULL_HANDLE;
-                GeometryHandle activeGeometry{};
-                if (indirectValid) {
-                    (void)probeCuller_.recordDraws(currentCmd, frameIndex,
-                        faceRecord, {
-                            .owner = &reflectionProbeCapturePass_,
-                            .pipeline = [](const void* owner, bool alphaMasked,
-                                bool doubleSided) {
-                                return static_cast<
-                                    const VulkanReflectionProbeCapturePass*>(
-                                    owner)->pipeline(alphaMasked, doubleSided,
-                                        true);
-                            },
-                        });
-                    if (probeQualificationOracle) {
-                        const RadialLodContext lodContext{ capture.position,
-                            static_cast<float>(capture.resolution),
-                            experimentalProbeLodErrorPixels_ };
-                        probeCuller_.emitExpectations(*shadowOracle, frameIndex,
-                            faceRecord,
-                            std::span(casterScratch_.casters).first(
-                                static_cast<size_t>(resolvedGpuSceneCasters)),
-                            std::span(casterScratch_.visibility).first(
-                                static_cast<size_t>(resolvedGpuSceneCasters)),
-                            1u, radialLodMetric(lodContext));
-                        for (size_t casterIndex = 0;
-                                casterIndex < resolvedGpuSceneCasters;
-                                ++casterIndex) {
-                            if (casterScratch_.visibility[
-                                    casterIndex] == 0u)
-                                continue;
-                            ++gpuSceneFaceDraws;
-                            ++casterFaceDraws;
-                        }
-                    }
-                    activePipeline = VK_NULL_HANDLE;
-                    activeGeometry = {};
-                }
-                const size_t directDrawBegin = indirectValid
-                    ? static_cast<size_t>(resolvedGpuSceneCasters) : 0u;
-                for (size_t casterIndex = directDrawBegin;
-                        casterIndex < casterScratch_.casters.size();
-                        ++casterIndex) {
-                    if (casterScratch_.visibility[casterIndex] == 0u)
-                        continue;
-                    const ResolvedShadowCaster& caster =
-                        casterScratch_.casters[casterIndex];
-                    VulkanGeometryPayload* geometry =
-                        resources_.geometries().get(caster.geometry);
-                    VulkanMaterialPayload* material =
-                        resources_.materials().get(caster.material);
-                    if (geometry == nullptr || material == nullptr) continue;
-                    const bool gpuScene = caster.gpuScenePrimitiveIndex !=
-                        InvalidGpuSceneIndex;
-                    const VkPipeline pipeline =
-                        reflectionProbeCapturePass_.pipeline(
-                            material->packed.alphaMode == 1u,
-                            material->packed.doubleSided != 0u,
-                            gpuScene);
-                    if (pipeline != activePipeline) {
-                        vkCmdBindPipeline(currentCmd,
-                            VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
-                        activePipeline = pipeline;
-                    }
-                    if (caster.geometry != activeGeometry) {
-                        const VkDeviceSize offset = geometry->vertexOffset;
-                        vkCmdBindVertexBuffers(currentCmd, 0, 1,
-                            &geometry->vertexBuffer.buffer, &offset);
-                        vkCmdBindIndexBuffer(currentCmd,
-                            geometry->indexBuffer.buffer, 0,
-                            toVkIndexType(geometry->indexFormat));
-                        activeGeometry = caster.geometry;
-                    }
-                    if (gpuScene) {
-                        vkCmdDrawIndexed(currentCmd, caster.indexCount, 1,
-                            caster.firstIndex, 0,
-                            caster.gpuScenePrimitiveIndex);
-                        ++gpuSceneFaceDraws;
-                    }
-                    else {
-                        CanonicalMeshPushConstants push{};
-                        push.renderMatrix = caster.worldTransform;
-                        push.materialIndex = caster.material.getIndex();
-                        vkCmdPushConstants(currentCmd, layout,
-                            VK_SHADER_STAGE_VERTEX_BIT |
-                                VK_SHADER_STAGE_FRAGMENT_BIT,
-                            0, sizeof(push), &push);
-                        vkCmdDrawIndexed(currentCmd, caster.indexCount, 1,
-                            caster.firstIndex, 0, 0);
-                        ++directFaceDraws;
-                    }
-                    ++casterFaceDraws;
-                }
-                reflectionProbeCapturePass_.endFace(currentCmd);
-                ++faceRecord;
-                ++reflectionProbeCaptureTelemetry_.facesRendered;
-                reflectionProbeCaptureTelemetry_.renderedTexels +=
-                    static_cast<uint64_t>(capture.resolution) *
-                    capture.resolution;
-            }
-            const uint8_t completedMask = static_cast<uint8_t>(
-                capture.capturedFaceMask | capture.scheduledFaceMask);
-            if (completedMask == kReflectionProbeCaptureCompleteMask) {
-                const auto duplicate = std::ranges::find_if(
-                    pendingReflectionProbeCaptures_,
-                    [&](const PendingReflectionProbeCapture& pending) {
-                        return pending.owner == capture.owner;
-                    });
-                if (duplicate != pendingReflectionProbeCaptures_.end())
-                    throw std::logic_error(
-                        "Reflection-probe capture publication is duplicated");
-                PendingReflectionProbeCapture pending{
-                    .owner = capture.owner,
-                    .captureTicket = capture.captureTicket,
-                    .filterDescriptors =
-                        reflectionProbeCapturePass_.recordPrefilter(
-                            currentCmd, target,
-                            reflectionProbePrefilterSampleCount_),
-                    .resolution = target.resolution,
-                    .mipLevels = target.mipLevels,
-                };
-                if (capture.updateMode == ReflectionProbeUpdateMode::Baked)
-                    pending.bakedReadback =
-                        reflectionProbeCapturePass_.recordReadback(
-                            currentCmd, target);
-                pendingReflectionProbeCaptures_.push_back(
-                    std::move(pending));
-                ++reflectionProbeCaptureTelemetry_.capturesFiltered;
-            }
-        }
-        scheduler.endGpuRange(captureRange);
-        reflectionProbeCaptureTelemetry_.capturesInFlight =
-            reflectionProbeCaptureTargets_.capturesInFlight();
-        reflectionProbeCaptureTelemetry_.stagingLogicalBytes =
-            reflectionProbeCaptureTargets_.stagingLogicalBytes();
-        reflectionProbeCaptureTelemetry_.publishedLogicalBytes =
-            reflectionProbeCaptureTargets_.publishedLogicalBytes();
-        if (cpuProfiler_ != nullptr) {
-            cpuProfiler_->recordCounter(
-                "probe.capture.casters.resolved_gpu_scene",
-                resolvedGpuSceneCasters);
-            cpuProfiler_->recordCounter(
-                "probe.capture.casters.resolved_direct",
-                resolvedDirectCasters);
-            cpuProfiler_->recordCounter(
-                "probe.capture.casters.invalid_gpu_scene",
-                probeCasters.gpuScenePrimitiveIndices.size() -
-                    resolvedGpuSceneCasters);
-            const ProfileCounterStatus cpuVisibilityStatus = indirectValid &&
-                    !probeQualificationOracle
-                ? ProfileCounterStatus::Unavailable
-                : ProfileCounterStatus::Exact;
-            cpuProfiler_->recordCounter("probe.capture.caster_face_tests",
-                casterFaceTests, cpuVisibilityStatus);
-            cpuProfiler_->recordCounter("probe.capture.caster_faces_culled",
-                casterFacesCulled, cpuVisibilityStatus);
-            cpuProfiler_->recordCounter("probe.capture.caster_face_draws",
-                casterFaceDraws, cpuVisibilityStatus);
-            cpuProfiler_->recordCounter(
-                "probe.capture.gpu_scene_face_draws", gpuSceneFaceDraws,
-                cpuVisibilityStatus);
-            cpuProfiler_->recordCounter(
-                "probe.capture.direct_face_draws", directFaceDraws);
-            cpuProfiler_->recordCounter(
-                "probe.capture.owner_face_exclusions",
-                ownerFaceExclusions);
-            cpuProfiler_->recordCounter(
-                "probe.capture.indirect.enabled", indirectValid ? 1u : 0u);
-            cpuProfiler_->recordCounter(
-                "probe.capture.indirect.bins",
-                indirectValid ? probeCuller_.bins().size() : 0u);
-            cpuProfiler_->recordCounter(
-                "probe.capture.indirect.fallback_reason",
-                static_cast<uint32_t>(probeCuller_.fallbackReason()));
-        }
+        // R3c.6 drain point: "probe.capture" (reads the shadow maps; staging
+        // and the per-face compaction keep their barriers inside the pass).
+        probes_.submitCaptures(probeCasters, captures, lights,
+            sceneDescriptors.get(scheduler.currentFrameIndex()));
     }
 
     bool VulkanVertexBackend::prepareOpaqueIndirectSubmission(
@@ -2656,10 +2276,7 @@ namespace Iridium {
         selectionOutlineActive_ = !selectionQueue.empty();
         // Frames that never submit probe captures (asset preview) skip the
         // declared pass before the opaque compaction.
-        if (!probeCaptureHandled_) {
-            renderGraph_.skipPass(graphIds_.probeCapture);
-            probeCaptureHandled_ = true;
-        }
+        probes_.skipCaptureIfUnhandled();
         CpuScope recordScope(cpuProfiler_, "cpu.render.record.gbuffer");
         VulkanFrameContextTargets& targets = frameTargets.get(
             scheduler.currentFrameIndex());
@@ -2979,18 +2596,13 @@ VkDeviceSize offset = geometry->vertexOffset;
         };
     }
 
-    void VulkanVertexBackend::createReflectionProbeIndirectPipeline() {
-        if (indirectCullerSetLayout_ == VK_NULL_HANDLE ||
-            reflectionProbeCapturePass_.captureSetLayout() == VK_NULL_HANDLE)
-            throw std::logic_error(
-                "reflection-probe indirect resources require capture and command layouts");
-        probeCuller_.init(cullerServices(), IndirectViewKind::ReflectionProbe,
-            createIndirectViewPipeline(vkContext->getDevice(),
-                IndirectViewKind::ReflectionProbe,
-                reflectionProbeCapturePass_.captureSetLayout(),
-                meshLayouts.getGpuSceneSetLayout(), indirectCullerSetLayout_),
-            indirectCullerSetLayout_,
-            activeIndirectOracle(VulkanIndirectOracleView::ReflectionProbe));
+    VulkanIndirectViewSettings VulkanVertexBackend::probeViewSettings() const noexcept {
+        return {
+            .lodErrorThreshold = experimentalProbeLodErrorPixels_,
+            .lodMaximumLevel = probeLodMaximumLevel_,
+            .forceDirectGBufferReference = forceDirectGBufferReference_,
+            .forceDirectShadowReference = forceDirectShadowReference_,
+        };
     }
 
     void VulkanVertexBackend::collectIndirectViewValidations(uint32_t frameIndex) {
@@ -3024,142 +2636,12 @@ VkDeviceSize offset = geometry->vertexOffset;
         sceneDescriptors.setClusterBuffers(clusterLighting_.sceneClusterDescriptors());
     }
 
-    void VulkanVertexBackend::createReflectionProbeBuffers(
-        uint32_t recordCapacity, uint32_t clusterCapacity,
-        uint32_t referenceCapacity) {
-        if (recordCapacity == 0 ||
-            recordCapacity > reflectionProbeRecordMaximumCapacity_ ||
-            clusterCapacity == 0 || referenceCapacity == 0 ||
-            referenceCapacity > kMaximumClusterProbeReferences)
-            throw std::invalid_argument(
-                "Reflection-probe GPU capacity is invalid");
-        if (frameOpen_)
-            throw std::logic_error(
-                "Reflection-probe buffers may grow only at a frame boundary");
-        const VkDeviceSize recordBytes = static_cast<VkDeviceSize>(
-            recordCapacity) * sizeof(PackedGpuReflectionProbe);
-        const VkDeviceSize activeBytes = static_cast<VkDeviceSize>(
-            recordCapacity) * sizeof(uint32_t);
-        const VkDeviceSize headerBytes = static_cast<VkDeviceSize>(
-            clusterCapacity) * sizeof(ClusterLightHeader);
-        const VkDeviceSize indexBytes = static_cast<VkDeviceSize>(
-            referenceCapacity) * sizeof(uint32_t);
-        std::array<VulkanBufferResource,
-            VulkanFrameScheduler::FramesInFlight> records{};
-        std::array<VulkanBufferResource,
-            VulkanFrameScheduler::FramesInFlight> active{};
-        std::array<VulkanBufferResource,
-            VulkanFrameScheduler::FramesInFlight> parameters{};
-        std::array<VulkanBufferResource,
-            VulkanFrameScheduler::FramesInFlight> headers{};
-        std::array<VulkanBufferResource,
-            VulkanFrameScheduler::FramesInFlight> indices{};
-        try {
-            for (uint32_t frame = 0;
-                frame < VulkanFrameScheduler::FramesInFlight; ++frame) {
-                records[frame] = resourceAllocator.createBuffer(recordBytes,
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                        VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                    true, ProfileMemoryCategory::Environment);
-                active[frame] = resourceAllocator.createBuffer(activeBytes,
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                        VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                    true, ProfileMemoryCategory::Environment);
-                parameters[frame] = resourceAllocator.createBuffer(
-                    sizeof(PackedGpuReflectionProbeClusterParameters),
-                    VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                        VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                    true, ProfileMemoryCategory::Environment);
-                headers[frame] = resourceAllocator.createBuffer(headerBytes,
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                    VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-                    false, ProfileMemoryCategory::Environment);
-                indices[frame] = resourceAllocator.createBuffer(indexBytes,
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                    VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-                    false, ProfileMemoryCategory::Environment);
-                std::memset(records[frame].mapped, 0,
-                    static_cast<size_t>(recordBytes));
-                std::memset(active[frame].mapped, 0,
-                    static_cast<size_t>(activeBytes));
-                std::memset(parameters[frame].mapped, 0,
-                    sizeof(PackedGpuReflectionProbeClusterParameters));
-            }
-        }
-        catch (...) {
-            for (uint32_t frame = 0;
-                frame < VulkanFrameScheduler::FramesInFlight; ++frame) {
-                resourceAllocator.destroy(records[frame]);
-                resourceAllocator.destroy(active[frame]);
-                resourceAllocator.destroy(parameters[frame]);
-                resourceAllocator.destroy(headers[frame]);
-                resourceAllocator.destroy(indices[frame]);
-            }
-            throw;
-        }
-        if (reflectionProbeRecordCapacity_ != 0) scheduler.waitForAllFrames();
-        clusterLighting_.probeClusterPipeline().clearDescriptors();
-        for (VulkanBufferResource& buffer : reflectionProbeRecordBuffers_)
-            resourceAllocator.destroy(buffer);
-        for (VulkanBufferResource& buffer : reflectionProbeActiveSlotBuffers_)
-            resourceAllocator.destroy(buffer);
-        for (VulkanBufferResource& buffer : reflectionProbeParameterBuffers_)
-            resourceAllocator.destroy(buffer);
-        for (VulkanBufferResource& buffer :
-                reflectionProbeClusterHeaderBuffers_)
-            resourceAllocator.destroy(buffer);
-        for (VulkanBufferResource& buffer :
-                reflectionProbeClusterIndexBuffers_)
-            resourceAllocator.destroy(buffer);
-        reflectionProbeRecordBuffers_ = records;
-        reflectionProbeActiveSlotBuffers_ = active;
-        reflectionProbeParameterBuffers_ = parameters;
-        reflectionProbeClusterHeaderBuffers_ = headers;
-        reflectionProbeClusterIndexBuffers_ = indices;
-        reflectionProbeRecordCapacity_ = recordCapacity;
-        reflectionProbeClusterCapacity_ = clusterCapacity;
-        reflectionProbeReferenceCapacity_ = referenceCapacity;
-        for (auto& revisions : uploadedReflectionProbeRevisions_)
-            revisions.assign(recordCapacity, uint64_t{ 0 });
-        uploadedReflectionProbeActiveListRevisions_.fill(0);
-        reflectionProbeUploadRanges_.reserve(recordCapacity);
-        if (sceneDescriptors.size() != 0) bindReflectionProbeBuffers();
-        bindGraphImportedBuffers();
-    }
-
     void VulkanVertexBackend::bindReflectionProbeBuffers() {
-        std::array<VulkanReflectionProbeBufferDescriptors,
-            VulkanFrameScheduler::FramesInFlight> scene{};
-        std::array<VkDescriptorBufferInfo,
-            VulkanFrameScheduler::FramesInFlight> records{};
-        std::array<VkDescriptorBufferInfo,
-            VulkanFrameScheduler::FramesInFlight> active{};
-        std::array<VkDescriptorBufferInfo,
-            VulkanFrameScheduler::FramesInFlight> parameters{};
-        std::array<VkDescriptorBufferInfo,
-            VulkanFrameScheduler::FramesInFlight> headers{};
-        std::array<VkDescriptorBufferInfo,
-            VulkanFrameScheduler::FramesInFlight> indices{};
-        const auto info = [](const VulkanBufferResource& buffer) {
-            return VkDescriptorBufferInfo{ buffer.buffer, 0, buffer.size };
-        };
-        for (uint32_t frame = 0;
-            frame < VulkanFrameScheduler::FramesInFlight; ++frame) {
-            records[frame] = info(reflectionProbeRecordBuffers_[frame]);
-            active[frame] = info(reflectionProbeActiveSlotBuffers_[frame]);
-            parameters[frame] = info(reflectionProbeParameterBuffers_[frame]);
-            headers[frame] = info(
-                reflectionProbeClusterHeaderBuffers_[frame]);
-            indices[frame] = info(
-                reflectionProbeClusterIndexBuffers_[frame]);
-            scene[frame] = { records[frame], headers[frame], indices[frame] };
-        }
-        sceneDescriptors.setReflectionProbeBuffers(scene);
-        clusterLighting_.probeClusterPipeline().rebuildDescriptors(records, active,
-            parameters, headers, indices);
+        const VulkanReflectionProbeFeature::BufferDescriptors buffers =
+            probes_.bufferDescriptors();
+        sceneDescriptors.setReflectionProbeBuffers(buffers.scene);
+        clusterLighting_.probeClusterPipeline().rebuildDescriptors(buffers.records,
+            buffers.active, buffers.parameters, buffers.headers, buffers.indices);
     }
 
     void VulkanVertexBackend::bindReflectionProbeEnvironments() {
@@ -3171,152 +2653,28 @@ VkDeviceSize offset = geometry->vertexOffset;
                 "Neutral reflection-probe environment is unavailable");
         const VkDescriptorImageInfo fallback{ neutral->sampler,
             neutral->image.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
-        std::array<VkDescriptorImageInfo,
-            kMaximumGpuReflectionProbeEnvironments> images{};
-        images.fill(fallback);
-        for (size_t index = 0;
-            index < reflectionProbeEnvironments_.size(); ++index) {
-            const EnvironmentLightingHandles& environment =
-                reflectionProbeEnvironments_[index];
-            const VulkanTexturePayload* prefiltered = resources_.textures().get(
-                environment.prefilteredSpecular);
-            if (prefiltered == nullptr || prefiltered->retired ||
-                prefiltered->image.viewType != VK_IMAGE_VIEW_TYPE_CUBE ||
-                prefiltered->format != TextureFormat::RGBA16_SFloat)
-                throw std::invalid_argument(
-                    "Local reflection-probe environment is incompatible");
-            images[index] = { prefiltered->sampler,
-                prefiltered->image.view,
-                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
-        }
-        for (const auto& [owner, slot] : capturedReflectionProbeSlots_) {
-            if (slot >= images.size())
-                throw std::logic_error(
-                    "Captured reflection-probe table slot is invalid");
-            const VulkanImageResource* published =
-                reflectionProbeCaptureTargets_.published(owner);
-            if (published == nullptr || !published->isValid())
-                throw std::logic_error(
-                    "Captured reflection-probe product is unavailable");
-            images[slot] = { reflectionProbeCapturePass_.sampler(),
-                published->view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
-        }
-        sceneDescriptors.setReflectionProbeImages(images);
+        sceneDescriptors.setReflectionProbeImages(probes_.environmentImages(fallback));
     }
 
     std::optional<uint32_t>
     VulkanVertexBackend::capturedReflectionProbeEnvironmentSlot(
         SceneEntityUuid owner) const noexcept {
-        const auto found = capturedReflectionProbeSlots_.find(owner);
-        return found == capturedReflectionProbeSlots_.end()
-            ? std::optional<uint32_t>{}
-            : std::optional<uint32_t>{ found->second };
+        return probes_.capturedEnvironmentSlot(owner);
     }
 
     void VulkanVertexBackend::synchronizeReflectionProbeCaptureOwners(
         std::span<const SceneEntityUuid> owners) {
-        if (frameOpen_)
-            throw std::logic_error(
-                "Reflection-probe owners must synchronize before beginFrame");
-        const auto retained = [&](SceneEntityUuid owner) {
-            return std::ranges::find(owners, owner) != owners.end();
-        };
-        const bool hasRemoved = std::ranges::any_of(
-            capturedReflectionProbeSlots_,
-            [&](const auto& entry) { return !retained(entry.first); });
-        if (!hasRemoved) return;
-        scheduler.waitForAllFrames();
-        for (auto current = capturedReflectionProbeSlots_.begin();
-            current != capturedReflectionProbeSlots_.end();) {
-            if (retained(current->first)) { ++current; continue; }
-            reflectionProbeCaptureTargets_.remove(current->first);
-            current = capturedReflectionProbeSlots_.erase(current);
-        }
-        reflectionProbeCaptureTelemetry_.publishedLogicalBytes =
-            reflectionProbeCaptureTargets_.publishedLogicalBytes();
-        bindReflectionProbeEnvironments();
+        probes_.synchronizeCaptureOwners(owners);
     }
 
     void VulkanVertexBackend::configureReflectionProbeCaptures(
         const ProjectReflectionProbeSettings& settings) {
-        if (settings.prefilterSampleCount < 64u ||
-            settings.prefilterSampleCount > 1024u)
-            throw std::invalid_argument(
-                "Reflection-probe prefilter sample count is invalid");
-        reflectionProbePrefilterSampleCount_ = settings.prefilterSampleCount;
+        probes_.configureCaptures(settings);
     }
 
     std::vector<ReflectionProbeCaptureCompletion>
     VulkanVertexBackend::finalizeReflectionProbeCaptures() {
-        if (frameOpen_)
-            throw std::logic_error(
-                "Reflection-probe captures must finalize before beginFrame");
-        std::vector<ReflectionProbeCaptureCompletion> completed;
-        if (pendingReflectionProbeCaptures_.empty()) return completed;
-        scheduler.waitForAllFrames();
-        completed.reserve(pendingReflectionProbeCaptures_.size());
-        for (PendingReflectionProbeCapture& pending :
-                pendingReflectionProbeCaptures_) {
-            reflectionProbeCapturePass_.releaseDescriptors(
-                pending.filterDescriptors);
-            reflectionProbeCaptureTargets_.promote(
-                pending.owner, pending.captureTicket);
-            auto found = capturedReflectionProbeSlots_.find(pending.owner);
-            if (found == capturedReflectionProbeSlots_.end()) {
-                std::array<bool, kMaximumGpuReflectionProbeEnvironments> used{};
-                for (const auto& [owner, slot] : capturedReflectionProbeSlots_) {
-                    (void)owner;
-                    if (slot < used.size()) used[slot] = true;
-                }
-                uint32_t slot = kInvalidEnvironmentTableSlot;
-                for (uint32_t candidate =
-                        kMaximumGpuReflectionProbeEnvironments;
-                    candidate-- > 0u;) {
-                    if (!used[candidate]) { slot = candidate; break; }
-                }
-                if (slot == kInvalidEnvironmentTableSlot)
-                    throw std::overflow_error(
-                        "Captured reflection-probe table is exhausted");
-                found = capturedReflectionProbeSlots_.emplace(
-                    pending.owner, slot).first;
-            }
-            ReflectionProbeCaptureCompletion completion{
-                .owner = pending.owner,
-                .captureTicket = pending.captureTicket,
-                .environmentSlot = found->second,
-            };
-            if (pending.bakedReadback.buffer.isValid()) {
-                if (pending.bakedReadback.buffer.mapped == nullptr)
-                    throw std::logic_error(
-                        "Reflection-probe baked readback is not mapped");
-                ReflectionProbeCaptureCompletion::Product product{
-                    .resolution = pending.resolution,
-                    .mipLevels = pending.mipLevels,
-                };
-                const auto* bytes = static_cast<const std::byte*>(
-                    pending.bakedReadback.buffer.mapped);
-                product.radiance.assign(bytes,
-                    bytes + pending.bakedReadback.radianceBytes);
-                product.prefilteredSpecular.assign(
-                    bytes + pending.bakedReadback.radianceBytes,
-                    bytes + pending.bakedReadback.radianceBytes +
-                        pending.bakedReadback.prefilteredBytes);
-                completion.bakedProduct = std::move(product);
-                resourceAllocator.destroy(pending.bakedReadback.buffer);
-            }
-            completed.push_back(std::move(completion));
-        }
-        pendingReflectionProbeCaptures_.clear();
-        reflectionProbeCaptureTelemetry_.capturesPublished +=
-            static_cast<uint32_t>(completed.size());
-        reflectionProbeCaptureTelemetry_.capturesInFlight =
-            reflectionProbeCaptureTargets_.capturesInFlight();
-        reflectionProbeCaptureTelemetry_.stagingLogicalBytes =
-            reflectionProbeCaptureTargets_.stagingLogicalBytes();
-        reflectionProbeCaptureTelemetry_.publishedLogicalBytes =
-            reflectionProbeCaptureTargets_.publishedLogicalBytes();
-        bindReflectionProbeEnvironments();
-        return completed;
+        return probes_.finalizeCaptures();
     }
 
     void VulkanVertexBackend::prepareReflectionProbes(
@@ -3327,144 +2685,7 @@ VkDeviceSize offset = geometry->vertexOffset;
         if (frameOpen_)
             throw std::logic_error(
                 "Reflection probes must be prepared before beginFrame");
-        if (requiredCapacity > reflectionProbeRecordMaximumCapacity_)
-            throw std::overflow_error(
-                "GPU reflection-probe records exhausted the device limit");
-        if (environments.size() > kMaximumGpuReflectionProbeEnvironments)
-            throw std::overflow_error(
-                "Reflection-probe environment table exhausted its capacity");
-        for (const auto& [owner, slot] : capturedReflectionProbeSlots_) {
-            (void)owner;
-            if (slot < environments.size())
-                throw std::overflow_error(
-                    "Asset and captured reflection-probe table slots overlap");
-        }
-        const ClusterGridDimensions dimensions = clusterGridDimensions(
-            clusterConfig_, { sceneExtent_.width, sceneExtent_.height,
-                0.1f, 100.0f, glm::mat4(1.0f), glm::mat4(1.0f) });
-        if (dimensions.clusterCount() >
-            (std::numeric_limits<uint32_t>::max)())
-            throw std::overflow_error(
-                "Reflection-probe cluster grid exceeds 32-bit addressing");
-        const uint32_t clusterCapacity = static_cast<uint32_t>(
-            dimensions.clusterCount());
-        const uint32_t referenceCapacity = static_cast<uint32_t>((std::min)(
-            dimensions.clusterCount() * kMaximumReflectionProbesPerCluster,
-            static_cast<uint64_t>(kMaximumClusterProbeReferences)));
-        uint32_t recordCapacity = reflectionProbeRecordCapacity_;
-        if (requiredCapacity > recordCapacity)
-            recordCapacity = nextMaterialTableCapacity(recordCapacity,
-                requiredCapacity, reflectionProbeRecordMaximumCapacity_);
-        if (recordCapacity != reflectionProbeRecordCapacity_ ||
-            clusterCapacity != reflectionProbeClusterCapacity_ ||
-            referenceCapacity != reflectionProbeReferenceCapacity_)
-            createReflectionProbeBuffers(recordCapacity, clusterCapacity,
-                referenceCapacity);
-
-        const bool environmentsChanged =
-            environments.size() != reflectionProbeEnvironments_.size() ||
-            !std::equal(environments.begin(), environments.end(),
-                reflectionProbeEnvironments_.begin(),
-                reflectionProbeEnvironments_.end());
-        if (environmentsChanged) {
-            for (const EnvironmentLightingHandles& environment : environments)
-                if (!environment.isValid())
-                    throw std::invalid_argument(
-                        "Reflection-probe table contains an invalid environment");
-            scheduler.waitForAllFrames();
-            reflectionProbeEnvironments_.assign(
-                environments.begin(), environments.end());
-            bindReflectionProbeEnvironments();
-        }
-    }
-
-    void VulkanVertexBackend::uploadReflectionProbesForFrame(
-        uint32_t frameIndex,
-        const ReflectionProbeGpuFramePacket& probes) {
-        CpuScope uploadScope(cpuProfiler_, "cpu.probe.upload");
-        if (frameIndex >= reflectionProbeRecordBuffers_.size() ||
-            probes.records.size() > reflectionProbeRecordCapacity_ ||
-            probes.recordRevisions.size() < probes.records.size() ||
-            probes.activeSlots.size() > reflectionProbeRecordCapacity_)
-            throw std::out_of_range(
-                "Reflection-probe packet is outside prepared capacity");
-        std::vector<uint64_t>& uploaded =
-            uploadedReflectionProbeRevisions_[frameIndex];
-        reflectionProbeUploadRanges_.clear();
-        uint32_t index = 0;
-        while (index < probes.records.size()) {
-            if (probes.recordRevisions[index] == uploaded[index]) {
-                ++index;
-                continue;
-            }
-            const uint32_t first = index++;
-            while (index < probes.records.size() &&
-                probes.recordRevisions[index] != uploaded[index]) ++index;
-            reflectionProbeUploadRanges_.push_back(
-                { first, index - first });
-        }
-        uint64_t uploadedBytes = 0;
-        for (const ReflectionProbeRecordRange range :
-                reflectionProbeUploadRanges_) {
-            const auto records = probes.records.subspan(
-                range.firstRecord, range.recordCount);
-            resourceAllocator.write(reflectionProbeRecordBuffers_[frameIndex],
-                static_cast<VkDeviceSize>(range.firstRecord) *
-                    sizeof(PackedGpuReflectionProbe),
-                std::as_bytes(records));
-            for (uint32_t slot = range.firstRecord;
-                slot < range.firstRecord + range.recordCount; ++slot)
-                uploaded[slot] = probes.recordRevisions[slot];
-            uploadedBytes += static_cast<uint64_t>(range.recordCount) *
-                sizeof(PackedGpuReflectionProbe);
-        }
-        if (uploadedReflectionProbeActiveListRevisions_[frameIndex] !=
-            probes.activeListRevision) {
-            if (!probes.activeSlots.empty())
-                resourceAllocator.write(
-                    reflectionProbeActiveSlotBuffers_[frameIndex], 0,
-                    std::as_bytes(probes.activeSlots));
-            uploadedReflectionProbeActiveListRevisions_[frameIndex] =
-                probes.activeListRevision;
-            uploadedBytes += probes.activeSlots.size() * sizeof(uint32_t);
-        }
-        if (cpuProfiler_ != nullptr) {
-            cpuProfiler_->recordCounter("probe.gpu_upload_bytes",
-                uploadedBytes, ProfileCounterStatus::Exact,
-                ProfileCounterUnit::Bytes);
-            cpuProfiler_->recordCounter("probe.gpu_upload_ranges",
-                reflectionProbeUploadRanges_.size());
-        }
-    }
-
-    void VulkanVertexBackend::updateReflectionProbeParameters(
-        uint32_t frameIndex, const glm::mat4& view,
-        const glm::mat4& projection, float nearPlane, float farPlane,
-        uint32_t activeProbeCount) {
-        if (frameIndex >= reflectionProbeParameterBuffers_.size() ||
-            !(nearPlane > 0.0f) || !(farPlane > nearPlane))
-            throw std::invalid_argument(
-                "Invalid reflection-probe cluster frame");
-        const ClusterFrameParameters frame{ sceneExtent_.width,
-            sceneExtent_.height, nearPlane, farPlane, view, projection };
-        const ClusterGridDimensions dimensions = clusterGridDimensions(
-            clusterConfig_, frame);
-        PackedGpuReflectionProbeClusterParameters parameters{};
-        parameters.view = view;
-        parameters.projection = projection;
-        parameters.inverseView = glm::inverse(view);
-        parameters.grid = { sceneExtent_.width, sceneExtent_.height,
-            dimensions.tilesX, dimensions.tilesY };
-        parameters.depth = { nearPlane, farPlane,
-            static_cast<float>(clusterConfig_.depthSlices) /
-                std::log(farPlane / nearPlane), 0.0f };
-        parameters.limits = { clusterConfig_.depthSlices,
-            kMaximumReflectionProbesPerCluster,
-            reflectionProbeReferenceCapacity_, activeProbeCount };
-        parameters.tiles = { clusterConfig_.tileWidth,
-            clusterConfig_.tileHeight, 0u, 0u };
-        resourceAllocator.write(reflectionProbeParameterBuffers_[frameIndex],
-            0, std::as_bytes(std::span(&parameters, size_t{ 1 })));
+        probes_.prepare(requiredCapacity, environments, sceneExtent_);
     }
 
     void VulkanVertexBackend::prepareLighting(uint32_t requiredCapacity) {
@@ -3502,8 +2723,7 @@ VkDeviceSize offset = geometry->vertexOffset;
             opaqueCuller_.resize(grownCapacity, frameOpen_);
             shadows_.growIndirectCapacity(grownCapacity);
             localShadows_.growIndirectCapacity(grownCapacity);
-            if (grownCapacity > probeCuller_.primitiveCapacity())
-                probeCuller_.resize(grownCapacity, frameOpen_);
+            probes_.growIndirectCapacity(grownCapacity);
             bindGraphImportedBuffers();
         }
     }
@@ -3563,9 +2783,8 @@ VkDeviceSize offset = geometry->vertexOffset;
         const uint32_t frameIndex = scheduler.currentFrameIndex();
         clusterLighting_.uploadFrame(frameIndex, view, proj, nearPlane, farPlane,
             lights, sceneExtent_, environmentLightingSettings_);
-        uploadReflectionProbesForFrame(frameIndex, reflectionProbes);
-        updateReflectionProbeParameters(frameIndex, view, proj,
-            nearPlane, farPlane, reflectionProbes.stats.activeProbeCount);
+        probes_.uploadFrame(frameIndex, view, proj, nearPlane, farPlane,
+            reflectionProbes, sceneExtent_);
         const ClusterGridDimensions probeDimensions = clusterGridDimensions(
             clusterConfig_, { sceneExtent_.width, sceneExtent_.height,
                 nearPlane, farPlane, view, proj });
