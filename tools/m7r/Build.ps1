@@ -15,6 +15,13 @@ Push-Location $repo
 try {
     $ErrorActionPreference = 'Continue'
     $buildDir = "out/build/$Preset"
+    # Build provenance (core/BuildInfo) is stamped at configure time; reconfigure
+    # when HEAD moved so profiles and run reports name the commit actually built.
+    $stamp = "$buildDir/generated/core/BuildInfo.cpp"
+    if (-not $Configure -and (Test-Path $stamp)) {
+        $head = (git rev-parse HEAD 2>$null | Select-Object -First 1)
+        if ($head -and -not (Select-String -Path $stamp -SimpleMatch $head -Quiet)) { $Configure = $true }
+    }
     if ($Configure -or -not (Test-Path "$buildDir/CMakeCache.txt")) {
         $out = cmake --preset $Preset 2>&1 | ForEach-Object { "$_" }
         if ($LASTEXITCODE -ne 0) { $out | Select-Object -Last 40; exit 1 }
