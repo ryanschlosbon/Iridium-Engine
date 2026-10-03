@@ -374,6 +374,29 @@ namespace {
         CHECK(plain.graph->resources()[0].aliasEligibility == AliasEligibility::FirstUseNotDiscard);
         CHECK(declared.graph->resources()[0].aliasEligibility == AliasEligibility::Eligible);
         CHECK(build(true).graph->topologyHash() == declared.graph->topologyHash());
+
+        // R4b.5 exclusion: overrides a clearing first use, hashed only when
+        // declared, any version names the resource.
+        const auto excluded = [](bool exclude) {
+            RenderGraphBuilder builder;
+            ResourceHandle first = builder.createResource("target", imageDesc());
+            const PassHandle write = builder.addPass("write");
+            const PassHandle read = builder.addPass("read");
+            const ResourceHandle written = builder.write(write, first, Access::ColorAttachment,
+                LoadOp::Clear);
+            builder.read(read, written, Access::SampledRead);
+            if (exclude) builder.excludeFromAliasing(first);
+            return builder.compile(CompileOptions{ .transientAliasing = true });
+        };
+        const CompileResult kept = excluded(false);
+        const CompileResult dropped = excluded(true);
+        CHECK(kept.succeeded() && dropped.succeeded());
+        CHECK(kept.graph->resources()[0].aliasEligibility == AliasEligibility::Eligible);
+        CHECK(dropped.graph->resources()[0].aliasEligibility == AliasEligibility::Excluded);
+        CHECK(std::string_view(aliasEligibilityName(AliasEligibility::Excluded)) == "excluded");
+        CHECK(!dropped.graph->physicalSlots()[dropped.graph->resources()[0].physicalSlot].aliased);
+        CHECK(kept.graph->topologyHash() != dropped.graph->topologyHash());
+        CHECK(excluded(true).graph->topologyHash() == dropped.graph->topologyHash());
         return true;
     }
 
@@ -652,6 +675,9 @@ namespace {
     // ready pass first, so the replay keeps the order and every lifetime.
     // `wholeResourceFirstWrites` names resources whose first write is declared
     // whole-resource (what a backend would declare in the production graph).
+    // The source's own declarations are reproduced from its eligibility: an
+    // eligible resource whose first write does not clear was declared
+    // whole-resource, an Excluded one was excluded (R4b.5).
     CompileResult replay(const CompiledGraph& source,
         std::span<const std::string_view> wholeResourceFirstWrites,
         const CompileOptions& options) {
@@ -669,6 +695,8 @@ namespace {
             }
             handles[resource.logicalResourceIndex] =
                 builder.createResource(resource.name, resource.desc);
+            if (resource.aliasEligibility == AliasEligibility::Excluded)
+                builder.excludeFromAliasing(handles[resource.logicalResourceIndex]);
         }
         std::vector<bool> used(resources.size(), false);
         for (const CompiledPass& pass : source.passes()) {
@@ -679,8 +707,11 @@ namespace {
                 if (usage.write) {
                     handles[logical] = builder.write(handle, handles[logical], usage.access,
                         usage.loadOp, usage.storeOp, usage.clearValue);
-                    if (!used[logical] && std::ranges::find(wholeResourceFirstWrites,
-                            resources[logical].name) != wholeResourceFirstWrites.end())
+                    const bool declaredInSource = resources[logical].aliasEligibility ==
+                        AliasEligibility::Eligible && usage.loadOp != LoadOp::Clear;
+                    if (!used[logical] && (declaredInSource ||
+                            std::ranges::find(wholeResourceFirstWrites,
+                                resources[logical].name) != wholeResourceFirstWrites.end()))
                         builder.declareWholeResourceWrite(handles[logical]);
                 }
                 else {
@@ -847,19 +878,20 @@ namespace {
                     static_cast<double>(transientImageBytes));
         };
 
-        // As declared at R4b.3: the refraction pyramids' first use is an
-        // undeclared StorageReadWrite, so they stay dedicated.
+        // As declared since R4b.5: the pyramid build is declared whole-resource
+        // (it writes every mip before reading it), so every transient image of
+        // the default graph is eligible.
         const AliasPlan declared = planTransientAliasing(production, requirements);
         CHECK(checkPlanInvariants(production, requirements, declared));
-        report("as declared (production graph at R4b.3)", production, declared,
+        report("as declared (production graph since R4b.5)", production, declared,
             ineligibleImageBytes);
         for (const std::string_view name : RefractionPyramids)
             CHECK(findResource(production, name)->aliasEligibility ==
-                AliasEligibility::FirstUseNotDiscard);
+                AliasEligibility::Eligible);
+        CHECK(ineligibleImageBytes == 0);
 
-        // Projection: the pyramid build declared whole-resource (it writes
-        // every mip before reading it), as R4b.4 must declare.
-        const CompileResult projected = replay(production, RefractionPyramids,
+        // The aliasing compile (what --render-graph-aliasing on builds).
+        const CompileResult projected = replay(production, {},
             CompileOptions{ .transientAliasing = true });
         CHECK(projected.succeeded());
         const AliasPlan full = planTransientAliasing(*projected.graph, requirements);
@@ -871,8 +903,7 @@ namespace {
                 resource.firstUse != InvalidIndex &&
                 resource.aliasEligibility != AliasEligibility::Eligible)
                 projectedDedicated += requirements[resource.logicalResourceIndex].size;
-        report("projected (refraction pyramids declared whole-resource)", *projected.graph,
-            full, projectedDedicated);
+        report("aliasing compile", *projected.graph, full, projectedDedicated);
 
         // The design's estimate: ~564 MB requested, ~398 MB peak (at lighting),
         // and the greedy plan reaches the peak.
@@ -883,7 +914,70 @@ namespace {
         CHECK(projected.graph->passes()[full.peakLivePass].name == "lighting");
         CHECK(full.committedBytes == full.peakLiveBytes);
         CHECK(declared.committedBytes == declared.peakLiveBytes);
+        CHECK(declared.committedBytes == full.committedBytes);
         CHECK(declared.committedBytes + ineligibleImageBytes < transientImageBytes);
+        return true;
+    }
+
+    // R4b.5 production declarations: whole-resource storage first writes
+    // (refraction pyramids, deep-tier tile masks), the deep resolve's inputs
+    // excluded only when both deep tiers share it, and the editor's depth
+    // read in the UI pass.
+    bool testProductionAliasingDeclarations() {
+        constexpr VkExtent2D Scene{ 1920, 1080 };
+        constexpr VkExtent2D Ordinary2{ 960, 528 };
+        constexpr VkExtent2D Hero4{ 1920, 528 };
+        constexpr VkExtent2D Cinematic8{ 1920, 1072 };
+        const auto build = [&](VulkanLayeredGraphConfig layered,
+            VulkanProductionGraphFeatures features) {
+            return buildVulkanProductionRenderGraph(Scene, Scene,
+                VK_FORMAT_B8G8R8A8_SRGB, VK_FORMAT_B8G8R8A8_SRGB, false,
+                GBufferLayout::CanonicalReference, {}, 4096, 8192, true, layered, features);
+        };
+        const auto eligibility = [](const CompiledGraph& graph, std::string_view name) {
+            const CompiledResource* resource = findResource(graph, name);
+            return resource == nullptr ? AliasEligibility::Unused : resource->aliasEligibility;
+        };
+        const CompiledGraph both = build({ Ordinary2, Hero4, Cinematic8, true }, {});
+        for (const CompiledResource& resource : both.resources()) {
+            if (resource.desc.type != ResourceType::Image ||
+                resource.desc.lifetime != ResourceLifetime::Transient ||
+                resource.firstUse == InvalidIndex) continue;
+            const bool resolveInput =
+                resource.name == "scene.layered.hero4.local-color" ||
+                resource.name == "identity.layered.hero4.interface.0" ||
+                resource.name == "scene.layered.cinematic8.local-color" ||
+                resource.name == "identity.layered.cinematic8.interface.0";
+            CHECK_MSG(resource.aliasEligibility == (resolveInput
+                ? AliasEligibility::Excluded : AliasEligibility::Eligible), resource.name);
+        }
+        CHECK(eligibility(both, "termination.layered.cinematic8.interface.5") ==
+            AliasEligibility::Eligible);
+        CHECK(eligibility(both, "depth.refraction-nearest-pyramid") ==
+            AliasEligibility::Eligible);
+        for (const VulkanLayeredGraphConfig& single : {
+                VulkanLayeredGraphConfig{ {}, Hero4, {} },
+                VulkanLayeredGraphConfig{ {}, {}, Cinematic8 } }) {
+            const CompiledGraph graph = build(single, {});
+            for (const CompiledResource& resource : graph.resources())
+                CHECK_MSG(resource.aliasEligibility != AliasEligibility::Excluded,
+                    resource.name);
+        }
+
+        VulkanProductionGraphFeatures editor{};
+        editor.hooks.editorDepthSample = true;
+        const CompiledGraph plain = build({}, {});
+        const CompiledGraph withEditor = build({}, editor);
+        const CompiledResource* plainDepth = findResource(plain, "depth.opaque");
+        const CompiledResource* editorDepth = findResource(withEditor, "depth.opaque");
+        CHECK(plainDepth != nullptr && editorDepth != nullptr);
+        CHECK(plain.passes()[plainDepth->lastUse].name == "output-transform");
+        CHECK(withEditor.passes()[editorDepth->lastUse].name == "ui-present");
+        CHECK(plain.topologyHash() != withEditor.topologyHash());
+        // The read keeps depth's SampledRead state: no new transition.
+        CHECK(plain.transitions().size() == withEditor.transitions().size());
+        CHECK(!VulkanGraphHooks::none().editorDepthSample);
+        CHECK(!VulkanGraphHooks{}.editorDepthSample);
         return true;
     }
 
@@ -906,6 +1000,7 @@ int main() {
         { "Aliasing off reproduces golden slots", testAliasingOffReproducesGoldenSlots },
         { "Aliasing on, production topologies", testAliasingOnProductionTopologies },
         { "4K default SDR report", testReport4kDefaultSdr },
+        { "Production aliasing declarations", testProductionAliasingDeclarations },
     };
 
     size_t failures = 0;

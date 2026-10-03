@@ -280,6 +280,9 @@ namespace Iridium::RenderGraph {
         // DontCare write (RenderGraphBuilder::declareWholeResourceWrite), so
         // the first user could observe the previous occupant's bytes.
         FirstUseNotDiscard,
+        // R4b.5: declared by RenderGraphBuilder::excludeFromAliasing (a reader
+        // may run in a frame whose first-use writer is skipped).
+        Excluded,
     };
 
     [[nodiscard]] const char* aliasEligibilityName(AliasEligibility eligibility) noexcept;
@@ -440,6 +443,12 @@ namespace Iridium::RenderGraph {
         // A transient image whose first use is such a write may be aliased.
         // The write must not load (LoadOp::Load). Hashed only when declared.
         void declareWholeResourceWrite(ResourceHandle writtenVersion);
+        // R4b.5: keeps a transient image out of aliasing whatever its first
+        // use, for resources a pass may read in frames whose first-use writer
+        // is skipped (the executor rejects reading an aliased image before
+        // its writer ran). Any version of the resource names it. Hashed only
+        // when declared.
+        void excludeFromAliasing(ResourceHandle resource);
 
         [[nodiscard]] CompileResult compile() const;
         [[nodiscard]] CompileResult compile(const CompileOptions& options) const;
@@ -456,6 +465,7 @@ namespace Iridium::RenderGraph {
             ResourceDesc desc{};
             uint32_t historyPair = InvalidIndex;
             HistoryRole historyRole = HistoryRole::None;
+            bool aliasingExcluded = false;
         };
 
         struct ResourceVersionRecord {

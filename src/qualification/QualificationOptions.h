@@ -47,6 +47,9 @@ namespace Iridium {
         // Hash every GPU-driven compaction stream per view/slot/frame
         // (VulkanIndirectStreamDigest); observes only, changes no work.
         bool indirectStreamDigest = false;
+        // M7R R4b.5: fill every render-graph alias heap with a NaN pattern at
+        // frame start (--qualification-alias-poison; implies aliasing on).
+        bool aliasPoison = false;
 
         // Validators.
         bool validateDepthPyramidCapture = false;

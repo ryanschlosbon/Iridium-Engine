@@ -6,6 +6,7 @@
 #include "renderer/vulkan/VulkanFrameScheduler.h"
 #include "renderer/vulkan/VulkanFrameTargets.h"
 #include "renderer/vulkan/VulkanReflectionProbeCaptureTargets.h"
+#include "renderer/vulkan/VulkanRenderGraphExecutor.h"
 #include "renderer/transparency/LayeredAtlas.h"
 #include "renderer/transparency/LayeredGlass.h"
 
@@ -105,6 +106,7 @@ namespace Iridium {
         });
         validateProbeCaptureTargets_ = config.validateProbeCaptureTargets;
         indirectStreamDigestEnabled_ = config.indirectStreamDigest;
+        aliasPoison_ = config.aliasPoison;
         indirectStreamDigest_.setOutput(
             indirectStreamDigestEnabled_ ? &std::cout : nullptr);
     }
@@ -162,6 +164,7 @@ namespace Iridium {
     void VulkanQualificationExtension::onBeforeDeviceDestroy() {
         // The backend has collected every slot; all streams have retired.
         if (indirectStreamDigestEnabled_) indirectStreamDigest_.finish();
+        destroyAliasPoisonBuffers();
         if (attached()) {
             VulkanResourceAllocator& allocator = *services_.allocator;
             for (PendingFrameCapture& pending : pendingFrameCaptures_)
@@ -233,6 +236,8 @@ namespace Iridium {
                 });
         case VulkanHookPoint::VirtualShadowDepthSnapshot:
             return oracle_.enabled(VulkanIndirectOracleView::VirtualShadowDepth);
+        case VulkanHookPoint::FrameGraphBegin:
+            return aliasPoison_;
         }
         return false;
     }
@@ -272,7 +277,75 @@ namespace Iridium {
             oracle_.recordVirtualShadowDepthSnapshot(context.cmd, context.slot,
                 std::get<VulkanVirtualShadowDepthPayload>(context.payload));
             return;
+        case VulkanHookPoint::FrameGraphBegin:
+            recordAliasPoison(context);
+            return;
         }
+    }
+
+    // --------------------------------------------------------------------
+    // Alias-heap poison (M7R R4b.5)
+    // --------------------------------------------------------------------
+
+    void VulkanQualificationExtension::recordAliasPoison(const VulkanHookContext& context) {
+        if (!aliasPoison_ || services_.graph == nullptr) return;
+        VulkanRenderGraphExecutor& graph = *services_.graph;
+        VulkanResourceAllocator& allocator = *services_.allocator;
+        if (aliasPoisonSlots_.size() <= context.slot)
+            aliasPoisonSlots_.resize(context.slot + 1u);
+        AliasPoisonSlot& slot = aliasPoisonSlots_[context.slot];
+        // A rebuild replaces the heaps. This slot's earlier frames have
+        // retired (its fence was waited before the frame began), so its old
+        // buffers are unused; their heaps may already be freed.
+        const uint64_t rebuildCount = graph.stats().rebuildCount;
+        if (!slot.valid || slot.rebuildCount != rebuildCount) {
+            for (VulkanBufferResource& buffer : slot.buffers) allocator.destroy(buffer);
+            slot.buffers.clear();
+            for (const VulkanAliasHeapResource& heap : graph.aliasHeaps(context.slot))
+                slot.buffers.push_back(allocator.createAliasingBuffer(heap,
+                    VK_BUFFER_USAGE_TRANSFER_DST_BIT));
+            slot.rebuildCount = rebuildCount;
+            slot.valid = true;
+            uint64_t bytes = 0;
+            for (const VulkanBufferResource& buffer : slot.buffers) bytes += buffer.size;
+            std::cout << "IRIDIUM_ALIAS_POISON {\"slot\":" << context.slot
+                << ",\"rebuild\":" << rebuildCount << ",\"heaps\":" << slot.buffers.size()
+                << ",\"bytes\":" << bytes << "}\n";
+        }
+        if (slot.buffers.empty()) return;
+        // A quiet NaN as both one 32-bit float and two 16-bit floats; also
+        // an implausible uint identity and depth.
+        constexpr uint32_t Poison = 0x7FC07FC0u;
+        for (const VulkanBufferResource& buffer : slot.buffers)
+            vkCmdFillBuffer(context.cmd, buffer.buffer, 0, VK_WHOLE_SIZE, Poison);
+        // The heaps' first uses transition from UNDEFINED with their own
+        // (possibly empty) source scopes, so order the fill before all of it.
+        if (graph.barrierApi() == VulkanBarrierApi::Synchronization2) {
+            VkMemoryBarrier2 barrier{ VK_STRUCTURE_TYPE_MEMORY_BARRIER_2 };
+            barrier.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+            barrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+            barrier.dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+            barrier.dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
+            VkDependencyInfo dependency{ VK_STRUCTURE_TYPE_DEPENDENCY_INFO };
+            dependency.memoryBarrierCount = 1;
+            dependency.pMemoryBarriers = &barrier;
+            vkCmdPipelineBarrier2(context.cmd, &dependency);
+        }
+        else {
+            VkMemoryBarrier barrier{ VK_STRUCTURE_TYPE_MEMORY_BARRIER };
+            barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            barrier.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+            vkCmdPipelineBarrier(context.cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 1, &barrier, 0, nullptr, 0, nullptr);
+        }
+    }
+
+    void VulkanQualificationExtension::destroyAliasPoisonBuffers() noexcept {
+        if (services_.allocator != nullptr)
+            for (AliasPoisonSlot& slot : aliasPoisonSlots_)
+                for (VulkanBufferResource& buffer : slot.buffers)
+                    services_.allocator->destroy(buffer);
+        aliasPoisonSlots_.clear();
     }
 
     void VulkanQualificationExtension::onFrameSlotRetired(uint32_t slot) {

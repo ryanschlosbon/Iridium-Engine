@@ -59,6 +59,14 @@ namespace Iridium {
 
             // IVulkanBackendExtension
             IVulkanEditorUi* editorUi() noexcept override { return this; }
+            // M7R R4b.5 (R4 design finding 5): the glass-depth view samples
+            // depth.opaque while the UI pass records, so the UI pass declares
+            // that read (no hook pass; depth stays live until the UI).
+            VulkanGraphHooks graphHooks() const noexcept override {
+                VulkanGraphHooks hooks = VulkanGraphHooks::none();
+                hooks.editorDepthSample = true;
+                return hooks;
+            }
 
             // IVulkanEditorUi
             void onUiDeviceReady(const VulkanEditorUiDevice& device,

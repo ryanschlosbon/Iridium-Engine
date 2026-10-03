@@ -1664,6 +1664,9 @@ namespace Iridium {
             .collectCounters = telemetry_.collecting(),
             .sceneExtent = sceneExtent_,
         });
+        // M7R R4b.5: before any graph pass (qualification alias poison).
+        extensionHooks_.notify({ .point = VulkanHookPoint::FrameGraphBegin,
+            .cmd = currentCmd, .slot = scheduler.currentFrameIndex() });
         frameOpen_ = true;
         return frame.status;
     }

@@ -638,6 +638,14 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
             Access::StorageReadWrite);
         refractionDepth = graph.write(pyramidBuild, refractionDepth,
             Access::StorageReadWrite);
+        // M7R R4b.5: the build writes every texel of mip 0 from scene colour
+        // and depth, then each mip from the one before it (all mips, in
+        // order), so nothing reads contents it did not write this frame.
+        // Their readers (compatibility forward, the layered local
+        // compositions) run only when the build runs (a non-empty
+        // compatibility queue).
+        graph.declareWholeResourceWrite(refractionColor);
+        graph.declareWholeResourceWrite(refractionDepth);
     }
 
     RenderGraph::PassHandle depthPyramidValidation{};
@@ -778,6 +786,10 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
                 tier.tileTermination[interfaceIndex] = graph.write(
                     termination, tier.tileTermination[interfaceIndex],
                     Access::StorageWrite, LoadOp::DontCare);
+                // M7R R4b.5: one workgroup per 16x16 tile stores every
+                // texel of the tile mask (its extent is the dispatch).
+                graph.declareWholeResourceWrite(
+                    tier.tileTermination[interfaceIndex]);
             }
         }
 
@@ -830,10 +842,19 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
                 : "transparent.layered.cinematic8.compose-hook";
         const RenderGraph::PassHandle composition = graph.addPass(
             compositionName);
+        // M7R R4b.5: with both tiers resident the shared resolve runs when
+        // either tier has draws, so it may read the other tier's products in
+        // a frame that skipped their writers. Those stay out of aliasing.
+        const bool bothTiers = hero4.interfaceCount != 0u &&
+            cinematic8.interfaceCount != 0u;
         const auto readTierResolveInputs = [&](const DeepLayeredTierResources& tier) {
             if (tier.interfaceCount == 0u) return;
             graph.read(composition, tier.localColor, Access::SampledRead);
             graph.read(composition, tier.identity[0], Access::SampledRead);
+            if (bothTiers) {
+                graph.excludeFromAliasing(tier.localColor);
+                graph.excludeFromAliasing(tier.identity[0]);
+            }
         };
         readTierResolveInputs(hero4);
         readTierResolveInputs(cinematic8);
@@ -911,6 +932,10 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
     const RenderGraph::PassHandle ui = graph.addPass(
         hdr10Composition ? "ui-compose" : "ui-present");
     graph.read(ui, output, Access::SampledRead);
+    // M7R R4b.5 (design finding 5): the editor's glass-depth view samples
+    // depth.opaque (DEPTH_STENCIL_READ_ONLY_OPTIMAL) while the UI records.
+    if (features.hooks.editorDepthSample)
+        graph.read(ui, depth, Access::SampledRead);
     if (hdr10Composition) {
         uiComposition = graph.write(ui, uiComposition,
             Access::ColorAttachment, LoadOp::Clear, StoreOp::Store, opaqueBlack);

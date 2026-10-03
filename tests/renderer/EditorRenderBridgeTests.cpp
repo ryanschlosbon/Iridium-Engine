@@ -57,14 +57,16 @@ namespace {
         auto* vulkan = dynamic_cast<IVulkanBackendExtension*>(&extension);
         CHECK(vulkan != nullptr);
         CHECK(vulkan->editorUi() != nullptr);
-        // It declares no graph hooks and wants no hook, so attaching it
-        // changes neither the topology nor any qualification hook.
+        // It declares no hook pass and wants no hook, so attaching it changes
+        // no qualification hook; its only graph effect is the UI pass's read
+        // of depth.opaque for the glass-depth view (M7R R4b.5).
         const VulkanGraphHooks hooks = vulkan->graphHooks();
         const VulkanGraphHooks none = VulkanGraphHooks::none();
         CHECK(hooks.depthPyramidValidation == none.depthPyramidValidation);
         CHECK(hooks.layeredValidation == none.layeredValidation);
         CHECK(hooks.virtualShadowDepthSnapshot == none.virtualShadowDepthSnapshot);
         CHECK(hooks.sceneColorCapture == none.sceneColorCapture);
+        CHECK(hooks.editorDepthSample && !none.editorDepthSample);
         CHECK(!vulkan->wantsHook({ .point = VulkanHookPoint::FinalCaptureHook }));
         CHECK(vulkan->indirectOracle() == nullptr);
         CHECK(vulkan->indirectStreamObserver() == nullptr);

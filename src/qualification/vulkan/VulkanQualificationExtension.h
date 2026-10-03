@@ -130,6 +130,12 @@ namespace Iridium {
             const VulkanDepthPyramidHookPayload& payload);
         void recordDeepResolveCounts(const VulkanHookContext& context,
             const VulkanDeepResolveCountsPayload& payload);
+        // M7R R4b.5 --qualification-alias-poison: at FrameGraphBegin, fills
+        // the slot's alias heaps through buffers over each whole heap
+        // (recreated when the graph is rebuilt), then orders the fill before
+        // every later access.
+        void recordAliasPoison(const VulkanHookContext& context);
+        void destroyAliasPoisonBuffers() noexcept;
         void collectFrameCapturesForSlot(uint32_t frameIndex);
         void collectOrdinary2ValidationsForSlot(uint32_t frameIndex);
         void collectDeepLayeredValidationsForSlot(uint32_t frameIndex);
@@ -144,6 +150,13 @@ namespace Iridium {
         VulkanIndirectStreamDigest indirectStreamDigest_;
         bool indirectStreamDigestEnabled_ = false;
         bool validateProbeCaptureTargets_ = false;
+        bool aliasPoison_ = false;
+        struct AliasPoisonSlot {
+            uint64_t rebuildCount = 0;
+            bool valid = false;
+            std::vector<VulkanBufferResource> buffers;
+        };
+        std::vector<AliasPoisonSlot> aliasPoisonSlots_;
 
         std::optional<ArmedFrameCapture> armedFrameCapture_;
         std::vector<PendingFrameCapture> pendingFrameCaptures_;

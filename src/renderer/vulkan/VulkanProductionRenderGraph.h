@@ -110,16 +110,22 @@ namespace Iridium {
         // read scene.color as a transfer source after the last scene writer;
         // output-transform's begin returns it to SampledRead.
         bool sceneColorCapture = true;
+        // M7R R4b.5 (design finding 5): the editor bridge samples
+        // depth.opaque in the UI pass (glass-depth view), so the UI pass
+        // declares that read and depth stays live (unaliased) until then.
+        // Not a hook pass; the attached editor bridge requests it.
+        bool editorDepthSample = false;
 
         [[nodiscard]] static constexpr VulkanGraphHooks none() noexcept {
-            return { false, false, false, false };
+            return { false, false, false, false, false };
         }
         [[nodiscard]] constexpr VulkanGraphHooks operator|(
             const VulkanGraphHooks& other) const noexcept {
             return { depthPyramidValidation || other.depthPyramidValidation,
                 layeredValidation || other.layeredValidation,
                 virtualShadowDepthSnapshot || other.virtualShadowDepthSnapshot,
-                sceneColorCapture || other.sceneColorCapture };
+                sceneColorCapture || other.sceneColorCapture,
+                editorDepthSample || other.editorDepthSample };
         }
     };
 

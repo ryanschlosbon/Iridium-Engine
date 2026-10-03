@@ -30,6 +30,9 @@ namespace Iridium {
         bool virtualShadowDepthOracle = false;
         // Print the indirect command-stream digest (R3a.0).
         bool indirectStreamDigest = false;
+        // Fill every render-graph alias heap with a NaN pattern at each
+        // frame's start (M7R R4b.5); captures must not change.
+        bool aliasPoison = false;
         // Exercise reflection-probe capture-target acquire/promote/retire at
         // backend initialization.
         bool validateProbeCaptureTargets = false;

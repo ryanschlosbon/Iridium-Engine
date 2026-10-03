@@ -121,7 +121,7 @@ namespace {
     };
 
     AliasEligibility classifyAliasing(const CompiledResource& resource,
-        const FirstUsage& first) noexcept {
+        const FirstUsage& first, bool excluded) noexcept {
         if (resource.firstUse == InvalidIndex || !first.seen)
             return AliasEligibility::Unused;
         if (resource.desc.imported ||
@@ -134,6 +134,7 @@ namespace {
             return AliasEligibility::NotTransient;
         if (resource.exported) return AliasEligibility::Exported;
         if (resource.desc.type != ResourceType::Image) return AliasEligibility::Buffer;
+        if (excluded) return AliasEligibility::Excluded;
         const bool discards = first.write && (first.loadOp == LoadOp::Clear ||
             (first.loadOp == LoadOp::DontCare && first.wholeResource));
         return discards ? AliasEligibility::Eligible
@@ -152,6 +153,7 @@ const char* aliasEligibilityName(AliasEligibility eligibility) noexcept {
     case AliasEligibility::Exported: return "exported";
     case AliasEligibility::Buffer: return "buffer";
     case AliasEligibility::FirstUseNotDiscard: return "first-use-not-discard";
+    case AliasEligibility::Excluded: return "excluded";
     }
     return "invalid";
 }
@@ -336,6 +338,12 @@ void RenderGraphBuilder::declareWholeResourceWrite(ResourceHandle writtenVersion
             "A whole-resource write cannot load its previous contents");
     }
     version.wholeResourceWrite = true;
+}
+
+void RenderGraphBuilder::excludeFromAliasing(ResourceHandle resource) {
+    validate(resource);
+    m_logicalResources[m_resourceVersions[resource.index].logicalResourceIndex]
+        .aliasingExcluded = true;
 }
 
 void RenderGraphBuilder::validate(PassHandle pass) const {
@@ -651,7 +659,8 @@ struct CompilerAccess {
 
         for (CompiledResource& resource : graph.m_resources) {
             resource.aliasEligibility = classifyAliasing(resource,
-                firstUsages[resource.logicalResourceIndex]);
+                firstUsages[resource.logicalResourceIndex],
+                builder.m_logicalResources[resource.logicalResourceIndex].aliasingExcluded);
         }
 
         std::vector<uint32_t> reusableResources;
@@ -768,6 +777,11 @@ struct CompilerAccess {
             if (resource.historyPair != InvalidIndex) {
                 hashValue(hash, resource.historyPair);
                 hashValue(hash, resource.historyRole);
+            }
+            // R4b.5: hashed only when declared.
+            if (resource.aliasingExcluded) {
+                const uint8_t excluded = 0xE5;
+                hashValue(hash, excluded);
             }
         }
         for (const auto& pass : builder.m_passes) {

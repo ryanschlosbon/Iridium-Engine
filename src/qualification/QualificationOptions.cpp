@@ -212,6 +212,12 @@ namespace Iridium {
         addSwitch(registry, owner, "--qualification-indirect-stream-digest",
             "Print a digest of every GPU-driven compaction stream per view and frame",
             [&q] { q.indirectStreamDigest = true; });
+        addSwitch(registry, owner, "--qualification-alias-poison",
+            "Fill render-graph alias heaps with NaN at frame start (implies aliasing on)",
+            [&q, &c] {
+                c.renderGraphAliasing = true;
+                q.aliasPoison = true;
+            });
         addValueOption(registry, owner, "--qualification-scripted-changes", "PATH",
             "Apply a deterministic mid-run change scenario (hitch measurement)",
             "--qualification-scripted-changes requires a path",

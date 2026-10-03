@@ -54,6 +54,9 @@ namespace Iridium {
         DeepLayeredValidation,      // "transparent.layered.<tier>.validation-readback-hook"
         DeepLayeredResolveCounts,   // notification only, after the deep scene resolve
         VirtualShadowDepthSnapshot, // inside "shadow.virtual.request-readback"
+        // Notification only (M7R R4b.5): the frame's command buffer is open
+        // and no graph pass has begun (qualification alias-heap poison).
+        FrameGraphBegin,
     };
 
     // Stable backend objects an extension may use between
