@@ -176,12 +176,13 @@ namespace Iridium {
         static bool deepResolveActive(void* owner, const VulkanFrameRecordContext& frame);
         static void executeDeepSceneResolve(void* owner, VulkanPassContext& context);
 
-        void drawOrdinary2Capture(VkCommandBuffer commandBuffer, uint32_t frame, bool exit);
-        void drawOrdinary2LocalComposition(VkCommandBuffer commandBuffer, uint32_t frame);
+        // R4a: these record inside the pass's dynamic-rendering scope.
+        void drawOrdinary2Capture(VulkanPassContext& context, bool exit);
+        void drawOrdinary2LocalComposition(VulkanPassContext& context);
         void drawOrdinary2SceneResolve(VkCommandBuffer commandBuffer, uint32_t frame);
-        void drawDeepCapture(VkCommandBuffer commandBuffer, uint32_t frame,
-            TransparencyQuality quality, uint32_t interfaceIndex);
-        void drawDeepLocalComposition(VkCommandBuffer commandBuffer, uint32_t frame,
+        void drawDeepCapture(VulkanPassContext& context, TransparencyQuality quality,
+            uint32_t interfaceIndex);
+        void drawDeepLocalComposition(VulkanPassContext& context,
             TransparencyQuality quality);
         void drawDeepSceneResolve(VkCommandBuffer commandBuffer, uint32_t frame);
 

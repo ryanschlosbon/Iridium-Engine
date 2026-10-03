@@ -100,16 +100,22 @@ namespace Iridium {
         // Declared only while the tier's atlas is resident. Every range opens
         // before its pass's barriers.
         constexpr GpuRangePlacement Before = GpuRangePlacement::BeforeBarriers;
+        // R4a: the captures and local compositions record with dynamic
+        // rendering. The executor's transitions to ColorAttachment and
+        // DepthAttachmentWrite replace the render passes' external
+        // dependencies; CLEAR on the preserved layout equals the old
+        // UNDEFINED initial layout.
+        constexpr bool Dynamic = true;
         if (ordinary2EntryPass_.isValid()) {
             graph.registerPass(ordinary2EntryPass_, { &ordinary2Captures_[0],
                 &ordinary2CaptureActive, &executeOrdinary2Capture,
-                "gpu.transparency.layered.entry.capture", Before });
+                "gpu.transparency.layered.entry.capture", Before, Dynamic });
             graph.registerPass(ordinary2ExitPass_, { &ordinary2Captures_[1],
                 &ordinary2CaptureActive, &executeOrdinary2Capture,
-                "gpu.transparency.layered.exit.capture", Before });
+                "gpu.transparency.layered.exit.capture", Before, Dynamic });
             graph.registerPass(ordinary2LocalComposePass_, { this, &ordinary2PassActive,
                 &executeOrdinary2LocalComposition,
-                "gpu.transparency.layered.local-compose", Before });
+                "gpu.transparency.layered.local-compose", Before, Dynamic });
             graph.registerPass(ordinary2ResolvePass_, { this, &ordinary2PassActive,
                 &executeOrdinary2SceneResolve,
                 "gpu.transparency.layered.scene-resolve", Before });
@@ -122,7 +128,7 @@ namespace Iridium {
                     graph.registerPass(deep.ids.interfaceCapture[index], {
                         &deep.interfaces[index], &deepTierActive, &executeDeepCapture,
                         hero4 ? Hero4CaptureGpuRanges[index]
-                            : Cinematic8CaptureGpuRanges[index], Before });
+                            : Cinematic8CaptureGpuRanges[index], Before, Dynamic });
                 if (deep.ids.terminateTiles[index].isValid())
                     graph.registerPass(deep.ids.terminateTiles[index], {
                         &deep.interfaces[index], &deepTierActive, &executeDeepTermination,
@@ -133,7 +139,8 @@ namespace Iridium {
                 graph.registerPass(deep.ids.localCompose, { &deep.tier, &deepTierActive,
                     &executeDeepLocalComposition, hero4
                         ? "gpu.transparency.layered.hero4.local-compose"
-                        : "gpu.transparency.layered.cinematic8.local-compose", Before });
+                        : "gpu.transparency.layered.cinematic8.local-compose", Before,
+                    Dynamic });
         }
         // The resident tier set selects the resolve's range (and the hook's name).
         if (deepResolvePass_.isValid()) {
@@ -563,14 +570,13 @@ namespace Iridium {
     void VulkanLayeredTransparencyFeature::executeOrdinary2Capture(void* owner,
         VulkanPassContext& context) {
         const auto& slot = *static_cast<const Ordinary2Slot*>(owner);
-        slot.self->drawOrdinary2Capture(context.commandBuffer, context.frame.frameIndex,
-            slot.exit);
+        slot.self->drawOrdinary2Capture(context, slot.exit);
     }
 
     void VulkanLayeredTransparencyFeature::executeOrdinary2LocalComposition(void* owner,
         VulkanPassContext& context) {
         static_cast<VulkanLayeredTransparencyFeature*>(owner)->drawOrdinary2LocalComposition(
-            context.commandBuffer, context.frame.frameIndex);
+            context);
     }
 
     void VulkanLayeredTransparencyFeature::executeOrdinary2SceneResolve(void* owner,
@@ -588,8 +594,7 @@ namespace Iridium {
     void VulkanLayeredTransparencyFeature::executeDeepCapture(void* owner,
         VulkanPassContext& context) {
         const auto& slot = *static_cast<const DeepSlot*>(owner);
-        slot.self->drawDeepCapture(context.commandBuffer, context.frame.frameIndex,
-            slot.quality, slot.interfaceIndex);
+        slot.self->drawDeepCapture(context, slot.quality, slot.interfaceIndex);
     }
 
     void VulkanLayeredTransparencyFeature::executeDeepTermination(void* owner,
@@ -609,8 +614,7 @@ namespace Iridium {
     void VulkanLayeredTransparencyFeature::executeDeepLocalComposition(void* owner,
         VulkanPassContext& context) {
         const auto& slot = *static_cast<const DeepSlot*>(owner);
-        slot.self->drawDeepLocalComposition(context.commandBuffer,
-            context.frame.frameIndex, slot.quality);
+        slot.self->drawDeepLocalComposition(context, slot.quality);
     }
 
     bool VulkanLayeredTransparencyFeature::deepResolveActive(void* owner,
@@ -629,30 +633,20 @@ namespace Iridium {
     // Recording (inside the passes; ranges and barriers are the executor's).
     // ------------------------------------------------------------------
 
-    void VulkanLayeredTransparencyFeature::drawOrdinary2Capture(VkCommandBuffer cmd,
-        uint32_t frameIndex, bool exitCapture) {
+    void VulkanLayeredTransparencyFeature::drawOrdinary2Capture(VulkanPassContext& context,
+        bool exitCapture) {
+        const VkCommandBuffer cmd = context.commandBuffer;
+        const uint32_t frameIndex = context.frame.frameIndex;
         const VulkanFrameTargets& frameTargets = context_->frameTargets;
         VulkanFrameTelemetry& telemetry = context_->telemetry;
         VulkanResourceRegistry& resources = context_->resources;
         const std::span<const DrawPacket> packets = staged_.compatibilityTransparentQueue;
         const std::span<const Ordinary2CaptureDraw> draws = stagedCaptureDraws_;
-        const VulkanFrameContextTargets& targets = frameTargets.get(frameIndex);
-        const VkFramebuffer framebuffer = exitCapture
-            ? targets.layeredExitFramebuffer
-            : targets.layeredEntryFramebuffer;
 
-        std::array<VkClearValue, 2> clears{};
-        clears[0].color.uint32[0] = 0u;
-        clears[1].depthStencil = { 1.0f, 0u };
-        VkRenderPassBeginInfo passInfo{
-            VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
-        passInfo.renderPass = interfaceCapture_.renderPass();
-        passInfo.framebuffer = framebuffer;
-        passInfo.renderArea.extent = ordinary2Extent_;
-        passInfo.clearValueCount = static_cast<uint32_t>(clears.size());
-        passInfo.pClearValues = clears.data();
-        vkCmdBeginRenderPass(cmd, &passInfo,
-            VK_SUBPASS_CONTENTS_INLINE);
+        // R4a: identity (uint 0) and depth (1.0) CLEAR/STORE from the graph.
+        VulkanRenderingOverrides rendering{};
+        rendering.renderArea = { { 0, 0 }, ordinary2Extent_ };
+        context.beginRendering(rendering);
 
         const VkPipelineLayout layout =
             interfaceCapture_.pipelineLayout();
@@ -724,11 +718,13 @@ namespace Iridium {
                     packet.indexCount / 3u);
             }
         }
-        vkCmdEndRenderPass(cmd);
+        context.endRendering();
     }
 
-    void VulkanLayeredTransparencyFeature::drawDeepCapture(VkCommandBuffer cmd,
-        uint32_t frameIndex, TransparencyQuality quality, uint32_t interfaceIndex) {
+    void VulkanLayeredTransparencyFeature::drawDeepCapture(VulkanPassContext& context,
+        TransparencyQuality quality, uint32_t interfaceIndex) {
+        const VkCommandBuffer cmd = context.commandBuffer;
+        const uint32_t frameIndex = context.frame.frameIndex;
         const VulkanFrameTargets& frameTargets = context_->frameTargets;
         VulkanFrameTelemetry& telemetry = context_->telemetry;
         VulkanResourceRegistry& resources = context_->resources;
@@ -738,21 +734,11 @@ namespace Iridium {
         const VulkanFrameContextTargets::DeepLayeredTier* tier = quality ==
                 TransparencyQuality::Hero4
             ? &targets.hero4 : &targets.cinematic8;
-        const VkFramebuffer framebuffer =
-            tier->interfaceFramebuffers[interfaceIndex];
 
-        std::array<VkClearValue, 2> clears{};
-        clears[0].color.uint32[0] = 0u;
-        clears[1].depthStencil = { 1.0f, 0u };
-        VkRenderPassBeginInfo passInfo{
-            VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
-        passInfo.renderPass = interfaceCapture_.renderPass();
-        passInfo.framebuffer = framebuffer;
-        passInfo.renderArea.extent = tier->atlasExtent;
-        passInfo.clearValueCount = static_cast<uint32_t>(clears.size());
-        passInfo.pClearValues = clears.data();
-        vkCmdBeginRenderPass(cmd, &passInfo,
-            VK_SUBPASS_CONTENTS_INLINE);
+        // R4a: identity (uint 0) and depth (1.0) CLEAR/STORE from the graph.
+        VulkanRenderingOverrides rendering{};
+        rendering.renderArea = { { 0, 0 }, tier->atlasExtent };
+        context.beginRendering(rendering);
 
         const VkPipelineLayout layout =
             interfaceCapture_.pipelineLayout();
@@ -824,11 +810,13 @@ namespace Iridium {
             telemetry.recordDraw(telemetry.counters().deepLayeredInterfaceDraws,
                 packet.indexCount / 3u);
         }
-        vkCmdEndRenderPass(cmd);
+        context.endRendering();
     }
 
-    void VulkanLayeredTransparencyFeature::drawDeepLocalComposition(VkCommandBuffer cmd,
-        uint32_t frameIndex, TransparencyQuality quality) {
+    void VulkanLayeredTransparencyFeature::drawDeepLocalComposition(
+        VulkanPassContext& context, TransparencyQuality quality) {
+        const VkCommandBuffer cmd = context.commandBuffer;
+        const uint32_t frameIndex = context.frame.frameIndex;
         const VulkanFrameTargets& frameTargets = context_->frameTargets;
         VulkanFrameTelemetry& telemetry = context_->telemetry;
         VulkanResourceRegistry& resources = context_->resources;
@@ -843,17 +831,10 @@ namespace Iridium {
                 TransparencyQuality::Hero4
             ? targets.hero4 : targets.cinematic8;
 
-        VkClearValue clear{};
-        clear.color = { { 0.0f, 0.0f, 0.0f, 0.0f } };
-        VkRenderPassBeginInfo passInfo{
-            VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
-        passInfo.renderPass = localComposition_.renderPass();
-        passInfo.framebuffer = tier.localCompositionFramebuffer;
-        passInfo.renderArea.extent = tier.atlasExtent;
-        passInfo.clearValueCount = 1u;
-        passInfo.pClearValues = &clear;
-        vkCmdBeginRenderPass(cmd, &passInfo,
-            VK_SUBPASS_CONTENTS_INLINE);
+        // R4a: local colour (0,0,0,0) CLEAR/STORE from the graph.
+        VulkanRenderingOverrides rendering{};
+        rendering.renderArea = { { 0, 0 }, tier.atlasExtent };
+        context.beginRendering(rendering);
 
         const VkPipelineLayout layout =
             localComposition_.deepPipelineLayout();
@@ -1000,30 +981,23 @@ namespace Iridium {
                     packet.indexCount / 3u);
             }
         }
-        vkCmdEndRenderPass(cmd);
+        context.endRendering();
     }
 
     void VulkanLayeredTransparencyFeature::drawOrdinary2LocalComposition(
-        VkCommandBuffer cmd, uint32_t frameIndex) {
+        VulkanPassContext& context) {
+        const VkCommandBuffer cmd = context.commandBuffer;
+        const uint32_t frameIndex = context.frame.frameIndex;
         const VulkanFrameTargets& frameTargets = context_->frameTargets;
         VulkanFrameTelemetry& telemetry = context_->telemetry;
         VulkanResourceRegistry& resources = context_->resources;
         const std::span<const DrawPacket> packets = staged_.compatibilityTransparentQueue;
         const std::span<const Ordinary2CaptureDraw> draws = stagedCaptureDraws_;
-        const VulkanFrameContextTargets& targets = frameTargets.get(frameIndex);
 
-        VkClearValue clear{};
-        clear.color = { { 0.0f, 0.0f, 0.0f, 0.0f } };
-        VkRenderPassBeginInfo passInfo{
-            VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
-        passInfo.renderPass = localComposition_.renderPass();
-        passInfo.framebuffer =
-            targets.layeredLocalCompositionFramebuffer;
-        passInfo.renderArea.extent = ordinary2Extent_;
-        passInfo.clearValueCount = 1u;
-        passInfo.pClearValues = &clear;
-        vkCmdBeginRenderPass(cmd, &passInfo,
-            VK_SUBPASS_CONTENTS_INLINE);
+        // R4a: local colour (0,0,0,0) CLEAR/STORE from the graph.
+        VulkanRenderingOverrides rendering{};
+        rendering.renderArea = { { 0, 0 }, ordinary2Extent_ };
+        context.beginRendering(rendering);
 
         const VkPipelineLayout layout =
             localComposition_.pipelineLayout();
@@ -1094,7 +1068,7 @@ namespace Iridium {
             telemetry.recordDraw(telemetry.counters().ordinary2LocalCompositionDraws,
                 packet.indexCount / 3u);
         }
-        vkCmdEndRenderPass(cmd);
+        context.endRendering();
     }
 
     void VulkanLayeredTransparencyFeature::drawOrdinary2SceneResolve(VkCommandBuffer cmd,

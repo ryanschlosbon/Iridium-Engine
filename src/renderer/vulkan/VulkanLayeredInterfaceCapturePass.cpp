@@ -242,7 +242,15 @@ VkPipeline VulkanLayeredInterfaceCapturePass::createPipeline() const {
         pipelineInfo.pColorBlendState = &colorBlend;
         pipelineInfo.pDynamicState = &dynamicState;
         pipelineInfo.layout = pipelineLayout_;
-        pipelineInfo.renderPass = renderPass_;
+        // R4a: dynamic rendering into the R32_UINT identity + D32 depth pair.
+        constexpr VkFormat identityFormat = VK_FORMAT_R32_UINT;
+        VkPipelineRenderingCreateInfo rendering{
+            VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO };
+        rendering.colorAttachmentCount = 1u;
+        rendering.pColorAttachmentFormats = &identityFormat;
+        rendering.depthAttachmentFormat = VK_FORMAT_D32_SFLOAT;
+        pipelineInfo.pNext = &rendering;
+        pipelineInfo.renderPass = VK_NULL_HANDLE;
         VkPipeline pipeline = VK_NULL_HANDLE;
         requireSuccess(vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1u,
             &pipelineInfo, nullptr, &pipeline),

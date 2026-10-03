@@ -224,7 +224,14 @@ VkPipeline VulkanLayeredLocalCompositionPass::createPipeline(
         pipelineInfo.pColorBlendState = &colorBlend;
         pipelineInfo.pDynamicState = &dynamicState;
         pipelineInfo.layout = layout;
-        pipelineInfo.renderPass = renderPass_;
+        // R4a: dynamic rendering into the RGBA16F local colour target.
+        const VkFormat colorFormat = VulkanSceneColorFormat;
+        VkPipelineRenderingCreateInfo rendering{
+            VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO };
+        rendering.colorAttachmentCount = 1u;
+        rendering.pColorAttachmentFormats = &colorFormat;
+        pipelineInfo.pNext = &rendering;
+        pipelineInfo.renderPass = VK_NULL_HANDLE;
         VkPipeline pipeline = VK_NULL_HANDLE;
         requireSuccess(vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1u,
             &pipelineInfo, nullptr, &pipeline),
