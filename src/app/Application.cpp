@@ -553,7 +553,9 @@ namespace Iridium {
             }
         }
         AssetGuid startupModelGuid;
-        if (policy_.deterministicContent) {
+        // Deterministic runs and hidden-window (automation) runs must not read or
+        // overwrite the user's editor layout in imgui.ini.
+        if (policy_.deterministicContent || !config_.windowVisible) {
             ImGui::GetIO().IniFilename = nullptr;
         }
         startupProfile_.editorNanoseconds = static_cast<uint64_t>(
