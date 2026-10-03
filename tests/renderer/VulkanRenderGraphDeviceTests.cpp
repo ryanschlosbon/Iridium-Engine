@@ -233,7 +233,8 @@ namespace {
         IRIDIUM_CHECK(compiled.succeeded());
 
         VulkanResourceAllocator allocator;
-        allocator.init(gpu.physicalDevice(), gpu.device(), gpu.hasMemoryBudget());
+        allocator.init(gpu.instance(), gpu.physicalDevice(), gpu.device(),
+            gpu.hasMemoryBudget());
         VulkanImageResource targetImage = allocator.createImage2D({ 256, 128 },
             VK_FORMAT_R8G8B8A8_UNORM,
             VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
