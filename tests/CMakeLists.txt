@@ -271,6 +271,12 @@ iridium_add_test(VulkanOutputTransportTests
         SOURCES renderer/VulkanOutputTransportTests.cpp
         LIBS iridium_vulkan)
 
+# M7R R3a.7: the shadow/probe/opaque indirect cullers' exact command logs and
+# host-written bytes through fake VulkanCullerCommands/Resources (no device).
+iridium_add_test(VulkanIndirectCullerTests
+        SOURCES renderer/VulkanIndirectCullerTests.cpp
+        LIBS iridium_vulkan)
+
 # M7R R2.7/R2.8 Vulkan qualification extension: readback analyzers, oracle
 # comparisons, hook declarations and factory attachment (no device).
 if(TARGET iridium_qualification)
