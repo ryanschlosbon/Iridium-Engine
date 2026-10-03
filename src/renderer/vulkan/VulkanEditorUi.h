@@ -14,11 +14,11 @@
 //                            transport and topology changes)
 //   onFrameTargetsCreated    after they were recreated and their layouts
 //                            established
-//   onPresentationChanged    the swapchain and the UI render pass were
+//   onPresentationChanged    the swapchain and the UI colour format were
 //                            replaced (transport change or recreate)
 //   onSwapchainImageCountChanged  after the replacement targets exist
 //   onDisplayColorChanged    live output settings changed
-//   recordUi                 inside the "ui" render pass of every frame
+//   recordUi                 inside the "ui" pass's rendering of every frame
 //   onUiShutdown             after device idle and the extensions'
 //                            onBeforeDeviceDestroy, before the backend
 //                            destroys its resources
@@ -61,8 +61,10 @@ namespace Iridium {
 
     // Swapchain-dependent state: init and every transport change.
     struct VulkanEditorUiPresentation {
-        // The backend's "ui" render pass (one color attachment, cleared).
-        VkRenderPass renderPass = VK_NULL_HANDLE;
+        // The format of the "ui" pass's one colour attachment (cleared): the
+        // swapchain's, or RGBA16F for HDR10 composition. The pass records
+        // with dynamic rendering (M7R R4a).
+        VkFormat colorFormat = VK_FORMAT_UNDEFINED;
         uint32_t imageCount = 0;
         Color::OutputTransport transport = Color::OutputTransport::SdrSrgb;
         float paperWhiteNits = 203.0f;
@@ -85,7 +87,7 @@ namespace Iridium {
         virtual void prepareRetainedViewImages(VkCommandBuffer commandBuffer) = 0;
         virtual void copyRetainedView(VkCommandBuffer commandBuffer) = 0;
 
-        // Inside the "ui" render pass, after its clear.
+        // Inside the "ui" pass's dynamic rendering, after its clear.
         virtual void recordUi(VkCommandBuffer commandBuffer) = 0;
 
         virtual void onUiShutdown() noexcept = 0;

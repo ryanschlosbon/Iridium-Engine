@@ -26,35 +26,6 @@ namespace Iridium {
         DescriptorAllocator& allocator, VkFormat swapchainFormat) {
         device_ = context.getDevice();
         allocator_ = &allocator;
-        VkAttachmentDescription attachment{};
-        attachment.format = swapchainFormat;
-        attachment.samples = VK_SAMPLE_COUNT_1_BIT;
-        attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-        attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-        attachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        attachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-        VkAttachmentReference reference{ 0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL };
-        VkSubpassDescription subpass{};
-        subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-        subpass.colorAttachmentCount = 1;
-        subpass.pColorAttachments = &reference;
-        VkSubpassDependency dependency{};
-        dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
-        dependency.dstSubpass = 0;
-        dependency.srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-        dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-        dependency.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-        VkRenderPassCreateInfo renderInfo{ VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO };
-        renderInfo.attachmentCount = 1;
-        renderInfo.pAttachments = &attachment;
-        renderInfo.subpassCount = 1;
-        renderInfo.pSubpasses = &subpass;
-        renderInfo.dependencyCount = 1;
-        renderInfo.pDependencies = &dependency;
-        if (vkCreateRenderPass(device_, &renderInfo, nullptr, &renderPass_) != VK_SUCCESS)
-            throw std::runtime_error("Failed to create HDR encode render pass.");
-
         VkDescriptorSetLayoutBinding binding{};
         binding.binding = 0;
         binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -127,7 +98,12 @@ namespace Iridium {
         pipelineInfo.pMultisampleState = &multisample;
         pipelineInfo.pColorBlendState = &blending;
         pipelineInfo.pDynamicState = &dynamic;
-        pipelineInfo.layout = pipelineLayout_; pipelineInfo.renderPass = renderPass_;
+        VkPipelineRenderingCreateInfo rendering{
+            VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO };
+        rendering.colorAttachmentCount = 1;
+        rendering.pColorAttachmentFormats = &swapchainFormat;
+        pipelineInfo.pNext = &rendering;
+        pipelineInfo.layout = pipelineLayout_; pipelineInfo.renderPass = VK_NULL_HANDLE;
         const VkResult result = vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1,
             &pipelineInfo, nullptr, &pipeline_);
         vkDestroyShaderModule(device_, fragment, nullptr);
@@ -150,35 +126,31 @@ namespace Iridium {
             write.pImageInfo = &image;
             vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
         }
-        for (VkImageView view : swapchainViews) {
-            VkFramebufferCreateInfo info{ VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO };
-            info.renderPass = renderPass_; info.attachmentCount = 1;
-            info.pAttachments = &view; info.width = extent.width;
-            info.height = extent.height; info.layers = 1;
-            VkFramebuffer framebuffer = VK_NULL_HANDLE;
-            if (vkCreateFramebuffer(device_, &info, nullptr, &framebuffer) != VK_SUCCESS)
-                throw std::runtime_error("Failed to create HDR present framebuffer.");
-            framebuffers_.push_back(framebuffer);
-        }
+        (void)extent;
+        swapchainViews_ = swapchainViews;
     }
 
     void VulkanHdrEncodePass::clearTargets() {
         if (!descriptorSets_.empty() && allocator_) allocator_->free(descriptorSets_);
         descriptorSets_.clear();
-        for (VkFramebuffer framebuffer : framebuffers_)
-            vkDestroyFramebuffer(device_, framebuffer, nullptr);
-        framebuffers_.clear();
+        swapchainViews_.clear();
     }
 
     void VulkanHdrEncodePass::record(VkCommandBuffer commandBuffer,
         uint32_t frameIndex, uint32_t imageIndex, VkExtent2D extent,
         float paperWhiteNits, float peakNits) const {
-        VkRenderPassBeginInfo begin{ VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
-        begin.renderPass = renderPass_; begin.framebuffer = framebuffers_.at(imageIndex);
-        begin.renderArea.extent = extent;
-        VkClearValue clear{ { { 0, 0, 0, 1 } } };
-        begin.clearValueCount = 1; begin.pClearValues = &clear;
-        vkCmdBeginRenderPass(commandBuffer, &begin, VK_SUBPASS_CONTENTS_INLINE);
+        VkRenderingAttachmentInfo color{ VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
+        color.imageView = swapchainViews_.at(imageIndex);
+        color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        color.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        color.clearValue.color = { { 0.0f, 0.0f, 0.0f, 1.0f } };
+        VkRenderingInfo rendering{ VK_STRUCTURE_TYPE_RENDERING_INFO };
+        rendering.renderArea.extent = extent;
+        rendering.layerCount = 1;
+        rendering.colorAttachmentCount = 1;
+        rendering.pColorAttachments = &color;
+        vkCmdBeginRendering(commandBuffer, &rendering);
         vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_);
         const VkDescriptorSet set = descriptorSets_.at(frameIndex);
         vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -192,7 +164,7 @@ namespace Iridium {
         vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
         vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
         vkCmdDraw(commandBuffer, 3, 1, 0, 0);
-        vkCmdEndRenderPass(commandBuffer);
+        vkCmdEndRendering(commandBuffer);
     }
 
     void VulkanHdrEncodePass::cleanup() {
@@ -201,10 +173,9 @@ namespace Iridium {
             if (pipeline_) vkDestroyPipeline(device_, pipeline_, nullptr);
             if (pipelineLayout_) vkDestroyPipelineLayout(device_, pipelineLayout_, nullptr);
             if (descriptorSetLayout_) vkDestroyDescriptorSetLayout(device_, descriptorSetLayout_, nullptr);
-            if (renderPass_) vkDestroyRenderPass(device_, renderPass_, nullptr);
         }
-        descriptorSets_.clear(); framebuffers_.clear(); device_ = VK_NULL_HANDLE;
-        allocator_ = nullptr; renderPass_ = VK_NULL_HANDLE;
+        descriptorSets_.clear(); swapchainViews_.clear(); device_ = VK_NULL_HANDLE;
+        allocator_ = nullptr;
         descriptorSetLayout_ = VK_NULL_HANDLE; pipelineLayout_ = VK_NULL_HANDLE;
         pipeline_ = VK_NULL_HANDLE;
     }

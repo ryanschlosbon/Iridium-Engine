@@ -80,6 +80,19 @@ namespace Iridium {
 
         private:
             void destroyRetainedViews();
+            // M7R R4a: ImGui's main pipeline targets the "ui" pass's colour
+            // format (dynamic rendering); ImGui deep-copies the format array.
+            VkPipelineRenderingCreateInfoKHR pipelineRendering(
+                const VulkanEditorUiPresentation& presentation) {
+                colorFormat_ = presentation.colorFormat;
+                VkPipelineRenderingCreateInfoKHR info{
+                    VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO_KHR };
+                info.colorAttachmentCount = 1;
+                info.pColorAttachmentFormats = &colorFormat_;
+                return info;
+            }
+
+            VkFormat colorFormat_ = VK_FORMAT_UNDEFINED;
 
             GLFWwindow* window_ = nullptr;
             VulkanEditorUiDevice device_{};
@@ -135,7 +148,11 @@ namespace Iridium {
             initInfo.DescriptorPool = pool_;
             initInfo.MinImageCount = presentation.imageCount;
             initInfo.ImageCount = presentation.imageCount;
-            initInfo.PipelineInfoMain.RenderPass = presentation.renderPass;
+            // M7R R4a: the UI pass records with dynamic rendering.
+            initInfo.ApiVersion = VK_API_VERSION_1_3;
+            initInfo.UseDynamicRendering = true;
+            initInfo.PipelineInfoMain.PipelineRenderingCreateInfo =
+                pipelineRendering(presentation);
             const std::vector<char> fragmentBytes = readFile(
                 std::string(PROJECT_ROOT_DIR) +
                 "assets/shaders/imgui_color_managed_frag.spv");
@@ -186,7 +203,7 @@ namespace Iridium {
             const VulkanEditorUiPresentation& presentation) {
             if (!initialized_) return;
             ImGui_ImplVulkan_PipelineInfo pipelineInfo{};
-            pipelineInfo.RenderPass = presentation.renderPass;
+            pipelineInfo.PipelineRenderingCreateInfo = pipelineRendering(presentation);
             pipelineInfo.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
             ImGui_ImplVulkan_CreateMainPipeline(&pipelineInfo);
             onDisplayColorChanged(presentation.transport, presentation.paperWhiteNits);

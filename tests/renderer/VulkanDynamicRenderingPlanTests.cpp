@@ -907,10 +907,10 @@ namespace {
         return true;
     }
 
-    // Render-pass- and owner-managed imports are left alone at frame end; the
-    // production topologies (no flagged pass) record nothing there, and the
-    // same barriers as without the R4a code paths.
-    bool testProductionFrameEndRecordsNothing() {
+    // The production topologies (SDR and HDR10 composition) record exactly
+    // one frame-end export: the swapchain (bound as in the backend, discarded
+    // on first use) moves from its writer's COLOR_ATTACHMENT to PRESENT_SRC.
+    bool testProductionFrameEndPresentsSwapchain() {
         for (const bool hdr10 : { false, true }) {
             FakeResourceFactory factory;
             RecordingSink sink;
@@ -929,22 +929,30 @@ namespace {
             swapchain.format = hdr10 ? VK_FORMAT_A2B10G10R10_UNORM_PACK32
                                      : VK_FORMAT_B8G8R8A8_SRGB;
             for (uint32_t slot = 0; slot < 2; ++slot) {
-                executor.bindExternalImage(slot, ids.swapchain, swapchain, Access::Undefined,
-                    ExternalSyncPolicy::renderPassManaged(Access::Undefined, Access::Present));
+                executor.bindExternalImage(slot, ids.swapchain, swapchain, Access::Present,
+                    ExternalSyncPolicy::discardOnFirstUse());
                 executor.bindExternalBuffer(slot, ids.virtualShadowWorkingSet,
                     reinterpret_cast<VkBuffer>(uintptr_t{ 0x900 + slot }), 8'192);
             }
             for (uint32_t frame = 0; frame < 3; ++frame) {
                 const uint32_t slot = frame % 2;
                 executor.onFrameFenceCompleted(slot);
-                executor.bindExternalImage(slot, ids.swapchain, swapchain, Access::Undefined,
-                    ExternalSyncPolicy::renderPassManaged(Access::Undefined, Access::Present));
+                executor.bindExternalImage(slot, ids.swapchain, swapchain, Access::Present,
+                    ExternalSyncPolicy::discardOnFirstUse());
                 executor.beginFrameExecution(slot);
                 for (const auto& pass : executor.compiledGraph()->passes())
                     executor.beginPass(FakeCommandBuffer, executor.passId(pass.name));
                 const uint32_t before = sink.barrierCalls;
+                const uint32_t firstImage = sink.imageCount;
                 executor.finishFrameExecution();
-                CHECK(sink.barrierCalls == before);
+                CHECK(sink.barrierCalls == before + 1);
+                CHECK(sink.imageCount == firstImage + 1);
+                if (sink.imageCount == firstImage + 1) {
+                    const RecordedBarrier& exported = sink.images[firstImage];
+                    CHECK(exported.image == 0xA000);
+                    CHECK(exported.oldLayout == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+                    CHECK(exported.newLayout == VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+                }
                 CHECK(sink.renderingCount == 0);
             }
             executor.cleanupAfterDeviceIdle();
@@ -995,7 +1003,7 @@ int main() {
         { "discard on first use and the present export",
             testDiscardOnFirstUseAndPresentExport },
         { "discard requires a write and re-arms", testDiscardRequiresAWriteAndRearms },
-        { "production frame end records nothing", testProductionFrameEndRecordsNothing },
+        { "production frame end presents the swapchain", testProductionFrameEndPresentsSwapchain },
         { "rendering frames allocate nothing", testRenderingFramesAllocateNothing },
     };
     size_t failures = 0;

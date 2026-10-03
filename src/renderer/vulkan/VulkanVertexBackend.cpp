@@ -675,16 +675,18 @@ namespace Iridium {
     }
 
     void VulkanVertexBackend::bindGraphImportedImages() {
-        // R3b.6. The swapchain is rebound per frame after acquire (every slot
-        // starts on image 0 so validateFrame holds before a slot's first
-        // acquire); its render passes go UNDEFINED -> PRESENT and the
-        // executor asserts them.
+        // R3b.6, R4a. The swapchain is rebound per frame after acquire (every
+        // slot starts on image 0 so validateFrame holds before a slot's first
+        // acquire). It is executor-owned and discarded on first use: the
+        // writing pass transitions it from UNDEFINED with a Present
+        // (BOTTOM_OF_PIPE) source scope, which in sync2 is ALL_COMMANDS and
+        // so chains with the acquire semaphore's COLOR_ATTACHMENT_OUTPUT
+        // wait; the frame-end export moves it to PRESENT_SRC.
         using RenderGraph::Access;
         for (uint32_t frame = 0; frame < VulkanFrameScheduler::FramesInFlight; ++frame)
             renderGraph_.bindExternalImage(frame, graphIds_.swapchain,
-                swapchainGraphImage(0), Access::Undefined,
-                ExternalSyncPolicy::renderPassManaged(Access::Undefined,
-                    Access::Present));
+                swapchainGraphImage(0), Access::Present,
+                ExternalSyncPolicy::discardOnFirstUse());
         // R4a: the shadow maps (dynamic rendering) are executor-owned
         // globals; their state persists across slots. Each writing pass moves
         // a whole map to DepthAttachmentWrite with its contents kept, and the
@@ -1424,7 +1426,7 @@ namespace Iridium {
 
     VulkanEditorUiPresentation VulkanVertexBackend::editorUiPresentation()
         const noexcept {
-        return { .renderPass = ui_.renderPass(),
+        return { .colorFormat = ui_.colorFormat(),
             .imageCount = vkSwapchain->getImageCount(),
             .transport = outputTransport_, .paperWhiteNits = paperWhiteNits_ };
     }
@@ -1512,10 +1514,8 @@ namespace Iridium {
             if (frame.status != FrameStatus::RecreateSwapchain) {
                 renderGraph_.bindExternalImage(frameSlot, graphIds_.swapchain,
                     swapchainGraphImage(frame.imageIndex),
-                    RenderGraph::Access::Undefined,
-                    ExternalSyncPolicy::renderPassManaged(
-                        RenderGraph::Access::Undefined,
-                        RenderGraph::Access::Present));
+                    RenderGraph::Access::Present,
+                    ExternalSyncPolicy::discardOnFirstUse());
             }
             if (!renderGraph_.validateFrame(completedFrameIndex)) {
                 throw std::runtime_error(

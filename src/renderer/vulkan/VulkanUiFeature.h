@@ -1,11 +1,12 @@
 #pragma once
 
 // M7R R3c.10: the backend-owned UI pass ("ui-present", or "ui-compose" for
-// HDR10 composition) as a feature owner. Owns the UI render pass, registers
-// the pass callback and records the clear, the attached editor UI's
-// contribution (IVulkanEditorUi::recordUi, renderer/vulkan_imgui) and the end
-// of the render pass. Without an editor UI the pass still clears the
-// swapchain image (or the composition target) and the frame presents.
+// HDR10 composition) as a feature owner. Registers the pass callback, which
+// records (R4a: dynamic rendering over the pass's planned attachment) the
+// clear and the attached editor UI's contribution (IVulkanEditorUi::recordUi,
+// renderer/vulkan_imgui). Without an editor UI the pass still clears the
+// swapchain image (or the composition target) and the frame presents; the
+// executor moves the swapchain to PRESENT at frame end.
 
 #include "VulkanFeatureContext.h"
 #include "VulkanRenderGraphExecutor.h"
@@ -34,14 +35,19 @@ namespace Iridium {
         void registerPasses(VulkanRenderGraphExecutor& graph) override;
         void destroy() noexcept override;
 
-        // Swapchain-dependent render pass (init and transport changes): it
-        // presents directly, or leaves the HDR10 composition target for the
-        // encode pass.
+        // Swapchain-dependent state (init and transport changes): the UI
+        // colour format (the swapchain's, or RGBA16F for HDR10 composition).
+        // The render pass only creates the frame targets' UI framebuffers
+        // until R4a.final removes them; recording uses dynamic rendering.
         void createRenderPass(VkFormat format, bool hdr10Composition);
-        void destroyRenderPass() noexcept { renderPass_.reset(); }
+        void destroyRenderPass() noexcept {
+            renderPass_.reset();
+            colorFormat_ = VK_FORMAT_UNDEFINED;
+        }
         [[nodiscard]] VkRenderPass renderPass() const noexcept {
             return renderPass_ ? renderPass_->getRenderPass() : VK_NULL_HANDLE;
         }
+        [[nodiscard]] VkFormat colorFormat() const noexcept { return colorFormat_; }
 
         // Drain point (submitUIPass).
         void record(VkExtent2D swapchainExtent);
@@ -51,7 +57,7 @@ namespace Iridium {
 
         const VulkanFeatureContext* context_ = nullptr;
         std::unique_ptr<VkUIRenderPass> renderPass_;
-        bool hdr10Composition_ = false;
+        VkFormat colorFormat_ = VK_FORMAT_UNDEFINED;
         IVulkanEditorUi* editorUi_ = nullptr;
         RenderGraph::PassId uiPass_{};
 

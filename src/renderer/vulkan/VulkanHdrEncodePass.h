@@ -21,16 +21,17 @@ namespace Iridium {
             uint32_t imageIndex, VkExtent2D extent, float paperWhiteNits,
             float peakNits) const;
         void cleanup();
-        [[nodiscard]] VkRenderPass renderPass() const noexcept { return renderPass_; }
 
     private:
         VkDevice device_ = VK_NULL_HANDLE;
         DescriptorAllocator* allocator_ = nullptr;
-        VkRenderPass renderPass_ = VK_NULL_HANDLE;
         VkDescriptorSetLayout descriptorSetLayout_ = VK_NULL_HANDLE;
         VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;
         VkPipeline pipeline_ = VK_NULL_HANDLE;
         std::vector<VkDescriptorSet> descriptorSets_;
-        std::vector<VkFramebuffer> framebuffers_;
+        // M7R R4a: dynamic rendering on the acquired image's view. The
+        // executor transitions the swapchain (discarded on first use) and
+        // moves it to PRESENT at frame end.
+        std::vector<VkImageView> swapchainViews_;
     };
 }

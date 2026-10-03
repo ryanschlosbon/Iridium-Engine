@@ -11,7 +11,7 @@ namespace Iridium {
     }
 
     void VulkanUiFeature::createRenderPass(VkFormat format, bool hdr10Composition) {
-        hdr10Composition_ = hdr10Composition;
+        colorFormat_ = format;
         renderPass_ = std::make_unique<VkUIRenderPass>(&context_->vk, format,
             !hdr10Composition);
     }
@@ -22,13 +22,14 @@ namespace Iridium {
 
     void VulkanUiFeature::registerPasses(VulkanRenderGraphExecutor& graph) {
         // gpu.ui starts after the pass's barriers, as it was recorded
-        // imperatively before R3c.10.
+        // imperatively before R3c.10. R4a: dynamic rendering.
         graph.registerPass(uiPass_, { this, nullptr, &executeUi, "gpu.ui",
-            GpuRangePlacement::AfterBarriers });
+            GpuRangePlacement::AfterBarriers, true });
     }
 
     void VulkanUiFeature::destroy() noexcept {
         renderPass_.reset();
+        colorFormat_ = VK_FORMAT_UNDEFINED;
         editorUi_ = nullptr;
         context_ = nullptr;
     }
@@ -40,22 +41,14 @@ namespace Iridium {
 
     void VulkanUiFeature::executeUi(void* owner, VulkanPassContext& context) {
         auto& self = *static_cast<VulkanUiFeature*>(owner);
-        VulkanFrameTargets& targets = self.context_->frameTargets;
-        VkRenderPassBeginInfo uiPassInfo{ VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
-        uiPassInfo.renderPass = self.renderPass_->getRenderPass();
-        uiPassInfo.framebuffer = self.hdr10Composition_
-            ? targets.get(context.frame.frameIndex).uiCompositionFramebuffer
-            : targets.uiFramebuffer(context.frame.imageIndex);
-        uiPassInfo.renderArea.extent = self.stagedSwapchainExtent_;
-
-        VkClearValue uiClearColor = { {{0.0f, 0.0f, 0.0f, 1.0f}} };
-        uiPassInfo.clearValueCount = 1;
-        uiPassInfo.pClearValues = &uiClearColor;
-
-        vkCmdBeginRenderPass(context.commandBuffer, &uiPassInfo,
-            VK_SUBPASS_CONTENTS_INLINE);
+        // The planned attachment: the acquired swapchain image (bound per
+        // frame, discarded on first use) or the HDR10 composition target,
+        // cleared to opaque black.
+        VulkanRenderingOverrides rendering{};
+        rendering.renderArea.extent = self.stagedSwapchainExtent_;
+        context.beginRendering(rendering);
         if (self.editorUi_ != nullptr) self.editorUi_->recordUi(context.commandBuffer);
-        vkCmdEndRenderPass(context.commandBuffer);
+        context.endRendering();
     }
 
 } // namespace Iridium
