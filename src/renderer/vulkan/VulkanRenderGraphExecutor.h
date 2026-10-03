@@ -124,22 +124,17 @@ namespace Iridium {
     // tracked state persists across slots (persistent and history-like imports).
     inline constexpr uint32_t VulkanGlobalBinding = UINT32_MAX;
 
+    // R4a retired RenderPassManaged (render passes that transitioned the
+    // swapchain and shadow maps themselves): those imports are executor-owned.
     enum class ExternalSyncMode : uint8_t {
         // The executor emits the barriers and tracks the state (default).
         ExecutorOwned,
-        // No barriers: a render pass transitions the image. Each writing pass
-        // asserts the tracked state is `initial` and leaves it `final`; reading
-        // passes assert the tracked layout matches their access. Swapchain
-        // (Undefined -> Present) and shadow maps (SampledRead both ways).
-        RenderPassManaged,
         // Declared for ordering only; the owning pass records its own barriers.
         OwnerManaged,
     };
 
     struct ExternalSyncPolicy {
         ExternalSyncMode mode = ExternalSyncMode::ExecutorOwned;
-        RenderGraph::Access initial = RenderGraph::Access::Undefined;
-        RenderGraph::Access final = RenderGraph::Access::Undefined;
         // R4a, ExecutorOwned only: the image's contents are not needed. Its
         // first use in each frame must be a write and transitions from
         // UNDEFINED, while the source scope keeps the tracked access (the
@@ -153,12 +148,7 @@ namespace Iridium {
             return {};
         }
         [[nodiscard]] static constexpr ExternalSyncPolicy discardOnFirstUse() noexcept {
-            return { ExternalSyncMode::ExecutorOwned, RenderGraph::Access::Undefined,
-                RenderGraph::Access::Undefined, true };
-        }
-        [[nodiscard]] static constexpr ExternalSyncPolicy renderPassManaged(
-            RenderGraph::Access initial, RenderGraph::Access final) noexcept {
-            return { ExternalSyncMode::RenderPassManaged, initial, final };
+            return { ExternalSyncMode::ExecutorOwned, true };
         }
         [[nodiscard]] static constexpr ExternalSyncPolicy ownerManaged() noexcept {
             return { ExternalSyncMode::OwnerManaged };
@@ -427,8 +417,7 @@ namespace Iridium {
         // transitions (the compiled transitions at passOrderIndex ==
         // passCount): every exported resource whose tracked state differs from
         // its final access moves there in one dependency on the frame's
-        // command buffer. Render-pass- and owner-managed imports are left to
-        // their owners.
+        // command buffer. Owner-managed imports are left to their owners.
         void finishFrameExecution();
         // R4a: the dynamic-rendering plan of a compiled pass.
         [[nodiscard]] const VulkanPassRenderingPlan& renderingPlan(

@@ -1487,15 +1487,15 @@ namespace {
     RenderGraph::CompiledGraph importGraph() {
         RenderGraph::RenderGraphBuilder builder;
         auto owned = builder.createResource("ext.owned", importedImage(Access::SampledRead));
-        auto renderPass = builder.createResource("ext.render-pass", importedImage(Access::Present));
+        auto perFrame = builder.createResource("ext.per-frame", importedImage(Access::Present));
         auto owner = builder.createResource("ext.owner", importedImage(Access::SampledRead));
         const auto write = builder.addPass("write");
         const auto read = builder.addPass("read");
         owned = builder.write(write, owned, Access::StorageWrite);
-        renderPass = builder.write(write, renderPass, Access::ColorAttachment, RenderGraph::LoadOp::Clear);
+        perFrame = builder.write(write, perFrame, Access::ColorAttachment, RenderGraph::LoadOp::Clear);
         owner = builder.write(write, owner, Access::TransferDestination);
         builder.read(read, owned, Access::SampledRead);
-        builder.read(read, renderPass, Access::SampledRead);
+        builder.read(read, perFrame, Access::SampledRead);
         builder.read(read, owner, Access::SampledRead);
         RenderGraph::CompileResult result = builder.compile();
         if (!result.succeeded()) throw std::runtime_error("import graph failed to compile");
@@ -1511,11 +1511,10 @@ namespace {
         executor.setBarrierApi(VulkanBarrierApi::Synchronization2);
         executor.rebuild(importGraph());
         const auto owned = executor.resourceId("ext.owned");
-        const auto renderPass = executor.resourceId("ext.render-pass");
+        const auto perFrame = executor.resourceId("ext.per-frame");
         const auto owner = executor.resourceId("ext.owner");
         const VulkanImageResource ownedImage = fakeImage(0x5000);
-        const auto rendering = ExternalSyncPolicy::renderPassManaged(Access::Undefined,
-            Access::SampledRead);
+        const auto perFramePolicy = ExternalSyncPolicy::ownerManaged();
 
         // Validation of the binding itself.
         CHECK(throws([&] { executor.bindExternalImage(0, owned,
@@ -1526,31 +1525,28 @@ namespace {
         CHECK(throws([&] { executor.bindExternalImage(2, owned, ownedImage, Access::SampledRead); }));
         CHECK(throws([&] { executor.bindExternalImage(0, RenderGraph::GraphResourceId{ 9 },
             ownedImage, Access::SampledRead); }));
-        CHECK(throws([&] { executor.bindExternalImage(0, renderPass, fakeImage(0x5300),
-            Access::Undefined, ExternalSyncPolicy::renderPassManaged(Access::Undefined,
-                Access::Undefined)); }));
 
         executor.bindExternalImage(VulkanGlobalBinding, owned, ownedImage, Access::SampledRead);
         CHECK(throws([&] { executor.bindExternalImage(0, owned, ownedImage, Access::SampledRead); }));
         CHECK(throws([&] { executor.bindExternalImage(0, owner, ownedImage, Access::SampledRead,
             ExternalSyncPolicy::ownerManaged()); }));   // aliases ext.owned
-        executor.bindExternalImage(0, renderPass, fakeImage(0x6000), Access::Undefined, rendering);
+        executor.bindExternalImage(0, perFrame, fakeImage(0x6000), Access::Undefined, perFramePolicy);
         CHECK(!executor.validateFrame(1));           // per-frame import unbound on slot 1
-        executor.bindExternalImage(1, renderPass, fakeImage(0x6100), Access::Undefined, rendering);
+        executor.bindExternalImage(1, perFrame, fakeImage(0x6100), Access::Undefined, perFramePolicy);
         executor.bindExternalImage(0, owner, fakeImage(0x7000), Access::SampledRead,
             ExternalSyncPolicy::ownerManaged());
         executor.bindExternalImage(1, owner, fakeImage(0x7000), Access::SampledRead,
             ExternalSyncPolicy::ownerManaged());     // non-executor-owned may share slots
         CHECK(executor.validateFrame(0) && executor.validateFrame(1));
         CHECK(executor.image(1, owned).image == ownedImage.image);
-        CHECK(executor.image(1, renderPass).image == reinterpret_cast<VkImage>(uintptr_t{ 0x6100 }));
+        CHECK(executor.image(1, perFrame).image == reinterpret_cast<VkImage>(uintptr_t{ 0x6100 }));
 
         // Frame 0: only the executor-owned import is barriered.
         executor.beginFrameExecution(0);
         CHECK(throws([&] { executor.bindExternalImage(VulkanGlobalBinding, owned, ownedImage,
             Access::SampledRead); }));
-        CHECK(throws([&] { executor.bindExternalImage(0, renderPass, fakeImage(0x6000),
-            Access::Undefined, rendering); }));
+        CHECK(throws([&] { executor.bindExternalImage(0, perFrame, fakeImage(0x6000),
+            Access::Undefined, perFramePolicy); }));
         sink.clear();
         executor.beginPass(FakeCommandBuffer, executor.passId("write"));
         CHECK(sink.recorded().size() == 1);
@@ -1558,7 +1554,7 @@ namespace {
         CHECK(sink.recorded()[0].oldLayout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         CHECK(sink.recorded()[0].newLayout == VK_IMAGE_LAYOUT_GENERAL);
         CHECK(sink.recorded()[0].range.aspectMask == VK_IMAGE_ASPECT_COLOR_BIT);
-        CHECK(executor.externalImageAccess(0, renderPass) == Access::SampledRead);
+        CHECK(executor.externalImageAccess(0, perFrame) == Access::Undefined);   // untracked
         sink.clear();
         executor.beginPass(FakeCommandBuffer, executor.passId("read"));
         CHECK(sink.recorded().size() == 1);
@@ -1576,50 +1572,15 @@ namespace {
         executor.beginPass(FakeCommandBuffer, executor.passId("read"));
         executor.finishFrameExecution();
 
-        // Frame 2 (slot 0) rebinds the render-pass import per frame (like a
-        // swapchain image after acquire); without that its initial state fails.
+        // Frame 2 (slot 0) rebinds the per-frame import after its fence.
         executor.onFrameFenceCompleted(0);
-        executor.bindExternalImage(0, renderPass, fakeImage(0x6000), Access::Undefined, rendering);
+        executor.bindExternalImage(0, perFrame, fakeImage(0x6000), Access::Undefined, perFramePolicy);
         executor.beginFrameExecution(0);
         executor.beginPass(FakeCommandBuffer, executor.passId("write"));
         executor.beginPass(FakeCommandBuffer, executor.passId("read"));
         executor.finishFrameExecution();
-        executor.onFrameFenceCompleted(1);
-        executor.beginFrameExecution(1);
-        CHECK(throws([&] { executor.beginPass(FakeCommandBuffer, executor.passId("write")); }));
         executor.cleanupAfterDeviceIdle();
         CHECK(factory.createCount == 0);
-        return true;
-    }
-
-    bool testRenderPassManagedReadLayout() {
-        RenderGraph::RenderGraphBuilder builder;
-        auto shadow = builder.createResource("shadow",
-            importedImage(Access::SampledRead, RenderGraph::Format::D32Float));
-        const auto draw = builder.addPass("draw");
-        const auto sample = builder.addPass("sample");
-        shadow = builder.write(draw, shadow, Access::DepthAttachmentWrite, RenderGraph::LoadOp::Clear);
-        builder.read(sample, shadow, Access::SampledRead);
-        builder.read(builder.addPass("copy"), shadow, Access::TransferSource);
-        const auto compiled = builder.compile();
-        CHECK(compiled.succeeded());
-        FakeResourceFactory factory;
-        RecordingBarrierSink sink;
-        VulkanRenderGraphExecutor executor;
-        executor.setBarrierSink(&sink);
-        executor.init(factory, 1);
-        executor.rebuild(*compiled.graph);
-        // Shadow maps: the render pass goes read-only -> read-only.
-        executor.bindExternalImage(VulkanGlobalBinding, executor.resourceId("shadow"),
-            fakeImage(0x8000, VK_FORMAT_D32_SFLOAT), Access::SampledRead,
-            ExternalSyncPolicy::renderPassManaged(Access::SampledRead, Access::SampledRead));
-        executor.beginFrameExecution(0);
-        executor.beginPass(FakeCommandBuffer, executor.passId("draw"));
-        executor.beginPass(FakeCommandBuffer, executor.passId("sample"));
-        CHECK(sink.recorded().empty());
-        // A read in a layout the render pass did not leave is rejected.
-        CHECK(throws([&] { executor.beginPass(FakeCommandBuffer, executor.passId("copy")); }));
-        executor.cleanupAfterDeviceIdle();
         return true;
     }
 
@@ -1927,7 +1888,6 @@ int main() {
         { "History retirement", testHistoryRetirement },
         { "production declares no History", testProductionDeclaresNoHistory },
         { "external image policies", testExternalImagePolicies },
-        { "render-pass-managed read layout", testRenderPassManagedReadLayout },
         { "production imported-image policies", testProductionImportedImagePolicies },
         { "variable-size imported buffer", testVariableSizeImportedBuffer },
         { "steady frames allocate nothing", testSteadyFramesAllocateNothing },

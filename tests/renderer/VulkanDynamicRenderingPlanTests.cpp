@@ -798,10 +798,7 @@ namespace {
         constexpr auto discard = ExternalSyncPolicy::discardOnFirstUse();
         static_assert(discard.mode == ExternalSyncMode::ExecutorOwned && discard.discard);
         CHECK(throws([&] { executor.bindExternalImage(0, swapchain, image(0xA000),
-            Access::Present, { ExternalSyncMode::RenderPassManaged, Access::Undefined,
-                Access::Present, true }); }));
-        CHECK(throws([&] { executor.bindExternalImage(0, swapchain, image(0xA000),
-            Access::Present, { ExternalSyncMode::OwnerManaged, {}, {}, true }); }));
+            Access::Present, { ExternalSyncMode::OwnerManaged, true }); }));
         // Like the backend before the first acquire: both slots on one image.
         executor.bindExternalImage(0, swapchain, image(0xA000), Access::Present, discard);
         executor.bindExternalImage(1, swapchain, image(0xA000), Access::Present, discard);

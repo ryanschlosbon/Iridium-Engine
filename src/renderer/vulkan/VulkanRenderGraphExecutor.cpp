@@ -939,9 +939,6 @@ void VulkanRenderGraphExecutor::bindExternalImage(uint32_t frameOrGlobal,
         image.mipLevels != desc.mipLevels || image.arrayLayers != desc.arrayLayers)
         throw std::invalid_argument("External graph image does not match its declaration");
     (void)getVulkanGraphAccessInfo(current, RenderGraph::ResourceType::Image);
-    if (policy.mode == ExternalSyncMode::RenderPassManaged &&
-        policy.final == RenderGraph::Access::Undefined)
-        throw std::invalid_argument("Render-pass-managed imports need a final access");
     if (policy.discard && policy.mode != ExternalSyncMode::ExecutorOwned)
         throw std::invalid_argument("Only executor-owned imports can discard on first use");
     const uint8_t scope = global ? 2 : 1;
@@ -1207,20 +1204,6 @@ void VulkanRenderGraphExecutor::queueExternalImageUsage(ExternalImageBinding& bi
         binding.access = usage.access;
         return;
     }
-    case ExternalSyncMode::RenderPassManaged:
-        if (usage.write) {
-            if (binding.access != binding.policy.initial)
-                throw std::logic_error(
-                    "Render-pass-managed import is not in its declared initial state");
-            binding.access = binding.policy.final;
-        }
-        else if (accessInfoForAspect(binding.access, RenderGraph::ResourceType::Image,
-                     aspect).layout != accessInfoForAspect(usage.access,
-                     RenderGraph::ResourceType::Image, aspect).layout) {
-            throw std::logic_error(
-                "Render-pass-managed import is read in a layout it is not in");
-        }
-        return;
     case ExternalSyncMode::OwnerManaged:
         return;
     }
