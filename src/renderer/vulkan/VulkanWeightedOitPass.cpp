@@ -288,7 +288,17 @@ VkPipeline VulkanWeightedOitPass::createAccumulationPipeline() const {
         info.pColorBlendState = &colorBlend;
         info.pDynamicState = &dynamicState;
         info.layout = accumulationPipelineLayout_;
-        info.renderPass = accumulationRenderPass_;
+        // R4a: dynamic rendering into accumulation + revealage, testing the
+        // opaque depth read-only (DEPTH_STENCIL_READ_ONLY_OPTIMAL, STORE_OP_NONE).
+        const std::array<VkFormat, 2> colorFormats{
+            VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_R16_SFLOAT };
+        VkPipelineRenderingCreateInfo rendering{
+            VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO };
+        rendering.colorAttachmentCount = static_cast<uint32_t>(colorFormats.size());
+        rendering.pColorAttachmentFormats = colorFormats.data();
+        rendering.depthAttachmentFormat = VK_FORMAT_D32_SFLOAT;
+        info.pNext = &rendering;
+        info.renderPass = VK_NULL_HANDLE;
         VkPipeline pipeline = VK_NULL_HANDLE;
         requireSuccess(vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1u,
             &info, nullptr, &pipeline),
@@ -360,7 +370,14 @@ VkPipeline VulkanWeightedOitPass::createResolvePipeline() const {
         info.pColorBlendState = &colorBlend;
         info.pDynamicState = &dynamicState;
         info.layout = resolvePipelineLayout_;
-        info.renderPass = resolveRenderPass_;
+        // R4a: dynamic rendering into scene colour (no depth attachment).
+        const VkFormat colorFormat = VulkanSceneColorFormat;
+        VkPipelineRenderingCreateInfo rendering{
+            VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO };
+        rendering.colorAttachmentCount = 1u;
+        rendering.pColorAttachmentFormats = &colorFormat;
+        info.pNext = &rendering;
+        info.renderPass = VK_NULL_HANDLE;
         VkPipeline pipeline = VK_NULL_HANDLE;
         requireSuccess(vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1u,
             &info, nullptr, &pipeline),

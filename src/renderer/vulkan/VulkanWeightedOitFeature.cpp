@@ -28,10 +28,14 @@ namespace Iridium {
     void VulkanWeightedOitFeature::registerPasses(VulkanRenderGraphExecutor& graph) {
         // Declared only while WeightedOIT is resident.
         if (!accumulatePass_.isValid()) return;
+        // R4a: both record with dynamic rendering. Accumulation's barriers
+        // (depth DepthAttachmentWrite -> DepthAttachmentRead, targets ->
+        // ColorAttachment) and resolve's scene.color same-access re-barrier
+        // replace the render passes' external dependencies.
         graph.registerPass(accumulatePass_, { this, &active, &executeAccumulation,
-            "gpu.transparency.oit.accumulate", GpuRangePlacement::AfterBarriers });
+            "gpu.transparency.oit.accumulate", GpuRangePlacement::AfterBarriers, true });
         graph.registerPass(resolvePass_, { this, &active, &executeResolve,
-            "gpu.transparency.oit.resolve", GpuRangePlacement::AfterBarriers });
+            "gpu.transparency.oit.resolve", GpuRangePlacement::AfterBarriers, true });
     }
 
     void VulkanWeightedOitFeature::destroy() noexcept {
@@ -202,8 +206,6 @@ namespace Iridium {
         VulkanFrameTelemetry& telemetry = context_->telemetry;
         const uint32_t oitFrameIndex = context.frame.frameIndex;
         const VkCommandBuffer commandBuffer = context.commandBuffer;
-        const VulkanFrameContextTargets& oitTargets =
-            frameTargets.get(oitFrameIndex);
         const VkExtent2D oitExtent = frameTargets.extent();
         const VkViewport viewport{ 0.0f, 0.0f,
             static_cast<float>(oitExtent.width),
@@ -212,21 +214,11 @@ namespace Iridium {
         VulkanBufferResource& instanceBuffer = instanceBuffers_[oitFrameIndex];
         const uint32_t oitQueueSize = static_cast<uint32_t>(
             staged_.sortedSurfaceQueue.size());
-        std::array<VkClearValue, 2> clears{};
-        clears[0].color = { { 0.0f, 0.0f, 0.0f, 0.0f } };
-        clears[1].color = { { 1.0f, 0.0f, 0.0f, 0.0f } };
-        VkRenderPassBeginInfo accumulationInfo{
-            VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
-        accumulationInfo.renderPass =
-            pass_.accumulationRenderPass();
-        accumulationInfo.framebuffer =
-            oitTargets.weightedOitAccumulationFramebuffer;
-        accumulationInfo.renderArea.extent = oitExtent;
-        accumulationInfo.clearValueCount = static_cast<uint32_t>(
-            clears.size());
-        accumulationInfo.pClearValues = clears.data();
-        vkCmdBeginRenderPass(commandBuffer, &accumulationInfo,
-            VK_SUBPASS_CONTENTS_INLINE);
+        // Accumulation (0,0,0,0) and revealage (1,0,0,0) CLEAR/STORE; depth
+        // LOAD/NONE read-only (graph declaration, design finding 4).
+        VulkanRenderingOverrides rendering{};
+        rendering.renderArea = { { 0, 0 }, oitExtent };
+        context.beginRendering(rendering);
         vkCmdSetViewport(commandBuffer, 0u, 1u, &viewport);
         vkCmdSetScissor(commandBuffer, 0u, 1u, &scissor);
 
@@ -355,7 +347,7 @@ namespace Iridium {
             throw std::logic_error(
                 "WeightedOIT instance preparation changed during recording");
         }
-        vkCmdEndRenderPass(commandBuffer);
+        context.endRendering();
     }
 
     void VulkanWeightedOitFeature::recordResolve(VulkanPassContext& context) {
@@ -363,21 +355,14 @@ namespace Iridium {
         VulkanFrameTelemetry& telemetry = context_->telemetry;
         const uint32_t oitFrameIndex = context.frame.frameIndex;
         const VkCommandBuffer commandBuffer = context.commandBuffer;
-        const VulkanFrameContextTargets& oitTargets =
-            frameTargets.get(oitFrameIndex);
         const VkExtent2D oitExtent = frameTargets.extent();
         const VkViewport viewport{ 0.0f, 0.0f,
             static_cast<float>(oitExtent.width),
             static_cast<float>(oitExtent.height), 0.0f, 1.0f };
         const VkRect2D scissor{ { 0, 0 }, oitExtent };
-        VkRenderPassBeginInfo resolveInfo{
-            VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
-        resolveInfo.renderPass = pass_.resolveRenderPass();
-        resolveInfo.framebuffer =
-            oitTargets.weightedOitResolveFramebuffer;
-        resolveInfo.renderArea.extent = oitExtent;
-        vkCmdBeginRenderPass(commandBuffer, &resolveInfo,
-            VK_SUBPASS_CONTENTS_INLINE);
+        VulkanRenderingOverrides rendering{};
+        rendering.renderArea = { { 0, 0 }, oitExtent };
+        context.beginRendering(rendering);
         vkCmdSetViewport(commandBuffer, 0u, 1u, &viewport);
         vkCmdSetScissor(commandBuffer, 0u, 1u, &scissor);
         vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -398,7 +383,7 @@ namespace Iridium {
             sizeof(resolveDebugView), &resolveDebugView);
         vkCmdDraw(commandBuffer, 3u, 1u, 0u, 0u);
         telemetry.recordDraw(telemetry.counters().drawWeightedOitResolve, 1u);
-        vkCmdEndRenderPass(commandBuffer);
+        context.endRendering();
     }
 
 } // namespace Iridium
