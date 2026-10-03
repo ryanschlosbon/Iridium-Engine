@@ -128,7 +128,9 @@ namespace Iridium {
         previousActiveSlots_.reserve(capacity);
         changedSlots_.reserve(capacity);
         changedRanges_.reserve(capacity);
-        candidates_.reserve(capacity);
+        // candidates_ is not reserved here: extract() calls ensureCapacity() while
+        // newCandidates_ holds pointers into candidates_, and a reallocation would
+        // leave them dangling (M7R R4c.0 crash). extract() sizes candidates_ itself.
         newCandidates_.reserve(capacity);
         removedOwners_.reserve(capacity);
         occupiedSlots_.resize(capacity);
