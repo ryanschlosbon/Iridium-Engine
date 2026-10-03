@@ -357,18 +357,7 @@ namespace Iridium {
         VulkanIndirectViewCuller directionalCuller_;
         VulkanIndirectViewCuller spotCuller_;
         VulkanIndirectViewCuller pointCuller_;
-
-        std::array<VulkanBufferResource, VulkanFrameScheduler::FramesInFlight>
-            reflectionProbeIndirectCommandBuffers_{};
-        std::array<VulkanBufferResource, VulkanFrameScheduler::FramesInFlight>
-            reflectionProbeIndirectCountBuffers_{};
-        std::array<VulkanBufferResource, VulkanFrameScheduler::FramesInFlight>
-            reflectionProbeIndirectCandidateBuffers_{};
-        std::array<VkDescriptorSet, VulkanFrameScheduler::FramesInFlight>
-            reflectionProbeIndirectDescriptorSets_{};
-        VkPipelineLayout reflectionProbeCompactPipelineLayout_ =
-            VK_NULL_HANDLE;
-        VkPipeline reflectionProbeCompactPipeline_ = VK_NULL_HANDLE;
+        VulkanIndirectViewCuller probeCuller_;
         std::array<VulkanBufferResource, VulkanFrameScheduler::FramesInFlight>
             depthOcclusionQueryBuffers_{};
         std::array<VulkanBufferResource, VulkanFrameScheduler::FramesInFlight>
@@ -419,44 +408,12 @@ namespace Iridium {
         std::vector<uint32_t> spotShadowDataSlots_;
         std::vector<uint32_t> pointShadowDataSlots_;
         using ResolvedShadowCaster = VulkanResolvedCaster;
-        struct ShadowIndirectBin {
-            uint32_t commandBegin = 0;
-            uint32_t commandCount = 0;
-            GeometryHandle geometry;
-            VkBuffer vertexBuffer = VK_NULL_HANDLE;
-            VkBuffer indexBuffer = VK_NULL_HANDLE;
-            VkIndexType indexType = VK_INDEX_TYPE_UINT32;
-            bool alphaMasked = false;
-            bool doubleSided = false;
-        };
+
         std::vector<uint32_t> spotShadowMappingScratch_;
         std::vector<uint32_t> pointShadowMappingScratch_;
         std::vector<ResolvedShadowCaster> shadowCasterScratch_;
         std::vector<uint8_t> directionalShadowCasterMaskScratch_;
-        // Device telemetry for one shadow/probe consumer's compaction; the
-        // qualification oracle owns the expected commands (R2.8).
-        struct PendingShadowIndirectValidation {
-            uint64_t profileFrameId = 0;
-            std::vector<uint32_t> countCapacities;
-            std::vector<uint32_t> commandOffsets;
-            bool pending = false;
-        };
 
-        std::vector<ShadowIndirectBin> reflectionProbeIndirectBins_;
-        std::vector<GpuSceneIndirectCandidate>
-            reflectionProbeIndirectCandidates_;
-        std::vector<GpuSceneIndirectCandidate>
-            reflectionProbeIndirectUnsortedCandidates_;
-        std::vector<uint32_t> reflectionProbeIndirectBinCursorScratch_;
-        std::vector<uint32_t> reflectionProbeIndirectPrimitiveBinScratch_;
-        std::array<PendingShadowIndirectValidation,
-            VulkanFrameScheduler::FramesInFlight>
-            pendingReflectionProbeIndirectValidations_{};
-        uint32_t reflectionProbeIndirectPrimitiveCapacity_ = 0;
-        uint32_t reflectionProbeIndirectCommandCapacity_ = 0;
-        uint32_t reflectionProbeIndirectCountCapacity_ = 0;
-        GpuSceneIndirectFallbackReason reflectionProbeIndirectFallbackReason_ =
-            GpuSceneIndirectFallbackReason::None;
         std::vector<PackedGpuLight> patchedLightRecordsScratch_;
         uint64_t spotShadowMappingRevision_ = 1;
         uint64_t pointShadowMappingRevision_ = 1;
@@ -665,8 +622,6 @@ namespace Iridium {
             const ShadowCasterSubmission& shadowCasters,
             std::span<const PointShadowFramePacket> shadows);
         void createReflectionProbeIndirectPipeline();
-        void createReflectionProbeIndirectBuffers(uint32_t primitiveCapacity);
-        void bindReflectionProbeIndirectBuffers();
         // Device telemetry (+ oracle verdict) for a shadow/probe consumer.
         void collectShadowIndirectValidation(VulkanIndirectOracleView view,
             uint32_t frameIndex);

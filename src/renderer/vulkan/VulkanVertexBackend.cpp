@@ -161,7 +161,7 @@ namespace Iridium {
 
         constexpr uint64_t FixedPipelineIdentityMask = uint64_t{ 1 } << 63;
 
-        constexpr uint32_t LocalShadowIndirectMaximumCommandCount = 1u << 20;
+
 
         enum class FixedPipelineIdentity : uint64_t {
             GBufferWireframe = FixedPipelineIdentityMask | 1,
@@ -492,7 +492,7 @@ namespace Iridium {
         createDirectionalShadowIndirectPipeline();
         directionalCuller_.resize(512u, frameOpen_);
         createReflectionProbeIndirectPipeline();
-        createReflectionProbeIndirectBuffers(512u);
+        probeCuller_.resize(512u, frameOpen_);
         if (vkContext->getPhysicalDeviceProperties().limits.maxUniformBufferRange <
             sizeof(VulkanSpotShadowData)) {
             throw std::runtime_error(
@@ -1073,19 +1073,7 @@ namespace Iridium {
         directionalCuller_.destroy(device);
         spotCuller_.destroy(device);
         pointCuller_.destroy(device);
-        for (VkDescriptorSet& set : reflectionProbeIndirectDescriptorSets_) {
-            if (set != VK_NULL_HANDLE) descriptorAllocator.free(set);
-            set = VK_NULL_HANDLE;
-        }
-        if (reflectionProbeCompactPipeline_ != VK_NULL_HANDLE) {
-            vkDestroyPipeline(device, reflectionProbeCompactPipeline_, nullptr);
-            reflectionProbeCompactPipeline_ = VK_NULL_HANDLE;
-        }
-        if (reflectionProbeCompactPipelineLayout_ != VK_NULL_HANDLE) {
-            vkDestroyPipelineLayout(device,
-                reflectionProbeCompactPipelineLayout_, nullptr);
-            reflectionProbeCompactPipelineLayout_ = VK_NULL_HANDLE;
-        }
+        probeCuller_.destroy(device);
 
         if (indirectCullerSetLayout_ != VK_NULL_HANDLE) {
             vkDestroyDescriptorSetLayout(device,
@@ -1148,15 +1136,7 @@ namespace Iridium {
         for (VulkanBufferResource& buffer : opaqueIndirectCandidateBuffers_)
             resourceAllocator.destroy(buffer);
 
-        for (VulkanBufferResource& buffer :
-                reflectionProbeIndirectCommandBuffers_)
-            resourceAllocator.destroy(buffer);
-        for (VulkanBufferResource& buffer :
-                reflectionProbeIndirectCountBuffers_)
-            resourceAllocator.destroy(buffer);
-        for (VulkanBufferResource& buffer :
-                reflectionProbeIndirectCandidateBuffers_)
-            resourceAllocator.destroy(buffer);
+
         for (VulkanBufferResource& buffer : depthOcclusionQueryBuffers_)
             resourceAllocator.destroy(buffer);
         for (VulkanBufferResource& buffer : depthOcclusionResultBuffers_)
@@ -1278,14 +1258,7 @@ namespace Iridium {
         reflectionProbeReferenceCapacity_ = 0;
 
 
-        reflectionProbeIndirectPrimitiveCapacity_ = 0;
-        reflectionProbeIndirectCommandCapacity_ = 0;
-        reflectionProbeIndirectCountCapacity_ = 0;
-        reflectionProbeIndirectBins_.clear();
-        reflectionProbeIndirectCandidates_.clear();
-        reflectionProbeIndirectUnsortedCandidates_.clear();
-        reflectionProbeIndirectBinCursorScratch_.clear();
-        reflectionProbeIndirectPrimitiveBinScratch_.clear();
+
         neutralEnvironmentCube_ = {};
         neutralEnvironmentBrdfLut_ = {};
         outputTransformLut_ = {};
@@ -4250,274 +4223,36 @@ namespace Iridium {
     bool VulkanVertexBackend::prepareReflectionProbeIndirectSubmission(
         const ReflectionProbeCasterSubmission& probeCasters,
         std::span<const ReflectionProbeCaptureScheduleEntry> captures) {
-        reflectionProbeIndirectBins_.clear();
-        reflectionProbeIndirectCandidates_.clear();
-        reflectionProbeIndirectUnsortedCandidates_.clear();
-        reflectionProbeIndirectFallbackReason_ =
-            GpuSceneIndirectFallbackReason::None;
-
-        const size_t requested = probeCasters.gpuScenePrimitiveIndices.size();
-        if (requested == 0u) return false;
-        const GpuSceneIndirectPolicy policy{
-            .multiDrawIndirect = vkContext->hasMultiDrawIndirect(),
-            .drawIndirectFirstInstance =
-                vkContext->hasDrawIndirectFirstInstance(),
-            .drawIndirectCount = vkContext->hasDrawIndirectCount(),
-            .maxDrawIndirectCount = (std::min)(
-                vkContext->getMaxDrawIndirectCount(),
-                reflectionProbeIndirectPrimitiveCapacity_),
-            .minimumCommandCount = 8u,
-            .forceDirectReference = forceDirectGBufferReference_,
-        };
-        const auto reject = [&](GpuSceneIndirectFallbackReason reason) {
-            reflectionProbeIndirectFallbackReason_ = reason;
-            reflectionProbeIndirectBins_.clear();
-            reflectionProbeIndirectCandidates_.clear();
-            reflectionProbeIndirectUnsortedCandidates_.clear();
-            reflectionProbeIndirectBinCursorScratch_.clear();
-            reflectionProbeIndirectPrimitiveBinScratch_.clear();
-            return false;
-        };
-        if (const GpuSceneIndirectFallbackReason reason =
-                evaluateIndirectPolicy(policy, requested,
-                    reflectionProbeIndirectPrimitiveCapacity_);
-            reason != GpuSceneIndirectFallbackReason::None)
-            return reject(reason);
-
         const uint32_t frame = scheduler.currentFrameIndex();
-        const GpuSceneCpuMirror& scene = gpuSceneCpuMirrors_[frame];
-        reflectionProbeIndirectPrimitiveBinScratch_.assign(
-            gpuScenePublishedCounts_.primitives, InvalidGpuSceneIndex);
-        for (uint32_t primitiveIndex :
-                probeCasters.gpuScenePrimitiveIndices) {
-            ResolvedShadowCaster caster{};
-            if (!resolveGpuSceneCaster(primitiveIndex,
-                    GpuSceneConsumerProbe, caster) ||
-                primitiveIndex >= scene.primitives.size() ||
-                primitiveIndex >=
-                    reflectionProbeIndirectPrimitiveBinScratch_.size())
-                return reject(GpuSceneIndirectFallbackReason::InvalidPacket);
-            const GpuScenePrimitiveRecord& primitive =
-                scene.primitives[primitiveIndex];
-            if (primitive.binding.y >= scene.geometries.size())
-                return reject(GpuSceneIndirectFallbackReason::InvalidPacket);
-            const GpuSceneGeometryRecord& packedGeometry =
-                scene.geometries[primitive.binding.y];
-            VulkanGeometryPayload* geometry = geometryVault.get(caster.geometry);
-            VulkanMaterialPayload* material = materialVault.get(caster.material);
-            if (geometry == nullptr || material == nullptr ||
-                geometry->vertexBuffer.buffer == VK_NULL_HANDLE ||
-                geometry->indexBuffer.buffer == VK_NULL_HANDLE ||
-                packedGeometry.draw.x != caster.firstIndex ||
-                packedGeometry.draw.y != caster.indexCount ||
-                packedGeometry.draw.w !=
-                    static_cast<uint32_t>(geometry->indexFormat))
-                return reject(GpuSceneIndirectFallbackReason::InvalidPacket);
-            const bool alphaMasked = material->packed.alphaMode == 1u;
-            const bool doubleSided = material->packed.doubleSided != 0u;
-            const VkIndexType indexType = toVkIndexType(geometry->indexFormat);
-            auto bin = std::find_if(reflectionProbeIndirectBins_.begin(),
-                reflectionProbeIndirectBins_.end(),
-                [&](const ShadowIndirectBin& candidate) {
-                    return candidate.vertexBuffer ==
-                            geometry->vertexBuffer.buffer &&
-                        candidate.indexBuffer ==
-                            geometry->indexBuffer.buffer &&
-                        candidate.indexType == indexType &&
-                        candidate.alphaMasked == alphaMasked &&
-                        candidate.doubleSided == doubleSided;
-                });
-            if (bin == reflectionProbeIndirectBins_.end()) {
-                reflectionProbeIndirectBins_.push_back({
-                    .geometry = caster.geometry,
-                    .vertexBuffer = geometry->vertexBuffer.buffer,
-                    .indexBuffer = geometry->indexBuffer.buffer,
-                    .indexType = indexType,
-                    .alphaMasked = alphaMasked,
-                    .doubleSided = doubleSided,
-                });
-                bin = std::prev(reflectionProbeIndirectBins_.end());
-            }
-            const uint32_t binIndex = static_cast<uint32_t>(
-                std::distance(reflectionProbeIndirectBins_.begin(), bin));
-            const uint32_t maximumLod = experimentalProbeLodErrorPixels_ > 0.0f
-                ? residentLodPrefix(scene.geometries, scene.instances,
-                    primitive, probeLodMaximumLevel_,
-                    { geometry->vertexBuffer.buffer,
-                        geometry->indexBuffer.buffer,
-                        geometry->indexFormat, geometry->vertexOffset },
-                    indirectAssets())
-                : 0u;
-            ++bin->commandCount;
-            reflectionProbeIndirectUnsortedCandidates_.push_back({
-                .primitiveIndex = primitiveIndex,
-                .binIndex = binIndex,
-                .maximumLod = maximumLod,
-            });
-            reflectionProbeIndirectPrimitiveBinScratch_[primitiveIndex] =
-                binIndex;
-        }
-
-        uint32_t commandBegin = 0u;
-        for (ShadowIndirectBin& bin : reflectionProbeIndirectBins_) {
-            bin.commandBegin = commandBegin;
-            commandBegin += bin.commandCount;
-        }
-        reflectionProbeIndirectCandidates_.resize(
-            reflectionProbeIndirectUnsortedCandidates_.size());
-        reflectionProbeIndirectBinCursorScratch_.clear();
-        for (const ShadowIndirectBin& bin : reflectionProbeIndirectBins_)
-            reflectionProbeIndirectBinCursorScratch_.push_back(
-                bin.commandBegin);
-        for (const GpuSceneIndirectCandidate& source :
-                reflectionProbeIndirectUnsortedCandidates_) {
-            const ShadowIndirectBin& bin =
-                reflectionProbeIndirectBins_[source.binIndex];
-            const uint32_t destination =
-                reflectionProbeIndirectBinCursorScratch_[source.binIndex]++;
-            reflectionProbeIndirectCandidates_[destination] = {
-                .primitiveIndex = source.primitiveIndex,
-                .binIndex = source.binIndex,
-                .commandBase = bin.commandBegin,
-                .commandCapacity = bin.commandCount,
-                .maximumLod = source.maximumLod,
-            };
-        }
-
-        uint32_t workCount = 0u;
-        for (const ReflectionProbeCaptureScheduleEntry& capture : captures)
-            workCount += std::popcount(
-                static_cast<uint32_t>(capture.scheduledFaceMask));
-        const uint64_t requiredCommands =
-            static_cast<uint64_t>(commandBegin) * workCount;
-        const uint64_t requiredCounts =
-            static_cast<uint64_t>(reflectionProbeIndirectBins_.size()) *
-            workCount;
-        if (workCount == 0u || workCount >
-                VulkanReflectionProbeCapturePass::MaximumFaceRecords ||
-            requiredCommands > reflectionProbeIndirectCommandCapacity_ ||
-            requiredCounts > reflectionProbeIndirectCountCapacity_)
-            return reject(GpuSceneIndirectFallbackReason::CapacityExceeded);
-
-        PendingShadowIndirectValidation& validation =
-            pendingReflectionProbeIndirectValidations_[frame];
-        if (validation.pending)
-            throw std::logic_error(
-                "reflection-probe indirect validation slot is still in flight");
-        validation.profileFrameId = cpuProfiler_ != nullptr &&
-                cpuProfiler_->isFrameOpen()
-            ? cpuProfiler_->currentFrameId() : 0u;
-        if (IVulkanIndirectOracle* oracle = activeIndirectOracle(
-                VulkanIndirectOracleView::ReflectionProbe))
-            oracle->beginShadowWork(VulkanIndirectOracleView::ReflectionProbe, frame,
-                static_cast<size_t>(requiredCounts));
-        validation.countCapacities.clear();
-        validation.commandOffsets.clear();
-        validation.countCapacities.reserve(
-            static_cast<size_t>(requiredCounts));
-        validation.commandOffsets.reserve(
-            static_cast<size_t>(requiredCounts));
-        for (uint32_t work = 0; work < workCount; ++work)
-            for (const ShadowIndirectBin& bin :
-                    reflectionProbeIndirectBins_) {
-                validation.countCapacities.push_back(bin.commandCount);
-                validation.commandOffsets.push_back(
-                    work * commandBegin + bin.commandBegin);
-            }
-        validation.pending = true;
-        const VulkanIndirectStreamTap stream{ activeIndirectStreamObserver(),
-            VulkanIndirectStreamView::ReflectionProbe, frame };
-        stream.begin(reflectionProbeIndirectCommandBuffers_[frame].buffer,
-            reflectionProbeIndirectCountBuffers_[frame].buffer);
-
-        std::memcpy(reflectionProbeIndirectCandidateBuffers_[frame].mapped,
-            reflectionProbeIndirectCandidates_.data(),
-            reflectionProbeIndirectCandidates_.size() *
-                sizeof(GpuSceneIndirectCandidate));
-        std::memset(reflectionProbeIndirectCountBuffers_[frame].mapped, 0,
-            static_cast<size_t>(requiredCounts) * sizeof(uint32_t));
-        stream.hostWrite(VulkanIndirectStreamHostTarget::Candidates,
-            reflectionProbeIndirectCandidateBuffers_[frame].mapped,
-            reflectionProbeIndirectCandidates_.size() *
-                sizeof(GpuSceneIndirectCandidate));
-        stream.hostWrite(VulkanIndirectStreamHostTarget::Counts,
-            reflectionProbeIndirectCountBuffers_[frame].mapped,
-            static_cast<size_t>(requiredCounts) * sizeof(uint32_t));
-        VkMemoryBarrier hostBarrier{ VK_STRUCTURE_TYPE_MEMORY_BARRIER };
-        hostBarrier.srcAccessMask = VK_ACCESS_HOST_WRITE_BIT;
-        hostBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT |
-            VK_ACCESS_SHADER_WRITE_BIT;
-        vkCmdPipelineBarrier(currentCmd, VK_PIPELINE_STAGE_HOST_BIT,
-            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0u,
-            1u, &hostBarrier, 0u, nullptr, 0u, nullptr);
-        stream.barrier(VK_PIPELINE_STAGE_HOST_BIT,
-            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, hostBarrier.srcAccessMask,
-            hostBarrier.dstAccessMask);
+        if (!probeCuller_.plan({
+                .primitiveIndices = probeCasters.gpuScenePrimitiveIndices,
+                .membershipRevision = probeCasters.membershipRevision,
+                .lodErrorThreshold = experimentalProbeLodErrorPixels_,
+                .lodMaximumLevel = probeLodMaximumLevel_,
+                .forceDirectGBufferReference = forceDirectGBufferReference_,
+                .forceDirectShadowReference = forceDirectShadowReference_,
+                .scene = indirectScene(frame),
+                .assets = indirectAssets(),
+            }, reflectionProbeWork(captures), frame))
+            return false;
+        // Per-face dispatches follow in recordReflectionProbeIndirectDispatch.
+        frameCounters_.dispatchRecorded +=
+            probeCuller_.recordCompaction(currentCmd, frame, {});
         return true;
     }
 
     void VulkanVertexBackend::recordReflectionProbeIndirectDispatch(
         uint32_t frameIndex, uint32_t faceRecord,
         uint32_t excludedInstanceIndex) {
-        const VulkanIndirectStreamTap stream{ activeIndirectStreamObserver(),
-            VulkanIndirectStreamView::ReflectionProbe, frameIndex };
-        vkCmdBindPipeline(currentCmd, VK_PIPELINE_BIND_POINT_COMPUTE,
-            reflectionProbeCompactPipeline_);
-        stream.bindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE,
-            reflectionProbeCompactPipeline_);
-        reflectionProbeCapturePass_.bindFaceComputeDescriptor(currentCmd,
-            reflectionProbeCompactPipelineLayout_, frameIndex, faceRecord);
-        if (stream.observer != nullptr) {
-            const VkDescriptorSet faceSet =
-                reflectionProbeCapturePass_.faceComputeDescriptor(frameIndex);
-            const uint32_t faceOffset =
-                reflectionProbeCapturePass_.faceComputeDynamicOffset(faceRecord);
-            stream.bindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE,
-                reflectionProbeCompactPipelineLayout_, 0u, { &faceSet, 1u },
-                { &faceOffset, 1u });
-        }
-        const std::array<VkDescriptorSet, 2> sets{
-            gpuSceneDescriptorSets_[frameIndex],
-            reflectionProbeIndirectDescriptorSets_[frameIndex] };
-        vkCmdBindDescriptorSets(currentCmd, VK_PIPELINE_BIND_POINT_COMPUTE,
-            reflectionProbeCompactPipelineLayout_, 1u,
-            static_cast<uint32_t>(sets.size()), sets.data(), 0u, nullptr);
-        stream.bindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE,
-            reflectionProbeCompactPipelineLayout_, 1u, sets);
-        const uint32_t candidateCount = static_cast<uint32_t>(
-            reflectionProbeIndirectCandidates_.size());
-        const std::array<uint32_t, 10> parameters{
-            candidateCount,
-            gpuScenePublishedCounts_.transforms,
-            gpuScenePublishedCounts_.instances,
-            gpuScenePublishedCounts_.primitives,
-            gpuScenePublishedCounts_.geometries,
-            excludedInstanceIndex,
-            faceRecord * static_cast<uint32_t>(
-                reflectionProbeIndirectBins_.size()),
-            faceRecord * candidateCount,
-            std::bit_cast<uint32_t>(experimentalProbeLodErrorPixels_),
-            0u,
-        };
-        vkCmdPushConstants(currentCmd, reflectionProbeCompactPipelineLayout_,
-            VK_SHADER_STAGE_COMPUTE_BIT, 0u, sizeof(parameters),
-            parameters.data());
-        stream.pushConstants(reflectionProbeCompactPipelineLayout_,
-            VK_SHADER_STAGE_COMPUTE_BIT, 0u, parameters.data(),
-            sizeof(parameters));
-        vkCmdDispatch(currentCmd, (candidateCount + 63u) / 64u, 1u, 1u);
-        stream.dispatch((candidateCount + 63u) / 64u, 1u, 1u);
-        ++frameCounters_.dispatchRecorded;
-        VkMemoryBarrier drawBarrier{ VK_STRUCTURE_TYPE_MEMORY_BARRIER };
-        drawBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-        drawBarrier.dstAccessMask = VK_ACCESS_INDIRECT_COMMAND_READ_BIT;
-        vkCmdPipelineBarrier(currentCmd,
-            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-            VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT, 0u,
-            1u, &drawBarrier, 0u, nullptr, 0u, nullptr);
-        stream.barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-            VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT, drawBarrier.srcAccessMask,
-            drawBarrier.dstAccessMask);
+        frameCounters_.dispatchRecorded += probeCuller_.recordWorkItem(
+            currentCmd, frameIndex, {
+                .set0 = reflectionProbeCapturePass_.faceComputeDescriptor(
+                    frameIndex),
+                .set0DynamicOffset =
+                    reflectionProbeCapturePass_.faceComputeDynamicOffset(
+                        faceRecord),
+                .gpuScene = gpuSceneDescriptorSets_[frameIndex],
+            }, { excludedInstanceIndex, faceRecord, 0u });
     }
 
     void VulkanVertexBackend::submitReflectionProbeCaptures(
@@ -4570,9 +4305,6 @@ namespace Iridium {
         uint32_t faceRecord = 0;
         VulkanGpuRangeToken captureRange =
             scheduler.beginGpuRange("gpu.probe.capture");
-        const VulkanIndirectStreamTap drawStream{ indirectValid
-                ? activeIndirectStreamObserver() : nullptr,
-            VulkanIndirectStreamView::ReflectionProbe, frameIndex };
         for (const ReflectionProbeCaptureScheduleEntry& capture : captures) {
             if (capture.scheduledFaceMask == 0u) continue;
             uint32_t excludedInstanceIndex = InvalidGpuSceneIndex;
@@ -4659,121 +4391,34 @@ namespace Iridium {
                 VkPipeline activePipeline = VK_NULL_HANDLE;
                 GeometryHandle activeGeometry{};
                 if (indirectValid) {
-                    const uint32_t commandRegion = faceRecord *
-                        static_cast<uint32_t>(
-                            reflectionProbeIndirectCandidates_.size());
-                    const uint32_t countRegion = faceRecord *
-                        static_cast<uint32_t>(
-                            reflectionProbeIndirectBins_.size());
-                    for (uint32_t binIndex = 0;
-                            binIndex < reflectionProbeIndirectBins_.size();
-                            ++binIndex) {
-                        const ShadowIndirectBin& bin =
-                            reflectionProbeIndirectBins_[binIndex];
-                        const VkPipeline pipeline =
-                            reflectionProbeCapturePass_.pipeline(
-                                bin.alphaMasked, bin.doubleSided, true);
-                        if (pipeline != activePipeline) {
-                            vkCmdBindPipeline(currentCmd,
-                                VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
-                            activePipeline = pipeline;
-                        }
-                        const VkDeviceSize vertexOffset = 0u;
-                        vkCmdBindVertexBuffers(currentCmd, 0u, 1u,
-                            &bin.vertexBuffer, &vertexOffset);
-                        vkCmdBindIndexBuffer(currentCmd, bin.indexBuffer,
-                            0u, bin.indexType);
-                        vkCmdDrawIndexedIndirectCount(currentCmd,
-                            reflectionProbeIndirectCommandBuffers_[
-                                frameIndex].buffer,
-                            static_cast<VkDeviceSize>(commandRegion +
-                                bin.commandBegin) *
-                                sizeof(GpuSceneIndexedIndirectCommand),
-                            reflectionProbeIndirectCountBuffers_[
-                                frameIndex].buffer,
-                            static_cast<VkDeviceSize>(countRegion + binIndex) *
-                                sizeof(uint32_t),
-                            bin.commandCount,
-                            sizeof(GpuSceneIndexedIndirectCommand));
-                        drawStream.indirectDraw(pipeline, bin.vertexBuffer,
-                            bin.indexBuffer, bin.indexType, UINT32_MAX,
-                            reflectionProbeIndirectCommandBuffers_[
-                                frameIndex].buffer,
-                            static_cast<VkDeviceSize>(commandRegion +
-                                bin.commandBegin) *
-                                sizeof(GpuSceneIndexedIndirectCommand),
-                            reflectionProbeIndirectCountBuffers_[
-                                frameIndex].buffer,
-                            static_cast<VkDeviceSize>(countRegion + binIndex) *
-                                sizeof(uint32_t),
-                            bin.commandCount);
-                    }
+                    (void)probeCuller_.recordDraws(currentCmd, frameIndex,
+                        faceRecord, {
+                            .owner = &reflectionProbeCapturePass_,
+                            .pipeline = [](const void* owner, bool alphaMasked,
+                                bool doubleSided) {
+                                return static_cast<
+                                    const VulkanReflectionProbeCapturePass*>(
+                                    owner)->pipeline(alphaMasked, doubleSided,
+                                        true);
+                            },
+                        });
                     if (probeQualificationOracle) {
+                        const RadialLodContext lodContext{ capture.position,
+                            static_cast<float>(capture.resolution),
+                            experimentalProbeLodErrorPixels_ };
+                        probeCuller_.emitExpectations(*shadowOracle, frameIndex,
+                            faceRecord,
+                            std::span(shadowCasterScratch_).first(
+                                static_cast<size_t>(resolvedGpuSceneCasters)),
+                            std::span(directionalShadowCasterMaskScratch_).first(
+                                static_cast<size_t>(resolvedGpuSceneCasters)),
+                            1u, radialLodMetric(lodContext));
                         for (size_t casterIndex = 0;
                                 casterIndex < resolvedGpuSceneCasters;
                                 ++casterIndex) {
-                            const ResolvedShadowCaster& caster =
-                                shadowCasterScratch_[casterIndex];
                             if (directionalShadowCasterMaskScratch_[
                                     casterIndex] == 0u)
                                 continue;
-                            uint32_t binIndex = InvalidGpuSceneIndex;
-                            if (caster.gpuScenePrimitiveIndex <
-                                    reflectionProbeIndirectPrimitiveBinScratch_.size())
-                                binIndex =
-                                    reflectionProbeIndirectPrimitiveBinScratch_[
-                                        caster.gpuScenePrimitiveIndex];
-                            if (binIndex < reflectionProbeIndirectBins_.size()) {
-                                PendingShadowIndirectValidation& validation =
-                                    pendingReflectionProbeIndirectValidations_[
-                                        frameIndex];
-                                const size_t countIndex = countRegion +
-                                    binIndex;
-                                if (countIndex <
-                                        validation.countCapacities.size()) {
-                                    const GpuSceneCpuMirror& scene =
-                                        gpuSceneCpuMirrors_[frameIndex];
-                                    const uint32_t primitiveIndex =
-                                        caster.gpuScenePrimitiveIndex;
-                                    const GpuScenePrimitiveRecord& primitive =
-                                        scene.primitives[primitiveIndex];
-                                    const ShadowIndirectBin& commandBin =
-                                        reflectionProbeIndirectBins_[binIndex];
-                                    const auto candidateBegin =
-                                        reflectionProbeIndirectCandidates_.begin() +
-                                        commandBin.commandBegin;
-                                    const auto candidateEnd = candidateBegin +
-                                        commandBin.commandCount;
-                                    const auto candidate = std::find_if(
-                                        candidateBegin, candidateEnd,
-                                        [&](const GpuSceneIndirectCandidate& value) {
-                                            return value.primitiveIndex == primitiveIndex;
-                                        });
-                                    if (candidate == candidateEnd)
-                                        throw std::logic_error(
-                                            "reflection-probe LOD oracle lost its candidate");
-                                    const uint32_t geometryIndex =
-                                        selectGpuSceneRadialLodGeometry(
-                                            scene.geometries,
-                                            primitive.binding.y,
-                                            scene.instances[primitive.binding.x],
-                                            capture.position,
-                                            static_cast<float>(capture.resolution),
-                                            experimentalProbeLodErrorPixels_,
-                                            candidate->maximumLod);
-                                    const GpuSceneGeometryRecord& selected =
-                                        scene.geometries[geometryIndex];
-                                    shadowOracle->expectShadowCommand(VulkanIndirectOracleView::ReflectionProbe,
-                                frameIndex, countIndex, {
-                                        .indexCount = selected.draw.y,
-                                        .instanceCount = 1u,
-                                        .firstIndex = selected.draw.x,
-                                        .vertexOffset = std::bit_cast<int32_t>(
-                                            selected.draw.z),
-                                        .firstInstance = primitiveIndex,
-                                    });
-                                }
-                            }
                             ++gpuSceneFaceDraws;
                             ++casterFaceDraws;
                         }
@@ -4913,11 +4558,10 @@ namespace Iridium {
                 "probe.capture.indirect.enabled", indirectValid ? 1u : 0u);
             cpuProfiler_->recordCounter(
                 "probe.capture.indirect.bins",
-                indirectValid ? reflectionProbeIndirectBins_.size() : 0u);
+                indirectValid ? probeCuller_.bins().size() : 0u);
             cpuProfiler_->recordCounter(
                 "probe.capture.indirect.fallback_reason",
-                static_cast<uint32_t>(
-                    reflectionProbeIndirectFallbackReason_));
+                static_cast<uint32_t>(probeCuller_.fallbackReason()));
         }
     }
 
@@ -6083,113 +5727,13 @@ VkDeviceSize offset = geometry->vertexOffset;
             reflectionProbeCapturePass_.captureSetLayout() == VK_NULL_HANDLE)
             throw std::logic_error(
                 "reflection-probe indirect resources require capture and command layouts");
-        const VkDevice device = vkContext->getDevice();
-        const std::array<VkDescriptorSetLayout, 3> setLayouts{
-            reflectionProbeCapturePass_.captureSetLayout(),
-            meshLayouts.getGpuSceneSetLayout(),
-            indirectCullerSetLayout_ };
-        reflectionProbeCompactPipelineLayout_ = createComputePipelineLayout(
-            device, setLayouts, 10u, "reflection-probe compact");
-        reflectionProbeCompactPipeline_ = createComputePipeline(device,
-            reflectionProbeCompactPipelineLayout_,
-            "assets/shaders/reflection_probe_capture_compact_comp.spv",
-            "reflection-probe compact");
-        for (VkDescriptorSet& set : reflectionProbeIndirectDescriptorSets_)
-            set = descriptorAllocator.allocate(
-                indirectCullerSetLayout_);
-    }
-
-    void VulkanVertexBackend::bindReflectionProbeIndirectBuffers() {
-        for (uint32_t frame = 0;
-                frame < VulkanFrameScheduler::FramesInFlight; ++frame) {
-            const std::array<VkDescriptorBufferInfo, 3> infos{{
-                { reflectionProbeIndirectCandidateBuffers_[frame].buffer, 0,
-                    reflectionProbeIndirectCandidateBuffers_[frame].size },
-                { reflectionProbeIndirectCommandBuffers_[frame].buffer, 0,
-                    reflectionProbeIndirectCommandBuffers_[frame].size },
-                { reflectionProbeIndirectCountBuffers_[frame].buffer, 0,
-                    reflectionProbeIndirectCountBuffers_[frame].size },
-            }};
-            std::array<VkWriteDescriptorSet, 3> writes{};
-            for (uint32_t binding = 0; binding < writes.size(); ++binding) {
-                writes[binding] = {
-                    VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
-                writes[binding].dstSet =
-                    reflectionProbeIndirectDescriptorSets_[frame];
-                writes[binding].dstBinding = binding;
-                writes[binding].descriptorType =
-                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-                writes[binding].descriptorCount = 1u;
-                writes[binding].pBufferInfo = &infos[binding];
-            }
-            vkUpdateDescriptorSets(vkContext->getDevice(),
-                static_cast<uint32_t>(writes.size()), writes.data(),
-                0u, nullptr);
-        }
-    }
-
-    namespace {
-        // Profile counter names per shadow/probe consumer, in emission order.
-        struct ShadowIndirectTelemetryNames {
-            const char* deviceCommands;
-            const char* oracleCommands;
-            const char* mismatchedBins;
-            const char* deviceTriangles;
-            const char* oracleTriangles;
-            const char* deviceReducedCommands;
-            const char* oracleReducedCommands;
-            const char* mismatchedCommandRegions;
-            const char* overflowCommands;
-            const char* qualificationOracle;
-            const char* subject;
-        };
-        constexpr std::array<ShadowIndirectTelemetryNames,
-            kVulkanShadowOracleViewCount> ShadowIndirectTelemetry{ {
-            { "shadow.directional.indirect.device_commands",
-                "shadow.directional.indirect.oracle_commands",
-                "shadow.directional.indirect.mismatched_bins",
-                "shadow.directional.lod.device_triangles",
-                "shadow.directional.lod.oracle_triangles",
-                "shadow.directional.lod.device_reduced_commands",
-                "shadow.directional.lod.oracle_reduced_commands",
-                "shadow.directional.lod.mismatched_command_regions",
-                "shadow.directional.indirect.overflow_commands",
-                "shadow.directional.indirect.qualification_oracle",
-                "directional-shadow" },
-            { "shadow.spot.indirect.device_commands",
-                "shadow.spot.indirect.oracle_commands",
-                "shadow.spot.indirect.mismatched_bins",
-                "shadow.spot.lod.device_triangles",
-                "shadow.spot.lod.oracle_triangles",
-                "shadow.spot.lod.device_reduced_commands",
-                "shadow.spot.lod.oracle_reduced_commands",
-                "shadow.spot.lod.mismatched_command_regions",
-                "shadow.spot.indirect.overflow_commands",
-                "shadow.spot.indirect.qualification_oracle",
-                "spot-shadow" },
-            { "shadow.point.indirect.device_commands",
-                "shadow.point.indirect.oracle_commands",
-                "shadow.point.indirect.mismatched_bins",
-                "shadow.point.lod.device_triangles",
-                "shadow.point.lod.oracle_triangles",
-                "shadow.point.lod.device_reduced_commands",
-                "shadow.point.lod.oracle_reduced_commands",
-                "shadow.point.lod.mismatched_command_regions",
-                "shadow.point.indirect.overflow_commands",
-                "shadow.point.indirect.qualification_oracle",
-                "point-shadow" },
-            { "probe.capture.indirect.device_commands",
-                "probe.capture.indirect.oracle_commands",
-                "probe.capture.indirect.mismatched_bins",
-                "probe.capture.lod.device_triangles",
-                "probe.capture.lod.oracle_triangles",
-                "probe.capture.lod.device_reduced_commands",
-                "probe.capture.lod.oracle_reduced_commands",
-                "probe.capture.lod.mismatched_command_regions",
-                "probe.capture.indirect.overflow_commands",
-                "probe.capture.indirect.qualification_oracle",
-                "reflection-probe" },
-        } };
+        probeCuller_.init(cullerServices(), IndirectViewKind::ReflectionProbe,
+            createIndirectViewPipeline(vkContext->getDevice(),
+                IndirectViewKind::ReflectionProbe,
+                reflectionProbeCapturePass_.captureSetLayout(),
+                meshLayouts.getGpuSceneSetLayout(), indirectCullerSetLayout_),
+            indirectCullerSetLayout_,
+            activeIndirectOracle(VulkanIndirectOracleView::ReflectionProbe));
     }
 
     void VulkanVertexBackend::collectShadowIndirectValidations(
@@ -6206,10 +5750,6 @@ VkDeviceSize offset = geometry->vertexOffset;
 
     void VulkanVertexBackend::collectShadowIndirectValidation(
         VulkanIndirectOracleView view, uint32_t frameIndex) {
-        PendingShadowIndirectValidation* validationSlots = nullptr;
-        const VulkanBufferResource* countBuffers = nullptr;
-        const VulkanBufferResource* commandBuffers = nullptr;
-        size_t viewIndex = 0u;
         switch (view) {
         case VulkanIndirectOracleView::DirectionalShadow:
             directionalCuller_.collect(frameIndex);
@@ -6221,197 +5761,12 @@ VkDeviceSize offset = geometry->vertexOffset;
             pointCuller_.collect(frameIndex);
             return;
         case VulkanIndirectOracleView::ReflectionProbe:
-            validationSlots = pendingReflectionProbeIndirectValidations_.data();
-            countBuffers = reflectionProbeIndirectCountBuffers_.data();
-            commandBuffers = reflectionProbeIndirectCommandBuffers_.data();
-            viewIndex = 3u;
-            break;
+            probeCuller_.collect(frameIndex);
+            return;
         default:
             throw std::invalid_argument(
                 "Shadow indirect telemetry requires a shadow/probe consumer");
         }
-        PendingShadowIndirectValidation& validation = validationSlots[frameIndex];
-        if (!validation.pending) return;
-        const ShadowIndirectTelemetryNames& names =
-            ShadowIndirectTelemetry[viewIndex];
-        const auto* counts = static_cast<const uint32_t*>(
-            countBuffers[frameIndex].mapped);
-        const auto* commands = static_cast<const GpuSceneIndexedIndirectCommand*>(
-            commandBuffers[frameIndex].mapped);
-        VulkanIndirectStreamTap{ activeIndirectStreamObserver(),
-            static_cast<VulkanIndirectStreamView>(viewIndex), frameIndex }
-            .retire({ .counts = counts, .commands = commands,
-                .countCapacities = validation.countCapacities,
-                .commandOffsets = validation.commandOffsets,
-                .primitives = gpuSceneCpuMirrors_[frameIndex].primitives,
-                .instances = gpuSceneCpuMirrors_[frameIndex].instances,
-                .transforms = gpuSceneCpuMirrors_[frameIndex].transforms });
-        const GpuSceneCpuMirror& scene = gpuSceneCpuMirrors_[frameIndex];
-        uint64_t deviceCommands = 0u;
-        uint64_t overflowCommands = 0u;
-        uint64_t deviceTriangles = 0u;
-        uint64_t deviceReducedCommands = 0u;
-        const auto baseIndexCount = [&](uint32_t primitiveIndex) {
-            if (primitiveIndex >= scene.primitives.size()) return 0u;
-            const uint32_t geometryIndex =
-                scene.primitives[primitiveIndex].binding.y;
-            return geometryIndex < scene.geometries.size()
-                ? scene.geometries[geometryIndex].draw.y : 0u;
-        };
-        for (size_t index = 0; index < validation.countCapacities.size();
-                ++index) {
-            const uint32_t capacity = validation.countCapacities[index];
-            const uint32_t deviceCount = counts != nullptr
-                ? counts[index] : 0u;
-            const uint32_t submitted = (std::min)(deviceCount, capacity);
-            deviceCommands += submitted;
-            const uint32_t commandOffset = index <
-                    validation.commandOffsets.size()
-                ? validation.commandOffsets[index] : 0u;
-            for (uint32_t commandIndex = 0u;
-                    commands != nullptr && commandIndex < submitted;
-                    ++commandIndex) {
-                const GpuSceneIndexedIndirectCommand command =
-                    commands[commandOffset + commandIndex];
-                deviceTriangles += command.indexCount / 3u;
-                deviceReducedCommands += command.indexCount <
-                    baseIndexCount(command.firstInstance) ? 1u : 0u;
-            }
-            overflowCommands += deviceCount > capacity
-                ? static_cast<uint64_t>(deviceCount - capacity) : 0u;
-        }
-        VulkanIndirectOracleResult oracle{};
-        if (indirectOracle_ != nullptr) {
-            oracle = indirectOracle_->verifyShadowWork(view, frameIndex, {
-                .counts = counts,
-                .commands = commands,
-                .countCapacities = validation.countCapacities,
-                .commandOffsets = validation.commandOffsets,
-                .primitives = scene.primitives,
-                .geometries = scene.geometries,
-            });
-        }
-        if (validation.profileFrameId != 0u && cpuProfiler_ != nullptr) {
-            const uint64_t frameId = validation.profileFrameId;
-            (void)cpuProfiler_->attachCounter(frameId, names.deviceCommands,
-                deviceCommands);
-            (void)cpuProfiler_->attachCounter(frameId, names.oracleCommands,
-                oracle.oracleCommands);
-            (void)cpuProfiler_->attachCounter(frameId, names.mismatchedBins,
-                oracle.mismatchedBins);
-            (void)cpuProfiler_->attachCounter(frameId, names.deviceTriangles,
-                deviceTriangles);
-            (void)cpuProfiler_->attachCounter(frameId, names.oracleTriangles,
-                oracle.oracleTriangles);
-            (void)cpuProfiler_->attachCounter(frameId,
-                names.deviceReducedCommands, deviceReducedCommands);
-            (void)cpuProfiler_->attachCounter(frameId,
-                names.oracleReducedCommands, oracle.oracleReducedCommands);
-            (void)cpuProfiler_->attachCounter(frameId,
-                names.mismatchedCommandRegions, oracle.mismatchedCommandRegions);
-            (void)cpuProfiler_->attachCounter(frameId, names.overflowCommands,
-                overflowCommands);
-            (void)cpuProfiler_->attachCounter(frameId, names.qualificationOracle,
-                oracle.validated ? 1u : 0u);
-        }
-        validation.pending = false;
-        validation.commandOffsets.clear();
-        if (oracle.mismatchedBins != 0u ||
-            oracle.mismatchedCommandRegions != 0u || overflowCommands != 0u) {
-            std::ostringstream diagnostic;
-            diagnostic << names.subject
-                << " device commands disagree with the CPU visibility/LOD oracle"
-                << " (bins=" << oracle.mismatchedBins
-                << ", command_regions=" << oracle.mismatchedCommandRegions
-                << ", overflow=" << overflowCommands
-                << ", device_triangles=" << deviceTriangles
-                << ", oracle_triangles=" << oracle.oracleTriangles
-                << ", device_reduced=" << deviceReducedCommands
-                << ", oracle_reduced=" << oracle.oracleReducedCommands << ')';
-            throw std::runtime_error(diagnostic.str());
-        }
-    }
-
-    void VulkanVertexBackend::createReflectionProbeIndirectBuffers(
-        uint32_t primitiveCapacity) {
-        if (frameOpen_ || primitiveCapacity == 0u ||
-            primitiveCapacity > MaximumOpaqueIndirectCommandCapacity)
-            throw std::invalid_argument(
-                "reflection-probe indirect capacity is invalid at this frame boundary");
-        using Buffers = std::array<VulkanBufferResource,
-            VulkanFrameScheduler::FramesInFlight>;
-        Buffers commands{}, counts{}, candidates{};
-        const uint64_t requestedWorkCapacity =
-            static_cast<uint64_t>(primitiveCapacity) *
-            VulkanReflectionProbeCapturePass::MaximumFaceRecords;
-        const uint32_t commandCapacity = static_cast<uint32_t>((std::min)(
-            requestedWorkCapacity,
-            static_cast<uint64_t>(LocalShadowIndirectMaximumCommandCount)));
-        const uint32_t countCapacity = commandCapacity;
-        try {
-            for (uint32_t frame = 0;
-                    frame < VulkanFrameScheduler::FramesInFlight; ++frame) {
-                commands[frame] = resourceAllocator.createBuffer(
-                    static_cast<uint64_t>(commandCapacity) *
-                        sizeof(GpuSceneIndexedIndirectCommand),
-                    VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
-                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                        VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                    true, ProfileMemoryCategory::GpuScene);
-                counts[frame] = resourceAllocator.createBuffer(
-                    static_cast<uint64_t>(countCapacity) * sizeof(uint32_t),
-                    VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
-                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                        VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                    true, ProfileMemoryCategory::GpuScene);
-                candidates[frame] = resourceAllocator.createBuffer(
-                    static_cast<uint64_t>(primitiveCapacity) *
-                        sizeof(GpuSceneIndirectCandidate),
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                        VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                    true, ProfileMemoryCategory::GpuScene);
-            }
-        }
-        catch (...) {
-            for (VulkanBufferResource& buffer : commands)
-                resourceAllocator.destroy(buffer);
-            for (VulkanBufferResource& buffer : counts)
-                resourceAllocator.destroy(buffer);
-            for (VulkanBufferResource& buffer : candidates)
-                resourceAllocator.destroy(buffer);
-            throw;
-        }
-        if (reflectionProbeIndirectPrimitiveCapacity_ != 0u)
-            scheduler.waitForAllFrames();
-        for (uint32_t frame = 0;
-                frame < VulkanFrameScheduler::FramesInFlight; ++frame)
-            collectShadowIndirectValidation(
-                VulkanIndirectOracleView::ReflectionProbe, frame);
-        for (VulkanBufferResource& buffer :
-                reflectionProbeIndirectCommandBuffers_)
-            resourceAllocator.destroy(buffer);
-        for (VulkanBufferResource& buffer :
-                reflectionProbeIndirectCountBuffers_)
-            resourceAllocator.destroy(buffer);
-        for (VulkanBufferResource& buffer :
-                reflectionProbeIndirectCandidateBuffers_)
-            resourceAllocator.destroy(buffer);
-        reflectionProbeIndirectCommandBuffers_ = commands;
-        reflectionProbeIndirectCountBuffers_ = counts;
-        reflectionProbeIndirectCandidateBuffers_ = candidates;
-        reflectionProbeIndirectPrimitiveCapacity_ = primitiveCapacity;
-        reflectionProbeIndirectCommandCapacity_ = commandCapacity;
-        reflectionProbeIndirectCountCapacity_ = countCapacity;
-        reflectionProbeIndirectBins_.reserve(primitiveCapacity);
-        reflectionProbeIndirectCandidates_.reserve(primitiveCapacity);
-        reflectionProbeIndirectUnsortedCandidates_.reserve(primitiveCapacity);
-        reflectionProbeIndirectBinCursorScratch_.reserve(primitiveCapacity);
-        reflectionProbeIndirectPrimitiveBinScratch_.reserve(primitiveCapacity);
-        if (reflectionProbeIndirectDescriptorSets_[0] != VK_NULL_HANDLE)
-            bindReflectionProbeIndirectBuffers();
     }
 
     void VulkanVertexBackend::createGpuSceneCullPipeline() {
@@ -7510,8 +6865,8 @@ VkDeviceSize offset = geometry->vertexOffset;
                 spotCuller_.resize(grownCapacity, frameOpen_);
             if (grownCapacity > pointCuller_.primitiveCapacity())
                 pointCuller_.resize(grownCapacity, frameOpen_);
-            if (grownCapacity > reflectionProbeIndirectPrimitiveCapacity_)
-                createReflectionProbeIndirectBuffers(grownCapacity);
+            if (grownCapacity > probeCuller_.primitiveCapacity())
+                probeCuller_.resize(grownCapacity, frameOpen_);
         }
     }
 
