@@ -596,7 +596,7 @@ namespace Iridium {
                 "Vulkan storage-buffer range cannot hold GPU-scene records");
         }
         createGpuSceneBuffers({ 2u, 1u, 1u, 1u });
-        createOpaqueIndirectBuffers(512u);
+        opaqueCuller_.resize(512u, frameOpen_);
         reflectionProbeRecordMaximumCapacity_ = (std::min)(
             static_cast<uint32_t>(
                 vkContext->getPhysicalDeviceProperties()
@@ -628,8 +628,7 @@ namespace Iridium {
             globalDescriptorSets[i] = descriptorAllocator.allocate(meshLayouts.getGlobalSetLayout());
             gpuSceneDescriptorSets_[i] = descriptorAllocator.allocate(
                 meshLayouts.getGpuSceneSetLayout());
-            gpuSceneCullDescriptorSets_[i] = descriptorAllocator.allocate(
-                gpuSceneCullSetLayout_);
+            opaqueCuller_.allocateSet(static_cast<uint32_t>(i));
 
             VkDescriptorBufferInfo bufferInfo{};
             bufferInfo.buffer = uniformBuffers[i].buffer;
@@ -647,7 +646,7 @@ namespace Iridium {
             vkUpdateDescriptorSets(vkContext->getDevice(), 1, &descriptorWrite, 0, nullptr);
         }
         bindGpuSceneBuffers();
-        bindOpaqueIndirectBuffers();
+        opaqueCuller_.bindBuffers();
         transparencyPyramid_.rebuild(frameTargets);
         if (depthPyramidEnabled_) depthPyramid_.rebuild(frameTargets);
         layeredInterfaceCapture_.rebuildDescriptors(frameTargets);
@@ -1018,7 +1017,7 @@ namespace Iridium {
         scheduler.waitForAllFrames();
         for (uint32_t frame = 0;
                 frame < VulkanFrameScheduler::FramesInFlight; ++frame)
-            collectOpaqueIndirectValidation(frame);
+            opaqueCuller_.collect(frame);
         for (VulkanIndirectViewCuller* culler : indirectViewCullers())
             for (uint32_t frame = 0;
                     frame < VulkanFrameScheduler::FramesInFlight; ++frame)
@@ -1125,22 +1124,7 @@ namespace Iridium {
             resourceAllocator.destroy(buffer);
         for (VulkanBufferResource& buffer : gpuSceneGeometryBuffers_)
             resourceAllocator.destroy(buffer);
-        for (VulkanBufferResource& buffer : opaqueIndirectCommandBuffers_)
-            resourceAllocator.destroy(buffer);
-        for (VulkanBufferResource& buffer : opaqueIndirectCountBuffers_)
-            resourceAllocator.destroy(buffer);
-        for (VulkanBufferResource& buffer : opaqueIndirectCandidateBuffers_)
-            resourceAllocator.destroy(buffer);
-
-
-        for (VulkanBufferResource& buffer : depthOcclusionQueryBuffers_)
-            resourceAllocator.destroy(buffer);
-        for (VulkanBufferResource& buffer : depthOcclusionResultBuffers_)
-            resourceAllocator.destroy(buffer);
-        for (VulkanBufferResource& buffer :
-                depthOcclusionGpuSceneResultBuffers_)
-            resourceAllocator.destroy(buffer);
-        resourceAllocator.destroy(mainOpaqueLodHistoryBuffer_);
+        opaqueCuller_.destroy(device);
         for (VulkanBufferResource& buffer : activeLightSlotBuffers_)
             resourceAllocator.destroy(buffer);
         for (VulkanBufferResource& buffer : fallbackCandidateBuffers_)
@@ -1184,22 +1168,7 @@ namespace Iridium {
         layeredLocalComposition_.cleanup();
         layeredInterfaceCapture_.cleanup();
         weightedOit_.cleanup();
-        if (gpuSceneCullPipeline_ != VK_NULL_HANDLE) {
-            vkDestroyPipeline(device, gpuSceneCullPipeline_, nullptr);
-            gpuSceneCullPipeline_ = VK_NULL_HANDLE;
-        }
-        if (gpuSceneCullFallbackPipeline_ != VK_NULL_HANDLE) {
-            vkDestroyPipeline(device, gpuSceneCullFallbackPipeline_, nullptr);
-            gpuSceneCullFallbackPipeline_ = VK_NULL_HANDLE;
-        }
-        if (gpuSceneCullPipelineLayout_ != VK_NULL_HANDLE) {
-            vkDestroyPipelineLayout(device, gpuSceneCullPipelineLayout_, nullptr);
-            gpuSceneCullPipelineLayout_ = VK_NULL_HANDLE;
-        }
-        if (gpuSceneCullSetLayout_ != VK_NULL_HANDLE) {
-            vkDestroyDescriptorSetLayout(device, gpuSceneCullSetLayout_, nullptr);
-            gpuSceneCullSetLayout_ = VK_NULL_HANDLE;
-        }
+
         meshLayouts.cleanup();
         indexedTextureTable_.cleanup();
         clusteredLighting_.cleanup();
@@ -1239,10 +1208,7 @@ namespace Iridium {
         gpuSceneMaximumCapacity_ = {};
         gpuScenePublishedCounts_ = {};
         gpuSceneCpuMirrors_ = {};
-        mainOpaqueLodHistory_ = {};
         gpuSceneUploadTelemetry_ = {};
-        pendingOpaqueIndirectValidations_ = {};
-        opaqueIndirectCommandCapacity_ = 0;
         retiredTextureCount_ = 0;
         environmentLighting_ = {};
         reflectionProbeEnvironments_.clear();
@@ -1990,7 +1956,7 @@ namespace Iridium {
                 "Output transport can only change between frames.");
         }
         // 1. Handle Minimization (Pause the engine until it's un-minimized)
-        mainOpaqueLodHistory_.resetView();
+        opaqueCuller_.lodHistory().resetView();
         int width = 0, height = 0;
         glfwGetFramebufferSize(window, &width, &height);
         while (width == 0 || height == 0) {
@@ -2157,7 +2123,7 @@ namespace Iridium {
             .limits.maxImageDimension2D;
         if (extent.width < 64 || extent.height < 64 ||
             extent.width > maximum || extent.height > maximum) {
-            if (extent.width == 0 || extent.height == 0) mainOpaqueLodHistory_.resetView();
+            if (extent.width == 0 || extent.height == 0) opaqueCuller_.lodHistory().resetView();
             diagnostic = "Requested scene extent is outside Vulkan image limits";
             return false;
         }
@@ -2167,7 +2133,7 @@ namespace Iridium {
             return true;
         }
 
-        mainOpaqueLodHistory_.resetView();
+        opaqueCuller_.lodHistory().resetView();
 
         // Compile first so invalid graph contracts cannot disturb the active
         // target. Resource allocation is retried with the previous extent if
@@ -3137,7 +3103,7 @@ namespace Iridium {
                 scheduler.completedSerial());
         }
         collectClusterDiagnostics(completedFrameIndex);
-        collectOpaqueIndirectValidation(completedFrameIndex);
+        opaqueCuller_.collect(completedFrameIndex);
         collectIndirectViewValidations(completedFrameIndex);
         {
             CpuScope graphScope(cpuProfiler_, "cpu.render_graph.lookup");
@@ -4524,473 +4490,27 @@ namespace Iridium {
 
     bool VulkanVertexBackend::prepareOpaqueIndirectSubmission(
         std::span<const DrawPacket> opaqueQueue) {
-        const GpuSceneIndirectPolicy policy{
-            .multiDrawIndirect = vkContext->hasMultiDrawIndirect(),
-            .drawIndirectFirstInstance =
-                vkContext->hasDrawIndirectFirstInstance(),
-            .drawIndirectCount = vkContext->hasDrawIndirectCount(),
-            .maxDrawIndirectCount = (std::min)(
-                vkContext->getMaxDrawIndirectCount(),
-                opaqueIndirectCommandCapacity_),
-            .minimumCommandCount = 8u,
-            .forceDirectReference = forceDirectGBufferReference_,
-        };
-        const uint32_t sceneFrame = scheduler.currentFrameIndex();
-        if (!gpuScenePrimitiveBuffers_[sceneFrame].mapped ||
-            !gpuSceneGeometryBuffers_[sceneFrame].mapped ||
-            !gpuSceneInstanceBuffers_[sceneFrame].mapped ||
-            !gpuSceneTransformBuffers_[sceneFrame].mapped ||
-            gpuScenePublishedCounts_.primitives == 0 || gpuScenePublishedCounts_.geometries == 0) {
-            opaqueIndirectPlan_.fallbackReason = GpuSceneIndirectFallbackReason::InvalidPacket;
-            return false;
-        }
-        const auto& cpuScene = gpuSceneCpuMirrors_[sceneFrame];
-        const auto primitiveRecords = std::span(cpuScene.primitives).first(gpuScenePublishedCounts_.primitives);
-        const auto geometryRecords = std::span(cpuScene.geometries).first(gpuScenePublishedCounts_.geometries);
-        const auto instanceRecords = std::span(cpuScene.instances).first(gpuScenePublishedCounts_.instances);
-        const auto transformRecords = std::span(cpuScene.transforms).first(gpuScenePublishedCounts_.transforms);
-        buildGpuSceneIndirectPlan(opaqueQueue, policy, opaqueIndirectPlan_,
-            primitiveRecords, geometryRecords);
-        opaqueIndirectBins_.clear();
-        opaqueIndirectCandidates_.clear();
-        bool valid = opaqueIndirectPlan_.usesIndirect();
-        if (experimentalGpuLodErrorPixels_ > 0.0f)
-            opaqueIndirectSeenHistory_.assign(primitiveRecords.size(), 0);
-        for (uint32_t index = 0; valid && index < opaqueQueue.size(); ++index) {
-            const DrawPacket& packet = opaqueQueue[index];
-            if (experimentalGpuLodErrorPixels_ > 0.0f &&
-                opaqueIndirectSeenHistory_[packet.firstInstanceTransform]++ != 0) {
-                opaqueIndirectPlan_.fallbackReason = GpuSceneIndirectFallbackReason::InvalidPacket;
-                return false; // Never dispatch two writers to the same history slot.
-            }
-            auto* geometry = geometryVault.get(packet.geometry);
-            auto* material = materialVault.get(packet.material);
-            const VulkanPipelineRecord* record =
-                pipelineLibrary.get(packet.pipeline);
-            if (!geometry || !material || !record ||
-                record->gpuSceneIndirectPipeline == VK_NULL_HANDLE ||
-                record->pipelineLayout == VK_NULL_HANDLE ||
-                record->renderPass != RenderPassClass::GBuffer) {
-                valid = false;
-                break;
-            }
-
-            const auto& primitive = primitiveRecords[packet.firstInstanceTransform];
-            const auto& packedGeometry = geometryRecords[primitive.binding.y];
-            if (primitive.binding.x >= instanceRecords.size() ||
-                instanceRecords[primitive.binding.x].references.x >= transformRecords.size() ||
-                (packedGeometry.storage.w & GpuSceneGeometryLegacyRhiHandle) == 0 ||
-                packedGeometry.storage.x != packet.geometry.id ||
-                packedGeometry.draw.w != static_cast<uint32_t>(geometry->indexFormat) ||
-                std::bit_cast<int32_t>(packedGeometry.draw.z) < 0 ||
-                static_cast<uint64_t>(packedGeometry.draw.z) * sizeof(Vertex) != geometry->vertexOffset) {
-                opaqueIndirectPlan_.fallbackReason = GpuSceneIndirectFallbackReason::InvalidPacket;
-                valid = false;
-                break;
-            }
-
-            bool startsBin = opaqueIndirectBins_.empty();
-            if (!startsBin) {
-                const OpaqueIndirectBin& previous =
-                    opaqueIndirectBins_.back();
-                const VulkanGeometryPayload* previousGeometry =
-                    geometryVault.get(previous.geometry);
-                startsBin = previous.pipeline != packet.pipeline ||
-                    previous.material != packet.material ||
-                    !previousGeometry ||
-                    previousGeometry->vertexBuffer.buffer !=
-                        geometry->vertexBuffer.buffer ||
-                    previousGeometry->indexBuffer.buffer !=
-                        geometry->indexBuffer.buffer ||
-                    previousGeometry->indexFormat != geometry->indexFormat;
-            }
-            if (startsBin) {
-                opaqueIndirectBins_.push_back({
-                    .packetBegin = index,
-                    .commandBegin = index,
-                    .commandCount = 1u,
-                    .pipeline = packet.pipeline,
-                    .material = packet.material,
-                    .geometry = packet.geometry,
-                });
-            }
-            else {
-                ++opaqueIndirectBins_.back().commandCount;
-            }
-        }
-        if (!valid) return false;
-
-        opaqueIndirectCandidates_.resize(opaqueQueue.size());
-        for (uint32_t binIndex = 0;
-                binIndex < opaqueIndirectBins_.size(); ++binIndex) {
-            const OpaqueIndirectBin& bin = opaqueIndirectBins_[binIndex];
-            for (uint32_t command = 0; command < bin.commandCount; ++command) {
-                const uint32_t packetIndex = bin.packetBegin + command;
-                opaqueIndirectCandidates_[packetIndex] = {
-                    .primitiveIndex =
-                        opaqueQueue[packetIndex].firstInstanceTransform,
-                    .binIndex = binIndex,
-                    .commandBase = bin.commandBegin,
-                    .commandCapacity = bin.commandCount,
-                };
-                auto& candidate = opaqueIndirectCandidates_[packetIndex];
-                if (experimentalGpuLodErrorPixels_ > 0.0f) {
-                    const auto history = mainOpaqueLodHistory_.binding(candidate.primitiveIndex);
-                    candidate.historySlot = history.slot;
-                    candidate.historyTokenLow = history.tokenLow;
-                    candidate.historyTokenHigh = history.tokenHigh;
-                    const auto* basePayload = geometryVault.get(opaqueQueue[packetIndex].geometry);
-                    candidate.maximumLod = residentLodPrefix(geometryRecords,
-                        instanceRecords, primitiveRecords[candidate.primitiveIndex],
-                        gpuLodMaximumLevel_,
-                        { basePayload->vertexBuffer.buffer,
-                            basePayload->indexBuffer.buffer,
-                            basePayload->indexFormat, basePayload->vertexOffset },
-                        indirectAssets());
-                }
-            }
-        }
-
         const uint32_t frame = scheduler.currentFrameIndex();
-        PendingOpaqueIndirectValidation& validation =
-            pendingOpaqueIndirectValidations_[frame];
-        validation.profileFrameId = cpuProfiler_ != nullptr &&
-                cpuProfiler_->isFrameOpen()
-            ? cpuProfiler_->currentFrameId() : 0u;
-        validation.expectedBinCounts.assign(
-            opaqueIndirectBins_.size(), 0u);
-        validation.binCapacities.resize(opaqueIndirectBins_.size());
-        validation.occlusionProfileFrameId = validation.profileFrameId;
-        validation.gpuSceneOcclusionCandidateCount = 0u;
-        validation.occlusionCandidatePrimitiveIndices.clear();
-        validation.occlusionCandidateBinIndices.clear();
-        validation.gpuSceneOcclusionPending = false;
-        validation.occlusionRejectionApplied = false;
-        const auto& viewUniform = gpuSceneCpuViews_[frame];
-        depthOcclusionQueries_.clear();
-        std::array<float, 16> worldToClip{};
-        const bool queryOcclusion = depthOcclusionQueryEnabled_ &&
-            currentDepthHistoryDecision_.eligible;
-        // Qualification-only expectation emission (R2.8): both oracles are
-        // null unless explicitly enabled in a qualification build.
-        IVulkanIndirectOracle* const lodOracle =
-            experimentalGpuLodErrorPixels_ > 0.0f
-            ? activeIndirectOracle(VulkanIndirectOracleView::OpaqueLod)
-            : nullptr;
-        IVulkanIndirectOracle* const occlusionOracle = queryOcclusion
-            ? activeIndirectOracle(VulkanIndirectOracleView::DepthOcclusion)
-            : nullptr;
-        validation.lodQualificationOracle = lodOracle != nullptr;
-        validation.occlusionQualificationOracle = occlusionOracle != nullptr;
-        if (lodOracle != nullptr || occlusionOracle != nullptr)
-            indirectOracle_->beginOpaqueWork(frame,
-                static_cast<uint32_t>(primitiveRecords.size()),
-                static_cast<uint32_t>(opaqueIndirectCandidates_.size()),
-                lodOracle != nullptr, occlusionOracle != nullptr);
-        if (queryOcclusion) {
-            validation.occlusionCandidatePrimitiveIndices.reserve(
-                opaqueIndirectCandidates_.size());
-            validation.occlusionCandidateBinIndices.reserve(
-                opaqueIndirectCandidates_.size());
-            for (const auto& candidate : opaqueIndirectCandidates_) {
-                validation.occlusionCandidatePrimitiveIndices.push_back(
-                    candidate.primitiveIndex);
-                validation.occlusionCandidateBinIndices.push_back(
-                    candidate.binIndex);
-            }
-        }
-        if (occlusionOracle != nullptr) {
-            const glm::mat4 clipFromWorld =
-                viewUniform.projection * viewUniform.view;
-            for (uint32_t row = 0; row < 4u; ++row)
-                for (uint32_t column = 0; column < 4u; ++column)
-                    worldToClip[row * 4u + column] =
-                        clipFromWorld[column][row];
-        }
-        const DepthPyramidExtent queryExtent{
-            static_cast<uint32_t>(viewUniform.renderInfo.x),
-            static_cast<uint32_t>(viewUniform.renderInfo.y) };
-        for (uint32_t binIndex = 0;
-                binIndex < opaqueIndirectBins_.size(); ++binIndex) {
-            const OpaqueIndirectBin& bin = opaqueIndirectBins_[binIndex];
-            validation.binCapacities[binIndex] = bin.commandCount;
-            for (uint32_t command = 0; command < bin.commandCount; ++command) {
-                const uint32_t packetIndex = bin.packetBegin + command;
-                if (cpuVisibilityOracleVisible(opaqueQueue[packetIndex])) {
-                    if (occlusionOracle != nullptr)
-                        occlusionOracle->expectOpaqueVisibleCandidate(frame,
-                            packetIndex);
-                    ++validation.expectedBinCounts[binIndex];
-                    if (occlusionOracle != nullptr) {
-                        const auto& candidate =
-                            opaqueIndirectCandidates_[packetIndex];
-                        const auto& primitive =
-                            primitiveRecords[candidate.primitiveIndex];
-                        const auto& geometry =
-                            geometryRecords[primitive.binding.y];
-                        const auto& instance =
-                            instanceRecords[primitive.binding.x];
-                        const glm::mat4 world = unpackGpuSceneAffine(
-                            transformRecords[instance.references.x]);
-                        const glm::vec3 localMinimum{
-                            geometry.localBoundsMin.x,
-                            geometry.localBoundsMin.y,
-                            geometry.localBoundsMin.z };
-                        const glm::vec3 localMaximum{
-                            geometry.localBoundsMax.x,
-                            geometry.localBoundsMax.y,
-                            geometry.localBoundsMax.z };
-                        glm::vec3 worldMinimum{
-                            (std::numeric_limits<float>::max)() };
-                        glm::vec3 worldMaximum{
-                            (std::numeric_limits<float>::lowest)() };
-                        for (uint32_t corner = 0; corner < 8u; ++corner) {
-                            const glm::vec3 local{
-                                (corner & 1u) != 0u ? localMaximum.x : localMinimum.x,
-                                (corner & 2u) != 0u ? localMaximum.y : localMinimum.y,
-                                (corner & 4u) != 0u ? localMaximum.z : localMinimum.z };
-                            const glm::vec3 position = glm::vec3(
-                                world * glm::vec4(local, 1.0f));
-                            worldMinimum = glm::min(worldMinimum, position);
-                            worldMaximum = glm::max(worldMaximum, position);
-                        }
-                        const auto projection = projectDepthPyramidBounds({
-                            .extent = queryExtent,
-                            .convention = DeviceDepthConvention::ForwardZeroToOne,
-                            .worldToClip = worldToClip,
-                            .minimumWorld = { worldMinimum.x, worldMinimum.y,
-                                worldMinimum.z },
-                            .maximumWorld = { worldMaximum.x, worldMaximum.y,
-                                worldMaximum.z },
-                            .guardPixels = 1.0f,
-                            .minimumFootprintPixels = 1.0f,
-                            .depthBias = 0.00001f,
-                        });
-                        if (projection.eligible) {
-                            occlusionOracle->expectOpaqueOcclusionQuery(frame,
-                                packetIndex);
-                            depthOcclusionQueries_.push_back(
-                                packDepthPyramidDeviceQuery(projection.query));
-                        }
-                        else
-                            occlusionOracle->expectOpaqueProjectionRejected(
-                                frame);
-                    }
-                    if (lodOracle != nullptr) {
-                        const auto& candidate = opaqueIndirectCandidates_[packetIndex];
-                        const auto& primitive = primitiveRecords[candidate.primitiveIndex];
-                        const auto& instance = instanceRecords[primitive.binding.x];
-                        const glm::mat4 clipFromLocal = viewUniform.projection * viewUniform.view *
-                            unpackGpuSceneAffine(transformRecords[instance.references.x]);
-                        const GpuSceneLodHistoryBinding history{ candidate.historySlot,
-                            candidate.historyTokenLow, candidate.historyTokenHigh };
-                        const uint32_t previous = mainOpaqueLodHistory_.previous(history);
-                        const uint32_t selected = selectGpuSceneLodGeometry(geometryRecords,
-                            primitive.binding.y, clipFromLocal, glm::vec2(viewUniform.renderInfo),
-                            experimentalGpuLodErrorPixels_, candidate.maximumLod, previous, gpuLodHysteresisFraction_);
-                        const auto& geometry = geometryRecords[selected];
-                        const uint32_t selectedLod = selected == primitive.binding.y ? 0u :
-                            static_cast<uint32_t>(geometry.localBoundsMax.w);
-                        mainOpaqueLodHistory_.record(history, selectedLod);
-                        lodOracle->expectOpaqueLod(frame, candidate.primitiveIndex, {
-                            .command = { geometry.draw.y, 1u, geometry.draw.x,
-                                std::bit_cast<int32_t>(geometry.draw.z),
-                                candidate.primitiveIndex },
-                            .baseTriangles =
-                                geometryRecords[primitive.binding.y].draw.y / 3u,
-                            .oracleTriangles = geometry.draw.y / 3u,
-                            .reduced = selected != primitive.binding.y,
-                            .historyValid = previous != InvalidGpuSceneIndex,
-                            .historyChanged = previous != InvalidGpuSceneIndex &&
-                                previous != selectedLod,
-                        });
-                    }
-                }
-            }
-        }
-        validation.pending = true;
-        const VulkanIndirectStreamTap stream{ activeIndirectStreamObserver(),
-            VulkanIndirectStreamView::Opaque, frame };
-        stream.begin(opaqueIndirectCommandBuffers_[frame].buffer,
-            opaqueIndirectCountBuffers_[frame].buffer);
-        std::memcpy(opaqueIndirectCandidateBuffers_[frame].mapped,
-            opaqueIndirectCandidates_.data(),
-            opaqueIndirectCandidates_.size() *
-                sizeof(GpuSceneIndirectCandidate));
-        std::memset(opaqueIndirectCountBuffers_[frame].mapped, 0,
-            opaqueIndirectBins_.size() * sizeof(uint32_t));
-        stream.hostWrite(VulkanIndirectStreamHostTarget::Candidates,
-            opaqueIndirectCandidateBuffers_[frame].mapped,
-            opaqueIndirectCandidates_.size() *
-                sizeof(GpuSceneIndirectCandidate));
-        stream.hostWrite(VulkanIndirectStreamHostTarget::Counts,
-            opaqueIndirectCountBuffers_[frame].mapped,
-            opaqueIndirectBins_.size() * sizeof(uint32_t));
-        const uint32_t occlusionQueryCount = static_cast<uint32_t>(
-            depthOcclusionQueries_.size());
-        if (occlusionQueryCount != 0u) {
-            std::memcpy(depthOcclusionQueryBuffers_[frame].mapped,
-                depthOcclusionQueries_.data(),
-                depthOcclusionQueries_.size() *
-                    sizeof(DepthPyramidDeviceQuery));
-            stream.hostWrite(VulkanIndirectStreamHostTarget::OcclusionQueries,
-                depthOcclusionQueryBuffers_[frame].mapped,
-                depthOcclusionQueries_.size() *
-                    sizeof(DepthPyramidDeviceQuery));
-        }
-        if (queryOcclusion && !opaqueIndirectCandidates_.empty()) {
-            validation.gpuSceneOcclusionCandidateCount =
-                static_cast<uint32_t>(opaqueIndirectCandidates_.size());
-            validation.occlusionRejectionApplied =
-                depthOcclusionRejectionEnabled_;
-            // Query-only runs and explicit qualification consume the result
-            // stream on the CPU. The deployable rejection route deliberately
-            // avoids reading every candidate result back from host-visible GPU
-            // memory; its compacted indirect counts are the consumed output.
-            validation.gpuSceneOcclusionPending =
-                !validation.occlusionRejectionApplied ||
-                validation.occlusionQualificationOracle;
-        }
-
-        VkMemoryBarrier hostBarrier{ VK_STRUCTURE_TYPE_MEMORY_BARRIER };
-        // Same queue, across submissions: the preceding view's history writes
-        // must be visible before this dispatch reads/updates the shared table.
-        hostBarrier.srcAccessMask = VK_ACCESS_HOST_WRITE_BIT |
-            (experimentalGpuLodErrorPixels_ > 0.0f ? VK_ACCESS_SHADER_WRITE_BIT : 0u);
-        hostBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT |
-            VK_ACCESS_SHADER_WRITE_BIT;
-        vkCmdPipelineBarrier(currentCmd, VK_PIPELINE_STAGE_HOST_BIT |
-            (experimentalGpuLodErrorPixels_ > 0.0f ? VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT : 0u),
-            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0u,
-            1u, &hostBarrier, 0u, nullptr, 0u, nullptr);
-        stream.barrier(VK_PIPELINE_STAGE_HOST_BIT |
-            (experimentalGpuLodErrorPixels_ > 0.0f ? VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT : 0u),
-            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, hostBarrier.srcAccessMask,
-            hostBarrier.dstAccessMask);
-
-        VulkanGpuRangeToken range{};
-        const auto recordGpuSceneOcclusion = [&]() {
-            if (!validation.gpuSceneOcclusionPending) return;
-            range = scheduler.beginGpuRange(
-                "gpu.depth.occlusion-gpu-scene-query");
-            stream.gpuRange("gpu.depth.occlusion-gpu-scene-query");
-            const uint64_t queryDispatches =
-                depthPyramid_.recordGpuSceneQueries(
-                    currentCmd, frame, retainedRenderView_,
-                    globalDescriptorSets[frame],
-                    gpuSceneDescriptorSets_[frame],
-                    opaqueIndirectCandidateBuffers_[frame].buffer,
-                    opaqueIndirectCandidateBuffers_[frame].size,
-                    depthOcclusionGpuSceneResultBuffers_[frame].buffer,
-                    depthOcclusionGpuSceneResultBuffers_[frame].size,
-                    validation.gpuSceneOcclusionCandidateCount,
-                    gpuScenePublishedCounts_.transforms,
-                    gpuScenePublishedCounts_.instances,
-                    gpuScenePublishedCounts_.primitives,
-                    gpuScenePublishedCounts_.geometries);
-            frameCounters_.dispatchRecorded += queryDispatches;
-            stream.note(1u, { retainedRenderView_,
-                validation.gpuSceneOcclusionCandidateCount,
-                gpuScenePublishedCounts_.transforms,
-                gpuScenePublishedCounts_.instances,
-                gpuScenePublishedCounts_.primitives,
-                gpuScenePublishedCounts_.geometries, queryDispatches });
-            scheduler.endGpuRange(range);
-        };
-        if (validation.occlusionRejectionApplied) {
-            const VkImageView historyView = depthPyramid_.historyImageView(
-                retainedRenderView_);
-            const VkSampler historySampler = depthPyramid_.historySampler();
-            if (historyView == VK_NULL_HANDLE ||
-                historySampler == VK_NULL_HANDLE) {
-                throw std::logic_error(
-                    "fused depth-occlusion history descriptor is unavailable");
-            }
-            const VkDescriptorImageInfo historyInfo{ historySampler,
-                historyView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
-            VkWriteDescriptorSet historyWrite{
-                VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
-            historyWrite.dstSet = gpuSceneCullDescriptorSets_[frame];
-            historyWrite.dstBinding = 5u;
-            historyWrite.descriptorType =
-                VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            historyWrite.descriptorCount = 1u;
-            historyWrite.pImageInfo = &historyInfo;
-            vkUpdateDescriptorSets(vkContext->getDevice(), 1u,
-                &historyWrite, 0u, nullptr);
-            stream.note(3u, { retainedRenderView_ });
-        }
-
-        range = scheduler.beginGpuRange("gpu.gpu_scene.frustum_compact");
-        stream.gpuRange("gpu.gpu_scene.frustum_compact");
-        const VkPipeline compactPipeline =
-            depthOcclusionRejectionEnabled_ &&
-                !validation.occlusionRejectionApplied
-            ? gpuSceneCullFallbackPipeline_ : gpuSceneCullPipeline_;
-        if (compactPipeline == VK_NULL_HANDLE)
-            throw std::logic_error("GPU-scene compact pipeline is unavailable");
-        vkCmdBindPipeline(currentCmd, VK_PIPELINE_BIND_POINT_COMPUTE,
-            compactPipeline);
-        stream.bindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, compactPipeline);
-        const std::array<VkDescriptorSet, 3> sets{
-            globalDescriptorSets[frame], gpuSceneDescriptorSets_[frame],
-            gpuSceneCullDescriptorSets_[frame] };
-        vkCmdBindDescriptorSets(currentCmd, VK_PIPELINE_BIND_POINT_COMPUTE,
-            gpuSceneCullPipelineLayout_, 0u,
-            static_cast<uint32_t>(sets.size()), sets.data(), 0u, nullptr);
-        stream.bindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE,
-            gpuSceneCullPipelineLayout_, 0u, sets);
-        const std::array<uint32_t, 11> parameters{
-            static_cast<uint32_t>(opaqueIndirectCandidates_.size()),
-            gpuScenePublishedCounts_.transforms,
-            gpuScenePublishedCounts_.instances,
-            gpuScenePublishedCounts_.primitives,
-            gpuScenePublishedCounts_.geometries,
-            std::bit_cast<uint32_t>(experimentalGpuLodErrorPixels_),
-            mainOpaqueLodHistory_.capacity(), mainOpaqueLodHistory_.frameSerial(),
-            std::bit_cast<uint32_t>(gpuLodHysteresisFraction_),
-            validation.occlusionRejectionApplied ? 1u : 0u,
-            validation.gpuSceneOcclusionPending ? 1u : 0u };
-        vkCmdPushConstants(currentCmd, gpuSceneCullPipelineLayout_,
-            VK_SHADER_STAGE_COMPUTE_BIT, 0u, sizeof(parameters),
-            parameters.data());
-        stream.pushConstants(gpuSceneCullPipelineLayout_,
-            VK_SHADER_STAGE_COMPUTE_BIT, 0u, parameters.data(),
-            sizeof(parameters));
-        vkCmdDispatch(currentCmd,
-            (parameters[0] + 63u) / 64u, 1u, 1u);
-        stream.dispatch((parameters[0] + 63u) / 64u, 1u, 1u);
-        scheduler.endGpuRange(range);
-        ++frameCounters_.dispatchRecorded;
-
-        if (occlusionQueryCount != 0u) {
-            range = scheduler.beginGpuRange("gpu.depth.occlusion-query");
-            stream.gpuRange("gpu.depth.occlusion-query");
-            const uint64_t queryDispatches = depthPyramid_.recordQueries(
-                currentCmd, frame, retainedRenderView_,
-                depthOcclusionQueryBuffers_[frame].buffer,
-                depthOcclusionQueryBuffers_[frame].size,
-                depthOcclusionResultBuffers_[frame].buffer,
-                depthOcclusionResultBuffers_[frame].size,
-                occlusionQueryCount);
-            frameCounters_.dispatchRecorded += queryDispatches;
-            stream.note(2u, { retainedRenderView_, occlusionQueryCount,
-                queryDispatches });
-            scheduler.endGpuRange(range);
-        }
-        if (!validation.occlusionRejectionApplied)
-            recordGpuSceneOcclusion();
-
-        VkMemoryBarrier drawBarrier{ VK_STRUCTURE_TYPE_MEMORY_BARRIER };
-        drawBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-        drawBarrier.dstAccessMask = VK_ACCESS_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_HOST_READ_BIT;
-        vkCmdPipelineBarrier(currentCmd,
-            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-            VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_HOST_BIT, 0u,
-            1u, &drawBarrier, 0u, nullptr, 0u, nullptr);
-        stream.barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-            VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_HOST_BIT,
-            drawBarrier.srcAccessMask, drawBarrier.dstAccessMask);
+        if (!opaqueCuller_.plan({
+                .queue = opaqueQueue,
+                .scene = indirectScene(frame),
+                .sceneBuffersMapped =
+                    gpuScenePrimitiveBuffers_[frame].mapped != nullptr &&
+                    gpuSceneGeometryBuffers_[frame].mapped != nullptr &&
+                    gpuSceneInstanceBuffers_[frame].mapped != nullptr &&
+                    gpuSceneTransformBuffers_[frame].mapped != nullptr,
+                .assets = indirectAssets(),
+                .queryOcclusion = depthOcclusionQueryEnabled_ &&
+                    currentDepthHistoryDecision_.eligible,
+                .view = &gpuSceneCpuViews_[frame],
+            }, frame))
+            return false;
+        frameCounters_.dispatchRecorded += opaqueCuller_.recordCompaction(
+            currentCmd, frame, {
+                .globalSet = globalDescriptorSets[frame],
+                .gpuSceneSet = gpuSceneDescriptorSets_[frame],
+                .retainedView = retainedRenderView_,
+            });
         return true;
     }
 
@@ -5094,9 +4614,9 @@ namespace Iridium {
                     VulkanIndirectStreamView::Opaque, frame };
                 uint64_t oracleVisibleCommands = 0;
                 for (uint32_t binIndex = 0;
-                        binIndex < opaqueIndirectBins_.size(); ++binIndex) {
-                    const OpaqueIndirectBin& bin =
-                        opaqueIndirectBins_[binIndex];
+                        binIndex < opaqueCuller_.bins().size(); ++binIndex) {
+                    const VulkanOpaqueIndirectCuller::Bin& bin =
+                        opaqueCuller_.bins()[binIndex];
                     const DrawPacket& packet = opaqueQueue[bin.packetBegin];
                     auto* geometry = geometryVault.get(bin.geometry);
                     const VulkanPipelineRecord* record =
@@ -5140,10 +4660,10 @@ namespace Iridium {
                             VK_SHADER_STAGE_FRAGMENT_BIT,
                         0u, sizeof(push), &push);
                     vkCmdDrawIndexedIndirectCount(currentCmd,
-                        opaqueIndirectCommandBuffers_[frame].buffer,
+                        opaqueCuller_.buffers().commands[frame].buffer,
                         static_cast<VkDeviceSize>(bin.commandBegin) *
                             sizeof(GpuSceneIndexedIndirectCommand),
-                        opaqueIndirectCountBuffers_[frame].buffer,
+                        opaqueCuller_.buffers().counts[frame].buffer,
                         static_cast<VkDeviceSize>(binIndex) * sizeof(uint32_t),
                         bin.commandCount,
                         sizeof(GpuSceneIndexedIndirectCommand));
@@ -5152,10 +4672,10 @@ namespace Iridium {
                         geometry->indexBuffer.buffer,
                         toVkIndexType(geometry->indexFormat),
                         push.padding[0],
-                        opaqueIndirectCommandBuffers_[frame].buffer,
+                        opaqueCuller_.buffers().commands[frame].buffer,
                         static_cast<VkDeviceSize>(bin.commandBegin) *
                             sizeof(GpuSceneIndexedIndirectCommand),
-                        opaqueIndirectCountBuffers_[frame].buffer,
+                        opaqueCuller_.buffers().counts[frame].buffer,
                         static_cast<VkDeviceSize>(binIndex) * sizeof(uint32_t),
                         bin.commandCount);
                     for (uint32_t command = 0;
@@ -5171,7 +4691,7 @@ namespace Iridium {
                 }
                 frameCounters_.opaqueIndirectCommands =
                     oracleVisibleCommands;
-                frameCounters_.opaqueIndirectBins = opaqueIndirectBins_.size();
+                frameCounters_.opaqueIndirectBins = opaqueCuller_.bins().size();
             }
             else for (const auto& packet : opaqueQueue) {
                 if (!forceDirectGBufferReference_ && hasGpuScenePrimitive(packet) &&
@@ -5231,10 +4751,10 @@ VkDeviceSize offset = geometry->vertexOffset;
                     }
                 }
                 frameCounters_.opaqueIndirectFallbackReason =
-                    static_cast<uint32_t>(opaqueIndirectPlan_.fallbackReason ==
+                    static_cast<uint32_t>(opaqueCuller_.indirectPlan().fallbackReason ==
                             GpuSceneIndirectFallbackReason::None
                         ? GpuSceneIndirectFallbackReason::InvalidPacket
-                        : opaqueIndirectPlan_.fallbackReason);
+                        : opaqueCuller_.indirectPlan().fallbackReason);
             }
         }
         scheduler.endGpuRange(opaqueGpuRange);
@@ -5719,533 +5239,21 @@ VkDeviceSize offset = geometry->vertexOffset;
     }
 
     void VulkanVertexBackend::createGpuSceneCullPipeline() {
-        std::array<VkDescriptorSetLayoutBinding, 6> bindings{};
-        for (uint32_t binding = 0; binding < 5u; ++binding) {
-            bindings[binding].binding = binding;
-            bindings[binding].descriptorType =
-                VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            bindings[binding].descriptorCount = 1u;
-            bindings[binding].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-        }
-        bindings[5].binding = 5u;
-        bindings[5].descriptorType =
-            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        bindings[5].descriptorCount = 1u;
-        bindings[5].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-        VkDescriptorSetLayoutCreateInfo setInfo{
-            VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
-        setInfo.bindingCount = depthOcclusionRejectionEnabled_
-            ? static_cast<uint32_t>(bindings.size()) : 4u;
-        setInfo.pBindings = bindings.data();
-        if (vkCreateDescriptorSetLayout(vkContext->getDevice(), &setInfo,
-                nullptr, &gpuSceneCullSetLayout_) != VK_SUCCESS) {
-            throw std::runtime_error(
-                "failed to create GPU-scene cull descriptor layout");
-        }
-
-        const std::array<VkDescriptorSetLayout, 3> setLayouts{
-            meshLayouts.getGlobalSetLayout(),
-            meshLayouts.getGpuSceneSetLayout(), gpuSceneCullSetLayout_ };
-        gpuSceneCullPipelineLayout_ = createComputePipelineLayout(
-            vkContext->getDevice(), setLayouts, 11u, "GPU-scene cull");
-        constexpr const char* baseShader =
-            "assets/shaders/gpu_scene_frustum_compact_comp.spv";
-        constexpr const char* fusedShader =
-            "assets/shaders/gpu_scene_frustum_occlusion_compact_comp.spv";
-        gpuSceneCullPipeline_ = createComputePipeline(vkContext->getDevice(),
-            gpuSceneCullPipelineLayout_,
-            depthOcclusionRejectionEnabled_ ? fusedShader : baseShader,
-            "GPU-scene cull");
-        if (depthOcclusionRejectionEnabled_)
-            gpuSceneCullFallbackPipeline_ = createComputePipeline(
-                vkContext->getDevice(), gpuSceneCullPipelineLayout_, baseShader,
-                "GPU-scene cull");
-    }
-
-    void VulkanVertexBackend::bindOpaqueIndirectBuffers() {
-        for (uint32_t frame = 0;
-                frame < VulkanFrameScheduler::FramesInFlight; ++frame) {
-            const std::array<VkDescriptorBufferInfo, 4> infos{{
-                { opaqueIndirectCandidateBuffers_[frame].buffer, 0,
-                    opaqueIndirectCandidateBuffers_[frame].size },
-                { opaqueIndirectCommandBuffers_[frame].buffer, 0,
-                    opaqueIndirectCommandBuffers_[frame].size },
-                { opaqueIndirectCountBuffers_[frame].buffer, 0,
-                    opaqueIndirectCountBuffers_[frame].size },
-                { mainOpaqueLodHistoryBuffer_.buffer, 0, mainOpaqueLodHistoryBuffer_.size },
-            }};
-            std::array<VkWriteDescriptorSet, 4> writes{};
-            for (uint32_t binding = 0; binding < writes.size(); ++binding) {
-                writes[binding] = {
-                    VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
-                writes[binding].dstSet =
-                    gpuSceneCullDescriptorSets_[frame];
-                writes[binding].dstBinding = binding;
-                writes[binding].descriptorType =
-                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-                writes[binding].descriptorCount = 1u;
-                writes[binding].pBufferInfo = &infos[binding];
-            }
-            vkUpdateDescriptorSets(vkContext->getDevice(),
-                static_cast<uint32_t>(writes.size()), writes.data(),
-                0u, nullptr);
-            if (depthOcclusionRejectionEnabled_) {
-                const VkDescriptorBufferInfo occlusionInfo{
-                    depthOcclusionGpuSceneResultBuffers_[frame].buffer, 0,
-                    depthOcclusionGpuSceneResultBuffers_[frame].size };
-                VkWriteDescriptorSet occlusionWrite{
-                    VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
-                occlusionWrite.dstSet = gpuSceneCullDescriptorSets_[frame];
-                occlusionWrite.dstBinding = 4u;
-                occlusionWrite.descriptorType =
-                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-                occlusionWrite.descriptorCount = 1u;
-                occlusionWrite.pBufferInfo = &occlusionInfo;
-                vkUpdateDescriptorSets(vkContext->getDevice(), 1u,
-                    &occlusionWrite, 0u, nullptr);
-            }
-        }
-    }
-
-    void VulkanVertexBackend::collectOpaqueIndirectValidation(
-        uint32_t frameIndex) {
-        PendingOpaqueIndirectValidation& validation =
-            pendingOpaqueIndirectValidations_[frameIndex];
-        if (!validation.pending) return;
-
-        const auto* counts = static_cast<const uint32_t*>(
-            opaqueIndirectCountBuffers_[frameIndex].mapped);
-        VulkanIndirectStreamTap{ activeIndirectStreamObserver(),
-            VulkanIndirectStreamView::Opaque, frameIndex }
-            .retire({ .counts = counts,
-                .commands = static_cast<const GpuSceneIndexedIndirectCommand*>(
-                    opaqueIndirectCommandBuffers_[frameIndex].mapped),
-                .countCapacities = validation.binCapacities,
-                .primitives = gpuSceneCpuMirrors_[frameIndex].primitives,
-                .instances = gpuSceneCpuMirrors_[frameIndex].instances,
-                .transforms = gpuSceneCpuMirrors_[frameIndex].transforms });
-        // Oracle state exists only for slots that emitted expectations.
-        IVulkanIndirectOracle* const lodOracle =
-            validation.lodQualificationOracle ? indirectOracle_ : nullptr;
-        IVulkanIndirectOracle* const occlusionOracle =
-            validation.occlusionQualificationOracle ? indirectOracle_ : nullptr;
-        uint64_t deviceCommands = 0;
-        uint64_t oracleCommands = 0;
-        uint64_t mismatchedBins = 0;
-        uint64_t overflowCommands = 0;
-        uint64_t gpuSceneOcclusionTested = 0;
-        uint64_t gpuSceneOcclusionWouldReject = 0;
-        uint64_t gpuSceneOcclusionFailVisible = 0;
-        std::array<uint64_t, 8> gpuSceneOcclusionFailVisibleReasons{};
-        uint64_t gpuSceneOcclusionAppliedRejects = 0;
-        uint64_t invalidGpuSceneOcclusionResults = 0;
-        uint64_t unsafeGpuSceneOcclusionMismatches = 0;
-        for (size_t bin = 0; bin < validation.expectedBinCounts.size(); ++bin) {
-            const uint32_t capacity = validation.binCapacities[bin];
-            const uint32_t deviceCount = counts != nullptr ? counts[bin] : 0u;
-            const uint32_t submittedCount = (std::min)(deviceCount, capacity);
-            deviceCommands += submittedCount;
-            oracleCommands += validation.expectedBinCounts[bin];
-            overflowCommands += deviceCount > capacity
-                ? static_cast<uint64_t>(deviceCount - capacity) : 0u;
-            if (!validation.occlusionRejectionApplied ||
-                validation.occlusionQualificationOracle) {
-                mismatchedBins += submittedCount !=
-                    validation.expectedBinCounts[bin] ? 1u : 0u;
-            }
-        }
-        if (lodOracle != nullptr) {
-            lodOracle->verifyOpaqueLodCommands(frameIndex, counts,
-                validation.binCapacities,
-                static_cast<const GpuSceneIndexedIndirectCommand*>(
-                    opaqueIndirectCommandBuffers_[frameIndex].mapped));
-        }
-        const VulkanOcclusionQueryVerdict occlusionQueries =
-            occlusionOracle != nullptr
-            ? occlusionOracle->verifyOcclusionQueries(frameIndex,
-                static_cast<const DepthPyramidDeviceResult*>(
-                    depthOcclusionResultBuffers_[frameIndex].mapped))
-            : VulkanOcclusionQueryVerdict{};
-        if (validation.gpuSceneOcclusionPending) {
-            const auto* results = static_cast<const DepthPyramidDeviceResult*>(
-                depthOcclusionGpuSceneResultBuffers_[frameIndex].mapped);
-            const uint32_t candidateCount =
-                validation.gpuSceneOcclusionCandidateCount;
-            if (results == nullptr ||
-                validation.occlusionCandidatePrimitiveIndices.size() !=
-                    candidateCount ||
-                validation.occlusionCandidateBinIndices.size() !=
-                    candidateCount) {
-                invalidGpuSceneOcclusionResults = candidateCount;
-            }
-            else {
-                for (uint32_t index = 0; index < candidateCount; ++index) {
-                    const auto& result = results[index];
-                    const bool tested = result.tested == 1u;
-                    const bool validRejection = result.reserved0 <=
-                        static_cast<uint32_t>(
-                            DepthPyramidProjectionRejection::SmallBounds);
-                    const bool validCommon =
-                        result.abiVersion == DepthPyramidAbiVersion &&
-                        result.mipLevel < 32u && result.tested <= 1u &&
-                        result.occluded <= 1u &&
-                        validRejection &&
-                        result.reserved1 ==
-                            validation.occlusionCandidatePrimitiveIndices[index] &&
-                        std::isfinite(result.farthestOccluderDepth) &&
-                        result.farthestOccluderDepth >= 0.0f &&
-                        result.farthestOccluderDepth <= 1.0f;
-                    const bool validTested = tested &&
-                        result.sampledTexels >= 1u &&
-                        result.sampledTexels <= 4u &&
-                        result.reserved0 == static_cast<uint32_t>(
-                            DepthPyramidProjectionRejection::None);
-                    const bool validFailVisible = !tested &&
-                        result.mipLevel == 0u &&
-                        result.sampledTexels == 0u && result.occluded == 0u &&
-                        result.reserved0 != static_cast<uint32_t>(
-                            DepthPyramidProjectionRejection::None);
-                    if (!validCommon ||
-                        (!validTested && !validFailVisible)) {
-                        ++invalidGpuSceneOcclusionResults;
-                        continue;
-                    }
-                    if (!tested) {
-                        ++gpuSceneOcclusionFailVisible;
-                        ++gpuSceneOcclusionFailVisibleReasons[result.reserved0];
-                        continue;
-                    }
-                    ++gpuSceneOcclusionTested;
-                    gpuSceneOcclusionWouldReject += result.occluded;
-                    if (result.occluded != 0u && occlusionOracle != nullptr &&
-                        occlusionOracle->unsafeGpuSceneOcclusion(frameIndex,
-                            index)) {
-                        ++unsafeGpuSceneOcclusionMismatches;
-                    }
-                    if (validation.occlusionRejectionApplied &&
-                        result.occluded != 0u &&
-                        (occlusionOracle == nullptr ||
-                            occlusionOracle->opaqueCandidateCpuVisible(
-                                frameIndex, index))) {
-                        const uint32_t bin =
-                            validation.occlusionCandidateBinIndices[index];
-                        if (bin >= validation.expectedBinCounts.size() ||
-                            validation.expectedBinCounts[bin] == 0u) {
-                            ++invalidGpuSceneOcclusionResults;
-                            continue;
-                        }
-                        --validation.expectedBinCounts[bin];
-                        ++gpuSceneOcclusionAppliedRejects;
-                        if (lodOracle != nullptr &&
-                            !lodOracle->rejectOpaqueLodPrimitive(frameIndex,
-                                validation.occlusionCandidatePrimitiveIndices[
-                                    index])) {
-                            ++invalidGpuSceneOcclusionResults;
-                        }
-                    }
-                }
-            }
-        }
-        if (validation.occlusionRejectionApplied &&
-            validation.occlusionQualificationOracle) {
-            oracleCommands = 0u;
-            mismatchedBins = 0u;
-            for (size_t bin = 0; bin <
-                    validation.expectedBinCounts.size(); ++bin) {
-                const uint32_t expected = validation.expectedBinCounts[bin];
-                const uint32_t deviceCount = counts != nullptr
-                    ? counts[bin] : 0u;
-                oracleCommands += expected;
-                mismatchedBins +=
-                    (std::min)(deviceCount,
-                        validation.binCapacities[bin]) != expected ? 1u : 0u;
-            }
-        }
-        const VulkanOpaqueLodVerdict lod = lodOracle != nullptr
-            ? lodOracle->finishOpaqueLod(frameIndex) : VulkanOpaqueLodVerdict{};
-        if (validation.profileFrameId != 0u && cpuProfiler_ != nullptr) {
-            (void)cpuProfiler_->attachCounter(validation.profileFrameId,
-                "gpu_scene.visibility.device_commands", deviceCommands);
-            (void)cpuProfiler_->attachCounter(validation.profileFrameId,
-                "gpu_scene.visibility.oracle_commands", oracleCommands,
-                validation.occlusionRejectionApplied &&
-                    !validation.occlusionQualificationOracle
-                    ? ProfileCounterStatus::Unavailable
-                    : ProfileCounterStatus::Exact);
-            (void)cpuProfiler_->attachCounter(validation.profileFrameId,
-                "gpu_scene.visibility.device_mismatched_bins", mismatchedBins,
-                validation.occlusionRejectionApplied &&
-                    !validation.occlusionQualificationOracle
-                    ? ProfileCounterStatus::Unavailable
-                    : ProfileCounterStatus::Exact);
-            (void)cpuProfiler_->attachCounter(validation.profileFrameId,
-                "gpu_scene.visibility.device_overflow_commands", overflowCommands);
-            if (lod.active) {
-                (void)cpuProfiler_->attachCounter(validation.profileFrameId,
-                    "gpu_scene.lod.base_triangles", lod.baseTriangles);
-                (void)cpuProfiler_->attachCounter(validation.profileFrameId,
-                    "gpu_scene.lod.oracle_triangles", lod.oracleTriangles);
-                (void)cpuProfiler_->attachCounter(validation.profileFrameId,
-                    "gpu_scene.lod.device_triangles", lod.deviceTriangles);
-                (void)cpuProfiler_->attachCounter(validation.profileFrameId,
-                    "gpu_scene.lod.oracle_reduced_commands", lod.oracleReducedCommands);
-                (void)cpuProfiler_->attachCounter(validation.profileFrameId,
-                    "gpu_scene.lod.device_mismatched_commands", lod.mismatchedCommands);
-                (void)cpuProfiler_->attachCounter(validation.profileFrameId,
-                    "gpu_scene.lod.history_valid", lod.historyValid);
-                (void)cpuProfiler_->attachCounter(validation.profileFrameId,
-                    "gpu_scene.lod.history_reset", lod.historyReset);
-                (void)cpuProfiler_->attachCounter(validation.profileFrameId,
-                    "gpu_scene.lod.history_changed", lod.historyChanged);
-            }
-        }
-        if (validation.occlusionProfileFrameId != 0u &&
-            cpuProfiler_ != nullptr && occlusionQueries.active) {
-            const uint64_t requested = occlusionQueries.queryCount +
-                occlusionQueries.projectionRejected;
-            (void)cpuProfiler_->attachCounter(validation.occlusionProfileFrameId,
-                "depth.occlusion.query.requested", requested);
-            (void)cpuProfiler_->attachCounter(validation.occlusionProfileFrameId,
-                "depth.occlusion.query.projected",
-                occlusionQueries.queryCount);
-            (void)cpuProfiler_->attachCounter(validation.occlusionProfileFrameId,
-                "depth.occlusion.query.tested", occlusionQueries.tested);
-            (void)cpuProfiler_->attachCounter(validation.occlusionProfileFrameId,
-                "depth.occlusion.query.would_reject",
-                occlusionQueries.wouldReject);
-            (void)cpuProfiler_->attachCounter(validation.occlusionProfileFrameId,
-                "depth.occlusion.query.invalid_results",
-                occlusionQueries.invalidResults);
-            (void)cpuProfiler_->attachCounter(validation.occlusionProfileFrameId,
-                "depth.occlusion.query.projection_fail_visible",
-                occlusionQueries.projectionRejected);
-        }
-        if (validation.occlusionProfileFrameId != 0u &&
-            cpuProfiler_ != nullptr && validation.gpuSceneOcclusionPending) {
-            (void)cpuProfiler_->attachCounter(validation.occlusionProfileFrameId,
-                "depth.occlusion.gpu_scene.requested",
-                validation.gpuSceneOcclusionCandidateCount);
-            (void)cpuProfiler_->attachCounter(validation.occlusionProfileFrameId,
-                "depth.occlusion.gpu_scene.tested", gpuSceneOcclusionTested);
-            (void)cpuProfiler_->attachCounter(validation.occlusionProfileFrameId,
-                "depth.occlusion.gpu_scene.would_reject",
-                gpuSceneOcclusionWouldReject);
-            (void)cpuProfiler_->attachCounter(validation.occlusionProfileFrameId,
-                "depth.occlusion.gpu_scene.fail_visible",
-                gpuSceneOcclusionFailVisible);
-            constexpr std::array<const char*, 8> failVisibleReasonNames{
-                "", "depth.occlusion.gpu_scene.fail_visible.invalid_extent",
-                "depth.occlusion.gpu_scene.fail_visible.invalid_bounds",
-                "depth.occlusion.gpu_scene.fail_visible.invalid_projection",
-                "depth.occlusion.gpu_scene.fail_visible.invalid_settings",
-                "depth.occlusion.gpu_scene.fail_visible.clip_plane",
-                "depth.occlusion.gpu_scene.fail_visible.outside_view",
-                "depth.occlusion.gpu_scene.fail_visible.small_bounds" };
-            for (uint32_t reason = 1u;
-                    reason < failVisibleReasonNames.size(); ++reason) {
-                (void)cpuProfiler_->attachCounter(
-                    validation.occlusionProfileFrameId,
-                    failVisibleReasonNames[reason],
-                    gpuSceneOcclusionFailVisibleReasons[reason]);
-            }
-            (void)cpuProfiler_->attachCounter(validation.occlusionProfileFrameId,
-                "depth.occlusion.gpu_scene.invalid_results",
-                invalidGpuSceneOcclusionResults);
-            if (validation.occlusionQualificationOracle)
-                (void)cpuProfiler_->attachCounter(
-                    validation.occlusionProfileFrameId,
-                    "depth.occlusion.gpu_scene.unsafe_mismatch",
-                    unsafeGpuSceneOcclusionMismatches);
-            (void)cpuProfiler_->attachCounter(validation.occlusionProfileFrameId,
-                "depth.occlusion.gpu_scene.applied_rejects",
-                gpuSceneOcclusionAppliedRejects);
-        }
-        else if (validation.occlusionProfileFrameId != 0u &&
-            cpuProfiler_ != nullptr &&
-            validation.occlusionRejectionApplied) {
-            const uint64_t appliedRejects = oracleCommands >= deviceCommands
-                ? oracleCommands - deviceCommands : 0u;
-            (void)cpuProfiler_->attachCounter(
-                validation.occlusionProfileFrameId,
-                "depth.occlusion.gpu_scene.requested",
-                validation.gpuSceneOcclusionCandidateCount);
-            (void)cpuProfiler_->attachCounter(
-                validation.occlusionProfileFrameId,
-                "depth.occlusion.gpu_scene.tested", 0u,
-                ProfileCounterStatus::Unavailable);
-            (void)cpuProfiler_->attachCounter(
-                validation.occlusionProfileFrameId,
-                "depth.occlusion.gpu_scene.would_reject", appliedRejects);
-            (void)cpuProfiler_->attachCounter(
-                validation.occlusionProfileFrameId,
-                "depth.occlusion.gpu_scene.fail_visible", 0u,
-                ProfileCounterStatus::Unavailable);
-            (void)cpuProfiler_->attachCounter(
-                validation.occlusionProfileFrameId,
-                "depth.occlusion.gpu_scene.invalid_results", 0u,
-                ProfileCounterStatus::Unavailable);
-            (void)cpuProfiler_->attachCounter(
-                validation.occlusionProfileFrameId,
-                "depth.occlusion.gpu_scene.unsafe_mismatch", 0u,
-                ProfileCounterStatus::Unavailable);
-            (void)cpuProfiler_->attachCounter(
-                validation.occlusionProfileFrameId,
-                "depth.occlusion.gpu_scene.applied_rejects",
-                appliedRejects);
-        }
-        if (lod.mismatchedCommands != 0)
-            throw std::runtime_error("experimental GPU LOD command readback disagrees with the CPU oracle");
-        if (validation.occlusionRejectionApplied &&
-            (overflowCommands != 0u ||
-                (validation.occlusionQualificationOracle &&
-                    mismatchedBins != 0u)))
-            throw std::runtime_error(
-                "experimental GPU-scene depth-occlusion rejection disagrees with the indirect-command oracle");
-        if (occlusionQueries.invalidResults != 0)
-            throw std::runtime_error(
-                "experimental depth-occlusion query returned invalid device results");
-        if (invalidGpuSceneOcclusionResults != 0)
-            throw std::runtime_error(
-                "experimental GPU-scene depth-occlusion query returned invalid device results");
-        if (unsafeGpuSceneOcclusionMismatches != 0)
-            throw std::runtime_error(
-                "experimental GPU-scene depth-occlusion query rejected CPU-visible work");
-        validation.gpuSceneOcclusionPending = false;
-        validation.pending = false;
-    }
-
-    void VulkanVertexBackend::createOpaqueIndirectBuffers(uint32_t capacity) {
-        if (frameOpen_ || capacity == 0u ||
-            capacity > MaximumOpaqueIndirectCommandCapacity) {
-            throw std::invalid_argument(
-                "opaque indirect capacity is invalid at this frame boundary");
-        }
-        using Buffers = std::array<VulkanBufferResource,
-            VulkanFrameScheduler::FramesInFlight>;
-        Buffers commands{}, counts{}, candidates{}, occlusionQueries{},
-            occlusionResults{}, gpuSceneOcclusionResults{};
-        VulkanBufferResource history{};
-        const bool depthOcclusionOracle = activeIndirectOracle(
-            VulkanIndirectOracleView::DepthOcclusion) != nullptr;
-        const bool standaloneOcclusionOracle =
-            depthOcclusionQueryEnabled_ &&
-            (!depthOcclusionRejectionEnabled_ || depthOcclusionOracle);
-        const uint32_t historyCapacity = experimentalGpuLodErrorPixels_ > 0.0f ? capacity : 1u;
-        try {
-            history = resourceAllocator.createBuffer(
-                static_cast<uint64_t>(historyCapacity) * sizeof(GpuSceneLodHistoryRecord),
-                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                true, ProfileMemoryCategory::GpuScene);
-            std::memset(history.mapped, 0, static_cast<size_t>(history.size));
-            for (uint32_t frame = 0;
-                    frame < VulkanFrameScheduler::FramesInFlight; ++frame) {
-                commands[frame] = resourceAllocator.createBuffer(
-                    static_cast<uint64_t>(capacity) *
-                        sizeof(GpuSceneIndexedIndirectCommand),
-                    VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
-                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                        VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                    true, ProfileMemoryCategory::GpuScene);
-                counts[frame] = resourceAllocator.createBuffer(
-                    static_cast<uint64_t>(capacity) * sizeof(uint32_t),
-                    VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
-                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                        VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                    true, ProfileMemoryCategory::GpuScene);
-                candidates[frame] = resourceAllocator.createBuffer(
-                    static_cast<uint64_t>(capacity) *
-                        sizeof(GpuSceneIndirectCandidate),
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                        VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                    true, ProfileMemoryCategory::GpuScene);
-                if (standaloneOcclusionOracle) {
-                    occlusionQueries[frame] = resourceAllocator.createBuffer(
-                        static_cast<uint64_t>(capacity) *
-                            sizeof(DepthPyramidDeviceQuery),
-                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                            VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                        true, ProfileMemoryCategory::GpuScene);
-                    occlusionResults[frame] = resourceAllocator.createBuffer(
-                        static_cast<uint64_t>(capacity) *
-                            sizeof(DepthPyramidDeviceResult),
-                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                        VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                        true, ProfileMemoryCategory::GpuScene);
-                }
-                if (depthOcclusionQueryEnabled_) {
-                    const uint32_t resultCapacity =
-                        !depthOcclusionRejectionEnabled_ || depthOcclusionOracle
-                        ? capacity : 1u;
-                    gpuSceneOcclusionResults[frame] =
-                        resourceAllocator.createBuffer(
-                            static_cast<uint64_t>(resultCapacity) *
-                                sizeof(DepthPyramidDeviceResult),
-                            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                                VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                            true, ProfileMemoryCategory::GpuScene);
-                }
-            }
-        }
-        catch (...) {
-            resourceAllocator.destroy(history);
-            for (VulkanBufferResource& buffer : commands)
-                resourceAllocator.destroy(buffer);
-            for (VulkanBufferResource& buffer : counts)
-                resourceAllocator.destroy(buffer);
-            for (VulkanBufferResource& buffer : candidates)
-                resourceAllocator.destroy(buffer);
-            for (VulkanBufferResource& buffer : occlusionQueries)
-                resourceAllocator.destroy(buffer);
-            for (VulkanBufferResource& buffer : occlusionResults)
-                resourceAllocator.destroy(buffer);
-            for (VulkanBufferResource& buffer : gpuSceneOcclusionResults)
-                resourceAllocator.destroy(buffer);
-            throw;
-        }
-        if (opaqueIndirectCommandCapacity_ != 0u) {
-            scheduler.waitForAllFrames();
-            for (uint32_t frame = 0;
-                    frame < VulkanFrameScheduler::FramesInFlight; ++frame)
-                collectOpaqueIndirectValidation(frame);
-        }
-        for (VulkanBufferResource& buffer : opaqueIndirectCommandBuffers_)
-            resourceAllocator.destroy(buffer);
-        for (VulkanBufferResource& buffer : opaqueIndirectCountBuffers_)
-            resourceAllocator.destroy(buffer);
-        for (VulkanBufferResource& buffer : opaqueIndirectCandidateBuffers_)
-            resourceAllocator.destroy(buffer);
-        for (VulkanBufferResource& buffer : depthOcclusionQueryBuffers_)
-            resourceAllocator.destroy(buffer);
-        for (VulkanBufferResource& buffer : depthOcclusionResultBuffers_)
-            resourceAllocator.destroy(buffer);
-        for (VulkanBufferResource& buffer :
-                depthOcclusionGpuSceneResultBuffers_)
-            resourceAllocator.destroy(buffer);
-        opaqueIndirectCommandBuffers_ = commands;
-        opaqueIndirectCountBuffers_ = counts;
-        opaqueIndirectCandidateBuffers_ = candidates;
-        depthOcclusionQueryBuffers_ = occlusionQueries;
-        depthOcclusionResultBuffers_ = occlusionResults;
-        depthOcclusionGpuSceneResultBuffers_ = gpuSceneOcclusionResults;
-        opaqueIndirectCommandCapacity_ = capacity;
-        opaqueIndirectBins_.reserve(capacity);
-        opaqueIndirectPlan_.commands.reserve(capacity);
-        opaqueIndirectPlan_.packetIndices.reserve(capacity);
-        opaqueIndirectCandidates_.reserve(capacity);
-        if (standaloneOcclusionOracle)
-            depthOcclusionQueries_.reserve(capacity);
-        resourceAllocator.destroy(mainOpaqueLodHistoryBuffer_);
-        mainOpaqueLodHistoryBuffer_ = history;
-        mainOpaqueLodHistory_.resize(historyCapacity);
-        if (gpuSceneCullDescriptorSets_[0] != VK_NULL_HANDLE)
-            bindOpaqueIndirectBuffers();
+        opaqueCuller_.init(cullerServices(), {
+                .depthOcclusionQuery = depthOcclusionQueryEnabled_,
+                .depthOcclusionRejection = depthOcclusionRejectionEnabled_,
+                .lodErrorPixels = experimentalGpuLodErrorPixels_,
+                .lodMaximumLevel = gpuLodMaximumLevel_,
+                .lodHysteresisFraction = gpuLodHysteresisFraction_,
+                .forceDirectGBufferReference = forceDirectGBufferReference_,
+                .lodOracle = activeIndirectOracle(VulkanIndirectOracleView::OpaqueLod),
+                .occlusionOracle =
+                    activeIndirectOracle(VulkanIndirectOracleView::DepthOcclusion),
+                .depthPyramid = &depthPyramid_,
+            },
+            createOpaqueCullPipelines(vkContext->getDevice(),
+                depthOcclusionRejectionEnabled_, meshLayouts.getGlobalSetLayout(),
+                meshLayouts.getGpuSceneSetLayout()));
     }
 
     void VulkanVertexBackend::bindLightRecordBuffers() {
@@ -6803,11 +5811,11 @@ VkDeviceSize offset = geometry->vertexOffset;
         const uint32_t desiredIndirectCapacity = (std::min)(
             (std::max)(requirements.primitives, 1u),
             MaximumOpaqueIndirectCommandCapacity);
-        if (desiredIndirectCapacity > opaqueIndirectCommandCapacity_) {
+        if (desiredIndirectCapacity > opaqueCuller_.commandCapacity()) {
             const uint32_t grownCapacity = nextMaterialTableCapacity(
-                opaqueIndirectCommandCapacity_, desiredIndirectCapacity,
+                opaqueCuller_.commandCapacity(), desiredIndirectCapacity,
                 MaximumOpaqueIndirectCommandCapacity);
-            createOpaqueIndirectBuffers(grownCapacity);
+            opaqueCuller_.resize(grownCapacity, frameOpen_);
             if (grownCapacity > directionalCuller_.primitiveCapacity())
                 directionalCuller_.resize(grownCapacity, frameOpen_);
             if (grownCapacity > spotCuller_.primitiveCapacity())
@@ -6841,7 +5849,7 @@ VkDeviceSize offset = geometry->vertexOffset;
         CpuScope uploadScope(cpuProfiler_, "cpu.gpu_scene.upload");
         publishedGpuSceneEpoch_ = scene.sceneEpoch == 0u
             ? 1u : scene.sceneEpoch;
-        if (experimentalGpuLodErrorPixels_ > 0.0f) mainOpaqueLodHistory_.publish(scene);
+        if (experimentalGpuLodErrorPixels_ > 0.0f) opaqueCuller_.lodHistory().publish(scene);
         gpuScenePublishedCounts_ = {
             static_cast<uint32_t>(scene.transforms.size()),
             static_cast<uint32_t>(scene.instances.size()),
@@ -6910,7 +5918,8 @@ VkDeviceSize offset = geometry->vertexOffset;
                         sizeof(GpuScenePrimitiveIdentity);
             cpuProfiler_->recordCounter("gpu_scene.cpu_mirror.capacity_bytes", mirrorBytes,
                 ProfileCounterStatus::Exact, ProfileCounterUnit::Bytes);
-            cpuProfiler_->recordCounter("gpu_scene.lod.history_buffer_bytes", mainOpaqueLodHistoryBuffer_.size,
+            cpuProfiler_->recordCounter("gpu_scene.lod.history_buffer_bytes",
+                opaqueCuller_.lodHistoryBufferBytes(),
                 ProfileCounterStatus::Exact, ProfileCounterUnit::Bytes);
         }
     }
@@ -7103,7 +6112,7 @@ VkDeviceSize offset = geometry->vertexOffset;
         currentViewHistory_ = history;
         currentProjectionRevision_ = viewProjectionRevision(
             view.view, view.projection);
-        if (experimentalGpuLodErrorPixels_ > 0.0f) mainOpaqueLodHistory_.updateView(view, history);
+        if (experimentalGpuLodErrorPixels_ > 0.0f) opaqueCuller_.lodHistory().updateView(view, history);
         gpuSceneCpuViews_[scheduler.currentFrameIndex()] = view;
         UniformBufferObject ubo{};
         ubo.model = glm::mat4(1.0f); // Handled individually via push constants

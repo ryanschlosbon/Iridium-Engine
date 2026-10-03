@@ -103,20 +103,6 @@ namespace Iridium {
     // Commands with more than this many entries never fit a local-light view.
     inline constexpr uint32_t kLocalShadowIndirectMaximumCommandCount = 1u << 20;
 
-    struct VulkanCullerServices {
-        VulkanCullerCommands commands{};
-        VulkanCullerResources resources{};
-        VulkanIndirectCapabilities capabilities{};
-        CpuProfiler* profiler = nullptr;
-        // The attached oracle: collect hands it every retired slot.
-        IVulkanIndirectOracle* oracle = nullptr;
-        IVulkanIndirectStreamObserver* streamObserver = nullptr;
-        // The CPU GPU-scene mirror of a frame slot (collect).
-        const void* sceneOwner = nullptr;
-        VulkanIndirectScene (*scene)(const void* owner, uint32_t slot) = nullptr;
-        // Upper bound of resize()'s primitive capacity.
-        uint32_t maximumPrimitiveCapacity = 0;
-    };
 
     struct VulkanCompactPipeline {
         VkPipelineLayout layout = VK_NULL_HANDLE;

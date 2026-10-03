@@ -36,6 +36,7 @@
 #include "VulkanBackendExtension.h"
 #include "VulkanIndirectCullerShared.h"
 #include "VulkanIndirectViewCuller.h"
+#include "VulkanOpaqueIndirectCuller.h"
 #include "VulkanRenderGraphExecutor.h"
 #include "VulkanTransparencyPyramid.h"
 #include "VulkanDepthPyramid.h"
@@ -343,12 +344,7 @@ namespace Iridium {
             gpuScenePrimitiveBuffers_{};
         std::array<VulkanBufferResource, VulkanFrameScheduler::FramesInFlight>
             gpuSceneGeometryBuffers_{};
-        std::array<VulkanBufferResource, VulkanFrameScheduler::FramesInFlight>
-            opaqueIndirectCommandBuffers_{};
-        std::array<VulkanBufferResource, VulkanFrameScheduler::FramesInFlight>
-            opaqueIndirectCountBuffers_{};
-        std::array<VulkanBufferResource, VulkanFrameScheduler::FramesInFlight>
-            opaqueIndirectCandidateBuffers_{};
+
         // GPU-driven shadow/probe caster compaction (M7R R3a). The shared
         // 3-binding indirect set layout is owned here; each culler owns its
         // pipeline, sets, buffers, scratch and validation slots.
@@ -358,22 +354,8 @@ namespace Iridium {
         VulkanIndirectViewCuller spotCuller_;
         VulkanIndirectViewCuller pointCuller_;
         VulkanIndirectViewCuller probeCuller_;
-        std::array<VulkanBufferResource, VulkanFrameScheduler::FramesInFlight>
-            depthOcclusionQueryBuffers_{};
-        std::array<VulkanBufferResource, VulkanFrameScheduler::FramesInFlight>
-            depthOcclusionResultBuffers_{};
-        std::array<VulkanBufferResource, VulkanFrameScheduler::FramesInFlight>
-            depthOcclusionGpuSceneResultBuffers_{};
-        std::array<VkDescriptorSet, VulkanFrameScheduler::FramesInFlight>
-            gpuSceneCullDescriptorSets_{};
-        // Shared across the ordered graphics queue, not replicated per frame.
-        VulkanBufferResource mainOpaqueLodHistoryBuffer_{};
-        GpuSceneLodHistory mainOpaqueLodHistory_;
-        std::vector<uint8_t> opaqueIndirectSeenHistory_;
-        VkDescriptorSetLayout gpuSceneCullSetLayout_ = VK_NULL_HANDLE;
-        VkPipelineLayout gpuSceneCullPipelineLayout_ = VK_NULL_HANDLE;
-        VkPipeline gpuSceneCullPipeline_ = VK_NULL_HANDLE;
-        VkPipeline gpuSceneCullFallbackPipeline_ = VK_NULL_HANDLE;
+        // Main-view opaque compaction (sibling of the view cullers).
+        VulkanOpaqueIndirectCuller opaqueCuller_;
         std::array<VulkanBufferResource, VulkanFrameScheduler::FramesInFlight>
             activeLightSlotBuffers_{};
         std::array<VulkanBufferResource, VulkanFrameScheduler::FramesInFlight>
@@ -460,39 +442,6 @@ namespace Iridium {
             uploadedGpuSceneGeometryRevisions_{};
         std::vector<GpuSceneRecordRange> gpuSceneUploadRanges_;
         GpuSceneUploadTelemetry gpuSceneUploadTelemetry_{};
-        GpuSceneIndirectPlan opaqueIndirectPlan_;
-        struct OpaqueIndirectBin {
-            uint32_t packetBegin = 0;
-            uint32_t commandBegin = 0;
-            uint32_t commandCount = 0;
-            PipelineHandle pipeline;
-            MaterialHandle material;
-            GeometryHandle geometry;
-        };
-        std::vector<OpaqueIndirectBin> opaqueIndirectBins_;
-        std::vector<GpuSceneIndirectCandidate> opaqueIndirectCandidates_;
-        std::vector<DepthPyramidDeviceQuery> depthOcclusionQueries_;
-        // Main-view compaction telemetry. The CPU visibility counts are
-        // production telemetry; GPU LOD and occlusion qualification state is
-        // owned by the oracle (R2.8).
-        struct PendingOpaqueIndirectValidation {
-            uint64_t profileFrameId = 0;
-            std::vector<uint32_t> expectedBinCounts;
-            std::vector<uint32_t> binCapacities;
-            uint64_t occlusionProfileFrameId = 0;
-            uint32_t gpuSceneOcclusionCandidateCount = 0;
-            std::vector<uint32_t> occlusionCandidatePrimitiveIndices;
-            std::vector<uint32_t> occlusionCandidateBinIndices;
-            bool lodQualificationOracle = false;
-            bool occlusionQualificationOracle = false;
-            bool gpuSceneOcclusionPending = false;
-            bool occlusionRejectionApplied = false;
-            bool pending = false;
-        };
-        std::array<PendingOpaqueIndirectValidation,
-            VulkanFrameScheduler::FramesInFlight>
-            pendingOpaqueIndirectValidations_{};
-        uint32_t opaqueIndirectCommandCapacity_ = 0;
         static constexpr uint32_t MaximumOpaqueIndirectCommandCapacity = 65536u;
         uint32_t activeLightCount_ = 0;
         uint64_t lightUploadBytes_ = 0;
@@ -606,7 +555,6 @@ namespace Iridium {
         void createGpuSceneBuffers(
             const GpuSceneCapacityRequirements& capacity);
         void bindGpuSceneBuffers();
-        void createOpaqueIndirectBuffers(uint32_t capacity);
         void createGpuSceneCullPipeline();
         [[nodiscard]] VulkanCullerServices cullerServices();
         void createDirectionalShadowIndirectPipeline();
@@ -641,8 +589,7 @@ namespace Iridium {
             std::span<const ReflectionProbeCaptureScheduleEntry> captures);
         void recordReflectionProbeIndirectDispatch(uint32_t frameIndex,
             uint32_t faceRecord, uint32_t excludedInstanceIndex);
-        void bindOpaqueIndirectBuffers();
-        void collectOpaqueIndirectValidation(uint32_t frameIndex);
+
         [[nodiscard]] bool prepareOpaqueIndirectSubmission(
             std::span<const DrawPacket> opaqueQueue);
         void bindLightRecordBuffers();

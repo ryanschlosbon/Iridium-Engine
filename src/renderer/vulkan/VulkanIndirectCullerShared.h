@@ -191,6 +191,22 @@ namespace Iridium {
         const VulkanIndirectGeometry& base,
         const VulkanIndirectAssetResolver& resolver);
 
+    // Everything a culler needs from its owner.
+    struct VulkanCullerServices {
+        VulkanCullerCommands commands{};
+        VulkanCullerResources resources{};
+        VulkanIndirectCapabilities capabilities{};
+        CpuProfiler* profiler = nullptr;
+        // The attached oracle: collect hands it every retired slot.
+        IVulkanIndirectOracle* oracle = nullptr;
+        IVulkanIndirectStreamObserver* streamObserver = nullptr;
+        // The CPU GPU-scene mirror of a frame slot (collect).
+        const void* sceneOwner = nullptr;
+        VulkanIndirectScene (*scene)(const void* owner, uint32_t slot) = nullptr;
+        // Upper bound of resize()'s primitive capacity.
+        uint32_t maximumPrimitiveCapacity = 0;
+    };
+
     // ---------------------------------------------------------------------
     // Per-frame command/count/candidate buffers of one culler.
     // ---------------------------------------------------------------------
