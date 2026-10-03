@@ -152,6 +152,15 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
     RenderGraph::RenderGraphBuilder graph;
     using RenderGraph::Access;
     using RenderGraph::LoadOp;
+    using RenderGraph::StoreOp;
+    using RenderGraph::ClearValue;
+    // M7R R4a: every clearing attachment declares the exact value its render
+    // pass clears with today (R4 design inventory), so the executor's
+    // dynamic-rendering plans clear bit-identically. Depth clears to 1.0.
+    const ClearValue opaqueBlack = ClearValue::color(0.0f, 0.0f, 0.0f, 1.0f);
+    const ClearValue transparentBlack = ClearValue::color(0.0f, 0.0f, 0.0f, 0.0f);
+    const ClearValue zeroUint = ClearValue::colorUint(0u);
+    const ClearValue farDepth = ClearValue::depthStencil(1.0f, 0u);
 
     if (clusterConfig.tileWidth == 0 || clusterConfig.tileHeight == 0 ||
         clusterConfig.depthSlices == 0) {
@@ -421,7 +430,8 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
     addCompaction("shadow.directional", directionalShadowPass,
         "shadow.directional");
     directionalShadow = graph.write(directionalShadowPass,
-        directionalShadow, Access::DepthAttachmentWrite, LoadOp::Clear);
+        directionalShadow, Access::DepthAttachmentWrite, LoadOp::Clear,
+        StoreOp::Store, farDepth);
 
     RenderGraph::PassHandle spotShadowPass{};
     addCompaction("shadow.spot", spotShadowPass, "shadow.spot");
@@ -468,14 +478,18 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
         addCompaction("gpu-scene.opaque", gbuffer, "gbuffer");
     if (depthPyramid)
         graph.read(opaqueCompact, depthHistory, Access::SampledRead);
-    normal = graph.write(gbuffer, normal, Access::ColorAttachment, LoadOp::Clear);
-    albedo = graph.write(gbuffer, albedo, Access::ColorAttachment, LoadOp::Clear);
-    emissive = graph.write(gbuffer, emissive, Access::ColorAttachment, LoadOp::Clear);
+    normal = graph.write(gbuffer, normal, Access::ColorAttachment, LoadOp::Clear,
+        StoreOp::Store, opaqueBlack);
+    albedo = graph.write(gbuffer, albedo, Access::ColorAttachment, LoadOp::Clear,
+        StoreOp::Store, opaqueBlack);
+    emissive = graph.write(gbuffer, emissive, Access::ColorAttachment, LoadOp::Clear,
+        StoreOp::Store, transparentBlack);
     f0Roughness = graph.write(gbuffer, f0Roughness,
-        Access::ColorAttachment, LoadOp::Clear);
+        Access::ColorAttachment, LoadOp::Clear, StoreOp::Store, opaqueBlack);
     materialFlags = graph.write(gbuffer, materialFlags,
-        Access::ColorAttachment, LoadOp::Clear);
-    depth = graph.write(gbuffer, depth, Access::DepthAttachmentWrite, LoadOp::Clear);
+        Access::ColorAttachment, LoadOp::Clear, StoreOp::Store, zeroUint);
+    depth = graph.write(gbuffer, depth, Access::DepthAttachmentWrite, LoadOp::Clear,
+        StoreOp::Store, farDepth);
 
     // Reflection-probe clustering (R3b.7): per-slot imported header/index
     // buffers written by compute and read by every lit consumer through
@@ -592,7 +606,8 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
     graph.read(lighting, materialFlags, Access::SampledRead);
     graph.read(lighting, depth, Access::SampledRead);
     readClusterProduct(lighting);
-    litScene = graph.write(lighting, litScene, Access::ColorAttachment, LoadOp::Clear);
+    litScene = graph.write(lighting, litScene, Access::ColorAttachment, LoadOp::Clear,
+        StoreOp::Store, opaqueBlack);
 
     const RenderGraph::PassHandle opaqueForward =
         graph.addPass("forward-opaque");
@@ -658,9 +673,10 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
         graph.read(entryCapture, depth, Access::SampledRead);
         graph.read(entryCapture, materialFlags, Access::SampledRead);
         layeredEntryDepth = graph.write(entryCapture, layeredEntryDepth,
-            Access::DepthAttachmentWrite, LoadOp::Clear);
+            Access::DepthAttachmentWrite, LoadOp::Clear, StoreOp::Store, farDepth);
         layeredEntryIdentity = graph.write(entryCapture,
-            layeredEntryIdentity, Access::ColorAttachment, LoadOp::Clear);
+            layeredEntryIdentity, Access::ColorAttachment, LoadOp::Clear,
+            StoreOp::Store, zeroUint);
 
         const RenderGraph::PassHandle exitCapture = graph.addPass(
             "transparent.layered.exit.capture");
@@ -668,9 +684,10 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
         graph.read(exitCapture, layeredEntryDepth, Access::SampledRead);
         graph.read(exitCapture, layeredEntryIdentity, Access::SampledRead);
         layeredExitDepth = graph.write(exitCapture, layeredExitDepth,
-            Access::DepthAttachmentWrite, LoadOp::Clear);
+            Access::DepthAttachmentWrite, LoadOp::Clear, StoreOp::Store, farDepth);
         layeredExitIdentity = graph.write(exitCapture,
-            layeredExitIdentity, Access::ColorAttachment, LoadOp::Clear);
+            layeredExitIdentity, Access::ColorAttachment, LoadOp::Clear,
+            StoreOp::Store, zeroUint);
 
         const RenderGraph::PassHandle localComposition = graph.addPass(
             "transparent.layered.local-compose");
@@ -689,7 +706,7 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
         graph.read(localComposition, layeredExitIdentity,
             Access::SampledRead);
         layeredLocalColor = graph.write(localComposition, layeredLocalColor,
-            Access::ColorAttachment, LoadOp::Clear);
+            Access::ColorAttachment, LoadOp::Clear, StoreOp::Store, transparentBlack);
 
         // The explicit one-shot diagnostic validates both paired interfaces and
         // their evaluated local AP1 result after composition has completed.
@@ -745,10 +762,10 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
             }
             tier.depth[interfaceIndex] = graph.write(capture,
                 tier.depth[interfaceIndex], Access::DepthAttachmentWrite,
-                LoadOp::Clear);
+                LoadOp::Clear, StoreOp::Store, farDepth);
             tier.identity[interfaceIndex] = graph.write(capture,
                 tier.identity[interfaceIndex], Access::ColorAttachment,
-                LoadOp::Clear);
+                LoadOp::Clear, StoreOp::Store, zeroUint);
 
             if (deepLayeredTerminationInterface(interfaceIndex,
                     tier.interfaceCount)) {
@@ -778,7 +795,7 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
                 Access::SampledRead);
         }
         tier.localColor = graph.write(localComposition, tier.localColor,
-            Access::ColorAttachment, LoadOp::Clear);
+            Access::ColorAttachment, LoadOp::Clear, StoreOp::Store, transparentBlack);
 
         if (!features.hooks.layeredValidation) return;
         const RenderGraph::PassHandle validationReadback = graph.addPass(
@@ -852,9 +869,11 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
         readClusterProduct(accumulation);
         graph.read(accumulation, depth, Access::DepthAttachmentRead);
         weightedOitAccumulation = graph.write(accumulation,
-            weightedOitAccumulation, Access::ColorAttachment, LoadOp::Clear);
+            weightedOitAccumulation, Access::ColorAttachment, LoadOp::Clear,
+            StoreOp::Store, transparentBlack);
         weightedOitRevealage = graph.write(accumulation,
-            weightedOitRevealage, Access::ColorAttachment, LoadOp::Clear);
+            weightedOitRevealage, Access::ColorAttachment, LoadOp::Clear,
+            StoreOp::Store, ClearValue::color(1.0f, 0.0f, 0.0f, 0.0f));
 
         const RenderGraph::PassHandle resolve = graph.addPass(
             "transparent.oit.resolve");
@@ -882,7 +901,7 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
     graph.read(outputTransform, emissive, Access::SampledRead);
     graph.read(outputTransform, depth, Access::SampledRead);
     output = graph.write(outputTransform, output,
-        Access::ColorAttachment, LoadOp::Clear);
+        Access::ColorAttachment, LoadOp::Clear, StoreOp::Store, opaqueBlack);
 
     const RenderGraph::PassHandle finalCaptureHook =
         graph.addPass("final-capture-hook");
@@ -894,16 +913,16 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
     graph.read(ui, output, Access::SampledRead);
     if (hdr10Composition) {
         uiComposition = graph.write(ui, uiComposition,
-            Access::ColorAttachment, LoadOp::Clear);
+            Access::ColorAttachment, LoadOp::Clear, StoreOp::Store, opaqueBlack);
         const RenderGraph::PassHandle encode = graph.addPass(
             "hdr10-encode-present");
         graph.read(encode, uiComposition, Access::SampledRead);
         swapchain = graph.write(encode, swapchain,
-            Access::ColorAttachment, LoadOp::Clear);
+            Access::ColorAttachment, LoadOp::Clear, StoreOp::Store, opaqueBlack);
     }
     else {
         swapchain = graph.write(ui, swapchain,
-            Access::ColorAttachment, LoadOp::Clear);
+            Access::ColorAttachment, LoadOp::Clear, StoreOp::Store, opaqueBlack);
     }
     graph.exportResource(swapchain, Access::Present);
 

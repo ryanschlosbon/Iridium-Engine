@@ -132,9 +132,12 @@ HeadlessVulkanDevice::HeadlessVulkanDevice(const Options& options) {
     // M7R R3: synchronization2 is enabled exactly when supported, as VkContext
     // does, so the graph executor's vkCmdPipelineBarrier2 path is validated.
     synchronization2_ = supported13.synchronization2 == VK_TRUE;
+    // M7R R4a: dynamic rendering likewise, for the executor's rendering plans.
+    dynamicRendering_ = supported13.dynamicRendering == VK_TRUE;
     VkPhysicalDeviceVulkan13Features enabled13{
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES };
     enabled13.synchronization2 = supported13.synchronization2;
+    enabled13.dynamicRendering = supported13.dynamicRendering;
     enabled12.pNext = &enabled13;
 
     VkPhysicalDeviceDescriptorIndexingProperties indexing{

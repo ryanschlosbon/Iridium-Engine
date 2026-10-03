@@ -506,10 +506,99 @@ namespace {
         return true;
     }
 
+    // M7R R4a: every clearing attachment carries the exact value its render
+    // pass clears with (R4 design inventory, bd89494), so dynamic-rendering
+    // plans clear bit-identically; read-only depth is LOAD + NONE.
+    bool testClearValuesMatchRenderPasses() {
+        using RenderGraph::ClearValue;
+        using RenderGraph::StoreOp;
+        const ClearValue opaqueBlack = ClearValue::color(0.0f, 0.0f, 0.0f, 1.0f);
+        const ClearValue transparentBlack = ClearValue::color(0.0f, 0.0f, 0.0f, 0.0f);
+        const ClearValue zeroUint = ClearValue::colorUint(0u);
+        const ClearValue farDepth = ClearValue::depthStencil(1.0f, 0u);
+        for (const bool hdr10 : { false, true }) {
+            const RenderGraph::CompiledGraph compiled = fullGraph(hdr10);
+            const GraphQuery graph(compiled);
+            std::vector<std::pair<std::string, std::string>> checked;
+            const auto clears = [&](std::string_view pass, std::string_view resource,
+                const ClearValue& value) {
+                checked.emplace_back(pass, resource);
+                for (const auto& usage : graph.usagesOf(pass, resource))
+                    if (usage.write && usage.loadOp == LoadOp::Clear &&
+                        usage.storeOp == StoreOp::Store && usage.clearValue == value)
+                        return true;
+                return false;
+            };
+            IRIDIUM_CHECK(clears("shadow.directional", "shadow.directional", farDepth));
+            IRIDIUM_CHECK(clears("gbuffer", "gbuffer.normal", opaqueBlack));
+            IRIDIUM_CHECK(clears("gbuffer", "gbuffer.albedo", opaqueBlack));
+            IRIDIUM_CHECK(clears("gbuffer", "gbuffer.emissive", transparentBlack));
+            IRIDIUM_CHECK(clears("gbuffer", "gbuffer.f0-roughness", opaqueBlack));
+            IRIDIUM_CHECK(clears("gbuffer", "gbuffer.material-flags", zeroUint));
+            IRIDIUM_CHECK(clears("gbuffer", "depth.opaque", farDepth));
+            IRIDIUM_CHECK(clears("lighting", "scene.color", opaqueBlack));
+            for (const char* side : { "entry", "exit" }) {
+                const std::string pass = std::string("transparent.layered.") + side + ".capture";
+                IRIDIUM_CHECK_MSG(clears(pass, std::string("depth.layered.") + side, farDepth), pass);
+                IRIDIUM_CHECK_MSG(clears(pass, std::string("identity.layered.") + side, zeroUint),
+                    pass);
+            }
+            IRIDIUM_CHECK(clears("transparent.layered.local-compose",
+                "scene.layered.local-color", transparentBlack));
+            for (const auto& [tier, count] : { std::pair{ std::string("hero4"), 4u },
+                    std::pair{ std::string("cinematic8"), 8u } }) {
+                for (uint32_t index = 0; index < count; ++index) {
+                    const std::string suffix = tier + ".interface." + std::to_string(index);
+                    const std::string pass = "transparent.layered." + suffix + ".capture";
+                    IRIDIUM_CHECK_MSG(clears(pass, "depth.layered." + suffix, farDepth), pass);
+                    IRIDIUM_CHECK_MSG(clears(pass, "identity.layered." + suffix, zeroUint), pass);
+                }
+                IRIDIUM_CHECK(clears("transparent.layered." + tier + ".local-compose",
+                    "scene.layered." + tier + ".local-color", transparentBlack));
+            }
+            IRIDIUM_CHECK(clears("transparent.oit.accumulate", "transparency.oit.accumulation",
+                transparentBlack));
+            IRIDIUM_CHECK(clears("transparent.oit.accumulate", "transparency.oit.revealage",
+                ClearValue::color(1.0f, 0.0f, 0.0f, 0.0f)));
+            IRIDIUM_CHECK(clears("output-transform", "output.display", opaqueBlack));
+            if (hdr10) {
+                IRIDIUM_CHECK(clears("ui-compose", "output.ui-composition", opaqueBlack));
+                IRIDIUM_CHECK(clears("hdr10-encode-present", "swapchain", opaqueBlack));
+            }
+            else {
+                IRIDIUM_CHECK(clears("ui-present", "swapchain", opaqueBlack));
+            }
+            // Nothing else clears: spot/point shadows and every scene-colour
+            // writer after lighting load.
+            for (const RenderGraph::CompiledPass& pass : compiled.passes()) {
+                for (const auto& usage : graph.usages(pass)) {
+                    const std::string resource = graph.resourceAt(usage.logicalResourceIndex)->name;
+                    if (usage.loadOp == LoadOp::Clear)
+                        IRIDIUM_CHECK_MSG(std::ranges::find(checked,
+                            std::pair{ std::string(pass.name), resource }) != checked.end(),
+                            pass.name << " clears " << resource);
+                    else
+                        IRIDIUM_CHECK(usage.clearValue == ClearValue{});
+                    if (!usage.write && usage.access == Access::DepthAttachmentRead)
+                        IRIDIUM_CHECK_MSG(usage.loadOp == LoadOp::Load &&
+                            usage.storeOp == StoreOp::None, pass.name);
+                    if (usage.write && usage.storeOp != StoreOp::Store)
+                        IRIDIUM_CHECK_MSG(false, pass.name << " does not store " << resource);
+                }
+            }
+            IRIDIUM_CHECK(graph.writes("shadow.spot", "shadow.spot",
+                Access::DepthAttachmentWrite, LoadOp::Load));
+            IRIDIUM_CHECK(graph.writes("shadow.point", "shadow.point.1024",
+                Access::DepthAttachmentWrite, LoadOp::Load));
+        }
+        return true;
+    }
+
 } // namespace
 
 int main() {
     constexpr Iridium::Test::TestCase tests[] = {
+        { "clear values match the render passes", testClearValuesMatchRenderPasses },
         { "Ordinary2 composition wiring", testOrdinary2CompositionWiring },
         { "deep-tier capture and composition wiring", testDeepTierWiring },
         { "WeightedOIT accumulate/resolve wiring", testWeightedOitWiring },

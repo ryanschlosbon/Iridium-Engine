@@ -61,6 +61,8 @@ public:
 	bool hasDrawIndirectCount() const { return drawIndirectCountEnabled; }
 	// Vulkan 1.3 synchronization2 (vkCmdPipelineBarrier2); M7R R3 enables it.
 	bool hasSynchronization2() const { return synchronization2Enabled; }
+	// Vulkan 1.3 dynamic rendering (vkCmdBeginRendering); M7R R4a enables it.
+	bool hasDynamicRendering() const { return dynamicRenderingEnabled; }
 	uint32_t getMaxDrawIndirectCount() const { return maxDrawIndirectCount; }
 	uint32_t getMaxIndexedTextureViews() const { return maxIndexedTextureViews; }
 	uint32_t getMaxIndexedSamplers() const { return maxIndexedSamplers; }
@@ -113,6 +115,7 @@ private:
 	bool drawIndirectFirstInstanceEnabled = false;
 	bool drawIndirectCountEnabled = false;
 	bool synchronization2Enabled = false;
+	bool dynamicRenderingEnabled = false;
 	bool synchronizationValidationRequested = false;
 	uint32_t maxDrawIndirectCount = 0;
 	uint32_t maxIndexedTextureViews = 0;

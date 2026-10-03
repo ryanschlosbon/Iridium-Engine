@@ -3,6 +3,7 @@
 #include <exception>
 #include <iostream>
 #include <iterator>
+#include <limits>
 #include <string_view>
 
 namespace {
@@ -463,6 +464,121 @@ namespace {
         return true;
     }
 
+    // ---- M7R R4a: clear values and store operations ---------------------------
+
+    bool testClearValueBits() {
+        constexpr ClearValue black = ClearValue::color(0.0f, 0.0f, 0.0f, 1.0f);
+        static_assert(black.colorBits[3] == 0x3F80'0000u);
+        static_assert(ClearValue::color(1.0f, 0.0f, 0.0f, 0.0f).colorBits[0] == 0x3F80'0000u);
+        static_assert(ClearValue::colorUint(7u).colorBits[0] == 7u);
+        static_assert(ClearValue{}.depth == 1.0f && ClearValue{}.stencil == 0u);
+        static_assert(ClearValue::depthStencil(0.5f, 3u).depth == 0.5f);
+        // Equality is bit-exact: signed zeros differ, a NaN equals itself.
+        CHECK(ClearValue::color(0.0f, 0.0f, 0.0f, 0.0f) == ClearValue::colorUint(0u));
+        CHECK(!(ClearValue::color(-0.0f, 0.0f, 0.0f, 0.0f) == ClearValue::colorUint(0u)));
+        CHECK(!(ClearValue::depthStencil(-0.0f) == ClearValue::depthStencil(0.0f)));
+        const ClearValue nan = ClearValue::depthStencil(
+            std::numeric_limits<float>::quiet_NaN());
+        CHECK(nan == nan);
+        return true;
+    }
+
+    // One pass clearing colour and depth with `color`/`depth`, then a reader.
+    CompileResult clearGraph(LoadOp load, const ClearValue& color, const ClearValue& depth,
+        bool explicitOverload = true) {
+        RenderGraphBuilder builder;
+        ResourceHandle scene = builder.createResource("scene", imageDesc());
+        ResourceHandle sceneDepth = builder.createResource("depth", imageDesc(Format::D32Float));
+        const PassHandle draw = builder.addPass("draw");
+        const PassHandle sample = builder.addPass("sample");
+        if (explicitOverload) {
+            scene = builder.write(draw, scene, Access::ColorAttachment, load,
+                StoreOp::Store, color);
+            sceneDepth = builder.write(draw, sceneDepth, Access::DepthAttachmentWrite, load,
+                StoreOp::Store, depth);
+        }
+        else {
+            scene = builder.write(draw, scene, Access::ColorAttachment, load);
+            sceneDepth = builder.write(draw, sceneDepth, Access::DepthAttachmentWrite, load);
+        }
+        builder.read(sample, scene, Access::SampledRead);
+        builder.read(sample, sceneDepth, Access::DepthAttachmentRead);
+        return builder.compile();
+    }
+
+    bool testClearValuesCompileAndHash() {
+        const ClearValue grey = ClearValue::color(0.5f, 0.5f, 0.5f, 1.0f);
+        const ClearValue nearDepth = ClearValue::depthStencil(0.0f);
+        const CompileResult clear = clearGraph(LoadOp::Clear, grey, nearDepth);
+        CHECK(clear.succeeded());
+        const auto& usages = clear.graph->usages();
+        CHECK(usages[0].loadOp == LoadOp::Clear && usages[0].clearValue == grey);
+        CHECK(usages[1].loadOp == LoadOp::Clear && usages[1].clearValue == nearDepth);
+        CHECK(usages[0].storeOp == StoreOp::Store && usages[1].storeOp == StoreOp::Store);
+
+        // Clear values are topology only when the usage clears.
+        CHECK(clearGraph(LoadOp::Clear, grey, nearDepth).graph->topologyHash() ==
+            clear.graph->topologyHash());
+        CHECK(clearGraph(LoadOp::Clear, ClearValue::color(0.5f, 0.5f, 0.5f, 0.0f), nearDepth)
+            .graph->topologyHash() != clear.graph->topologyHash());
+        CHECK(clearGraph(LoadOp::Clear, grey, ClearValue::depthStencil(1.0f))
+            .graph->topologyHash() != clear.graph->topologyHash());
+        CHECK(clearGraph(LoadOp::Clear, grey, ClearValue::depthStencil(0.0f, 1u))
+            .graph->topologyHash() != clear.graph->topologyHash());
+        // The default value equals the overload without one.
+        CHECK(clearGraph(LoadOp::Clear, ClearValue{}, ClearValue{}).graph->topologyHash() ==
+            clearGraph(LoadOp::Clear, {}, {}, false).graph->topologyHash());
+        // A non-clearing usage drops its value: identical usage and hash.
+        const CompileResult dontCare = clearGraph(LoadOp::DontCare, grey, nearDepth);
+        CHECK(dontCare.succeeded());
+        CHECK(dontCare.graph->usages()[0].clearValue == ClearValue{});
+        CHECK(dontCare.graph->topologyHash() ==
+            clearGraph(LoadOp::DontCare, ClearValue{}, ClearValue{}).graph->topologyHash());
+        CHECK(dontCare.graph->topologyHash() != clear.graph->topologyHash());
+        return true;
+    }
+
+    bool testStoreOperations() {
+        // DepthAttachmentRead implies LOAD + NONE; other reads are unchanged.
+        const CompileResult clear = clearGraph(LoadOp::Clear, {}, {});
+        CHECK(clear.succeeded());
+        const CompiledPass& sample = clear.graph->passes()[1];
+        const CompiledUsage& sampled = clear.graph->usages()[sample.firstUsage];
+        const CompiledUsage& depthRead = clear.graph->usages()[sample.firstUsage + 1];
+        CHECK(sampled.access == Access::SampledRead && sampled.loadOp == LoadOp::DontCare &&
+            sampled.storeOp == StoreOp::Store);
+        CHECK(depthRead.access == Access::DepthAttachmentRead && !depthRead.write);
+        CHECK(depthRead.loadOp == LoadOp::Load && depthRead.storeOp == StoreOp::None);
+
+        // A write that stores NONE leaves nothing to read.
+        {
+            RenderGraphBuilder builder;
+            ResourceHandle scene = builder.createResource("scene", imageDesc());
+            const PassHandle draw = builder.addPass("draw");
+            const PassHandle sampleScene = builder.addPass("sample");
+            scene = builder.write(draw, scene, Access::ColorAttachment, LoadOp::Clear,
+                StoreOp::None, ClearValue{});
+            builder.read(sampleScene, scene, Access::SampledRead);
+            const CompileResult result = builder.compile();
+            CHECK(!result.succeeded());
+            CHECK(hasDiagnostic(result, DiagnosticCode::InvalidUsage));
+        }
+        // NONE and clear values are attachment-only.
+        RenderGraphBuilder builder;
+        ResourceDesc buffer{};
+        buffer.type = ResourceType::Buffer;
+        buffer.buffer.size = 64;
+        const ResourceHandle data = builder.createResource("data", buffer);
+        const PassHandle compute = builder.addPass("compute", QueueClass::Compute);
+        CHECK(throwsBuildError([&] {
+            (void)builder.write(compute, data, Access::StorageWrite, LoadOp::DontCare,
+                StoreOp::None, ClearValue{}); }));
+        CHECK(throwsBuildError([&] {
+            (void)builder.write(compute, data, Access::StorageWrite, LoadOp::Clear,
+                StoreOp::Store, ClearValue::colorUint(1u)); }));
+        return true;
+    }
+
 } // namespace
 
 int main() {
@@ -486,6 +602,9 @@ int main() {
         { "Stale handles and capacity", testStaleHandlesAndFixedCapacity },
         { "Repeated compile and cache", testRepeatedCompileHashAndCache },
         { "Layered mip image contract", testLayeredMipImageContract },
+        { "Clear value bits", testClearValueBits },
+        { "Clear values compile and hash", testClearValuesCompileAndHash },
+        { "Store operations", testStoreOperations },
     };
 
     size_t failures = 0;

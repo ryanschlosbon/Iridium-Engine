@@ -397,10 +397,21 @@ namespace {
         executor.skipPass(executor.passId("again"));
         executor.finishFrameExecution();
         const auto second = sink.recorded();
-        CHECK(second.size() == 3);
+        // produce: 3; then (R4a) the frame-end exports, since the skipped
+        // consumers left every exported resource away from its final access.
+        CHECK(second.size() == 6);
         CHECK(second[0].oldLayout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         CHECK(second[1].oldLayout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
         CHECK(second[2].srcAccess == (VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT));
+        CHECK(second[3].handle == colorImage &&
+            second[3].oldLayout == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL &&
+            second[3].newLayout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        CHECK(second[4].handle == depthImage &&
+            second[4].oldLayout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL &&
+            second[4].newLayout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
+        CHECK(second[5].handle == dataBuffer &&
+            second[5].srcAccess == VK_ACCESS_2_SHADER_WRITE_BIT &&
+            second[5].dstAccess == (VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT));
 
         executor.cleanupAfterDeviceIdle();
         return true;
@@ -808,7 +819,9 @@ namespace {
             }
         }
         FakeResourceFactory factory;
+        RecordingBarrierSink sink;
         VulkanRenderGraphExecutor executor;
+        executor.setBarrierSink(&sink);
         executor.init(factory, 1);
         CHECK(executor.barrierApi() == VulkanBarrierApi::Synchronization1);
         CHECK(!vulkanDeviceSupportsSynchronization2(VK_NULL_HANDLE));
@@ -816,7 +829,12 @@ namespace {
         executor.beginFrameExecution(0);
         CHECK(throws([&] { executor.setBarrierApi(VulkanBarrierApi::Synchronization2); }));
         for (uint32_t pass = 0; pass < 3; ++pass) executor.skipPass(RenderGraph::PassId{ pass });
+        // R4a: the three exports still move to their final access, which
+        // needs the frame's command buffer.
+        CHECK(throws([&] { executor.finishFrameExecution(); }));
+        executor.setFrameRecordContext({ FakeCommandBuffer, 0 });
         executor.finishFrameExecution();
+        CHECK(sink.recorded().size() == 3 && sink.sync1Calls == 3);
         executor.setBarrierApi(VulkanBarrierApi::Synchronization2);
         CHECK(executor.barrierApi() == VulkanBarrierApi::Synchronization2);
         executor.cleanupAfterDeviceIdle();
@@ -1132,7 +1150,10 @@ namespace {
                     std::string_view(events[2].name) == "gpu.group");
                 CHECK(log.countOf(EventKind::RangeBegin) == 2);       // group + gpu.after
                 CHECK(log.countOf(EventKind::RangeEnd) == 2);
-                CHECK(events[log.count - 1].kind == EventKind::RangeEnd);
+                // The group closes after p3; the skipped p4 leaves the export
+                // (TransferSource) to the frame-end barrier (R4a).
+                CHECK(events[log.count - 2].kind == EventKind::RangeEnd);
+                CHECK(events[log.count - 1].kind == EventKind::Barrier);
             }
         }
         // Unregistering a grouped pass dissolves the group.

@@ -181,6 +181,112 @@ namespace {
         return true;
     }
 
+    // M7R R4a.0: passes flagged for dynamic rendering begin and end rendering
+    // through their plans on real images: clear, then loads of the same
+    // colour and depth attachments (ordered only by the same-access
+    // re-barrier), read-only depth with STORE_OP_NONE, a discard-on-first-use
+    // import written from UNDEFINED, and its frame-end export transition.
+    struct DynamicRenderingOwner {
+        uint32_t scopes = 0;
+    };
+
+    bool runDynamicRenderingFrames(bool forceSynchronization1) {
+        HeadlessVulkanDevice& gpu = *sharedDevice;
+        gpu.resetValidationErrors();
+        using RenderGraph::Access;
+        using RenderGraph::LoadOp;
+        using RenderGraph::StoreOp;
+        using RenderGraph::ClearValue;
+        RenderGraph::RenderGraphBuilder builder;
+        RenderGraph::ResourceDesc colorDesc{};
+        colorDesc.image.format = RenderGraph::Format::Rgba16Float;
+        colorDesc.image.extent = { 256, 128, 1 };
+        RenderGraph::ResourceDesc depthDesc = colorDesc;
+        depthDesc.image.format = RenderGraph::Format::D32Float;
+        RenderGraph::ResourceDesc targetDesc = colorDesc;
+        targetDesc.image.format = RenderGraph::Format::Rgba8Unorm;
+        targetDesc.lifetime = RenderGraph::ResourceLifetime::External;
+        targetDesc.imported = true;
+        targetDesc.initialAccess = Access::SampledRead;
+        auto color = builder.createResource("color", colorDesc);
+        auto depth = builder.createResource("depth", depthDesc);
+        auto target = builder.createResource("target", targetDesc);
+        const auto clear = builder.addPass("clear");
+        const auto overdraw = builder.addPass("overdraw");
+        const auto readOnly = builder.addPass("read-only-depth");
+        const auto sample = builder.addPass("sample");
+        const auto present = builder.addPass("present");
+        color = builder.write(clear, color, Access::ColorAttachment, LoadOp::Clear,
+            StoreOp::Store, ClearValue::color(0.25f, 0.5f, 0.75f, 1.0f));
+        depth = builder.write(clear, depth, Access::DepthAttachmentWrite, LoadOp::Clear,
+            StoreOp::Store, ClearValue::depthStencil(1.0f));
+        color = builder.write(overdraw, color, Access::ColorAttachment, LoadOp::Load);
+        depth = builder.write(overdraw, depth, Access::DepthAttachmentWrite, LoadOp::Load);
+        builder.read(readOnly, depth, Access::DepthAttachmentRead);
+        color = builder.write(readOnly, color, Access::ColorAttachment, LoadOp::Load);
+        builder.read(sample, color, Access::SampledRead);
+        builder.read(sample, depth, Access::SampledRead);
+        target = builder.write(present, target, Access::ColorAttachment, LoadOp::Clear,
+            StoreOp::Store, ClearValue::color(0.0f, 0.0f, 0.0f, 1.0f));
+        builder.exportResource(target, Access::SampledRead);
+        auto compiled = builder.compile();
+        IRIDIUM_CHECK(compiled.succeeded());
+
+        VulkanResourceAllocator allocator;
+        allocator.init(gpu.physicalDevice(), gpu.device(), gpu.hasMemoryBudget());
+        VulkanImageResource targetImage = allocator.createImage2D({ 256, 128 },
+            VK_FORMAT_R8G8B8A8_UNORM,
+            VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+            VK_IMAGE_ASPECT_COLOR_BIT);
+        DynamicRenderingOwner owner;
+        {
+            VulkanRenderGraphExecutor executor;
+            executor.init(allocator, 2);
+            if (forceSynchronization1) executor.setBarrierApi(VulkanBarrierApi::Synchronization1);
+            executor.rebuild(std::move(*compiled.graph));
+            executor.bindExternalImage(VulkanGlobalBinding, executor.resourceId("target"),
+                targetImage, Access::SampledRead, ExternalSyncPolicy::discardOnFirstUse());
+            VulkanPassCallbacks callbacks{};
+            callbacks.owner = &owner;
+            callbacks.dynamicRendering = true;
+            callbacks.execute = [](void* self, VulkanPassContext& context) {
+                context.beginRendering();
+                context.endRendering();
+                ++static_cast<DynamicRenderingOwner*>(self)->scopes;
+            };
+            for (const char* pass : { "clear", "overdraw", "read-only-depth", "present" })
+                executor.registerPass(executor.passId(pass), callbacks);
+            for (uint32_t frame = 0; frame < 4; ++frame) {
+                const uint32_t slot = frame % 2;
+                executor.onFrameFenceCompleted(slot);
+                IRIDIUM_CHECK(executor.validateFrame(slot));
+                executor.beginFrameExecution(slot);
+                gpu.submitAndWait([&](VkCommandBuffer commandBuffer) {
+                    executor.beginPass(commandBuffer, executor.passId("sample"));
+                    // Drains "present", then the export to SampledRead.
+                    executor.finishFrameExecution();
+                });
+            }
+            IRIDIUM_CHECK(executor.externalImageAccess(VulkanGlobalBinding,
+                executor.resourceId("target")) == Access::SampledRead);
+            executor.cleanupAfterDeviceIdle();
+        }
+        allocator.destroy(targetImage);
+        allocator.cleanup();
+        IRIDIUM_CHECK(owner.scopes == 16);
+        IRIDIUM_CHECK_MSG(gpu.validationErrors() == 0,
+            gpu.validationErrors() << " validation errors");
+        return true;
+    }
+
+    bool testDynamicRenderingThroughPlans() {
+        if (!sharedDevice->hasDynamicRendering()) {
+            std::cout << "  dynamic rendering unsupported; skipped\n";
+            return true;
+        }
+        return runDynamicRenderingFrames(false) && runDynamicRenderingFrames(true);
+    }
+
 } // namespace
 
 int main() {
@@ -192,11 +298,13 @@ int main() {
         return 1;
     }
     std::cout << "synchronization2: " << (sharedDevice->hasSynchronization2() ? "yes" : "no")
+        << ", dynamic rendering: " << (sharedDevice->hasDynamicRendering() ? "yes" : "no")
         << '\n';
     constexpr Iridium::Test::TestCase tests[] = {
         { "base topology barriers validate", testBaseTopology },
         { "all-features topology barriers validate", testAllFeaturesTopology },
         { "History pair barriers validate", testHistoryPairBarriers },
+        { "dynamic rendering through plans validates", testDynamicRenderingThroughPlans },
     };
     const int result = Iridium::Test::runTests(tests);
     sharedDevice.reset();

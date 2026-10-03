@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -115,9 +116,53 @@ namespace Iridium::RenderGraph {
         Load,
     };
 
+    // R4a: None leaves the attachment untouched by the store (Vulkan 1.3
+    // STORE_OP_NONE); it is implied for DepthAttachmentRead. A write declared
+    // with None is treated like DontCare: later reads see no contents.
     enum class StoreOp : uint8_t {
         DontCare,
         Store,
+        None,
+    };
+
+    // R4a: the bit-exact clear value of a LoadOp::Clear attachment usage.
+    // Colour channels are stored as raw 32-bit patterns (float, int or uint
+    // per the attachment format), so the value the executor hands Vulkan is
+    // exactly the declared one. Hashed only when the usage clears.
+    struct ClearValue {
+        std::array<uint32_t, 4> colorBits{};
+        float depth = 1.0f;
+        uint32_t stencil = 0;
+
+        [[nodiscard]] static constexpr ClearValue color(float red, float green,
+            float blue, float alpha) noexcept {
+            ClearValue value{};
+            value.colorBits = { std::bit_cast<uint32_t>(red),
+                std::bit_cast<uint32_t>(green), std::bit_cast<uint32_t>(blue),
+                std::bit_cast<uint32_t>(alpha) };
+            return value;
+        }
+        [[nodiscard]] static constexpr ClearValue colorUint(uint32_t red,
+            uint32_t green = 0, uint32_t blue = 0, uint32_t alpha = 0) noexcept {
+            ClearValue value{};
+            value.colorBits = { red, green, blue, alpha };
+            return value;
+        }
+        [[nodiscard]] static constexpr ClearValue depthStencil(float depth,
+            uint32_t stencil = 0) noexcept {
+            ClearValue value{};
+            value.depth = depth;
+            value.stencil = stencil;
+            return value;
+        }
+
+        // Bit-exact: -0.0 and +0.0 differ; NaN payloads compare by bits.
+        friend constexpr bool operator==(const ClearValue& left,
+            const ClearValue& right) noexcept {
+            return left.colorBits == right.colorBits &&
+                std::bit_cast<uint32_t>(left.depth) == std::bit_cast<uint32_t>(right.depth) &&
+                left.stencil == right.stencil;
+        }
     };
 
     using UsageMask = uint64_t;
@@ -208,6 +253,9 @@ namespace Iridium::RenderGraph {
         bool write = false;
         LoadOp loadOp = LoadOp::DontCare;
         StoreOp storeOp = StoreOp::Store;
+        // Meaningful only when loadOp == Clear (otherwise the default value).
+        // A DepthAttachmentRead usage compiles to Load + None (R4a).
+        ClearValue clearValue{};
     };
 
     // R3b.10: the two logical halves of a History pair.
@@ -344,6 +392,12 @@ namespace Iridium::RenderGraph {
             ResourceHandle previousVersion, Access access,
             LoadOp loadOp = LoadOp::DontCare,
             StoreOp storeOp = StoreOp::Store);
+        // R4a: an attachment write with its clear value. The value is kept
+        // only for LoadOp::Clear (otherwise the default) and is part of the
+        // topology hash only then.
+        [[nodiscard]] ResourceHandle write(PassHandle pass,
+            ResourceHandle previousVersion, Access access, LoadOp loadOp,
+            StoreOp storeOp, const ClearValue& clearValue);
         void addDependency(PassHandle before, PassHandle after);
         void exportResource(ResourceHandle resource, Access finalAccess);
 
@@ -379,6 +433,7 @@ namespace Iridium::RenderGraph {
             bool write = false;
             LoadOp loadOp = LoadOp::DontCare;
             StoreOp storeOp = StoreOp::Store;
+            ClearValue clearValue{};
         };
 
         struct DependencyRecord {

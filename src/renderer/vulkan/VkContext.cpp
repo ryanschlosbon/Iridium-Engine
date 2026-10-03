@@ -462,10 +462,15 @@ void VkContext::createLogicalDevice() {
 	// M7R R3: synchronization2 is enabled when available (core in Vulkan 1.3);
 	// barrier recording migrates to vkCmdPipelineBarrier2 incrementally.
 	synchronization2Enabled = supportedVulkan13.synchronization2 == VK_TRUE;
+	// M7R R4a: dynamic rendering (core in Vulkan 1.3) is enabled when
+	// available; passes migrate from render passes one at a time.
+	dynamicRenderingEnabled = supportedVulkan13.dynamicRendering == VK_TRUE;
 	VkPhysicalDeviceVulkan13Features enabledVulkan13{
 		VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES };
 	enabledVulkan13.synchronization2 = synchronization2Enabled ? VK_TRUE : VK_FALSE;
-	enabledVulkan12.pNext = synchronization2Enabled ? &enabledVulkan13 : nullptr;
+	enabledVulkan13.dynamicRendering = dynamicRenderingEnabled ? VK_TRUE : VK_FALSE;
+	const bool vulkan13FeaturesEnabled = synchronization2Enabled || dynamicRenderingEnabled;
+	enabledVulkan12.pNext = vulkan13FeaturesEnabled ? &enabledVulkan13 : nullptr;
 
     // 3. Extensions Setup (THE MAC COMPATIBILITY FIX)
     // Start with the Swapchain extension, which is required on all platforms.
@@ -503,7 +508,7 @@ void VkContext::createLogicalDevice() {
 
     createInfo.pEnabledFeatures = &deviceFeatures;
     createInfo.pNext = descriptorIndexingEnabled || drawIndirectCountEnabled ||
-		synchronization2Enabled ? &enabledVulkan12 : nullptr;
+		vulkan13FeaturesEnabled ? &enabledVulkan12 : nullptr;
 
     // Pass the dynamically created list of extensions
     createInfo.enabledExtensionCount = static_cast<uint32_t>(deviceExtensions.size());

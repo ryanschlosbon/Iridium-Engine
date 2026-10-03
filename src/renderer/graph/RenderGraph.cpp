@@ -1,6 +1,7 @@
 #include "renderer/graph/RenderGraph.h"
 
 #include <algorithm>
+#include <bit>
 #include <cstring>
 #include <limits>
 #include <utility>
@@ -50,6 +51,12 @@ namespace {
             const uint8_t variableSize = 1;
             hashValue(hash, variableSize);
         }
+    }
+
+    void hashClearValue(uint64_t& hash, const ClearValue& value) noexcept {
+        for (const uint32_t bits : value.colorBits) hashValue(hash, bits);
+        hashValue(hash, std::bit_cast<uint32_t>(value.depth));
+        hashValue(hash, value.stencil);
     }
 
     bool isPowerOfTwo(uint32_t value) noexcept {
@@ -209,6 +216,12 @@ void RenderGraphBuilder::read(PassHandle pass, ResourceHandle resource,
 
 ResourceHandle RenderGraphBuilder::write(PassHandle pass,
     ResourceHandle previousVersion, Access access, LoadOp loadOp, StoreOp storeOp) {
+    return write(pass, previousVersion, access, loadOp, storeOp, ClearValue{});
+}
+
+ResourceHandle RenderGraphBuilder::write(PassHandle pass,
+    ResourceHandle previousVersion, Access access, LoadOp loadOp, StoreOp storeOp,
+    const ClearValue& clearValue) {
     validate(pass);
     validate(previousVersion);
     if (!isWriteAccess(access)) {
@@ -241,7 +254,10 @@ ResourceHandle RenderGraphBuilder::write(PassHandle pass,
     version.previousVersionIndex = previousVersion.index;
     version.preservePrevious = loadOp == LoadOp::Load;
     m_resourceVersions.push_back(version);
-    m_usages.push_back({ pass.index, versionIndex, access, true, loadOp, storeOp });
+    // Only a clearing usage carries its value, so every other usage compiles
+    // and hashes identically whatever value was passed.
+    m_usages.push_back({ pass.index, versionIndex, access, true, loadOp, storeOp,
+        loadOp == LoadOp::Clear ? clearValue : ClearValue{} });
     return { versionIndex, m_generation };
 }
 
@@ -526,8 +542,13 @@ struct CompilerAccess {
                 }
                 const uint32_t logicalIndex = builder.m_resourceVersions[
                     usage.resourceVersionIndex].logicalResourceIndex;
+                // R4a: a read-only depth attachment preserves its contents
+                // (LOAD) and is never stored (NONE).
+                const bool readOnlyDepth = !usage.write &&
+                    usage.access == Access::DepthAttachmentRead;
                 graph.m_usages.push_back({ orderIndex, logicalIndex, usage.access,
-                    usage.write, usage.loadOp, usage.storeOp });
+                    usage.write, readOnlyDepth ? LoadOp::Load : usage.loadOp,
+                    readOnlyDepth ? StoreOp::None : usage.storeOp, usage.clearValue });
                 ++pass.usageCount;
             }
         }
@@ -695,6 +716,9 @@ struct CompilerAccess {
             hashValue(hash, write);
             hashValue(hash, usage.loadOp);
             hashValue(hash, usage.storeOp);
+            // R4a: clear values are topology (a changed clear rebuilds the
+            // plan), hashed only for clearing usages.
+            if (usage.loadOp == LoadOp::Clear) hashClearValue(hash, usage.clearValue);
         }
         for (const auto& dependency : builder.m_dependencies) {
             hashValue(hash, dependency.beforePassIndex);

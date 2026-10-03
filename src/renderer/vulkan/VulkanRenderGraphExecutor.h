@@ -6,6 +6,7 @@
 
 #include <vulkan/vulkan.h>
 
+#include <array>
 #include <cstdint>
 #include <functional>
 #include <optional>
@@ -139,9 +140,21 @@ namespace Iridium {
         ExternalSyncMode mode = ExternalSyncMode::ExecutorOwned;
         RenderGraph::Access initial = RenderGraph::Access::Undefined;
         RenderGraph::Access final = RenderGraph::Access::Undefined;
+        // R4a, ExecutorOwned only: the image's contents are not needed. Its
+        // first use in each frame must be a write and transitions from
+        // UNDEFINED, while the source scope keeps the tracked access (the
+        // History pattern), e.g. the swapchain after acquire (current =
+        // Present: BOTTOM_OF_PIPE, which in sync2 chains with the acquire
+        // semaphore wait). Such bindings may share one image across frame
+        // slots, since no state carries between them.
+        bool discard = false;
 
         [[nodiscard]] static constexpr ExternalSyncPolicy executorOwned() noexcept {
             return {};
+        }
+        [[nodiscard]] static constexpr ExternalSyncPolicy discardOnFirstUse() noexcept {
+            return { ExternalSyncMode::ExecutorOwned, RenderGraph::Access::Undefined,
+                RenderGraph::Access::Undefined, true };
         }
         [[nodiscard]] static constexpr ExternalSyncPolicy renderPassManaged(
             RenderGraph::Access initial, RenderGraph::Access final) noexcept {
@@ -155,7 +168,9 @@ namespace Iridium {
     // M7R R3b: the executor records every graph barrier through this seam.
     // The default sink forwards to vkCmdPipelineBarrier/vkCmdPipelineBarrier2;
     // tests inject a recording sink to compare emitted dependencies without a
-    // device. This is a Vulkan-side recording seam, not an RHI hook.
+    // device. This is a Vulkan-side recording seam, not an RHI hook. R4a adds
+    // the dynamic-rendering scopes the executor begins for migrated passes;
+    // their defaults record the Vulkan commands.
     class VulkanBarrierSink {
     public:
         virtual ~VulkanBarrierSink() = default;
@@ -165,6 +180,9 @@ namespace Iridium {
             std::span<const VkImageMemoryBarrier> images) = 0;
         virtual void pipelineBarrier2(VkCommandBuffer commandBuffer,
             const VkDependencyInfo& dependency) = 0;
+        virtual void beginRendering(VkCommandBuffer commandBuffer,
+            const VkRenderingInfo& rendering);
+        virtual void endRendering(VkCommandBuffer commandBuffer);
     };
 
     [[nodiscard]] VulkanBarrierSink& vulkanCommandBarrierSink() noexcept;
@@ -192,6 +210,71 @@ namespace Iridium {
 
     class VulkanRenderGraphExecutor;
 
+    // ---- R4a dynamic rendering ------------------------------------------------
+
+    inline constexpr uint32_t VulkanMaxColorAttachments = 8;
+    // Depth usages one pass may choose from per scope (the point-shadow pass
+    // writes three pools).
+    inline constexpr uint32_t VulkanMaxDepthAttachments = 4;
+
+    // One attachment of a pass's rendering plan, from its graph usage.
+    struct VulkanRenderingAttachmentPlan {
+        uint32_t logicalResourceIndex = RenderGraph::InvalidIndex;
+        VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
+        VkAttachmentLoadOp loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        VkAttachmentStoreOp storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        // The usage's bit-exact clear value (colour bits or depth/stencil).
+        VkClearValue clearValue{};
+        VkExtent2D extent{};
+    };
+
+    // Built at rebuild for every pass (fixed size, no frame allocation).
+    // Colour attachments follow usage-declaration order, which matches the
+    // framebuffer order of the render passes they replace. Depth candidates
+    // are the pass's DepthAttachmentWrite/DepthAttachmentRead usages in
+    // declaration order; each scope binds one (read-only depth:
+    // DEPTH_STENCIL_READ_ONLY_OPTIMAL, LOAD, STORE_OP_NONE).
+    struct VulkanPassRenderingPlan {
+        std::array<VulkanRenderingAttachmentPlan, VulkanMaxColorAttachments> color{};
+        uint32_t colorCount = 0;
+        std::array<VulkanRenderingAttachmentPlan, VulkanMaxDepthAttachments> depth{};
+        uint32_t depthCount = 0;
+        // false: more than VulkanMaxColorAttachments colour or
+        // VulkanMaxDepthAttachments depth usages; beginRendering then throws.
+        bool valid = true;
+
+        [[nodiscard]] bool empty() const noexcept { return colorCount == 0 && depthCount == 0; }
+        [[nodiscard]] bool hasDepth() const noexcept { return depthCount != 0; }
+        // The default render area of a scope binding depth candidate
+        // `depthIndex`: the smallest extent of its attachments.
+        [[nodiscard]] VkExtent2D renderExtent(uint32_t depthIndex = 0) const noexcept {
+            VkExtent2D result{ UINT32_MAX, UINT32_MAX };
+            const auto include = [&](VkExtent2D extent) {
+                result.width = extent.width < result.width ? extent.width : result.width;
+                result.height = extent.height < result.height ? extent.height : result.height;
+            };
+            for (uint32_t index = 0; index < colorCount; ++index) include(color[index].extent);
+            if (depthIndex < depthCount) include(depth[depthIndex].extent);
+            return result.width == UINT32_MAX ? VkExtent2D{} : result;
+        }
+    };
+
+    // Per-call adjustments of a pass's plan.
+    struct VulkanRenderingOverrides {
+        // A zero extent renders the plan's full extent.
+        VkRect2D renderArea{};
+        uint32_t layerCount = 1;
+        // VK_NULL_HANDLE keeps the resource's view; otherwise a per-layer view
+        // (shadow cascades, point faces) of the planned image.
+        std::array<VkImageView, VulkanMaxColorAttachments> colorViews{};
+        VkImageView depthView = VK_NULL_HANDLE;
+        // Which depth candidate the scope binds (declaration order).
+        uint32_t depthIndex = 0;
+        // Clearing attachments LOAD instead; the pass clears regions itself
+        // with vkCmdClearAttachments (spot tiles, point faces).
+        bool loadInsteadOfClear = false;
+    };
+
     // M7R R3b.3 callback execution. The per-frame recording context handed to
     // registered passes (R3c moves its producer into the feature context).
     struct VulkanFrameRecordContext {
@@ -207,6 +290,14 @@ namespace Iridium {
         VulkanRenderGraphExecutor& graph;
         RenderGraph::PassId pass;
         VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
+
+        // R4a: begins/ends a dynamic-rendering scope over the pass's planned
+        // attachments (this frame slot's views). Only for passes registered
+        // with VulkanPassCallbacks::dynamicRendering; scopes may repeat inside
+        // one callback (per layer) but must not nest or stay open past it.
+        void beginRendering(const VulkanRenderingOverrides& overrides = {});
+        void endRendering();
+        [[nodiscard]] const VulkanPassRenderingPlan& renderingPlan() const;
     };
 
     // Where a pass's GPU timestamp range starts relative to its barriers; all
@@ -228,6 +319,12 @@ namespace Iridium {
         void (*execute)(void* owner, VulkanPassContext& context) = nullptr;
         const char* gpuRange = nullptr;
         GpuRangePlacement placement = GpuRangePlacement::BeforeBarriers;
+        // R4a: the pass records with dynamic rendering (migrated from its
+        // render pass). Same-access ColorAttachment/DepthAttachmentWrite usages
+        // then get a memory-only re-barrier (attachment write -> attachment
+        // read/write, layout unchanged), the ordering a render pass's external
+        // dependency used to provide; beginRendering is allowed only here.
+        bool dynamicRendering = false;
     };
 
     // One GPU range over several registered passes (e.g. gpu.lighting.cluster).
@@ -326,8 +423,16 @@ namespace Iridium {
         // was already handled; an invalid id (undeclared pass) is a no-op.
         void drainRegisteredThrough(RenderGraph::PassId last);
         // Drains the remaining registered passes, then requires every pass to
-        // have been handled.
+        // have been handled. R4a: then records the frame-end export
+        // transitions (the compiled transitions at passOrderIndex ==
+        // passCount): every exported resource whose tracked state differs from
+        // its final access moves there in one dependency on the frame's
+        // command buffer. Render-pass- and owner-managed imports are left to
+        // their owners.
         void finishFrameExecution();
+        // R4a: the dynamic-rendering plan of a compiled pass.
+        [[nodiscard]] const VulkanPassRenderingPlan& renderingPlan(
+            RenderGraph::PassId pass) const;
 
         // Callback registry (R3b.3). Registrations are per compiled plan: a
         // rebuild clears them, owners re-register after it. Not allowed during
@@ -360,6 +465,8 @@ namespace Iridium {
         }
 
     private:
+        friend struct VulkanPassContext;
+
         struct TransparentStringHash {
             using is_transparent = void;
             [[nodiscard]] size_t operator()(std::string_view value) const noexcept {
@@ -414,6 +521,11 @@ namespace Iridium {
         uint32_t batchOrderCount_ = 0;
         // Callback registry, sized at rebuild (indexed by compiled order).
         std::vector<VulkanPassCallbacks> callbacks_;
+        // R4a: per pass, built at rebuild; exported logicals for frame end.
+        std::vector<VulkanPassRenderingPlan> renderingPlans_;
+        std::vector<uint32_t> exportedResources_;
+        uint32_t callbackPass_ = RenderGraph::InvalidIndex;
+        bool renderingOpen_ = false;
         std::vector<uint32_t> passGroup_;
         std::vector<VulkanRangeGroup> rangeGroups_;
         uint32_t registeredCount_ = 0;
@@ -445,6 +557,8 @@ namespace Iridium {
             RenderGraph::Access access = RenderGraph::Access::Undefined;
             ExternalSyncPolicy policy{};
             bool bound = false;
+            // policy.discard: this frame's first use is still to come.
+            bool discardPending = false;
         };
         // [frameCount + 1][logical]; the last row holds global bindings.
         std::vector<std::vector<ExternalImageBinding>> externalImages_;
@@ -453,7 +567,8 @@ namespace Iridium {
         [[nodiscard]] const RenderGraph::CompiledGraph& executingGraph() const;
         [[nodiscard]] const RenderGraph::CompiledGraph& boundGraph() const;
         void beginPassAt(VkCommandBuffer commandBuffer, uint32_t passOrder);
-        void queuePhysicalTransition(uint32_t physicalSlot, RenderGraph::Access access);
+        void queuePhysicalTransition(uint32_t physicalSlot, RenderGraph::Access access,
+            bool attachmentRebarrier = false);
         void queueImageBarrier(const VulkanImageResource& image,
             const VulkanGraphAccessInfo& before, const VulkanGraphAccessInfo& after);
         void queueBufferBarrier(VkBuffer buffer, VkDeviceSize size,
@@ -466,9 +581,13 @@ namespace Iridium {
         void runRegisteredPass(uint32_t passOrder);
         [[nodiscard]] uint32_t historySlot(const RenderGraph::CompiledResource& resource) const noexcept;
         void queueHistoryUsage(const RenderGraph::CompiledResource& resource,
-            RenderGraph::Access access);
+            RenderGraph::Access access, bool attachmentRebarrier = false);
         void queueExternalImageUsage(ExternalImageBinding& binding,
-            const RenderGraph::CompiledUsage& usage);
+            const RenderGraph::CompiledUsage& usage, bool attachmentRebarrier = false);
+        uint32_t queueFrameEndExports(bool record);
+        void beginPassRendering(RenderGraph::PassId pass, VkCommandBuffer commandBuffer,
+            const VulkanRenderingOverrides& overrides);
+        void endPassRendering(RenderGraph::PassId pass, VkCommandBuffer commandBuffer);
         [[nodiscard]] const ExternalImageBinding* externalImageBinding(
             uint32_t frameIndex, uint32_t logical) const noexcept;
         void destroyHistoryResources() noexcept;

@@ -267,6 +267,14 @@ iridium_add_test(VulkanRenderGraphExecutionTests
         LIBS iridium_vulkan
         ALLOCATION_PROFILE)
 
+# M7R R4a.0: dynamic-rendering plans, beginRendering/endRendering, the
+# attachment re-barrier on migrated passes, discard-on-first-use imports and
+# frame-end exports, through a recording sink (no device).
+iridium_add_test(VulkanDynamicRenderingPlanTests
+        SOURCES renderer/VulkanDynamicRenderingPlanTests.cpp
+        LIBS iridium_vulkan
+        ALLOCATION_PROFILE)
+
 iridium_add_test(VulkanOutputTransportTests
         SOURCES renderer/VulkanOutputTransportTests.cpp
         LIBS iridium_vulkan)
