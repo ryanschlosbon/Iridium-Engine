@@ -1172,16 +1172,21 @@ void VulkanRenderGraphExecutor::runRegisteredPass(uint32_t passOrder) {
                 openGroup_ = group;
             }
             const bool ranged = callbacks.gpuRange != nullptr && rangeSink_.enabled();
+            const bool aroundBarriers =
+                callbacks.placement == GpuRangePlacement::AroundBarriers;
             VulkanGpuRangeToken token{};
-            if (ranged && callbacks.placement == GpuRangePlacement::BeforeBarriers)
+            if (ranged && (aroundBarriers ||
+                    callbacks.placement == GpuRangePlacement::BeforeBarriers))
                 token = rangeSink_.begin(rangeSink_.owner, callbacks.gpuRange);
             beginPassAt(recordContext_.commandBuffer, passOrder);
+            if (ranged && aroundBarriers)
+                rangeSink_.end(rangeSink_.owner, token);
             if (ranged && callbacks.placement == GpuRangePlacement::AfterBarriers)
                 token = rangeSink_.begin(rangeSink_.owner, callbacks.gpuRange);
             VulkanPassContext context{ recordContext_, *this,
                 RenderGraph::PassId{ passOrder }, recordContext_.commandBuffer };
             callbacks.execute(callbacks.owner, context);
-            if (ranged) rangeSink_.end(rangeSink_.owner, token);
+            if (ranged && !aroundBarriers) rangeSink_.end(rangeSink_.owner, token);
         }
         else {
             ++nextPass_;

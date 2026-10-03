@@ -28,6 +28,7 @@ add_library(iridium_vulkan STATIC
         VulkanLayeredLocalCompositionPass.cpp
         VulkanLayeredSceneResolvePass.cpp
         VulkanMeshLayouts.cpp
+        VulkanOutputFeature.cpp
         VulkanOutputPass.cpp
         VulkanOutputTransport.cpp
         VulkanPipelineLibrary.cpp

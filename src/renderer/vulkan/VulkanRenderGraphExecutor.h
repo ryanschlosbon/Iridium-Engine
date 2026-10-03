@@ -209,11 +209,14 @@ namespace Iridium {
         VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
     };
 
-    // Where a pass's GPU timestamp range starts relative to its barriers; both
-    // placements exist in the imperative backend today.
+    // Where a pass's GPU timestamp range starts relative to its barriers; all
+    // three placements exist in the imperative backend today. AroundBarriers
+    // measures only the pass's transitions (e.g. gpu.output.graph_transition):
+    // it closes before the execute callback runs.
     enum class GpuRangePlacement : uint8_t {
         BeforeBarriers,
         AfterBarriers,
+        AroundBarriers,
     };
 
     // Execute side of a pass, indexed by compiled order. Plain function

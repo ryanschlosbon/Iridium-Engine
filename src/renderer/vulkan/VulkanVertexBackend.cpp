@@ -275,8 +275,8 @@ namespace Iridium {
         clusterConfig_.tileWidth = config.clusterTileSize;
         clusterConfig_.tileHeight = config.clusterTileSize;
         clusterConfig_.depthSlices = config.clusterDepthSlices;
-        manualExposureEv_ = static_cast<float>(config.manualExposureEv);
-        outputOperator_ = config.outputOperator;
+        output_.configure(static_cast<float>(config.manualExposureEv),
+            config.outputOperator);
 		requestedOutputTransport_ = config.outputTransport;
 		outputTransport_ = config.outputTransport;
         paperWhiteNits_ = static_cast<float>(config.paperWhiteNits);
@@ -421,11 +421,10 @@ namespace Iridium {
             VulkanSceneColorFormat, VK_FORMAT_D32_SFLOAT);
         transparentPass = std::make_unique<VkForwardRenderPass>(vkContext.get(),
             VulkanSceneColorFormat, VK_FORMAT_D32_SFLOAT, true);
-		outputPass.init(*vkContext, descriptorAllocator, outputTargetFormat_);
-        if (outputTransport_ == Color::OutputTransport::Hdr10Pq) {
-            hdrEncodePass.init(*vkContext, descriptorAllocator,
-                vkSwapchain->getImageFormat());
-        }
+        output_.create(*featureContext_);
+        output_.createPipelines(outputTargetFormat_,
+            outputTransport_ == Color::OutputTransport::Hdr10Pq,
+            vkSwapchain->getImageFormat());
         createGpuSceneCullPipeline();
         weightedOit_.init(vkContext->getDevice(), descriptorAllocator,
             meshLayouts.getForwardPipelineLayout());
@@ -508,7 +507,7 @@ namespace Iridium {
         rebuildRenderGraphAfterDeviceIdle();
         initFrameTargets();
         if (hdr10Composition) {
-            hdrEncodePass.rebuild(frameTargets, vkSwapchain->getImageViews(),
+            output_.rebuildHdr10Targets(vkSwapchain->getImageViews(),
                 vkSwapchain->getExtent());
         }
         // Target descriptors declare shader-read layouts, so submit their initial
@@ -613,13 +612,7 @@ namespace Iridium {
         bindReflectionProbeBuffers();
         bindReflectionProbeEnvironments();
         sceneDescriptors.rebuild(frameTargets);
-        if (VulkanTexturePayload* lut = resources_.textures().get(outputTransformLut_);
-            lut != nullptr && !lut->retired) {
-            outputPass.rebuildDescriptors(frameTargets, lut->image.view, lut->sampler);
-        }
-        else {
-            outputPass.rebuildDescriptors(frameTargets);
-        }
+        output_.rebuildDescriptors();
 
         // 4. ImGui Initialization & UI Textures
         // Create a small pool specifically for ImGui's internal fonts and textures
@@ -892,9 +885,7 @@ namespace Iridium {
         scheduler.waitForAllFrames();
         for (uint32_t frame = 0; frame < VulkanFrameScheduler::FramesInFlight; ++frame)
             collectVirtualShadowRequests(frame);
-        outputTransformLut_ = lutHandle;
-        outputPass.rebuildDescriptors(frameTargets, payload->image.view,
-            payload->sampler);
+        output_.setLut(lutHandle);
     }
 
     void VulkanVertexBackend::setOutputSettings(float manualExposureEv,
@@ -906,7 +897,7 @@ namespace Iridium {
             peakNits > 10000.0f) {
             throw std::invalid_argument("Live output settings are outside supported bounds.");
         }
-        manualExposureEv_ = manualExposureEv;
+        output_.setManualExposure(manualExposureEv);
         paperWhiteNits_ = paperWhiteNits;
         peakNits_ = peakNits;
         if (vkSwapchain) vkSwapchain->setHdrMetadata(peakNits_);
@@ -965,8 +956,6 @@ namespace Iridium {
         }
 
         sceneDescriptors.cleanup();
-        outputPass.clearDescriptors();
-        hdrEncodePass.clearTargets();
         transparencyPyramid_.clearDescriptors();
         depthPyramid_.clearDescriptors();
         layeredInterfaceCapture_.clearDescriptors();
@@ -1032,8 +1021,7 @@ namespace Iridium {
         }
 
         uiPass.reset();
-        hdrEncodePass.cleanup();
-        outputPass.cleanup();
+        output_.destroy();
         gBufferPipeline.reset();
         gBufferPass.reset();
 
@@ -1068,8 +1056,6 @@ namespace Iridium {
         frameTopologyPrewarm_ = {};
         cpuProfiler_ = nullptr;
         telemetry_.cleanup();
-        manualExposureEv_ = 0.0f;
-        outputOperator_ = OutputTransformOperator::Aces2;
         requestedOutputTransport_ = Color::OutputTransport::SdrSrgb;
         outputTransport_ = Color::OutputTransport::SdrSrgb;
         outputTargetFormat_ = VulkanSdrOutputFormat;
@@ -1089,7 +1075,6 @@ namespace Iridium {
 
         neutralEnvironmentCube_ = {};
         neutralEnvironmentBrdfLut_ = {};
-        outputTransformLut_ = {};
         finalCaptureHookRecorded_ = false;
         featureContext_.reset();
     }
@@ -1393,9 +1378,7 @@ namespace Iridium {
             uiSceneTextures.clear();
             uiDepthTextures.clear();
             sceneDescriptors.cleanup();
-            clusterLighting_.onGraphReleased();
-            outputPass.clearDescriptors();
-            hdrEncodePass.clearTargets();
+            for (IVulkanFeature* feature : features()) feature->onGraphReleased();
             transparencyPyramid_.clearDescriptors();
             depthPyramid_.clearDescriptors();
             layeredInterfaceCapture_.clearDescriptors();
@@ -1409,8 +1392,8 @@ namespace Iridium {
             rebuildRenderGraphAfterDeviceIdle();
             initFrameTargets();
             if (outputTransport_ == Color::OutputTransport::Hdr10Pq) {
-                hdrEncodePass.rebuild(frameTargets,
-                    vkSwapchain->getImageViews(), vkSwapchain->getExtent());
+                output_.rebuildHdr10Targets(vkSwapchain->getImageViews(),
+                    vkSwapchain->getExtent());
             }
             uploadContext.flush();
             sceneDescriptors.init(vkContext->getDevice(), descriptorAllocator,
@@ -1433,14 +1416,7 @@ namespace Iridium {
             layeredLocalComposition_.rebuildDescriptors(frameTargets);
             layeredSceneResolve_.rebuildDescriptors(frameTargets);
             weightedOit_.rebuildDescriptors(frameTargets);
-            if (VulkanTexturePayload* lut = resources_.textures().get(
-                    outputTransformLut_); lut != nullptr && !lut->retired) {
-                outputPass.rebuildDescriptors(frameTargets,
-                    lut->image.view, lut->sampler);
-            }
-            else {
-                outputPass.rebuildDescriptors(frameTargets);
-            }
+            output_.rebuildDescriptors();
             uiSceneTextures.resize(frameTargets.size());
             uiDepthTextures.resize(frameTargets.size());
             for (size_t index = 0; index < frameTargets.size(); ++index) {
@@ -1572,9 +1548,7 @@ namespace Iridium {
         // The clustered pass owns descriptor sets that reference transient
         // render-graph buffers.  Swapchain recreation rebuilds that graph, so
         // retire the bindings before the buffers and recreate them afterward.
-        clusterLighting_.onGraphReleased();
-        outputPass.clearDescriptors();
-        hdrEncodePass.clearTargets();
+        for (IVulkanFeature* feature : features()) feature->onGraphReleased();
         transparencyPyramid_.clearDescriptors();
         depthPyramid_.clearDescriptors();
         layeredInterfaceCapture_.clearDescriptors();
@@ -1583,20 +1557,17 @@ namespace Iridium {
         weightedOit_.clearDescriptors();
         frameTargets.cleanup();
 		renderGraph_.cleanupAfterDeviceIdle();
-		hdrEncodePass.cleanup();
-		outputPass.cleanup();
-		uiPass.reset();
+        output_.destroyPipelines();
+        uiPass.reset();
 
         vkSwapchain = std::move(candidate);
 		requestedOutputTransport_ = requestedTransport;
 		outputTransport_ = candidateTransport;
 		outputTargetFormat_ = candidateOutputFormat;
         vkSwapchain->setHdrMetadata(peakNits_);
-		outputPass.init(*vkContext, descriptorAllocator, outputTargetFormat_);
-        if (outputTransport_ == Color::OutputTransport::Hdr10Pq) {
-            hdrEncodePass.init(*vkContext, descriptorAllocator,
-                vkSwapchain->getImageFormat());
-        }
+        output_.createPipelines(outputTargetFormat_,
+            outputTransport_ == Color::OutputTransport::Hdr10Pq,
+            vkSwapchain->getImageFormat());
         const bool hdr10Composition = outputTransport_ ==
             Color::OutputTransport::Hdr10Pq;
         uiPass = std::make_unique<VkUIRenderPass>(vkContext.get(),
@@ -1620,7 +1591,7 @@ namespace Iridium {
         rebuildRenderGraphAfterDeviceIdle();
         initFrameTargets();
         if (outputTransport_ == Color::OutputTransport::Hdr10Pq) {
-            hdrEncodePass.rebuild(frameTargets, vkSwapchain->getImageViews(),
+            output_.rebuildHdr10Targets(vkSwapchain->getImageViews(),
                 vkSwapchain->getExtent());
         }
         // The replacement target images are referenced by descriptor sets and
@@ -1646,13 +1617,7 @@ namespace Iridium {
         layeredLocalComposition_.rebuildDescriptors(frameTargets);
         layeredSceneResolve_.rebuildDescriptors(frameTargets);
         weightedOit_.rebuildDescriptors(frameTargets);
-        if (VulkanTexturePayload* lut = resources_.textures().get(outputTransformLut_);
-            lut != nullptr && !lut->retired) {
-            outputPass.rebuildDescriptors(frameTargets, lut->image.view, lut->sampler);
-        }
-        else {
-            outputPass.rebuildDescriptors(frameTargets);
-        }
+        output_.rebuildDescriptors();
         if (newImageCount != oldImageCount) {
             ImGui_ImplVulkan_SetMinImageCount(newImageCount);
         }
@@ -1764,9 +1729,7 @@ namespace Iridium {
             uiSceneTextures.clear();
             uiDepthTextures.clear();
             sceneDescriptors.cleanup();
-            clusterLighting_.onGraphReleased();
-            outputPass.clearDescriptors();
-            hdrEncodePass.clearTargets();
+            for (IVulkanFeature* feature : features()) feature->onGraphReleased();
             transparencyPyramid_.clearDescriptors();
             depthPyramid_.clearDescriptors();
             layeredInterfaceCapture_.clearDescriptors();
@@ -1780,8 +1743,8 @@ namespace Iridium {
             rebuildRenderGraphAfterDeviceIdle();
             initFrameTargets();
             if (outputTransport_ == Color::OutputTransport::Hdr10Pq) {
-                hdrEncodePass.rebuild(frameTargets,
-                    vkSwapchain->getImageViews(), vkSwapchain->getExtent());
+                output_.rebuildHdr10Targets(vkSwapchain->getImageViews(),
+                    vkSwapchain->getExtent());
             }
             uploadContext.flush();
             sceneDescriptors.init(vkContext->getDevice(), descriptorAllocator,
@@ -1804,14 +1767,7 @@ namespace Iridium {
             layeredLocalComposition_.rebuildDescriptors(frameTargets);
             layeredSceneResolve_.rebuildDescriptors(frameTargets);
             weightedOit_.rebuildDescriptors(frameTargets);
-            if (VulkanTexturePayload* lut = resources_.textures().get(outputTransformLut_);
-                lut != nullptr && !lut->retired) {
-                outputPass.rebuildDescriptors(frameTargets,
-                    lut->image.view, lut->sampler);
-            }
-            else {
-                outputPass.rebuildDescriptors(frameTargets);
-            }
+            output_.rebuildDescriptors();
             uiSceneTextures.resize(frameTargets.size());
             uiDepthTextures.resize(frameTargets.size());
             for (size_t index = 0; index < frameTargets.size(); ++index) {
@@ -1958,7 +1914,7 @@ namespace Iridium {
             info.outputMode =
                 "scene_linear_acescg_to_aces2_p3d65_1000nit_rec2100_pq_hdr10";
         }
-        else switch (outputOperator_) {
+        else switch (output_.outputOperator()) {
         case OutputTransformOperator::Aces2:
             info.outputMode = "scene_linear_acescg_to_aces2_rec709_srgb_sdr";
             break;
@@ -2223,7 +2179,7 @@ namespace Iridium {
                 layeredInterfaceCapture_.renderPass(),
                 layeredLocalComposition_.renderPass(),
                 weightedOit_.accumulationRenderPass(),
-                weightedOit_.resolveRenderPass(), outputPass.renderPass(),
+                weightedOit_.resolveRenderPass(), output_.outputRenderPass(),
                 uiPass->getRenderPass() },
             VulkanFrameScheduler::FramesInFlight,
             outputTransport_ == Color::OutputTransport::Hdr10Pq,
@@ -6542,33 +6498,13 @@ const VkDeviceSize offset = geometry->vertexOffset;
     }
 
     void VulkanVertexBackend::submitOutputPass() {
-        {
-            CpuScope outputRecordScope(cpuProfiler_,
-                "cpu.render.record.output_transform");
-            VulkanFrameContextTargets& targets = frameTargets.get(
-                scheduler.currentFrameIndex());
-            {
-                VulkanGpuScope transitionGpuScope(scheduler,
-                    "gpu.output.graph_transition");
-                // M1 exposes scene-linear color to a future bloom implementation
-                // without paying for a disabled effect or changing resource versions.
-                renderGraph_.skipPass(graphIds_.bloomHook);
-                renderGraph_.beginPass(currentCmd, graphIds_.outputTransform);
-            }
-            {
-                VulkanGpuScope outputGpuScope(scheduler, "gpu.output.transform");
-                outputPass.record(currentCmd, scheduler.currentFrameIndex(),
-                    targets.outputFramebuffer, frameTargets.extent(), manualExposureEv_,
-                    static_cast<uint32_t>(outputOperator_),
-                    static_cast<uint32_t>(outputTransport_), paperWhiteNits_, peakNits_,
-                    selectionOutlineActive_, viewportGridOverlay_);
-                if (telemetry_.collecting()) {
-                    telemetry_.recordPipelineBind(pipelineIdentity(
-                        FixedPipelineIdentity::OutputTransform));
-                    telemetry_.recordDraw(telemetry_.counters().drawOutput, 1);
-                }
-            }
-        }
+        // R3c.2 drain point: bloom-hook (skipped) and output-transform.
+        output_.recordOutputTransform({
+            .transport = outputTransport_,
+            .paperWhiteNits = paperWhiteNits_,
+            .peakNits = peakNits_,
+            .selectionOutline = selectionOutlineActive_,
+        });
         runCaptureHook(VulkanHookPoint::FinalCaptureHook,
             outputTransport_ == Color::OutputTransport::SdrSrgb
                 ? FrameCapturePoint::FinalSdr : FrameCapturePoint::FinalOutput);
@@ -6648,18 +6584,10 @@ const VkDeviceSize offset = geometry->vertexOffset;
 
         vkCmdEndRenderPass(currentCmd);
         }
-        if (outputTransport_ == Color::OutputTransport::Hdr10Pq) {
-            renderGraph_.beginPass(currentCmd, graphIds_.hdr10EncodePresent);
-            VulkanGpuScope encodeScope(scheduler, "gpu.output.hdr10_encode");
-            hdrEncodePass.record(currentCmd, scheduler.currentFrameIndex(),
-                currentImageIndex, vkSwapchain->getExtent(), paperWhiteNits_,
-                peakNits_);
-            if (telemetry_.collecting()) {
-                telemetry_.recordPipelineBind(pipelineIdentity(
-                    FixedPipelineIdentity::OutputTransform));
-                telemetry_.recordDraw(telemetry_.counters().drawOutput, 1);
-            }
-        }
+        // R3c.2 drain point: "hdr10-encode-present" (declared for HDR10
+        // composition only; otherwise a no-op).
+        output_.recordHdr10Encode(vkSwapchain->getExtent(), paperWhiteNits_,
+            peakNits_);
         renderGraph_.finishFrameExecution();
     }
 

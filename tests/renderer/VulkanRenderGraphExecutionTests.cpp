@@ -1141,6 +1141,33 @@ namespace {
         return true;
     }
 
+    // AroundBarriers (R3c.2): the range covers only the pass's barriers and is
+    // closed before its execute callback records.
+    bool testGpuRangeAroundBarriers() {
+        ChainFixture fixture;
+        auto& executor = fixture.executor;
+        auto& log = fixture.log;
+        executor.registerPass(ChainFixture::pass(1), testCallbacks(fixture.owner, 1,
+            "gpu.transition", GpuRangePlacement::AroundBarriers));
+        executor.beginFrameExecution(0);
+        executor.beginPass(FakeCommandBuffer, ChainFixture::pass(0));
+        log.count = 0;
+        executor.drainRegisteredThrough(ChainFixture::pass(1));
+        const auto events = log.recorded();
+        const EventKind expected[] = { EventKind::Active, EventKind::RangeBegin,
+            EventKind::Barrier, EventKind::RangeEnd, EventKind::Execute };
+        CHECK(events.size() == std::size(expected));
+        for (size_t index = 0; index < events.size(); ++index)
+            CHECK(events[index].kind == expected[index]);
+        CHECK(std::string_view(events[1].name) == "gpu.transition");
+        CHECK(log.countOf(EventKind::RangeEnd) == 1);
+        executor.skipPass(ChainFixture::pass(2));
+        executor.skipPass(ChainFixture::pass(3));
+        executor.skipPass(ChainFixture::pass(4));
+        executor.finishFrameExecution();
+        return true;
+    }
+
     // R3c explicit drain points: the owner runs its registered passes where
     // they used to be recorded, in compiled order, never past an imperative one.
     bool testExplicitDrainPoints() {
@@ -1830,6 +1857,7 @@ int main() {
         { "drain rejects unregistered skips", testDrainRejectsUnregisteredSkips },
         { "finish drains and rollback", testFinishDrainsAndRollback },
         { "GPU range placement and groups", testGpuRangePlacementAndGroups },
+        { "GPU range around barriers", testGpuRangeAroundBarriers },
         { "explicit drain points", testExplicitDrainPoints },
         { "callback context and reentry", testCallbackContextAndReentry },
         { "History pair lifetime", testHistoryPairLifetime },

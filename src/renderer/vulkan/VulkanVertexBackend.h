@@ -35,6 +35,7 @@
 #include "VulkanProductionRenderGraph.h"
 #include "VulkanBackendExtension.h"
 #include "VulkanClusterLightingFeature.h"
+#include "VulkanOutputFeature.h"
 #include "VulkanExtensionHooks.h"
 #include "VulkanFeatureContext.h"
 #include "VulkanFrameTelemetry.h"
@@ -169,8 +170,8 @@ namespace Iridium {
         std::unique_ptr<VkForwardRenderPass> forwardPass;
         std::unique_ptr<VkForwardRenderPass> transparentPass;
 
-        VulkanOutputPass outputPass;
-        VulkanHdrEncodePass hdrEncodePass;
+        // R3c.2: output transform, HDR10 encode, LUT, exposure, grid overlay.
+        VulkanOutputFeature output_;
 
         // UI Pass
         std::unique_ptr<VkUIRenderPass> uiPass;
@@ -312,8 +313,6 @@ namespace Iridium {
         std::array<uint32_t, 3> pointShadowCapacities_{
             kPointShadowPool256Capacity, kPointShadowPool512Capacity,
             kPointShadowPool1024Capacity };
-        float manualExposureEv_ = 0.0f;
-        OutputTransformOperator outputOperator_ = OutputTransformOperator::Aces2;
 		Color::OutputTransport outputTransport_ = Color::OutputTransport::SdrSrgb;
 		Color::OutputTransport requestedOutputTransport_ =
 			Color::OutputTransport::SdrSrgb;
@@ -321,8 +320,6 @@ namespace Iridium {
         float paperWhiteNits_ = 203.0f;
         float peakNits_ = 1000.0f;
         bool selectionOutlineActive_ = false;
-        ViewportGridOverlay viewportGridOverlay_{};
-        TextureHandle outputTransformLut_{};
         bool finalCaptureHookRecorded_ = false;
         // "probe.capture" begun or skipped this frame (R3b.8).
         bool probeCaptureHandled_ = false;
@@ -385,8 +382,8 @@ namespace Iridium {
             const glm::mat4& view, const glm::mat4& projection,
             float nearPlane, float farPlane, uint32_t activeProbeCount);
         // Feature owners in registration (and graph) order.
-        [[nodiscard]] std::array<IVulkanFeature*, 1> features() noexcept {
-            return { &clusterLighting_ };
+        [[nodiscard]] std::array<IVulkanFeature*, 2> features() noexcept {
+            return { &clusterLighting_, &output_ };
         }
         void initFrameTargets();
         void rebuildRenderGraphAfterDeviceIdle();
@@ -546,7 +543,7 @@ namespace Iridium {
             float peakNits) override;
         void setViewportGridOverlay(
             const ViewportGridOverlay& overlay) override {
-            viewportGridOverlay_ = overlay;
+            output_.setGridOverlay(overlay);
         }
         void submitDirectionalShadows(
             const ShadowCasterSubmission& shadowCasters,
