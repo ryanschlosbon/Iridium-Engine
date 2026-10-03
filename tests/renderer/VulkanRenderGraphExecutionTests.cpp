@@ -1623,10 +1623,13 @@ namespace {
         return true;
     }
 
-    // R3b.6 production imports: the swapchain (per frame, Undefined ->
-    // Present) and the shadow maps (global, SampledRead both ways) are bound
-    // render-pass-managed, so a full frame records no barrier on them and
-    // leaves the declared final states.
+    // Production imports (R3b.6, R4a). Shadow maps migrated to dynamic
+    // rendering are executor-owned globals bound SampledRead: their writing
+    // pass moves the whole image DS_RO -> DS_ATT (never from UNDEFINED, the
+    // contents are kept) and the next reader moves it back, so every frame
+    // ends SampledRead. Imports still recorded with render passes are
+    // render-pass-managed (swapchain Undefined -> Present, shadow maps
+    // SampledRead both ways) and get no barrier.
     bool testProductionImportedImagePolicies() {
         FakeResourceFactory factory;
         RecordingBarrierSink sink;
@@ -1660,32 +1663,39 @@ namespace {
             Access::Present);
         const auto shadow = ExternalSyncPolicy::renderPassManaged(Access::SampledRead,
             Access::SampledRead);
+        struct ShadowImport {
+            RenderGraph::GraphResourceId id;
+            VulkanImageResource image;
+            const char* writer;
+            bool executorOwned;
+        };
+        constexpr std::array<uint32_t, 3> PointResolutions{ 256, 512, 1024 };
+        constexpr std::array<uint32_t, 3> PointCapacities{ kPointShadowPool256Capacity,
+            kPointShadowPool512Capacity, kPointShadowPool1024Capacity };
+        std::vector<ShadowImport> shadows{
+            { ids.shadowDirectionalMap,
+                shadowImage(0xB000, 4096, kDirectionalShadowLayerCount),
+                "shadow.directional", true },
+            { ids.shadowSpotMap, shadowImage(0xB100, 8192, 1), "shadow.spot", false },
+        };
+        for (uint32_t tier = 0; tier < 3; ++tier)
+            shadows.push_back({ ids.shadowPointMaps[tier],
+                shadowImage(0xB200 + 0x10 * tier, PointResolutions[tier],
+                    PointCapacities[tier] * 6u), "shadow.point", false });
         executor.bindExternalImage(0, ids.swapchain, swapchain(0xA000), Access::Undefined,
             present);
         executor.bindExternalImage(1, ids.swapchain, swapchain(0xA000), Access::Undefined,
             present);
-        executor.bindExternalImage(VulkanGlobalBinding, ids.shadowDirectionalMap,
-            shadowImage(0xB000, 4096, kDirectionalShadowLayerCount), Access::SampledRead,
-            shadow);
-        executor.bindExternalImage(VulkanGlobalBinding, ids.shadowSpotMap,
-            shadowImage(0xB100, 8192, 1), Access::SampledRead, shadow);
-        constexpr std::array<uint32_t, 3> PointResolutions{ 256, 512, 1024 };
-        constexpr std::array<uint32_t, 3> PointCapacities{ kPointShadowPool256Capacity,
-            kPointShadowPool512Capacity, kPointShadowPool1024Capacity };
-        for (uint32_t tier = 0; tier < 3; ++tier)
-            executor.bindExternalImage(VulkanGlobalBinding, ids.shadowPointMaps[tier],
-                shadowImage(0xB200 + 0x10 * tier, PointResolutions[tier],
-                    PointCapacities[tier] * 6u), Access::SampledRead, shadow);
+        for (const ShadowImport& import : shadows)
+            executor.bindExternalImage(VulkanGlobalBinding, import.id, import.image,
+                Access::SampledRead, import.executorOwned
+                    ? ExternalSyncPolicy::executorOwned() : shadow);
         // A pool whose capacity differs from the declaration is rejected.
         CHECK(throws([&] { executor.bindExternalImage(VulkanGlobalBinding,
             ids.shadowPointMaps[0], shadowImage(0xB300, 256, 6), Access::SampledRead,
             shadow); }));
         CHECK(executor.validateFrame(0) && executor.validateFrame(1));
 
-        const auto isImported = [](uint64_t handle) {
-            return (handle & ~uint64_t{ 0xFFF }) == 0xA000 ||
-                (handle & ~uint64_t{ 0xFFF }) == 0xB000;
-        };
         for (uint32_t frame = 0; frame < 3; ++frame) {
             const uint32_t slot = frame % 2;
             if (frame >= 2) {
@@ -1695,14 +1705,41 @@ namespace {
             }
             sink.clear();
             executor.beginFrameExecution(slot);
-            for (const auto& pass : executor.compiledGraph()->passes())
+            std::vector<std::string_view> barrierPass;
+            for (const auto& pass : executor.compiledGraph()->passes()) {
                 executor.beginPass(FakeCommandBuffer, executor.passId(pass.name));
+                barrierPass.resize(sink.recorded().size(), pass.name);
+            }
             executor.finishFrameExecution();
-            for (const RecordedBarrier& barrier : sink.recorded())
-                CHECK(!isImported(barrier.handle));
+            barrierPass.resize(sink.recorded().size(), "frame-end");
             CHECK(executor.externalImageAccess(slot, ids.swapchain) == Access::Present);
-            CHECK(executor.externalImageAccess(VulkanGlobalBinding, ids.shadowSpotMap) ==
-                Access::SampledRead);
+            for (const ShadowImport& import : shadows) {
+                const uint64_t handle = reinterpret_cast<uint64_t>(import.image.image);
+                std::vector<size_t> found;
+                for (size_t index = 0; index < sink.recorded().size(); ++index)
+                    if (sink.recorded()[index].handle == handle) found.push_back(index);
+                CHECK(executor.externalImageAccess(VulkanGlobalBinding, import.id) ==
+                    Access::SampledRead);
+                if (!import.executorOwned) {
+                    CHECK(found.empty());
+                    continue;
+                }
+                CHECK(found.size() == 2);
+                const RecordedBarrier& toWrite = sink.recorded()[found[0]];
+                const RecordedBarrier& toRead = sink.recorded()[found[1]];
+                CHECK(barrierPass[found[0]] == import.writer);
+                CHECK(barrierPass[found[1]] == "probe.capture");
+                CHECK(toWrite.oldLayout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
+                CHECK(toWrite.newLayout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+                CHECK(toWrite.range.baseArrayLayer == 0 &&
+                    toWrite.range.layerCount == import.image.arrayLayers);
+                CHECK(toRead.oldLayout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+                CHECK(toRead.newLayout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
+                CHECK(toRead.srcAccess == (VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
+                    VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT));
+            }
+            for (const RecordedBarrier& barrier : sink.recorded())
+                CHECK((barrier.handle & ~uint64_t{ 0xFFF }) != 0xA000);
         }
         // Without the per-frame rebind the swapchain is not in its initial state.
         executor.onFrameFenceCompleted(1);

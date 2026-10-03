@@ -690,9 +690,12 @@ namespace Iridium {
         const ExternalSyncPolicy shadowPolicy =
             ExternalSyncPolicy::renderPassManaged(Access::SampledRead,
                 Access::SampledRead);
+        // R4a: shadow maps on dynamic rendering are executor-owned globals.
+        // Every frame that writes one also runs lighting, which samples it,
+        // so a frame (and therefore a rebuild) always leaves it SampledRead.
         renderGraph_.bindExternalImage(VulkanGlobalBinding,
             graphIds_.shadowDirectionalMap, shadows_.map().image(),
-            Access::SampledRead, shadowPolicy);
+            Access::SampledRead, ExternalSyncPolicy::executorOwned());
         renderGraph_.bindExternalImage(VulkanGlobalBinding,
             graphIds_.shadowSpotMap, localShadows_.spot().image(), Access::SampledRead,
             shadowPolicy);

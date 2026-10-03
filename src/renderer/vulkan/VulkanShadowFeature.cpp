@@ -65,8 +65,12 @@ namespace Iridium {
         // R3b.7: the compute -> indirect barrier is the executor's, at
         // "shadow.directional".
         graph.registerPass(compactPass_, { this, &compactActive, &executeCompact });
+        // R4a: dynamic rendering per cascade layer. The executor moves the
+        // whole cascade array SampledRead -> DepthAttachmentWrite (contents
+        // kept: layers not rendered this frame stay valid) and the next
+        // reader moves it back.
         graph.registerPass(drawPass_, { this, &drawActive, &executeDraw,
-            "gpu.shadow.directional", GpuRangePlacement::AfterBarriers });
+            "gpu.shadow.directional", GpuRangePlacement::AfterBarriers, true });
         if (depthMarkPass_.isValid())
             graph.registerPass(depthMarkPass_, { this, nullptr, &executeDepthMark,
                 "gpu.shadow.virtual.depth-demand", GpuRangePlacement::BeforeBarriers });
@@ -284,7 +288,10 @@ namespace Iridium {
             for (uint32_t cascade = 0;
                 cascade < kDirectionalShadowCascadeCount; ++cascade) {
                 if ((shadow.updateMask & (1u << cascade)) == 0u) continue;
-                self.map_.beginCascade(cmd, shadow.shadowIndex, cascade);
+                VulkanRenderingOverrides rendering{};
+                rendering.depthView = self.map_.cascadeView(shadow.shadowIndex, cascade);
+                context.beginRendering(rendering);
+                self.map_.setCascadeState(cmd);
                 vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                     layout, 0, 1, &shadowSet, 0, nullptr);
                 const uint32_t layer = shadow.shadowIndex *
@@ -341,7 +348,7 @@ namespace Iridium {
                     .drawCounter = &counters.drawShadowDirectional,
                     .alphaMaskCounter = &counters.drawShadowDirectionalAlphaMask,
                 }, materialDescriptorsBound);
-                self.map_.endCascade(cmd);
+                context.endRendering();
             }
         }
     }

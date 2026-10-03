@@ -51,9 +51,11 @@ namespace Iridium {
 
         void updateFrame(uint32_t frameIndex,
             std::span<const DirectionalShadowFramePacket> packets);
-        void beginCascade(VkCommandBuffer commandBuffer,
-            uint32_t shadowIndex, uint32_t cascadeIndex) const;
-        void endCascade(VkCommandBuffer commandBuffer) const;
+        // M7R R4a: the shadow owner begins dynamic rendering on a cascade's
+        // layer view (CLEAR 1.0 from the graph plan), then sets its state.
+        [[nodiscard]] VkImageView cascadeView(uint32_t shadowIndex,
+            uint32_t cascadeIndex) const;
+        void setCascadeState(VkCommandBuffer commandBuffer) const;
 
         [[nodiscard]] VkPipeline pipeline(bool alphaMasked,
             bool doubleSided, bool gpuSceneIndirect = false) const noexcept;
@@ -81,8 +83,6 @@ namespace Iridium {
         VulkanImageResource image_;
         std::array<VkImageView, kDirectionalShadowLayerCount> layerViews_{};
         VkSampler sampler_ = VK_NULL_HANDLE;
-        VkRenderPass renderPass_ = VK_NULL_HANDLE;
-        std::array<VkFramebuffer, kDirectionalShadowLayerCount> framebuffers_{};
         VkDescriptorSetLayout renderSetLayout_ = VK_NULL_HANDLE;
         VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;
         std::array<VkPipeline, 8> pipelines_{};
