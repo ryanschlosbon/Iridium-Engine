@@ -12,6 +12,7 @@ add_library(iridium_vulkan STATIC
         VkUIRenderPass.cpp
         VulkanClusterLightingFeature.cpp
         VulkanClusteredLightingPipeline.cpp
+        VulkanDeferredLightingFeature.cpp
         VulkanDepthPyramid.cpp
         VulkanDirectionalShadowMap.cpp
         VulkanExtensionHooks.cpp
@@ -52,6 +53,7 @@ add_library(iridium_vulkan STATIC
         VulkanTransparencyPyramid.cpp
         VulkanUploadContext.cpp
         VulkanVertexBackend.cpp
+        VulkanViewUniforms.cpp
         VulkanVirtualShadowDepthReceiverPass.cpp
         VulkanVirtualShadowFullViewPass.cpp
         VulkanVirtualShadowMarkingPass.cpp

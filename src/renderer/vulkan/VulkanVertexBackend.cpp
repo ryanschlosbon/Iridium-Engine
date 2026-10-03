@@ -325,9 +325,10 @@ namespace Iridium {
         }
 
         // 2. Lighting and forward pass contracts needed by the shared mesh layouts.
-        createLightingRenderPass();
-        lightingPipeline = std::make_unique<VkLightingPipeline>(vkContext.get(),
-            lightingRenderPass, gBufferLayout_);
+        // R3c.8: the deferred-lighting owner (render pass, pipeline, lighting set).
+        lighting_.configure(gBufferLayout_, { &clusterLighting_, &shadows_,
+            &localShadows_, &probes_ });
+        lighting_.create(*featureContext_);
         clusterLighting_.configure(clusterConfig_, (std::min)(
             static_cast<uint32_t>(
                 vkContext->getPhysicalDeviceProperties()
@@ -336,21 +337,21 @@ namespace Iridium {
             kMaximumGpuLightCapacity));
         clusterLighting_.create(*featureContext_);
         meshLayouts.init(vkContext->getDevice(),
-            lightingPipeline->getDescriptorSetLayout(),
+            lighting_.setLayout(),
             resources_.textureTable().materialViewLayout(),
             resources_.textureTable().samplerLayout());
         // R3c.6: the probe owner's capture pass and targets.
         probes_.configure(clusterConfig_, probeViewSettings(), casterScratch_,
-            lightingPipeline->getDescriptorSetLayout(), clusterLighting_, { this,
+            lighting_.setLayout(), clusterLighting_, { this,
                 [](void* owner) {
                     auto& self = *static_cast<VulkanVertexBackend*>(owner);
-                    if (self.sceneDescriptors.size() != 0)
-                        self.bindReflectionProbeBuffers();
+                    if (self.lighting_.sceneSetReady())
+                        self.lighting_.bindReflectionProbeBuffers();
                     self.bindGraphImportedBuffers();
                 },
                 [](void* owner) {
                     static_cast<VulkanVertexBackend*>(owner)->
-                        bindReflectionProbeEnvironments();
+                        lighting_.bindReflectionProbeEnvironments();
                 } });
         probes_.create(*featureContext_);
         forwardPass = std::make_unique<VkForwardRenderPass>(vkContext.get(),
@@ -378,7 +379,7 @@ namespace Iridium {
             descriptorAllocator, meshLayouts.getGlobalSetLayout(),
             resources_.textureTable().materialViewLayout(),
             resources_.textureTable().samplerLayout(),
-            lightingPipeline->getDescriptorSetLayout());
+            lighting_.setLayout());
         layeredSceneResolve_.init(vkContext->getDevice(),
             descriptorAllocator, meshLayouts.getGlobalSetLayout(),
             transparentPass->getRenderPass());
@@ -427,11 +428,11 @@ namespace Iridium {
         // Target descriptors declare shader-read layouts, so submit their initial
         // Undefined -> ShaderResource transitions before any descriptor or ImGui
         // registration can reference those images.
-        createNeutralEnvironmentProducts();
+        lighting_.createNeutralEnvironment();
         uploadContext.flush();
 
         // 8. Global Camera Buffers
-        createUniformBuffers();
+        view_.createBuffers(resourceAllocator);
         resources_.setMaterialTableMaximumCapacity((std::min)(
             static_cast<uint32_t>(
                 vkContext->getPhysicalDeviceProperties()
@@ -458,27 +459,12 @@ namespace Iridium {
         // --------------------------------
 
         // 2. Global Descriptor Sets (Camera Data)
-        globalDescriptorSets.resize(VulkanFrameScheduler::FramesInFlight);
-        for (size_t i = 0; i < VulkanFrameScheduler::FramesInFlight; i++) {
-            globalDescriptorSets[i] = descriptorAllocator.allocate(meshLayouts.getGlobalSetLayout());
-            gpuScene_.setDescriptorSet(static_cast<uint32_t>(i),
+        for (uint32_t i = 0; i < VulkanFrameScheduler::FramesInFlight; i++) {
+            view_.allocateSet(i, descriptorAllocator, meshLayouts.getGlobalSetLayout());
+            gpuScene_.setDescriptorSet(i,
                 descriptorAllocator.allocate(meshLayouts.getGpuSceneSetLayout()));
-            opaque_.culler().allocateSet(static_cast<uint32_t>(i));
-
-            VkDescriptorBufferInfo bufferInfo{};
-            bufferInfo.buffer = uniformBuffers[i].buffer;
-            bufferInfo.offset = 0;
-            bufferInfo.range = sizeof(UniformBufferObject);
-
-            VkWriteDescriptorSet descriptorWrite{ VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
-            descriptorWrite.dstSet = globalDescriptorSets[i];
-            descriptorWrite.dstBinding = 0;
-            descriptorWrite.dstArrayElement = 0;
-            descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-            descriptorWrite.descriptorCount = 1;
-            descriptorWrite.pBufferInfo = &bufferInfo;
-
-            vkUpdateDescriptorSets(vkContext->getDevice(), 1, &descriptorWrite, 0, nullptr);
+            opaque_.culler().allocateSet(i);
+            view_.writeSet(i, vkContext->getDevice());
         }
         gpuScene_.bindBuffers();
         opaque_.culler().bindBuffers();
@@ -491,17 +477,7 @@ namespace Iridium {
 
         // 3. Lighting descriptors (one set per frame context).
         const uint32_t imgCount = vkSwapchain->getImageCount();
-        sceneDescriptors.init(vkContext->getDevice(), descriptorAllocator,
-            lightingPipeline->getDescriptorSetLayout());
-        bindLightRecordBuffers();
-        bindSceneClusterBuffers();
-        bindEnvironmentProducts();
-        bindDirectionalShadowDescriptors();
-        bindSpotShadowDescriptors();
-        bindPointShadowDescriptors();
-        bindReflectionProbeBuffers();
-        bindReflectionProbeEnvironments();
-        sceneDescriptors.rebuild(frameTargets);
+        lighting_.rebuildSceneSet();
         output_.rebuildDescriptors();
 
         // 4. ImGui Initialization & UI Textures
@@ -558,18 +534,7 @@ namespace Iridium {
         imguiInitialized_ = true;
 
         // Create the initial ImGui textures for the viewport!
-        const size_t frameTargetCount = frameTargets.size();
-        uiSceneTextures.resize(frameTargetCount);
-        uiDepthTextures.resize(frameTargetCount);
-        for (size_t i = 0; i < frameTargetCount; i++) {
-            const VulkanFrameContextTargets& targets = frameTargets.get(i);
-            uiSceneTextures[i] = ImGui_ImplVulkan_AddTexture(frameTargets.sampler(),
-                targets.output.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-            const VkImageView editorDepthView = targets.depth.view;
-            uiDepthTextures[i] = ImGui_ImplVulkan_AddTexture(frameTargets.sampler(),
-                editorDepthView,
-                VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
-        }
+        registerEditorTargetTextures();
 
         initialized_ = true;
         cleaned_ = false;
@@ -595,160 +560,12 @@ namespace Iridium {
 
     void VulkanVertexBackend::setEnvironmentLighting(
         const EnvironmentLightingHandles& environment) {
-        if (!environment.isValid())
-            throw std::invalid_argument(
-                "Environment lighting requires four valid texture handles.");
-        const VulkanTexturePayload* radiance = resources_.textures().get(environment.radiance);
-        const VulkanTexturePayload* irradiance = resources_.textures().get(environment.irradiance);
-        const VulkanTexturePayload* prefiltered =
-            resources_.textures().get(environment.prefilteredSpecular);
-        const VulkanTexturePayload* brdf = resources_.textures().get(environment.brdfLut);
-        if (radiance == nullptr || irradiance == nullptr || prefiltered == nullptr ||
-            brdf == nullptr || radiance->retired || irradiance->retired ||
-            prefiltered->retired || brdf->retired ||
-            radiance->image.viewType != VK_IMAGE_VIEW_TYPE_CUBE ||
-            irradiance->image.viewType != VK_IMAGE_VIEW_TYPE_CUBE ||
-            prefiltered->image.viewType != VK_IMAGE_VIEW_TYPE_CUBE ||
-            brdf->image.viewType != VK_IMAGE_VIEW_TYPE_2D ||
-            radiance->format != TextureFormat::RGBA16_SFloat ||
-            irradiance->format != TextureFormat::RGBA16_SFloat ||
-            prefiltered->format != TextureFormat::RGBA16_SFloat ||
-            brdf->format != TextureFormat::RG16_SFloat) {
-            throw std::invalid_argument(
-                "Environment lighting textures do not match the cube/LUT contract.");
-        }
-        // Bind each frame's descriptor set only after its fence completes. View
-        // switches must not idle both frames merely to choose a resident HDRI.
-        environmentLighting_ = environment;
-        for (VulkanTexturePayload* payload : {
-                resources_.textures().get(environment.radiance),
-                resources_.textures().get(environment.irradiance),
-                resources_.textures().get(environment.prefilteredSpecular),
-                resources_.textures().get(environment.brdfLut) })
-            resourceAllocator.reclassify(payload->image,
-                ProfileMemoryCategory::Environment);
+        lighting_.setEnvironment(environment);
     }
 
     void VulkanVertexBackend::setEnvironmentLightingSettings(
         const EnvironmentLightingSettings& settings) {
-        if (!std::isfinite(settings.lightingIntensity) ||
-            settings.lightingIntensity < 0.0f ||
-            !std::isfinite(settings.backgroundIntensity) ||
-            settings.backgroundIntensity < 0.0f ||
-            !std::isfinite(settings.rotationRadians)) {
-            throw std::invalid_argument(
-                "Environment lighting settings must be finite and nonnegative.");
-        }
-        environmentLightingSettings_ = settings;
-    }
-
-    void VulkanVertexBackend::createNeutralEnvironmentProducts() {
-        if (neutralEnvironmentCube_.isValid() ||
-            neutralEnvironmentBrdfLut_.isValid()) {
-            throw std::logic_error(
-                "Neutral environment products were initialized twice.");
-        }
-
-        TextureDesc cubeDesc{};
-        cubeDesc.width = 1;
-        cubeDesc.height = 1;
-        cubeDesc.format = TextureFormat::RGBA16_SFloat;
-        cubeDesc.usageClass = TextureUsageClass::Environment;
-        cubeDesc.arrayLayers = 6;
-        cubeDesc.topology = TextureTopology::Cube;
-        cubeDesc.sampler.addressU = SamplerAddressMode::ClampToEdge;
-        cubeDesc.sampler.addressV = SamplerAddressMode::ClampToEdge;
-        cubeDesc.sampler.addressW = SamplerAddressMode::ClampToEdge;
-
-        // Six layer-major RGBA16F black texels. The same semantic neutral cube
-        // is safe for irradiance, prefiltered radiance, and sky radiance.
-        const std::array<std::byte, 6u * 4u * sizeof(uint16_t)> blackCube{};
-        neutralEnvironmentCube_ = allocateTexture(cubeDesc, blackCube);
-
-        TextureDesc brdfDesc{};
-        brdfDesc.width = 1;
-        brdfDesc.height = 1;
-        brdfDesc.format = TextureFormat::RG16_SFloat;
-        brdfDesc.usageClass = TextureUsageClass::Environment;
-        brdfDesc.sampler.addressU = SamplerAddressMode::ClampToEdge;
-        brdfDesc.sampler.addressV = SamplerAddressMode::ClampToEdge;
-        brdfDesc.sampler.addressW = SamplerAddressMode::ClampToEdge;
-        // Half-float (1, 0) is the identity split-sum fallback: F0 * 1 + F90 * 0.
-        const std::array<uint16_t, 2> brdfIdentity{ 0x3c00u, 0u };
-        neutralEnvironmentBrdfLut_ = allocateTexture(
-            brdfDesc, std::as_bytes(std::span{ brdfIdentity }));
-    }
-
-    void VulkanVertexBackend::bindEnvironmentProducts(uint32_t frame) {
-        const EnvironmentLightingHandles handles = environmentLighting_.isValid()
-            ? environmentLighting_
-            : EnvironmentLightingHandles{
-                .radiance = neutralEnvironmentCube_,
-                .irradiance = neutralEnvironmentCube_,
-                .prefilteredSpecular = neutralEnvironmentCube_,
-                .brdfLut = neutralEnvironmentBrdfLut_,
-            };
-        const VulkanTexturePayload* radiance = resources_.textures().get(handles.radiance);
-        const VulkanTexturePayload* irradiance = resources_.textures().get(handles.irradiance);
-        const VulkanTexturePayload* prefiltered =
-            resources_.textures().get(handles.prefilteredSpecular);
-        const VulkanTexturePayload* brdf = resources_.textures().get(handles.brdfLut);
-        if (radiance == nullptr || irradiance == nullptr || prefiltered == nullptr ||
-            brdf == nullptr || radiance->retired || irradiance->retired ||
-            prefiltered->retired || brdf->retired ||
-            radiance->image.viewType != VK_IMAGE_VIEW_TYPE_CUBE ||
-            irradiance->image.viewType != VK_IMAGE_VIEW_TYPE_CUBE ||
-            prefiltered->image.viewType != VK_IMAGE_VIEW_TYPE_CUBE ||
-            brdf->image.viewType != VK_IMAGE_VIEW_TYPE_2D) {
-            throw std::logic_error(
-                "Neutral environment products are unavailable or incompatible.");
-        }
-        const VkDescriptorImageInfo radianceInfo{ radiance->sampler,
-            radiance->image.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
-        const VkDescriptorImageInfo irradianceInfo{ irradiance->sampler,
-            irradiance->image.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
-        const VkDescriptorImageInfo prefilteredInfo{ prefiltered->sampler,
-            prefiltered->image.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
-        const VkDescriptorImageInfo brdfInfo{ brdf->sampler, brdf->image.view,
-            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
-        sceneDescriptors.setEnvironmentImages({
-            .irradiance = irradianceInfo,
-            .prefilteredRadiance = prefilteredInfo,
-            .brdfLut = brdfInfo,
-            .skyRadiance = radianceInfo,
-        }, frame);
-        if (frame == UINT32_MAX) frameEnvironments_.fill(environmentLighting_);
-        else frameEnvironments_[frame] = environmentLighting_;
-    }
-
-    void VulkanVertexBackend::bindDirectionalShadowDescriptors() {
-        std::vector<VkDescriptorBufferInfo> frameData;
-        frameData.reserve(VulkanFrameScheduler::FramesInFlight);
-        for (uint32_t frame = 0;
-            frame < VulkanFrameScheduler::FramesInFlight; ++frame)
-            frameData.push_back(shadows_.map().sampleBuffer(frame));
-        sceneDescriptors.setDirectionalShadow({
-            shadows_.map().sampleImage(), std::move(frameData) });
-    }
-
-    void VulkanVertexBackend::bindSpotShadowDescriptors() {
-        std::vector<VkDescriptorBufferInfo> frameData;
-        frameData.reserve(VulkanFrameScheduler::FramesInFlight);
-        for (uint32_t frame = 0;
-            frame < VulkanFrameScheduler::FramesInFlight; ++frame)
-            frameData.push_back(localShadows_.spot().sampleBuffer(frame));
-        sceneDescriptors.setSpotShadow({
-            localShadows_.spot().sampleImage(), std::move(frameData) });
-    }
-
-    void VulkanVertexBackend::bindPointShadowDescriptors() {
-        std::vector<VkDescriptorBufferInfo> frameData;
-        frameData.reserve(VulkanFrameScheduler::FramesInFlight);
-        for (uint32_t frame = 0;
-            frame < VulkanFrameScheduler::FramesInFlight; ++frame)
-            frameData.push_back(localShadows_.point().sampleBuffer(frame));
-        sceneDescriptors.setPointShadow({ localShadows_.point().sampleImages(),
-            std::move(frameData) });
+        lighting_.setEnvironmentSettings(settings);
     }
 
     void VulkanVertexBackend::setOutputTransformLut(TextureHandle lutHandle) {
@@ -807,18 +624,7 @@ namespace Iridium {
 
         pipelineLibrary.cleanup();
 
-        for (VkDescriptorSet texture : uiSceneTextures) {
-            if (texture != VK_NULL_HANDLE) {
-                ImGui_ImplVulkan_RemoveTexture(texture);
-            }
-        }
-        for (VkDescriptorSet texture : uiDepthTextures) {
-            if (texture != VK_NULL_HANDLE) {
-                ImGui_ImplVulkan_RemoveTexture(texture);
-            }
-        }
-        uiSceneTextures.clear();
-        uiDepthTextures.clear();
+        releaseEditorTargetTextures();
         destroyRetainedViews();
         if (imguiInitialized_) {
             ImGui_ImplVulkan_Shutdown();
@@ -832,7 +638,7 @@ namespace Iridium {
             imguiPool = VK_NULL_HANDLE;
         }
 
-        sceneDescriptors.cleanup();
+        lighting_.releaseSceneSet();
         transparencyPyramid_.clearDescriptors();
         opaque_.clearDescriptors();
         layeredInterfaceCapture_.clearDescriptors();
@@ -853,9 +659,7 @@ namespace Iridium {
 
         resources_.destroyResources();
 
-        for (size_t i = 0; i < uniformBuffers.size(); i++) {
-            resourceAllocator.destroy(uniformBuffers[i]);
-        }
+        view_.destroy(resourceAllocator);
         gpuScene_.destroy();
         opaque_.destroy();
 
@@ -863,11 +667,7 @@ namespace Iridium {
         forwardPass.reset();
         transparentPass.reset();
 
-        lightingPipeline.reset();
-        if (lightingRenderPass != VK_NULL_HANDLE) {
-            vkDestroyRenderPass(device, lightingRenderPass, nullptr);
-            lightingRenderPass = VK_NULL_HANDLE;
-        }
+        lighting_.destroy();
 
         uiPass.reset();
         output_.destroy();
@@ -908,12 +708,6 @@ namespace Iridium {
         outputTargetFormat_ = VulkanSdrOutputFormat;
         resources_.reset();
         gpuScene_.reset();
-        environmentLighting_ = {};
-
-
-
-        neutralEnvironmentCube_ = {};
-        neutralEnvironmentBrdfLut_ = {};
         featureContext_.reset();
     }
 
@@ -1140,67 +934,10 @@ namespace Iridium {
             cinematic8AtlasResidency_.enabled();
         const bool previousWeightedOitEnabled =
             weightedOitResidency_.enabled();
-        const auto releaseTargets = [&] {
-            for (VkDescriptorSet texture : uiSceneTextures) {
-                if (texture != VK_NULL_HANDLE)
-                    ImGui_ImplVulkan_RemoveTexture(texture);
-            }
-            for (VkDescriptorSet texture : uiDepthTextures) {
-                if (texture != VK_NULL_HANDLE)
-                    ImGui_ImplVulkan_RemoveTexture(texture);
-            }
-            uiSceneTextures.clear();
-            uiDepthTextures.clear();
-            sceneDescriptors.cleanup();
-            for (IVulkanFeature* feature : features()) feature->onGraphReleased();
-            transparencyPyramid_.clearDescriptors();
-            opaque_.clearDescriptors();
-            layeredInterfaceCapture_.clearDescriptors();
-            layeredLocalComposition_.clearDescriptors();
-            layeredSceneResolve_.clearDescriptors();
-            oit_.clearDescriptors();
-            frameTargets.cleanup();
-            renderGraph_.cleanupAfterDeviceIdle();
-        };
+        const auto releaseTargets = [&] { releaseFrameTargets(); };
         const auto createTargets = [&] {
-            rebuildRenderGraphAfterDeviceIdle();
-            initFrameTargets();
-            if (outputTransport_ == Color::OutputTransport::Hdr10Pq) {
-                output_.rebuildHdr10Targets(vkSwapchain->getImageViews(),
-                    vkSwapchain->getExtent());
-            }
-            uploadContext.flush();
-            sceneDescriptors.init(vkContext->getDevice(), descriptorAllocator,
-                lightingPipeline->getDescriptorSetLayout());
-            bindLightRecordBuffers();
-            bindSceneClusterBuffers();
-            bindEnvironmentProducts();
-            bindDirectionalShadowDescriptors();
-            bindSpotShadowDescriptors();
-            bindPointShadowDescriptors();
-            bindReflectionProbeBuffers();
-            bindReflectionProbeEnvironments();
-            sceneDescriptors.rebuild(frameTargets);
-            transparencyPyramid_.rebuild(frameTargets);
-            opaque_.rebuildDescriptors();
-            layeredInterfaceCapture_.rebuildDescriptors(frameTargets);
-            layeredLocalComposition_.rebuildDescriptors(frameTargets);
-            layeredSceneResolve_.rebuildDescriptors(frameTargets);
-            oit_.rebuildDescriptors();
-            output_.rebuildDescriptors();
-            uiSceneTextures.resize(frameTargets.size());
-            uiDepthTextures.resize(frameTargets.size());
-            for (size_t index = 0; index < frameTargets.size(); ++index) {
-                const VulkanFrameContextTargets& targets =
-                    frameTargets.get(index);
-                uiSceneTextures[index] = ImGui_ImplVulkan_AddTexture(
-                    frameTargets.sampler(), targets.output.view,
-                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-                const VkImageView editorDepthView = targets.depth.view;
-                uiDepthTextures[index] = ImGui_ImplVulkan_AddTexture(
-                    frameTargets.sampler(), editorDepthView,
-                    VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
-            }
+            createFrameTargets();
+            registerEditorTargetTextures();
         };
 
         // This executes only between frames. All shared descriptor sets and
@@ -1303,31 +1040,9 @@ namespace Iridium {
         // Resize is the one accepted global stall, after candidate validation.
         vkDeviceWaitIdle(vkContext->getDevice());
 
-        for (VkDescriptorSet texture : uiSceneTextures) {
-            if (texture != VK_NULL_HANDLE) {
-                ImGui_ImplVulkan_RemoveTexture(texture);
-            }
-        }
-        for (VkDescriptorSet texture : uiDepthTextures) {
-            if (texture != VK_NULL_HANDLE) {
-                ImGui_ImplVulkan_RemoveTexture(texture);
-            }
-        }
-        uiSceneTextures.clear();
-        uiDepthTextures.clear();
-        sceneDescriptors.cleanup();
-        // The clustered pass owns descriptor sets that reference transient
-        // render-graph buffers.  Swapchain recreation rebuilds that graph, so
-        // retire the bindings before the buffers and recreate them afterward.
-        for (IVulkanFeature* feature : features()) feature->onGraphReleased();
-        transparencyPyramid_.clearDescriptors();
-        opaque_.clearDescriptors();
-        layeredInterfaceCapture_.clearDescriptors();
-        layeredLocalComposition_.clearDescriptors();
-        layeredSceneResolve_.clearDescriptors();
-        oit_.clearDescriptors();
-        frameTargets.cleanup();
-		renderGraph_.cleanupAfterDeviceIdle();
+        // Owners with descriptor sets over transient graph resources retire
+        // them before the graph is rebuilt, and recreate them afterward.
+        releaseFrameTargets();
         output_.destroyPipelines();
         uiPass.reset();
 
@@ -1359,49 +1074,14 @@ namespace Iridium {
         scheduler.setTransparentTargetPixelCount(
             static_cast<uint64_t>(sceneExtent_.width) *
             sceneExtent_.height);
-        rebuildRenderGraphAfterDeviceIdle();
-        initFrameTargets();
-        if (outputTransport_ == Color::OutputTransport::Hdr10Pq) {
-            output_.rebuildHdr10Targets(vkSwapchain->getImageViews(),
-                vkSwapchain->getExtent());
-        }
         // The replacement target images are referenced by descriptor sets and
-        // ImGui immediately below; establish their declared layouts first.
-        uploadContext.flush();
-        sceneDescriptors.init(vkContext->getDevice(), descriptorAllocator,
-            lightingPipeline->getDescriptorSetLayout());
-        bindLightRecordBuffers();
-        bindSceneClusterBuffers();
-        bindEnvironmentProducts();
-        bindDirectionalShadowDescriptors();
-        bindSpotShadowDescriptors();
-        bindPointShadowDescriptors();
-        bindReflectionProbeBuffers();
-        bindReflectionProbeEnvironments();
-        sceneDescriptors.rebuild(frameTargets);
-        transparencyPyramid_.rebuild(frameTargets);
-        opaque_.rebuildDescriptors();
-        layeredInterfaceCapture_.rebuildDescriptors(frameTargets);
-        layeredLocalComposition_.rebuildDescriptors(frameTargets);
-        layeredSceneResolve_.rebuildDescriptors(frameTargets);
-        oit_.rebuildDescriptors();
-        output_.rebuildDescriptors();
+        // ImGui immediately below; createFrameTargets establishes their
+        // declared layouts (upload flush) first.
+        createFrameTargets();
         if (newImageCount != oldImageCount) {
             ImGui_ImplVulkan_SetMinImageCount(newImageCount);
         }
-
-        uiSceneTextures.resize(frameTargets.size());
-        uiDepthTextures.resize(frameTargets.size());
-        for (size_t i = 0; i < frameTargets.size(); i++) {
-            const VulkanFrameContextTargets& targets = frameTargets.get(i);
-            uiSceneTextures[i] = ImGui_ImplVulkan_AddTexture(frameTargets.sampler(),
-                targets.output.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-            const VkImageView editorDepthView = targets.depth.view;
-            uiDepthTextures[i] = ImGui_ImplVulkan_AddTexture(frameTargets.sampler(),
-                editorDepthView,
-                VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
-        }
-
+        registerEditorTargetTextures();
     }
 
     RenderExtent VulkanVertexBackend::getRenderExtent() const {
@@ -1483,69 +1163,10 @@ namespace Iridium {
         }
 
         const VkExtent2D previous = sceneExtent_;
-        const auto releaseTargets = [&] {
-            for (VkDescriptorSet texture : uiSceneTextures) {
-                if (texture != VK_NULL_HANDLE) {
-                    ImGui_ImplVulkan_RemoveTexture(texture);
-                }
-            }
-            for (VkDescriptorSet texture : uiDepthTextures) {
-                if (texture != VK_NULL_HANDLE) {
-                    ImGui_ImplVulkan_RemoveTexture(texture);
-                }
-            }
-            uiSceneTextures.clear();
-            uiDepthTextures.clear();
-            sceneDescriptors.cleanup();
-            for (IVulkanFeature* feature : features()) feature->onGraphReleased();
-            transparencyPyramid_.clearDescriptors();
-            opaque_.clearDescriptors();
-            layeredInterfaceCapture_.clearDescriptors();
-            layeredLocalComposition_.clearDescriptors();
-            layeredSceneResolve_.clearDescriptors();
-            oit_.clearDescriptors();
-            frameTargets.cleanup();
-            renderGraph_.cleanupAfterDeviceIdle();
-        };
+        const auto releaseTargets = [&] { releaseFrameTargets(); };
         const auto createTargets = [&] {
-            rebuildRenderGraphAfterDeviceIdle();
-            initFrameTargets();
-            if (outputTransport_ == Color::OutputTransport::Hdr10Pq) {
-                output_.rebuildHdr10Targets(vkSwapchain->getImageViews(),
-                    vkSwapchain->getExtent());
-            }
-            uploadContext.flush();
-            sceneDescriptors.init(vkContext->getDevice(), descriptorAllocator,
-                lightingPipeline->getDescriptorSetLayout());
-            bindLightRecordBuffers();
-            bindSceneClusterBuffers();
-            bindEnvironmentProducts();
-            bindDirectionalShadowDescriptors();
-            bindSpotShadowDescriptors();
-            bindPointShadowDescriptors();
-            bindReflectionProbeBuffers();
-            bindReflectionProbeEnvironments();
-            sceneDescriptors.rebuild(frameTargets);
-            transparencyPyramid_.rebuild(frameTargets);
-            opaque_.rebuildDescriptors();
-            layeredInterfaceCapture_.rebuildDescriptors(frameTargets);
-            layeredLocalComposition_.rebuildDescriptors(frameTargets);
-            layeredSceneResolve_.rebuildDescriptors(frameTargets);
-            oit_.rebuildDescriptors();
-            output_.rebuildDescriptors();
-            uiSceneTextures.resize(frameTargets.size());
-            uiDepthTextures.resize(frameTargets.size());
-            for (size_t index = 0; index < frameTargets.size(); ++index) {
-                const VulkanFrameContextTargets& targets =
-                    frameTargets.get(index);
-                uiSceneTextures[index] = ImGui_ImplVulkan_AddTexture(
-                    frameTargets.sampler(), targets.output.view,
-                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-                const VkImageView editorDepthView = targets.depth.view;
-                uiDepthTextures[index] = ImGui_ImplVulkan_AddTexture(
-                    frameTargets.sampler(), editorDepthView,
-                    VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
-            }
+            createFrameTargets();
+            registerEditorTargetTextures();
             scheduler.setTransparentTargetPixelCount(
                 static_cast<uint64_t>(sceneExtent_.width) *
                 sceneExtent_.height);
@@ -1893,53 +1514,73 @@ namespace Iridium {
 
     // --- PRIVATE HELPERS ---
 
-    void VulkanVertexBackend::createLightingRenderPass() {
-        // This pass writes the evaluated lighting to the frame-context lit-scene target.
-        VkAttachmentDescription colorAttachment{};
-        colorAttachment.format = VulkanSceneColorFormat;
-        colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
-        colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-        colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-        colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-        colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-        colorAttachment.initialLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-        colorAttachment.finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-
-        VkAttachmentReference colorAttachmentRef{};
-        colorAttachmentRef.attachment = 0;
-        colorAttachmentRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-
-        VkSubpassDescription subpass{};
-        subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-        subpass.colorAttachmentCount = 1;
-        subpass.pColorAttachments = &colorAttachmentRef;
-
-        VkSubpassDependency dependency{};
-        dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
-        dependency.dstSubpass = 0;
-        dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
-            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-        dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-        dependency.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT;
-        dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-
-        VkRenderPassCreateInfo renderPassInfo{};
-        renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-        renderPassInfo.attachmentCount = 1;
-        renderPassInfo.pAttachments = &colorAttachment;
-        renderPassInfo.subpassCount = 1;
-        renderPassInfo.pSubpasses = &subpass;
-        renderPassInfo.dependencyCount = 1;
-        renderPassInfo.pDependencies = &dependency;
-
-        if (vkCreateRenderPass(vkContext->getDevice(), &renderPassInfo, nullptr, &lightingRenderPass) != VK_SUCCESS) {
-            throw std::runtime_error("Failed to create lighting render pass!");
+    void VulkanVertexBackend::releaseEditorTargetTextures() {
+        for (VkDescriptorSet texture : uiSceneTextures) {
+            if (texture != VK_NULL_HANDLE)
+                ImGui_ImplVulkan_RemoveTexture(texture);
         }
+        for (VkDescriptorSet texture : uiDepthTextures) {
+            if (texture != VK_NULL_HANDLE)
+                ImGui_ImplVulkan_RemoveTexture(texture);
+        }
+        uiSceneTextures.clear();
+        uiDepthTextures.clear();
+    }
+
+    void VulkanVertexBackend::registerEditorTargetTextures() {
+        uiSceneTextures.resize(frameTargets.size());
+        uiDepthTextures.resize(frameTargets.size());
+        for (size_t index = 0; index < frameTargets.size(); ++index) {
+            const VulkanFrameContextTargets& targets = frameTargets.get(index);
+            uiSceneTextures[index] = ImGui_ImplVulkan_AddTexture(
+                frameTargets.sampler(), targets.output.view,
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            const VkImageView editorDepthView = targets.depth.view;
+            uiDepthTextures[index] = ImGui_ImplVulkan_AddTexture(
+                frameTargets.sampler(), editorDepthView,
+                VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
+        }
+    }
+
+    void VulkanVertexBackend::releaseFrameTargets() {
+        // Only between frames, after every slot retired: shared descriptor
+        // sets and scene targets must be unreferenced.
+        releaseEditorTargetTextures();
+        lighting_.releaseSceneSet();
+        for (IVulkanFeature* feature : features()) feature->onGraphReleased();
+        transparencyPyramid_.clearDescriptors();
+        opaque_.clearDescriptors();
+        layeredInterfaceCapture_.clearDescriptors();
+        layeredLocalComposition_.clearDescriptors();
+        layeredSceneResolve_.clearDescriptors();
+        oit_.clearDescriptors();
+        frameTargets.cleanup();
+        renderGraph_.cleanupAfterDeviceIdle();
+    }
+
+    void VulkanVertexBackend::createFrameTargets() {
+        rebuildRenderGraphAfterDeviceIdle();
+        initFrameTargets();
+        if (outputTransport_ == Color::OutputTransport::Hdr10Pq) {
+            output_.rebuildHdr10Targets(vkSwapchain->getImageViews(),
+                vkSwapchain->getExtent());
+        }
+        // Establish the targets' declared layouts before descriptors (and
+        // the editor) reference them.
+        uploadContext.flush();
+        lighting_.rebuildSceneSet();
+        transparencyPyramid_.rebuild(frameTargets);
+        opaque_.rebuildDescriptors();
+        layeredInterfaceCapture_.rebuildDescriptors(frameTargets);
+        layeredLocalComposition_.rebuildDescriptors(frameTargets);
+        layeredSceneResolve_.rebuildDescriptors(frameTargets);
+        oit_.rebuildDescriptors();
+        output_.rebuildDescriptors();
     }
 
     void VulkanVertexBackend::initFrameTargets() {
         frameTargets.init(vkContext->getDevice(), *vkSwapchain, sceneExtent_,
-            { opaque_.gBufferRenderPass(), lightingRenderPass,
+            { opaque_.gBufferRenderPass(), lighting_.renderPass(),
                 forwardPass->getRenderPass(), transparentPass->getRenderPass(),
                 layeredInterfaceCapture_.renderPass(),
                 layeredLocalComposition_.renderPass(),
@@ -1953,20 +1594,6 @@ namespace Iridium {
                 hero4AtlasExtent_, cinematic8AtlasExtent_,
                 weightedOitResidency_.enabled() },
             renderGraph_, graphIds_);
-    }
-
-    void VulkanVertexBackend::createUniformBuffers() {
-        VkDeviceSize bufferSize = sizeof(UniformBufferObject);
-        size_t frameCount = VulkanFrameScheduler::FramesInFlight;
-
-        uniformBuffers.resize(frameCount);
-
-        for (size_t i = 0; i < frameCount; i++) {
-            uniformBuffers[i] = resourceAllocator.createBuffer(bufferSize,
-                VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                true, ProfileMemoryCategory::Uniform);
-        }
     }
 
     // ==============================================================================
@@ -2025,8 +1652,7 @@ namespace Iridium {
         resources_.uploadCanonicalMaterialsForFrame(scheduler.currentFrameIndex());
         currentImageIndex = frame.imageIndex;
         currentCmd = frame.commandBuffer;
-        if (frameEnvironments_[scheduler.currentFrameIndex()] != environmentLighting_)
-            bindEnvironmentProducts(scheduler.currentFrameIndex());
+        lighting_.bindFrameEnvironment(scheduler.currentFrameIndex());
         opaque_.bindHistory(false);
         renderGraph_.beginFrameExecution(scheduler.currentFrameIndex());
         renderGraph_.setFrameRecordContext({
@@ -2118,7 +1744,7 @@ namespace Iridium {
         // R3c.6 drain point: "probe.capture" (reads the shadow maps; staging
         // and the per-face compaction keep their barriers inside the pass).
         probes_.submitCaptures(probeCasters, captures, lights,
-            sceneDescriptors.get(scheduler.currentFrameIndex()));
+            lighting_.sceneSet(scheduler.currentFrameIndex()));
     }
 
     void VulkanVertexBackend::submitOpaqueQueue(std::span<const DrawPacket> opaqueQueue,
@@ -2135,7 +1761,7 @@ namespace Iridium {
             .opaqueQueue = opaqueQueue,
             .selectionQueue = selectionQueue,
             .wireframe = isWireframe,
-            .globalSet = globalDescriptorSets[scheduler.currentFrameIndex()],
+            .globalSet = view_.globalSet(scheduler.currentFrameIndex()),
             .debugView = debugView_,
         });
     }
@@ -2179,34 +1805,6 @@ namespace Iridium {
             culler->collect(frameIndex);
     }
 
-    void VulkanVertexBackend::bindLightRecordBuffers() {
-        sceneDescriptors.setLightBuffers(clusterLighting_.lightRecordDescriptors());
-    }
-
-    void VulkanVertexBackend::bindSceneClusterBuffers() {
-        sceneDescriptors.setClusterBuffers(clusterLighting_.sceneClusterDescriptors());
-    }
-
-    void VulkanVertexBackend::bindReflectionProbeBuffers() {
-        const VulkanReflectionProbeFeature::BufferDescriptors buffers =
-            probes_.bufferDescriptors();
-        sceneDescriptors.setReflectionProbeBuffers(buffers.scene);
-        clusterLighting_.probeClusterPipeline().rebuildDescriptors(buffers.records,
-            buffers.active, buffers.parameters, buffers.headers, buffers.indices);
-    }
-
-    void VulkanVertexBackend::bindReflectionProbeEnvironments() {
-        const VulkanTexturePayload* neutral = resources_.textures().get(
-            neutralEnvironmentCube_);
-        if (neutral == nullptr || neutral->retired ||
-            neutral->image.viewType != VK_IMAGE_VIEW_TYPE_CUBE)
-            throw std::logic_error(
-                "Neutral reflection-probe environment is unavailable");
-        const VkDescriptorImageInfo fallback{ neutral->sampler,
-            neutral->image.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
-        sceneDescriptors.setReflectionProbeImages(probes_.environmentImages(fallback));
-    }
-
     std::optional<uint32_t>
     VulkanVertexBackend::capturedReflectionProbeEnvironmentSlot(
         SceneEntityUuid owner) const noexcept {
@@ -2247,11 +1845,8 @@ namespace Iridium {
             throw std::logic_error(
                 "Lighting capacity must be prepared before beginFrame");
         }
-        if (clusterLighting_.prepare(requiredCapacity) &&
-            sceneDescriptors.size() != 0) {
-            bindLightRecordBuffers();
-            bindSceneClusterBuffers();
-        }
+        if (clusterLighting_.prepare(requiredCapacity) && lighting_.sceneSetReady())
+            lighting_.bindLightBuffers();
     }
 
     void VulkanVertexBackend::prepareGpuScene(
@@ -2299,25 +1894,8 @@ namespace Iridium {
     void VulkanVertexBackend::updateCamera(const ViewTransportRecord& view, ViewHistoryContext history) {
         opaque_.updateView(view, history);
         gpuScene_.views()[scheduler.currentFrameIndex()] = view;
-        UniformBufferObject ubo{};
-        ubo.model = glm::mat4(1.0f); // Handled individually via push constants
-        ubo.view = view.view;
-        ubo.proj = view.projection;
-        ubo.inverseView = view.inverseView;
-        ubo.inverseProjection = view.inverseProjection;
-        ubo.cameraPosition = view.cameraPosition;
-        ubo.depthRange = view.depthRange;
-        ubo.renderInfo = view.renderInfo;
-        ubo.renderInfo.w &= ~(ViewTransportRefractionPyramidsAvailable |
-            ViewTransportDebugViewMask);
-        if (transparencyPyramidResidency_.enabled())
-            ubo.renderInfo.w |= ViewTransportRefractionPyramidsAvailable;
-        ubo.renderInfo.w |= (static_cast<uint32_t>(debugView_) <<
-            ViewTransportDebugViewShift) & ViewTransportDebugViewMask;
-        ubo.worldUnits = view.worldUnits;
-
-        // Push the matrices to the GPU!
-        std::memcpy(uniformBuffers[scheduler.currentFrameIndex()].mapped, &ubo, sizeof(ubo));
+        view_.update(scheduler.currentFrameIndex(), view,
+            transparencyPyramidResidency_.enabled(), debugView_);
     }
 
     void VulkanVertexBackend::submitLightingPass(const glm::vec3& cameraPos,
@@ -2330,7 +1908,7 @@ namespace Iridium {
         ordinary2ViewProjectionValid_ = true;
         const uint32_t frameIndex = scheduler.currentFrameIndex();
         clusterLighting_.uploadFrame(frameIndex, view, proj, nearPlane, farPlane,
-            lights, sceneExtent_, environmentLightingSettings_);
+            lights, sceneExtent_, lighting_.environmentSettings());
         probes_.uploadFrame(frameIndex, view, proj, nearPlane, farPlane,
             reflectionProbes, sceneExtent_);
         const ClusterGridDimensions probeDimensions = clusterGridDimensions(
@@ -2347,47 +1925,13 @@ namespace Iridium {
         clusterLighting_.recordClusters(frameIndex,
             static_cast<uint32_t>(dimensions.clusterCount()),
             lights.stats.activeLightCount);
-        VulkanFrameContextTargets& targets = frameTargets.get(
-            scheduler.currentFrameIndex());
-        renderGraph_.beginPass(currentCmd, graphIds_.lighting);
-
-        VkRenderPassBeginInfo lightingPassInfo{ VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
-        lightingPassInfo.renderPass = lightingRenderPass;
-        lightingPassInfo.framebuffer = frameTargets.get(
-            scheduler.currentFrameIndex()).lightingFramebuffer;
-        lightingPassInfo.renderArea.extent = frameTargets.extent();
-
-        VkClearValue lightingClearColor = { {{0.0f, 0.0f, 0.0f, 1.0f}} };
-        lightingPassInfo.clearValueCount = 1;
-        lightingPassInfo.pClearValues = &lightingClearColor;
-
-        vkCmdBeginRenderPass(currentCmd, &lightingPassInfo, VK_SUBPASS_CONTENTS_INLINE);
-        VulkanGpuRangeToken deferredGpuRange =
-            scheduler.beginGpuRange("gpu.lighting.deferred");
-        vkCmdBindPipeline(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS, lightingPipeline->getPipeline());
-        telemetry_.recordPipelineBind(pipelineIdentity(FixedPipelineIdentity::DeferredLighting));
-
-        // Bind the G-Buffer Textures internally managed by the backend
-        const VkDescriptorSet sceneSet = sceneDescriptors.get(
-            scheduler.currentFrameIndex());
-        vkCmdBindDescriptorSets(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS, lightingPipeline->getPipelineLayout(),
-            0, 1, &sceneSet, 0, nullptr);
-
-        LightingPushConstants push{};
-        push.viewPos = glm::vec4(cameraPos, 1.0f);
-        push.invView = glm::inverse(view);
-        push.invProj = glm::inverse(proj);
-        push.debugView = glm::ivec4(static_cast<int32_t>(debugView_), 0, 0, 0);
-
-        vkCmdPushConstants(currentCmd, lightingPipeline->getPipelineLayout(), VK_SHADER_STAGE_FRAGMENT_BIT,
-            0, sizeof(LightingPushConstants), &push);
-
-        // Draw the full screen triangle without vertex buffers
-        vkCmdDraw(currentCmd, 3, 1, 0, 0);
-        telemetry_.recordDraw(telemetry_.counters().drawLighting, 1);
-        scheduler.endGpuRange(deferredGpuRange);
-
-        vkCmdEndRenderPass(currentCmd);
+        // R3c.8 drain point: "lighting".
+        lighting_.record({
+            .cameraPosition = cameraPos,
+            .view = view,
+            .projection = proj,
+            .debugView = debugView_,
+        });
     }
 
     void VulkanVertexBackend::recordOrdinary2InterfaceCapture(
@@ -2441,8 +1985,8 @@ namespace Iridium {
             layeredInterfaceCapture_.pipeline());
         telemetry_.recordPipelineBind(pipelineIdentity(
             FixedPipelineIdentity::LayeredInterfaceCapture));
-        const VkDescriptorSet globalSet = globalDescriptorSets[
-            scheduler.currentFrameIndex()];
+        const VkDescriptorSet globalSet = view_.globalSet(
+            scheduler.currentFrameIndex());
         vkCmdBindDescriptorSets(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
             layout, 0u, 1u, &globalSet, 0u, nullptr);
         bindMaterialDescriptors(layout);
@@ -2591,7 +2135,7 @@ namespace Iridium {
             layeredInterfaceCapture_.pipeline());
         telemetry_.recordPipelineBind(pipelineIdentity(
             FixedPipelineIdentity::LayeredInterfaceCapture));
-        const VkDescriptorSet globalSet = globalDescriptorSets[frameIndex];
+        const VkDescriptorSet globalSet = view_.globalSet(frameIndex);
         vkCmdBindDescriptorSets(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
             layout, 0u, 1u, &globalSet, 0u, nullptr);
         bindMaterialDescriptors(layout);
@@ -2785,11 +2329,11 @@ const VkDeviceSize offset = geometry->vertexOffset;
 
         const VkPipelineLayout layout =
             layeredLocalComposition_.deepPipelineLayout();
-        const VkDescriptorSet globalSet = globalDescriptorSets[frameIndex];
+        const VkDescriptorSet globalSet = view_.globalSet(frameIndex);
         vkCmdBindDescriptorSets(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
             layout, 0u, 1u, &globalSet, 0u, nullptr);
         bindMaterialDescriptors(layout);
-        const VkDescriptorSet sceneSet = sceneDescriptors.get(frameIndex);
+        const VkDescriptorSet sceneSet = lighting_.sceneSet(frameIndex);
         vkCmdBindDescriptorSets(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
             layout, 3u, 1u, &sceneSet, 0u, nullptr);
         const VkDescriptorSet interfaceSet =
@@ -2974,11 +2518,11 @@ const VkDeviceSize offset = geometry->vertexOffset;
             layeredLocalComposition_.pipeline());
         telemetry_.recordPipelineBind(pipelineIdentity(
             FixedPipelineIdentity::LayeredLocalComposition));
-        const VkDescriptorSet globalSet = globalDescriptorSets[frameIndex];
+        const VkDescriptorSet globalSet = view_.globalSet(frameIndex);
         vkCmdBindDescriptorSets(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
             layout, 0u, 1u, &globalSet, 0u, nullptr);
         bindMaterialDescriptors(layout);
-        const VkDescriptorSet sceneSet = sceneDescriptors.get(frameIndex);
+        const VkDescriptorSet sceneSet = lighting_.sceneSet(frameIndex);
         vkCmdBindDescriptorSets(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
             layout, 3u, 1u, &sceneSet, 0u, nullptr);
         const VkDescriptorSet interfaceSet =
@@ -3137,7 +2681,7 @@ const VkDeviceSize offset = geometry->vertexOffset;
             layeredSceneResolve_.pipeline());
         telemetry_.recordPipelineBind(pipelineIdentity(
             FixedPipelineIdentity::LayeredSceneResolve));
-        const VkDescriptorSet globalSet = globalDescriptorSets[frameIndex];
+        const VkDescriptorSet globalSet = view_.globalSet(frameIndex);
         vkCmdBindDescriptorSets(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
             layout, 0u, 1u, &globalSet, 0u, nullptr);
         const VkDescriptorSet localSet =
@@ -3253,7 +2797,7 @@ const VkDeviceSize offset = geometry->vertexOffset;
             layeredSceneResolve_.pipeline());
         telemetry_.recordPipelineBind(pipelineIdentity(
             FixedPipelineIdentity::LayeredSceneResolve));
-        const VkDescriptorSet globalSet = globalDescriptorSets[frameIndex];
+        const VkDescriptorSet globalSet = view_.globalSet(frameIndex);
         vkCmdBindDescriptorSets(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
             layout, 0u, 1u, &globalSet, 0u, nullptr);
         GeometryHandle lastGeometry{};
@@ -3620,7 +3164,9 @@ const VkDeviceSize offset = geometry->vertexOffset;
             MaterialHandle lastBoundMaterial{};
             GeometryHandle lastBoundGeometry{};
             VkPipelineLayout activeLayout = VK_NULL_HANDLE;
-            const VkDescriptorSet sceneSet = sceneDescriptors.get(
+            const VkDescriptorSet sceneSet = lighting_.sceneSet(
+                scheduler.currentFrameIndex());
+            const VkDescriptorSet globalSet = view_.globalSet(
                 scheduler.currentFrameIndex());
 
             for (const DrawPacket& packet : queue) {
@@ -3655,8 +3201,7 @@ const VkDeviceSize offset = geometry->vertexOffset;
                     activeLayout = record->pipelineLayout;
                     vkCmdBindDescriptorSets(currentCmd,
                         VK_PIPELINE_BIND_POINT_GRAPHICS, activeLayout,
-                        0, 1, &globalDescriptorSets[
-                            scheduler.currentFrameIndex()], 0, nullptr);
+                        0, 1, &globalSet, 0, nullptr);
                     vkCmdBindDescriptorSets(currentCmd,
                         VK_PIPELINE_BIND_POINT_GRAPHICS, activeLayout,
                         3u,
@@ -3746,7 +3291,7 @@ const VkDeviceSize offset = geometry->vertexOffset;
             renderGraph_.beginPass(currentCmd, graphIds_.refractionPyramids);
             const uint32_t dispatches = transparencyPyramid_.record(
                 currentCmd, scheduler.currentFrameIndex(),
-                globalDescriptorSets[scheduler.currentFrameIndex()],
+                view_.globalSet(scheduler.currentFrameIndex()),
                 frameTargets);
             if (telemetry_.collecting())
                 telemetry_.counters().dispatchRecorded += dispatches;
@@ -3831,8 +3376,8 @@ const VkDeviceSize offset = geometry->vertexOffset;
                 .instanceTransforms = instanceTransforms,
                 .execute = weightedOitExecutionEnabled &&
                     weightedOitPacketCount != 0u,
-                .globalSet = globalDescriptorSets[oitFrameIndex],
-                .sceneSet = sceneDescriptors.get(oitFrameIndex),
+                .globalSet = view_.globalSet(oitFrameIndex),
+                .sceneSet = lighting_.sceneSet(oitFrameIndex),
                 .debugView = debugView_,
             });
         }

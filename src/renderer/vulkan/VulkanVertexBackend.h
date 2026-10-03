@@ -51,6 +51,8 @@
 #include "VulkanIndirectViewCuller.h"
 #include "VulkanOpaqueIndirectCuller.h"
 #include "VulkanOpaqueFeature.h"
+#include "VulkanDeferredLightingFeature.h"
+#include "VulkanViewUniforms.h"
 #include "VulkanRenderGraphExecutor.h"
 #include "VulkanTransparencyPyramid.h"
 #include "VulkanDepthPyramid.h"
@@ -133,8 +135,10 @@ namespace Iridium {
 
         // G-Buffer Raw Images
 
-        // Lighting Pass Raw Images & Descriptors
-        VulkanSceneDescriptors sceneDescriptors;
+        // R3c.8: deferred lighting (render pass, pipeline, the lighting set,
+        // environment products) and the camera uniforms/global sets.
+        VulkanDeferredLightingFeature lighting_;
+        VulkanViewUniforms view_;
         // R3c.1: clustered lighting and probe clustering.
         VulkanClusterLightingFeature clusterLighting_;
         // R3c.6: probe capture, probe buffers and environment tables.
@@ -142,19 +146,11 @@ namespace Iridium {
         // R3c.5: directional cascades + M7.8 VSM, and spot/point shadows.
         VulkanShadowFeature shadows_;
         VulkanLocalShadowFeature localShadows_;
-        EnvironmentLightingHandles environmentLighting_;
-        EnvironmentLightingSettings environmentLightingSettings_;
-        TextureHandle neutralEnvironmentCube_;
-        TextureHandle neutralEnvironmentBrdfLut_;
 
 
         // Translucency Pass Raw Images
 
         // Depth Pass
-
-        // Deferred Lighting Pass
-        VkRenderPass lightingRenderPass = VK_NULL_HANDLE;
-        std::unique_ptr<VkLightingPipeline> lightingPipeline;
 
         // Translucency Passes
 
@@ -182,10 +178,6 @@ namespace Iridium {
         void copyRetainedView(VkCommandBuffer commandBuffer);
         std::vector<VkDescriptorSet> uiDepthTextures;
         std::vector<uint32_t> imguiFragmentShaderCode_;
-
-        // Global Camera Data
-        std::vector<VulkanBufferResource> uniformBuffers;
-        std::vector<VkDescriptorSet> globalDescriptorSets;
 
         // GPU-driven shadow/probe caster compaction (M7R R3a). The shared
         // 3-binding indirect set layout is owned here; each culler owns its
@@ -254,8 +246,6 @@ namespace Iridium {
         bool selectionOutlineActive_ = false;
 
 
-        // Private helpers that Application.cpp no longer needs to worry about
-        void createUniformBuffers();
         [[nodiscard]] VulkanCullerServices cullerServices();
         [[nodiscard]] VulkanIndirectViewSettings probeViewSettings() const noexcept;
         // The view cullers in collection order: directional, spot, point,
@@ -268,21 +258,19 @@ namespace Iridium {
         // Device telemetry (+ oracle verdict) of every view's retired slot.
         void collectIndirectViewValidations(uint32_t frameIndex);
 
-        void bindLightRecordBuffers();
-        void bindSceneClusterBuffers();
-        void createNeutralEnvironmentProducts();
-        void bindEnvironmentProducts(uint32_t frame = UINT32_MAX);
-        std::array<EnvironmentLightingHandles, VulkanFrameScheduler::FramesInFlight> frameEnvironments_{};
-        void bindDirectionalShadowDescriptors();
-        void bindSpotShadowDescriptors();
-        void bindPointShadowDescriptors();
-        void bindReflectionProbeBuffers();
-        void bindReflectionProbeEnvironments();
         // Feature owners in registration (and graph) order.
-        [[nodiscard]] std::array<IVulkanFeature*, 8> features() noexcept {
+        [[nodiscard]] std::array<IVulkanFeature*, 9> features() noexcept {
             return { &shadows_, &localShadows_, &probes_, &opaque_,
-                &clusterLighting_, &output_, &oit_, &hooks_ };
+                &clusterLighting_, &lighting_, &output_, &oit_, &hooks_ };
         }
+        // Between frames, after every slot retired (resize, transport and
+        // topology changes): release and recreate the graph, the frame
+        // targets and every descriptor set over them, and the editor's
+        // target textures.
+        void releaseFrameTargets();
+        void createFrameTargets();
+        void releaseEditorTargetTextures();
+        void registerEditorTargetTextures();
         void initFrameTargets();
         void rebuildRenderGraphAfterDeviceIdle();
         // R3b.6 imported images: swapchain (per frame) and shadow maps (global).
@@ -301,8 +289,6 @@ namespace Iridium {
                 std::nullopt,
             std::optional<VkExtent2D> requestedCinematic8AtlasExtent =
                 std::nullopt);
-        void updateUniformBuffer(const glm::mat4& view, const glm::mat4& proj);
-        void createLightingRenderPass();
         void emitFrameCounters();
         void bindMaterialDescriptors(VkPipelineLayout layout);
         void recordOrdinary2InterfaceCapture(
@@ -502,7 +488,9 @@ namespace Iridium {
 
         void setEnvironmentLighting(
             const EnvironmentLightingHandles& environment) override;
-        [[nodiscard]] EnvironmentLightingHandles getEnvironmentLighting() const override { return environmentLighting_; }
+        [[nodiscard]] EnvironmentLightingHandles getEnvironmentLighting() const override {
+            return lighting_.environment();
+        }
         void prepareRetainedViews(bool enabled, uint32_t renderView) override;
         [[nodiscard]] void* getRetainedViewTextureID(uint32_t view) override;
         void setEnvironmentLightingSettings(

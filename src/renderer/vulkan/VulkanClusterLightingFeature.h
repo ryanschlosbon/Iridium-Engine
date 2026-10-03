@@ -6,8 +6,9 @@
 // diagnostics readback, and registers the callbacks of
 // "lighting.probe-cluster", "lighting.cluster.{clear,count,scan,fill,finalize}"
 // and (when declared) "lighting.cluster.readback". The scene-descriptor
-// bindings of these buffers stay with the lighting set's owner (the backend
-// until R3c.8), which reads them through the *Descriptors() queries.
+// bindings of these buffers stay with the lighting set's owner
+// (VulkanDeferredLightingFeature, R3c.8), which reads them through the
+// *Descriptors() queries.
 
 #include "renderer/lighting/ClusteredLighting.h"
 #include "renderer/rhi/IRenderBackend.h"

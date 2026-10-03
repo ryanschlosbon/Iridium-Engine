@@ -8,7 +8,7 @@
 // "probe.capture"; its gpu.probe.capture range opens inside the callback,
 // after the culler's host -> compute barrier, as before. The lighting set's
 // probe bindings and the probe-clustering descriptors stay with their owners
-// (the backend until R3c.8, the clustered-light owner), which read them
+// (VulkanDeferredLightingFeature since R3c.8, the clustered-light owner), which read them
 // through bufferDescriptors()/environmentImages() and are told to rebind
 // through Bindings.
 

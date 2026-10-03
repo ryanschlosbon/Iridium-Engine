@@ -8,8 +8,8 @@
 // "shadow.directional.compact", "shadow.directional" (gpu.shadow.directional
 // after its barriers), "shadow.virtual.depth-mark" (gpu.shadow.virtual.
 // depth-demand before its barriers) and "shadow.virtual.request-readback".
-// The lighting set's shadow bindings stay with its owner (the backend until
-// R3c.8), which reads them through map().
+// The lighting set's shadow bindings stay with its owner
+// (VulkanDeferredLightingFeature, R3c.8), which reads them through map().
 
 #include "VulkanDirectionalShadowMap.h"
 #include "VulkanFeatureContext.h"

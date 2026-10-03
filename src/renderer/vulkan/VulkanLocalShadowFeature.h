@@ -7,7 +7,8 @@
 // "shadow.point.compact" and "shadow.point" (gpu.shadow.point), each drawing
 // range after its barriers. The lights' shadow-data slot mapping is published
 // to the clustered-light owner; the lighting set's shadow bindings stay with
-// its owner (the backend until R3c.8), which reads them through spot()/point().
+// its owner (VulkanDeferredLightingFeature, R3c.8), which reads them through
+// spot()/point().
 
 #include "VulkanFeatureContext.h"
 #include "VulkanFrameScheduler.h"
