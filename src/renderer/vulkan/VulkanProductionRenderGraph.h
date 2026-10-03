@@ -138,6 +138,10 @@ namespace Iridium {
         std::array<uint32_t, 3> pointShadowPoolCapacities{
             kPointShadowPool256Capacity, kPointShadowPool512Capacity,
             kPointShadowPool1024Capacity };
+        // M7R R4b.4 (--render-graph-aliasing): compile with
+        // CompileOptions::transientAliasing, so the executor places the
+        // aliasing-eligible transient images in shared alias heaps.
+        bool transientAliasing = false;
     };
 
     [[nodiscard]] RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(

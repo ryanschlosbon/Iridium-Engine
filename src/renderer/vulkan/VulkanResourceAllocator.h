@@ -56,6 +56,25 @@ namespace Iridium {
         }
     };
 
+    // M7R R4b.4: one dedicated VkDeviceMemory block that several transient
+    // render-graph images alias at planned offsets. The heap owns the memory;
+    // the images bound into it own only their VkImage and view (their
+    // vmaAllocation is null and their profile record is not counted, so the
+    // heap is the only memory the profile sees). `offset` is the heap's base
+    // within `memory` (0 for a dedicated block).
+    struct VulkanAliasHeapResource {
+        VmaAllocation vmaAllocation = VK_NULL_HANDLE;
+        VkDeviceMemory memory = VK_NULL_HANDLE;
+        VkDeviceSize offset = 0;
+        VkDeviceSize size = 0;
+        uint32_t memoryTypeIndex = 0;
+        ProfileMemoryAllocation allocation;
+
+        [[nodiscard]] bool isValid() const noexcept {
+            return vmaAllocation != VK_NULL_HANDLE && memory != VK_NULL_HANDLE;
+        }
+    };
+
     // The memory type the pre-VMA allocator chose: the lowest-indexed type allowed
     // by typeBits whose property flags include every requested flag. R4b keeps
     // memory types identical by restricting each VMA allocation to exactly this
@@ -116,6 +135,38 @@ namespace Iridium {
             VkImageCreateFlags flags = 0,
             VkImageViewType viewType = VK_IMAGE_VIEW_TYPE_2D);
 
+        // ---- M7R R4b.4 transient aliasing ------------------------------------
+        // The requirements createImage2D's image would have, without creating
+        // it (vkGetDeviceImageMemoryRequirements), with memoryTypeBits reduced
+        // to the single legacy DEVICE_LOCAL type createImage2D binds to.
+        [[nodiscard]] VkMemoryRequirements imageMemoryRequirements(
+            VkExtent2D extent, VkFormat format, VkImageUsageFlags usage,
+            uint32_t mipLevels = 1, uint32_t arrayLayers = 1,
+            VkImageCreateFlags flags = 0) const;
+        // A dedicated DEVICE_LOCAL block of at least `size` bytes (rounded up
+        // to whole 64 KiB pages) in one of `typeBits`.
+        // The profile records it under `category` with `requestedBytes` (the
+        // bytes its members would have needed unaliased) and the block size
+        // as committed bytes.
+        [[nodiscard]] VulkanAliasHeapResource createAliasHeap(VkDeviceSize size,
+            VkDeviceSize alignment, uint32_t typeBits, ProfileMemoryCategory category,
+            uint64_t requestedBytes);
+        // An image (and its view) bound at `offset` inside `heap`; the offset
+        // must satisfy imageMemoryRequirements' alignment and the image must
+        // fit. allocation.requestedBytes is set for statistics, uncounted.
+        [[nodiscard]] VulkanImageResource createAliasingImage2D(
+            const VulkanAliasHeapResource& heap, VkDeviceSize offset,
+            VkExtent2D extent, VkFormat format, VkImageUsageFlags usage,
+            VkImageAspectFlags aspect, uint32_t mipLevels = 1,
+            uint32_t arrayLayers = 1, VkImageCreateFlags flags = 0,
+            VkImageViewType viewType = VK_IMAGE_VIEW_TYPE_2D);
+        // A buffer over the whole heap (qualification poison fills).
+        [[nodiscard]] VulkanBufferResource createAliasingBuffer(
+            const VulkanAliasHeapResource& heap, VkBufferUsageFlags usage);
+        // Every image and buffer bound into the heap must be destroyed first
+        // (or never be used again).
+        void destroy(VulkanAliasHeapResource& heap) noexcept;
+
         void destroy(VulkanBufferResource& resource) noexcept;
         void destroy(VulkanImageResource& resource) noexcept;
         void write(VulkanBufferResource& resource, VkDeviceSize offset, std::span<const std::byte> data);
@@ -134,6 +185,7 @@ namespace Iridium {
         VmaAllocator vma_ = VK_NULL_HANDLE;
         uint32_t frameIndex_ = 0;
         VkPhysicalDeviceMemoryProperties memoryProperties_{};
+        uint32_t deviceApiVersion_ = 0;
         MemoryProfileAccumulator memoryProfile_;
         bool memoryBudgetAvailable_ = false;
     };

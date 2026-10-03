@@ -1859,6 +1859,162 @@ namespace {
         return true;
     }
 
+    // ---- M7R R4b.4 transient aliasing ----------------------------------------
+
+    // first (clear) -> readFirst -> second (clear, reuses first's memory) ->
+    // readSecond, plus a dedicated exported output. Equal sizes, so the
+    // planner puts `second` at `first`'s offset with `first` as predecessor.
+    RenderGraph::CompiledGraph aliasingGraph(bool aliasing) {
+        RenderGraph::RenderGraphBuilder builder;
+        auto first = builder.createResource("first", imageDesc());
+        auto second = builder.createResource("second", imageDesc());
+        auto output = builder.createResource("output", imageDesc());
+        const auto writeFirst = builder.addPass("write-first");
+        const auto readFirst = builder.addPass("read-first");
+        const auto writeSecond = builder.addPass("write-second");
+        const auto readSecond = builder.addPass("read-second");
+        first = builder.write(writeFirst, first, Access::ColorAttachment,
+            RenderGraph::LoadOp::Clear);
+        builder.read(readFirst, first, Access::SampledRead);
+        output = builder.write(readFirst, output, Access::ColorAttachment,
+            RenderGraph::LoadOp::Clear);
+        second = builder.write(writeSecond, second, Access::StorageWrite,
+            RenderGraph::LoadOp::DontCare);
+        builder.declareWholeResourceWrite(second);
+        builder.read(readSecond, second, Access::SampledRead);
+        output = builder.write(readSecond, output, Access::ColorAttachment,
+            RenderGraph::LoadOp::Load);
+        builder.exportResource(output, Access::SampledRead);
+        RenderGraph::CompileResult result = builder.compile(
+            RenderGraph::CompileOptions{ .transientAliasing = aliasing });
+        if (!result.succeeded()) throw std::runtime_error("aliasing graph failed to compile");
+        return std::move(*result.graph);
+    }
+
+    const RecordedBarrier* findBarrier(std::span<const RecordedBarrier> barriers,
+        VkImage image) {
+        for (const RecordedBarrier& barrier : barriers)
+            if (barrier.handle == reinterpret_cast<uint64_t>(image)) return &barrier;
+        return nullptr;
+    }
+
+    bool testAliasedFirstUseBarriers() {
+        FakeResourceFactory factory;
+        RecordingBarrierSink sink;
+        VulkanRenderGraphExecutor executor;
+        executor.setBarrierSink(&sink);
+        executor.init(factory, 2);
+        executor.setBarrierApi(VulkanBarrierApi::Synchronization2);
+        executor.rebuild(aliasingGraph(true));
+        const RenderGraph::CompiledGraph& graph = *executor.compiledGraph();
+        const auto firstId = executor.resourceId("first");
+        const auto secondId = executor.resourceId("second");
+        CHECK(graph.physicalSlots()[graph.resources()[firstId.logical].physicalSlot].aliased);
+        CHECK(graph.physicalSlots()[graph.resources()[secondId.logical].physicalSlot].aliased);
+        CHECK(!graph.physicalSlots()[graph.resources()[
+            executor.resourceId("output").logical].physicalSlot].aliased);
+        const VulkanGraphStats stats = executor.stats();
+        CHECK(stats.transientAliasing && stats.aliasHeapCount == 1 &&
+            stats.aliasedResourceCount == 2);
+        // Default fake requirement: 64 KiB each, packed into one 64 KiB heap.
+        CHECK(stats.aliasedRequestedBytes == 2u * 2u * 65536u);
+        CHECK(stats.aliasHeapCommittedBytes == 2u * 65536u);
+        CHECK(executor.aliasHeaps(0).size() == 1 && executor.aliasHeaps(1).size() == 1);
+
+        const auto pass = [&](const char* name) { return executor.passId(name); };
+        const VulkanGraphAccessInfo sampled = getVulkanGraphAccessInfo(
+            Access::SampledRead, RenderGraph::ResourceType::Image);
+        const VulkanGraphAccessInfo color = getVulkanGraphAccessInfo(
+            Access::ColorAttachment, RenderGraph::ResourceType::Image);
+        for (uint32_t frame = 0; frame < 4; ++frame) {
+            const uint32_t slot = frame % 2;
+            executor.onFrameFenceCompleted(slot);
+            executor.beginFrameExecution(slot);
+            const VkImage firstImage = executor.image(slot, firstId).image;
+            const VkImage secondImage = executor.image(slot, secondId).image;
+            // first: its frame's first use discards (UNDEFINED) and waits on
+            // nothing (no predecessor; the slot's last frame has retired).
+            sink.clear();
+            executor.beginPass(FakeCommandBuffer, pass("write-first"));
+            const RecordedBarrier* barrier = findBarrier(sink.recorded(), firstImage);
+            CHECK(barrier != nullptr);
+            CHECK(barrier->oldLayout == VK_IMAGE_LAYOUT_UNDEFINED);
+            CHECK(barrier->newLayout == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+            CHECK(barrier->srcStages == VK_PIPELINE_STAGE_2_NONE && barrier->srcAccess == 0);
+            CHECK(barrier->dstStages == color.stages && barrier->dstAccess == color.access);
+            // Frame 3 skips first's reader: second then waits on the
+            // predecessor's tracked (attachment write) access instead.
+            const bool skipReader = frame == 3;
+            if (skipReader) executor.skipPass(pass("read-first"));
+            else executor.beginPass(FakeCommandBuffer, pass("read-first"));
+            sink.clear();
+            executor.beginPass(FakeCommandBuffer, pass("write-second"));
+            barrier = findBarrier(sink.recorded(), secondImage);
+            CHECK(barrier != nullptr);
+            CHECK(barrier->oldLayout == VK_IMAGE_LAYOUT_UNDEFINED);
+            CHECK(barrier->newLayout == VK_IMAGE_LAYOUT_GENERAL);
+            const VulkanGraphAccessInfo& source = skipReader ? color : sampled;
+            CHECK(barrier->srcStages == source.stages && barrier->srcAccess == source.access);
+            executor.beginPass(FakeCommandBuffer, pass("read-second"));
+            executor.finishFrameExecution();
+        }
+
+        // Skip-path guard: second's writer skipped while its reader runs.
+        executor.onFrameFenceCompleted(0);
+        executor.beginFrameExecution(0);
+        executor.beginPass(FakeCommandBuffer, pass("write-first"));
+        executor.beginPass(FakeCommandBuffer, pass("read-first"));
+        executor.skipPass(pass("write-second"));
+        CHECK(throws([&] { executor.beginPass(FakeCommandBuffer, pass("read-second")); }));
+        executor.cleanupAfterDeviceIdle();
+
+        // Aliasing off: the same graph keeps exact-descriptor reuse (first and
+        // second share one slot) and allocates no heap.
+        FakeResourceFactory plainFactory;
+        VulkanRenderGraphExecutor plain;
+        plain.init(plainFactory, 2);
+        plain.rebuild(aliasingGraph(false));
+        CHECK(!plain.stats().transientAliasing && plain.stats().aliasHeapCount == 0);
+        CHECK(plain.aliasHeaps(0).empty());
+        const RenderGraph::CompiledGraph& off = *plain.compiledGraph();
+        CHECK(off.resources()[plain.resourceId("first").logical].physicalSlot ==
+            off.resources()[plain.resourceId("second").logical].physicalSlot);
+        plain.cleanupAfterDeviceIdle();
+        return true;
+    }
+
+    bool testAliasedSteadyFramesAllocateNothing() {
+        FakeResourceFactory factory;
+        RecordingBarrierSink sink;
+        VulkanRenderGraphExecutor executor;
+        executor.setBarrierSink(&sink);
+        executor.init(factory, 2);
+        executor.setBarrierApi(VulkanBarrierApi::Synchronization2);
+        executor.rebuild(aliasingGraph(true));
+        const RenderGraph::PassId passes[] = { executor.passId("write-first"),
+            executor.passId("read-first"), executor.passId("write-second"),
+            executor.passId("read-second") };
+        const auto frame = [&](uint32_t index) {
+            const uint32_t slot = index % 2;
+            sink.clear();
+            executor.onFrameFenceCompleted(slot);
+            executor.beginFrameExecution(slot);
+            for (const RenderGraph::PassId pass : passes) {
+                if (index % 3 == 1 && pass == passes[1]) executor.skipPass(pass);
+                else executor.beginPass(FakeCommandBuffer, pass);
+            }
+            executor.finishFrameExecution();
+        };
+        for (uint32_t index = 0; index < 4; ++index) frame(index);
+        beginCpuAllocationFrame();
+        for (uint32_t index = 4; index < 40; ++index) frame(index);
+        const CpuAllocationFrameSample sample = endCpuAllocationFrame();
+        CHECK(sink.overflow == 0);
+        CHECK(sample.allocationCount == 0);
+        executor.cleanupAfterDeviceIdle();
+        return true;
+    }
+
 } // namespace
 
 int main() {
@@ -1891,6 +2047,8 @@ int main() {
         { "production imported-image policies", testProductionImportedImagePolicies },
         { "variable-size imported buffer", testVariableSizeImportedBuffer },
         { "steady frames allocate nothing", testSteadyFramesAllocateNothing },
+        { "aliased first-use barriers and skip guard", testAliasedFirstUseBarriers },
+        { "aliased steady frames allocate nothing", testAliasedSteadyFramesAllocateNothing },
     };
 
     size_t passed = 0;

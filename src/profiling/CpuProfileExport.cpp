@@ -223,6 +223,15 @@ namespace Iridium {
                     { "committed_bytes", metadata.renderGraphCommittedBytes },
                     { "rebuild_count", metadata.renderGraphRebuildCount },
                     { "cache_miss_count", metadata.renderGraphCacheMissCount },
+                    // M7R R4b.4: heaps per frame slot; bytes over all slots.
+                    { "transient_aliasing", metadata.renderGraphTransientAliasing },
+                    { "alias_heap_count", metadata.renderGraphAliasHeapCount },
+                    { "aliased_resource_count",
+                        metadata.renderGraphAliasedResourceCount },
+                    { "aliased_requested_bytes",
+                        metadata.renderGraphAliasedRequestedBytes },
+                    { "alias_heap_committed_bytes",
+                        metadata.renderGraphAliasHeapCommittedBytes },
                     { "ordinary2_atlas_resident",
                         metadata.ordinary2AtlasResident },
                     { "ordinary2_atlas_extent", {

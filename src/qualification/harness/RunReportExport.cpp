@@ -416,6 +416,15 @@ namespace Iridium {
             runtimeInfo_.renderGraphRebuildCount;
         metadata.renderGraphCacheMissCount =
             runtimeInfo_.renderGraphCacheMissCount;
+        metadata.renderGraphTransientAliasing =
+            runtimeInfo_.renderGraphTransientAliasing;
+        metadata.renderGraphAliasHeapCount = runtimeInfo_.renderGraphAliasHeapCount;
+        metadata.renderGraphAliasedResourceCount =
+            runtimeInfo_.renderGraphAliasedResourceCount;
+        metadata.renderGraphAliasedRequestedBytes =
+            runtimeInfo_.renderGraphAliasedRequestedBytes;
+        metadata.renderGraphAliasHeapCommittedBytes =
+            runtimeInfo_.renderGraphAliasHeapCommittedBytes;
         metadata.ordinary2AtlasResident =
             runtimeInfo_.ordinary2AtlasResident;
         metadata.ordinary2AtlasWidth =

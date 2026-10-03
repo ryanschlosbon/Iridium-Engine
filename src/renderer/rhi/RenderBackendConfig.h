@@ -29,6 +29,9 @@ namespace Iridium {
         bool experimentalDepthOcclusionQuery = false;
         // Explicit M7.6 experiment: consume qualified GPU results in compaction.
         bool experimentalDepthOcclusionRejection = false;
+        // M7R R4b: transient render-graph images whose lifetimes never overlap
+        // share memory (--render-graph-aliasing on|off; kept until R6).
+        bool renderGraphAliasing = false;
         CpuProfiler* cpuProfiler = nullptr;
         bool enableGpuProfiling = false;
         bool enableTransparentPipelineStatistics = false;

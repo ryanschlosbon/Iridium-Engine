@@ -17,6 +17,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace {
 
@@ -33,13 +34,50 @@ namespace {
             name.starts_with("shadow.virtual.");
     }
 
-    bool runs(std::string_view name, uint32_t frame, uint32_t pass) {
+    bool runs(std::string_view name, uint32_t frame, uint32_t pass, bool aliased) {
         if (alwaysRecorded(name)) return true;
+        // R4b.4: an aliased image's readers may run only when its first-use
+        // writer ran, so aliased topologies skip whole frames' optional work.
+        if (aliased) return frame % 2 == 0;
         switch (frame) {
         case 0: return true;
         case 1: return false;
         case 2: return pass % 2 == 0;
         default: return pass % 3 != 1;
+        }
+    }
+
+    // R4b.4 poison (the qualification --qualification-alias-poison recording):
+    // fill every alias heap of the slot through a buffer over the whole heap,
+    // then order the fill before every later access.
+    void poisonAliasHeaps(VulkanResourceAllocator& allocator,
+        const VulkanRenderGraphExecutor& executor, uint32_t slot,
+        std::vector<VulkanBufferResource>& buffers, VkCommandBuffer commandBuffer,
+        bool synchronization2) {
+        const auto heaps = executor.aliasHeaps(slot);
+        if (buffers.empty())
+            for (const VulkanAliasHeapResource& heap : heaps)
+                buffers.push_back(allocator.createAliasingBuffer(heap,
+                    VK_BUFFER_USAGE_TRANSFER_DST_BIT));
+        for (const VulkanBufferResource& buffer : buffers)
+            vkCmdFillBuffer(commandBuffer, buffer.buffer, 0, VK_WHOLE_SIZE, 0x7FC07FC0u);
+        if (synchronization2) {
+            VkMemoryBarrier2 barrier{ VK_STRUCTURE_TYPE_MEMORY_BARRIER_2 };
+            barrier.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+            barrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+            barrier.dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+            barrier.dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
+            VkDependencyInfo dependency{ VK_STRUCTURE_TYPE_DEPENDENCY_INFO };
+            dependency.memoryBarrierCount = 1;
+            dependency.pMemoryBarriers = &barrier;
+            vkCmdPipelineBarrier2(commandBuffer, &dependency);
+        }
+        else {
+            VkMemoryBarrier barrier{ VK_STRUCTURE_TYPE_MEMORY_BARRIER };
+            barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            barrier.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+            vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 1, &barrier, 0, nullptr, 0, nullptr);
         }
     }
 
@@ -69,14 +107,21 @@ namespace {
                 }
             }
             const RenderGraph::CompiledGraph& compiled = *executor.compiledGraph();
-            for (uint32_t frame = 0; frame < 4; ++frame) {
+            const bool aliased = executor.stats().transientAliasing;
+            IRIDIUM_CHECK(!aliased || executor.stats().aliasHeapCount != 0);
+            std::vector<VulkanBufferResource> poison[FrameSlots];
+            for (uint32_t frame = 0; frame < (aliased ? 6u : 4u); ++frame) {
                 const uint32_t slot = frame % FrameSlots;
                 executor.onFrameFenceCompleted(slot);
                 IRIDIUM_CHECK(executor.validateFrame(slot));
                 executor.beginFrameExecution(slot);
                 gpu.submitAndWait([&](VkCommandBuffer commandBuffer) {
+                    if (aliased && frame >= 2)
+                        poisonAliasHeaps(allocator, executor, slot, poison[slot],
+                            commandBuffer, executor.barrierApi() ==
+                                VulkanBarrierApi::Synchronization2);
                     for (uint32_t pass = 0; pass < compiled.passes().size(); ++pass) {
-                        if (runs(compiled.passes()[pass].name, frame, pass))
+                        if (runs(compiled.passes()[pass].name, frame, pass, aliased))
                             executor.beginPass(commandBuffer, RenderGraph::PassId{ pass });
                         else
                             executor.skipPass(RenderGraph::PassId{ pass });
@@ -84,6 +129,8 @@ namespace {
                 });
                 executor.finishFrameExecution();
             }
+            for (auto& buffers : poison)
+                for (VulkanBufferResource& buffer : buffers) allocator.destroy(buffer);
             executor.cleanupAfterDeviceIdle();
         }
         for (auto& buffer : workingSets) gpu.destroy(buffer);
@@ -115,6 +162,25 @@ namespace {
             .virtualShadowWorkingSetBytes = 8'192 };
         return executeTopology("all features HDR10", build(true, layered, features), false) &&
             executeTopology("all features sync1", build(false, layered, features), true);
+    }
+
+    // M7R R4b.4: the same topologies with transient aliasing (images at
+    // planned offsets in shared heaps, first uses from UNDEFINED after the
+    // memory's earlier occupants) and the poison fill, under synchronization
+    // validation, which tracks hazards through aliased memory.
+    bool testAliasedTopologies() {
+        VulkanProductionGraphFeatures aliasing{};
+        aliasing.transientAliasing = true;
+        const VulkanLayeredGraphConfig layered{ { 960, 528 }, { 1920, 528 },
+            { 1920, 1072 }, true };
+        VulkanProductionGraphFeatures all{ .depthPyramid = true,
+            .virtualShadowWorkingSetBytes = 8'192 };
+        all.transientAliasing = true;
+        return executeTopology("aliased base SDR", build(false, {}, aliasing), false) &&
+            executeTopology("aliased base SDR sync1", build(false, {}, aliasing), true) &&
+            executeTopology("aliased HDR10", build(true, {}, aliasing), false) &&
+            executeTopology("aliased all features HDR10", build(true, layered, all), false) &&
+            executeTopology("aliased all features sync1", build(false, layered, all), true);
     }
 
     // History pairs on real images: alternating slots, an invalid previous
@@ -304,6 +370,7 @@ int main() {
     constexpr Iridium::Test::TestCase tests[] = {
         { "base topology barriers validate", testBaseTopology },
         { "all-features topology barriers validate", testAllFeaturesTopology },
+        { "aliased topologies validate", testAliasedTopologies },
         { "History pair barriers validate", testHistoryPairBarriers },
         { "dynamic rendering through plans validates", testDynamicRenderingThroughPlans },
     };

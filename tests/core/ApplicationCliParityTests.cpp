@@ -111,6 +111,7 @@ namespace {
         flag("experimentalDepthOcclusionRejection", c.experimentalDepthOcclusionRejection);
         flag("depthOcclusionQualificationOracle", c.depthOcclusionQualificationOracle);
         flag("indirectStreamDigest", c.indirectStreamDigest);
+        flag("renderGraphAliasing", c.renderGraphAliasing);
         flag("validateDepthPyramidCapture", c.validateDepthPyramidCapture);
         flag("validateDepthPyramidResize", c.validateDepthPyramidResize);
         field("gpuLodMinimumResidentLevel", exact(c.gpuLodMinimumResidentLevel));
@@ -456,6 +457,12 @@ namespace {
                 c.pipelineCacheDirectory = "out/m7r/pipeline-cache"; },
                 "--pipeline-cache requires a directory or off",
                 { { "", "--pipeline-cache requires a directory or off" } } },
+            // M7R R4b.4 (not in the 6b000ad parser).
+            { "--render-graph-aliasing", G, "on", {}, [](C& c) {
+                c.renderGraphAliasing = true; },
+                "--render-graph-aliasing requires on or off",
+                { { "yes", "--render-graph-aliasing requires on or off" },
+                  { "", "--render-graph-aliasing requires on or off" } } },
             // --- qualification (38) ---
             { "--validate-texture-residency-churn", Q, {}, {}, [](C& c) {
                 c.validateTextureResidencyChurn = true; }, {}, {} },
@@ -587,8 +594,8 @@ namespace {
         Cli::CliOptionRegistry registry;
         registerEngineOptions(registry, scratch);
 
-        CHECK(table.size() == 86);
-        CHECK(registry.options().size() == 86);
+        CHECK(table.size() == 87);
+        CHECK(registry.options().size() == 87);
         std::set<std::string_view> names;
         std::map<std::string_view, size_t> ownerCounts;
         for (const FlagCase& row : table) {
@@ -642,7 +649,7 @@ namespace {
         }
         CHECK(ownerCounts[R] == 14);
         CHECK(ownerCounts[E] == 4);
-        CHECK(ownerCounts[G] == 30);
+        CHECK(ownerCounts[G] == 31);
         CHECK(ownerCounts[Q] == 38);
         std::cout << "  owners: runtime " << ownerCounts[R] << ", editor " << ownerCounts[E]
                   << ", renderer " << ownerCounts[G] << ", qualification "
@@ -694,7 +701,7 @@ namespace {
     bool testUsageParity() {
         const std::string usage = engineUsage();
         CHECK(usage.starts_with("Usage: IridiumEngine [options]\n"));
-        CHECK(optionLines(usage).size() == 86);
+        CHECK(optionLines(usage).size() == 87);
         // Groups appear in owner order: runtime, editor, renderer, qualification.
         const size_t runtime = usage.find("runtime options:");
         const size_t editor = usage.find("editor options:");
@@ -713,7 +720,7 @@ namespace {
         AppCli::registerRuntimeOptions(registry, config);
         AppCli::registerEditorOptions(registry, config);
         AppCli::registerRendererOptions(registry, config);
-        CHECK(registry.options().size() == 48);
+        CHECK(registry.options().size() == 49);
         try {
             registry.parse(Args{ "--benchmark", "material_lab_v1" });
             CHECK(false);
@@ -769,7 +776,7 @@ int main() {
     };
 
     constexpr TestCase tests[] = {
-        { "Per-flag table (86 flags)", testFlagTable },
+        { "Per-flag table (87 flags)", testFlagTable },
         { "Aliases and removed flags", testAliasesAndRemovedFlags },
         { "Usage parity", testUsageParity },
         { "Registry without qualification", testRegistryWithoutQualification },

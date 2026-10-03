@@ -191,6 +191,8 @@ namespace Iridium {
         CpuProfiler* cpuProfiler_ = nullptr;
         bool forceDirectGBufferReference_ = false;
         bool forceDirectShadowReference_ = false;
+        // M7R R4b.4: compile the production graph with transient aliasing.
+        bool renderGraphAliasing_ = false;
         float experimentalShadowLodErrorTexels_ = 0.0f;
         uint32_t shadowLodMaximumLevel_ = 15u;
         float experimentalProbeLodErrorPixels_ = 0.0f;

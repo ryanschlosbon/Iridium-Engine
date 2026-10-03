@@ -59,6 +59,13 @@ namespace Iridium {
         uint64_t renderGraphCommittedBytes = 0;
         uint64_t renderGraphRebuildCount = 0;
         uint64_t renderGraphCacheMissCount = 0;
+        // M7R R4b.4 transient aliasing: heaps per frame slot; byte totals over
+        // every slot (committed bytes above include the heaps).
+        bool renderGraphTransientAliasing = false;
+        uint32_t renderGraphAliasHeapCount = 0;
+        uint32_t renderGraphAliasedResourceCount = 0;
+        uint64_t renderGraphAliasedRequestedBytes = 0;
+        uint64_t renderGraphAliasHeapCommittedBytes = 0;
         bool refractionPyramidsResident = false;
         bool ordinary2AtlasResident = false;
         uint32_t ordinary2AtlasWidth = 0;

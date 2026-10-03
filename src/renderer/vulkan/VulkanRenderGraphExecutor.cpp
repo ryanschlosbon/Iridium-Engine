@@ -382,6 +382,113 @@ RenderGraph::Format toGraphFormat(VkFormat format) {
     throw std::invalid_argument("Unsupported Vulkan format for render graph");
 }
 
+namespace {
+
+    // How the allocator factory creates a slot's image (dedicated or aliased).
+    struct GraphImageParameters {
+        VkExtent2D extent{};
+        VkFormat format = VK_FORMAT_UNDEFINED;
+        VkImageUsageFlags usage = 0;
+        VkImageAspectFlags aspect = 0;
+        uint32_t mipLevels = 1;
+        uint32_t arrayLayers = 1;
+        VkImageViewType viewType = VK_IMAGE_VIEW_TYPE_2D;
+    };
+
+    GraphImageParameters graphImageParameters(const RenderGraph::PhysicalResourceSlot& slot) {
+        if (slot.image.extent.depth != 1 || slot.image.mipLevels == 0 ||
+            slot.image.arrayLayers == 0 || slot.image.samples != 1) {
+            throw std::invalid_argument(
+                "Vulkan graph images require 2D, nonempty mip/layer ranges, and one sample");
+        }
+        GraphImageParameters parameters{};
+        parameters.extent = { slot.image.extent.width, slot.image.extent.height };
+        parameters.format = toVkFormat(slot.image.format);
+        parameters.usage = imageUsage(slot.usages);
+        if (parameters.usage == 0) {
+            throw std::invalid_argument("Render-graph image has no Vulkan usage");
+        }
+        parameters.aspect = aspectForFormat(parameters.format);
+        parameters.mipLevels = slot.image.mipLevels;
+        parameters.arrayLayers = slot.image.arrayLayers;
+        parameters.viewType = slot.image.arrayLayers == 1 ? VK_IMAGE_VIEW_TYPE_2D :
+            VK_IMAGE_VIEW_TYPE_2D_ARRAY;
+        return parameters;
+    }
+
+} // namespace
+
+RenderGraph::TransientMemoryRequirement VulkanGraphResourceFactory::aliasRequirement(
+    const RenderGraph::PhysicalResourceSlot& slot) {
+    // Nominal: 8 bytes per texel and layer (x 2 with mips), 64 KiB aligned.
+    constexpr uint64_t Alignment = uint64_t{ 1 } << 16;
+    const RenderGraph::ImageDesc& image = slot.image;
+    uint64_t bytes = uint64_t{ image.extent.width } * image.extent.height *
+        image.extent.depth * image.arrayLayers * 8u * (image.mipLevels > 1 ? 2u : 1u);
+    bytes = (std::max)(bytes, Alignment);
+    return { (bytes + Alignment - 1) / Alignment * Alignment, Alignment, 1u };
+}
+
+VulkanAliasHeapResource VulkanGraphResourceFactory::createAliasHeap(
+    const RenderGraph::AliasHeap& heap, uint64_t requestedBytes) {
+    VulkanAliasHeapResource result{};
+    result.size = heap.size;
+    result.allocation.requestedBytes = requestedBytes;
+    result.allocation.committedBytes = heap.size;
+    return result;
+}
+
+void VulkanGraphResourceFactory::destroyAliasHeap(VulkanAliasHeapResource& heap) noexcept {
+    heap = {};
+}
+
+VulkanGraphPhysicalResource VulkanGraphResourceFactory::createAliased(
+    const RenderGraph::PhysicalResourceSlot& slot, const VulkanAliasHeapResource&,
+    uint64_t) {
+    return create(slot);
+}
+
+RenderGraph::TransientMemoryRequirement
+VulkanAllocatorGraphResourceFactory::aliasRequirement(
+    const RenderGraph::PhysicalResourceSlot& slot) {
+    if (allocator_ == nullptr || slot.type != RenderGraph::ResourceType::Image)
+        throw std::logic_error("Only graph images can be aliased");
+    const GraphImageParameters parameters = graphImageParameters(slot);
+    const VkMemoryRequirements requirements = allocator_->imageMemoryRequirements(
+        parameters.extent, parameters.format, parameters.usage, parameters.mipLevels,
+        parameters.arrayLayers, 0);
+    return { requirements.size, requirements.alignment, requirements.memoryTypeBits };
+}
+
+VulkanAliasHeapResource VulkanAllocatorGraphResourceFactory::createAliasHeap(
+    const RenderGraph::AliasHeap& heap, uint64_t requestedBytes) {
+    if (allocator_ == nullptr)
+        throw std::logic_error("Invalid Vulkan graph alias heap request");
+    return allocator_->createAliasHeap(heap.size, heap.alignment, heap.typeMask,
+        category_, requestedBytes);
+}
+
+void VulkanAllocatorGraphResourceFactory::destroyAliasHeap(
+    VulkanAliasHeapResource& heap) noexcept {
+    if (allocator_ != nullptr) allocator_->destroy(heap);
+    heap = {};
+}
+
+VulkanGraphPhysicalResource VulkanAllocatorGraphResourceFactory::createAliased(
+    const RenderGraph::PhysicalResourceSlot& slot, const VulkanAliasHeapResource& heap,
+    uint64_t offset) {
+    if (allocator_ == nullptr || slot.logicalResources.size() != 1 ||
+        slot.type != RenderGraph::ResourceType::Image)
+        throw std::logic_error("Invalid Vulkan graph aliased image request");
+    const GraphImageParameters parameters = graphImageParameters(slot);
+    VulkanGraphPhysicalResource resource{};
+    resource.type = slot.type;
+    resource.image = allocator_->createAliasingImage2D(heap, offset, parameters.extent,
+        parameters.format, parameters.usage, parameters.aspect, parameters.mipLevels,
+        parameters.arrayLayers, 0, parameters.viewType);
+    return resource;
+}
+
 VulkanGraphPhysicalResource VulkanAllocatorGraphResourceFactory::create(
     const RenderGraph::PhysicalResourceSlot& slot) {
     if (allocator_ == nullptr || slot.logicalResources.empty()) {
@@ -390,22 +497,10 @@ VulkanGraphPhysicalResource VulkanAllocatorGraphResourceFactory::create(
     VulkanGraphPhysicalResource resource{};
     resource.type = slot.type;
     if (slot.type == RenderGraph::ResourceType::Image) {
-        if (slot.image.extent.depth != 1 || slot.image.mipLevels == 0 ||
-            slot.image.arrayLayers == 0 || slot.image.samples != 1) {
-            throw std::invalid_argument(
-                "Vulkan graph images require 2D, nonempty mip/layer ranges, and one sample");
-        }
-        const VkFormat format = toVkFormat(slot.image.format);
-        const VkImageUsageFlags usage = imageUsage(slot.usages);
-        if (usage == 0) {
-            throw std::invalid_argument("Render-graph image has no Vulkan usage");
-        }
-        resource.image = allocator_->createImage2D(
-            { slot.image.extent.width, slot.image.extent.height }, format, usage,
-            aspectForFormat(format), category_, slot.image.mipLevels,
-            slot.image.arrayLayers, 0,
-            slot.image.arrayLayers == 1 ? VK_IMAGE_VIEW_TYPE_2D :
-                VK_IMAGE_VIEW_TYPE_2D_ARRAY);
+        const GraphImageParameters parameters = graphImageParameters(slot);
+        resource.image = allocator_->createImage2D(parameters.extent, parameters.format,
+            parameters.usage, parameters.aspect, category_, parameters.mipLevels,
+            parameters.arrayLayers, 0, parameters.viewType);
     }
     else {
         const VkBufferUsageFlags usage = bufferUsage(slot.usages);
@@ -448,37 +543,64 @@ void VulkanGraphResourcePool::init(VulkanGraphResourceFactory& factory,
     retired_.resize(frameCount);
 }
 
-void VulkanGraphResourcePool::rebuild(const RenderGraph::CompiledGraph& graph) {
+void VulkanGraphResourcePool::rebuild(const RenderGraph::CompiledGraph& graph,
+    const RenderGraph::AliasPlan* plan) {
     if (factory_ == nullptr || active_.empty()) {
         throw std::logic_error("Vulkan graph resource pool is not initialized");
     }
+    bool anyAliased = false;
+    for (const RenderGraph::PhysicalResourceSlot& slot : graph.physicalSlots())
+        anyAliased = anyAliased || slot.aliased;
+    if (anyAliased && plan == nullptr)
+        throw std::logic_error("Aliased render-graph slots need an alias plan");
 
-    std::vector<std::vector<VulkanGraphPhysicalResource>> candidate(active_.size());
+    // What each heap's members would need unaliased (accounting only).
+    std::vector<uint64_t> heapRequested;
+    if (anyAliased) {
+        heapRequested.assign(plan->heaps.size(), 0);
+        for (const RenderGraph::AliasPlacement& placement : plan->placements)
+            if (placement.placed()) heapRequested.at(placement.heap) += placement.size;
+    }
+
+    std::vector<FrameResources> candidate(active_.size());
     try {
-        for (auto& frame : candidate) {
-            frame.reserve(graph.physicalSlots().size());
+        for (FrameResources& frame : candidate) {
+            if (anyAliased) {
+                frame.heaps.reserve(plan->heaps.size());
+                for (size_t heap = 0; heap < plan->heaps.size(); ++heap)
+                    frame.heaps.push_back(factory_->createAliasHeap(plan->heaps[heap],
+                        heapRequested[heap]));
+            }
+            frame.resources.reserve(graph.physicalSlots().size());
             for (const RenderGraph::PhysicalResourceSlot& slot :
                 graph.physicalSlots()) {
-                frame.push_back(factory_->create(slot));
+                if (!slot.aliased) {
+                    frame.resources.push_back(factory_->create(slot));
+                    continue;
+                }
+                const RenderGraph::AliasPlacement& placement =
+                    plan->placements.at(slot.logicalResources.at(0));
+                if (!placement.placed())
+                    throw std::logic_error("Aliased render-graph slot has no placement");
+                frame.resources.push_back(factory_->createAliased(slot,
+                    frame.heaps.at(placement.heap), placement.offset));
             }
         }
-        for (size_t frameIndex = 0; frameIndex < active_.size(); ++frameIndex) {
-            retired_[frameIndex].reserve(retired_[frameIndex].size() +
-                active_[frameIndex].size());
-        }
+        for (size_t frameIndex = 0; frameIndex < active_.size(); ++frameIndex)
+            retired_[frameIndex].reserve(retired_[frameIndex].size() + 1);
     }
     catch (...) {
-        for (auto& frame : candidate) {
-            destroyResources(frame);
+        for (FrameResources& frame : candidate) {
+            destroyFrame(frame);
         }
         throw;
     }
 
     for (size_t frameIndex = 0; frameIndex < active_.size(); ++frameIndex) {
-        auto& retired = retired_[frameIndex];
-        auto& active = active_[frameIndex];
-        std::move(active.begin(), active.end(), std::back_inserter(retired));
-        active.clear();
+        FrameResources& active = active_[frameIndex];
+        if (!active.resources.empty() || !active.heaps.empty())
+            retired_[frameIndex].push_back(std::move(active));
+        active = {};
     }
     active_ = std::move(candidate);
 }
@@ -487,16 +609,17 @@ void VulkanGraphResourcePool::onFrameFenceCompleted(uint32_t frameIndex) {
     if (frameIndex >= retired_.size()) {
         throw std::out_of_range("Render-graph frame index is out of range");
     }
-    destroyResources(retired_[frameIndex]);
+    for (FrameResources& frame : retired_[frameIndex]) destroyFrame(frame);
+    retired_[frameIndex].clear();
 }
 
 void VulkanGraphResourcePool::cleanupAfterDeviceIdle() noexcept {
     if (factory_ != nullptr) {
-        for (auto& frame : active_) {
-            destroyResources(frame);
+        for (FrameResources& frame : active_) {
+            destroyFrame(frame);
         }
-        for (auto& frame : retired_) {
-            destroyResources(frame);
+        for (auto& frames : retired_) {
+            for (FrameResources& frame : frames) destroyFrame(frame);
         }
     }
     active_.clear();
@@ -508,54 +631,81 @@ size_t VulkanGraphResourcePool::activeResourceCount(uint32_t frameIndex) const {
     if (frameIndex >= active_.size()) {
         throw std::out_of_range("Render-graph frame index is out of range");
     }
-    return active_[frameIndex].size();
+    return active_[frameIndex].resources.size();
 }
 
 size_t VulkanGraphResourcePool::retiredResourceCount(uint32_t frameIndex) const {
     if (frameIndex >= retired_.size()) {
         throw std::out_of_range("Render-graph frame index is out of range");
     }
-    return retired_[frameIndex].size();
+    size_t count = 0;
+    for (const FrameResources& frame : retired_[frameIndex])
+        count += frame.resources.size();
+    return count;
 }
 
 uint64_t VulkanGraphResourcePool::requestedBytes() const noexcept {
     uint64_t result = 0;
-    for (const auto& frames : { &active_, &retired_ }) {
-        for (const auto& frame : *frames) {
-            for (const VulkanGraphPhysicalResource& resource : frame) {
-                result += resourceRequestedBytes(resource);
-            }
-        }
-    }
+    const auto add = [&](const FrameResources& frame) {
+        for (const VulkanGraphPhysicalResource& resource : frame.resources)
+            result += resourceRequestedBytes(resource);
+    };
+    for (const FrameResources& frame : active_) add(frame);
+    for (const auto& frames : retired_)
+        for (const FrameResources& frame : frames) add(frame);
     return result;
 }
 
 uint64_t VulkanGraphResourcePool::committedBytes() const noexcept {
+    uint64_t result = aliasHeapCommittedBytes();
+    const auto add = [&](const FrameResources& frame) {
+        for (const VulkanGraphPhysicalResource& resource : frame.resources)
+            result += resourceCommittedBytes(resource);
+    };
+    for (const FrameResources& frame : active_) add(frame);
+    for (const auto& frames : retired_)
+        for (const FrameResources& frame : frames) add(frame);
+    return result;
+}
+
+uint64_t VulkanGraphResourcePool::aliasHeapCommittedBytes() const noexcept {
     uint64_t result = 0;
-    for (const auto& frames : { &active_, &retired_ }) {
-        for (const auto& frame : *frames) {
-            for (const VulkanGraphPhysicalResource& resource : frame) {
-                result += resourceCommittedBytes(resource);
-            }
-        }
-    }
+    const auto add = [&](const FrameResources& frame) {
+        for (const VulkanAliasHeapResource& heap : frame.heaps)
+            result += heap.allocation.committedBytes;
+    };
+    for (const FrameResources& frame : active_) add(frame);
+    for (const auto& frames : retired_)
+        for (const FrameResources& frame : frames) add(frame);
     return result;
 }
 
 const VulkanGraphPhysicalResource& VulkanGraphResourcePool::resource(
     uint32_t frameIndex, uint32_t physicalSlot) const {
-    if (frameIndex >= active_.size() || physicalSlot >= active_[frameIndex].size()) {
+    if (frameIndex >= active_.size() ||
+        physicalSlot >= active_[frameIndex].resources.size()) {
         throw std::out_of_range("Render-graph physical resource is out of range");
     }
-    return active_[frameIndex][physicalSlot];
+    return active_[frameIndex].resources[physicalSlot];
 }
 
-void VulkanGraphResourcePool::destroyResources(
-    std::vector<VulkanGraphPhysicalResource>& resources) noexcept {
-    for (VulkanGraphPhysicalResource& resource : resources) {
+std::span<const VulkanAliasHeapResource> VulkanGraphResourcePool::aliasHeaps(
+    uint32_t frameIndex) const {
+    if (frameIndex >= active_.size())
+        throw std::out_of_range("Render-graph frame index is out of range");
+    return active_[frameIndex].heaps;
+}
+
+void VulkanGraphResourcePool::destroyFrame(FrameResources& frame) noexcept {
+    // Images bound into a heap go before the heap's memory.
+    for (VulkanGraphPhysicalResource& resource : frame.resources) {
         factory_->destroy(resource);
     }
-    resources.clear();
+    for (VulkanAliasHeapResource& heap : frame.heaps) {
+        factory_->destroyAliasHeap(heap);
+    }
+    frame.resources.clear();
+    frame.heaps.clear();
 }
 
 void VulkanRenderGraphExecutor::init(VulkanResourceAllocator& allocator,
@@ -616,6 +766,48 @@ void VulkanRenderGraphExecutor::rebuild(RenderGraph::CompiledGraph graph) {
             accessInfoForAspect(transition.after, resource.desc.type, aspect) });
     }
 
+    // R4b.4: a plan compiled with transient aliasing places its aliased slots
+    // in alias heaps. Requirements come from the factory (device image
+    // requirements); the plan is per rebuild and is not kept.
+    std::optional<RenderGraph::AliasPlan> aliasPlan;
+    std::vector<uint8_t> candidateAliased(graph.physicalSlots().size(), 0);
+    std::vector<uint32_t> candidateAliasedSlots;
+    std::vector<uint32_t> candidatePredecessorFirst;
+    std::vector<uint32_t> candidatePredecessorSlots;
+    for (const RenderGraph::PhysicalResourceSlot& slot : graph.physicalSlots()) {
+        if (!slot.aliased) continue;
+        if (slot.type != RenderGraph::ResourceType::Image ||
+            slot.logicalResources.size() != 1)
+            throw std::logic_error("Aliased render-graph slots hold exactly one image");
+        candidateAliased[slot.slotIndex] = 1;
+        candidateAliasedSlots.push_back(slot.slotIndex);
+    }
+    if (!candidateAliasedSlots.empty()) {
+        std::vector<RenderGraph::TransientMemoryRequirement> requirements(
+            graph.resources().size());
+        for (const uint32_t slot : candidateAliasedSlots) {
+            const RenderGraph::PhysicalResourceSlot& physical = graph.physicalSlots()[slot];
+            requirements[physical.logicalResources[0]] = factory_->aliasRequirement(physical);
+        }
+        aliasPlan = RenderGraph::planTransientAliasing(graph, requirements);
+        // Predecessors by physical slot: the slots whose memory this slot
+        // reuses after they are done in the frame.
+        candidatePredecessorFirst.assign(graph.physicalSlots().size() + 1, 0);
+        for (uint32_t slot = 0; slot < graph.physicalSlots().size(); ++slot) {
+            candidatePredecessorFirst[slot] =
+                static_cast<uint32_t>(candidatePredecessorSlots.size());
+            if (candidateAliased[slot] == 0) continue;
+            const uint32_t logical = graph.physicalSlots()[slot].logicalResources[0];
+            if (!aliasPlan->placements[logical].placed())
+                throw std::logic_error("Aliased render-graph slot was not placed");
+            for (const uint32_t predecessor : aliasPlan->aliasPredecessors(logical))
+                candidatePredecessorSlots.push_back(
+                    graph.resources()[predecessor].physicalSlot);
+        }
+        candidatePredecessorFirst[graph.physicalSlots().size()] =
+            static_cast<uint32_t>(candidatePredecessorSlots.size());
+    }
+
     // History slots are global, created once per plan outside the per-frame
     // pool. Create them first so a failure leaves the active plan untouched.
     std::vector<VulkanGraphPhysicalResource> candidateHistory;
@@ -624,7 +816,7 @@ void VulkanRenderGraphExecutor::rebuild(RenderGraph::CompiledGraph graph) {
         for (const RenderGraph::PhysicalResourceSlot& slot : graph.historySlots())
             candidateHistory.push_back(factory_->create(slot));
         retiredHistory_.reserve(retiredHistory_.size() + historyResources_.size());
-        resources_.rebuild(graph);
+        resources_.rebuild(graph, aliasPlan ? &*aliasPlan : nullptr);
     }
     catch (...) {
         for (VulkanGraphPhysicalResource& resource : candidateHistory)
@@ -655,6 +847,13 @@ void VulkanRenderGraphExecutor::rebuild(RenderGraph::CompiledGraph graph) {
     externalImages_.clear();
     externalImageScope_.assign(logicalResourceCount_, 0);
     frameRetired_.assign(resources_.frameCount(), true);
+    aliasedSlot_ = std::move(candidateAliased);
+    aliasedSlots_ = std::move(candidateAliasedSlots);
+    aliasPredecessorFirst_ = std::move(candidatePredecessorFirst);
+    aliasPredecessorSlots_ = std::move(candidatePredecessorSlots);
+    aliasHeapCount_ = aliasPlan ? static_cast<uint32_t>(aliasPlan->heaps.size()) : 0u;
+    aliasedRequestedBytes_ = aliasPlan ? aliasPlan->requestedBytes : 0u;
+    aliasPeakLiveBytes_ = aliasPlan ? aliasPlan->peakLiveBytes : 0u;
     cache_.store(std::move(graph));
     barriers_ = std::move(candidateBarriers);
     topologyHash_ = hash;
@@ -872,6 +1071,10 @@ void VulkanRenderGraphExecutor::beginFrameExecution(uint32_t frameIndex,
     historyValidity_.beginFrame(view);
     std::fill(historyWriterBegun_.begin(), historyWriterBegun_.end(), uint8_t{ 0 });
     std::fill(historyDiscarded_.begin(), historyDiscarded_.end(), uint8_t{ 0 });
+    // R4b.4: aliased slots hold no contents across frames (their memory is
+    // reused within the frame), so each frame's first use starts Undefined.
+    for (const uint32_t slot : aliasedSlots_)
+        frameAccess_[frameIndex][slot] = RenderGraph::Access::Undefined;
     // R4a: discard-on-first-use bindings discard again each frame.
     if (!externalImages_.empty()) {
         for (const uint32_t row : { frameIndex, resources_.frameCount() })
@@ -1138,6 +1341,43 @@ void VulkanRenderGraphExecutor::queuePhysicalTransition(uint32_t physicalSlot,
     current = access;
 }
 
+void VulkanRenderGraphExecutor::queueAliasedFirstUse(
+    const RenderGraph::CompiledResource& resource, const RenderGraph::CompiledUsage& usage) {
+    // Skip-path guard: an aliased image's memory holds another resource's
+    // bytes until its first-use writer discards it, so nothing may use it
+    // this frame unless that writer ran (and it must not load).
+    if (!usage.write || usage.passOrderIndex != resource.firstUse ||
+        usage.loadOp == RenderGraph::LoadOp::Load)
+        throw std::logic_error("Render-graph aliased transient '" + resource.name +
+            "' is used before its first-use writer ran this frame");
+    const uint32_t slot = resource.physicalSlot;
+    const VulkanGraphPhysicalResource& physical = resources_.resource(executingFrame_, slot);
+    // Source scope: whatever the predecessors in this memory did this frame
+    // (their tracked access, so a skipped last reader narrows nothing);
+    // none ran => nothing to wait for (the slot's previous frame retired
+    // with its fence).
+    VulkanGraphAccessInfo before{ VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0,
+        VK_IMAGE_LAYOUT_UNDEFINED };
+    bool waits = false;
+    for (uint32_t index = aliasPredecessorFirst_[slot];
+         index < aliasPredecessorFirst_[slot + 1]; ++index) {
+        const uint32_t predecessor = aliasPredecessorSlots_[index];
+        const RenderGraph::Access access = frameAccess_[executingFrame_][predecessor];
+        if (access == RenderGraph::Access::Undefined) continue;
+        const VulkanGraphAccessInfo info = accessInfoForAspect(access,
+            RenderGraph::ResourceType::Image,
+            resources_.resource(executingFrame_, predecessor).image.aspect);
+        if (!waits) before.stages = 0;
+        waits = true;
+        before.stages |= info.stages;
+        before.access |= info.access;
+    }
+    const VulkanGraphAccessInfo after = accessInfoForAspect(usage.access,
+        physical.type, physical.image.aspect);
+    queueImageBarrier(physical.image, before, after);
+    frameAccess_[executingFrame_][slot] = usage.access;
+}
+
 void VulkanRenderGraphExecutor::queueHistoryUsage(
     const RenderGraph::CompiledResource& resource, RenderGraph::Access access,
     bool attachmentRebarrier) {
@@ -1236,6 +1476,12 @@ void VulkanRenderGraphExecutor::beginPassAt(VkCommandBuffer commandBuffer,
             graph.resources()[usage.logicalResourceIndex];
         const bool rebarrier = migrated && usage.write;
         if (resource.physicalSlot != RenderGraph::InvalidIndex) {
+            if (aliasedSlot_[resource.physicalSlot] != 0 &&
+                frameAccess_[executingFrame_][resource.physicalSlot] ==
+                    RenderGraph::Access::Undefined) {
+                queueAliasedFirstUse(resource, usage);
+                continue;
+            }
             queuePhysicalTransition(resource.physicalSlot, usage.access, rebarrier);
             continue;
         }
@@ -1678,6 +1924,13 @@ void VulkanRenderGraphExecutor::cleanupAfterDeviceIdle() noexcept {
     lastView_ = {};
     externalImages_.clear();
     externalImageScope_.clear();
+    aliasedSlot_.clear();
+    aliasedSlots_.clear();
+    aliasPredecessorFirst_.clear();
+    aliasPredecessorSlots_.clear();
+    aliasHeapCount_ = 0;
+    aliasedRequestedBytes_ = 0;
+    aliasPeakLiveBytes_ = 0;
     barriers_.clear();
     frameAccess_.clear();
     externalBuffers_.clear(); externalBufferTracked_.clear(); frameRetired_.clear();
@@ -1715,7 +1968,20 @@ VulkanGraphStats VulkanRenderGraphExecutor::stats() const noexcept {
         .rebuildCount = rebuildCount_,
         .cacheMissCount = cacheMissCount_,
         .historySlotCount = static_cast<uint32_t>(historyResources_.size()),
+        .transientAliasing = !aliasedSlots_.empty(),
+        .aliasHeapCount = aliasHeapCount_,
+        .aliasedResourceCount = static_cast<uint32_t>(aliasedSlots_.size()),
+        .aliasedRequestedBytes = aliasedRequestedBytes_ * resources_.frameCount(),
+        .aliasHeapCommittedBytes = resources_.aliasHeapCommittedBytes(),
+        .aliasPeakLiveBytes = aliasPeakLiveBytes_,
     };
+}
+
+std::span<const VulkanAliasHeapResource> VulkanRenderGraphExecutor::aliasHeaps(
+    uint32_t frameIndex) const {
+    if (frameIndex >= resources_.frameCount())
+        throw std::out_of_range("Render-graph frame index is out of range");
+    return resources_.aliasHeaps(frameIndex);
 }
 
 const VulkanImageResource& VulkanRenderGraphExecutor::image(uint32_t frameIndex,

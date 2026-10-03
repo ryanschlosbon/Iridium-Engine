@@ -152,6 +152,7 @@ namespace Iridium {
         oit_.configure(config.weightedOitOrderSeed);
         forceDirectGBufferReference_ = config.forceDirectGBufferReference;
         forceDirectShadowReference_ = config.forceDirectShadowReference;
+        renderGraphAliasing_ = config.renderGraphAliasing;
         experimentalShadowLodErrorTexels_ =
             config.experimentalShadowLodErrorTexels;
         shadowLodMaximumLevel_ = (std::min)(config.shadowLodMaximumLevel,
@@ -694,6 +695,7 @@ namespace Iridium {
                 cpuProfiler_ != nullptr && cpuProfiler_->isEnabled(),
             .hooks = extensionHooks_.graphHooks(),
             .pointShadowPoolCapacities = pointShadowCapacities_,
+            .transientAliasing = renderGraphAliasing_,
         };
     }
 
@@ -1345,6 +1347,11 @@ namespace Iridium {
         info.renderGraphCommittedBytes = graphStats.committedBytes;
         info.renderGraphRebuildCount = graphStats.rebuildCount;
         info.renderGraphCacheMissCount = graphStats.cacheMissCount;
+        info.renderGraphTransientAliasing = graphStats.transientAliasing;
+        info.renderGraphAliasHeapCount = graphStats.aliasHeapCount;
+        info.renderGraphAliasedResourceCount = graphStats.aliasedResourceCount;
+        info.renderGraphAliasedRequestedBytes = graphStats.aliasedRequestedBytes;
+        info.renderGraphAliasHeapCommittedBytes = graphStats.aliasHeapCommittedBytes;
         info.refractionPyramidsResident =
             forward_.pyramidResidency().enabled();
         info.ordinary2AtlasResident = layered_.ordinary2Residency().enabled() &&

@@ -926,7 +926,8 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
     }
     graph.exportResource(swapchain, Access::Present);
 
-    RenderGraph::CompileResult result = graph.compile();
+    RenderGraph::CompileResult result = graph.compile(RenderGraph::CompileOptions{
+        .transientAliasing = features.transientAliasing });
     if (!result.succeeded()) {
         std::ostringstream message;
         message << "Production render graph failed to compile";

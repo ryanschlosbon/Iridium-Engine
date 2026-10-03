@@ -314,6 +314,176 @@ namespace Iridium {
         return resource;
     }
 
+    // ---- M7R R4b.4 transient aliasing --------------------------------------
+
+    namespace {
+        VkImageCreateInfo imageCreateInfo(VkExtent2D extent, VkFormat format,
+            VkImageUsageFlags usage, uint32_t mipLevels, uint32_t arrayLayers,
+            VkImageCreateFlags flags) {
+            VkImageCreateInfo imageInfo{ VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
+            imageInfo.flags = flags;
+            imageInfo.imageType = VK_IMAGE_TYPE_2D;
+            imageInfo.format = format;
+            imageInfo.extent = { extent.width, extent.height, 1 };
+            imageInfo.mipLevels = mipLevels;
+            imageInfo.arrayLayers = arrayLayers;
+            imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+            imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+            imageInfo.usage = usage;
+            imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+            imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            return imageInfo;
+        }
+    } // namespace
+
+    VkMemoryRequirements VulkanResourceAllocator::imageMemoryRequirements(
+        VkExtent2D extent, VkFormat format, VkImageUsageFlags usage,
+        uint32_t mipLevels, uint32_t arrayLayers, VkImageCreateFlags flags) const {
+        requireInitialized(physicalDevice_, device_);
+        if (mipLevels == 0 || arrayLayers == 0)
+            throw std::invalid_argument("image mip and layer counts must be nonzero");
+        const VkImageCreateInfo imageInfo = imageCreateInfo(extent, format, usage,
+            mipLevels, arrayLayers, flags);
+        VkMemoryRequirements requirements{};
+        if (deviceApiVersion_ >= VK_API_VERSION_1_3) {
+            // Core 1.3: the requirements of an image that does not exist yet.
+            VkDeviceImageMemoryRequirements query{
+                VK_STRUCTURE_TYPE_DEVICE_IMAGE_MEMORY_REQUIREMENTS };
+            query.pCreateInfo = &imageInfo;
+            VkMemoryRequirements2 result{ VK_STRUCTURE_TYPE_MEMORY_REQUIREMENTS_2 };
+            vkGetDeviceImageMemoryRequirements(device_, &query, &result);
+            requirements = result.memoryRequirements;
+        }
+        else {
+            VkImage image = VK_NULL_HANDLE;
+            const VkResult result = vkCreateImage(device_, &imageInfo, nullptr, &image);
+            if (result != VK_SUCCESS) throwVkError("vkCreateImage", result);
+            vkGetImageMemoryRequirements(device_, image, &requirements);
+            vkDestroyImage(device_, image, nullptr);
+        }
+        // Exactly the type createImage2D binds to (no silent type change).
+        requirements.memoryTypeBits = 1u << findMemoryType(
+            requirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        return requirements;
+    }
+
+    VulkanAliasHeapResource VulkanResourceAllocator::createAliasHeap(VkDeviceSize size,
+        VkDeviceSize alignment, uint32_t typeBits, ProfileMemoryCategory category,
+        uint64_t requestedBytes) {
+        requireInitialized(physicalDevice_, device_);
+        if (size == 0 || typeBits == 0 || alignment == 0 ||
+            (alignment & (alignment - 1)) != 0)
+            throw std::invalid_argument(
+                "Alias heap needs a size, memory types and a power-of-two alignment");
+        const uint32_t memoryTypeIndex = findMemoryType(typeBits,
+            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        // Whole 64 KiB pages, so a buffer over the entire heap (poison fills)
+        // fits whatever rounding the buffer's own requirements apply.
+        constexpr VkDeviceSize Page = VkDeviceSize{ 64 } * 1024;
+        const VkDeviceSize granule = (std::max)(alignment, Page);
+        size = (size + granule - 1) / granule * granule;
+        VkMemoryRequirements requirements{};
+        requirements.size = size;
+        requirements.alignment = alignment;
+        requirements.memoryTypeBits = 1u << memoryTypeIndex;
+        // One dedicated block per heap: offsets are the planner's, not VMA's.
+        VmaAllocationCreateInfo allocationInfo{};
+        allocationInfo.flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
+        allocationInfo.usage = VMA_MEMORY_USAGE_UNKNOWN;
+        allocationInfo.requiredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+        allocationInfo.memoryTypeBits = requirements.memoryTypeBits;
+        VulkanAliasHeapResource heap{};
+        VmaAllocationInfo info{};
+        const VkResult result = vmaAllocateMemory(vma_, &requirements, &allocationInfo,
+            &heap.vmaAllocation, &info);
+        if (result != VK_SUCCESS) throwVkError("vmaAllocateMemory (alias heap)", result);
+        heap.memory = info.deviceMemory;
+        heap.offset = info.offset;
+        heap.size = size;
+        heap.memoryTypeIndex = info.memoryType;
+        vmaSetAllocationName(vma_, heap.vmaAllocation, profileMemoryCategoryName(category));
+        memoryProfile_.recordAllocation(heap.allocation, category, requestedBytes,
+            static_cast<uint64_t>(info.size), info.memoryType,
+            memoryProperties_.memoryTypes[info.memoryType].heapIndex);
+        return heap;
+    }
+
+    VulkanImageResource VulkanResourceAllocator::createAliasingImage2D(
+        const VulkanAliasHeapResource& heap, VkDeviceSize offset, VkExtent2D extent,
+        VkFormat format, VkImageUsageFlags usage, VkImageAspectFlags aspect,
+        uint32_t mipLevels, uint32_t arrayLayers, VkImageCreateFlags flags,
+        VkImageViewType viewType) {
+        requireInitialized(physicalDevice_, device_);
+        if (!heap.isValid()) throw std::invalid_argument("Aliasing image needs a valid heap");
+        const VkMemoryRequirements requirements = imageMemoryRequirements(extent, format,
+            usage, mipLevels, arrayLayers, flags);
+        if ((requirements.memoryTypeBits & (1u << heap.memoryTypeIndex)) == 0 ||
+            offset % requirements.alignment != 0 || offset > heap.size ||
+            requirements.size > heap.size - offset)
+            throw std::invalid_argument(
+                "Aliasing image does not fit its heap placement or memory type");
+
+        const VkImageCreateInfo imageInfo = imageCreateInfo(extent, format, usage,
+            mipLevels, arrayLayers, flags);
+        VulkanImageResource resource{};
+        VkResult result = vmaCreateAliasingImage2(vma_, heap.vmaAllocation, offset,
+            &imageInfo, &resource.image);
+        if (result != VK_SUCCESS) throwVkError("vmaCreateAliasingImage2", result);
+
+        VkImageViewCreateInfo viewInfo{ VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
+        viewInfo.image = resource.image;
+        viewInfo.viewType = viewType;
+        viewInfo.format = format;
+        viewInfo.subresourceRange = { aspect, 0, mipLevels, 0, arrayLayers };
+        result = vkCreateImageView(device_, &viewInfo, nullptr, &resource.view);
+        if (result != VK_SUCCESS) {
+            vkDestroyImage(device_, resource.image, nullptr);
+            throwVkError("vkCreateImageView", result);
+        }
+        resource.memory = heap.memory;
+        resource.memoryOffset = heap.offset + offset;
+        resource.extent = extent;
+        resource.format = format;
+        resource.aspect = aspect;
+        resource.mipLevels = mipLevels;
+        resource.arrayLayers = arrayLayers;
+        resource.viewType = viewType;
+        // Statistics only (valid = false: never counted, recordFree is a
+        // no-op); the heap's profile record owns the memory.
+        resource.allocation.category = ProfileMemoryCategory::RenderGraphTransient;
+        resource.allocation.requestedBytes =
+            imageRequestedBytes(extent, format, mipLevels, arrayLayers);
+        resource.allocation.memoryTypeIndex = heap.memoryTypeIndex;
+        resource.allocation.memoryHeapIndex =
+            memoryProperties_.memoryTypes[heap.memoryTypeIndex].heapIndex;
+        return resource;
+    }
+
+    VulkanBufferResource VulkanResourceAllocator::createAliasingBuffer(
+        const VulkanAliasHeapResource& heap, VkBufferUsageFlags usage) {
+        requireInitialized(physicalDevice_, device_);
+        if (!heap.isValid()) throw std::invalid_argument("Aliasing buffer needs a valid heap");
+        VkBufferCreateInfo bufferInfo{ VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
+        bufferInfo.size = heap.size;
+        bufferInfo.usage = usage;
+        bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        VulkanBufferResource resource{};
+        const VkResult result = vmaCreateAliasingBuffer2(vma_, heap.vmaAllocation, 0,
+            &bufferInfo, &resource.buffer);
+        if (result != VK_SUCCESS) throwVkError("vmaCreateAliasingBuffer2", result);
+        resource.memory = heap.memory;
+        resource.memoryOffset = heap.offset;
+        resource.size = heap.size;
+        return resource;
+    }
+
+    void VulkanResourceAllocator::destroy(VulkanAliasHeapResource& heap) noexcept {
+        if (device_ != VK_NULL_HANDLE && heap.vmaAllocation != VK_NULL_HANDLE)
+            vmaFreeMemory(vma_, heap.vmaAllocation);
+        memoryProfile_.recordFree(heap.allocation);
+        heap = {};
+    }
+
     void VulkanResourceAllocator::destroy(VulkanBufferResource& resource) noexcept {
         if (device_ != VK_NULL_HANDLE) {
             if (resource.buffer != VK_NULL_HANDLE) {

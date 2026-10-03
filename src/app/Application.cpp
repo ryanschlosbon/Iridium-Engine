@@ -371,6 +371,7 @@ namespace Iridium {
                 config_.experimentalDepthOcclusionQuery,
             .experimentalDepthOcclusionRejection =
                 config_.experimentalDepthOcclusionRejection,
+            .renderGraphAliasing = config_.renderGraphAliasing,
             .cpuProfiler = &cpuProfiler_,
             .enableGpuProfiling = config_.enableGpuProfiling,
             .enableTransparentPipelineStatistics =

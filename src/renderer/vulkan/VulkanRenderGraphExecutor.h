@@ -1,6 +1,7 @@
 #pragma once
 
 #include "renderer/graph/RenderGraph.h"
+#include "renderer/graph/RenderGraphAliasing.h"
 #include "renderer/vulkan/VulkanFrameScheduler.h"
 #include "renderer/vulkan/VulkanResourceAllocator.h"
 
@@ -55,6 +56,23 @@ namespace Iridium {
         [[nodiscard]] virtual VulkanGraphPhysicalResource create(
             const RenderGraph::PhysicalResourceSlot& slot) = 0;
         virtual void destroy(VulkanGraphPhysicalResource& resource) noexcept = 0;
+
+        // ---- M7R R4b.4 transient aliasing (PhysicalResourceSlot::aliased) ----
+        // The memory an aliased slot's image needs (planning input). The
+        // defaults serve device-free fakes: a nominal requirement from the
+        // descriptor, heaps that own no memory, and aliased slots created as
+        // ordinary resources.
+        [[nodiscard]] virtual RenderGraph::TransientMemoryRequirement aliasRequirement(
+            const RenderGraph::PhysicalResourceSlot& slot);
+        // One block for a planned heap; `requestedBytes` is what its members
+        // would need unaliased (accounting only).
+        [[nodiscard]] virtual VulkanAliasHeapResource createAliasHeap(
+            const RenderGraph::AliasHeap& heap, uint64_t requestedBytes);
+        // After every resource bound into the heap is destroyed.
+        virtual void destroyAliasHeap(VulkanAliasHeapResource& heap) noexcept;
+        [[nodiscard]] virtual VulkanGraphPhysicalResource createAliased(
+            const RenderGraph::PhysicalResourceSlot& slot,
+            const VulkanAliasHeapResource& heap, uint64_t offset);
     };
 
     class VulkanAllocatorGraphResourceFactory final
@@ -68,6 +86,17 @@ namespace Iridium {
         [[nodiscard]] VulkanGraphPhysicalResource create(
             const RenderGraph::PhysicalResourceSlot& slot) override;
         void destroy(VulkanGraphPhysicalResource& resource) noexcept override;
+        // vkGetDeviceImageMemoryRequirements restricted to the legacy memory
+        // type; one dedicated VMA block per heap (accounted under the
+        // factory's category); vmaCreateAliasingImage2 at the planned offset.
+        [[nodiscard]] RenderGraph::TransientMemoryRequirement aliasRequirement(
+            const RenderGraph::PhysicalResourceSlot& slot) override;
+        [[nodiscard]] VulkanAliasHeapResource createAliasHeap(
+            const RenderGraph::AliasHeap& heap, uint64_t requestedBytes) override;
+        void destroyAliasHeap(VulkanAliasHeapResource& heap) noexcept override;
+        [[nodiscard]] VulkanGraphPhysicalResource createAliased(
+            const RenderGraph::PhysicalResourceSlot& slot,
+            const VulkanAliasHeapResource& heap, uint64_t offset) override;
 
     private:
         VulkanResourceAllocator* allocator_ = nullptr;
@@ -82,7 +111,11 @@ namespace Iridium {
         ~VulkanGraphResourcePool();
 
         void init(VulkanGraphResourceFactory& factory, uint32_t frameCount);
-        void rebuild(const RenderGraph::CompiledGraph& graph);
+        // R4b.4: with `plan`, every frame slot gets its own heaps and the
+        // graph's aliased slots are created inside them at the planned
+        // offsets. Heaps retire with the frame's resources.
+        void rebuild(const RenderGraph::CompiledGraph& graph,
+            const RenderGraph::AliasPlan* plan = nullptr);
         void onFrameFenceCompleted(uint32_t frameIndex);
         void cleanupAfterDeviceIdle() noexcept;
 
@@ -91,17 +124,28 @@ namespace Iridium {
         }
         [[nodiscard]] size_t activeResourceCount(uint32_t frameIndex) const;
         [[nodiscard]] size_t retiredResourceCount(uint32_t frameIndex) const;
+        // Resources' requested bytes (aliased images included).
         [[nodiscard]] uint64_t requestedBytes() const noexcept;
+        // Dedicated resources' committed bytes plus every alias heap's.
         [[nodiscard]] uint64_t committedBytes() const noexcept;
+        // Alias heaps only (active and retired).
+        [[nodiscard]] uint64_t aliasHeapCommittedBytes() const noexcept;
         [[nodiscard]] const VulkanGraphPhysicalResource& resource(
             uint32_t frameIndex, uint32_t physicalSlot) const;
+        [[nodiscard]] std::span<const VulkanAliasHeapResource> aliasHeaps(
+            uint32_t frameIndex) const;
 
     private:
-        void destroyResources(std::vector<VulkanGraphPhysicalResource>& resources) noexcept;
+        struct FrameResources {
+            std::vector<VulkanGraphPhysicalResource> resources;
+            std::vector<VulkanAliasHeapResource> heaps;
+        };
+        void destroyFrame(FrameResources& frame) noexcept;
 
         VulkanGraphResourceFactory* factory_ = nullptr;
-        std::vector<std::vector<VulkanGraphPhysicalResource>> active_;
-        std::vector<std::vector<VulkanGraphPhysicalResource>> retired_;
+        std::vector<FrameResources> active_;
+        // Several retired generations may wait for one fence.
+        std::vector<std::vector<FrameResources>> retired_;
     };
 
     struct VulkanGraphStats {
@@ -118,6 +162,15 @@ namespace Iridium {
         uint64_t cacheMissCount = 0;
         // History-pair slots (two per pair, global; included in the bytes).
         uint32_t historySlotCount = 0;
+        // R4b.4 transient aliasing (zero without aliased slots). Heap count
+        // and peak are per frame slot; the byte totals cover every slot.
+        // committedBytes above already includes aliasHeapCommittedBytes.
+        bool transientAliasing = false;
+        uint32_t aliasHeapCount = 0;
+        uint32_t aliasedResourceCount = 0;
+        uint64_t aliasedRequestedBytes = 0;
+        uint64_t aliasHeapCommittedBytes = 0;
+        uint64_t aliasPeakLiveBytes = 0;
     };
 
     // bindExternalImage target for a binding shared by every frame slot; its
@@ -452,6 +505,11 @@ namespace Iridium {
         [[nodiscard]] const RenderGraph::CompiledGraph* compiledGraph() const noexcept {
             return graph_;
         }
+        // R4b.4: the active plan's alias heaps of one frame slot (empty
+        // without aliased slots). Valid until the next rebuild; a heap's
+        // memory is reused by that slot's frames only.
+        [[nodiscard]] std::span<const VulkanAliasHeapResource> aliasHeaps(
+            uint32_t frameIndex) const;
 
     private:
         friend struct VulkanPassContext;
@@ -552,6 +610,20 @@ namespace Iridium {
         // [frameCount + 1][logical]; the last row holds global bindings.
         std::vector<std::vector<ExternalImageBinding>> externalImages_;
         std::vector<uint8_t> externalImageScope_;   // 0 none, 1 per frame, 2 global
+        // R4b.4 transient aliasing, built at rebuild. An aliased slot starts
+        // every frame Undefined; its first use (which must be its first-use
+        // writer) transitions from UNDEFINED after the tracked accesses of
+        // the slots that occupied its memory earlier in the frame
+        // (AliasPlan::aliasPredecessors, by physical slot).
+        std::vector<uint8_t> aliasedSlot_;              // per physical slot
+        std::vector<uint32_t> aliasedSlots_;            // indices of aliased slots
+        std::vector<uint32_t> aliasPredecessorFirst_;   // physicalSlotCount + 1
+        std::vector<uint32_t> aliasPredecessorSlots_;
+        uint32_t aliasHeapCount_ = 0;
+        uint64_t aliasedRequestedBytes_ = 0;            // per frame slot
+        uint64_t aliasPeakLiveBytes_ = 0;               // per frame slot
+        void queueAliasedFirstUse(const RenderGraph::CompiledResource& resource,
+            const RenderGraph::CompiledUsage& usage);
 
         [[nodiscard]] const RenderGraph::CompiledGraph& executingGraph() const;
         [[nodiscard]] const RenderGraph::CompiledGraph& boundGraph() const;
