@@ -1006,7 +1006,10 @@ void VulkanRenderGraphExecutor::bindExternalBuffer(uint32_t frameIndex,
         for (uint32_t resource = 0; resource < externalBuffers_[slot].size(); ++resource)
             if ((slot != frameIndex || resource != index) &&
                 externalBuffers_[slot][resource].buffer == buffer)
-                throw std::invalid_argument("Tracked external graph buffers must not alias resources or frame slots");
+                throw std::invalid_argument("Tracked external graph buffers must not alias "
+                    "resources or frame slots: binding '" + graph_->resources()[index].name +
+                    "' (slot " + std::to_string(frameIndex) + ") reuses the handle bound to '" +
+                    graph_->resources()[resource].name + "' (slot " + std::to_string(slot) + ")");
     externalBuffers_[frameIndex][index] = {buffer, size, initialAccess};
     externalBufferTracked_[index] = true;
 }

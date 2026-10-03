@@ -826,16 +826,37 @@ namespace Iridium {
 
     void VulkanVertexBackend::rebindIdleSlotImports() {
         if (renderGraph_.compiledGraph() == nullptr) return;
+        // M7R R4b.6 fix: every idle slot swapped at once, so a growth that
+        // destroyed one idle slot's buffers may hand a recycled handle to
+        // another owner's replacement. Unbind every idle slot before binding
+        // any (as bindGraphImportedBuffers does), or the first slot's bind
+        // meets the second's stale handle (seen without validation layers,
+        // whose handle wrapping never recycles).
+        std::array<bool, VulkanFrameScheduler::FramesInFlight> idle{};
         for (uint32_t slot = 0; slot < VulkanFrameScheduler::FramesInFlight; ++slot) {
             if (scheduler.slotInFlight(slot)) {
                 importRebindPending_[slot] = true;
                 continue;
             }
+            idle[slot] = true;
             // The slot's fence has been waited (possibly by a bounded stall
             // outside beginFrame): retire it in the executor before binding.
             renderGraph_.onFrameFenceCompleted(slot);
-            rebindGraphImportedBuffers(slot);
+            unbindGraphImportedBuffers(slot);
         }
+        for (uint32_t slot = 0; slot < VulkanFrameScheduler::FramesInFlight; ++slot)
+            if (idle[slot]) rebindGraphImportedBuffers(slot);
+    }
+
+    void VulkanVertexBackend::unbindGraphImportedBuffers(uint32_t slot) {
+        const RenderGraph::GraphResourceId ids[] = {
+            graphIds_.directionalIndirect.commands, graphIds_.directionalIndirect.counts,
+            graphIds_.spotIndirect.commands, graphIds_.spotIndirect.counts,
+            graphIds_.pointIndirect.commands, graphIds_.pointIndirect.counts,
+            graphIds_.opaqueIndirect.commands, graphIds_.opaqueIndirect.counts,
+            graphIds_.probeClusterHeaders, graphIds_.probeClusterIndices };
+        for (const RenderGraph::GraphResourceId id : ids)
+            if (id.isValid()) renderGraph_.unbindExternalBuffer(slot, id);
     }
 
     void VulkanVertexBackend::swapRetiredSlot(uint32_t slot) {

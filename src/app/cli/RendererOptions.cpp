@@ -312,7 +312,7 @@ namespace Iridium::AppCli {
             });
 
         addValueOption(registry, owner, "--render-graph-aliasing", "on|off",
-            "Share memory between transient graph images (default off)",
+            "Share memory between transient graph images (default on)",
             "--render-graph-aliasing requires on or off",
             [&c](std::string_view value) {
                 if (value == "on") c.renderGraphAliasing = true;

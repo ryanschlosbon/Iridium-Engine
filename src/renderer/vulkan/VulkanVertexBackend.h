@@ -192,7 +192,7 @@ namespace Iridium {
         bool forceDirectGBufferReference_ = false;
         bool forceDirectShadowReference_ = false;
         // M7R R4b.4: compile the production graph with transient aliasing.
-        bool renderGraphAliasing_ = false;
+        bool renderGraphAliasing_ = true;
         float experimentalShadowLodErrorTexels_ = 0.0f;
         uint32_t shadowLodMaximumLevel_ = 15u;
         float experimentalProbeLodErrorPixels_ = 0.0f;
@@ -254,6 +254,7 @@ namespace Iridium {
         // M7R R4c.2: one retired slot's imported buffers (the owners' current
         // buffers of that slot).
         void rebindGraphImportedBuffers(uint32_t slot);
+        void unbindGraphImportedBuffers(uint32_t slot);
         // After capacity growth: rebinds every slot that is not in flight now;
         // an in-flight slot rebinds at its retirement.
         void rebindIdleSlotImports();

@@ -45,8 +45,9 @@ namespace Iridium {
         bool experimentalVirtualShadowResources = false;
         bool experimentalDepthOcclusionQuery = false;
         bool experimentalDepthOcclusionRejection = false;
-        // M7R R4b: --render-graph-aliasing on|off (kept until R6).
-        bool renderGraphAliasing = false;
+        // M7R R4b: --render-graph-aliasing on|off (on since R4b.6; the switch
+        // is kept until R6).
+        bool renderGraphAliasing = true;
         bool forceWireframe = false;
         uint32_t clusterTileSize = 32;
         uint32_t clusterDepthSlices = 24;

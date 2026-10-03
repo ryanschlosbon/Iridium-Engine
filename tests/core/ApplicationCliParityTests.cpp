@@ -458,9 +458,9 @@ namespace {
                 c.pipelineCacheDirectory = "out/m7r/pipeline-cache"; },
                 "--pipeline-cache requires a directory or off",
                 { { "", "--pipeline-cache requires a directory or off" } } },
-            // M7R R4b.4 (not in the 6b000ad parser).
-            { "--render-graph-aliasing", G, "on", {}, [](C& c) {
-                c.renderGraphAliasing = true; },
+            // M7R R4b.4 (not in the 6b000ad parser); on by default since R4b.6.
+            { "--render-graph-aliasing", G, "off", {}, [](C& c) {
+                c.renderGraphAliasing = false; },
                 "--render-graph-aliasing requires on or off",
                 { { "yes", "--render-graph-aliasing requires on or off" },
                   { "", "--render-graph-aliasing requires on or off" } } },
