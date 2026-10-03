@@ -3,10 +3,13 @@
 # checked with Diff-Images.py against that class's envelope. Exits non-zero on any
 # failure or missing entry.
 #
-#   powershell -File tools/m7r/Compare-FrozenCaptures.ps1 -Baseline r0-release-a -Candidate r1-release
+#   powershell -File tools/m7r/Compare-FrozenCaptures.ps1 -Baseline r0 -Candidate r1 [-PruneIdentical]
 param(
     [Parameter(Mandatory)] [string] $Baseline,
-    [Parameter(Mandatory)] [string] $Candidate
+    [Parameter(Mandatory)] [string] $Candidate,
+    # Delete candidate images that are byte-identical to the baseline (the hash is
+    # recorded in hashes.json); keeps disk use bounded across many 4K runs.
+    [switch] $PruneIdentical
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'M7RFixtures.ps1')
@@ -31,7 +34,11 @@ foreach ($k in ($base.Keys + $cand.Keys | Sort-Object -Unique)) {
     if (-not $base.ContainsKey($k)) { Write-Host "NEW       $k"; continue }
     if (-not $cand.ContainsKey($k)) { Write-Host "MISSING   $k"; $failures++; continue }
     $b = $base[$k]; $c = $cand[$k]
-    if ($b.sha256 -and $b.sha256 -eq $c.sha256) { Write-Host "identical $k"; continue }
+    if ($b.sha256 -and $b.sha256 -eq $c.sha256) {
+        Write-Host "identical $k"
+        if ($PruneIdentical) { Remove-Item -ErrorAction SilentlyContinue (Image-Path $Candidate $c) }
+        continue
+    }
     $class = $tolerance[$b.key]
     if (-not $class -or $class -eq 'exact' -or -not $c.sha256) {
         Write-Host "MISMATCH  $k  $($b.sha256) -> $($c.sha256)"; $failures++; continue
