@@ -559,6 +559,14 @@ void VulkanRenderGraphExecutor::rebuild(RenderGraph::CompiledGraph graph) {
     bufferBatch_.assign(batchCapacity, VkBufferMemoryBarrier2{});
     batchOrder_.assign(batchCapacity, 0u);
     imageBatchCount_ = bufferBatchCount_ = batchOrderCount_ = 0;
+
+    // Pass ids change with the plan, so registrations do not survive it.
+    callbacks_.assign(passCount_, VulkanPassCallbacks{});
+    passGroup_.assign(passCount_, RenderGraph::InvalidIndex);
+    rangeGroups_.clear();
+    rangeGroups_.reserve(std::max(passCount_, 1u));
+    registeredCount_ = 0;
+    openGroup_ = RenderGraph::InvalidIndex;
 }
 
 void VulkanRenderGraphExecutor::onFrameFenceCompleted(uint32_t frameIndex) {
@@ -663,6 +671,9 @@ void VulkanRenderGraphExecutor::beginFrameExecution(uint32_t frameIndex) {
     executingFrame_ = frameIndex;
     frameRetired_[frameIndex] = false;
     nextPass_ = 0;
+    hasRecordContext_ = false;
+    recordContext_ = {};
+    openGroup_ = RenderGraph::InvalidIndex;
 }
 
 const RenderGraph::CompiledGraph& VulkanRenderGraphExecutor::executingGraph() const {
@@ -839,14 +850,91 @@ void VulkanRenderGraphExecutor::beginPassAt(VkCommandBuffer commandBuffer,
     ++nextPass_;
 }
 
+void VulkanRenderGraphExecutor::requireCursorAt(uint32_t passOrder,
+    const char* message) const {
+    if (passOrder != nextPass_ || nextPass_ >= graph_->passes().size())
+        throw std::logic_error(message);
+}
+
+void VulkanRenderGraphExecutor::noteCommandBuffer(VkCommandBuffer commandBuffer) {
+    if (!hasRecordContext_) {
+        recordContext_ = { commandBuffer, executingFrame_ };
+        hasRecordContext_ = true;
+    }
+}
+
+void VulkanRenderGraphExecutor::runRegisteredPass(uint32_t passOrder) {
+    const VulkanPassCallbacks& callbacks = callbacks_[passOrder];
+    if (!hasRecordContext_ || recordContext_.commandBuffer == VK_NULL_HANDLE)
+        throw std::logic_error(
+            "Render-graph callback pass needs a frame record context or command buffer");
+    inCallback_ = true;
+    try {
+        const bool active = callbacks.active == nullptr ||
+            callbacks.active(callbacks.owner, recordContext_);
+        const uint32_t group = passGroup_[passOrder];
+        if (active) {
+            if (group != RenderGraph::InvalidIndex && openGroup_ != group &&
+                rangeSink_.enabled()) {
+                groupToken_ = rangeSink_.begin(rangeSink_.owner, rangeGroups_[group].name);
+                openGroup_ = group;
+            }
+            const bool ranged = callbacks.gpuRange != nullptr && rangeSink_.enabled();
+            VulkanGpuRangeToken token{};
+            if (ranged && callbacks.placement == GpuRangePlacement::BeforeBarriers)
+                token = rangeSink_.begin(rangeSink_.owner, callbacks.gpuRange);
+            beginPassAt(recordContext_.commandBuffer, passOrder);
+            if (ranged && callbacks.placement == GpuRangePlacement::AfterBarriers)
+                token = rangeSink_.begin(rangeSink_.owner, callbacks.gpuRange);
+            VulkanPassContext context{ recordContext_, *this,
+                RenderGraph::PassId{ passOrder }, recordContext_.commandBuffer };
+            callbacks.execute(callbacks.owner, context);
+            if (ranged) rangeSink_.end(rangeSink_.owner, token);
+        }
+        else {
+            ++nextPass_;
+        }
+        if (group != RenderGraph::InvalidIndex && openGroup_ == group &&
+            rangeGroups_[group].lastPass.order == passOrder) {
+            rangeSink_.end(rangeSink_.owner, groupToken_);
+            openGroup_ = RenderGraph::InvalidIndex;
+        }
+    }
+    catch (...) {
+        inCallback_ = false;
+        throw;
+    }
+    inCallback_ = false;
+}
+
+void VulkanRenderGraphExecutor::drainRegisteredBefore(uint32_t passOrder) {
+    while (nextPass_ < passOrder) {
+        if (callbacks_[nextPass_].execute == nullptr)
+            throw std::logic_error("Render-graph pass order does not match the compiled plan: "
+                "an unregistered pass would be skipped");
+        runRegisteredPass(nextPass_);
+    }
+}
+
+void VulkanRenderGraphExecutor::drainRegisteredAtCursor() {
+    while (nextPass_ < callbacks_.size() && callbacks_[nextPass_].execute != nullptr)
+        runRegisteredPass(nextPass_);
+}
+
 void VulkanRenderGraphExecutor::beginPass(VkCommandBuffer commandBuffer,
     RenderGraph::PassId pass) {
     if (commandBuffer == VK_NULL_HANDLE)
         throw std::invalid_argument("Render-graph pass requires a command buffer");
     const RenderGraph::CompiledGraph& graph = executingGraph();
-    if (nextPass_ >= graph.passes().size() || pass.order != nextPass_) {
+    if (inCallback_)
+        throw std::logic_error("Render-graph passes cannot begin inside a pass callback");
+    if (pass.order >= graph.passes().size() || pass.order < nextPass_ ||
+        callbacks_[pass.order].execute != nullptr) {
         throw std::logic_error("Render-graph pass order does not match the compiled plan");
     }
+    noteCommandBuffer(commandBuffer);
+    if (registeredCount_ != 0) drainRegisteredBefore(pass.order);
+    requireCursorAt(pass.order, "Render-graph pass order does not match the compiled plan");
     beginPassAt(commandBuffer, pass.order);
 }
 
@@ -855,23 +943,38 @@ void VulkanRenderGraphExecutor::beginPass(VkCommandBuffer commandBuffer,
     if (commandBuffer == VK_NULL_HANDLE)
         throw std::invalid_argument("Render-graph pass requires a command buffer");
     const RenderGraph::CompiledGraph& graph = executingGraph();
+    if (inCallback_)
+        throw std::logic_error("Render-graph passes cannot begin inside a pass callback");
+    if (registeredCount_ != 0) {
+        noteCommandBuffer(commandBuffer);
+        drainRegisteredAtCursor();
+    }
     if (nextPass_ >= graph.passes().size() ||
         graph.passes()[nextPass_].name != passName) {
         throw std::logic_error("Render-graph pass order does not match the compiled plan");
     }
+    noteCommandBuffer(commandBuffer);
     beginPassAt(commandBuffer, nextPass_);
 }
 
 void VulkanRenderGraphExecutor::skipPass(RenderGraph::PassId pass) {
     const RenderGraph::CompiledGraph& graph = executingGraph();
-    if (nextPass_ >= graph.passes().size() || pass.order != nextPass_) {
+    if (inCallback_)
+        throw std::logic_error("Render-graph passes cannot be skipped inside a pass callback");
+    if (pass.order >= graph.passes().size() || pass.order < nextPass_ ||
+        callbacks_[pass.order].execute != nullptr) {
         throw std::logic_error("Render-graph skipped pass is out of order");
     }
+    if (registeredCount_ != 0) drainRegisteredBefore(pass.order);
+    requireCursorAt(pass.order, "Render-graph skipped pass is out of order");
     ++nextPass_;
 }
 
 void VulkanRenderGraphExecutor::skipPass(std::string_view passName) {
     const RenderGraph::CompiledGraph& graph = executingGraph();
+    if (inCallback_)
+        throw std::logic_error("Render-graph passes cannot be skipped inside a pass callback");
+    if (registeredCount_ != 0) drainRegisteredAtCursor();
     if (nextPass_ >= graph.passes().size() ||
         graph.passes()[nextPass_].name != passName) {
         throw std::logic_error("Render-graph skipped pass is out of order");
@@ -881,11 +984,98 @@ void VulkanRenderGraphExecutor::skipPass(std::string_view passName) {
 
 void VulkanRenderGraphExecutor::finishFrameExecution() {
     const RenderGraph::CompiledGraph& graph = executingGraph();
+    if (inCallback_)
+        throw std::logic_error("Render-graph frame cannot finish inside a pass callback");
+    if (registeredCount_ != 0) drainRegisteredAtCursor();
     if (nextPass_ != graph.passes().size()) {
         throw std::logic_error("Render-graph frame ended before all passes were handled");
     }
     executingFrame_ = RenderGraph::InvalidIndex;
     nextPass_ = 0;
+    hasRecordContext_ = false;
+    recordContext_ = {};
+}
+
+void VulkanRenderGraphExecutor::setFrameRecordContext(
+    const VulkanFrameRecordContext& context) {
+    (void)executingGraph();
+    if (context.commandBuffer == VK_NULL_HANDLE)
+        throw std::invalid_argument("Render-graph record context requires a command buffer");
+    recordContext_ = context;
+    recordContext_.frameIndex = executingFrame_;
+    hasRecordContext_ = true;
+}
+
+void VulkanRenderGraphExecutor::registerPass(RenderGraph::PassId pass,
+    const VulkanPassCallbacks& callbacks) {
+    const RenderGraph::CompiledGraph& graph = boundGraph();
+    if (executingFrame_ != RenderGraph::InvalidIndex)
+        throw std::logic_error("Render-graph passes cannot be registered during frame execution");
+    if (pass.order >= graph.passes().size() || callbacks.execute == nullptr)
+        throw std::invalid_argument("Render-graph pass registration is invalid");
+    if (callbacks_[pass.order].execute != nullptr)
+        throw std::logic_error("Render-graph pass is already registered");
+    callbacks_[pass.order] = callbacks;
+    ++registeredCount_;
+}
+
+void VulkanRenderGraphExecutor::unregisterPass(RenderGraph::PassId pass) {
+    (void)boundGraph();
+    if (executingFrame_ != RenderGraph::InvalidIndex)
+        throw std::logic_error("Render-graph passes cannot be unregistered during frame execution");
+    if (pass.order >= callbacks_.size() || callbacks_[pass.order].execute == nullptr)
+        return;
+    const uint32_t group = passGroup_[pass.order];
+    if (group != RenderGraph::InvalidIndex) {
+        const VulkanRangeGroup& value = rangeGroups_[group];
+        for (uint32_t order = value.firstPass.order; order <= value.lastPass.order; ++order)
+            passGroup_[order] = RenderGraph::InvalidIndex;
+        rangeGroups_[group] = {};
+    }
+    callbacks_[pass.order] = {};
+    --registeredCount_;
+}
+
+bool VulkanRenderGraphExecutor::isRegistered(RenderGraph::PassId pass) const noexcept {
+    return pass.order < callbacks_.size() && callbacks_[pass.order].execute != nullptr;
+}
+
+void VulkanRenderGraphExecutor::registerRangeGroup(const VulkanRangeGroup& group) {
+    (void)boundGraph();
+    if (executingFrame_ != RenderGraph::InvalidIndex)
+        throw std::logic_error("Render-graph range groups cannot change during frame execution");
+    if (group.name == nullptr || group.firstPass.order > group.lastPass.order ||
+        group.lastPass.order >= callbacks_.size())
+        throw std::invalid_argument("Render-graph range group is invalid");
+    for (uint32_t order = group.firstPass.order; order <= group.lastPass.order; ++order) {
+        if (callbacks_[order].execute == nullptr)
+            throw std::logic_error("Render-graph range groups span registered passes only");
+        if (passGroup_[order] != RenderGraph::InvalidIndex)
+            throw std::logic_error("Render-graph range groups must not overlap");
+    }
+    uint32_t index = 0;
+    while (index < rangeGroups_.size() && rangeGroups_[index].name != nullptr) ++index;
+    if (index == rangeGroups_.size()) {
+        if (rangeGroups_.size() == rangeGroups_.capacity())
+            throw std::logic_error("Render-graph range group capacity exceeded");
+        rangeGroups_.push_back(group);
+    }
+    else {
+        rangeGroups_[index] = group;
+    }
+    for (uint32_t order = group.firstPass.order; order <= group.lastPass.order; ++order)
+        passGroup_[order] = index;
+}
+
+VulkanGpuRangeSink VulkanGpuRangeSink::forScheduler(
+    VulkanFrameScheduler& scheduler) noexcept {
+    return { &scheduler,
+        [](void* owner, const char* name) {
+            return static_cast<VulkanFrameScheduler*>(owner)->beginGpuRange(name);
+        },
+        [](void* owner, VulkanGpuRangeToken& token) {
+            static_cast<VulkanFrameScheduler*>(owner)->endGpuRange(token);
+        } };
 }
 
 void VulkanRenderGraphExecutor::transitionImage(VkCommandBuffer commandBuffer,
@@ -924,6 +1114,14 @@ void VulkanRenderGraphExecutor::cleanupAfterDeviceIdle() noexcept {
     bufferBatch_.clear();
     batchOrder_.clear();
     imageBatchCount_ = bufferBatchCount_ = batchOrderCount_ = 0;
+    callbacks_.clear();
+    passGroup_.clear();
+    rangeGroups_.clear();
+    registeredCount_ = 0;
+    hasRecordContext_ = false;
+    recordContext_ = {};
+    inCallback_ = false;
+    openGroup_ = RenderGraph::InvalidIndex;
     barriers_.clear();
     frameAccess_.clear();
     externalBuffers_.clear(); externalBufferTracked_.clear(); frameRetired_.clear();

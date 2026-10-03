@@ -831,6 +831,345 @@ namespace {
         return true;
     }
 
+    // ---- R3b.3: callback registry ----------------------------------------------
+
+    enum class EventKind : uint8_t { Barrier, Execute, Active, RangeBegin, RangeEnd };
+
+    struct Event {
+        EventKind kind = EventKind::Barrier;
+        uint32_t pass = RenderGraph::InvalidIndex;
+        const char* name = nullptr;
+        uint32_t barriers = 0;
+    };
+
+    // One ordered log for barrier calls, callbacks and GPU ranges.
+    struct EventLog final : VulkanBarrierSink {
+        void pipelineBarrier(VkCommandBuffer, VkPipelineStageFlags, VkPipelineStageFlags,
+            std::span<const VkBufferMemoryBarrier> buffers,
+            std::span<const VkImageMemoryBarrier> images) override {
+            push({ EventKind::Barrier, currentPass, nullptr,
+                static_cast<uint32_t>(buffers.size() + images.size()) });
+        }
+        void pipelineBarrier2(VkCommandBuffer, const VkDependencyInfo& dependency) override {
+            push({ EventKind::Barrier, currentPass, nullptr,
+                dependency.bufferMemoryBarrierCount + dependency.imageMemoryBarrierCount });
+        }
+        void push(const Event& event) noexcept {
+            if (count < events.size()) events[count++] = event;
+        }
+        [[nodiscard]] std::span<const Event> recorded() const noexcept {
+            return std::span(events.data(), count);
+        }
+        [[nodiscard]] size_t countOf(EventKind kind) const noexcept {
+            return static_cast<size_t>(std::count_if(events.begin(), events.begin() + count,
+                [kind](const Event& event) { return event.kind == kind; }));
+        }
+
+        std::array<Event, 512> events{};
+        size_t count = 0;
+        uint32_t currentPass = RenderGraph::InvalidIndex;
+        uint32_t nextToken = 1;
+    };
+
+    VulkanGpuRangeSink rangeSinkFor(EventLog& log) {
+        return { &log,
+            [](void* owner, const char* name) {
+                auto& self = *static_cast<EventLog*>(owner);
+                self.push({ EventKind::RangeBegin, RenderGraph::InvalidIndex, name });
+                return VulkanGpuRangeToken{ 0, self.nextToken++, true };
+            },
+            [](void* owner, VulkanGpuRangeToken& token) {
+                auto& self = *static_cast<EventLog*>(owner);
+                self.push({ EventKind::RangeEnd, token.endQuery, nullptr });
+                token.active = false;
+            } };
+    }
+
+    // Owner of the test callbacks: per-pass activity and a record of what the
+    // callback saw.
+    struct CallbackOwner;
+    struct PassOwner {
+        CallbackOwner* shared = nullptr;
+        uint32_t pass = 0;
+    };
+
+    struct CallbackOwner {
+        EventLog* log = nullptr;
+        std::array<PassOwner, 8> passes{};
+        std::array<bool, 8> active{ true, true, true, true, true, true, true, true };
+        std::array<uint32_t, 8> executions{};
+        VkCommandBuffer seenCommandBuffer = VK_NULL_HANDLE;
+        uint32_t seenFrame = RenderGraph::InvalidIndex;
+        uint32_t seenImageIndex = RenderGraph::InvalidIndex;
+        bool reentryRejected = false;
+        bool tryReentry = false;
+        RenderGraph::GraphResourceId image{};
+        VkImage seenImage = VK_NULL_HANDLE;
+    };
+
+    // One owner per pass (PassOwner), sharing the CallbackOwner state.
+    VulkanPassCallbacks testCallbacks(CallbackOwner& owner, uint32_t pass,
+        const char* range = nullptr,
+        GpuRangePlacement placement = GpuRangePlacement::BeforeBarriers) {
+        VulkanPassCallbacks callbacks{};
+        owner.passes[pass] = { &owner, pass };
+        callbacks.owner = &owner.passes[pass];
+        callbacks.active = [](void* self, const VulkanFrameRecordContext& frame) {
+            const auto& passOwner = *static_cast<PassOwner*>(self);
+            auto& state = *passOwner.shared;
+            state.seenFrame = frame.frameIndex;
+            state.log->push({ EventKind::Active, passOwner.pass });
+            return state.active[passOwner.pass];
+        };
+        callbacks.execute = [](void* self, VulkanPassContext& context) {
+            auto& state = *static_cast<PassOwner*>(self)->shared;
+            if (context.pass.order != static_cast<PassOwner*>(self)->pass)
+                state.log->push({ EventKind::Execute, RenderGraph::InvalidIndex });
+            state.log->push({ EventKind::Execute, context.pass.order });
+            ++state.executions[context.pass.order];
+            state.seenCommandBuffer = context.commandBuffer;
+            state.seenImageIndex = context.frame.imageIndex;
+            if (state.image.isValid())
+                state.seenImage = context.graph.image(context.frame.frameIndex, state.image).image;
+            if (state.tryReentry) {
+                try { context.graph.beginPass(context.commandBuffer, RenderGraph::PassId{ 4 }); }
+                catch (const std::logic_error&) { state.reentryRejected = true; }
+            }
+        };
+        callbacks.gpuRange = range;
+        callbacks.placement = placement;
+        return callbacks;
+    }
+
+    // p0..p4 alternate accesses of one image, so every executed pass records
+    // a barrier.
+    RenderGraph::CompiledGraph chainGraph() {
+        RenderGraph::RenderGraphBuilder builder;
+        auto image = builder.createResource("image", imageDesc());
+        std::array<RenderGraph::PassHandle, 5> passes{};
+        for (uint32_t index = 0; index < 5; ++index)
+            passes[index] = builder.addPass("p" + std::to_string(index));
+        image = builder.write(passes[0], image, Access::ColorAttachment, RenderGraph::LoadOp::Clear);
+        builder.read(passes[1], image, Access::SampledRead);
+        image = builder.write(passes[2], image, Access::StorageReadWrite);
+        builder.read(passes[3], image, Access::SampledRead);
+        builder.read(passes[4], image, Access::TransferSource);
+        builder.exportResource(image, Access::TransferSource);
+        RenderGraph::CompileResult result = builder.compile();
+        if (!result.succeeded()) throw std::runtime_error("chain graph failed to compile");
+        return std::move(*result.graph);
+    }
+
+    struct ChainFixture {
+        FakeResourceFactory factory;
+        EventLog log;
+        CallbackOwner owner;
+        VulkanRenderGraphExecutor executor;
+
+        ChainFixture() {
+            owner.log = &log;
+            executor.setBarrierSink(&log);
+            executor.init(factory, 2);
+            executor.setBarrierApi(VulkanBarrierApi::Synchronization2);
+            executor.rebuild(chainGraph());
+            executor.setGpuRangeSink(rangeSinkFor(log));
+        }
+        static RenderGraph::PassId pass(uint32_t order) { return RenderGraph::PassId{ order }; }
+    };
+
+    bool testCallbackDrainOrder() {
+        ChainFixture fixture;
+        auto& executor = fixture.executor;
+        auto& log = fixture.log;
+        executor.registerPass(ChainFixture::pass(1), testCallbacks(fixture.owner, 1));
+        executor.registerPass(ChainFixture::pass(3), testCallbacks(fixture.owner, 3));
+        fixture.owner.active[3] = false;
+        CHECK(executor.isRegistered(ChainFixture::pass(1)));
+        CHECK(!executor.isRegistered(ChainFixture::pass(2)));
+
+        executor.beginFrameExecution(0);
+        executor.beginPass(FakeCommandBuffer, ChainFixture::pass(0));
+        // Draining p1 happens inside beginPass(p2), p3 inside beginPass(p4).
+        executor.beginPass(FakeCommandBuffer, ChainFixture::pass(2));
+        executor.beginPass(FakeCommandBuffer, ChainFixture::pass(4));
+        executor.finishFrameExecution();
+
+        const auto events = log.recorded();
+        // p0 barrier | p1 active, barrier, execute | p2 barrier | p3 inactive | p4 barrier
+        CHECK(events.size() == 7);
+        CHECK(events[0].kind == EventKind::Barrier);
+        CHECK(events[1].kind == EventKind::Active && events[1].pass == 1);
+        CHECK(events[2].kind == EventKind::Barrier);
+        CHECK(events[3].kind == EventKind::Execute && events[3].pass == 1);
+        CHECK(events[4].kind == EventKind::Barrier);
+        CHECK(events[5].kind == EventKind::Active && events[5].pass == 3);
+        CHECK(events[6].kind == EventKind::Barrier);
+        CHECK(fixture.owner.executions[1] == 1 && fixture.owner.executions[3] == 0);
+        CHECK(fixture.owner.seenCommandBuffer == FakeCommandBuffer);
+        CHECK(fixture.owner.seenFrame == 0);
+        return true;
+    }
+
+    bool testDrainRejectsUnregisteredSkips() {
+        ChainFixture fixture;
+        auto& executor = fixture.executor;
+        executor.registerPass(ChainFixture::pass(2), testCallbacks(fixture.owner, 2));
+        CHECK(throws([&] { executor.registerPass(ChainFixture::pass(2), testCallbacks(fixture.owner, 2)); }));
+        CHECK(throws([&] { executor.registerPass(ChainFixture::pass(9), testCallbacks(fixture.owner, 0)); }));
+        CHECK(throws([&] { executor.registerPass(ChainFixture::pass(0), VulkanPassCallbacks{}); }));
+        executor.beginFrameExecution(0);
+        CHECK(throws([&] { executor.registerPass(ChainFixture::pass(4), testCallbacks(fixture.owner, 4)); }));
+        CHECK(throws([&] { executor.unregisterPass(ChainFixture::pass(2)); }));
+        executor.beginPass(FakeCommandBuffer, ChainFixture::pass(0));
+        // Draining up to p3 would skip the unregistered p1.
+        CHECK(throws([&] { executor.beginPass(FakeCommandBuffer, ChainFixture::pass(3)); }));
+        CHECK(throws([&] { executor.skipPass(ChainFixture::pass(3)); }));
+        // A registered pass is never begun or skipped imperatively.
+        CHECK(throws([&] { executor.beginPass(FakeCommandBuffer, ChainFixture::pass(2)); }));
+        CHECK(throws([&] { executor.skipPass(ChainFixture::pass(2)); }));
+        CHECK(fixture.owner.executions[2] == 0);
+        executor.skipPass(ChainFixture::pass(1));
+        // The string form drains the registered pass at the cursor first.
+        executor.beginPass(FakeCommandBuffer, "p3");
+        CHECK(fixture.owner.executions[2] == 1);
+        CHECK(throws([&] { executor.finishFrameExecution(); }));
+        executor.skipPass("p4");
+        executor.finishFrameExecution();
+        return true;
+    }
+
+    bool testFinishDrainsAndRollback() {
+        ChainFixture fixture;
+        auto& executor = fixture.executor;
+        executor.registerPass(ChainFixture::pass(3), testCallbacks(fixture.owner, 3));
+        executor.registerPass(ChainFixture::pass(4), testCallbacks(fixture.owner, 4));
+        executor.beginFrameExecution(0);
+        // No beginPass yet: the drain needs an explicit record context.
+        executor.skipPass(ChainFixture::pass(0));
+        executor.skipPass(ChainFixture::pass(1));
+        executor.skipPass(ChainFixture::pass(2));
+        CHECK(throws([&] { executor.finishFrameExecution(); }));
+        executor.setFrameRecordContext({ FakeCommandBuffer, 7, 2 });
+        executor.finishFrameExecution();
+        CHECK(fixture.owner.executions[3] == 1 && fixture.owner.executions[4] == 1);
+        CHECK(fixture.owner.seenImageIndex == 2);
+        CHECK(fixture.owner.seenFrame == 0);   // the executing slot, not the argument
+
+        // Rollback: unregister p4 and restore its imperative call.
+        executor.unregisterPass(ChainFixture::pass(4));
+        CHECK(!executor.isRegistered(ChainFixture::pass(4)));
+        executor.onFrameFenceCompleted(1);
+        executor.beginFrameExecution(1);
+        executor.beginPass(FakeCommandBuffer, ChainFixture::pass(0));
+        executor.skipPass(ChainFixture::pass(1));
+        executor.skipPass(ChainFixture::pass(2));
+        // finish drains p3, then fails: p4 is imperative again.
+        CHECK(throws([&] { executor.finishFrameExecution(); }));
+        executor.beginPass(FakeCommandBuffer, ChainFixture::pass(4));
+        executor.finishFrameExecution();
+        CHECK(fixture.owner.executions[3] == 2 && fixture.owner.executions[4] == 1);
+
+        // A rebuild clears every registration.
+        executor.rebuild(chainGraph());
+        CHECK(!executor.isRegistered(ChainFixture::pass(3)));
+        return true;
+    }
+
+    bool testGpuRangePlacementAndGroups() {
+        ChainFixture fixture;
+        auto& executor = fixture.executor;
+        auto& log = fixture.log;
+        executor.registerPass(ChainFixture::pass(1), testCallbacks(fixture.owner, 1, "gpu.before"));
+        executor.registerPass(ChainFixture::pass(2), testCallbacks(fixture.owner, 2, "gpu.after",
+            GpuRangePlacement::AfterBarriers));
+        executor.registerPass(ChainFixture::pass(3), testCallbacks(fixture.owner, 3));
+        CHECK(throws([&] { executor.registerRangeGroup({ "gpu.group", ChainFixture::pass(0),
+            ChainFixture::pass(2) }); }));   // p0 is imperative
+        CHECK(throws([&] { executor.registerRangeGroup({ nullptr, ChainFixture::pass(1),
+            ChainFixture::pass(2) }); }));
+        executor.registerRangeGroup({ "gpu.group", ChainFixture::pass(1), ChainFixture::pass(3) });
+        CHECK(throws([&] { executor.registerRangeGroup({ "gpu.other", ChainFixture::pass(3),
+            ChainFixture::pass(3) }); }));   // overlap
+
+        executor.beginFrameExecution(0);
+        executor.beginPass(FakeCommandBuffer, ChainFixture::pass(0));
+        log.count = 0;
+        executor.beginPass(FakeCommandBuffer, ChainFixture::pass(4));
+        executor.finishFrameExecution();
+        auto events = log.recorded();
+        // Group opens before p1's range; p1's range wraps its barrier; p2's
+        // range starts after its barrier; the group closes after p3.
+        const EventKind expected[] = {
+            EventKind::Active, EventKind::RangeBegin, EventKind::RangeBegin, EventKind::Barrier,
+            EventKind::Execute, EventKind::RangeEnd,
+            EventKind::Active, EventKind::Barrier, EventKind::RangeBegin, EventKind::Execute,
+            EventKind::RangeEnd,
+            EventKind::Active, EventKind::Barrier, EventKind::Execute, EventKind::RangeEnd,
+            EventKind::Barrier };
+        CHECK(events.size() == std::size(expected));
+        for (size_t index = 0; index < events.size(); ++index)
+            CHECK(events[index].kind == expected[index]);
+        CHECK(std::string_view(events[1].name) == "gpu.group");
+        CHECK(std::string_view(events[2].name) == "gpu.before");
+        CHECK(std::string_view(events[8].name) == "gpu.after");
+        CHECK(events[14].pass == 1);   // the group token closes last
+
+        // The group opens at the first active pass; with every pass inactive
+        // no range is recorded.
+        for (const bool everyInactive : { false, true }) {
+            fixture.owner.active[1] = false;
+            fixture.owner.active[2] = !everyInactive;
+            fixture.owner.active[3] = !everyInactive;
+            executor.onFrameFenceCompleted(1);
+            executor.beginFrameExecution(1);
+            // Only skips this frame: the drain needs an explicit context.
+            executor.setFrameRecordContext({ FakeCommandBuffer, 1 });
+            executor.skipPass(ChainFixture::pass(0));
+            log.count = 0;
+            executor.skipPass(ChainFixture::pass(4));
+            executor.finishFrameExecution();
+            events = log.recorded();
+            if (everyInactive) {
+                CHECK(log.countOf(EventKind::RangeBegin) == 0);
+                CHECK(log.countOf(EventKind::Execute) == 0);
+            }
+            else {
+                CHECK(events[0].kind == EventKind::Active);           // p1 inactive
+                CHECK(events[1].kind == EventKind::Active);           // p2 asked
+                CHECK(events[2].kind == EventKind::RangeBegin &&
+                    std::string_view(events[2].name) == "gpu.group");
+                CHECK(log.countOf(EventKind::RangeBegin) == 2);       // group + gpu.after
+                CHECK(log.countOf(EventKind::RangeEnd) == 2);
+                CHECK(events[log.count - 1].kind == EventKind::RangeEnd);
+            }
+        }
+        // Unregistering a grouped pass dissolves the group.
+        executor.unregisterPass(ChainFixture::pass(2));
+        executor.registerRangeGroup({ "gpu.single", ChainFixture::pass(3), ChainFixture::pass(3) });
+        return true;
+    }
+
+    bool testCallbackContextAndReentry() {
+        ChainFixture fixture;
+        auto& executor = fixture.executor;
+        fixture.owner.image = executor.resourceId("image");
+        fixture.owner.tryReentry = true;
+        executor.registerPass(ChainFixture::pass(1), testCallbacks(fixture.owner, 1));
+        executor.onFrameFenceCompleted(1);
+        executor.beginFrameExecution(1);
+        executor.setFrameRecordContext({ FakeCommandBuffer, 1, 5 });
+        executor.beginPass(FakeCommandBuffer, ChainFixture::pass(0));
+        executor.skipPass(ChainFixture::pass(2));
+        CHECK(fixture.owner.reentryRejected);
+        CHECK(fixture.owner.seenImageIndex == 5);
+        CHECK(fixture.owner.seenImage == executor.image(1, fixture.owner.image).image);
+        executor.skipPass(ChainFixture::pass(3));
+        executor.skipPass(ChainFixture::pass(4));
+        executor.finishFrameExecution();
+        CHECK(throws([&] { executor.setFrameRecordContext({ FakeCommandBuffer }); }));
+        return true;
+    }
+
 } // namespace
 
 int main() {
@@ -848,6 +1187,11 @@ int main() {
         { "production passes never collapse", testProductionPassesNeverCollapse },
         { "batched synchronization2 matches legacy emission",
             testBatchedSynchronization2MatchesLegacyEmission },
+        { "callback drain order", testCallbackDrainOrder },
+        { "drain rejects unregistered skips", testDrainRejectsUnregisteredSkips },
+        { "finish drains and rollback", testFinishDrainsAndRollback },
+        { "GPU range placement and groups", testGpuRangePlacementAndGroups },
+        { "callback context and reentry", testCallbackContextAndReentry },
     };
 
     size_t passed = 0;

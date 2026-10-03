@@ -1,6 +1,7 @@
 #pragma once
 
 #include "renderer/graph/RenderGraph.h"
+#include "renderer/vulkan/VulkanFrameScheduler.h"
 #include "renderer/vulkan/VulkanResourceAllocator.h"
 
 #include <vulkan/vulkan.h>
@@ -154,6 +155,66 @@ namespace Iridium {
     [[nodiscard]] VkPipelineStageFlags2 toVulkanDestinationStages2(
         VkPipelineStageFlags stages) noexcept;
 
+    class VulkanRenderGraphExecutor;
+
+    // M7R R3b.3 callback execution. The per-frame recording context handed to
+    // registered passes (R3c moves its producer into the feature context).
+    struct VulkanFrameRecordContext {
+        VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
+        uint32_t frameIndex = 0;
+        uint32_t imageIndex = 0;
+        bool collectCounters = false;
+        VkExtent2D sceneExtent{};
+    };
+
+    struct VulkanPassContext {
+        const VulkanFrameRecordContext& frame;
+        VulkanRenderGraphExecutor& graph;
+        RenderGraph::PassId pass;
+        VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
+    };
+
+    // Where a pass's GPU timestamp range starts relative to its barriers; both
+    // placements exist in the imperative backend today.
+    enum class GpuRangePlacement : uint8_t {
+        BeforeBarriers,
+        AfterBarriers,
+    };
+
+    // Execute side of a pass, indexed by compiled order. Plain function
+    // pointers: registration and dispatch never allocate.
+    struct VulkanPassCallbacks {
+        void* owner = nullptr;
+        // false => the pass is skipped (no barriers, no range). nullptr => active.
+        bool (*active)(void* owner, const VulkanFrameRecordContext& frame) = nullptr;
+        void (*execute)(void* owner, VulkanPassContext& context) = nullptr;
+        const char* gpuRange = nullptr;
+        GpuRangePlacement placement = GpuRangePlacement::BeforeBarriers;
+    };
+
+    // One GPU range over several registered passes (e.g. gpu.lighting.cluster).
+    // It opens before the first active pass of the group (before that pass's
+    // own range and barriers) and closes after the last pass of the group.
+    struct VulkanRangeGroup {
+        const char* name = nullptr;
+        RenderGraph::PassId firstPass;
+        RenderGraph::PassId lastPass;
+    };
+
+    // GPU timestamp ranges for callback passes; forScheduler adapts the frame
+    // scheduler. Without a sink, ranges are not recorded.
+    struct VulkanGpuRangeSink {
+        void* owner = nullptr;
+        VulkanGpuRangeToken (*begin)(void* owner, const char* name) = nullptr;
+        void (*end)(void* owner, VulkanGpuRangeToken& token) = nullptr;
+
+        [[nodiscard]] static VulkanGpuRangeSink forScheduler(
+            VulkanFrameScheduler& scheduler) noexcept;
+        [[nodiscard]] bool enabled() const noexcept {
+            return begin != nullptr && end != nullptr;
+        }
+    };
+
     class VulkanRenderGraphExecutor final {
     public:
         VulkanRenderGraphExecutor() = default;
@@ -191,16 +252,32 @@ namespace Iridium {
         [[nodiscard]] RenderGraph::PassId passId(std::string_view name) const;
         [[nodiscard]] RenderGraph::GraphResourceId resourceId(std::string_view name) const;
 
-        // Primary, index-addressed execution. The pass must be the next pass in
-        // compiled order.
+        // Primary, index-addressed execution. Registered callback passes that
+        // precede `pass` in compiled order run first (drain); it throws if that
+        // would skip an unregistered pass, or if `pass` itself is registered.
         void beginPass(VkCommandBuffer commandBuffer, RenderGraph::PassId pass);
         void skipPass(RenderGraph::PassId pass);
         // Transitional string forms (until the R3b.4 call-site conversion).
-        // They keep the sequential cursor check: the name must match the next
-        // pass in compiled order.
+        // After draining registered passes at the cursor they keep the
+        // sequential cursor check: the name must match the next pass.
         void beginPass(VkCommandBuffer commandBuffer, std::string_view passName);
         void skipPass(std::string_view passName);
+        // Drains the remaining registered passes, then requires every pass to
+        // have been handled.
         void finishFrameExecution();
+
+        // Callback registry (R3b.3). Registrations are per compiled plan: a
+        // rebuild clears them, owners re-register after it. Not allowed during
+        // frame execution. Unregistering a pass also dissolves its range group
+        // (rollback restores the imperative call).
+        void registerPass(RenderGraph::PassId pass, const VulkanPassCallbacks& callbacks);
+        void unregisterPass(RenderGraph::PassId pass);
+        [[nodiscard]] bool isRegistered(RenderGraph::PassId pass) const noexcept;
+        void registerRangeGroup(const VulkanRangeGroup& group);
+        void setGpuRangeSink(const VulkanGpuRangeSink& sink) noexcept { rangeSink_ = sink; }
+        // Context for drained callbacks this frame. Without it, the first
+        // beginPass of the frame supplies {commandBuffer, frameIndex}.
+        void setFrameRecordContext(const VulkanFrameRecordContext& context);
         void transitionImage(VkCommandBuffer commandBuffer,
             RenderGraph::GraphResourceId id, RenderGraph::Access access);
         void transitionImage(VkCommandBuffer commandBuffer,
@@ -280,6 +357,17 @@ namespace Iridium {
         uint32_t imageBatchCount_ = 0;
         uint32_t bufferBatchCount_ = 0;
         uint32_t batchOrderCount_ = 0;
+        // Callback registry, sized at rebuild (indexed by compiled order).
+        std::vector<VulkanPassCallbacks> callbacks_;
+        std::vector<uint32_t> passGroup_;
+        std::vector<VulkanRangeGroup> rangeGroups_;
+        uint32_t registeredCount_ = 0;
+        VulkanGpuRangeSink rangeSink_{};
+        VulkanFrameRecordContext recordContext_{};
+        bool hasRecordContext_ = false;
+        bool inCallback_ = false;
+        uint32_t openGroup_ = RenderGraph::InvalidIndex;
+        VulkanGpuRangeToken groupToken_{};
 
         [[nodiscard]] const RenderGraph::CompiledGraph& executingGraph() const;
         [[nodiscard]] const RenderGraph::CompiledGraph& boundGraph() const;
@@ -290,6 +378,11 @@ namespace Iridium {
         void queueBufferBarrier(VkBuffer buffer, VkDeviceSize size,
             const VulkanGraphAccessInfo& before, const VulkanGraphAccessInfo& after);
         void flushBarriers(VkCommandBuffer commandBuffer);
+        void requireCursorAt(uint32_t passOrder, const char* message) const;
+        void noteCommandBuffer(VkCommandBuffer commandBuffer);
+        void drainRegisteredBefore(uint32_t passOrder);
+        void drainRegisteredAtCursor();
+        void runRegisteredPass(uint32_t passOrder);
     };
 
 } // namespace Iridium
