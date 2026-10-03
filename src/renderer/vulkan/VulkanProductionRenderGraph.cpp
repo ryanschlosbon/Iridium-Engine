@@ -383,23 +383,55 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
         const auto upload = graph.addPass("shadow.virtual.clip-upload");
         virtualWorking = graph.write(upload, virtualWorking, Access::TransferDestination);
     }
-    const RenderGraph::PassHandle directionalShadowPass = graph.addPass(
+    // M7R R3b.7: GPU-driven compaction producers. Each view's per-slot
+    // indirect command and count buffers are imported (owned by its culler,
+    // capacity grows, so variableSize); the compact pass writes them and the
+    // drawing pass reads them as indirect arguments, so the compute ->
+    // indirect dependency is an executor barrier. Host -> compute barriers stay
+    // inside the compact passes. Declared directly before their consumers so
+    // the compiled order keeps the previous order as a subsequence.
+    const auto indirectBuffer = [&](std::string name) {
+        RenderGraph::ResourceDesc desc = bufferDesc(sizeof(uint32_t));
+        desc.lifetime = RenderGraph::ResourceLifetime::External;
+        desc.imported = true;
+        desc.initialAccess = Access::IndirectRead;
+        desc.buffer.variableSize = true;
+        return graph.createResource(std::move(name), desc);
+    };
+    const auto addCompaction = [&](std::string view,
+        RenderGraph::PassHandle& consumerPass, const char* consumerName) {
+        RenderGraph::ResourceHandle commands =
+            indirectBuffer(view + ".indirect-commands");
+        RenderGraph::ResourceHandle counts =
+            indirectBuffer(view + ".indirect-counts");
+        const RenderGraph::PassHandle compact = graph.addPass(view + ".compact",
+            RenderGraph::QueueClass::Compute);
+        commands = graph.write(compact, commands, Access::StorageReadWrite);
+        counts = graph.write(compact, counts, Access::StorageReadWrite);
+        consumerPass = graph.addPass(consumerName);
+        graph.read(consumerPass, commands, Access::IndirectRead);
+        graph.read(consumerPass, counts, Access::IndirectRead);
+    };
+
+    RenderGraph::PassHandle directionalShadowPass{};
+    addCompaction("shadow.directional", directionalShadowPass,
         "shadow.directional");
     directionalShadow = graph.write(directionalShadowPass,
         directionalShadow, Access::DepthAttachmentWrite, LoadOp::Clear);
 
-    const RenderGraph::PassHandle spotShadowPass = graph.addPass(
-        "shadow.spot");
+    RenderGraph::PassHandle spotShadowPass{};
+    addCompaction("shadow.spot", spotShadowPass, "shadow.spot");
     spotShadow = graph.write(spotShadowPass, spotShadow,
         Access::DepthAttachmentWrite, LoadOp::Load);
 
-    const RenderGraph::PassHandle pointShadowPass = graph.addPass(
-        "shadow.point");
+    RenderGraph::PassHandle pointShadowPass{};
+    addCompaction("shadow.point", pointShadowPass, "shadow.point");
     for (RenderGraph::ResourceHandle& pointShadow : pointShadows)
         pointShadow = graph.write(pointShadowPass, pointShadow,
             Access::DepthAttachmentWrite, LoadOp::Load);
 
-    const RenderGraph::PassHandle gbuffer = graph.addPass("gbuffer");
+    RenderGraph::PassHandle gbuffer{};
+    addCompaction("gpu-scene.opaque", gbuffer, "gbuffer");
     normal = graph.write(gbuffer, normal, Access::ColorAttachment, LoadOp::Clear);
     albedo = graph.write(gbuffer, albedo, Access::ColorAttachment, LoadOp::Clear);
     emissive = graph.write(gbuffer, emissive, Access::ColorAttachment, LoadOp::Clear);
@@ -408,6 +440,29 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
     materialFlags = graph.write(gbuffer, materialFlags,
         Access::ColorAttachment, LoadOp::Clear);
     depth = graph.write(gbuffer, depth, Access::DepthAttachmentWrite, LoadOp::Clear);
+
+    // Reflection-probe clustering (R3b.7): per-slot imported header/index
+    // buffers written by compute and read by every lit consumer through
+    // readClusterProduct; the compute -> fragment dependency is an executor
+    // barrier.
+    const auto probeClusterBuffer = [&](std::string name) {
+        RenderGraph::ResourceDesc desc = bufferDesc(sizeof(uint32_t));
+        desc.lifetime = RenderGraph::ResourceLifetime::External;
+        desc.imported = true;
+        desc.initialAccess = Access::StorageRead;
+        desc.buffer.variableSize = true;
+        return graph.createResource(std::move(name), desc);
+    };
+    RenderGraph::ResourceHandle probeClusterHeaders =
+        probeClusterBuffer("lighting.probe-cluster.headers");
+    RenderGraph::ResourceHandle probeClusterIndices =
+        probeClusterBuffer("lighting.probe-cluster.indices");
+    const RenderGraph::PassHandle probeCluster = graph.addPass(
+        "lighting.probe-cluster", RenderGraph::QueueClass::Compute);
+    probeClusterHeaders = graph.write(probeCluster, probeClusterHeaders,
+        Access::StorageWrite);
+    probeClusterIndices = graph.write(probeCluster, probeClusterIndices,
+        Access::StorageWrite);
 
     const RenderGraph::PassHandle clusterClear = graph.addPass(
         "lighting.cluster.clear", RenderGraph::QueueClass::Compute);
@@ -489,6 +544,8 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
         graph.read(pass, clusterIndices, Access::StorageRead);
         graph.read(pass, clusterFallback, Access::StorageRead);
         graph.read(pass, clusterDiagnostics, Access::StorageRead);
+        graph.read(pass, probeClusterHeaders, Access::StorageRead);
+        graph.read(pass, probeClusterIndices, Access::StorageRead);
     };
 
     const RenderGraph::PassHandle lighting = graph.addPass("lighting");
@@ -831,11 +888,22 @@ VulkanProductionGraphIds resolveVulkanProductionGraphIds(
         return graph.findResource(name);
     };
     VulkanProductionGraphIds ids{};
+    const auto producer = [&](const std::string& view) {
+        return VulkanIndirectProducerGraphIds{ pass(view + ".compact"),
+            resource(view + ".indirect-commands"), resource(view + ".indirect-counts") };
+    };
     ids.virtualShadowClipUpload = pass("shadow.virtual.clip-upload");
+    ids.directionalIndirect = producer("shadow.directional");
     ids.shadowDirectional = pass("shadow.directional");
+    ids.spotIndirect = producer("shadow.spot");
     ids.shadowSpot = pass("shadow.spot");
+    ids.pointIndirect = producer("shadow.point");
     ids.shadowPoint = pass("shadow.point");
+    ids.opaqueIndirect = producer("gpu-scene.opaque");
     ids.gbuffer = pass("gbuffer");
+    ids.probeCluster = pass("lighting.probe-cluster");
+    ids.probeClusterHeaders = resource("lighting.probe-cluster.headers");
+    ids.probeClusterIndices = resource("lighting.probe-cluster.indices");
     ids.cluster = {
         .clear = pass("lighting.cluster.clear"),
         .count = pass("lighting.cluster.count"),

@@ -144,13 +144,10 @@ namespace Iridium {
         vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
             pipelineLayout_, 0, 1, &descriptorSets_[frameIndex], 0, nullptr);
         vkCmdDispatch(commandBuffer, (clusterCount + 63u) / 64u, 1, 1);
-        VkMemoryBarrier barrier{ VK_STRUCTURE_TYPE_MEMORY_BARRIER };
-        barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        vkCmdPipelineBarrier(commandBuffer,
-            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
-            1, &barrier, 0, nullptr, 0, nullptr);
+        // M7R R3b.7: the compute -> fragment dependency on the cluster
+        // header/index buffers is the graph executor's barrier at the first
+        // lit consumer ("lighting.probe-cluster" writes, readClusterProduct
+        // readers read).
         return 1;
     }
 

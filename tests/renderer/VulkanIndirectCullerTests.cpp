@@ -465,7 +465,7 @@ namespace {
             pushLine(0x51, { 10, 10, 10, 10, 6, 6, 6, 10, 0 }),
             "dispatch 1 1 1",
             "end",
-            DrawBarrier,
+            // R3b.7: the compute -> indirect barrier is the graph executor's.
         };
         CHECK(rig.context.recorder.log == expected);
 
@@ -541,7 +541,9 @@ namespace {
             lodCandidates.size() * sizeof(GpuSceneIndirectCandidate)));
         rig.context.recorder.log.clear();
         (void)rig.culler.recordCompaction(nullptr, 0u, {});
-        CHECK(rig.context.recorder.log.size() == 8u);
+        // Host barrier, range, pipeline, sets, push, dispatch, end (R3b.7:
+        // no in-pass compute -> indirect barrier).
+        CHECK(rig.context.recorder.log.size() == 7u);
         CHECK(rig.context.recorder.log[4] == pushLine(0x51,
             { 10, 10, 10, 10, 6, 0, 0, 0, std::bit_cast<uint32_t>(2.0f) }));
         rig.culler.collect(0u);
@@ -598,7 +600,6 @@ namespace {
                 pushLine(0x51, { 10, 10, 10, 10, 6, 1, 6, 10, 0 }),
                 "dispatch 1 1 1",
                 "end",
-                DrawBarrier,
             };
             CHECK(rig.context.recorder.log == expected);
             rig.culler.collect(1u);
@@ -616,7 +617,7 @@ namespace {
             CHECK(rig.culler.plan(rig.inputs(), pointShadowWork(shadows), 0u));
             CHECK(rig.culler.recordCompaction(nullptr, 0u, {}) == 6u);
             const auto& log = rig.context.recorder.log;
-            CHECK(log.size() == 4u + 12u + 2u);
+            CHECK(log.size() == 4u + 12u + 1u);
             CHECK(log[1] == "range gpu.shadow.point.compact");
             for (uint32_t face = 0; face < 6u; ++face) {
                 CHECK(log[4u + face * 2u] == pushLine(0x51, { 10, 10, 10, 10, 6,
@@ -822,13 +823,13 @@ namespace {
             std::bit_cast<uint32_t>(0.15f), 0, 0 }));
         CHECK(log[5] == "dispatch 1 1 1");
         CHECK(log[6] == "end");
+        // R3b.7: only the compute -> host half stays in the pass; the graph
+        // executor issues the compute -> indirect barrier at gbuffer.
         CHECK(log[7] == "barrier " +
             std::to_string(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT) + "->" +
-            std::to_string(VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT |
-                VK_PIPELINE_STAGE_HOST_BIT) + " " +
+            std::to_string(VK_PIPELINE_STAGE_HOST_BIT) + " " +
             std::to_string(VK_ACCESS_SHADER_WRITE_BIT) + "->" +
-            std::to_string(VK_ACCESS_INDIRECT_COMMAND_READ_BIT |
-                VK_ACCESS_HOST_READ_BIT));
+            std::to_string(VK_ACCESS_HOST_READ_BIT));
         culler.collect(0u);
 
         // A pipeline without a GPU-scene variant falls the frame back.

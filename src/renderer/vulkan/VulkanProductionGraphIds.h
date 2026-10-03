@@ -44,13 +44,28 @@ namespace Iridium {
         RenderGraph::GraphResourceId localColor;
     };
 
+    // A GPU-driven compaction producer (R3b.7): its compute pass and the
+    // per-slot imported indirect command/count buffers its consumer reads.
+    struct VulkanIndirectProducerGraphIds {
+        RenderGraph::PassId compact;
+        RenderGraph::GraphResourceId commands;
+        RenderGraph::GraphResourceId counts;
+    };
+
     struct VulkanProductionGraphIds {
         // Passes, in declaration order.
         RenderGraph::PassId virtualShadowClipUpload;
+        VulkanIndirectProducerGraphIds directionalIndirect;
         RenderGraph::PassId shadowDirectional;
+        VulkanIndirectProducerGraphIds spotIndirect;
         RenderGraph::PassId shadowSpot;
+        VulkanIndirectProducerGraphIds pointIndirect;
         RenderGraph::PassId shadowPoint;
+        VulkanIndirectProducerGraphIds opaqueIndirect;
         RenderGraph::PassId gbuffer;
+        RenderGraph::PassId probeCluster;
+        RenderGraph::GraphResourceId probeClusterHeaders;
+        RenderGraph::GraphResourceId probeClusterIndices;
         VulkanClusterGraphIds cluster;
         RenderGraph::PassId clusterReadback;
         RenderGraph::PassId lighting;

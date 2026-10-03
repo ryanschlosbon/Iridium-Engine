@@ -624,6 +624,9 @@ namespace Iridium {
         void rebuildRenderGraphAfterDeviceIdle();
         // R3b.6 imported images: swapchain (per frame) and shadow maps (global).
         void bindGraphImportedImages();
+        // R3b.7 imported buffers: culler indirect command/count buffers and
+        // probe-cluster buffers (per slot). Waits for every frame in flight.
+        void bindGraphImportedBuffers();
         [[nodiscard]] VulkanImageResource swapchainGraphImage(
             uint32_t imageIndex) const;
         [[nodiscard]] VulkanProductionGraphFeatures

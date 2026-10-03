@@ -1702,6 +1702,51 @@ namespace Iridium {
                 Access::SampledRead, shadowPolicy);
     }
 
+    void VulkanVertexBackend::bindGraphImportedBuffers() {
+        // R3b.7: per-slot indirect command/count buffers of the four drawing
+        // cullers and the reflection-probe cluster buffers. Their owners
+        // replace them on capacity growth, so every slot is unbound before
+        // any is rebound (a recycled handle must not meet a destroyed one).
+        if (renderGraph_.compiledGraph() == nullptr) return;
+        if (frameOpen_)
+            throw std::logic_error(
+                "Graph imported buffers rebind only at a frame boundary");
+        scheduler.waitForAllFrames();
+        for (uint32_t frame = 0; frame < VulkanFrameScheduler::FramesInFlight; ++frame)
+            renderGraph_.onFrameFenceCompleted(frame);
+        struct Binding {
+            RenderGraph::GraphResourceId id;
+            const std::array<VulkanBufferResource,
+                VulkanFrameScheduler::FramesInFlight>* buffers;
+        };
+        const std::array<Binding, 10> bindings{ {
+            { graphIds_.directionalIndirect.commands, &directionalCuller_.buffers().commands },
+            { graphIds_.directionalIndirect.counts, &directionalCuller_.buffers().counts },
+            { graphIds_.spotIndirect.commands, &spotCuller_.buffers().commands },
+            { graphIds_.spotIndirect.counts, &spotCuller_.buffers().counts },
+            { graphIds_.pointIndirect.commands, &pointCuller_.buffers().commands },
+            { graphIds_.pointIndirect.counts, &pointCuller_.buffers().counts },
+            { graphIds_.opaqueIndirect.commands, &opaqueCuller_.buffers().commands },
+            { graphIds_.opaqueIndirect.counts, &opaqueCuller_.buffers().counts },
+            { graphIds_.probeClusterHeaders, &reflectionProbeClusterHeaderBuffers_ },
+            { graphIds_.probeClusterIndices, &reflectionProbeClusterIndexBuffers_ },
+        } };
+        for (const Binding& binding : bindings) {
+            if (!binding.id.isValid()) continue;
+            for (uint32_t frame = 0; frame < VulkanFrameScheduler::FramesInFlight; ++frame)
+                renderGraph_.unbindExternalBuffer(frame, binding.id);
+        }
+        for (const Binding& binding : bindings) {
+            if (!binding.id.isValid()) continue;
+            for (uint32_t frame = 0; frame < VulkanFrameScheduler::FramesInFlight; ++frame) {
+                const VulkanBufferResource& buffer = (*binding.buffers)[frame];
+                if (buffer.buffer == VK_NULL_HANDLE) continue;
+                renderGraph_.bindExternalBuffer(frame, binding.id, buffer.buffer,
+                    buffer.size);
+            }
+        }
+    }
+
     void VulkanVertexBackend::rebuildRenderGraphAfterDeviceIdle() {
         renderGraph_.cleanupAfterDeviceIdle();
         renderGraph_.init(resourceAllocator,
@@ -1727,6 +1772,7 @@ namespace Iridium {
             : VulkanBarrierApi::Synchronization1);
         renderGraph_.setGpuRangeSink(VulkanGpuRangeSink::forScheduler(scheduler));
         bindGraphImportedImages();
+        bindGraphImportedBuffers();
         if (virtualShadowResources_.initialized()) {
             for (uint32_t frame = 0; frame < VulkanFrameScheduler::FramesInFlight; ++frame) {
                 const auto& buffer = virtualShadowResources_.workingSet(frame);
@@ -3437,7 +3483,11 @@ namespace Iridium {
             static_cast<uint32_t>(directionalCuller_.fallbackReason());
         if (directionalCuller_.membershipCacheHit())
             frameCounters_.shadowDirectionalMembershipCacheHit = 1u;
-        if (!planned) return false;
+        if (!planned) {
+            renderGraph_.skipPass(graphIds_.directionalIndirect.compact);
+            return false;
+        }
+        renderGraph_.beginPass(currentCmd, graphIds_.directionalIndirect.compact);
         frameCounters_.dispatchRecorded += directionalCuller_.recordCompaction(
             currentCmd, frame, {
                 .set0 = directionalShadow_.renderDescriptor(frame),
@@ -3574,10 +3624,10 @@ namespace Iridium {
                 return shadow.updateMask != 0u;
             });
         if (!hasUpdates) {
+            renderGraph_.skipPass(graphIds_.directionalIndirect.compact);
             renderGraph_.skipPass(graphIds_.shadowDirectional);
             return;
         }
-        renderGraph_.beginPass(currentCmd, graphIds_.shadowDirectional);
         for (const DirectionalShadowFramePacket& shadow : shadows)
             if (shadow.resolution != directionalShadow_.resolution())
                 throw std::invalid_argument(
@@ -3590,8 +3640,10 @@ namespace Iridium {
             [&](const ResolvedShadowCaster& caster) {
                 shadowCasterScratch_.push_back(caster);
             });
+        // R3b.7: compaction is its own pass ("shadow.directional.compact").
         const bool indirectValid =
             prepareDirectionalShadowIndirectSubmission(shadowCasters, shadows);
+        renderGraph_.beginPass(currentCmd, graphIds_.shadowDirectional);
         IVulkanIndirectOracle* const shadowOracle =
             activeIndirectOracle(VulkanIndirectOracleView::DirectionalShadow);
         frameCounters_.shadowDirectionalDirectFallback =
@@ -3761,7 +3813,11 @@ namespace Iridium {
             static_cast<uint32_t>(spotCuller_.fallbackReason());
         if (spotCuller_.membershipCacheHit())
             frameCounters_.shadowSpotMembershipCacheHit = 1u;
-        if (!planned) return false;
+        if (!planned) {
+            renderGraph_.skipPass(graphIds_.spotIndirect.compact);
+            return false;
+        }
+        renderGraph_.beginPass(currentCmd, graphIds_.spotIndirect.compact);
         frameCounters_.dispatchRecorded += spotCuller_.recordCompaction(
             currentCmd, frame, {
                 .set0 = spotShadow_.renderDescriptor(frame),
@@ -3799,10 +3855,10 @@ namespace Iridium {
         const bool hasUpdates = std::ranges::any_of(shadows,
             [](const SpotShadowFramePacket& shadow) { return shadow.update; });
         if (!hasUpdates) {
+            renderGraph_.skipPass(graphIds_.spotIndirect.compact);
             renderGraph_.skipPass(graphIds_.shadowSpot);
             return;
         }
-        renderGraph_.beginPass(currentCmd, graphIds_.shadowSpot);
         CpuScope recordScope(cpuProfiler_, "cpu.render.record.shadow.spot");
         shadowCasterScratch_.clear();
         shadowCasterScratch_.reserve(shadowCasters.size());
@@ -3812,6 +3868,7 @@ namespace Iridium {
             });
         const bool indirectValid =
             prepareSpotShadowIndirectSubmission(shadowCasters, shadows);
+        renderGraph_.beginPass(currentCmd, graphIds_.shadowSpot);
         IVulkanIndirectOracle* const shadowOracle =
             activeIndirectOracle(VulkanIndirectOracleView::SpotShadow);
         frameCounters_.shadowSpotDirectFallback =
@@ -3970,7 +4027,11 @@ namespace Iridium {
             static_cast<uint32_t>(pointCuller_.fallbackReason());
         if (pointCuller_.membershipCacheHit())
             frameCounters_.shadowPointMembershipCacheHit = 1u;
-        if (!planned) return false;
+        if (!planned) {
+            renderGraph_.skipPass(graphIds_.pointIndirect.compact);
+            return false;
+        }
+        renderGraph_.beginPass(currentCmd, graphIds_.pointIndirect.compact);
         frameCounters_.dispatchRecorded += pointCuller_.recordCompaction(
             currentCmd, frame, {
                 .set0 = pointShadow_.renderDescriptor(frame),
@@ -4008,10 +4069,10 @@ namespace Iridium {
         const bool hasUpdates = std::ranges::any_of(shadows,
             [](const PointShadowFramePacket& shadow) { return shadow.update; });
         if (!hasUpdates) {
+            renderGraph_.skipPass(graphIds_.pointIndirect.compact);
             renderGraph_.skipPass(graphIds_.shadowPoint);
             return;
         }
-        renderGraph_.beginPass(currentCmd, graphIds_.shadowPoint);
         CpuScope recordScope(cpuProfiler_, "cpu.render.record.shadow.point");
         shadowCasterScratch_.clear();
         shadowCasterScratch_.reserve(shadowCasters.size());
@@ -4021,6 +4082,7 @@ namespace Iridium {
             });
         const bool indirectValid =
             preparePointShadowIndirectSubmission(shadowCasters, shadows);
+        renderGraph_.beginPass(currentCmd, graphIds_.shadowPoint);
         IVulkanIndirectOracle* const shadowOracle =
             activeIndirectOracle(VulkanIndirectOracleView::PointShadow);
         frameCounters_.shadowPointDirectFallback =
@@ -4533,8 +4595,11 @@ namespace Iridium {
                 .queryOcclusion = depthOcclusionQueryEnabled_ &&
                     currentDepthHistoryDecision_.eligible,
                 .view = &gpuSceneCpuViews_[frame],
-            }, frame))
+            }, frame)) {
+            renderGraph_.skipPass(graphIds_.opaqueIndirect.compact);
             return false;
+        }
+        renderGraph_.beginPass(currentCmd, graphIds_.opaqueIndirect.compact);
         frameCounters_.dispatchRecorded += opaqueCuller_.recordCompaction(
             currentCmd, frame, {
                 .globalSet = globalDescriptorSets[frame],
@@ -4553,6 +4618,8 @@ namespace Iridium {
         CpuScope recordScope(cpuProfiler_, "cpu.render.record.gbuffer");
         VulkanFrameContextTargets& targets = frameTargets.get(
             scheduler.currentFrameIndex());
+        // R3b.7: "gpu-scene.opaque.compact" is begun or skipped here.
+        if (isWireframe) renderGraph_.skipPass(graphIds_.opaqueIndirect.compact);
         const bool indirectValid = !isWireframe &&
             prepareOpaqueIndirectSubmission(opaqueQueue);
         renderGraph_.beginPass(currentCmd, graphIds_.gbuffer);
@@ -5447,6 +5514,7 @@ VkDeviceSize offset = geometry->vertexOffset;
         uploadedReflectionProbeActiveListRevisions_.fill(0);
         reflectionProbeUploadRanges_.reserve(recordCapacity);
         if (sceneDescriptors.size() != 0) bindReflectionProbeBuffers();
+        bindGraphImportedBuffers();
     }
 
     void VulkanVertexBackend::bindReflectionProbeBuffers() {
@@ -5850,6 +5918,7 @@ VkDeviceSize offset = geometry->vertexOffset;
                 pointCuller_.resize(grownCapacity, frameOpen_);
             if (grownCapacity > probeCuller_.primitiveCapacity())
                 probeCuller_.resize(grownCapacity, frameOpen_);
+            bindGraphImportedBuffers();
         }
     }
 
@@ -6185,9 +6254,17 @@ VkDeviceSize offset = geometry->vertexOffset;
                 "cpu.render.record.probe_cluster");
             VulkanGpuRangeToken probeGpuRange =
                 scheduler.beginGpuRange("gpu.lighting.probe_cluster");
-            frameCounters_.dispatchRecorded += reflectionProbePipeline_.record(
-                currentCmd, frameIndex,
-                static_cast<uint32_t>(probeDimensions.clusterCount()));
+            // R3b.7: "lighting.probe-cluster" (the dispatch's consumers
+            // receive the compute -> fragment barrier from the executor).
+            if (probeDimensions.clusterCount() == 0u) {
+                renderGraph_.skipPass(graphIds_.probeCluster);
+            }
+            else {
+                renderGraph_.beginPass(currentCmd, graphIds_.probeCluster);
+                frameCounters_.dispatchRecorded += reflectionProbePipeline_.record(
+                    currentCmd, frameIndex,
+                    static_cast<uint32_t>(probeDimensions.clusterCount()));
+            }
             scheduler.endGpuRange(probeGpuRange);
         }
         {

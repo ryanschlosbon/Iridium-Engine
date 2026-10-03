@@ -620,13 +620,19 @@ namespace Iridium {
         if (!validation.occlusionRejectionApplied)
             recordGpuSceneOcclusion();
 
+        // M7R R3b.7: the compute -> indirect half of this dependency is the
+        // executor's buffer barrier at gbuffer (IndirectRead of the command
+        // and count buffers); the compute -> host half (validation readback
+        // of counts, commands and occlusion results) stays here. The digest
+        // records the combined dependency, so stream identity is unchanged.
         constexpr VkAccessFlags drawSrc = VK_ACCESS_SHADER_WRITE_BIT;
         constexpr VkAccessFlags drawDst =
             VK_ACCESS_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_HOST_READ_BIT;
         constexpr VkPipelineStageFlags drawStages =
             VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_HOST_BIT;
         commands.memoryBarrier(commands.user, cmd,
-            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, drawStages, drawSrc, drawDst);
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_HOST_BIT,
+            drawSrc, VK_ACCESS_HOST_READ_BIT);
         tap.barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, drawStages, drawSrc,
             drawDst);
         return dispatches;

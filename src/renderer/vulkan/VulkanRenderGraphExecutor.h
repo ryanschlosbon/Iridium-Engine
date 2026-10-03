@@ -295,6 +295,11 @@ namespace Iridium {
         void bindExternalBuffer(uint32_t frameIndex, RenderGraph::GraphResourceId id,
             VkBuffer buffer, VkDeviceSize size,
             RenderGraph::Access initialAccess = RenderGraph::Access::Undefined);
+        // Drops a slot's binding (same retired-slot rule). Owners replacing
+        // buffers unbind every slot first, so a recycled handle never trips
+        // the aliasing check against a destroyed one. The resource stays
+        // tracked while any slot is bound.
+        void unbindExternalBuffer(uint32_t frameIndex, RenderGraph::GraphResourceId id);
 
         // Ids are resolved per rebuild through O(1) name maps over strings the
         // compiled graph owns; find* return an invalid id for unknown names and

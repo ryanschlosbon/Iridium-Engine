@@ -10,8 +10,9 @@
 //                    membership), enumerates the kind's work items, commits the
 //                    validation slot and writes the candidate/count buffers;
 //   recordCompaction records the host->compute barrier and, for batched kinds,
-//                    every work item's compaction dispatch and the
-//                    compute->indirect barrier;
+//                    every work item's compaction dispatch (the
+//                    compute->indirect barrier is the graph executor's, at
+//                    the drawing pass: M7R R3b.7);
 //   recordWorkItem   (per-work-item kinds: the probe) one face's dispatch;
 //   recordDraws      the indirect-count draws of one work item;
 //   emitExpectations qualification-oracle commands for one work item;

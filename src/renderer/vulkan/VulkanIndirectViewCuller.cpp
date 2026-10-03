@@ -630,11 +630,12 @@ namespace Iridium {
             ++dispatches;
         }
         commands.endGpuRange(commands.user, range);
+        // M7R R3b.7: the compute -> indirect dependency is the executor's
+        // buffer barrier at the drawing pass (it reads the command and count
+        // buffers as IndirectRead). The digest still records the dependency
+        // at this point of the stream, so stream identity is unchanged.
         constexpr VkAccessFlags drawSrc = VK_ACCESS_SHADER_WRITE_BIT;
         constexpr VkAccessFlags drawDst = VK_ACCESS_INDIRECT_COMMAND_READ_BIT;
-        commands.memoryBarrier(commands.user, cmd,
-            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-            VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT, drawSrc, drawDst);
         tap.barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
             VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT, drawSrc, drawDst);
         return dispatches;

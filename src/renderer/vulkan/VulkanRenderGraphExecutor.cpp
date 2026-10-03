@@ -708,6 +708,20 @@ void VulkanRenderGraphExecutor::bindExternalBuffer(uint32_t frameIndex,
     externalBufferTracked_[index] = true;
 }
 
+void VulkanRenderGraphExecutor::unbindExternalBuffer(uint32_t frameIndex,
+    RenderGraph::GraphResourceId id) {
+    if (graph_ == nullptr || frameIndex >= externalBuffers_.size() ||
+        !frameRetired_[frameIndex] || executingFrame_ == frameIndex)
+        throw std::invalid_argument("External graph buffer unbinding requires a retired frame slot");
+    if (id.logical >= externalBufferTracked_.size())
+        throw std::invalid_argument("External graph buffer unbinding targets an unknown resource");
+    externalBuffers_[frameIndex][id.logical] = {};
+    bool anyBound = false;
+    for (const auto& slot : externalBuffers_)
+        anyBound = anyBound || slot[id.logical].buffer != VK_NULL_HANDLE;
+    externalBufferTracked_[id.logical] = anyBound;
+}
+
 bool VulkanRenderGraphExecutor::validateFrame(uint32_t frameIndex) noexcept {
     const RenderGraph::CompiledGraph* graph = cache_.find(topologyHash_);
     if (graph == nullptr) {

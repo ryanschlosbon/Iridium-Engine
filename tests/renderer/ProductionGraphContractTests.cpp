@@ -381,6 +381,99 @@ namespace {
         return true;
     }
 
+    // M7R R3b.7/R3b.8: previously undeclared GPU work becomes graph passes.
+    // Declaring them at matching positions must keep the R3b.6 compiled order
+    // as a subsequence (the passes below removed, the rest is unchanged) and
+    // leave every physical slot's membership unchanged (their resources are
+    // imported). The golden was generated from the R3b.6 graph.
+    struct GoldenTopology {
+        const char* name;
+        std::vector<std::string_view> passes;
+        std::vector<std::vector<std::string_view>> slots;
+    };
+    const std::vector<GoldenTopology>& r3b6Golden() {
+        static const std::vector<GoldenTopology> golden{
+#include "fixtures/ProductionGraphR3b6Golden.inc"
+        };
+        return golden;
+    }
+    constexpr std::array<std::string_view, 5> DeclaredSinceR3b6{
+        "shadow.directional.compact", "shadow.spot.compact", "shadow.point.compact",
+        "gpu-scene.opaque.compact", "lighting.probe-cluster" };
+
+    bool testDeclaredWorkKeepsOrderAndSlots() {
+        const VulkanLayeredGraphConfig all{ Ordinary2Atlas, Hero4Atlas, Cinematic8Atlas, true };
+        const VulkanProductionGraphFeatures full{ .depthPyramid = true,
+            .virtualShadowWorkingSetBytes = 1u << 20 };
+        VulkanProductionGraphFeatures fullNone = full;
+        fullNone.hooks = VulkanGraphHooks::none();
+        VulkanProductionGraphFeatures lean{ .depthPyramid = true,
+            .clusterTelemetryReadback = false };
+        lean.hooks = VulkanGraphHooks::none();
+        const std::array<std::pair<const char*, RenderGraph::CompiledGraph>, 6> topologies{ {
+            { "default-sdr", layeredGraph({}) },
+            { "default-hdr10", layeredGraph({}, {}, true) },
+            { "full-sdr", layeredGraph(all, full) },
+            { "full-hdr10", layeredGraph(all, full, true) },
+            { "full-sdr-no-hooks", layeredGraph(all, fullNone) },
+            { "lean-depth-pyramid", layeredGraph({}, lean) },
+        } };
+        IRIDIUM_CHECK(r3b6Golden().size() == topologies.size());
+        for (size_t index = 0; index < topologies.size(); ++index) {
+            const auto& [name, compiled] = topologies[index];
+            const GoldenTopology& golden = r3b6Golden()[index];
+            IRIDIUM_CHECK_MSG(std::string_view(golden.name) == name, name);
+            std::vector<std::string_view> previous;
+            for (const RenderGraph::CompiledPass& pass : compiled.passes())
+                if (std::ranges::find(DeclaredSinceR3b6, pass.name) ==
+                    DeclaredSinceR3b6.end())
+                    previous.push_back(pass.name);
+            IRIDIUM_CHECK_MSG(previous == golden.passes, name);
+            IRIDIUM_CHECK_MSG(compiled.physicalSlots().size() == golden.slots.size(), name);
+            for (size_t slot = 0; slot < golden.slots.size(); ++slot) {
+                std::vector<std::string_view> members;
+                for (const uint32_t logical : compiled.physicalSlots()[slot].logicalResources)
+                    members.push_back(compiled.resources()[logical].name);
+                IRIDIUM_CHECK_MSG(members == golden.slots[slot], name << " slot " << slot);
+            }
+
+            // Producers run directly before their consumers (shadows, gbuffer).
+            const GraphQuery graph(compiled);
+            for (const auto& [producer, consumer] : {
+                    std::pair{ "shadow.directional.compact", "shadow.directional" },
+                    std::pair{ "shadow.spot.compact", "shadow.spot" },
+                    std::pair{ "shadow.point.compact", "shadow.point" },
+                    std::pair{ "gpu-scene.opaque.compact", "gbuffer" } }) {
+                IRIDIUM_CHECK_MSG(*graph.passOrder(producer) + 1u ==
+                    *graph.passOrder(consumer), name << ' ' << producer);
+                IRIDIUM_CHECK(graph.pass(producer)->queue == RenderGraph::QueueClass::Compute);
+                const std::string view = std::string(producer).substr(0,
+                    std::string_view(producer).size() - std::string_view(".compact").size());
+                for (const char* suffix : { ".indirect-commands", ".indirect-counts" }) {
+                    const std::string buffer = view + suffix;
+                    IRIDIUM_CHECK_MSG(graph.writes(producer, buffer,
+                        Access::StorageReadWrite), buffer);
+                    IRIDIUM_CHECK_MSG(graph.reads(consumer, buffer, Access::IndirectRead),
+                        buffer);
+                    const auto* resource = graph.resource(buffer);
+                    IRIDIUM_CHECK(resource != nullptr && resource->desc.imported &&
+                        resource->desc.buffer.variableSize &&
+                        resource->physicalSlot == RenderGraph::InvalidIndex);
+                }
+            }
+            IRIDIUM_CHECK(graph.ordered({ "gbuffer", "lighting.probe-cluster",
+                "lighting.cluster.clear" }));
+            for (const char* buffer : { "lighting.probe-cluster.headers",
+                    "lighting.probe-cluster.indices" }) {
+                IRIDIUM_CHECK(graph.writes("lighting.probe-cluster", buffer,
+                    Access::StorageWrite));
+                IRIDIUM_CHECK_MSG(graph.reads("lighting", buffer, Access::StorageRead),
+                    buffer);
+            }
+        }
+        return true;
+    }
+
 } // namespace
 
 int main() {
@@ -393,6 +486,8 @@ int main() {
         { "one clustered-light product", testOneClusteredLightProduct },
         { "null-extension graph differs only by hooks",
             testNullExtensionGraphDiffersOnlyByHooks },
+        { "declared work keeps the R3b.6 order and slots",
+            testDeclaredWorkKeepsOrderAndSlots },
     };
     return Iridium::Test::runTests(tests);
 }

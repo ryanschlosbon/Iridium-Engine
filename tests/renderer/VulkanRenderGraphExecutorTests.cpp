@@ -153,30 +153,39 @@ namespace {
     bool testProductionTopologyContract() {
         const RenderGraph::CompiledGraph graph = buildVulkanProductionRenderGraph(
             { 3840, 2160 }, VK_FORMAT_B8G8R8A8_SRGB);
-        // R3b.5: the default hooks declare scene-color-capture-hook.
-        CHECK(graph.passes().size() == 20);
-        CHECK(graph.resources().size() == 26);
+        // R3b.5: the default hooks declare scene-color-capture-hook. R3b.7:
+        // the shadow/opaque compaction and probe-cluster passes are declared
+        // (their ten indirect/cluster buffers are imported).
+        CHECK(graph.passes().size() == 25);
+        CHECK(graph.resources().size() == 36);
         CHECK(!graph.transitions().empty());
-        CHECK(graph.passes().front().name == "shadow.directional");
+        CHECK(graph.passes().front().name == "shadow.directional.compact");
         CHECK(graph.passes().back().name == "ui-present");
-        CHECK(graph.passes()[1].name == "shadow.spot");
-        CHECK(graph.passes()[2].name == "shadow.point");
-        CHECK(graph.passes()[3].name == "gbuffer");
-        CHECK(graph.passes()[4].name == "lighting.cluster.clear");
-        CHECK(graph.passes()[8].name == "lighting.cluster.finalize");
-        CHECK(graph.passes()[9].name == "lighting.cluster.readback");
-        CHECK(graph.passes()[11].name == "forward-opaque");
-        CHECK(graph.passes()[12].name == "transparent.refraction-pyramids");
-        CHECK(graph.passes()[12].queue == RenderGraph::QueueClass::Compute);
-        CHECK(graph.passes()[13].name == "transparent.sorted.forward");
-        CHECK(graph.passes()[14].name ==
+        CHECK(graph.passes()[1].name == "shadow.directional");
+        CHECK(graph.passes()[2].name == "shadow.spot.compact");
+        CHECK(graph.passes()[3].name == "shadow.spot");
+        CHECK(graph.passes()[4].name == "shadow.point.compact");
+        CHECK(graph.passes()[5].name == "shadow.point");
+        CHECK(graph.passes()[6].name == "gpu-scene.opaque.compact");
+        CHECK(graph.passes()[7].name == "gbuffer");
+        CHECK(graph.passes()[8].name == "lighting.probe-cluster");
+        CHECK(graph.passes()[9].name == "lighting.cluster.clear");
+        CHECK(graph.passes()[13].name == "lighting.cluster.finalize");
+        CHECK(graph.passes()[14].name == "lighting.cluster.readback");
+        CHECK(graph.passes()[16].name == "forward-opaque");
+        CHECK(graph.passes()[17].name == "transparent.refraction-pyramids");
+        CHECK(graph.passes()[17].queue == RenderGraph::QueueClass::Compute);
+        CHECK(graph.passes()[18].name == "transparent.sorted.forward");
+        CHECK(graph.passes()[19].name ==
             "transparent.compatibility.forward");
-        CHECK(graph.passes()[15].name == "scene-color-capture-hook");
-        CHECK(graph.passes()[15].queue == RenderGraph::QueueClass::Transfer);
-        CHECK(graph.passes()[16].name == "bloom-hook");
+        CHECK(graph.passes()[20].name == "scene-color-capture-hook");
+        CHECK(graph.passes()[20].queue == RenderGraph::QueueClass::Transfer);
+        CHECK(graph.passes()[21].name == "bloom-hook");
+        for (const size_t compact : { 0u, 2u, 4u, 6u, 8u })
+            CHECK(graph.passes()[compact].queue == RenderGraph::QueueClass::Compute);
         bool sortedReadsDepth = false;
         bool sortedLoadsSceneColor = false;
-        const RenderGraph::CompiledPass& sortedPass = graph.passes()[13];
+        const RenderGraph::CompiledPass& sortedPass = graph.passes()[18];
         for (uint32_t usageIndex = sortedPass.firstUsage;
             usageIndex < sortedPass.firstUsage + sortedPass.usageCount;
             ++usageIndex) {
@@ -200,7 +209,7 @@ namespace {
         }
         CHECK(sortedReadsDepth);
         CHECK(sortedLoadsSceneColor);
-        for (size_t passIndex = 4; passIndex <= 8; ++passIndex) {
+        for (size_t passIndex = 9; passIndex <= 13; ++passIndex) {
             CHECK(graph.passes()[passIndex].queue ==
                 RenderGraph::QueueClass::Compute);
         }
@@ -277,7 +286,7 @@ namespace {
             120ull * 68ull * 32ull * sizeof(ClusterLightHeader));
         CHECK(coarse.topologyHash() != graph.topologyHash());
 
-        const RenderGraph::CompiledResource& swapchain = graph.resources().back();
+        const RenderGraph::CompiledResource& swapchain = *findResource("swapchain");
         CHECK(swapchain.desc.lifetime == RenderGraph::ResourceLifetime::External);
         CHECK(swapchain.desc.imported);
         CHECK(swapchain.physicalSlot == RenderGraph::InvalidIndex);
@@ -342,9 +351,9 @@ namespace {
         const RenderGraph::CompiledGraph graph = buildVulkanProductionRenderGraph(
             { 3840, 2160 }, VK_FORMAT_A2B10G10R10_UNORM_PACK32,
             VK_FORMAT_R16G16B16A16_SFLOAT, true);
-        CHECK(graph.passes().size() == 21);
-        CHECK(graph.resources().size() == 27);
-        CHECK(graph.passes()[19].name == "ui-compose");
+        CHECK(graph.passes().size() == 26);
+        CHECK(graph.resources().size() == 37);
+        CHECK(graph.passes()[24].name == "ui-compose");
         CHECK(graph.passes().back().name == "hdr10-encode-present");
         const auto composition = std::find_if(graph.resources().begin(),
             graph.resources().end(), [](const RenderGraph::CompiledResource& resource) {
@@ -356,8 +365,10 @@ namespace {
             RenderGraph::Access::ColorAttachment)) != 0);
         CHECK((composition->usages & RenderGraph::usageBit(
             RenderGraph::Access::SampledRead)) != 0);
-        CHECK(graph.resources().back().desc.image.format ==
-            RenderGraph::Format::Rgb10A2Unorm);
+        CHECK(std::ranges::find_if(graph.resources(),
+            [](const RenderGraph::CompiledResource& resource) {
+                return resource.name == "swapchain";
+            })->desc.image.format == RenderGraph::Format::Rgb10A2Unorm);
         return true;
     }
 
@@ -966,8 +977,8 @@ namespace {
 
         const VulkanGraphStats stats = executor.stats();
         CHECK(stats.enabled);
-        CHECK(stats.passCount == 20);
-        CHECK(stats.logicalResourceCount == 26);
+        CHECK(stats.passCount == 25);
+        CHECK(stats.logicalResourceCount == 36);
         CHECK(stats.physicalSlotCount == 19);
         CHECK(stats.barrierCount == transitionCount);
         CHECK(stats.frameCount == 2);
@@ -989,10 +1000,15 @@ namespace {
         CHECK(executor.stats().cacheMissCount == 0);
 
         constexpr std::string_view passNames[] = {
+            "shadow.directional.compact",
             "shadow.directional",
+            "shadow.spot.compact",
             "shadow.spot",
+            "shadow.point.compact",
             "shadow.point",
+            "gpu-scene.opaque.compact",
             "gbuffer",
+            "lighting.probe-cluster",
             "lighting.cluster.clear",
             "lighting.cluster.count",
             "lighting.cluster.scan",
