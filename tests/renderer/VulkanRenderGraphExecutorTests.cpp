@@ -1007,21 +1007,21 @@ namespace {
         };
         executor.beginFrameExecution(0);
         for (const std::string_view passName : passNames) {
-            executor.skipPass(passName);
+            executor.skipPass(executor.passId(passName));
         }
         executor.finishFrameExecution();
 
         bool orderRejected = false;
         executor.beginFrameExecution(1);
         try {
-            executor.skipPass("lighting");
+            executor.skipPass(executor.passId("lighting"));
         }
         catch (const std::logic_error&) {
             orderRejected = true;
         }
         CHECK(orderRejected);
         for (const std::string_view passName : passNames) {
-            executor.skipPass(passName);
+            executor.skipPass(executor.passId(passName));
         }
         executor.finishFrameExecution();
 
@@ -1048,11 +1048,12 @@ namespace {
         VulkanRenderGraphExecutor executor;
         executor.init(factory, 2);
         executor.rebuild(*compiled.graph);
-        CHECK(executor.bufferResource(0, "lighting.cluster.headers").isValid());
-        CHECK(executor.bufferResource(1, "lighting.cluster.headers").isValid());
+        const auto headers = executor.resourceId("lighting.cluster.headers");
+        CHECK(executor.buffer(0, headers).isValid());
+        CHECK(executor.buffer(1, headers).isValid());
         bool rejectedImage = false;
         try {
-            (void)executor.imageResource(0, "lighting.cluster.headers");
+            (void)executor.image(0, headers);
         }
         catch (const std::out_of_range&) {
             rejectedImage = true;
@@ -1194,7 +1195,7 @@ namespace {
         const auto handle = reinterpret_cast<VkBuffer>(uintptr_t{123});
         const auto other = reinterpret_cast<VkBuffer>(uintptr_t{456});
         const auto rejects = [&](uint32_t slot, std::string_view name, VkBuffer value, uint64_t bytes) {
-            try { executor.bindExternalBuffer(slot, name, value, bytes); }
+            try { executor.bindExternalBuffer(slot, executor.findResource(name), value, bytes); }
             catch (const std::invalid_argument&) { return true; }
             return false;
         };
@@ -1202,17 +1203,18 @@ namespace {
         CHECK(rejects(2, "external", handle, 256));
         CHECK(rejects(0, "unknown", handle, 256));
         CHECK(rejects(0, "external", handle, 255));
-        executor.bindExternalBuffer(0, "external", handle, 256);
+        const auto external = executor.resourceId("external");
+        executor.bindExternalBuffer(0, external, handle, 256);
         CHECK(executor.validateFrame(0)); CHECK(!executor.validateFrame(1));
         CHECK(rejects(1, "external", handle, 256));
-        executor.bindExternalBuffer(1, "external", other, 256);
+        executor.bindExternalBuffer(1, external, other, 256);
         CHECK(executor.validateFrame(1));
         executor.beginFrameExecution(0);
         CHECK(rejects(0, "external", handle, 256));
-        executor.skipPass("upload"); executor.finishFrameExecution();
+        executor.skipPass(executor.passId("upload")); executor.finishFrameExecution();
         CHECK(rejects(0, "external", handle, 256));
         executor.onFrameFenceCompleted(0);
-        executor.bindExternalBuffer(0, "external", handle, 256);
+        executor.bindExternalBuffer(0, external, handle, 256);
         executor.cleanupAfterDeviceIdle();
         CHECK(factory.createCount == 0 && factory.destroyCount == 0);
         return true;

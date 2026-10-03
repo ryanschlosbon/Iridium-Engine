@@ -287,12 +287,12 @@ namespace {
         // Lookups accept std::string and string literals without temporaries.
         const std::string gbuffer = "gbuffer";
         CHECK(executor.findPass(gbuffer) == executor.passId("gbuffer"));
-        // Id and name forms address the same physical resources.
+        // Resolved ids address the frame slot's physical resources.
         const auto scene = executor.resourceId("scene.color");
-        CHECK(&executor.image(1, scene) == &executor.imageResource(1, "scene.color"));
+        CHECK(executor.image(1, scene).isValid());
+        CHECK(&executor.image(1, scene) != &executor.image(0, scene));
         const auto headers = executor.resourceId(kClusterHeaderResourceName);
-        CHECK(&executor.buffer(0, headers) ==
-            &executor.bufferResource(0, kClusterHeaderResourceName));
+        CHECK(executor.buffer(0, headers).isValid());
         CHECK(throws([&] { (void)executor.image(0, headers); }));
         CHECK(throws([&] { (void)executor.buffer(0, scene); }));
         CHECK(throws([&] { (void)executor.image(0, RenderGraph::GraphResourceId{ 9999 }); }));
@@ -313,7 +313,7 @@ namespace {
         return true;
     }
 
-    bool testIdAndStringOrderChecks() {
+    bool testIdOrderChecks() {
         FakeResourceFactory factory;
         VulkanRenderGraphExecutor executor;
         RecordingBarrierSink sink;
@@ -329,21 +329,22 @@ namespace {
         CHECK(throws([&] { executor.beginPass(FakeCommandBuffer, consume); }));
         CHECK(throws([&] { executor.skipPass(again); }));
         CHECK(throws([&] { executor.beginPass(VK_NULL_HANDLE, produce); }));
-        CHECK(throws([&] { executor.beginPass(FakeCommandBuffer, "consume"); }));
+        CHECK(throws([&] { executor.beginPass(FakeCommandBuffer,
+            RenderGraph::PassId{} ); }));
         executor.beginPass(FakeCommandBuffer, produce);
         CHECK(throws([&] { executor.beginPass(FakeCommandBuffer, produce); }));
-        executor.skipPass("consume");
+        executor.skipPass(consume);
         CHECK(throws([&] { executor.finishFrameExecution(); }));
-        executor.beginPass(FakeCommandBuffer, "again");
+        executor.beginPass(FakeCommandBuffer, again);
         CHECK(throws([&] { executor.skipPass(RenderGraph::PassId{ 3 }); }));
         executor.finishFrameExecution();
 
-        // Mixed forms address the same cursor.
+        // Begin and skip address the same cursor.
         executor.onFrameFenceCompleted(1);
         executor.beginFrameExecution(1);
         executor.skipPass(produce);
-        executor.beginPass(FakeCommandBuffer, "consume");
-        executor.skipPass("again");
+        executor.beginPass(FakeCommandBuffer, consume);
+        executor.skipPass(again);
         executor.finishFrameExecution();
         CHECK(sink.wrongCommandBuffer == 0);
         executor.cleanupAfterDeviceIdle();
@@ -406,8 +407,9 @@ namespace {
         executor.onFrameFenceCompleted(1);
         executor.beginFrameExecution(1);
         executor.transitionImage(FakeCommandBuffer, color, Access::TransferSource);
-        executor.transitionImage(FakeCommandBuffer, "color", Access::TransferSource);
-        CHECK(throws([&] { executor.transitionImage(FakeCommandBuffer, "nothing", Access::TransferSource); }));
+        executor.transitionImage(FakeCommandBuffer, color, Access::TransferSource);
+        CHECK(throws([&] { executor.transitionImage(FakeCommandBuffer,
+            RenderGraph::GraphResourceId{}, Access::TransferSource); }));
         CHECK(sink.recorded().size() == 1);
         CHECK(sink.recorded()[0].newLayout == VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
         for (const auto& pass : graph.passes())
@@ -437,7 +439,8 @@ namespace {
         const auto id = executor.resourceId("external");
         const auto handle = reinterpret_cast<VkBuffer>(uintptr_t{ 123 });
         CHECK(throws([&] { executor.bindExternalBuffer(0, RenderGraph::GraphResourceId{ 7 }, handle, 256); }));
-        CHECK(throws([&] { executor.bindExternalBuffer(0, "unknown", handle, 256); }));
+        CHECK(throws([&] { executor.bindExternalBuffer(0, executor.findResource("unknown"),
+            handle, 256); }));
         executor.bindExternalBuffer(0, id, handle, 512, Access::TransferDestination);
         executor.beginFrameExecution(0);
         executor.beginPass(FakeCommandBuffer, executor.passId("upload"));
@@ -1031,11 +1034,11 @@ namespace {
         CHECK(throws([&] { executor.skipPass(ChainFixture::pass(2)); }));
         CHECK(fixture.owner.executions[2] == 0);
         executor.skipPass(ChainFixture::pass(1));
-        // The string form drains the registered pass at the cursor first.
-        executor.beginPass(FakeCommandBuffer, "p3");
+        // Beginning p3 drains the registered p2 before it.
+        executor.beginPass(FakeCommandBuffer, executor.passId("p3"));
         CHECK(fixture.owner.executions[2] == 1);
         CHECK(throws([&] { executor.finishFrameExecution(); }));
-        executor.skipPass("p4");
+        executor.skipPass(executor.passId("p4"));
         executor.finishFrameExecution();
         return true;
     }
@@ -1700,7 +1703,7 @@ int main() {
     };
     constexpr TestCase tests[] = {
         { "id resolution", testIdResolution },
-        { "id and string order checks", testIdAndStringOrderChecks },
+        { "id order checks", testIdOrderChecks },
         { "barrier sink records graph barriers", testBarrierSinkRecordsGraphBarriers },
         { "external buffer binding by id", testExternalBufferBindingById },
         { "synchronization2 mapping", testSynchronization2Mapping },

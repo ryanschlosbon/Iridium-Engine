@@ -79,7 +79,8 @@ namespace Iridium {
         bool hdr10Composition,
         bool transparencyPyramids,
         const VulkanLayeredGraphConfig& layered,
-        const VulkanRenderGraphExecutor& graphResources) {
+        const VulkanRenderGraphExecutor& graphResources,
+        const VulkanProductionGraphIds& ids) {
         if (device == VK_NULL_HANDLE || swapchain.getSwapchain() == VK_NULL_HANDLE ||
             swapchain.getImageCount() == 0 ||
             swapchain.getImageViews().size() != swapchain.getImageCount() ||
@@ -141,35 +142,30 @@ namespace Iridium {
             for (VulkanFrameContextTargets& target : targets_) {
                 const uint32_t frameIndex = static_cast<uint32_t>(
                     &target - targets_.data());
-                target.normal = graphResources.imageResource(frameIndex, "gbuffer.normal");
-                target.albedo = graphResources.imageResource(frameIndex, "gbuffer.albedo");
-                target.emissive = graphResources.imageResource(frameIndex, "gbuffer.emissive");
-                target.f0Roughness = graphResources.imageResource(
-                    frameIndex, "gbuffer.f0-roughness");
-                target.materialFlags = graphResources.imageResource(
-                    frameIndex, "gbuffer.material-flags");
-                target.depth = graphResources.imageResource(frameIndex, "depth.opaque");
-                target.litScene = graphResources.imageResource(frameIndex, "scene.color");
+                const auto image = [&](RenderGraph::GraphResourceId id) {
+                    return graphResources.image(frameIndex, id);
+                };
+                target.normal = image(ids.gbufferNormal);
+                target.albedo = image(ids.gbufferAlbedo);
+                target.emissive = image(ids.gbufferEmissive);
+                target.f0Roughness = image(ids.gbufferF0Roughness);
+                target.materialFlags = image(ids.gbufferMaterialFlags);
+                target.depth = image(ids.depth);
+                target.litScene = image(ids.sceneColor);
                 if (transparencyPyramids) {
-                    target.refractionColorPyramid = graphResources.imageResource(
-                        frameIndex, "scene.refraction-color-pyramid");
-                    target.refractionDepthPyramid = graphResources.imageResource(
-                        frameIndex, "depth.refraction-nearest-pyramid");
+                    target.refractionColorPyramid = image(ids.refractionColorPyramid);
+                    target.refractionDepthPyramid = image(ids.refractionDepthPyramid);
                 }
                 if (ordinary2) {
-                    target.layeredEntryDepth = graphResources.imageResource(
-                        frameIndex, "depth.layered.entry");
-                    target.layeredEntryIdentity = graphResources.imageResource(
-                        frameIndex, "identity.layered.entry");
-                    target.layeredExitDepth = graphResources.imageResource(
-                        frameIndex, "depth.layered.exit");
-                    target.layeredExitIdentity = graphResources.imageResource(
-                        frameIndex, "identity.layered.exit");
-                    target.layeredLocalColor = graphResources.imageResource(
-                        frameIndex, "scene.layered.local-color");
+                    target.layeredEntryDepth = image(ids.ordinary2EntryDepth);
+                    target.layeredEntryIdentity = image(ids.ordinary2EntryIdentity);
+                    target.layeredExitDepth = image(ids.ordinary2ExitDepth);
+                    target.layeredExitIdentity = image(ids.ordinary2ExitIdentity);
+                    target.layeredLocalColor = image(ids.ordinary2LocalColor);
                 }
                 const auto acquireDeepLayeredTier = [&](
-                        TransparencyQuality quality, const char* name,
+                        TransparencyQuality quality,
+                        const VulkanDeepLayeredGraphIds& tierIds,
                         VulkanFrameContextTargets::DeepLayeredTier& tier) {
                     if (!layered.enabled(quality)) return;
                     tier.atlasExtent = layered.atlasExtent(quality);
@@ -178,45 +174,34 @@ namespace Iridium {
                     for (uint32_t interfaceIndex = 0u;
                         interfaceIndex < tier.interfaceCount;
                         ++interfaceIndex) {
-                        const std::string suffix = std::string(name) +
-                            ".interface." + std::to_string(interfaceIndex);
                         tier.interfaceDepth[interfaceIndex] =
-                            graphResources.imageResource(frameIndex,
-                                "depth.layered." + suffix);
+                            image(tierIds.interfaceDepth[interfaceIndex]);
                         tier.interfaceIdentity[interfaceIndex] =
-                            graphResources.imageResource(frameIndex,
-                                "identity.layered." + suffix);
+                            image(tierIds.interfaceIdentity[interfaceIndex]);
                         if (deepLayeredTerminationInterface(interfaceIndex,
                                 tier.interfaceCount)) {
                             tier.tileTermination[interfaceIndex] =
-                                graphResources.imageResource(frameIndex,
-                                    "termination.layered." + suffix);
+                                image(tierIds.tileTermination[interfaceIndex]);
                         }
                     }
-                    tier.localColor = graphResources.imageResource(frameIndex,
-                        std::string("scene.layered.") + name +
-                            ".local-color");
+                    tier.localColor = image(tierIds.localColor);
                 };
-                acquireDeepLayeredTier(TransparencyQuality::Hero4, "hero4",
+                acquireDeepLayeredTier(TransparencyQuality::Hero4, ids.hero4,
                     target.hero4);
                 acquireDeepLayeredTier(TransparencyQuality::Cinematic8,
-                    "cinematic8", target.cinematic8);
+                    ids.cinematic8, target.cinematic8);
                 if (layered.weightedOit) {
-                    target.weightedOitAccumulation =
-                        graphResources.imageResource(frameIndex,
-                            "transparency.oit.accumulation");
-                    target.weightedOitRevealage =
-                        graphResources.imageResource(frameIndex,
-                            "transparency.oit.revealage");
+                    target.weightedOitAccumulation = image(ids.oitAccumulation);
+                    target.weightedOitRevealage = image(ids.oitRevealage);
                 }
-                target.output = graphResources.imageResource(frameIndex, "output.display");
+                target.output = image(ids.output);
             }
             if (hdr10Composition) {
                 for (VulkanFrameContextTargets& target : targets_) {
                     const uint32_t frameIndex = static_cast<uint32_t>(
                         &target - targets_.data());
-                    target.uiComposition = graphResources.imageResource(
-                        frameIndex, "output.ui-composition");
+                    target.uiComposition = graphResources.image(frameIndex,
+                        ids.uiComposition);
                 }
             }
 

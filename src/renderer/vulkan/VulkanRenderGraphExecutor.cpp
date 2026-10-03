@@ -681,13 +681,6 @@ const RenderGraph::CompiledGraph& VulkanRenderGraphExecutor::boundGraph() const 
 }
 
 void VulkanRenderGraphExecutor::bindExternalBuffer(uint32_t frameIndex,
-    std::string_view logicalName, VkBuffer buffer, VkDeviceSize size,
-    RenderGraph::Access initialAccess) {
-    bindExternalBuffer(frameIndex, findResource(logicalName), buffer, size,
-        initialAccess);
-}
-
-void VulkanRenderGraphExecutor::bindExternalBuffer(uint32_t frameIndex,
     RenderGraph::GraphResourceId id, VkBuffer buffer, VkDeviceSize size,
     RenderGraph::Access initialAccess) {
     if (initialAccess == RenderGraph::Access::ColorAttachment ||
@@ -1224,25 +1217,6 @@ void VulkanRenderGraphExecutor::beginPass(VkCommandBuffer commandBuffer,
     beginPassAt(commandBuffer, pass.order);
 }
 
-void VulkanRenderGraphExecutor::beginPass(VkCommandBuffer commandBuffer,
-    std::string_view passName) {
-    if (commandBuffer == VK_NULL_HANDLE)
-        throw std::invalid_argument("Render-graph pass requires a command buffer");
-    const RenderGraph::CompiledGraph& graph = executingGraph();
-    if (inCallback_)
-        throw std::logic_error("Render-graph passes cannot begin inside a pass callback");
-    if (registeredCount_ != 0) {
-        noteCommandBuffer(commandBuffer);
-        drainRegisteredAtCursor();
-    }
-    if (nextPass_ >= graph.passes().size() ||
-        graph.passes()[nextPass_].name != passName) {
-        throw std::logic_error("Render-graph pass order does not match the compiled plan");
-    }
-    noteCommandBuffer(commandBuffer);
-    beginPassAt(commandBuffer, nextPass_);
-}
-
 void VulkanRenderGraphExecutor::skipPass(RenderGraph::PassId pass) {
     const RenderGraph::CompiledGraph& graph = executingGraph();
     if (inCallback_)
@@ -1253,18 +1227,6 @@ void VulkanRenderGraphExecutor::skipPass(RenderGraph::PassId pass) {
     }
     if (registeredCount_ != 0) drainRegisteredBefore(pass.order);
     requireCursorAt(pass.order, "Render-graph skipped pass is out of order");
-    ++nextPass_;
-}
-
-void VulkanRenderGraphExecutor::skipPass(std::string_view passName) {
-    const RenderGraph::CompiledGraph& graph = executingGraph();
-    if (inCallback_)
-        throw std::logic_error("Render-graph passes cannot be skipped inside a pass callback");
-    if (registeredCount_ != 0) drainRegisteredAtCursor();
-    if (nextPass_ >= graph.passes().size() ||
-        graph.passes()[nextPass_].name != passName) {
-        throw std::logic_error("Render-graph skipped pass is out of order");
-    }
     ++nextPass_;
 }
 
@@ -1368,15 +1330,6 @@ VulkanGpuRangeSink VulkanGpuRangeSink::forScheduler(
 }
 
 void VulkanRenderGraphExecutor::transitionImage(VkCommandBuffer commandBuffer,
-    std::string_view logicalName, RenderGraph::Access access) {
-    (void)executingGraph();
-    const RenderGraph::GraphResourceId id = findResource(logicalName);
-    if (!id.isValid())
-        throw std::out_of_range("Render-graph transition resource was not found");
-    transitionImage(commandBuffer, id, access);
-}
-
-void VulkanRenderGraphExecutor::transitionImage(VkCommandBuffer commandBuffer,
     RenderGraph::GraphResourceId id, RenderGraph::Access access) {
     const RenderGraph::CompiledGraph& graph = executingGraph();
     if (id.logical >= graph.resources().size() ||
@@ -1475,24 +1428,6 @@ VulkanGraphStats VulkanRenderGraphExecutor::stats() const noexcept {
         .cacheMissCount = cacheMissCount_,
         .historySlotCount = static_cast<uint32_t>(historyResources_.size()),
     };
-}
-
-const VulkanImageResource& VulkanRenderGraphExecutor::imageResource(
-    uint32_t frameIndex, std::string_view logicalName) const {
-    (void)boundGraph();
-    const RenderGraph::GraphResourceId id = findResource(logicalName);
-    if (!id.isValid())
-        throw std::out_of_range("Render-graph image resource was not found");
-    return image(frameIndex, id);
-}
-
-const VulkanBufferResource& VulkanRenderGraphExecutor::bufferResource(
-    uint32_t frameIndex, std::string_view logicalName) const {
-    (void)boundGraph();
-    const RenderGraph::GraphResourceId id = findResource(logicalName);
-    if (!id.isValid())
-        throw std::out_of_range("Render-graph buffer resource was not found");
-    return buffer(frameIndex, id);
 }
 
 const VulkanImageResource& VulkanRenderGraphExecutor::image(uint32_t frameIndex,

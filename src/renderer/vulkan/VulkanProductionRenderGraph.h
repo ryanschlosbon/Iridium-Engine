@@ -1,6 +1,7 @@
 #pragma once
 
 #include "renderer/graph/RenderGraph.h"
+#include "renderer/vulkan/VulkanProductionGraphIds.h"
 #include "renderer/rhi/GBufferLayout.h"
 #include "renderer/lighting/ClusteredLighting.h"
 #include "renderer/transparency/LayeredGlass.h"
@@ -150,5 +151,12 @@ namespace Iridium {
         bool transparencyPyramids = true,
         VulkanLayeredGraphConfig layered = {},
         VulkanProductionGraphFeatures features = {});
+
+    class VulkanRenderGraphExecutor;
+
+    // The ids of the production passes and resources in the executor's bound
+    // plan (R3b.4); undeclared ones are invalid. Call after every rebuild.
+    [[nodiscard]] VulkanProductionGraphIds resolveVulkanProductionGraphIds(
+        const VulkanRenderGraphExecutor& graph);
 
 } // namespace Iridium

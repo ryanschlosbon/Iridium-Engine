@@ -37,26 +37,6 @@
 namespace Iridium {
 
     namespace {
-        constexpr std::array<std::string_view, 6> Hero4PassNames{
-            "transparent.layered.hero4.interface.0.capture",
-            "transparent.layered.hero4.interface.1.capture",
-            "transparent.layered.hero4.interface.2.capture",
-            "transparent.layered.hero4.interface.3.capture",
-            "transparent.layered.hero4.local-compose",
-            "transparent.layered.hero4.validation-readback-hook",
-        };
-        constexpr std::array<std::string_view, 10> Cinematic8PassNames{
-            "transparent.layered.cinematic8.interface.0.capture",
-            "transparent.layered.cinematic8.interface.1.capture",
-            "transparent.layered.cinematic8.interface.2.capture",
-            "transparent.layered.cinematic8.interface.3.capture",
-            "transparent.layered.cinematic8.interface.4.capture",
-            "transparent.layered.cinematic8.interface.5.capture",
-            "transparent.layered.cinematic8.interface.6.capture",
-            "transparent.layered.cinematic8.interface.7.capture",
-            "transparent.layered.cinematic8.local-compose",
-            "transparent.layered.cinematic8.validation-readback-hook",
-        };
         constexpr std::array<const char*, 4> Hero4CaptureGpuRanges{
             "gpu.transparency.layered.hero4.interface.0.capture",
             "gpu.transparency.layered.hero4.interface.1.capture",
@@ -89,23 +69,6 @@ namespace Iridium {
             "gpu.transparency.layered.cinematic8.interface.6.terminate-tiles",
             "gpu.transparency.layered.cinematic8.interface.7.terminate-tiles",
         };
-        constexpr std::array<std::string_view, 4> Hero4TerminationPassNames{
-            "transparent.layered.hero4.interface.0.terminate-tiles",
-            "transparent.layered.hero4.interface.1.terminate-tiles",
-            "transparent.layered.hero4.interface.2.terminate-tiles",
-            "transparent.layered.hero4.interface.3.terminate-tiles",
-        };
-        constexpr std::array<std::string_view, 8>
-            Cinematic8TerminationPassNames{
-                "transparent.layered.cinematic8.interface.0.terminate-tiles",
-                "transparent.layered.cinematic8.interface.1.terminate-tiles",
-                "transparent.layered.cinematic8.interface.2.terminate-tiles",
-                "transparent.layered.cinematic8.interface.3.terminate-tiles",
-                "transparent.layered.cinematic8.interface.4.terminate-tiles",
-                "transparent.layered.cinematic8.interface.5.terminate-tiles",
-                "transparent.layered.cinematic8.interface.6.terminate-tiles",
-                "transparent.layered.cinematic8.interface.7.terminate-tiles",
-            };
 
         // CPU LOD selectors for the qualification oracle's expected commands.
         struct DensityLodContext {
@@ -792,14 +755,14 @@ namespace Iridium {
     }
 
     void VulkanVertexBackend::runPassHook(const VulkanHookContext& context,
-        bool declared, std::string_view passName, const char* gpuRangeName) {
+        bool declared, RenderGraph::PassId pass, const char* gpuRangeName) {
         if (!declared) return;
         if (!anyExtensionWants(context)) {
-            renderGraph_.skipPass(passName);
+            renderGraph_.skipPass(pass);
             return;
         }
         VulkanGpuRangeToken gpuRange = scheduler.beginGpuRange(gpuRangeName);
-        renderGraph_.beginPass(currentCmd, passName);
+        renderGraph_.beginPass(currentCmd, pass);
         for (IVulkanBackendExtension* extension : extensions_)
             if (extension->wantsHook(context)) extension->onHook(context);
         scheduler.endGpuRange(gpuRange);
@@ -1715,10 +1678,19 @@ namespace Iridium {
             VulkanLayeredGraphConfig{ ordinary2AtlasExtent_,
                 hero4AtlasExtent_, cinematic8AtlasExtent_,
                 weightedOitResidency_.enabled() }, productionGraphFeatures()));
+        // R3b.4: ids are resolved once per plan; the barrier API follows the
+        // device feature explicitly; callback passes record GPU ranges through
+        // the scheduler.
+        graphIds_ = resolveVulkanProductionGraphIds(renderGraph_);
+        renderGraph_.setBarrierApi(vkContext->hasSynchronization2()
+            ? VulkanBarrierApi::Synchronization2
+            : VulkanBarrierApi::Synchronization1);
+        renderGraph_.setGpuRangeSink(VulkanGpuRangeSink::forScheduler(scheduler));
         if (virtualShadowResources_.initialized()) {
             for (uint32_t frame = 0; frame < VulkanFrameScheduler::FramesInFlight; ++frame) {
                 const auto& buffer = virtualShadowResources_.workingSet(frame);
-                renderGraph_.bindExternalBuffer(frame, "shadow.virtual.working-set", buffer.buffer, buffer.size);
+                renderGraph_.bindExternalBuffer(frame, graphIds_.virtualShadowWorkingSet,
+                    buffer.buffer, buffer.size);
             }
             virtualShadowDepthBindings_.fill(VK_NULL_HANDLE);
         }
@@ -3055,7 +3027,7 @@ namespace Iridium {
             VulkanLayeredGraphConfig{ ordinary2AtlasExtent_,
                 hero4AtlasExtent_, cinematic8AtlasExtent_,
                 weightedOitResidency_.enabled() },
-            renderGraph_);
+            renderGraph_, graphIds_);
     }
 
     void VulkanVertexBackend::createUniformBuffers() {
@@ -3130,6 +3102,13 @@ namespace Iridium {
         if (frameEnvironments_[scheduler.currentFrameIndex()] != environmentLighting_)
             bindEnvironmentProducts(scheduler.currentFrameIndex());
         renderGraph_.beginFrameExecution(scheduler.currentFrameIndex());
+        renderGraph_.setFrameRecordContext({
+            .commandBuffer = currentCmd,
+            .frameIndex = scheduler.currentFrameIndex(),
+            .imageIndex = currentImageIndex,
+            .collectCounters = collectFrameCounters_,
+            .sceneExtent = sceneExtent_,
+        });
         frameOpen_ = true;
         return frame.status;
     }
@@ -3531,7 +3510,7 @@ namespace Iridium {
             if (const auto& packet = virtualShadowFrameClipPlans_[frameIndex])
                 for (uint32_t i = 0; i < packet->levelCount; ++i)
                     packed[i] = packDirectionalVirtualShadowClipLevel(packet->clips[i]);
-            renderGraph_.beginPass(currentCmd, "shadow.virtual.clip-upload");
+            renderGraph_.beginPass(currentCmd, graphIds_.virtualShadowClipUpload);
             const auto& range = virtualShadowResources_.info().workingSetLayout.clipLevels;
             if (range.size != sizeof(packed))
                 throw std::logic_error("Virtual-shadow clip upload does not match the working-set ABI");
@@ -3544,10 +3523,10 @@ namespace Iridium {
                 return shadow.updateMask != 0u;
             });
         if (!hasUpdates) {
-            renderGraph_.skipPass("shadow.directional");
+            renderGraph_.skipPass(graphIds_.shadowDirectional);
             return;
         }
-        renderGraph_.beginPass(currentCmd, "shadow.directional");
+        renderGraph_.beginPass(currentCmd, graphIds_.shadowDirectional);
         for (const DirectionalShadowFramePacket& shadow : shadows)
             if (shadow.resolution != directionalShadow_.resolution())
                 throw std::invalid_argument(
@@ -3769,10 +3748,10 @@ namespace Iridium {
         const bool hasUpdates = std::ranges::any_of(shadows,
             [](const SpotShadowFramePacket& shadow) { return shadow.update; });
         if (!hasUpdates) {
-            renderGraph_.skipPass("shadow.spot");
+            renderGraph_.skipPass(graphIds_.shadowSpot);
             return;
         }
-        renderGraph_.beginPass(currentCmd, "shadow.spot");
+        renderGraph_.beginPass(currentCmd, graphIds_.shadowSpot);
         CpuScope recordScope(cpuProfiler_, "cpu.render.record.shadow.spot");
         shadowCasterScratch_.clear();
         shadowCasterScratch_.reserve(shadowCasters.size());
@@ -3978,10 +3957,10 @@ namespace Iridium {
         const bool hasUpdates = std::ranges::any_of(shadows,
             [](const PointShadowFramePacket& shadow) { return shadow.update; });
         if (!hasUpdates) {
-            renderGraph_.skipPass("shadow.point");
+            renderGraph_.skipPass(graphIds_.shadowPoint);
             return;
         }
-        renderGraph_.beginPass(currentCmd, "shadow.point");
+        renderGraph_.beginPass(currentCmd, graphIds_.shadowPoint);
         CpuScope recordScope(cpuProfiler_, "cpu.render.record.shadow.point");
         shadowCasterScratch_.clear();
         shadowCasterScratch_.reserve(shadowCasters.size());
@@ -4525,7 +4504,7 @@ namespace Iridium {
             scheduler.currentFrameIndex());
         const bool indirectValid = !isWireframe &&
             prepareOpaqueIndirectSubmission(opaqueQueue);
-        renderGraph_.beginPass(currentCmd, "gbuffer");
+        renderGraph_.beginPass(currentCmd, graphIds_.gbuffer);
         VkRenderPassBeginInfo rpInfo{ VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
         rpInfo.renderPass = gBufferPass->getRenderPass();
         rpInfo.framebuffer = frameTargets.get(
@@ -5288,7 +5267,8 @@ VkDeviceSize offset = geometry->vertexOffset;
             parameters[frame] = { clusterParameterBuffers_[frame].buffer, 0,
                 sizeof(PackedGpuClusterParameters) };
         }
-        clusteredLighting_.rebuildDescriptors(renderGraph_, records, active,
+        clusteredLighting_.rebuildDescriptors(renderGraph_, graphIds_.cluster,
+            records, active,
             fallbackCandidates, parameters);
     }
 
@@ -5301,16 +5281,11 @@ VkDeviceSize offset = geometry->vertexOffset;
                 return VkDescriptorBufferInfo{ buffer.buffer, 0, buffer.size };
             };
             descriptors[frame] = {
-                info(renderGraph_.bufferResource(frame,
-                    kClusterGlobalResourceName)),
-                info(renderGraph_.bufferResource(frame,
-                    kClusterHeaderResourceName)),
-                info(renderGraph_.bufferResource(frame,
-                    kClusterIndexResourceName)),
-                info(renderGraph_.bufferResource(frame,
-                    kClusterFallbackResourceName)),
-                info(renderGraph_.bufferResource(frame,
-                    kClusterDiagnosticResourceName)),
+                info(renderGraph_.buffer(frame, graphIds_.cluster.global)),
+                info(renderGraph_.buffer(frame, graphIds_.cluster.headers)),
+                info(renderGraph_.buffer(frame, graphIds_.cluster.indices)),
+                info(renderGraph_.buffer(frame, graphIds_.cluster.fallback)),
+                info(renderGraph_.buffer(frame, graphIds_.cluster.diagnostics)),
                 { clusterParameterBuffers_[frame].buffer, 0,
                     sizeof(PackedGpuClusterParameters) },
             };
@@ -6173,14 +6148,13 @@ VkDeviceSize offset = geometry->vertexOffset;
             VulkanGpuRangeToken clusterGpuRange =
                 scheduler.beginGpuRange("gpu.lighting.cluster");
             frameCounters_.dispatchRecorded += clusteredLighting_.record(
-                currentCmd, renderGraph_, frameIndex,
+                currentCmd, renderGraph_, graphIds_.cluster, frameIndex,
                 static_cast<uint32_t>(dimensions.clusterCount()),
                 lights.stats.activeLightCount);
             if (productionGraphFeatures().clusterTelemetryReadback) {
-                renderGraph_.beginPass(currentCmd, "lighting.cluster.readback");
-                const VulkanBufferResource& diagnostics =
-                    renderGraph_.bufferResource(frameIndex,
-                        kClusterDiagnosticResourceName);
+                renderGraph_.beginPass(currentCmd, graphIds_.clusterReadback);
+                const VulkanBufferResource& diagnostics = renderGraph_.buffer(
+                    frameIndex, graphIds_.cluster.diagnostics);
                 const VkBufferCopy copy{ 0, 0, 64 };
                 vkCmdCopyBuffer(currentCmd, diagnostics.buffer,
                     clusterDiagnosticReadbackBuffers_[frameIndex].buffer,
@@ -6193,7 +6167,7 @@ VkDeviceSize offset = geometry->vertexOffset;
         }
         VulkanFrameContextTargets& targets = frameTargets.get(
             scheduler.currentFrameIndex());
-        renderGraph_.beginPass(currentCmd, "lighting");
+        renderGraph_.beginPass(currentCmd, graphIds_.lighting);
 
         VkRenderPassBeginInfo lightingPassInfo{ VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
         lightingPassInfo.renderPass = lightingRenderPass;
@@ -6238,11 +6212,10 @@ VkDeviceSize offset = geometry->vertexOffset;
         std::span<const DrawPacket> packets,
         std::span<const Ordinary2CaptureDraw> draws,
         bool exitCapture) {
-        const char* passName = exitCapture
-            ? "transparent.layered.exit.capture"
-            : "transparent.layered.entry.capture";
+        const RenderGraph::PassId pass = exitCapture
+            ? graphIds_.ordinary2ExitCapture : graphIds_.ordinary2EntryCapture;
         if (draws.empty()) {
-            renderGraph_.skipPass(passName);
+            renderGraph_.skipPass(pass);
             return;
         }
         if (ordinary2AtlasExtent_.width == 0u ||
@@ -6266,7 +6239,7 @@ VkDeviceSize offset = geometry->vertexOffset;
         VulkanGpuRangeToken gpuRange = scheduler.beginGpuRange(exitCapture
             ? "gpu.transparency.layered.exit.capture"
             : "gpu.transparency.layered.entry.capture");
-        renderGraph_.beginPass(currentCmd, passName);
+        renderGraph_.beginPass(currentCmd, pass);
         std::array<VkClearValue, 2> clears{};
         clears[0].color.uint32[0] = 0u;
         clears[1].depthStencil = { 1.0f, 0u };
@@ -6367,31 +6340,32 @@ VkDeviceSize offset = geometry->vertexOffset;
         std::span<const DrawPacket> packets,
         std::span<const LayeredCaptureDraw> draws,
         TransparencyQuality quality, uint32_t interfaceIndex) {
-        const std::span<const std::string_view> passNames = quality ==
+        const std::span<const RenderGraph::PassId> passes = quality ==
                 TransparencyQuality::Hero4
-            ? std::span<const std::string_view>(Hero4PassNames).first(4u)
+            ? std::span<const RenderGraph::PassId>(
+                graphIds_.hero4.interfaceCapture).first(4u)
             : quality == TransparencyQuality::Cinematic8
-                ? std::span<const std::string_view>(
-                    Cinematic8PassNames).first(8u)
-                : std::span<const std::string_view>{};
+                ? std::span<const RenderGraph::PassId>(
+                    graphIds_.cinematic8.interfaceCapture).first(8u)
+                : std::span<const RenderGraph::PassId>{};
         const std::span<const char* const> gpuRanges = quality ==
                 TransparencyQuality::Hero4
             ? std::span<const char* const>(Hero4CaptureGpuRanges)
             : quality == TransparencyQuality::Cinematic8
                 ? std::span<const char* const>(Cinematic8CaptureGpuRanges)
                 : std::span<const char* const>{};
-        if (interfaceIndex >= passNames.size() ||
+        if (interfaceIndex >= passes.size() ||
             interfaceIndex >= gpuRanges.size()) {
             throw std::out_of_range(
                 "Deep layered interface index is invalid");
         }
-        const std::string_view passName = passNames[interfaceIndex];
+        const RenderGraph::PassId pass = passes[interfaceIndex];
         const bool hasTierDraws = std::ranges::any_of(draws,
             [quality](const LayeredCaptureDraw& draw) {
                 return draw.quality == quality;
             });
         if (!hasTierDraws) {
-            renderGraph_.skipPass(passName);
+            renderGraph_.skipPass(pass);
             return;
         }
 
@@ -6415,7 +6389,7 @@ VkDeviceSize offset = geometry->vertexOffset;
 
         VulkanGpuRangeToken gpuRange = scheduler.beginGpuRange(
             gpuRanges[interfaceIndex]);
-        renderGraph_.beginPass(currentCmd, passName);
+        renderGraph_.beginPass(currentCmd, pass);
         std::array<VkClearValue, 2> clears{};
         clears[0].color.uint32[0] = 0u;
         clears[1].depthStencil = { 1.0f, 0u };
@@ -6546,16 +6520,15 @@ const VkDeviceSize offset = geometry->vertexOffset;
             throw std::logic_error(
                 "Layered tile termination requires a resident tier");
         }
-        const std::string_view passName = quality ==
-                TransparencyQuality::Hero4
-            ? Hero4TerminationPassNames[interfaceIndex]
-            : Cinematic8TerminationPassNames[interfaceIndex];
+        const RenderGraph::PassId pass = quality == TransparencyQuality::Hero4
+            ? graphIds_.hero4.terminateTiles[interfaceIndex]
+            : graphIds_.cinematic8.terminateTiles[interfaceIndex];
         const bool hasTierDraws = std::ranges::any_of(draws,
             [quality](const LayeredCaptureDraw& draw) {
                 return draw.quality == quality;
             });
         if (!hasTierDraws) {
-            renderGraph_.skipPass(passName);
+            renderGraph_.skipPass(pass);
             return;
         }
         const char* gpuRangeName = quality == TransparencyQuality::Hero4
@@ -6563,7 +6536,7 @@ const VkDeviceSize offset = geometry->vertexOffset;
             : Cinematic8TerminationGpuRanges[interfaceIndex];
         VulkanGpuRangeToken gpuRange = scheduler.beginGpuRange(
             gpuRangeName);
-        renderGraph_.beginPass(currentCmd, passName);
+        renderGraph_.beginPass(currentCmd, pass);
         layeredInterfaceCapture_.recordTileTermination(currentCmd,
             frameIndex, quality, interfaceIndex, tier.atlasExtent);
         recordPipelineBind(pipelineIdentity(
@@ -6584,17 +6557,14 @@ const VkDeviceSize offset = geometry->vertexOffset;
         }
         const uint32_t interfaceCount =
             tierContract.maximumInterfaceCount;
-        const std::span<const std::string_view> passNames = quality ==
-                TransparencyQuality::Hero4
-            ? std::span<const std::string_view>(Hero4PassNames)
-            : std::span<const std::string_view>(Cinematic8PassNames);
-        const std::string_view passName = passNames[interfaceCount];
+        const RenderGraph::PassId pass = quality == TransparencyQuality::Hero4
+            ? graphIds_.hero4.localCompose : graphIds_.cinematic8.localCompose;
         const bool hasTierDraws = std::ranges::any_of(draws,
             [quality](const LayeredCaptureDraw& draw) {
                 return draw.quality == quality;
             });
         if (!hasTierDraws) {
-            renderGraph_.skipPass(passName);
+            renderGraph_.skipPass(pass);
             return;
         }
 
@@ -6618,7 +6588,7 @@ const VkDeviceSize offset = geometry->vertexOffset;
             ? "gpu.transparency.layered.hero4.local-compose"
             : "gpu.transparency.layered.cinematic8.local-compose";
         VulkanGpuRangeToken gpuRange = scheduler.beginGpuRange(gpuRangeName);
-        renderGraph_.beginPass(currentCmd, passName);
+        renderGraph_.beginPass(currentCmd, pass);
         VkClearValue clear{};
         clear.color = { { 0.0f, 0.0f, 0.0f, 0.0f } };
         VkRenderPassBeginInfo passInfo{
@@ -6783,10 +6753,8 @@ const VkDeviceSize offset = geometry->vertexOffset;
     void VulkanVertexBackend::recordOrdinary2LocalComposition(
         std::span<const DrawPacket> packets,
         std::span<const Ordinary2CaptureDraw> draws) {
-        constexpr std::string_view PassName =
-            "transparent.layered.local-compose";
         if (draws.empty()) {
-            renderGraph_.skipPass(PassName);
+            renderGraph_.skipPass(graphIds_.ordinary2LocalCompose);
             return;
         }
         const uint32_t frameIndex = scheduler.currentFrameIndex();
@@ -6804,7 +6772,7 @@ const VkDeviceSize offset = geometry->vertexOffset;
 
         VulkanGpuRangeToken gpuRange = scheduler.beginGpuRange(
             "gpu.transparency.layered.local-compose");
-        renderGraph_.beginPass(currentCmd, PassName);
+        renderGraph_.beginPass(currentCmd, graphIds_.ordinary2LocalCompose);
         VkClearValue clear{};
         clear.color = { { 0.0f, 0.0f, 0.0f, 0.0f } };
         VkRenderPassBeginInfo passInfo{
@@ -6955,10 +6923,8 @@ const VkDeviceSize offset = geometry->vertexOffset;
     void VulkanVertexBackend::recordOrdinary2SceneResolve(
         std::span<const DrawPacket> packets,
         std::span<const Ordinary2CaptureDraw> draws) {
-        constexpr std::string_view PassName =
-            "transparent.layered.compose-hook";
         if (draws.empty()) {
-            renderGraph_.skipPass(PassName);
+            renderGraph_.skipPass(graphIds_.ordinary2ComposeHook);
             return;
         }
         const uint32_t frameIndex = scheduler.currentFrameIndex();
@@ -6974,7 +6940,7 @@ const VkDeviceSize offset = geometry->vertexOffset;
 
         VulkanGpuRangeToken gpuRange = scheduler.beginGpuRange(
             "gpu.transparency.layered.scene-resolve");
-        renderGraph_.beginPass(currentCmd, PassName);
+        renderGraph_.beginPass(currentCmd, graphIds_.ordinary2ComposeHook);
         VkRenderPassBeginInfo passInfo{
             VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
         passInfo.renderPass = transparentPass->getRenderPass();
@@ -7069,13 +7035,8 @@ const VkDeviceSize offset = geometry->vertexOffset;
             hero4AtlasExtent_.height != 0u;
         const bool cinematic8Active = cinematic8AtlasExtent_.width != 0u &&
             cinematic8AtlasExtent_.height != 0u;
-        const std::string_view passName = hero4Active && cinematic8Active
-            ? "transparent.layered.deep.compose-hook"
-            : hero4Active
-                ? "transparent.layered.hero4.compose-hook"
-                : "transparent.layered.cinematic8.compose-hook";
         if (draws.empty() || deepResolvedPacketCount_ == 0u) {
-            renderGraph_.skipPass(passName);
+            renderGraph_.skipPass(graphIds_.deepComposeHook);
             return;
         }
         const uint32_t frameIndex = scheduler.currentFrameIndex();
@@ -7095,7 +7056,7 @@ const VkDeviceSize offset = geometry->vertexOffset;
                 : hero4Active
                     ? "gpu.transparency.layered.hero4.scene-resolve"
                     : "gpu.transparency.layered.cinematic8.scene-resolve");
-        renderGraph_.beginPass(currentCmd, passName);
+        renderGraph_.beginPass(currentCmd, graphIds_.deepComposeHook);
         VkRenderPassBeginInfo passInfo{
             VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
         passInfo.renderPass = transparentPass->getRenderPass();
@@ -7211,14 +7172,8 @@ const VkDeviceSize offset = geometry->vertexOffset;
         if (!graphHooks_.layeredValidation) return;
         const uint32_t interfaceCount = layeredQualityTierContract(
             quality).maximumInterfaceCount;
-        const std::span<const std::string_view> passNames = quality ==
-                TransparencyQuality::Hero4
-            ? std::span<const std::string_view>(Hero4PassNames)
-            : quality == TransparencyQuality::Cinematic8
-                ? std::span<const std::string_view>(
-                    Cinematic8PassNames)
-                : std::span<const std::string_view>{};
-        if (passNames.empty()) {
+        if (quality != TransparencyQuality::Hero4 &&
+            quality != TransparencyQuality::Cinematic8) {
             throw std::invalid_argument(
                 "Deep validation requires Hero4 or Cinematic8");
         }
@@ -7232,7 +7187,9 @@ const VkDeviceSize offset = geometry->vertexOffset;
                 .payload = VulkanDeepLayeredHookPayload{ quality, interfaceCount,
                     drawCount, static_cast<uint32_t>(
                         deepLayeredAtlasPlan_.workIdentities().size()) } },
-            true, passNames[interfaceCount + 1u],
+            true, quality == TransparencyQuality::Hero4
+                ? graphIds_.hero4.validationReadbackHook
+                : graphIds_.cinematic8.validationReadbackHook,
             quality == TransparencyQuality::Hero4
                 ? "gpu.transparency.layered.hero4.validation-readback"
                 : "gpu.transparency.layered.cinematic8.validation-readback");
@@ -7440,7 +7397,7 @@ const VkDeviceSize offset = geometry->vertexOffset;
         prepareDeepResolvedPacketIndices(deepCaptureDraws);
 
         const auto recordForwardPass = [&](std::span<const DrawPacket> queue,
-            std::string_view passName, std::string_view gpuRangeName,
+            RenderGraph::PassId pass, std::string_view gpuRangeName,
             VkRenderPass renderPass, VkFramebuffer framebuffer,
             RenderPassClass expectedPassClass,
             bool skipResolvedLayered, bool skipWeightedOit) {
@@ -7457,13 +7414,13 @@ const VkDeviceSize offset = geometry->vertexOffset;
                 break;
             }
             if (!hasPackets) {
-                renderGraph_.skipPass(passName);
+                renderGraph_.skipPass(pass);
                 return;
             }
 
             VulkanGpuRangeToken forwardGpuRange =
                 scheduler.beginGpuRange(gpuRangeName.data());
-            renderGraph_.beginPass(currentCmd, passName);
+            renderGraph_.beginPass(currentCmd, pass);
             VkRenderPassBeginInfo passInfo{
                 VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
             passInfo.renderPass = renderPass;
@@ -7585,7 +7542,7 @@ const VkDeviceSize offset = geometry->vertexOffset;
 
         const VulkanFrameContextTargets& targets = frameTargets.get(
             scheduler.currentFrameIndex());
-        recordForwardPass(opaqueForwardQueue, "forward-opaque",
+        recordForwardPass(opaqueForwardQueue, graphIds_.forwardOpaque,
             "gpu.forward.opaque", forwardPass->getRenderPass(),
             targets.forwardFramebuffer, RenderPassClass::Forward, false,
             false);
@@ -7595,7 +7552,7 @@ const VkDeviceSize offset = geometry->vertexOffset;
             const auto& packet = virtualShadowFrameClipPlans_[slot];
             const auto& view = gpuSceneCpuViews_[slot];
             auto gpuRange = scheduler.beginGpuRange("gpu.shadow.virtual.depth-demand");
-            renderGraph_.beginPass(currentCmd, "shadow.virtual.depth-mark");
+            renderGraph_.beginPass(currentCmd, graphIds_.virtualShadowDepthMark);
             if (packet) {
                 if (virtualShadowDepthBindings_[slot] != targets.depth.view) {
                     virtualShadowResources_.fullViewPass().bindDepth(slot, targets.depth.view,
@@ -7613,7 +7570,7 @@ const VkDeviceSize offset = geometry->vertexOffset;
                 virtualShadowResources_.markingPass().recordCompaction(currentCmd, slot, 0, 1);
             }
             scheduler.endGpuRange(gpuRange);
-            renderGraph_.beginPass(currentCmd, "shadow.virtual.request-readback");
+            renderGraph_.beginPass(currentCmd, graphIds_.virtualShadowRequestReadback);
             if constexpr (kQualificationBuild) {
                 // Explicit qualification copies the exact depth consumed above.
                 if (packet && graphHooks_.virtualShadowDepthSnapshot)
@@ -7647,13 +7604,12 @@ const VkDeviceSize offset = geometry->vertexOffset;
         }
         if (transparencyPyramidResidency_.enabled() &&
             !requiresRefractionPyramids) {
-            renderGraph_.skipPass("transparent.refraction-pyramids");
+            renderGraph_.skipPass(graphIds_.refractionPyramids);
         }
         else if (transparencyPyramidResidency_.enabled()) {
             VulkanGpuRangeToken pyramidGpuRange = scheduler.beginGpuRange(
                 "gpu.transparency.refraction-pyramids");
-            renderGraph_.beginPass(currentCmd,
-                "transparent.refraction-pyramids");
+            renderGraph_.beginPass(currentCmd, graphIds_.refractionPyramids);
             const uint32_t dispatches = transparencyPyramid_.record(
                 currentCmd, scheduler.currentFrameIndex(),
                 globalDescriptorSets[scheduler.currentFrameIndex()],
@@ -7668,7 +7624,7 @@ const VkDeviceSize offset = geometry->vertexOffset;
         }
         if (depthPyramidEnabled_) {
             auto range = scheduler.beginGpuRange("gpu.depth.occlusion-pyramid");
-            renderGraph_.beginPass(currentCmd, "depth.occlusion-pyramid.build");
+            renderGraph_.beginPass(currentCmd, graphIds_.depthPyramidBuild);
             const DepthPyramidHistoryOwner owner{
                 .viewIdentity = currentViewHistory_.identity,
                 .sceneEpoch = retainedRenderView_ == 0u
@@ -7688,10 +7644,10 @@ const VkDeviceSize offset = geometry->vertexOffset;
                     .cmd = currentCmd, .slot = scheduler.currentFrameIndex(),
                     .payload = VulkanDepthPyramidHookPayload{ retainedRenderView_ } },
                 graphHooks_.depthPyramidValidation,
-                "depth.occlusion-pyramid.validation-readback-hook",
+                graphIds_.depthPyramidValidationHook,
                 "gpu.depth.occlusion-pyramid.validation-readback");
         }
-        recordForwardPass(sortedSurfaceQueue, "transparent.sorted.forward",
+        recordForwardPass(sortedSurfaceQueue, graphIds_.sortedForward,
             "gpu.transparency.sorted.forward", transparentPass->getRenderPass(),
             targets.transparentFramebuffer, RenderPassClass::Transparent,
             false, weightedOitExecutionEnabled);
@@ -7712,7 +7668,7 @@ const VkDeviceSize offset = geometry->vertexOffset;
                         static_cast<uint32_t>(
                             ordinary2AtlasPlan_.workIdentities().size()) } },
                 graphHooks_.layeredValidation,
-                "transparent.layered.validation-readback-hook",
+                graphIds_.ordinary2ValidationHook,
                 "gpu.transparency.layered.validation-readback");
             recordOrdinary2SceneResolve(compatibilityTransparentQueue,
                 captureDraws);
@@ -7745,15 +7701,15 @@ const VkDeviceSize offset = geometry->vertexOffset;
             frameCounters_.transparentNonemptyBuckets = 0u;
         }
         recordForwardPass(compatibilityTransparentQueue,
-            "transparent.compatibility.forward",
+            graphIds_.compatibilityForward,
             "gpu.transparency.compatibility.forward",
             forwardPass->getRenderPass(), targets.forwardFramebuffer,
             RenderPassClass::Forward, true, false);
 
         if (weightedOitResidency_.enabled() &&
             (!weightedOitExecutionEnabled || weightedOitPacketCount == 0u)) {
-            renderGraph_.skipPass("transparent.oit.accumulate");
-            renderGraph_.skipPass("transparent.oit.resolve");
+            renderGraph_.skipPass(graphIds_.oitAccumulate);
+            renderGraph_.skipPass(graphIds_.oitResolve);
         }
         else if (weightedOitExecutionEnabled) {
             const uint32_t oitFrameIndex = scheduler.currentFrameIndex();
@@ -7806,8 +7762,7 @@ const VkDeviceSize offset = geometry->vertexOffset;
                     weightedOitInstanceStreamBytes(preparedInstanceCount);
             }
 
-            renderGraph_.beginPass(currentCmd,
-                "transparent.oit.accumulate");
+            renderGraph_.beginPass(currentCmd, graphIds_.oitAccumulate);
             VulkanGpuRangeToken accumulationRange = scheduler.beginGpuRange(
                 "gpu.transparency.oit.accumulate");
             std::array<VkClearValue, 2> clears{};
@@ -7957,7 +7912,7 @@ const VkDeviceSize offset = geometry->vertexOffset;
             vkCmdEndRenderPass(currentCmd);
             scheduler.endGpuRange(accumulationRange);
 
-            renderGraph_.beginPass(currentCmd, "transparent.oit.resolve");
+            renderGraph_.beginPass(currentCmd, graphIds_.oitResolve);
             VulkanGpuRangeToken resolveRange = scheduler.beginGpuRange(
                 "gpu.transparency.oit.resolve");
             VkRenderPassBeginInfo resolveInfo{
@@ -8020,16 +7975,16 @@ const VkDeviceSize offset = geometry->vertexOffset;
         Record&& record) {
         const VulkanCaptureHookPayload source = captureSource(point);
         if (point == FrameCapturePoint::SceneLinear) {
-            renderGraph_.transitionImage(currentCmd, "scene.color",
+            renderGraph_.transitionImage(currentCmd, graphIds_.sceneColor,
                 RenderGraph::Access::TransferSource);
         }
         else if (!finalCaptureHookRecorded_) {
-            renderGraph_.beginPass(currentCmd, "final-capture-hook");
+            renderGraph_.beginPass(currentCmd, graphIds_.finalCaptureHook);
             finalCaptureHookRecorded_ = true;
         }
         record(source);
         if (point == FrameCapturePoint::SceneLinear) {
-            renderGraph_.transitionImage(currentCmd, "scene.color",
+            renderGraph_.transitionImage(currentCmd, graphIds_.sceneColor,
                 RenderGraph::Access::SampledRead);
         }
     }
@@ -8056,8 +8011,8 @@ const VkDeviceSize offset = geometry->vertexOffset;
                     "gpu.output.graph_transition");
                 // M1 exposes scene-linear color to a future bloom implementation
                 // without paying for a disabled effect or changing resource versions.
-                renderGraph_.skipPass("bloom-hook");
-                renderGraph_.beginPass(currentCmd, "output-transform");
+                renderGraph_.skipPass(graphIds_.bloomHook);
+                renderGraph_.beginPass(currentCmd, graphIds_.outputTransform);
             }
             {
                 VulkanGpuScope outputGpuScope(scheduler, "gpu.output.transform");
@@ -8081,12 +8036,10 @@ const VkDeviceSize offset = geometry->vertexOffset;
     void VulkanVertexBackend::submitUIPass() {
         if (retainedViewsEnabled_) publishRetainedView();
         if (!finalCaptureHookRecorded_) {
-            renderGraph_.skipPass("final-capture-hook");
+            renderGraph_.skipPass(graphIds_.finalCaptureHook);
         }
         CpuScope recordScope(cpuProfiler_, "cpu.render.record.ui");
-        renderGraph_.beginPass(currentCmd,
-            outputTransport_ == Color::OutputTransport::Hdr10Pq
-                ? "ui-compose" : "ui-present");
+        renderGraph_.beginPass(currentCmd, graphIds_.ui);
         {
         VulkanGpuScope gpuScope(scheduler, "gpu.ui");
         ImGui::Render();
@@ -8155,8 +8108,7 @@ const VkDeviceSize offset = geometry->vertexOffset;
         vkCmdEndRenderPass(currentCmd);
         }
         if (outputTransport_ == Color::OutputTransport::Hdr10Pq) {
-            renderGraph_.beginPass(currentCmd,
-                "hdr10-encode-present");
+            renderGraph_.beginPass(currentCmd, graphIds_.hdr10EncodePresent);
             VulkanGpuScope encodeScope(scheduler, "gpu.output.hdr10_encode");
             hdrEncodePass.record(currentCmd, scheduler.currentFrameIndex(),
                 currentImageIndex, vkSwapchain->getExtent(), paperWhiteNits_,
@@ -8279,7 +8231,7 @@ const VkDeviceSize offset = geometry->vertexOffset;
             commands.transition(image, ResourceState::ShaderResource);
         }
         if (!finalCaptureHookRecorded_) {
-            renderGraph_.beginPass(currentCmd, "final-capture-hook");
+            renderGraph_.beginPass(currentCmd, graphIds_.finalCaptureHook);
             finalCaptureHookRecorded_ = true;
         }
         auto& target = retainedViewImages_[retainedRenderView_];

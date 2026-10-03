@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <array>
 #include <string>
+#include <string_view>
 #include <sstream>
 #include <stdexcept>
 #include <utility>
@@ -810,6 +811,113 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
         throw std::runtime_error(message.str());
     }
     return std::move(*result.graph);
+}
+
+VulkanProductionGraphIds resolveVulkanProductionGraphIds(
+    const VulkanRenderGraphExecutor& graph) {
+    const auto pass = [&](std::string_view name) { return graph.findPass(name); };
+    const auto resource = [&](std::string_view name) {
+        return graph.findResource(name);
+    };
+    VulkanProductionGraphIds ids{};
+    ids.virtualShadowClipUpload = pass("shadow.virtual.clip-upload");
+    ids.shadowDirectional = pass("shadow.directional");
+    ids.shadowSpot = pass("shadow.spot");
+    ids.shadowPoint = pass("shadow.point");
+    ids.gbuffer = pass("gbuffer");
+    ids.cluster = {
+        .clear = pass("lighting.cluster.clear"),
+        .count = pass("lighting.cluster.count"),
+        .scan = pass("lighting.cluster.scan"),
+        .fill = pass("lighting.cluster.fill"),
+        .finalize = pass("lighting.cluster.finalize"),
+        .global = resource(kClusterGlobalResourceName),
+        .headers = resource(kClusterHeaderResourceName),
+        .indices = resource(kClusterIndexResourceName),
+        .fallback = resource(kClusterFallbackResourceName),
+        .diagnostics = resource(kClusterDiagnosticResourceName),
+        .counts = resource(kClusterCountResourceName),
+        .cursors = resource(kClusterCursorResourceName),
+        .scanScratch = resource(kClusterScanScratchResourceName),
+        .indirect = resource(kClusterIndirectResourceName),
+    };
+    ids.clusterReadback = pass("lighting.cluster.readback");
+    ids.lighting = pass("lighting");
+    ids.forwardOpaque = pass("forward-opaque");
+    ids.virtualShadowDepthMark = pass("shadow.virtual.depth-mark");
+    ids.virtualShadowRequestReadback = pass("shadow.virtual.request-readback");
+    ids.refractionPyramids = pass("transparent.refraction-pyramids");
+    ids.depthPyramidBuild = pass("depth.occlusion-pyramid.build");
+    ids.depthPyramidValidationHook =
+        pass("depth.occlusion-pyramid.validation-readback-hook");
+    ids.sortedForward = pass("transparent.sorted.forward");
+    ids.ordinary2EntryCapture = pass("transparent.layered.entry.capture");
+    ids.ordinary2ExitCapture = pass("transparent.layered.exit.capture");
+    ids.ordinary2LocalCompose = pass("transparent.layered.local-compose");
+    ids.ordinary2ValidationHook =
+        pass("transparent.layered.validation-readback-hook");
+    ids.ordinary2ComposeHook = pass("transparent.layered.compose-hook");
+    const auto deepTier = [&](std::string_view tier) {
+        VulkanDeepLayeredGraphIds result{};
+        const std::string prefix = "transparent.layered." + std::string(tier);
+        for (uint32_t index = 0u;
+            index < VulkanDeepLayeredGraphIds::MaximumInterfaces; ++index) {
+            const std::string interfaceName = std::string(tier) + ".interface." +
+                std::to_string(index);
+            const std::string passPrefix = prefix + ".interface." +
+                std::to_string(index);
+            result.interfaceCapture[index] = pass(passPrefix + ".capture");
+            result.terminateTiles[index] = pass(passPrefix + ".terminate-tiles");
+            result.interfaceDepth[index] = resource("depth.layered." + interfaceName);
+            result.interfaceIdentity[index] =
+                resource("identity.layered." + interfaceName);
+            result.tileTermination[index] =
+                resource("termination.layered." + interfaceName);
+        }
+        result.localCompose = pass(prefix + ".local-compose");
+        result.validationReadbackHook = pass(prefix + ".validation-readback-hook");
+        result.localColor = resource("scene.layered." + std::string(tier) +
+            ".local-color");
+        return result;
+    };
+    ids.hero4 = deepTier("hero4");
+    ids.cinematic8 = deepTier("cinematic8");
+    for (const std::string_view name : { "transparent.layered.deep.compose-hook",
+            "transparent.layered.hero4.compose-hook",
+            "transparent.layered.cinematic8.compose-hook" }) {
+        if (const RenderGraph::PassId id = pass(name); id.isValid())
+            ids.deepComposeHook = id;
+    }
+    ids.compatibilityForward = pass("transparent.compatibility.forward");
+    ids.oitAccumulate = pass("transparent.oit.accumulate");
+    ids.oitResolve = pass("transparent.oit.resolve");
+    ids.bloomHook = pass("bloom-hook");
+    ids.outputTransform = pass("output-transform");
+    ids.finalCaptureHook = pass("final-capture-hook");
+    ids.ui = pass("ui-compose");
+    if (!ids.ui.isValid()) ids.ui = pass("ui-present");
+    ids.hdr10EncodePresent = pass("hdr10-encode-present");
+
+    ids.virtualShadowWorkingSet = resource("shadow.virtual.working-set");
+    ids.gbufferNormal = resource("gbuffer.normal");
+    ids.gbufferAlbedo = resource("gbuffer.albedo");
+    ids.gbufferEmissive = resource("gbuffer.emissive");
+    ids.gbufferF0Roughness = resource("gbuffer.f0-roughness");
+    ids.gbufferMaterialFlags = resource("gbuffer.material-flags");
+    ids.depth = resource("depth.opaque");
+    ids.sceneColor = resource("scene.color");
+    ids.refractionColorPyramid = resource("scene.refraction-color-pyramid");
+    ids.refractionDepthPyramid = resource("depth.refraction-nearest-pyramid");
+    ids.ordinary2EntryDepth = resource("depth.layered.entry");
+    ids.ordinary2EntryIdentity = resource("identity.layered.entry");
+    ids.ordinary2ExitDepth = resource("depth.layered.exit");
+    ids.ordinary2ExitIdentity = resource("identity.layered.exit");
+    ids.ordinary2LocalColor = resource("scene.layered.local-color");
+    ids.oitAccumulation = resource("transparency.oit.accumulation");
+    ids.oitRevealage = resource("transparency.oit.revealage");
+    ids.output = resource("output.display");
+    ids.uiComposition = resource("output.ui-composition");
+    return ids;
 }
 
 } // namespace Iridium

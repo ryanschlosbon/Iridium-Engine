@@ -228,6 +228,8 @@ namespace Iridium {
         // --- MISSING RAW IMAGE ARRAYS ---
         VulkanFrameTargets frameTargets;
         VulkanRenderGraphExecutor renderGraph_;
+        // Pass/resource ids of the bound plan, refreshed on every rebuild.
+        VulkanProductionGraphIds graphIds_{};
         VulkanTransparencyPyramid transparencyPyramid_;
         VulkanDepthPyramid depthPyramid_;
         bool depthPyramidEnabled_ = false;
@@ -692,7 +694,7 @@ namespace Iridium {
         [[nodiscard]] bool anyExtensionWants(
             const VulkanHookContext& context) const;
         void runPassHook(const VulkanHookContext& context, bool declared,
-            std::string_view passName, const char* gpuRangeName);
+            RenderGraph::PassId pass, const char* gpuRangeName);
         void notifyHook(const VulkanHookContext& context);
         // Brackets a capture copy: scene-linear transitions scene.color to
         // TransferSource and back; final output runs in final-capture-hook.

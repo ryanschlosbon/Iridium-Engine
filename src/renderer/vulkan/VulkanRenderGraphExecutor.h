@@ -292,32 +292,26 @@ namespace Iridium {
         // Bind only after the slot fence retires; handles must be slot-distinct.
         // `size` must cover the declared size; for a variableSize declaration
         // the barriers cover the bound size.
-        void bindExternalBuffer(uint32_t frameIndex, std::string_view logicalName,
-            VkBuffer buffer, VkDeviceSize size,
-            RenderGraph::Access initialAccess = RenderGraph::Access::Undefined);
         void bindExternalBuffer(uint32_t frameIndex, RenderGraph::GraphResourceId id,
             VkBuffer buffer, VkDeviceSize size,
             RenderGraph::Access initialAccess = RenderGraph::Access::Undefined);
 
         // Ids are resolved per rebuild through O(1) name maps over strings the
         // compiled graph owns; find* return an invalid id for unknown names and
-        // passId/resourceId throw std::out_of_range.
+        // passId/resourceId throw std::out_of_range. Names are for resolution,
+        // diagnostics and tests only: execution is addressed by id (R3b.4).
         [[nodiscard]] RenderGraph::PassId findPass(std::string_view name) const noexcept;
         [[nodiscard]] RenderGraph::GraphResourceId findResource(
             std::string_view name) const noexcept;
         [[nodiscard]] RenderGraph::PassId passId(std::string_view name) const;
         [[nodiscard]] RenderGraph::GraphResourceId resourceId(std::string_view name) const;
 
-        // Primary, index-addressed execution. Registered callback passes that
-        // precede `pass` in compiled order run first (drain); it throws if that
-        // would skip an unregistered pass, or if `pass` itself is registered.
+        // Index-addressed execution. Registered callback passes that precede
+        // `pass` in compiled order run first (drain); it throws if that would
+        // skip an unregistered pass, or if `pass` itself is registered. Every
+        // pass must be begun or skipped in compiled order.
         void beginPass(VkCommandBuffer commandBuffer, RenderGraph::PassId pass);
         void skipPass(RenderGraph::PassId pass);
-        // Transitional string forms (until the R3b.4 call-site conversion).
-        // After draining registered passes at the cursor they keep the
-        // sequential cursor check: the name must match the next pass.
-        void beginPass(VkCommandBuffer commandBuffer, std::string_view passName);
-        void skipPass(std::string_view passName);
         // Drains the remaining registered passes, then requires every pass to
         // have been handled.
         void finishFrameExecution();
@@ -336,8 +330,6 @@ namespace Iridium {
         void setFrameRecordContext(const VulkanFrameRecordContext& context);
         void transitionImage(VkCommandBuffer commandBuffer,
             RenderGraph::GraphResourceId id, RenderGraph::Access access);
-        void transitionImage(VkCommandBuffer commandBuffer,
-            std::string_view logicalName, RenderGraph::Access access);
         void cleanupAfterDeviceIdle() noexcept;
 
         // nullptr restores the Vulkan command sink.
@@ -347,10 +339,6 @@ namespace Iridium {
             return barriers_;
         }
         [[nodiscard]] VulkanGraphStats stats() const noexcept;
-        [[nodiscard]] const VulkanImageResource& imageResource(
-            uint32_t frameIndex, std::string_view logicalName) const;
-        [[nodiscard]] const VulkanBufferResource& bufferResource(
-            uint32_t frameIndex, std::string_view logicalName) const;
         [[nodiscard]] const VulkanImageResource& image(uint32_t frameIndex,
             RenderGraph::GraphResourceId id) const;
         [[nodiscard]] const VulkanBufferResource& buffer(uint32_t frameIndex,

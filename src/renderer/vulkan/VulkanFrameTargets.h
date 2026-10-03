@@ -19,6 +19,7 @@ namespace Iridium {
 
     class VulkanRenderGraphExecutor;
     struct VulkanLayeredGraphConfig;
+    struct VulkanProductionGraphIds;
 
     struct VulkanTargetRenderPasses {
         VkRenderPass gBuffer = VK_NULL_HANDLE;
@@ -111,7 +112,8 @@ namespace Iridium {
             VulkanTargetRenderPasses renderPasses, uint32_t frameContextCount,
             bool hdr10Composition, bool transparencyPyramids,
             const VulkanLayeredGraphConfig& layered,
-            const VulkanRenderGraphExecutor& graphResources);
+            const VulkanRenderGraphExecutor& graphResources,
+            const VulkanProductionGraphIds& ids);
         void cleanup();
 
         [[nodiscard]] size_t size() const noexcept;

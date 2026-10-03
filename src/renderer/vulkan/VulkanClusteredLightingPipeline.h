@@ -2,6 +2,7 @@
 
 #include "renderer/lighting/ClusteredLighting.h"
 #include "renderer/vulkan/DescriptorAllocator.h"
+#include "renderer/vulkan/VulkanProductionGraphIds.h"
 #include "renderer/vulkan/VulkanRenderGraphExecutor.h"
 
 #include <vulkan/vulkan.h>
@@ -24,14 +25,15 @@ namespace Iridium {
 
         void init(VkDevice device, ::DescriptorAllocator& allocator);
         void rebuildDescriptors(const VulkanRenderGraphExecutor& graph,
+            const VulkanClusterGraphIds& ids,
             std::span<const VkDescriptorBufferInfo> lightRecords,
             std::span<const VkDescriptorBufferInfo> activeSlots,
             std::span<const VkDescriptorBufferInfo> fallbackCandidates,
             std::span<const VkDescriptorBufferInfo> parameters);
         void clearDescriptors();
         [[nodiscard]] uint32_t record(VkCommandBuffer commandBuffer,
-            VulkanRenderGraphExecutor& graph, uint32_t frameIndex,
-            uint32_t clusterCount, uint32_t activeLightCount);
+            VulkanRenderGraphExecutor& graph, const VulkanClusterGraphIds& ids,
+            uint32_t frameIndex, uint32_t clusterCount, uint32_t activeLightCount);
         void cleanup() noexcept;
 
     private:
