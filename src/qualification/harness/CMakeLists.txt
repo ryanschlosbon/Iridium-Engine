@@ -9,4 +9,6 @@ target_sources(iridium_qualification PRIVATE
         QualificationReport.cpp
         RunReportExport.cpp
         HarnessDetail.cpp
+        ScriptedChanges.cpp
+        ScriptedChangeEvents.cpp
 )

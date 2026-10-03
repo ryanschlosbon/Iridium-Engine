@@ -212,6 +212,11 @@ namespace Iridium {
         addSwitch(registry, owner, "--qualification-indirect-stream-digest",
             "Print a digest of every GPU-driven compaction stream per view and frame",
             [&q] { q.indirectStreamDigest = true; });
+        addValueOption(registry, owner, "--qualification-scripted-changes", "PATH",
+            "Apply a deterministic mid-run change scenario (hitch measurement)",
+            "--qualification-scripted-changes requires a path",
+            [&q](std::string_view value) { q.scriptedChanges = std::string(value); },
+            true);
         addSwitch(registry, owner, "--validate-depth-pyramid-capture",
             "Read back live depth and verify every pyramid mip",
             [&q, &c] {
@@ -262,6 +267,14 @@ namespace Iridium {
                     "Light-table and cluster-stress generators are mutually exclusive");
             }
         }, AppCli::kValidateLightGenerators);
+        // After every frozen-order check: the per-frame drain timeline is
+        // appended to the CPU profile.
+        registry.addValidator(ownerName, [&q] {
+            if (!q.scriptedChanges.empty() && q.cpuProfileOutput.empty()) {
+                throw std::invalid_argument(
+                    "--qualification-scripted-changes requires --profile-cpu-output");
+            }
+        }, AppCli::kValidateLightGenerators + 10);
     }
 
 } // namespace Iridium

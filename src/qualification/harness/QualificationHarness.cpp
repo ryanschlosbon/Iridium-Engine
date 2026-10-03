@@ -73,6 +73,7 @@ namespace Iridium {
             // Oracles and graph hooks are fixed before the backend exists.
             backend_->configureQualification(
                 qualificationBackendConfig(options_));
+            loadScriptedChanges(context);
             return;
         case StartupPhase::BackendReady:
             capabilities_ = context.capabilities;
@@ -100,6 +101,7 @@ namespace Iridium {
             return;
         case StartupPhase::Ready:
             allocateResidencyChurnProbe(context);
+            prepareScriptedChanges(context);
             return;
         }
     }
@@ -388,6 +390,7 @@ namespace Iridium {
         AppFrameContext& context) {
         switch (phase) {
         case FrameBeginPhase::PreSceneUpdate:
+            updateScriptedChanges(context);
             updateBenchmarkState(context);
             return;
         case FrameBeginPhase::PostSceneUpdate: {
@@ -458,10 +461,12 @@ namespace Iridium {
         AppShutdownContext& context) {
         switch (phase) {
         case ShutdownPhase::RunComplete:
+            finishScriptedChanges(context);
             reportRunMetrics(context);
             collectEndOfRunValidations(context);
             return;
         case ShutdownPhase::ReleaseResources:
+            releaseScriptedChangeResources(context);
             releaseProbeResources(context);
             return;
         case ShutdownPhase::Finalize: {

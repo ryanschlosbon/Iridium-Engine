@@ -1,0 +1,18 @@
+{
+  "schema": "iridium.qualification.scripted_changes.v1",
+  "id": "m7r_hitch_probe_v1",
+  "description": "M7R R4c hitch route H-probe on m7_probe_lod_reflection_motion_v1 with --validate-reflection-probes (one asset-environment probe, one realtime capture probe, which already finalizes captures periodically): 40 asset-environment probes within the 64-record capacity (control), then 40 more past it, capture-owner removal and re-addition, two new scene environments prebuilt at startup and published mid-run (environment-table change), a removal control event and a capture-resolution change.",
+  "runner": { "route": "H-probe", "fixture": "F6-probecap", "warmup_frames": 500, "measured_frames": 10000 },
+  "events": [
+    { "frame": 500, "action": "add_environment_probes", "count": 40 },
+    { "frame": 1500, "action": "remove_capture_probe" },
+    { "frame": 2500, "action": "add_capture_probe" },
+    { "frame": 3500, "action": "publish_constant_environment", "color": [0.02, 0.025, 0.03] },
+    { "frame": 4500, "action": "add_environment_probes", "count": 40 },
+    { "frame": 5500, "action": "remove_capture_probe" },
+    { "frame": 6500, "action": "add_capture_probe" },
+    { "frame": 7500, "action": "publish_constant_environment", "color": [0.03, 0.02, 0.015] },
+    { "frame": 8500, "action": "remove_environment_probes", "count": 80 },
+    { "frame": 9500, "action": "set_capture_probe_resolution", "resolution": 512 }
+  ]
+}

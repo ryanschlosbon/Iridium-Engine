@@ -31,6 +31,11 @@
 namespace Iridium {
 
     struct SystemProfile;
+    struct ScriptedChangeRun;
+    // Defined with ScriptedChangeRun (ScriptedChangeEvents.cpp).
+    struct ScriptedChangeRunDeleter {
+        void operator()(ScriptedChangeRun* run) const noexcept;
+    };
 
     // The run policy the harness requests: a --benchmark run is deterministic,
     // fullscreen and owns its startup content; reference routes, the OIT order
@@ -120,6 +125,17 @@ namespace Iridium {
         void updateTextureResidencyChurn(AppFrameContext& context);
         void updateOutputTransportValidation(AppFrameContext& context);
 
+        // Scripted mid-run changes (ScriptedChangeEvents.cpp). Every entry
+        // point is a no-op without --qualification-scripted-changes.
+        void loadScriptedChanges(AppStartupContext& context);
+        void prepareScriptedChanges(AppStartupContext& context);
+        void updateScriptedChanges(AppFrameContext& context);
+        void finishScriptedChanges(AppShutdownContext& context);
+        void releaseScriptedChangeResources(AppShutdownContext& context);
+        void appendScriptedChangeRecords(const AppShutdownContext& context) const;
+        [[nodiscard]] uint64_t applyScriptedChange(size_t eventIndex,
+            AppFrameContext& context);
+
         // Shutdown (QualificationReport.cpp, RunReportExport.cpp).
         void reportRunMetrics(const AppShutdownContext& context) const;
         void collectEndOfRunValidations(AppShutdownContext& context);
@@ -162,6 +178,13 @@ namespace Iridium {
         std::vector<TextureHandle> textureScaleProbeTextures_;
         TextureHandle materialScaleProbeTexture_{};
         std::vector<MaterialHandle> materialScaleProbeMaterials_;
+
+        // Probe validation entities (--validate-reflection-probes).
+        Entity environmentProbeEntity_ = NULL_ENTITY;
+        Entity captureProbeEntity_ = NULL_ENTITY;
+
+        // Scripted mid-run changes; null without the flag.
+        std::unique_ptr<ScriptedChangeRun, ScriptedChangeRunDeleter> scripted_;
 
         // Captures.
         FrameRequests frame_{};

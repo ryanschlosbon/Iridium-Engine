@@ -550,6 +550,7 @@ namespace Iridium {
                 "transparent.fullscreen_equivalents");
         }
         writeCpuProfileJsonLines(options_.cpuProfileOutput, context.profiler, metadata);
+        appendScriptedChangeRecords(context);
     }
 
 } // namespace Iridium

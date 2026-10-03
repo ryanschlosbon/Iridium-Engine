@@ -113,6 +113,13 @@ if(TARGET iridium_qualification)
             SOURCES qualification/QualificationHarnessTests.cpp
             LIBS iridium_qualification
             NO_PCH)
+
+    # M7R R4c.0 scripted mid-run changes (hitch scenario): parser, schedule,
+    # drain timeline and the tracked assets/benchmarks/m7r scenarios.
+    iridium_add_test(ScriptedChangesTests
+            SOURCES qualification/ScriptedChangesTests.cpp
+            LIBS iridium_qualification
+            NO_PCH)
 endif()
 
 iridium_add_test(TransformSystemTests

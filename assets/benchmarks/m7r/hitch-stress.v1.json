@@ -1,0 +1,18 @@
+{
+  "schema": "iridium.qualification.scripted_changes.v1",
+  "id": "m7r_hitch_stress_v1",
+  "description": "M7R R4c hitch route H-stress on m7_many_instance_stress_v1 (256 instances, no lights): instances 256->512->1024, unshadowed point lights past the 256/512/1024 record capacities, canonical materials, and two control events that cross no capacity boundary (removing 512 instances, then re-adding them within capacity). Scripted instances and lights are placed behind the camera, so they change capacities and per-instance CPU work but not the rendered image.",
+  "runner": { "route": "H-stress", "fixture": "F3-stress", "warmup_frames": 500, "measured_frames": 10000 },
+  "events": [
+    { "frame": 500, "action": "add_instances", "count": 256 },
+    { "frame": 1500, "action": "add_lights", "count": 300 },
+    { "frame": 2500, "action": "add_materials", "count": 256 },
+    { "frame": 3500, "action": "add_instances", "count": 512 },
+    { "frame": 4500, "action": "add_lights", "count": 300 },
+    { "frame": 5500, "action": "add_materials", "count": 512 },
+    { "frame": 6500, "action": "remove_instances", "count": 512 },
+    { "frame": 7500, "action": "add_instances", "count": 512 },
+    { "frame": 8500, "action": "add_lights", "count": 500 },
+    { "frame": 9500, "action": "add_materials", "count": 1024 }
+  ]
+}

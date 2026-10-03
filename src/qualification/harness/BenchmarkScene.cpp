@@ -484,6 +484,7 @@ namespace Iridium {
         probe.parallaxMode = ReflectionProbeParallaxMode::None;
         probe.environmentAssetGuid = activeEnvironmentAssetGuid;
         probe.resolvedEnvironmentAssetGuid = activeEnvironmentAssetGuid;
+        environmentProbeEntity_ = probeEntity;
 
         const BenchmarkReflectionProbeCapture* fixtureCapture =
             benchmark_ && benchmark_->reflectionProbeCapture
@@ -515,6 +516,7 @@ namespace Iridium {
         auto& captureProbe =
             registry.addComponent<ReflectionProbeComponent>(
                 captureProbeEntity);
+        captureProbeEntity_ = captureProbeEntity;
         captureProbe.shape = ReflectionProbeShape::Sphere;
         captureProbe.sphereRadiusMeters = 1'000.0f;
         captureProbe.blendDistanceMeters = 0.0f;

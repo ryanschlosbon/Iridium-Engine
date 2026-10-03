@@ -74,9 +74,13 @@ namespace Iridium {
         std::filesystem::path captureDirectory;
         std::filesystem::path cpuProfileOutput;
         std::string cacheState = "unspecified";
+
+        // M7R R4c.0 hitch scenario: deterministic mid-run scene changes
+        // (qualification/harness/ScriptedChanges.h). Empty runs no changes.
+        std::filesystem::path scriptedChanges;
     };
 
-    // Registers the 37 qualification flags and their post-parse checks
+    // Registers the 38 qualification flags and their post-parse checks
     // (owner "qualification"). Flags that imply runtime or renderer behavior
     // also write `config`: --profile-cpu-output enables CPU profiling, the
     // VSM depth oracle enables the VSM resources and the depth-pyramid

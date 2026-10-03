@@ -7,8 +7,11 @@
 
 #include "profiling/CpuProfiler.h"
 #include "scene/SceneWorld.h"
+#include "scene/components/LightComponent.h"
 
 #include <exception>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <memory>
 #include <optional>
@@ -308,6 +311,101 @@ namespace {
         return true;
     }
 
+    // M7R R4c.0: scripted changes apply at PreSceneUpdate of their measured
+    // frame (never during warmup or later hooks), and their resources are
+    // harness-owned.
+    bool testScriptedChangesApplyAtTheirMeasuredFrame() {
+        const std::filesystem::path path =
+            std::filesystem::temp_directory_path() /
+            "iridium-scripted-changes-test.json";
+        {
+            std::ofstream file(path, std::ios::binary);
+            file << R"({"schema":"iridium.qualification.scripted_changes.v1",)"
+                R"("id":"t","events":[)"
+                R"({"frame":1,"action":"add_materials","count":3},)"
+                R"({"frame":3,"action":"add_lights","count":5},)"
+                R"({"frame":4,"action":"remove_lights","count":2}]})";
+        }
+        HarnessRig rig;
+        rig.options.scriptedChanges = path;
+        rig.options.cpuProfileOutput = "unused.jsonl";
+        rig.config.frameLimit = 6u;
+        rig.profiler.setEnabled(true);
+        rig.start();
+        AppStartupContext startup = rig.startupContext();
+        rig.harness->onStartup(StartupPhase::Configure, startup);
+        rig.harness->onStartup(StartupPhase::BackendReady, startup);
+        rig.harness->onStartup(StartupPhase::Ready, startup);
+        std::filesystem::remove(path);
+        const auto lights = [&rig] {
+            const auto* pool = rig.scene.registry().findPool<LightComponent>();
+            return pool == nullptr ? size_t{ 0 } : pool->entities.size();
+        };
+        rig.runMeasured(2u, 1u);   // warmup 0-1, measured 0
+        CHECK(rig.backend.calls.empty());
+        rig.runFrame(3u, 1u);
+        // One texture, then three materials, all at PreSceneUpdate.
+        CHECK(rig.backend.count(Kind::AllocateTexture) == 1u);
+        CHECK(rig.backend.count(Kind::AllocateMaterial) == 3u);
+        for (const BackendCall& call : rig.backend.calls) CHECK(call.marker == "pre");
+        rig.runFrame(4u, 2u);
+        CHECK(lights() == 0u);
+        rig.runFrame(5u, 3u);
+        CHECK(lights() == 5u);
+        rig.runFrame(6u, 4u);
+        CHECK(lights() == 3u);
+        rig.runFrame(7u, 5u);
+        CHECK(rig.backend.count(Kind::AllocateMaterial) == 3u);
+
+        const AppRunSnapshot run{};
+        AppShutdownContext shutdown{
+            .config = rig.config,
+            .profiler = rig.profiler,
+            .backend = &rig.backend,
+            .completed = true,
+            .run = run,
+        };
+        rig.harness->onShutdown(ShutdownPhase::ReleaseResources, shutdown);
+        CHECK(rig.backend.count(Kind::FreeMaterial) == 3u);
+        CHECK(rig.backend.count(Kind::FreeTexture) == 1u);
+        return true;
+    }
+
+    bool testScriptedChangesRejectUnmetPrerequisites() {
+        const std::filesystem::path path =
+            std::filesystem::temp_directory_path() /
+            "iridium-scripted-changes-prerequisites.json";
+        {
+            std::ofstream file(path, std::ios::binary);
+            file << R"({"schema":"iridium.qualification.scripted_changes.v1",)"
+                R"("id":"t","events":[{"frame":2,"action":"remove_capture_probe"}]})";
+        }
+        const auto readyFails = [&path](uint64_t frameLimit) {
+            HarnessRig rig;
+            rig.options.scriptedChanges = path;
+            rig.options.cpuProfileOutput = "unused.jsonl";
+            rig.config.frameLimit = frameLimit;
+            rig.profiler.setEnabled(true);
+            rig.start();
+            AppStartupContext startup = rig.startupContext();
+            try {
+                rig.harness->onStartup(StartupPhase::Configure, startup);
+                rig.harness->onStartup(StartupPhase::Ready, startup);
+            }
+            catch (const std::invalid_argument&) {
+                return true;
+            }
+            return false;
+        };
+        // Beyond the frame limit, and (within it) without probe entities.
+        const bool beyondLimit = readyFails(2u);
+        const bool withoutProbes = readyFails(10u);
+        std::filesystem::remove(path);
+        CHECK(beyondLimit);
+        CHECK(withoutProbes);
+        return true;
+    }
+
     bool testInertWithoutQualificationFlags() {
         HarnessRig rig;
         rig.start();
@@ -344,6 +442,10 @@ int main() {
         { "Output transport switch sequence", testOutputTransportSwitchSequence },
         { "Table-scale probes are harness-owned",
             testTableScaleProbesAreHarnessOwned },
+        { "Scripted changes apply at their measured frame",
+            testScriptedChangesApplyAtTheirMeasuredFrame },
+        { "Scripted changes reject unmet prerequisites",
+            testScriptedChangesRejectUnmetPrerequisites },
         { "Inert without qualification flags", testInertWithoutQualificationFlags },
     };
 

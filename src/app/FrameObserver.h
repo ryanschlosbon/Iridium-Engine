@@ -174,7 +174,9 @@ namespace Iridium {
         [[nodiscard]] virtual RenderExtent renderExtent() const = 0;
         // Startup content (ContentLoad): loads --cooked-model-artifact as the
         // startup model, loads --cooked-environment-artifact as the scene
-        // environment, or publishes an observer-built environment.
+        // environment, or publishes an observer-built environment. The
+        // qualification hitch scenario (M7R R4c.0) also publishes environments
+        // at FrameBeginPhase::PreSceneUpdate; earlier environments stay loaded.
         virtual std::shared_ptr<ModelAsset> loadCookedStartupModel() = 0;
         virtual void loadCookedStartupEnvironment() = 0;
         virtual void publishStartupEnvironment(

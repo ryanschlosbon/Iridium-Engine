@@ -186,6 +186,7 @@ namespace {
         field("capturePoint", exact(enumValue(c.capturePoint)));
         field("captureDirectory", c.captureDirectory.generic_string());
         field("cacheState", c.cacheState);
+        field("scriptedChanges", c.scriptedChanges.generic_string());
         return s.str();
     }
 
@@ -448,7 +449,7 @@ namespace {
                 c.experimentalDepthPyramid = true;
                 c.experimentalDepthOcclusionQuery = true;
                 c.experimentalDepthOcclusionRejection = true; }, {}, {} },
-            // --- qualification (37) ---
+            // --- qualification (38) ---
             { "--validate-texture-residency-churn", Q, {}, {}, [](C& c) {
                 c.validateTextureResidencyChurn = true; }, {}, {} },
             { "--validate-reflection-probes", Q, {}, {}, [](C& c) {
@@ -523,6 +524,13 @@ namespace {
                 c.depthOcclusionQualificationOracle = true; }, {}, {} },
             { "--qualification-indirect-stream-digest", Q, {}, {}, [](C& c) {
                 c.indirectStreamDigest = true; }, {}, {} },
+            // M7R R4c.0 (not in 6b000ad): requires --profile-cpu-output.
+            { "--qualification-scripted-changes", Q, "hitch.json",
+                { "--profile-cpu-output", "p.jsonl" }, [](C& c) {
+                c.scriptedChanges = "hitch.json"; c.enableCpuProfiling = true;
+                c.cpuProfileOutput = "p.jsonl"; },
+                "--qualification-scripted-changes requires a path",
+                { { "", "--qualification-scripted-changes requires a path" } } },
             { "--validate-depth-pyramid-capture", Q, {}, {}, [](C& c) {
                 c.experimentalDepthPyramid = true; c.validateDepthPyramidCapture = true; },
                 {}, {} },
@@ -572,8 +580,8 @@ namespace {
         Cli::CliOptionRegistry registry;
         registerEngineOptions(registry, scratch);
 
-        CHECK(table.size() == 84);
-        CHECK(registry.options().size() == 84);
+        CHECK(table.size() == 85);
+        CHECK(registry.options().size() == 85);
         std::set<std::string_view> names;
         std::map<std::string_view, size_t> ownerCounts;
         for (const FlagCase& row : table) {
@@ -613,10 +621,12 @@ namespace {
         for (const Cli::CliOption& option : registry.options()) {
             CHECK_MSG(names.contains(option.name), option.name);
         }
+        CHECK(newOutcome({ "--qualification-scripted-changes", "hitch.json" }) ==
+            error("--qualification-scripted-changes requires --profile-cpu-output"));
         CHECK(ownerCounts[R] == 14);
         CHECK(ownerCounts[E] == 4);
         CHECK(ownerCounts[G] == 29);
-        CHECK(ownerCounts[Q] == 37);
+        CHECK(ownerCounts[Q] == 38);
         std::cout << "  owners: runtime " << ownerCounts[R] << ", editor " << ownerCounts[E]
                   << ", renderer " << ownerCounts[G] << ", qualification "
                   << ownerCounts[Q] << '\n';
@@ -667,7 +677,7 @@ namespace {
     bool testUsageParity() {
         const std::string usage = engineUsage();
         CHECK(usage.starts_with("Usage: IridiumEngine [options]\n"));
-        CHECK(optionLines(usage).size() == 84);
+        CHECK(optionLines(usage).size() == 85);
         // Groups appear in owner order: runtime, editor, renderer, qualification.
         const size_t runtime = usage.find("runtime options:");
         const size_t editor = usage.find("editor options:");
@@ -742,7 +752,7 @@ int main() {
     };
 
     constexpr TestCase tests[] = {
-        { "Per-flag table (84 flags)", testFlagTable },
+        { "Per-flag table (85 flags)", testFlagTable },
         { "Aliases and removed flags", testAliasesAndRemovedFlags },
         { "Usage parity", testUsageParity },
         { "Registry without qualification", testRegistryWithoutQualification },
