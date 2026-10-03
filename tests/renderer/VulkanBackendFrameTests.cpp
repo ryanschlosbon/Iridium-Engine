@@ -1,11 +1,13 @@
-// M7R R3c.10: the production Vulkan backend on a device (hidden GLFW window,
-// validation with synchronization validation), recording empty frames:
+// M7R R3c.10/R3c.11: the production Vulkan backend on a device (hidden GLFW
+// window, validation with synchronization validation), recording empty frames
+// through submitFrame:
 //   - without an editor bridge (headless hosts): the UI pass still clears and
 //     presents;
 //   - with the ImGui editor bridge: viewport, editor-texture and retained-view
 //     ids, the final-capture-hook consumer, a scene-extent resize and an
 //     output-transport recreate (the bridge's target and presentation events).
-// Every run must produce zero validation messages.
+// Every run must produce zero validation messages, and submitFrame reports
+// its stage boundaries in order.
 
 #include "renderer/color/AcesOutputLut.h"
 #include "renderer/rhi/EditorRenderBridge.h"
@@ -88,6 +90,16 @@ namespace {
         std::streambuf* previous_ = nullptr;
     };
 
+    class StageLog final : public IRenderFrameStageObserver {
+    public:
+        void onRenderFrameStage(RenderFrameStage stage) override {
+            if (count < stages.size()) stages[count] = stage;
+            ++count;
+        }
+        std::array<RenderFrameStage, 8> stages{};
+        size_t count = 0;
+    };
+
     RenderBackendConfig deviceConfig() {
         RenderBackendConfig config{};
         config.enableValidation = true;
@@ -120,7 +132,8 @@ namespace {
     // One empty frame through the public frame pipeline. Returns false when
     // the swapchain asked to be recreated.
     bool renderFrame(IRenderBackend& backend, IEditorRenderBridge* bridge,
-        GLFWwindow* window, bool retainedViews, uint32_t renderView) {
+        GLFWwindow* window, bool retainedViews, uint32_t renderView,
+        StageLog* stages = nullptr, RenderFrameOutputSettings output = {}) {
         const LightingFramePacket lights{};
         const ReflectionProbeGpuFramePacket probes{};
         backend.prepareLighting(lights.requiredCapacity);
@@ -146,20 +159,17 @@ namespace {
             static_cast<float>(extent.width) / static_cast<float>(extent.height),
             0.1f, 100.0f);
         projection[1][1] *= -1.0f;
-        backend.setDebugView(RenderDebugView::Final);
-        backend.updateCamera(makeViewTransportRecord(view, projection, eye, 0.1f,
-            100.0f, { extent.width, extent.height }), { .identity = 1u });
-        backend.setViewportGridOverlay({});
-        backend.submitDirectionalShadows({}, {});
-        backend.submitSpotShadows({}, {});
-        backend.submitPointShadows({}, {});
-        backend.submitReflectionProbeCaptures({}, {}, lights);
-        backend.prepareDepthPyramidHistory({}, {});
-        backend.submitOpaqueQueue({}, {}, false);
-        backend.submitLightingPass(eye, view, projection, 0.1f, 100.0f, lights, probes);
-        backend.submitForwardQueues({}, {}, {});
-        backend.submitOutputPass();
-        backend.submitUIPass();
+        RenderFrame frame{
+            .view = makeViewTransportRecord(view, projection, eye, 0.1f, 100.0f,
+                { extent.width, extent.height }),
+            .history = { .identity = 1u },
+            .output = output,
+        };
+        frame.submitReflectionProbeCaptures = true;
+        frame.lights = &lights;
+        frame.reflectionProbes = &probes;
+        frame.stageObserver = stages;
+        backend.submitFrame(frame);
         if (backend.endFrame() == FrameStatus::RecreateSwapchain) {
             backend.recreateSwapchain(window);
             return false;
@@ -179,6 +189,24 @@ namespace {
             for (uint32_t frame = 0; frame < 8; ++frame)
                 if (renderFrame(*backend, nullptr, window.get(), false, 0)) ++presented;
             CHECK(presented >= 6u);
+
+            StageLog stages;
+            (void)renderFrame(*backend, nullptr, window.get(), false, 0, &stages);
+            constexpr std::array<RenderFrameStage, 7> expected{
+                RenderFrameStage::DirectionalShadows, RenderFrameStage::SpotShadows,
+                RenderFrameStage::PointShadows,
+                RenderFrameStage::ReflectionProbeCaptures, RenderFrameStage::Lighting,
+                RenderFrameStage::SceneLinearComplete, RenderFrameStage::OutputComplete };
+            CHECK(stages.count == expected.size());
+            for (size_t index = 0; index < expected.size(); ++index)
+                CHECK(stages.stages[index] == expected[index]);
+
+            // A frame outside beginFrame/endFrame, or without its packets, is
+            // rejected.
+            bool rejected = false;
+            try { backend->submitFrame(RenderFrame{}); }
+            catch (const std::logic_error&) { rejected = true; }
+            CHECK(rejected);
             backend->cleanup();
         }
         if (validation.messages() != 0u) std::cout << validation.text();
@@ -233,8 +261,9 @@ namespace {
             for (uint32_t frame = 0; frame < 4; ++frame)
                 (void)renderFrame(*backend, bridge.get(), window.get(), frame >= 2u, 0);
             CHECK(bridge->sceneTextureId() != nullptr);
-            backend->setOutputSettings(0.5f, 240.0f, 1000.0f);
-            (void)renderFrame(*backend, bridge.get(), window.get(), false, 0);
+            // Live output settings reach the bridge's display colour.
+            (void)renderFrame(*backend, bridge.get(), window.get(), false, 0, nullptr,
+                { .manualExposureEv = 0.5f, .paperWhiteNits = 240.0f, .peakNits = 1000.0f });
             backend->cleanup();
             CHECK(bridge->sceneTextureId() == nullptr);
         }

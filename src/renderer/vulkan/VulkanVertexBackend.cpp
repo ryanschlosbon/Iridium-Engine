@@ -498,8 +498,16 @@ namespace Iridium {
         output_.setLut(lutHandle);
     }
 
-    void VulkanVertexBackend::setOutputSettings(float manualExposureEv,
-        float paperWhiteNits, float peakNits) {
+    void VulkanVertexBackend::applyOutputSettings(
+        const RenderFrameOutputSettings& settings) {
+        // Unchanged settings re-apply nothing (swapchain metadata, editor
+        // display colour), as the editor host used to skip the call.
+        if (settings.manualExposureEv == output_.manualExposure() &&
+            settings.paperWhiteNits == paperWhiteNits_ &&
+            settings.peakNits == peakNits_) return;
+        const float manualExposureEv = settings.manualExposureEv;
+        const float paperWhiteNits = settings.paperWhiteNits;
+        const float peakNits = settings.peakNits;
         if (!std::isfinite(manualExposureEv) || manualExposureEv < -16.0f ||
             manualExposureEv > 16.0f || !std::isfinite(paperWhiteNits) ||
             paperWhiteNits < 80.0f || paperWhiteNits > 1000.0f ||
@@ -1576,6 +1584,61 @@ namespace Iridium {
             throw std::logic_error(
                 "Depth-pyramid history preparation requires an open frame");
         opaque_.prepareDepthHistory(opaqueQueue, opaqueForwardQueue);
+    }
+
+    void VulkanVertexBackend::submitFrame(const RenderFrame& frame) {
+        if (!frameOpen_)
+            throw std::logic_error("submitFrame requires an open frame");
+        if (frame.lights == nullptr || frame.reflectionProbes == nullptr)
+            throw std::invalid_argument(
+                "A render frame needs its light and reflection-probe packets");
+        const auto stageComplete = [&frame](RenderFrameStage stage) {
+            if (frame.stageObserver != nullptr)
+                frame.stageObserver->onRenderFrameStage(stage);
+        };
+        // View and output state first (the camera uniforms encode the debug
+        // view), as the separate setters were called before extraction.
+        applyOutputSettings(frame.output);
+        debugView_ = frame.debugView;
+        updateCamera(frame.view, frame.history);
+        output_.setGridOverlay(frame.gridOverlay);
+
+        submitDirectionalShadows(frame.directionalShadows.casters,
+            frame.directionalShadows.shadows);
+        stageComplete(RenderFrameStage::DirectionalShadows);
+        submitSpotShadows(frame.spotShadows.casters, frame.spotShadows.shadows);
+        stageComplete(RenderFrameStage::SpotShadows);
+        submitPointShadows(frame.pointShadows.casters, frame.pointShadows.shadows);
+        stageComplete(RenderFrameStage::PointShadows);
+        if (frame.submitReflectionProbeCaptures) {
+            submitReflectionProbeCaptures(frame.probeCasters,
+                frame.probeCaptureSchedule, *frame.lights);
+            stageComplete(RenderFrameStage::ReflectionProbeCaptures);
+        }
+
+        prepareDepthPyramidHistory(frame.opaqueQueue, frame.forwardOpaqueQueue);
+        submitOpaqueQueue(frame.opaqueQueue, frame.selectionQueue, frame.wireframe);
+        // The camera position, matrices and planes are the view record's
+        // (bit-identical to the former submitLightingPass arguments).
+        submitLightingPass(glm::vec3(frame.view.cameraPosition), frame.view.view,
+            frame.view.projection, frame.view.depthRange.x,
+            frame.view.depthRange.y, *frame.lights, *frame.reflectionProbes);
+        stageComplete(RenderFrameStage::Lighting);
+        submitForwardQueues(frame.forwardOpaqueQueue, frame.sortedSurfaceQueue,
+            frame.compatibilityTransparentQueue, frame.instanceTransforms);
+        stageComplete(RenderFrameStage::SceneLinearComplete);
+        submitOutputPass();
+        stageComplete(RenderFrameStage::OutputComplete);
+        submitUIPass();
+    }
+
+    RenderFrameTelemetry VulkanVertexBackend::frameTelemetry() const noexcept {
+        return {
+            .gpuSceneUpload = gpuScene_.uploadTelemetry(),
+            .probeCaptures = probes_.telemetry(),
+            .lightUploads = clusterLighting_.uploadTelemetry(),
+            .clusters = clusterLighting_.clusterTelemetry(),
+        };
     }
 
     void VulkanVertexBackend::submitDirectionalShadows(

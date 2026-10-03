@@ -70,9 +70,6 @@ namespace IridiumTest {
         GpuSceneFrameSerials getGpuSceneFrameSerials() const noexcept override {
             return {};
         }
-        GpuSceneUploadTelemetry getGpuSceneUploadTelemetry() const noexcept override {
-            return {};
-        }
         void prepareReflectionProbes(uint32_t,
             std::span<const EnvironmentLightingHandles>) override {}
         std::vector<ReflectionProbeCaptureCompletion>
@@ -85,24 +82,23 @@ namespace IridiumTest {
             const ProjectReflectionProbeSettings&) override {}
 
         FrameStatus beginFrame() override { return FrameStatus::Ready; }
-        void updateCamera(const ViewTransportRecord&, ViewHistoryContext) override {}
-        void setDebugView(RenderDebugView) override {}
-        void setOutputSettings(float, float, float) override {}
-        void setViewportGridOverlay(const ViewportGridOverlay&) override {}
-
-        void submitDirectionalShadows(const ShadowCasterSubmission&,
-            std::span<const DirectionalShadowFramePacket>) override {}
-        void submitSpotShadows(const ShadowCasterSubmission&,
-            std::span<const SpotShadowFramePacket>) override {}
-        void submitPointShadows(const ShadowCasterSubmission&,
-            std::span<const PointShadowFramePacket>) override {}
-        void submitReflectionProbeCaptures(const ReflectionProbeCasterSubmission&,
-            std::span<const ReflectionProbeCaptureScheduleEntry>,
-            const LightingFramePacket&) override {}
-        ReflectionProbeCaptureTelemetry
-            getReflectionProbeCaptureTelemetry() const noexcept override {
-            return {};
+        // Reports every stage boundary in order, like the Vulkan backend.
+        void submitFrame(const RenderFrame& frame) override {
+            if (frame.stageObserver == nullptr) return;
+            for (const RenderFrameStage stage : { RenderFrameStage::DirectionalShadows,
+                    RenderFrameStage::SpotShadows, RenderFrameStage::PointShadows }) {
+                frame.stageObserver->onRenderFrameStage(stage);
+            }
+            if (frame.submitReflectionProbeCaptures)
+                frame.stageObserver->onRenderFrameStage(
+                    RenderFrameStage::ReflectionProbeCaptures);
+            for (const RenderFrameStage stage : { RenderFrameStage::Lighting,
+                    RenderFrameStage::SceneLinearComplete,
+                    RenderFrameStage::OutputComplete }) {
+                frame.stageObserver->onRenderFrameStage(stage);
+            }
         }
+        RenderFrameTelemetry frameTelemetry() const noexcept override { return {}; }
         uint64_t getShadowCasterRevision(
             const ShadowCasterSubmission&) const noexcept override { return 0; }
         std::array<uint64_t, kDirectionalShadowCascadeCount>
@@ -110,23 +106,6 @@ namespace IridiumTest {
                 const DirectionalShadowCascadePlan&) const noexcept override {
             return {};
         }
-
-        void submitOpaqueQueue(std::span<const DrawPacket>,
-            std::span<const DrawPacket>, bool) override {}
-        void submitLightingPass(const glm::vec3&, const glm::mat4&,
-            const glm::mat4&, float, float, const LightingFramePacket&,
-            const ReflectionProbeGpuFramePacket&) override {}
-        LightingUploadTelemetry getLightingUploadTelemetry() const noexcept override {
-            return {};
-        }
-        ClusteredLightingTelemetry
-            getClusteredLightingTelemetry() const noexcept override { return {}; }
-        void submitForwardQueues(std::span<const DrawPacket>,
-            std::span<const DrawPacket>, std::span<const DrawPacket>,
-            std::span<const glm::mat4>) override {}
-
-        void submitOutputPass() override {}
-        void submitUIPass() override {}
         FrameStatus endFrame() override { return FrameStatus::Ready; }
 
         GeometryHandle allocateGeometry(const GeometryDesc&,

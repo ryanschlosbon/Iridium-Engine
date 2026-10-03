@@ -8,18 +8,20 @@
 //
 // Per-frame staging. A callback reads only what its owner holds. Per-frame
 // inputs it needs (view and lighting packets, exposure, queue spans, counts)
-// are staged into the owner by the backend's existing submit* call, before
-// that pass's drain point, and stay valid until the callback ran. Owners
-// stage into fixed members (spans and PODs, never containers that grow), so
-// a steady frame allocates nothing.
+// are staged into the owner by the backend's submitFrame stage, before that
+// pass's drain point, and stay valid until the callback ran. Owners stage
+// into fixed members (spans and PODs, never containers that grow), so a
+// steady frame allocates nothing.
 //
-// Drain points. Until submitFrame (R3c.11) the backend still sequences the
-// frame with its submit* calls, interleaved with imperative passes. Each owner
-// therefore runs its registered passes at the point where they used to be
-// recorded: it stages, then calls VulkanRenderGraphExecutor::
-// drainRegisteredThrough(lastPass) inside the same CPU scope as before. The
-// executor still decides activity, emits the barriers and GPU ranges, and runs
-// the callbacks in compiled order, so the command stream is unchanged.
+// Drain points. submitFrame (R3c.11) sequences the frame through the stages
+// the former IRenderBackend::submit* calls had, in the same order. Each owner
+// runs its registered passes at the point where they used to be recorded: it
+// stages, then calls VulkanRenderGraphExecutor::drainRegisteredThrough(lastPass)
+// inside the same CPU scope as before. Explicit drains keep work from moving
+// across the transparent pipeline-statistics bracket, other passes' GPU
+// ranges and CPU scopes. The executor still decides activity, emits the
+// barriers and GPU ranges, and runs the callbacks in compiled order, so the
+// command stream is unchanged.
 
 #include "renderer/vulkan/VulkanProductionGraphIds.h"
 

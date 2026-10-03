@@ -282,6 +282,42 @@ namespace Iridium {
         }
         [[nodiscard]] FrameMemoryProfile memorySnapshot();
 
+        // submitFrame's stages (M7R R3c.11), in recording order. Each keeps
+        // the drain points, CPU scopes, pipeline-statistics bracket and GPU
+        // ranges the former IRenderBackend::submit* call had.
+        void applyOutputSettings(const RenderFrameOutputSettings& settings);
+        void updateCamera(const ViewTransportRecord& view,
+            ViewHistoryContext history);
+        void submitDirectionalShadows(
+            const ShadowCasterSubmission& shadowCasters,
+            std::span<const DirectionalShadowFramePacket> shadows);
+        void submitSpotShadows(
+            const ShadowCasterSubmission& shadowCasters,
+            std::span<const SpotShadowFramePacket> shadows);
+        void submitPointShadows(
+            const ShadowCasterSubmission& shadowCasters,
+            std::span<const PointShadowFramePacket> shadows);
+        void submitReflectionProbeCaptures(
+            const ReflectionProbeCasterSubmission& probeCasters,
+            std::span<const ReflectionProbeCaptureScheduleEntry> captures,
+            const LightingFramePacket& lights);
+        void prepareDepthPyramidHistory(
+            std::span<const DrawPacket> opaqueQueue,
+            std::span<const DrawPacket> opaqueForwardQueue);
+        void submitOpaqueQueue(std::span<const DrawPacket> opaqueQueue,
+            std::span<const DrawPacket> selectionQueue, bool isWireframe);
+        void submitLightingPass(const glm::vec3& cameraPos,
+            const glm::mat4& view, const glm::mat4& proj,
+            float nearPlane, float farPlane,
+            const LightingFramePacket& lights,
+            const ReflectionProbeGpuFramePacket& reflectionProbes);
+        void submitForwardQueues(std::span<const DrawPacket> opaqueForwardQueue,
+            std::span<const DrawPacket> sortedSurfaceQueue,
+            std::span<const DrawPacket> compatibilityTransparentQueue,
+            std::span<const glm::mat4> instanceTransforms);
+        void submitOutputPass();
+        void submitUIPass();
+
     public:
         VulkanVertexBackend() = default;
         ~VulkanVertexBackend() override { cleanup(); }
@@ -311,8 +347,6 @@ namespace Iridium {
             return { scheduler.lastSubmittedSerial(),
                 scheduler.completedSerial() };
         }
-        [[nodiscard]] GpuSceneUploadTelemetry getGpuSceneUploadTelemetry()
-            const noexcept override { return gpuScene_.uploadTelemetry(); }
         void prepareReflectionProbes(uint32_t requiredCapacity,
             std::span<const EnvironmentLightingHandles> environments) override;
         [[nodiscard]] std::vector<ReflectionProbeCaptureCompletion>
@@ -325,64 +359,14 @@ namespace Iridium {
         void configureReflectionProbeCaptures(
             const ProjectReflectionProbeSettings& settings) override;
         FrameStatus beginFrame() override;
-        void updateCamera(const ViewTransportRecord& view,
-            ViewHistoryContext history = {}) override;
-        void setDebugView(RenderDebugView view) override { debugView_ = view; }
-        void setOutputSettings(float manualExposureEv, float paperWhiteNits,
-            float peakNits) override;
-        void setViewportGridOverlay(
-            const ViewportGridOverlay& overlay) override {
-            output_.setGridOverlay(overlay);
-        }
-        void submitDirectionalShadows(
-            const ShadowCasterSubmission& shadowCasters,
-            std::span<const DirectionalShadowFramePacket> shadows) override;
-        void submitSpotShadows(
-            const ShadowCasterSubmission& shadowCasters,
-            std::span<const SpotShadowFramePacket> shadows) override;
-        void submitPointShadows(
-            const ShadowCasterSubmission& shadowCasters,
-            std::span<const PointShadowFramePacket> shadows) override;
-        void submitReflectionProbeCaptures(
-            const ReflectionProbeCasterSubmission& probeCasters,
-            std::span<const ReflectionProbeCaptureScheduleEntry> captures,
-            const LightingFramePacket& lights) override;
-        [[nodiscard]] ReflectionProbeCaptureTelemetry
-            getReflectionProbeCaptureTelemetry() const noexcept override {
-            return probes_.telemetry();
-        }
+        void submitFrame(const RenderFrame& frame) override;
+        [[nodiscard]] RenderFrameTelemetry frameTelemetry() const noexcept override;
         [[nodiscard]] uint64_t getShadowCasterRevision(
             const ShadowCasterSubmission& shadowCasters) const noexcept override;
         [[nodiscard]] std::array<uint64_t, kDirectionalShadowCascadeCount>
             getDirectionalShadowCasterRevisions(
                 const ShadowCasterSubmission& shadowCasters,
                 const DirectionalShadowCascadePlan& plan) const noexcept override;
-        void prepareDepthPyramidHistory(
-            std::span<const DrawPacket> opaqueQueue,
-            std::span<const DrawPacket> opaqueForwardQueue) override;
-
-        void submitOpaqueQueue(std::span<const DrawPacket> opaqueQueue,
-            std::span<const DrawPacket> selectionQueue, bool isWireframe) override;
-        void submitLightingPass(const glm::vec3& cameraPos,
-            const glm::mat4& view, const glm::mat4& proj,
-            float nearPlane, float farPlane,
-            const LightingFramePacket& lights,
-            const ReflectionProbeGpuFramePacket& reflectionProbes) override;
-        [[nodiscard]] LightingUploadTelemetry
-            getLightingUploadTelemetry() const noexcept override {
-            return clusterLighting_.uploadTelemetry();
-        }
-        [[nodiscard]] ClusteredLightingTelemetry
-            getClusteredLightingTelemetry() const noexcept override {
-            return clusterLighting_.clusterTelemetry();
-        }
-        void submitForwardQueues(std::span<const DrawPacket> opaqueForwardQueue,
-            std::span<const DrawPacket> sortedSurfaceQueue,
-            std::span<const DrawPacket> compatibilityTransparentQueue,
-            std::span<const glm::mat4> instanceTransforms = {}) override;
-        void submitOutputPass() override;
-        void submitUIPass() override;
-
         FrameStatus endFrame() override;
 
         // Resource Allocation

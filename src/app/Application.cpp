@@ -521,9 +521,8 @@ namespace Iridium {
             &engineLog_, &sceneDocumentService_, &transactionService_);
         renderRuntimeInfo_ = renderBackend->getRuntimeInfo();
         publishOutputTransportStatus();
-        renderBackend->setOutputSettings(static_cast<float>(config_.manualExposureEv),
-            static_cast<float>(config_.paperWhiteNits),
-            static_cast<float>(config_.peakNits));
+        // The backend starts from the configured output settings; each
+        // frame's RenderFrame::output carries later changes (M7R R3c.11).
         editor.setDebugView(config_.debugView);
         if (config_.editorAssetViewerGuid) {
             const std::vector<AssetCatalogRecord> records =
@@ -1381,6 +1380,123 @@ namespace Iridium {
             gpuSceneDirectFallbackCount_ + stats.capacityFallbackInstances);
     }
 
+    void Application::onRenderFrameStage(RenderFrameStage stage) {
+        switch (stage) {
+        case RenderFrameStage::DirectionalShadows:
+            for (const DirectionalShadowFramePacket& shadow : frameStage_.directionalShadows)
+                directionalShadowCaches_[shadow.shadowIndex].markRendered(
+                    shadow.updateMask);
+            break;
+        case RenderFrameStage::SpotShadows: {
+            // Completing the schedule retires it; its stats are read first.
+            const auto stats = frameStage_.spotSchedule->stats;
+            spotShadowCache_.markScheduledRendered();
+            const LocalShadowAllocationStats& allocation = frameStage_.spotAllocation;
+            cpuProfiler_.recordCounter("shadow.spot.requested", allocation.requested);
+            cpuProfiler_.recordCounter("shadow.spot.allocated", allocation.allocated);
+            cpuProfiler_.recordCounter("shadow.spot.omitted", allocation.omitted);
+            cpuProfiler_.recordCounter("shadow.spot.cache_hits", stats.cacheHits);
+            cpuProfiler_.recordCounter("shadow.spot.updates", stats.updates);
+            cpuProfiler_.recordCounter("shadow.spot.stale_sampled",
+                stats.staleSampled);
+            cpuProfiler_.recordCounter("shadow.spot.unshadowed", stats.unshadowed);
+            cpuProfiler_.recordCounter("shadow.spot.rendered_texels",
+                stats.renderedTexels);
+            break;
+        }
+        case RenderFrameStage::PointShadows: {
+            // Completing the schedule retires it; its stats are read first.
+            const auto stats = frameStage_.pointSchedule->stats;
+            pointShadowCache_.markScheduledRendered();
+            const LocalShadowAllocationStats& allocation = frameStage_.pointAllocation;
+            cpuProfiler_.recordCounter("shadow.point.requested", allocation.requested);
+            cpuProfiler_.recordCounter("shadow.point.allocated", allocation.allocated);
+            cpuProfiler_.recordCounter("shadow.point.omitted", allocation.omitted);
+            cpuProfiler_.recordCounter("shadow.point.cache_hits", stats.cacheHits);
+            cpuProfiler_.recordCounter("shadow.point.updates", stats.updates);
+            cpuProfiler_.recordCounter("shadow.point.stale_sampled",
+                stats.staleSampled);
+            cpuProfiler_.recordCounter("shadow.point.unshadowed", stats.unshadowed);
+            cpuProfiler_.recordCounter("shadow.point.rendered_texels",
+                stats.renderedTexels);
+            break;
+        }
+        case RenderFrameStage::ReflectionProbeCaptures: {
+            // Completing the schedule retires it; its stats are read first.
+            const auto stats = frameStage_.probeCaptureSchedule->stats;
+            reflectionProbeCaptureScheduler_.markScheduledFacesRendered();
+            const ReflectionProbeCaptureTelemetry telemetry =
+                renderBackend->frameTelemetry().probeCaptures;
+            cpuProfiler_.recordCounter("probe.capture.faces_scheduled",
+                stats.facesScheduled);
+            cpuProfiler_.recordCounter("probe.capture.budget_deferred",
+                stats.budgetDeferred);
+            cpuProfiler_.recordCounter("probe.capture.capacity_deferred",
+                stats.capacityDeferred);
+            cpuProfiler_.recordCounter("probe.capture.cadence_deferred",
+                stats.cadenceDeferred);
+            cpuProfiler_.recordCounter("probe.capture.faces_rendered",
+                telemetry.facesRendered);
+            cpuProfiler_.recordCounter("probe.capture.filtered",
+                telemetry.capturesFiltered);
+            cpuProfiler_.recordCounter("probe.capture.published",
+                telemetry.capturesPublished);
+            cpuProfiler_.recordCounter("probe.capture.staging_bytes",
+                telemetry.stagingLogicalBytes,
+                ProfileCounterStatus::Exact, ProfileCounterUnit::Bytes);
+            cpuProfiler_.recordCounter("probe.capture.published_bytes",
+                telemetry.publishedLogicalBytes,
+                ProfileCounterStatus::Exact, ProfileCounterUnit::Bytes);
+            break;
+        }
+        case RenderFrameStage::Lighting: {
+            const RenderFrameTelemetry telemetry = renderBackend->frameTelemetry();
+            const LightingUploadTelemetry& lightUpload = telemetry.lightUploads;
+            cpuProfiler_.recordCounter("light.gpu_upload_bytes", lightUpload.bytes,
+                ProfileCounterStatus::Exact, ProfileCounterUnit::Bytes);
+            cpuProfiler_.recordCounter("light.gpu_upload_ranges", lightUpload.ranges);
+            const ClusteredLightingTelemetry& clusters = telemetry.clusters;
+            const ProfileCounterStatus clusterStatus = clusters.available
+                ? ProfileCounterStatus::Exact : ProfileCounterStatus::Unavailable;
+            cpuProfiler_.recordCounter("cluster.buffer_bytes_per_frame",
+                clusters.bufferBytesPerFrame, clusterStatus, ProfileCounterUnit::Bytes);
+            cpuProfiler_.recordCounter("cluster.count", clusters.clusterCount, clusterStatus);
+            cpuProfiler_.recordCounter("cluster.lights.active", clusters.activeLights,
+                clusterStatus);
+            cpuProfiler_.recordCounter("cluster.lights.directional",
+                clusters.directionalLights, clusterStatus);
+            cpuProfiler_.recordCounter("cluster.lights.local", clusters.localLights,
+                clusterStatus);
+            cpuProfiler_.recordCounter("cluster.references.requested",
+                clusters.requestedReferences, clusterStatus);
+            cpuProfiler_.recordCounter("cluster.references.published",
+                clusters.publishedReferences, clusterStatus);
+            cpuProfiler_.recordCounter("cluster.used", clusters.clustersUsed, clusterStatus);
+            cpuProfiler_.recordCounter("cluster.occupancy.maximum",
+                clusters.maximumOccupancy, clusterStatus);
+            cpuProfiler_.recordCounter("cluster.fallback_lights",
+                clusters.fallbackLights, clusterStatus);
+            cpuProfiler_.recordCounter("cluster.dropped_lights",
+                clusters.droppedLights, clusterStatus);
+            cpuProfiler_.recordCounter("cluster.overflow_code", clusters.overflowCode,
+                clusterStatus);
+            break;
+        }
+        case RenderFrameStage::SceneLinearComplete:
+            // Scene-linear captures read the lit scene here.
+            if (observer_)
+                observer_->onFrameSubmit(FrameSubmitPoint::SceneLinearReady,
+                    *frameStage_.frame);
+            break;
+        case RenderFrameStage::OutputComplete:
+            // Final-output captures read the output target before the UI pass.
+            if (observer_)
+                observer_->onFrameSubmit(FrameSubmitPoint::OutputReady,
+                    *frameStage_.frame);
+            break;
+        }
+    }
+
     void Application::drawFrame(AppFrameContext& frame) {
         const uint64_t applicationFrameIndex = frame.applicationFrameIndex;
         const bool dualViews = !policy_.fullscreenScenePresentation &&
@@ -1544,7 +1660,7 @@ namespace Iridium {
         }
         if (gpuSceneFrame_) renderBackend->publishGpuScene(*gpuSceneFrame_);
         const GpuSceneUploadTelemetry gpuSceneUpload =
-            renderBackend->getGpuSceneUploadTelemetry();
+            renderBackend->frameTelemetry().gpuSceneUpload;
         cpuProfiler_.recordCounter("gpu_scene.upload.bytes",
             gpuSceneUpload.bytes);
         cpuProfiler_.recordCounter("gpu_scene.upload.ranges",
@@ -1633,9 +1749,6 @@ namespace Iridium {
                     config_.manualExposureEv = outputSettings.manualExposureEv;
                     config_.paperWhiteNits = outputSettings.paperWhiteNits;
                     config_.peakNits = outputSettings.peakNits;
-                    renderBackend->setOutputSettings(outputSettings.manualExposureEv,
-                        outputSettings.paperWhiteNits, outputSettings.peakNits);
-                    appliedViewExposureEv_ = outputSettings.manualExposureEv;
                 }
                 ProjectShadowSettings shadowSettings{};
                 if (editor.consumeShadowSettings(shadowSettings)) {
@@ -1724,21 +1837,22 @@ namespace Iridium {
         renderBackend->setEnvironmentLightingSettings(assetPreviewActive
             ? previewLighting.environmentSettings() : sceneEnvironmentSettings_);
         const float viewExposure = assetPreviewActive ? previewLighting.exposureEv : config_.manualExposureEv;
-        if (!appliedViewExposureEv_ || *appliedViewExposureEv_ != viewExposure) {
-            renderBackend->setOutputSettings(viewExposure, config_.paperWhiteNits, config_.peakNits);
-            appliedViewExposureEv_ = viewExposure;
-        }
-        renderBackend->setDebugView(debugView);
-        renderBackend->updateCamera(viewTransport, {
-            .identity = assetPreviewActive ? previewDocument->sessionSerial + 2u : 1u,
-            .resetRevision = assetPreviewActive ? previewDocument->framingRevision :
-                frameRequests_.viewHistoryResetRevision.value_or(0u),
-        });
-        ViewportGridOverlay gridOverlay{};
+        // M7R R3c.11: the frame is assembled from spans over this frame's
+        // queues and packets and submitted once, after extraction.
+        RenderFrame renderFrame{
+            .view = viewTransport,
+            .history = {
+                .identity = assetPreviewActive ? previewDocument->sessionSerial + 2u : 1u,
+                .resetRevision = assetPreviewActive ? previewDocument->framingRevision :
+                    frameRequests_.viewHistoryResetRevision.value_or(0u),
+            },
+            .debugView = debugView,
+            .output = { viewExposure, static_cast<float>(config_.paperWhiteNits),
+                static_cast<float>(config_.peakNits) },
+        };
         if (!frameRequests_.suppressGridOverlay && !assetPreviewActive) {
-            gridOverlay = editor.viewportGridOverlay(viewMatrix, projMatrix);
+            renderFrame.gridOverlay = editor.viewportGridOverlay(viewMatrix, projMatrix);
         }
-        renderBackend->setViewportGridOverlay(gridOverlay);
 
         // --- 3. THE EXTRACTION PHASE (Data-Oriented Design) ---
         uint64_t requestedModelRecords = 0;
@@ -2568,11 +2682,8 @@ namespace Iridium {
             activeDirectionalShadowOwnerCount_ = 0;
             cpuProfiler_.recordCounter("shadow.directional.requested", 0);
         }
-        renderBackend->submitDirectionalShadows(
-            shadowCasters, directionalShadows);
-        for (const DirectionalShadowFramePacket& shadow : directionalShadows)
-            directionalShadowCaches_[shadow.shadowIndex].markRendered(
-                shadow.updateMask);
+        renderFrame.directionalShadows = { shadowCasters, directionalShadows };
+        frameStage_ = { .frame = &frame, .directionalShadows = directionalShadows };
 
         // Spot shadows share the same extracted light slots and caster revision
         // as clustered lighting. Stable atlas allocation is reconciled before
@@ -2668,25 +2779,9 @@ namespace Iridium {
                         PackedGpuLightShadowQualityShift),
             });
         }
-        renderBackend->submitSpotShadows(
-            shadowCasters, spotShadows);
-        spotShadowCache_.markScheduledRendered();
-        cpuProfiler_.recordCounter("shadow.spot.requested",
-            spotAllocation.requested);
-        cpuProfiler_.recordCounter("shadow.spot.allocated",
-            spotAllocation.allocated);
-        cpuProfiler_.recordCounter("shadow.spot.omitted",
-            spotAllocation.omitted);
-        cpuProfiler_.recordCounter("shadow.spot.cache_hits",
-            spotSchedule.stats.cacheHits);
-        cpuProfiler_.recordCounter("shadow.spot.updates",
-            spotSchedule.stats.updates);
-        cpuProfiler_.recordCounter("shadow.spot.stale_sampled",
-            spotSchedule.stats.staleSampled);
-        cpuProfiler_.recordCounter("shadow.spot.unshadowed",
-            spotSchedule.stats.unshadowed);
-        cpuProfiler_.recordCounter("shadow.spot.rendered_texels",
-            spotSchedule.stats.renderedTexels);
+        renderFrame.spotShadows = { shadowCasters, spotShadows };
+        frameStage_.spotAllocation = spotAllocation;
+        frameStage_.spotSchedule = &spotSchedule;
 
         // Point lights use stable tiered cube slots. Cache publication is
         // all-or-nothing across the frozen six-face orientation so lighting can
@@ -2778,25 +2873,9 @@ namespace Iridium {
                     faces[face].worldToShadowClip;
             pointShadows.push_back(packet);
         }
-        renderBackend->submitPointShadows(
-            shadowCasters, pointShadows);
-        pointShadowCache_.markScheduledRendered();
-        cpuProfiler_.recordCounter("shadow.point.requested",
-            pointAllocation.requested);
-        cpuProfiler_.recordCounter("shadow.point.allocated",
-            pointAllocation.allocated);
-        cpuProfiler_.recordCounter("shadow.point.omitted",
-            pointAllocation.omitted);
-        cpuProfiler_.recordCounter("shadow.point.cache_hits",
-            pointSchedule.stats.cacheHits);
-        cpuProfiler_.recordCounter("shadow.point.updates",
-            pointSchedule.stats.updates);
-        cpuProfiler_.recordCounter("shadow.point.stale_sampled",
-            pointSchedule.stats.staleSampled);
-        cpuProfiler_.recordCounter("shadow.point.unshadowed",
-            pointSchedule.stats.unshadowed);
-        cpuProfiler_.recordCounter("shadow.point.rendered_texels",
-            pointSchedule.stats.renderedTexels);
+        renderFrame.pointShadows = { shadowCasters, pointShadows };
+        frameStage_.pointAllocation = pointAllocation;
+        frameStage_.pointSchedule = &pointSchedule;
 
         // Scene probes must never capture the isolated model or its preview sun.
         if (!assetPreviewActive) {
@@ -2835,33 +2914,10 @@ namespace Iridium {
         }
         const ReflectionProbeCaptureSchedule& probeCaptureSchedule =
             reflectionProbeCaptureScheduler_.schedule(probeCaptureRequests);
-        renderBackend->submitReflectionProbeCaptures(
-            probeCasters, probeCaptureSchedule.entries,
-            lightingFrame);
-        reflectionProbeCaptureScheduler_.markScheduledFacesRendered();
-        const ReflectionProbeCaptureTelemetry probeCaptureTelemetry =
-            renderBackend->getReflectionProbeCaptureTelemetry();
-        cpuProfiler_.recordCounter("probe.capture.faces_scheduled",
-            probeCaptureSchedule.stats.facesScheduled);
-        cpuProfiler_.recordCounter("probe.capture.budget_deferred",
-            probeCaptureSchedule.stats.budgetDeferred);
-        cpuProfiler_.recordCounter("probe.capture.capacity_deferred",
-            probeCaptureSchedule.stats.capacityDeferred);
-        cpuProfiler_.recordCounter("probe.capture.cadence_deferred",
-            probeCaptureSchedule.stats.cadenceDeferred);
-        cpuProfiler_.recordCounter("probe.capture.faces_rendered",
-            probeCaptureTelemetry.facesRendered);
-        cpuProfiler_.recordCounter("probe.capture.filtered",
-            probeCaptureTelemetry.capturesFiltered);
-        cpuProfiler_.recordCounter("probe.capture.published",
-            probeCaptureTelemetry.capturesPublished);
-        cpuProfiler_.recordCounter("probe.capture.staging_bytes",
-            probeCaptureTelemetry.stagingLogicalBytes,
-            ProfileCounterStatus::Exact, ProfileCounterUnit::Bytes);
-        cpuProfiler_.recordCounter("probe.capture.published_bytes",
-            probeCaptureTelemetry.publishedLogicalBytes,
-            ProfileCounterStatus::Exact, ProfileCounterUnit::Bytes);
-
+        renderFrame.submitReflectionProbeCaptures = true;
+        renderFrame.probeCasters = probeCasters;
+        renderFrame.probeCaptureSchedule = probeCaptureSchedule.entries;
+        frameStage_.probeCaptureSchedule = &probeCaptureSchedule;
         }
         // Keep scene-probe resources resident, but exclude their local influence
         // from the isolated preview. Tag the active-list identity across views.
@@ -2877,86 +2933,22 @@ namespace Iridium {
             debugView == RenderDebugView::Final
             ? std::span<const DrawPacket>(selectionQueue.data(), selectionQueue.size())
             : std::span<const DrawPacket>{};
-        renderBackend->prepareDepthPyramidHistory(
-            std::span<const DrawPacket>(opaqueQueue.data(), opaqueQueue.size()),
-            std::span<const DrawPacket>(forwardOpaqueQueue.data(),
-                forwardOpaqueQueue.size()));
-        renderBackend->submitOpaqueQueue(
-            std::span<const DrawPacket>(opaqueQueue.data(), opaqueQueue.size()),
-            activeSelectionQueue,
-            isWireframe);
+        renderFrame.opaqueQueue = opaqueQueue;
+        renderFrame.selectionQueue = activeSelectionQueue;
+        renderFrame.wireframe = isWireframe;
+        renderFrame.forwardOpaqueQueue = forwardOpaqueQueue;
+        renderFrame.sortedSurfaceQueue = sortedSurfaceQueue;
+        renderFrame.compatibilityTransparentQueue = transparentQueue;
+        renderFrame.instanceTransforms = forwardInstanceTransforms_;
+        renderFrame.lights = &lightingFrame;
+        renderFrame.reflectionProbes = &publishedProbes;
+        renderFrame.stageObserver = this;
 
-        // Pass 2: Deferred Lighting 
-        renderBackend->submitLightingPass(
-            renderCameraPosition, viewMatrix, projMatrix,
-            renderCameraNearPlane, renderCameraFarPlane, lightingFrame,
-            publishedProbes);
-        const LightingUploadTelemetry lightUpload =
-            renderBackend->getLightingUploadTelemetry();
-        cpuProfiler_.recordCounter("light.gpu_upload_bytes", lightUpload.bytes,
-            ProfileCounterStatus::Exact, ProfileCounterUnit::Bytes);
-        cpuProfiler_.recordCounter("light.gpu_upload_ranges", lightUpload.ranges);
-        const ClusteredLightingTelemetry clusters =
-            renderBackend->getClusteredLightingTelemetry();
-        cpuProfiler_.recordCounter("cluster.buffer_bytes_per_frame",
-            clusters.bufferBytesPerFrame,
-            clusters.available ? ProfileCounterStatus::Exact : ProfileCounterStatus::Unavailable,
-            ProfileCounterUnit::Bytes);
-        cpuProfiler_.recordCounter("cluster.count", clusters.clusterCount,
-            clusters.available ? ProfileCounterStatus::Exact : ProfileCounterStatus::Unavailable);
-        cpuProfiler_.recordCounter("cluster.lights.active", clusters.activeLights,
-            clusters.available ? ProfileCounterStatus::Exact : ProfileCounterStatus::Unavailable);
-        cpuProfiler_.recordCounter("cluster.lights.directional",
-            clusters.directionalLights,
-            clusters.available ? ProfileCounterStatus::Exact : ProfileCounterStatus::Unavailable);
-        cpuProfiler_.recordCounter("cluster.lights.local", clusters.localLights,
-            clusters.available ? ProfileCounterStatus::Exact : ProfileCounterStatus::Unavailable);
-        cpuProfiler_.recordCounter("cluster.references.requested",
-            clusters.requestedReferences,
-            clusters.available ? ProfileCounterStatus::Exact : ProfileCounterStatus::Unavailable);
-        cpuProfiler_.recordCounter("cluster.references.published",
-            clusters.publishedReferences,
-            clusters.available ? ProfileCounterStatus::Exact : ProfileCounterStatus::Unavailable);
-        cpuProfiler_.recordCounter("cluster.used", clusters.clustersUsed,
-            clusters.available ? ProfileCounterStatus::Exact : ProfileCounterStatus::Unavailable);
-        cpuProfiler_.recordCounter("cluster.occupancy.maximum",
-            clusters.maximumOccupancy,
-            clusters.available ? ProfileCounterStatus::Exact : ProfileCounterStatus::Unavailable);
-        cpuProfiler_.recordCounter("cluster.fallback_lights",
-            clusters.fallbackLights,
-            clusters.available ? ProfileCounterStatus::Exact : ProfileCounterStatus::Unavailable);
-        cpuProfiler_.recordCounter("cluster.dropped_lights",
-            clusters.droppedLights,
-            clusters.available ? ProfileCounterStatus::Exact : ProfileCounterStatus::Unavailable);
-        cpuProfiler_.recordCounter("cluster.overflow_code", clusters.overflowCode,
-            clusters.available ? ProfileCounterStatus::Exact : ProfileCounterStatus::Unavailable);
-
-        // Pass 3: The AAA Translucency Pipeline (includes per-layer glass depth)
-        renderBackend->submitForwardQueues(
-            std::span<const DrawPacket>(
-                forwardOpaqueQueue.data(), forwardOpaqueQueue.size()),
-            std::span<const DrawPacket>(
-                sortedSurfaceQueue.data(), sortedSurfaceQueue.size()),
-            std::span<const DrawPacket>(
-                transparentQueue.data(), transparentQueue.size()),
-            std::span<const glm::mat4>(forwardInstanceTransforms_.data(),
-                forwardInstanceTransforms_.size()));
-
-        // Scene-linear captures read the lit scene here.
-        if (observer_) {
-            observer_->onFrameSubmit(FrameSubmitPoint::SceneLinearReady, frame);
-        }
-
-        // Pass 4: Final output mapping.
-        renderBackend->submitOutputPass();
-
-        // Final-output captures read the output target before the UI pass.
-        if (observer_) {
-            observer_->onFrameSubmit(FrameSubmitPoint::OutputReady, frame);
-        }
-
-        // Pass 5: ImGui/Editor UI.
-        renderBackend->submitUIPass();
+        // Shadows, probe captures, G-buffer, lighting, forward and
+        // transparency, output and UI. The observer's scene-linear and
+        // output submit points are reported from the stage boundaries.
+        renderBackend->submitFrame(renderFrame);
+        frameStage_ = {};
 
         if (renderBackend->endFrame() == FrameStatus::RecreateSwapchain) {
             framebufferResized = false;

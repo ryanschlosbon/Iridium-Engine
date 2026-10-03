@@ -47,7 +47,8 @@
 
 namespace Iridium {
 
-    class Application final : private IAppControl {
+    class Application final : private IAppControl,
+        private IRenderFrameStageObserver {
     public:
         // The observer (the qualification harness in IRIDIUM_QUALIFICATION
         // builds) is optional and must outlive run(); without one the
@@ -182,7 +183,6 @@ namespace Iridium {
         float activeEnvironmentRadianceScale_ = 0.0f;
         EnvironmentLightingHandles environmentLighting_;
         EnvironmentLightingSettings sceneEnvironmentSettings_;
-        std::optional<float> appliedViewExposureEv_;
         std::map<AssetGuid, LoadedEnvironmentAsset> loadedEnvironments_;
         TextureHandle outputTransformLut; // Pinned application-owned ACES 2 LUT.
         Color::OutputTransport outputTransformLutTransport_ =
@@ -211,6 +211,21 @@ namespace Iridium {
         std::string framedPreviewCookKey_;
         uint64_t framedPreviewRevision_ = 0;
         uint64_t framedPreviewSession_ = 0;
+
+        // M7R R3c.11: caller-side work reported at submitFrame's stage
+        // boundaries (cache bookkeeping, profile counters and the observer's
+        // submit points), in the order it ran between the former submit*
+        // calls. Valid while submitFrame runs.
+        struct FrameStageRecords {
+            AppFrameContext* frame = nullptr;
+            std::span<const DirectionalShadowFramePacket> directionalShadows{};
+            LocalShadowAllocationStats spotAllocation{};
+            const LocalShadowSchedule* spotSchedule = nullptr;
+            LocalShadowAllocationStats pointAllocation{};
+            const LocalShadowSchedule* pointSchedule = nullptr;
+            const ReflectionProbeCaptureSchedule* probeCaptureSchedule = nullptr;
+        };
+        FrameStageRecords frameStage_{};
 
         // --- MOUSE STATE ---
         float lastX = 1280 / 2.0f;
@@ -243,6 +258,9 @@ namespace Iridium {
         [[nodiscard]] AppRunSnapshot makeRunSnapshot() const;
         void notifyStartup(StartupPhase phase, AppStartupContext& context);
         void notifyShutdown(ShutdownPhase phase, bool completed);
+
+        // IRenderFrameStageObserver
+        void onRenderFrameStage(RenderFrameStage stage) override;
 
         // IAppControl
         OutputTransportSwitchResult applyOutputTransport(

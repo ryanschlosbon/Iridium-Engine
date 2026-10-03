@@ -46,6 +46,7 @@ namespace Iridium {
         void setManualExposure(float manualExposureEv) noexcept {
             manualExposureEv_ = manualExposureEv;
         }
+        [[nodiscard]] float manualExposure() const noexcept { return manualExposureEv_; }
         void setGridOverlay(const ViewportGridOverlay& overlay) noexcept {
             gridOverlay_ = overlay;
         }

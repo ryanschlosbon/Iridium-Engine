@@ -26,8 +26,9 @@
 //                                   between frames
 //   onFrameBegin(BackendFrameOpened) after beginFrame succeeded and the GPU scene was
 //                                   published (not called on a swapchain recreate)
-//   onFrameSubmit(SceneLinearReady) after the forward queues
-//   onFrameSubmit(OutputReady)      after the output pass, before the UI pass
+//   onFrameSubmit(SceneLinearReady) after the forward queues  } reported from
+//   onFrameSubmit(OutputReady)      after the output pass,    } submitFrame's
+//                                   before the UI pass        } stage boundaries
 //   onFrameEnd                      after endFrame succeeded
 //
 //   onShutdown(RunComplete)         main loop finished normally; backend alive
