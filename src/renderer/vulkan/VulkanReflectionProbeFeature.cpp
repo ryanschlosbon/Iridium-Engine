@@ -39,7 +39,7 @@ namespace Iridium {
             context.resources.textureTable().samplerLayout(),
             lightingSetLayout_, context.meshLayouts.getGpuSceneSetLayout());
         captureTargets_.init(context.device, context.vk.getPhysicalDevice(),
-            context.allocator, capturePass_.renderPass());
+            context.allocator);
     }
 
     void VulkanReflectionProbeFeature::createCuller(const VulkanIndirectViewSetup& setup) {
@@ -758,7 +758,7 @@ namespace Iridium {
                     }
                     ++casterFaceDraws;
                 }
-                capturePass.endFace(cmd);
+                capturePass.endFace(cmd, target, face);
                 ++faceRecord;
                 ++captureTelemetry.facesRendered;
                 captureTelemetry.renderedTexels +=

@@ -45,9 +45,6 @@ namespace Iridium {
             VkDescriptorSetLayout gpuSceneLayout);
         void cleanup() noexcept;
 
-        [[nodiscard]] VkRenderPass renderPass() const noexcept {
-            return renderPass_;
-        }
         [[nodiscard]] VkPipelineLayout graphicsLayout() const noexcept {
             return graphicsLayout_;
         }
@@ -65,6 +62,8 @@ namespace Iridium {
             const ReflectionProbeCaptureFace& face, glm::vec3 position,
             float nearPlane, uint32_t activeLightCount, bool captureSky,
             uint32_t resolution);
+        // M7R R4a: dynamic rendering per face, with the face's own
+        // (owner-managed) layout barriers before and after.
         void beginFace(VkCommandBuffer commandBuffer,
             const VulkanReflectionProbeCaptureStaging& target,
             uint32_t faceIndex, uint32_t frameIndex, uint32_t recordIndex,
@@ -80,7 +79,9 @@ namespace Iridium {
             uint32_t frameIndex) const;
         [[nodiscard]] uint32_t faceComputeDynamicOffset(
             uint32_t recordIndex) const;
-        void endFace(VkCommandBuffer commandBuffer) const;
+        void endFace(VkCommandBuffer commandBuffer,
+            const VulkanReflectionProbeCaptureStaging& target,
+            uint32_t faceIndex) const;
 
         [[nodiscard]] std::vector<VkDescriptorSet> recordPrefilter(
             VkCommandBuffer commandBuffer,
@@ -103,7 +104,6 @@ namespace Iridium {
         VkDevice device_ = VK_NULL_HANDLE;
         VulkanResourceAllocator* allocator_ = nullptr;
         ::DescriptorAllocator* descriptors_ = nullptr;
-        VkRenderPass renderPass_ = VK_NULL_HANDLE;
         VkDescriptorSetLayout captureLayout_ = VK_NULL_HANDLE;
         VkPipelineLayout graphicsLayout_ = VK_NULL_HANDLE;
         VkPipelineLayout gpuSceneGraphicsLayout_ = VK_NULL_HANDLE;

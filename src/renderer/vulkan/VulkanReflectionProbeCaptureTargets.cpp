@@ -25,13 +25,11 @@ void VulkanReflectionProbeCaptureTargets::validateConfig(
 
 void VulkanReflectionProbeCaptureTargets::init(VkDevice device,
     VkPhysicalDevice physicalDevice, VulkanResourceAllocator& allocator,
-    VkRenderPass captureRenderPass,
     VulkanReflectionProbeCaptureTargetConfig config) {
     if (device_ != VK_NULL_HANDLE || allocator_ != nullptr)
         throw std::logic_error(
             "Reflection-probe capture targets were initialized twice");
-    if (device == VK_NULL_HANDLE || physicalDevice == VK_NULL_HANDLE ||
-        captureRenderPass == VK_NULL_HANDLE)
+    if (device == VK_NULL_HANDLE || physicalDevice == VK_NULL_HANDLE)
         throw std::invalid_argument(
             "Reflection-probe capture targets require a Vulkan device");
     validateConfig(config);
@@ -42,7 +40,6 @@ void VulkanReflectionProbeCaptureTargets::init(VkDevice device,
             "Vulkan cube-image limit cannot hold a reflection probe");
     device_ = device;
     allocator_ = &allocator;
-    captureRenderPass_ = captureRenderPass;
     config_ = config;
     maximumCubeDimension_ = properties.limits.maxImageDimensionCube;
     owners_.reserve(config.maximumOwners);
@@ -151,20 +148,6 @@ VulkanReflectionProbeCaptureTargets::acquire(SceneEntityUuid owner,
             staging.depthFaceViews[face] = createView(staging.depth.image,
                 staging.depth.format, VK_IMAGE_ASPECT_DEPTH_BIT,
                 VK_IMAGE_VIEW_TYPE_2D, 0, 1, face, 1);
-            const std::array attachments{
-                staging.rawFaceViews[face], staging.depthFaceViews[face] };
-            VkFramebufferCreateInfo framebuffer{
-                VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO };
-            framebuffer.renderPass = captureRenderPass_;
-            framebuffer.attachmentCount = static_cast<uint32_t>(
-                attachments.size());
-            framebuffer.pAttachments = attachments.data();
-            framebuffer.width = resolution;
-            framebuffer.height = resolution;
-            framebuffer.layers = 1;
-            requireSuccess(vkCreateFramebuffer(device_, &framebuffer, nullptr,
-                &staging.framebuffers[face]),
-                "vkCreateFramebuffer(reflection probe capture)");
         }
         staging.prefilteredMipArrayViews.reserve(staging.mipLevels);
         for (uint32_t mip = 0; mip < staging.mipLevels; ++mip) {
@@ -193,9 +176,6 @@ VulkanReflectionProbeCaptureTargets::acquire(SceneEntityUuid owner,
 void VulkanReflectionProbeCaptureTargets::destroyStaging(
     VulkanReflectionProbeCaptureStaging& staging) noexcept {
     if (device_ != VK_NULL_HANDLE) {
-        for (VkFramebuffer framebuffer : staging.framebuffers)
-            if (framebuffer != VK_NULL_HANDLE)
-                vkDestroyFramebuffer(device_, framebuffer, nullptr);
         for (VkImageView view : staging.rawFaceViews)
             if (view != VK_NULL_HANDLE)
                 vkDestroyImageView(device_, view, nullptr);
@@ -249,11 +229,6 @@ void VulkanReflectionProbeCaptureTargets::promote(SceneEntityUuid owner,
     if (state->hasPublished) {
         publishedLogicalBytes_ -= state->publishedLogicalBytes;
         allocator_->destroy(state->published);
-    }
-    for (VkFramebuffer& framebuffer : state->staging.framebuffers) {
-        if (framebuffer != VK_NULL_HANDLE)
-            vkDestroyFramebuffer(device_, framebuffer, nullptr);
-        framebuffer = VK_NULL_HANDLE;
     }
     for (VkImageView& view : state->staging.rawFaceViews) {
         if (view != VK_NULL_HANDLE)
@@ -333,7 +308,6 @@ void VulkanReflectionProbeCaptureTargets::cleanup() noexcept {
     stagingLogicalBytes_ = 0;
     publishedLogicalBytes_ = 0;
     maximumCubeDimension_ = 0;
-    captureRenderPass_ = VK_NULL_HANDLE;
     allocator_ = nullptr;
     device_ = VK_NULL_HANDLE;
 }

@@ -32,8 +32,6 @@ namespace Iridium {
             rawFaceViews{};
         std::array<VkImageView, kReflectionProbeCaptureFaceCount>
             depthFaceViews{};
-        std::array<VkFramebuffer, kReflectionProbeCaptureFaceCount>
-            framebuffers{};
         std::vector<VkImageView> prefilteredMipArrayViews;
         uint64_t logicalBytes = 0;
     };
@@ -50,7 +48,6 @@ namespace Iridium {
 
         void init(VkDevice device, VkPhysicalDevice physicalDevice,
             VulkanResourceAllocator& allocator,
-            VkRenderPass captureRenderPass,
             VulkanReflectionProbeCaptureTargetConfig config = {});
         void cleanup() noexcept;
 
@@ -98,7 +95,6 @@ namespace Iridium {
             const VulkanReflectionProbeCaptureTargetConfig& config);
 
         VkDevice device_ = VK_NULL_HANDLE;
-        VkRenderPass captureRenderPass_ = VK_NULL_HANDLE;
         VulkanResourceAllocator* allocator_ = nullptr;
         VulkanReflectionProbeCaptureTargetConfig config_{};
         uint32_t maximumCubeDimension_ = 0;
