@@ -199,7 +199,8 @@ namespace Iridium {
                 "Indexed material descriptors are required for the production path, "
                 "but the Vulkan device lacks the complete descriptor-indexing feature set.");
         }
-        resourceAllocator.init(vkContext->getPhysicalDevice(), vkContext->getDevice(),
+        resourceAllocator.init(vkContext->getInstance(), vkContext->getPhysicalDevice(),
+            vkContext->getDevice(),
             vkContext->hasMemoryBudget());
         // The VSM depth oracle qualifies live VSM demand, so it implies the
         // resources.
@@ -1490,6 +1491,7 @@ namespace Iridium {
         const uint32_t completedFrameIndex = scheduler.currentFrameIndex();
         const VulkanFrameBegin frame = scheduler.beginFrame(vkSwapchain->getSwapchain());
         const uint32_t frameSlot = scheduler.currentFrameIndex();
+        resourceAllocator.beginFrame();
         // beginFrame has waited this slot's fence before returning, including
         // the out-of-date acquire path. Its capture readbacks are now CPU-safe.
         extensionHooks_.onFrameSlotRetired(completedFrameIndex);

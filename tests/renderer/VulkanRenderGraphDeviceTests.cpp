@@ -49,7 +49,8 @@ namespace {
         gpu.resetValidationErrors();
         constexpr uint32_t FrameSlots = 2;
         VulkanResourceAllocator allocator;
-        allocator.init(gpu.physicalDevice(), gpu.device(), gpu.hasMemoryBudget());
+        allocator.init(gpu.instance(), gpu.physicalDevice(), gpu.device(),
+            gpu.hasMemoryBudget());
         Test::HeadlessVulkanBuffer workingSets[FrameSlots]{};
         {
             VulkanRenderGraphExecutor executor;
@@ -146,7 +147,8 @@ namespace {
         IRIDIUM_CHECK(compiled.succeeded());
 
         VulkanResourceAllocator allocator;
-        allocator.init(gpu.physicalDevice(), gpu.device(), gpu.hasMemoryBudget());
+        allocator.init(gpu.instance(), gpu.physicalDevice(), gpu.device(),
+            gpu.hasMemoryBudget());
         {
             VulkanRenderGraphExecutor executor;
             executor.init(allocator, 2);

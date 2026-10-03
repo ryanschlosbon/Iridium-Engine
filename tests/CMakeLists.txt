@@ -368,6 +368,13 @@ if(TARGET iridium_shaders)
             LIBS iridium_test_vulkan_support iridium_vulkan
             LABELS vulkan)
 
+    # M7R R4b: VulkanResourceAllocator over VMA (legacy memory types, dedicated
+    # images, persistent mappings, category accounting, memory budget).
+    iridium_add_test(VulkanResourceAllocatorTests
+            SOURCES renderer/VulkanResourceAllocatorTests.cpp
+            LIBS iridium_test_vulkan_support iridium_vulkan
+            LABELS vulkan)
+
     # M7R R3c.10: the production backend on a hidden window, with and
     # without the ImGui editor bridge, under synchronization validation.
     iridium_add_test(VulkanBackendFrameTests

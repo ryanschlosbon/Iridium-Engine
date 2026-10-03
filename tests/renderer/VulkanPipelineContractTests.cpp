@@ -228,7 +228,8 @@ namespace {
         {
             ProductionLayouts layouts(gpu);
             VulkanResourceAllocator allocator;
-            allocator.init(gpu.physicalDevice(), gpu.device(), gpu.hasMemoryBudget());
+            allocator.init(gpu.instance(), gpu.physicalDevice(), gpu.device(),
+                gpu.hasMemoryBudget());
             VulkanUploadContext uploads;
             uploads.init(gpu.device(), gpu.queue(), gpu.queueFamily(), allocator, nullptr);
 
