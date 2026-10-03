@@ -40,9 +40,12 @@ namespace Iridium {
         graph.registerPass(bloomHookPass_, { this, &never, &executeNothing });
         // The transition range measures only output-transform's barriers;
         // the transform range opens inside the callback.
+        // R4a: dynamic rendering; the executor's SampledRead/TransferSource
+        // -> ColorAttachment barrier replaces the render pass's external
+        // dependency.
         graph.registerPass(outputTransformPass_, { this, nullptr,
             &executeOutputTransform, "gpu.output.graph_transition",
-            GpuRangePlacement::AroundBarriers });
+            GpuRangePlacement::AroundBarriers, true });
         if (hdr10EncodePass_.isValid()) {
             graph.registerPass(hdr10EncodePass_, { this, nullptr,
                 &executeHdr10Encode, "gpu.output.hdr10_encode",
@@ -112,15 +115,18 @@ namespace Iridium {
         auto& self = *static_cast<VulkanOutputFeature*>(owner);
         const VulkanFeatureContext& shared = *self.context_;
         const uint32_t frameIndex = context.frame.frameIndex;
-        VulkanFrameContextTargets& targets = shared.frameTargets.get(frameIndex);
         VulkanGpuScope outputGpuScope(shared.scheduler, "gpu.output.transform");
-        self.outputPass_.record(context.commandBuffer, frameIndex,
-            targets.outputFramebuffer, shared.frameTargets.extent(),
+        const VkExtent2D extent = shared.frameTargets.extent();
+        VulkanRenderingOverrides rendering{};
+        rendering.renderArea = { { 0, 0 }, extent };
+        context.beginRendering(rendering);
+        self.outputPass_.record(context.commandBuffer, frameIndex, extent,
             self.manualExposureEv_,
             static_cast<uint32_t>(self.outputOperator_),
             static_cast<uint32_t>(self.staged_.transport),
             self.staged_.paperWhiteNits, self.staged_.peakNits,
             self.staged_.selectionOutline, self.gridOverlay_);
+        context.endRendering();
         if (shared.telemetry.collecting()) {
             shared.telemetry.recordPipelineBind(pipelineIdentity(
                 FixedPipelineIdentity::OutputTransform));

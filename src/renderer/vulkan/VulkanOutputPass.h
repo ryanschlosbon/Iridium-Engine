@@ -26,14 +26,18 @@ namespace Iridium {
             VkImageView lutView = VK_NULL_HANDLE,
             VkSampler lutSampler = VK_NULL_HANDLE);
         void clearDescriptors();
+        // Records the transform draw; the caller has begun dynamic rendering
+        // on the output target (R4a).
         void record(VkCommandBuffer commandBuffer, uint32_t frameIndex,
-            VkFramebuffer framebuffer, VkExtent2D extent,
+            VkExtent2D extent,
             float manualExposureEv, uint32_t outputOperator,
             uint32_t outputTransport, float paperWhiteNits,
             float peakNits, bool selectionActive,
             const ViewportGridOverlay& gridOverlay) const;
         void cleanup();
 
+        // R4a: only the framebuffer creation still uses it (R4a.final
+        // removes both).
         [[nodiscard]] VkRenderPass renderPass() const noexcept {
             return renderPass_;
         }
