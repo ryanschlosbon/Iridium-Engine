@@ -68,6 +68,8 @@ namespace Iridium {
         [[nodiscard]] VkDescriptorBufferInfo sampleBuffer(
             uint32_t frameIndex) const noexcept;
         [[nodiscard]] uint32_t resolution() const noexcept { return resolution_; }
+        // The cascade array (graph import "shadow.directional").
+        [[nodiscard]] const VulkanImageResource& image() const noexcept { return image_; }
 
     private:
         VkPipeline createPipeline(bool alphaMasked, bool doubleSided,

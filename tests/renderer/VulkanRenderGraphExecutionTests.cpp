@@ -1542,6 +1542,101 @@ namespace {
         return true;
     }
 
+    // R3b.6 production imports: the swapchain (per frame, Undefined ->
+    // Present) and the shadow maps (global, SampledRead both ways) are bound
+    // render-pass-managed, so a full frame records no barrier on them and
+    // leaves the declared final states.
+    bool testProductionImportedImagePolicies() {
+        FakeResourceFactory factory;
+        RecordingBarrierSink sink;
+        VulkanRenderGraphExecutor executor;
+        executor.setBarrierSink(&sink);
+        executor.init(factory, 2);
+        executor.setBarrierApi(VulkanBarrierApi::Synchronization2);
+        executor.rebuild(buildVulkanProductionRenderGraph({ 640, 360 },
+            VK_FORMAT_B8G8R8A8_SRGB));
+        const VulkanProductionGraphIds ids = resolveVulkanProductionGraphIds(executor);
+        CHECK(ids.swapchain.isValid() && ids.shadowDirectionalMap.isValid() &&
+            ids.shadowSpotMap.isValid());
+        const auto shadowImage = [](uintptr_t handle, uint32_t resolution,
+            uint32_t layers) {
+            VulkanImageResource image{};
+            image.image = reinterpret_cast<VkImage>(handle);
+            image.view = reinterpret_cast<VkImageView>(handle + 1);
+            image.format = VK_FORMAT_D32_SFLOAT;
+            image.extent = { resolution, resolution };
+            image.arrayLayers = layers;
+            return image;
+        };
+        const auto swapchain = [](uintptr_t handle) {
+            VulkanImageResource image{};
+            image.image = reinterpret_cast<VkImage>(handle);
+            image.format = VK_FORMAT_B8G8R8A8_SRGB;
+            image.extent = { 640, 360 };
+            return image;
+        };
+        const auto present = ExternalSyncPolicy::renderPassManaged(Access::Undefined,
+            Access::Present);
+        const auto shadow = ExternalSyncPolicy::renderPassManaged(Access::SampledRead,
+            Access::SampledRead);
+        executor.bindExternalImage(0, ids.swapchain, swapchain(0xA000), Access::Undefined,
+            present);
+        executor.bindExternalImage(1, ids.swapchain, swapchain(0xA000), Access::Undefined,
+            present);
+        executor.bindExternalImage(VulkanGlobalBinding, ids.shadowDirectionalMap,
+            shadowImage(0xB000, 4096, kDirectionalShadowLayerCount), Access::SampledRead,
+            shadow);
+        executor.bindExternalImage(VulkanGlobalBinding, ids.shadowSpotMap,
+            shadowImage(0xB100, 8192, 1), Access::SampledRead, shadow);
+        constexpr std::array<uint32_t, 3> PointResolutions{ 256, 512, 1024 };
+        constexpr std::array<uint32_t, 3> PointCapacities{ kPointShadowPool256Capacity,
+            kPointShadowPool512Capacity, kPointShadowPool1024Capacity };
+        for (uint32_t tier = 0; tier < 3; ++tier)
+            executor.bindExternalImage(VulkanGlobalBinding, ids.shadowPointMaps[tier],
+                shadowImage(0xB200 + 0x10 * tier, PointResolutions[tier],
+                    PointCapacities[tier] * 6u), Access::SampledRead, shadow);
+        // A pool whose capacity differs from the declaration is rejected.
+        CHECK(throws([&] { executor.bindExternalImage(VulkanGlobalBinding,
+            ids.shadowPointMaps[0], shadowImage(0xB300, 256, 6), Access::SampledRead,
+            shadow); }));
+        CHECK(executor.validateFrame(0) && executor.validateFrame(1));
+
+        const auto isImported = [](uint64_t handle) {
+            return (handle & ~uint64_t{ 0xFFF }) == 0xA000 ||
+                (handle & ~uint64_t{ 0xFFF }) == 0xB000;
+        };
+        for (uint32_t frame = 0; frame < 3; ++frame) {
+            const uint32_t slot = frame % 2;
+            if (frame >= 2) {
+                executor.onFrameFenceCompleted(slot);
+                executor.bindExternalImage(slot, ids.swapchain, swapchain(0xA010),
+                    Access::Undefined, present);
+            }
+            sink.clear();
+            executor.beginFrameExecution(slot);
+            for (const auto& pass : executor.compiledGraph()->passes())
+                executor.beginPass(FakeCommandBuffer, executor.passId(pass.name));
+            executor.finishFrameExecution();
+            for (const RecordedBarrier& barrier : sink.recorded())
+                CHECK(!isImported(barrier.handle));
+            CHECK(executor.externalImageAccess(slot, ids.swapchain) == Access::Present);
+            CHECK(executor.externalImageAccess(VulkanGlobalBinding, ids.shadowSpotMap) ==
+                Access::SampledRead);
+        }
+        // Without the per-frame rebind the swapchain is not in its initial state.
+        executor.onFrameFenceCompleted(1);
+        executor.beginFrameExecution(1);
+        bool rejected = false;
+        try {
+            for (const auto& pass : executor.compiledGraph()->passes())
+                executor.beginPass(FakeCommandBuffer, executor.passId(pass.name));
+        }
+        catch (const std::logic_error&) { rejected = true; }
+        CHECK(rejected);
+        executor.cleanupAfterDeviceIdle();
+        return true;
+    }
+
     bool testVariableSizeImportedBuffer() {
         const auto build = [](bool variable) {
             RenderGraph::RenderGraphBuilder builder;
@@ -1709,6 +1804,7 @@ int main() {
         { "production declares no History", testProductionDeclaresNoHistory },
         { "external image policies", testExternalImagePolicies },
         { "render-pass-managed read layout", testRenderPassManagedReadLayout },
+        { "production imported-image policies", testProductionImportedImagePolicies },
         { "variable-size imported buffer", testVariableSizeImportedBuffer },
         { "steady frames allocate nothing", testSteadyFramesAllocateNothing },
     };

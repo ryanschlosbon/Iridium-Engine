@@ -73,6 +73,10 @@ namespace Iridium {
         [[nodiscard]] uint32_t resolution() const noexcept {
             return resolution_;
         }
+        // The atlas (graph import "shadow.spot").
+        [[nodiscard]] const VulkanImageResource& image() const noexcept {
+            return image_;
+        }
 
     private:
         VkPipeline createPipeline(bool alphaMasked, bool doubleSided,

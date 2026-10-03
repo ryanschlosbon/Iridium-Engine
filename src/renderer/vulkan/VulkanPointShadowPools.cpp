@@ -71,7 +71,12 @@ void VulkanPointShadowPools::init(VkDevice device,
             VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
             VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
         dependencies[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        // LOAD_OP_LOAD reads the face (EARLY_FRAGMENT_TESTS,
+        // DEPTH_STENCIL_ATTACHMENT_READ) after the READ_ONLY -> ATTACHMENT
+        // layout transition; without the read in the destination scope the
+        // load races the transition (M7R R3.0 sync-validation baseline).
         dependencies[0].dstAccessMask =
+            VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
             VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
         dependencies[0].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
         dependencies[1].srcSubpass = 0;

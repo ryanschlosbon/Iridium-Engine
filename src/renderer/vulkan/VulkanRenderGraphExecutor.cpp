@@ -1122,7 +1122,7 @@ void VulkanRenderGraphExecutor::beginPassAt(VkCommandBuffer commandBuffer,
             ExternalImageBinding& binding = externalImages_[row][usage.logicalResourceIndex];
             if (binding.bound) queueExternalImageUsage(binding, usage);
         }
-        // Unbound imports (swapchain, shadow maps until R3b.6) are skipped.
+        // Unbound imports are skipped: their synchronization is not known.
     }
     flushBarriers(commandBuffer);
     ++nextPass_;

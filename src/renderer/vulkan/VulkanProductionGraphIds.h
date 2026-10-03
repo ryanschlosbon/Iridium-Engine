@@ -83,6 +83,11 @@ namespace Iridium {
         RenderGraph::PassId hdr10EncodePresent;
 
         // Imported and per-frame resources the backend binds or reads.
+        RenderGraph::GraphResourceId swapchain;
+        RenderGraph::GraphResourceId shadowDirectionalMap;
+        RenderGraph::GraphResourceId shadowSpotMap;
+        // 256, 512 and 1024 pools.
+        std::array<RenderGraph::GraphResourceId, 3> shadowPointMaps{};
         RenderGraph::GraphResourceId virtualShadowWorkingSet;
         RenderGraph::GraphResourceId gbufferNormal;
         RenderGraph::GraphResourceId gbufferAlbedo;

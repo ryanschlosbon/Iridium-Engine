@@ -3,9 +3,11 @@
 #include "renderer/graph/RenderGraph.h"
 #include "renderer/vulkan/VulkanProductionGraphIds.h"
 #include "renderer/rhi/GBufferLayout.h"
+#include "renderer/rhi/ShadowSettings.h"
 #include "renderer/lighting/ClusteredLighting.h"
 #include "renderer/transparency/LayeredGlass.h"
 
+#include <array>
 #include <limits>
 #include <vulkan/vulkan.h>
 
@@ -131,6 +133,11 @@ namespace Iridium {
         // when frame counters are collected.
         bool clusterTelemetryReadback = true;
         VulkanGraphHooks hooks{};
+        // Cube capacity of the 256/512/1024 point-shadow pools; the imported
+        // pool images declare capacity x 6 layers (R3b.6 binds them).
+        std::array<uint32_t, 3> pointShadowPoolCapacities{
+            kPointShadowPool256Capacity, kPointShadowPool512Capacity,
+            kPointShadowPool1024Capacity };
     };
 
     [[nodiscard]] RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(

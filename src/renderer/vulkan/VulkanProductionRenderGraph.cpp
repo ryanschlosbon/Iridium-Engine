@@ -233,10 +233,12 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
         "shadow.spot", spotShadowDesc);
     std::array<RenderGraph::ResourceHandle, 3> pointShadows{};
     constexpr std::array<uint32_t, 3> PointResolutions{ 256, 512, 1024 };
-    constexpr std::array<uint32_t, 3> PointCapacities{
-        kPointShadowPool256Capacity, kPointShadowPool512Capacity,
-        kPointShadowPool1024Capacity };
+    const std::array<uint32_t, 3>& PointCapacities =
+        features.pointShadowPoolCapacities;
     for (uint32_t tier = 0; tier < pointShadows.size(); ++tier) {
+        if (PointCapacities[tier] == 0u)
+            throw std::invalid_argument(
+                "Production render graph requires nonzero point-shadow pools");
         RenderGraph::ResourceDesc pointDesc = imageDesc(
             RenderGraph::Format::D32Float,
             { PointResolutions[tier], PointResolutions[tier] },
@@ -908,6 +910,11 @@ VulkanProductionGraphIds resolveVulkanProductionGraphIds(
     if (!ids.ui.isValid()) ids.ui = pass("ui-present");
     ids.hdr10EncodePresent = pass("hdr10-encode-present");
 
+    ids.swapchain = resource("swapchain");
+    ids.shadowDirectionalMap = resource("shadow.directional");
+    ids.shadowSpotMap = resource("shadow.spot");
+    ids.shadowPointMaps = { resource("shadow.point.256"),
+        resource("shadow.point.512"), resource("shadow.point.1024") };
     ids.virtualShadowWorkingSet = resource("shadow.virtual.working-set");
     ids.gbufferNormal = resource("gbuffer.normal");
     ids.gbufferAlbedo = resource("gbuffer.albedo");

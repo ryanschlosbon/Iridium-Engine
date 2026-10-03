@@ -77,6 +77,10 @@ namespace Iridium {
         [[nodiscard]] std::array<uint32_t, 3> capacities() const noexcept {
             return capacities_;
         }
+        // One cube-array pool per tier (graph imports "shadow.point.<res>").
+        [[nodiscard]] const VulkanImageResource& image(uint32_t tier) const {
+            return pools_.at(tier).image;
+        }
 
     private:
         struct Pool {

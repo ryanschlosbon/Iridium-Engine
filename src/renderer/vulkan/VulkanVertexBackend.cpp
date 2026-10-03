@@ -1659,7 +1659,47 @@ namespace Iridium {
             .clusterTelemetryReadback =
                 cpuProfiler_ != nullptr && cpuProfiler_->isEnabled(),
             .hooks = graphHooks_,
+            .pointShadowPoolCapacities = pointShadowCapacities_,
         };
+    }
+
+    VulkanImageResource VulkanVertexBackend::swapchainGraphImage(
+        uint32_t imageIndex) const {
+        VulkanImageResource image{};
+        image.image = vkSwapchain->getImages().at(imageIndex);
+        image.view = vkSwapchain->getImageViews().at(imageIndex);
+        image.extent = vkSwapchain->getExtent();
+        image.format = vkSwapchain->getImageFormat();
+        image.aspect = VK_IMAGE_ASPECT_COLOR_BIT;
+        return image;
+    }
+
+    void VulkanVertexBackend::bindGraphImportedImages() {
+        // R3b.6. Render passes own these layouts until dynamic rendering
+        // (R4a); the executor asserts them. The swapchain is rebound per frame
+        // after acquire (every slot starts on image 0 so validateFrame holds
+        // before a slot's first acquire); its render passes go UNDEFINED ->
+        // PRESENT. Shadow maps persist across slots and their render passes go
+        // READ_ONLY -> READ_ONLY.
+        using RenderGraph::Access;
+        for (uint32_t frame = 0; frame < VulkanFrameScheduler::FramesInFlight; ++frame)
+            renderGraph_.bindExternalImage(frame, graphIds_.swapchain,
+                swapchainGraphImage(0), Access::Undefined,
+                ExternalSyncPolicy::renderPassManaged(Access::Undefined,
+                    Access::Present));
+        const ExternalSyncPolicy shadowPolicy =
+            ExternalSyncPolicy::renderPassManaged(Access::SampledRead,
+                Access::SampledRead);
+        renderGraph_.bindExternalImage(VulkanGlobalBinding,
+            graphIds_.shadowDirectionalMap, directionalShadow_.image(),
+            Access::SampledRead, shadowPolicy);
+        renderGraph_.bindExternalImage(VulkanGlobalBinding,
+            graphIds_.shadowSpotMap, spotShadow_.image(), Access::SampledRead,
+            shadowPolicy);
+        for (uint32_t tier = 0; tier < graphIds_.shadowPointMaps.size(); ++tier)
+            renderGraph_.bindExternalImage(VulkanGlobalBinding,
+                graphIds_.shadowPointMaps[tier], pointShadow_.image(tier),
+                Access::SampledRead, shadowPolicy);
     }
 
     void VulkanVertexBackend::rebuildRenderGraphAfterDeviceIdle() {
@@ -1686,6 +1726,7 @@ namespace Iridium {
             ? VulkanBarrierApi::Synchronization2
             : VulkanBarrierApi::Synchronization1);
         renderGraph_.setGpuRangeSink(VulkanGpuRangeSink::forScheduler(scheduler));
+        bindGraphImportedImages();
         if (virtualShadowResources_.initialized()) {
             for (uint32_t frame = 0; frame < VulkanFrameScheduler::FramesInFlight; ++frame) {
                 const auto& buffer = virtualShadowResources_.workingSet(frame);
@@ -3065,6 +3106,7 @@ namespace Iridium {
         applyTransparencyPyramidTopologyChange();
         const uint32_t completedFrameIndex = scheduler.currentFrameIndex();
         const VulkanFrameBegin frame = scheduler.beginFrame(vkSwapchain->getSwapchain());
+        const uint32_t frameSlot = scheduler.currentFrameIndex();
         // beginFrame has waited this slot's fence before returning, including
         // the out-of-date acquire path. Its capture readbacks are now CPU-safe.
         for (IVulkanBackendExtension* extension : extensions_)
@@ -3080,6 +3122,15 @@ namespace Iridium {
         {
             CpuScope graphScope(cpuProfiler_, "cpu.render_graph.lookup");
             renderGraph_.onFrameFenceCompleted(completedFrameIndex);
+            // The acquired swapchain image for this slot (R3b.6).
+            if (frame.status != FrameStatus::RecreateSwapchain) {
+                renderGraph_.bindExternalImage(frameSlot, graphIds_.swapchain,
+                    swapchainGraphImage(frame.imageIndex),
+                    RenderGraph::Access::Undefined,
+                    ExternalSyncPolicy::renderPassManaged(
+                        RenderGraph::Access::Undefined,
+                        RenderGraph::Access::Present));
+            }
             if (!renderGraph_.validateFrame(completedFrameIndex)) {
                 throw std::runtime_error(
                     "Graph-owned frame targets failed executor validation");

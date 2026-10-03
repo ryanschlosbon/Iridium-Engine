@@ -21,6 +21,7 @@ class VkSwapchain {
 		VkPresentModeKHR getPresentMode() const { return swapChainPresentMode; }
 		VkExtent2D getExtent() const { return swapChainExtent; }
 		const std::vector<VkImageView>& getImageViews() const { return swapChainImageViews; }
+		const std::vector<VkImage>& getImages() const { return swapChainImages; }
 		uint32_t getImageCount() const { return static_cast<uint32_t>(swapChainImages.size()); }
         void setHdrMetadata(float peakNits) const;
 		const Iridium::VulkanOutputTransportSelection& getOutputTransportSelection() const {

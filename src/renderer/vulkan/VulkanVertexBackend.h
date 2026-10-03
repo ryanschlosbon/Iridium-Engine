@@ -622,6 +622,10 @@ namespace Iridium {
         void collectClusterDiagnostics(uint32_t frameIndex) noexcept;
         void initFrameTargets();
         void rebuildRenderGraphAfterDeviceIdle();
+        // R3b.6 imported images: swapchain (per frame) and shadow maps (global).
+        void bindGraphImportedImages();
+        [[nodiscard]] VulkanImageResource swapchainGraphImage(
+            uint32_t imageIndex) const;
         [[nodiscard]] VulkanProductionGraphFeatures
             productionGraphFeatures() const noexcept;
         void applyTransparencyPyramidTopologyChange(
