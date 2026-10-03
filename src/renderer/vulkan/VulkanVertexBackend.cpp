@@ -122,31 +122,6 @@ namespace Iridium {
             } };
         }
 
-        constexpr uint64_t FixedPipelineIdentityMask = uint64_t{ 1 } << 63;
-
-
-
-        enum class FixedPipelineIdentity : uint64_t {
-            GBufferWireframe = FixedPipelineIdentityMask | 1,
-            SelectionMask = FixedPipelineIdentityMask | 2,
-            DeferredLighting = FixedPipelineIdentityMask | 3,
-            SelectionOutline = FixedPipelineIdentityMask | 4,
-            RetiredGlassDepth = FixedPipelineIdentityMask | 5, // reserved; never reuse
-            ImGui = FixedPipelineIdentityMask | 6,
-            OutputTransform = FixedPipelineIdentityMask | 7,
-            LayeredInterfaceCapture = FixedPipelineIdentityMask | 8,
-            LayeredLocalComposition = FixedPipelineIdentityMask | 9,
-            LayeredSceneResolve = FixedPipelineIdentityMask | 10,
-            LayeredResidualComposition = FixedPipelineIdentityMask | 11,
-            LayeredTileTermination = FixedPipelineIdentityMask | 12,
-            WeightedOitAccumulation = FixedPipelineIdentityMask | 13,
-            WeightedOitResolve = FixedPipelineIdentityMask | 14,
-        };
-
-        constexpr uint64_t pipelineIdentity(FixedPipelineIdentity identity) noexcept {
-            return static_cast<uint64_t>(identity);
-        }
-
         uint64_t swapchainRequestedBytes(const VkSwapchain& swapchain) noexcept {
             uint64_t bytesPerTexel = 0;
             switch (swapchain.getImageFormat()) {
@@ -267,13 +242,7 @@ namespace Iridium {
             throw std::logic_error("VulkanVertexBackend was initialized more than once.");
         }
 
-        // Extensions see the configuration before any graph or resource
-        // exists; their hook declarations and oracle are fixed for the process.
-        for (IVulkanBackendExtension* extension : extensions_)
-            extension->configure(config);
-        graphHooks_ = VulkanGraphHooks::none();
-        for (IVulkanBackendExtension* extension : extensions_)
-            graphHooks_ = graphHooks_ | extension->graphHooks();
+        extensionHooks_.configure(config);
         cpuProfiler_ = config.cpuProfiler;
         gBufferLayout_ = config.gBufferLayout;
         depthPyramidEnabled_ = config.experimentalDepthPyramid ||
@@ -326,10 +295,7 @@ namespace Iridium {
             pointShadowCapacities_[2] > kPointShadowPool1024Capacity)
             throw std::invalid_argument(
                 "Point shadow pool capacity exceeds the GPU table contract");
-        if (cpuProfiler_ != nullptr && cpuProfiler_->isEnabled()) {
-            uniqueMaterialIds_.reserve(MaxUniqueResourcesPerFrame);
-            uniquePipelineIds_.reserve(MaxUniqueResourcesPerFrame);
-        }
+        telemetry_.init(cpuProfiler_);
         vkContext = std::make_unique<VkContext>(config.enableValidation,
             config.enableGpuProfiling,
             config.enableTransparentPipelineStatistics, window,
@@ -370,6 +336,36 @@ namespace Iridium {
             static_cast<uint64_t>(sceneExtent_.width) *
                 sceneExtent_.height);
 
+        resources_.init({
+            .device = vkContext->getDevice(),
+            .allocator = &resourceAllocator,
+            .uploads = &uploadContext,
+            .scheduler = &scheduler,
+            .pipelines = &pipelineLibrary,
+            .profiler = cpuProfiler_,
+            .frameOpen = &frameOpen_,
+        });
+        resources_.setEditorDescriptorRelease(this,
+            [](void* owner, VkDescriptorSet descriptor) {
+                if (static_cast<VulkanVertexBackend*>(owner)->imguiInitialized_)
+                    ImGui_ImplVulkan_RemoveTexture(descriptor);
+            });
+        featureContext_.emplace(VulkanFeatureContext{
+            .vk = *vkContext,
+            .device = vkContext->getDevice(),
+            .allocator = resourceAllocator,
+            .descriptors = descriptorAllocator,
+            .scheduler = scheduler,
+            .graph = renderGraph_,
+            .frameTargets = frameTargets,
+            .meshLayouts = meshLayouts,
+            .pipelines = pipelineLibrary,
+            .resources = resources_,
+            .gpuScene = gpuScene_,
+            .profiler = cpuProfiler_,
+            .telemetry = telemetry_,
+            .extensions = extensionHooks_,
+        });
         descriptorAllocator.init(vkContext->getDevice());
         // Keep initial driver allocation modest; the per-frame tables grow
         // geometrically at fence-safe frame boundaries.
@@ -388,7 +384,7 @@ namespace Iridium {
         const uint32_t initialCapacity =
             (std::min)(DesiredCapacity, maximumCapacity);
         if (initialCapacity >= 2) {
-            indexedTextureTable_.init(vkContext->getDevice(),
+            resources_.textureTable().init(vkContext->getDevice(),
                 initialCapacity, maximumCapacity);
         } else {
             throw std::runtime_error(
@@ -405,12 +401,12 @@ namespace Iridium {
             descriptorAllocator);
         meshLayouts.init(vkContext->getDevice(),
             lightingPipeline->getDescriptorSetLayout(),
-            indexedTextureTable_.materialViewLayout(),
-            indexedTextureTable_.samplerLayout());
+            resources_.textureTable().materialViewLayout(),
+            resources_.textureTable().samplerLayout());
         reflectionProbeCapturePass_.init(vkContext->getDevice(),
             vkContext->getPhysicalDevice(), resourceAllocator,
-            descriptorAllocator, indexedTextureTable_.materialViewLayout(),
-            indexedTextureTable_.samplerLayout(),
+            descriptorAllocator, resources_.textureTable().materialViewLayout(),
+            resources_.textureTable().samplerLayout(),
             lightingPipeline->getDescriptorSetLayout(),
             meshLayouts.getGpuSceneSetLayout());
         reflectionProbeCaptureTargets_.init(vkContext->getDevice(),
@@ -430,12 +426,12 @@ namespace Iridium {
             meshLayouts.getForwardPipelineLayout());
         layeredInterfaceCapture_.init(vkContext->getDevice(),
             descriptorAllocator, meshLayouts.getGlobalSetLayout(),
-            indexedTextureTable_.materialViewLayout(),
-            indexedTextureTable_.samplerLayout());
+            resources_.textureTable().materialViewLayout(),
+            resources_.textureTable().samplerLayout());
         layeredLocalComposition_.init(vkContext->getDevice(),
             descriptorAllocator, meshLayouts.getGlobalSetLayout(),
-            indexedTextureTable_.materialViewLayout(),
-            indexedTextureTable_.samplerLayout(),
+            resources_.textureTable().materialViewLayout(),
+            resources_.textureTable().samplerLayout(),
             lightingPipeline->getDescriptorSetLayout());
         layeredSceneResolve_.init(vkContext->getDevice(),
             descriptorAllocator, meshLayouts.getGlobalSetLayout(),
@@ -448,8 +444,8 @@ namespace Iridium {
             meshLayouts.getGpuSceneSetLayout());
         directionalShadow_.init(vkContext->getDevice(), resourceAllocator,
             uploadContext, descriptorAllocator,
-            indexedTextureTable_.materialViewLayout(),
-            indexedTextureTable_.samplerLayout(),
+            resources_.textureTable().materialViewLayout(),
+            resources_.textureTable().samplerLayout(),
             meshLayouts.getGpuSceneSetLayout(),
             directionalShadowResolution_);
         createDirectionalShadowIndirectPipeline();
@@ -463,8 +459,8 @@ namespace Iridium {
         }
         spotShadow_.init(vkContext->getDevice(), resourceAllocator,
             uploadContext, descriptorAllocator,
-            indexedTextureTable_.materialViewLayout(),
-            indexedTextureTable_.samplerLayout(),
+            resources_.textureTable().materialViewLayout(),
+            resources_.textureTable().samplerLayout(),
             meshLayouts.getGpuSceneSetLayout(),
             spotShadowAtlasResolution_);
         createSpotShadowIndirectPipeline();
@@ -476,8 +472,8 @@ namespace Iridium {
         }
         pointShadow_.init(vkContext->getDevice(), resourceAllocator,
             uploadContext, descriptorAllocator,
-            indexedTextureTable_.materialViewLayout(),
-            indexedTextureTable_.samplerLayout(),
+            resources_.textureTable().materialViewLayout(),
+            resources_.textureTable().samplerLayout(),
             meshLayouts.getGpuSceneSetLayout(), pointShadowCapacities_);
         createPointShadowIndirectPipeline();
         pointCuller_.resize(512u, frameOpen_);
@@ -518,15 +514,15 @@ namespace Iridium {
 
         // 8. Global Camera Buffers
         createUniformBuffers();
-        canonicalMaterialMaximumCapacity_ = (std::min)(
+        resources_.setMaterialTableMaximumCapacity((std::min)(
             static_cast<uint32_t>(
                 vkContext->getPhysicalDeviceProperties()
                     .limits.maxStorageBufferRange /
                 sizeof(PackedGpuMaterial)),
-            MaterialHandle::MaxIndex + 1u);
-        createCanonicalMaterialBuffers(
+            MaterialHandle::MaxIndex + 1u));
+        resources_.createCanonicalMaterialBuffers(
             (std::min)(DesiredCapacity,
-                canonicalMaterialMaximumCapacity_));
+                resources_.materialTableMaximumCapacity()));
         lightRecordMaximumCapacity_ = (std::min)(
             static_cast<uint32_t>(
                 vkContext->getPhysicalDeviceProperties()
@@ -541,24 +537,9 @@ namespace Iridium {
             lightRecordMaximumCapacity_));
         const uint64_t storageRange = vkContext->getPhysicalDeviceProperties()
             .limits.maxStorageBufferRange;
-        gpuSceneMaximumCapacity_ = {
-            static_cast<uint32_t>(storageRange /
-                sizeof(GpuSceneAffineTransform)),
-            static_cast<uint32_t>(storageRange /
-                sizeof(GpuSceneInstanceRecord)),
-            static_cast<uint32_t>(storageRange /
-                sizeof(GpuScenePrimitiveRecord)),
-            static_cast<uint32_t>(storageRange /
-                sizeof(GpuSceneGeometryRecord)),
-        };
-        if (gpuSceneMaximumCapacity_.transforms == 0 ||
-            gpuSceneMaximumCapacity_.instances == 0 ||
-            gpuSceneMaximumCapacity_.primitives == 0 ||
-            gpuSceneMaximumCapacity_.geometries == 0) {
-            throw std::runtime_error(
-                "Vulkan storage-buffer range cannot hold GPU-scene records");
-        }
-        createGpuSceneBuffers({ 2u, 1u, 1u, 1u });
+        gpuScene_.init(vkContext->getDevice(), resourceAllocator, scheduler,
+            cpuProfiler_, frameOpen_, storageRange);
+        gpuScene_.createBuffers({ 2u, 1u, 1u, 1u });
         opaqueCuller_.resize(512u, frameOpen_);
         reflectionProbeRecordMaximumCapacity_ = (std::min)(
             static_cast<uint32_t>(
@@ -589,8 +570,8 @@ namespace Iridium {
         globalDescriptorSets.resize(VulkanFrameScheduler::FramesInFlight);
         for (size_t i = 0; i < VulkanFrameScheduler::FramesInFlight; i++) {
             globalDescriptorSets[i] = descriptorAllocator.allocate(meshLayouts.getGlobalSetLayout());
-            gpuSceneDescriptorSets_[i] = descriptorAllocator.allocate(
-                meshLayouts.getGpuSceneSetLayout());
+            gpuScene_.setDescriptorSet(static_cast<uint32_t>(i),
+                descriptorAllocator.allocate(meshLayouts.getGpuSceneSetLayout()));
             opaqueCuller_.allocateSet(static_cast<uint32_t>(i));
 
             VkDescriptorBufferInfo bufferInfo{};
@@ -608,7 +589,7 @@ namespace Iridium {
 
             vkUpdateDescriptorSets(vkContext->getDevice(), 1, &descriptorWrite, 0, nullptr);
         }
-        bindGpuSceneBuffers();
+        gpuScene_.bindBuffers();
         opaqueCuller_.bindBuffers();
         transparencyPyramid_.rebuild(frameTargets);
         if (depthPyramidEnabled_) {
@@ -633,7 +614,7 @@ namespace Iridium {
         bindReflectionProbeBuffers();
         bindReflectionProbeEnvironments();
         sceneDescriptors.rebuild(frameTargets);
-        if (VulkanTexturePayload* lut = textureVault.get(outputTransformLut_);
+        if (VulkanTexturePayload* lut = resources_.textures().get(outputTransformLut_);
             lut != nullptr && !lut->retired) {
             outputPass.rebuildDescriptors(frameTargets, lut->image.view, lut->sampler);
         }
@@ -710,30 +691,11 @@ namespace Iridium {
 
         initialized_ = true;
         cleaned_ = false;
-        const VulkanBackendServices services = backendServices();
-        for (IVulkanBackendExtension* extension : extensions_)
-            extension->onBackendInitialized(services);
+        extensionHooks_.onBackendInitialized(backendServices());
     }
 
     void VulkanVertexBackend::attachExtension(IRenderBackendExtension* extension) {
-        if (extension == nullptr)
-            throw std::invalid_argument("Render backend extension is null");
-        if (initialized_)
-            throw std::logic_error(
-                "Render backend extensions attach before init()");
-        if (extension->api() != RenderBackendApi::Vulkan)
-            throw std::invalid_argument(
-                "Render backend extension targets another graphics API");
-        auto* vulkanExtension = dynamic_cast<IVulkanBackendExtension*>(extension);
-        if (vulkanExtension == nullptr)
-            throw std::invalid_argument(
-                "Vulkan backend extension does not implement IVulkanBackendExtension");
-        extensions_.push_back(vulkanExtension);
-        // The first extension providing each service serves it.
-        if (indirectOracle_ == nullptr)
-            indirectOracle_ = vulkanExtension->indirectOracle();
-        if (indirectStreamObserver_ == nullptr)
-            indirectStreamObserver_ = vulkanExtension->indirectStreamObserver();
+        extensionHooks_.attach(extension, initialized_);
     }
 
     VulkanBackendServices VulkanVertexBackend::backendServices() noexcept {
@@ -749,43 +711,29 @@ namespace Iridium {
         };
     }
 
-    bool VulkanVertexBackend::anyExtensionWants(
-        const VulkanHookContext& context) const {
-        return std::ranges::any_of(extensions_,
-            [&](const IVulkanBackendExtension* extension) {
-                return extension->wantsHook(context);
-            });
-    }
-
     void VulkanVertexBackend::runPassHook(const VulkanHookContext& context,
         bool declared, RenderGraph::PassId pass, const char* gpuRangeName) {
         if (!declared) return;
-        if (!anyExtensionWants(context)) {
+        if (!extensionHooks_.anyWants(context)) {
             renderGraph_.skipPass(pass);
             return;
         }
         VulkanGpuRangeToken gpuRange = scheduler.beginGpuRange(gpuRangeName);
         renderGraph_.beginPass(currentCmd, pass);
-        for (IVulkanBackendExtension* extension : extensions_)
-            if (extension->wantsHook(context)) extension->onHook(context);
+        extensionHooks_.notify(context);
         scheduler.endGpuRange(gpuRange);
     }
 
-    void VulkanVertexBackend::notifyHook(const VulkanHookContext& context) {
-        for (IVulkanBackendExtension* extension : extensions_)
-            if (extension->wantsHook(context)) extension->onHook(context);
-    }
-    
     void VulkanVertexBackend::setEnvironmentLighting(
         const EnvironmentLightingHandles& environment) {
         if (!environment.isValid())
             throw std::invalid_argument(
                 "Environment lighting requires four valid texture handles.");
-        const VulkanTexturePayload* radiance = textureVault.get(environment.radiance);
-        const VulkanTexturePayload* irradiance = textureVault.get(environment.irradiance);
+        const VulkanTexturePayload* radiance = resources_.textures().get(environment.radiance);
+        const VulkanTexturePayload* irradiance = resources_.textures().get(environment.irradiance);
         const VulkanTexturePayload* prefiltered =
-            textureVault.get(environment.prefilteredSpecular);
-        const VulkanTexturePayload* brdf = textureVault.get(environment.brdfLut);
+            resources_.textures().get(environment.prefilteredSpecular);
+        const VulkanTexturePayload* brdf = resources_.textures().get(environment.brdfLut);
         if (radiance == nullptr || irradiance == nullptr || prefiltered == nullptr ||
             brdf == nullptr || radiance->retired || irradiance->retired ||
             prefiltered->retired || brdf->retired ||
@@ -804,10 +752,10 @@ namespace Iridium {
         // switches must not idle both frames merely to choose a resident HDRI.
         environmentLighting_ = environment;
         for (VulkanTexturePayload* payload : {
-                textureVault.get(environment.radiance),
-                textureVault.get(environment.irradiance),
-                textureVault.get(environment.prefilteredSpecular),
-                textureVault.get(environment.brdfLut) })
+                resources_.textures().get(environment.radiance),
+                resources_.textures().get(environment.irradiance),
+                resources_.textures().get(environment.prefilteredSpecular),
+                resources_.textures().get(environment.brdfLut) })
             resourceAllocator.reclassify(payload->image,
                 ProfileMemoryCategory::Environment);
     }
@@ -871,11 +819,11 @@ namespace Iridium {
                 .prefilteredSpecular = neutralEnvironmentCube_,
                 .brdfLut = neutralEnvironmentBrdfLut_,
             };
-        const VulkanTexturePayload* radiance = textureVault.get(handles.radiance);
-        const VulkanTexturePayload* irradiance = textureVault.get(handles.irradiance);
+        const VulkanTexturePayload* radiance = resources_.textures().get(handles.radiance);
+        const VulkanTexturePayload* irradiance = resources_.textures().get(handles.irradiance);
         const VulkanTexturePayload* prefiltered =
-            textureVault.get(handles.prefilteredSpecular);
-        const VulkanTexturePayload* brdf = textureVault.get(handles.brdfLut);
+            resources_.textures().get(handles.prefilteredSpecular);
+        const VulkanTexturePayload* brdf = resources_.textures().get(handles.brdfLut);
         if (radiance == nullptr || irradiance == nullptr || prefiltered == nullptr ||
             brdf == nullptr || radiance->retired || irradiance->retired ||
             prefiltered->retired || brdf->retired ||
@@ -935,7 +883,7 @@ namespace Iridium {
     }
 
     void VulkanVertexBackend::setOutputTransformLut(TextureHandle lutHandle) {
-        VulkanTexturePayload* payload = textureVault.get(lutHandle);
+        VulkanTexturePayload* payload = resources_.textures().get(lutHandle);
         if (payload == nullptr || payload->retired ||
             payload->format != TextureFormat::RGBA32_SFloat ||
             payload->width != 16384 || payload->height != 128) {
@@ -988,8 +936,7 @@ namespace Iridium {
             for (uint32_t frame = 0;
                     frame < VulkanFrameScheduler::FramesInFlight; ++frame)
                 culler->collect(frame);
-        for (IVulkanBackendExtension* extension : extensions_)
-            extension->onBeforeDeviceDestroy();
+        extensionHooks_.onBeforeDeviceDestroy();
 
         pipelineLibrary.cleanup();
 
@@ -1055,41 +1002,16 @@ namespace Iridium {
         reflectionProbeCaptureTargets_.cleanup();
         reflectionProbeCapturePass_.cleanup();
 
-        geometryVault.forEach([this](VulkanGeometryPayload& payload) {
-            if (payload.arenaAllocation) {
-                if (!payload.ownsArenaBuffers) return;
-                resourceAllocator.destroy(payload.vertexBuffer);
-                resourceAllocator.destroy(payload.arenaUInt16IndexBuffer);
-                resourceAllocator.destroy(payload.arenaUInt32IndexBuffer);
-            }
-            else {
-                resourceAllocator.destroy(payload.vertexBuffer);
-                resourceAllocator.destroy(payload.indexBuffer);
-            }
-            });
-
-        textureVault.forEach([this](VulkanTexturePayload& payload) {
-            if (!payload.retired) resourceAllocator.destroy(payload.image);
-            });
-        cleanupSamplerCache();
+        resources_.destroyResources();
 
         for (size_t i = 0; i < uniformBuffers.size(); i++) {
             resourceAllocator.destroy(uniformBuffers[i]);
         }
-        for (VulkanBufferResource& buffer : canonicalMaterialBuffers_)
-            resourceAllocator.destroy(buffer);
         for (VulkanBufferResource& buffer : weightedOitInstanceBuffers_)
             resourceAllocator.destroy(buffer);
         for (VulkanBufferResource& buffer : lightRecordBuffers_)
             resourceAllocator.destroy(buffer);
-        for (VulkanBufferResource& buffer : gpuSceneTransformBuffers_)
-            resourceAllocator.destroy(buffer);
-        for (VulkanBufferResource& buffer : gpuSceneInstanceBuffers_)
-            resourceAllocator.destroy(buffer);
-        for (VulkanBufferResource& buffer : gpuScenePrimitiveBuffers_)
-            resourceAllocator.destroy(buffer);
-        for (VulkanBufferResource& buffer : gpuSceneGeometryBuffers_)
-            resourceAllocator.destroy(buffer);
+        gpuScene_.destroy();
         opaqueCuller_.destroy(device);
         for (VulkanBufferResource& buffer : activeLightSlotBuffers_)
             resourceAllocator.destroy(buffer);
@@ -1136,7 +1058,7 @@ namespace Iridium {
         weightedOit_.cleanup();
 
         meshLayouts.cleanup();
-        indexedTextureTable_.cleanup();
+        resources_.textureTable().cleanup();
         clusteredLighting_.cleanup();
         reflectionProbePipeline_.cleanup();
         descriptorAllocator.cleanup();
@@ -1159,23 +1081,15 @@ namespace Iridium {
         cinematic8AtlasExtent_ = {};
         frameTopologyPrewarm_ = {};
         cpuProfiler_ = nullptr;
-        collectFrameCounters_ = false;
-        uniqueMaterialIds_.clear();
-        uniquePipelineIds_.clear();
+        telemetry_.cleanup();
         manualExposureEv_ = 0.0f;
         outputOperator_ = OutputTransformOperator::Aces2;
         requestedOutputTransport_ = Color::OutputTransport::SdrSrgb;
         outputTransport_ = Color::OutputTransport::SdrSrgb;
         outputTargetFormat_ = VulkanSdrOutputFormat;
-        canonicalMaterialCapacity_ = 0;
+        resources_.reset();
         weightedOitInstanceCapacity_ = 0;
-        canonicalMaterialMaximumCapacity_ = 0;
-        gpuSceneCapacity_ = {};
-        gpuSceneMaximumCapacity_ = {};
-        gpuScenePublishedCounts_ = {};
-        gpuSceneCpuMirrors_ = {};
-        gpuSceneUploadTelemetry_ = {};
-        retiredTextureCount_ = 0;
+        gpuScene_.reset();
         environmentLighting_ = {};
         reflectionProbeEnvironments_.clear();
         capturedReflectionProbeSlots_.clear();
@@ -1191,465 +1105,38 @@ namespace Iridium {
         neutralEnvironmentBrdfLut_ = {};
         outputTransformLut_ = {};
         finalCaptureHookRecorded_ = false;
-    }
-
-    void VulkanVertexBackend::resetFrameCounters() {
-        frameCounters_ = {};
-        uniqueMaterialIds_.clear();
-        uniquePipelineIds_.clear();
-    }
-
-    void VulkanVertexBackend::recordMaterialBind(MaterialHandle material) {
-        if (!collectFrameCounters_) {
-            return;
-        }
-        ++frameCounters_.materialBinds;
-        const uint32_t identity = material.id;
-        if (std::find(uniqueMaterialIds_.begin(), uniqueMaterialIds_.end(), identity) !=
-            uniqueMaterialIds_.end()) {
-            return;
-        }
-        if (uniqueMaterialIds_.size() >= MaxUniqueResourcesPerFrame) {
-            ++frameCounters_.materialUniqueOverflow;
-            return;
-        }
-        uniqueMaterialIds_.push_back(identity);
-    }
-
-    void VulkanVertexBackend::recordPipelineBind(uint64_t pipelineIdentityValue) {
-        if (!collectFrameCounters_) {
-            return;
-        }
-        ++frameCounters_.pipelineBinds;
-        if (std::find(uniquePipelineIds_.begin(), uniquePipelineIds_.end(),
-            pipelineIdentityValue) != uniquePipelineIds_.end()) {
-            return;
-        }
-        if (uniquePipelineIds_.size() >= MaxUniqueResourcesPerFrame) {
-            ++frameCounters_.pipelineUniqueOverflow;
-            return;
-        }
-        uniquePipelineIds_.push_back(pipelineIdentityValue);
-    }
-
-    void VulkanVertexBackend::recordDraw(uint64_t& drawCounter,
-        uint64_t submittedTriangles) {
-        if (!collectFrameCounters_) {
-            return;
-        }
-        ++drawCounter;
-        frameCounters_.trianglesSubmitted += submittedTriangles;
+        featureContext_.reset();
     }
 
     void VulkanVertexBackend::emitFrameCounters() {
-        if (!collectFrameCounters_ || cpuProfiler_ == nullptr) {
+        if (!telemetry_.collecting() || cpuProfiler_ == nullptr) {
             return;
         }
-
-        const uint64_t transparentDraws = frameCounters_.drawTransparentDepth +
-            frameCounters_.drawTransparentForward +
-            frameCounters_.drawWeightedOitAccumulation +
-            frameCounters_.drawWeightedOitResolve +
-            frameCounters_.ordinary2CaptureEntryDraws +
-            frameCounters_.ordinary2CaptureExitDraws +
-            frameCounters_.ordinary2LocalCompositionDraws +
-            frameCounters_.ordinary2SceneResolveDraws +
-            frameCounters_.deepLayeredInterfaceDraws +
-            frameCounters_.deepLayeredResidualProbeDraws +
-            frameCounters_.deepLayeredLocalCompositionDraws +
-            frameCounters_.deepLayeredSceneResolveDraws;
-        const uint64_t totalDraws = frameCounters_.drawOpaque +
-            frameCounters_.drawSelection +
-            frameCounters_.drawShadowDirectional +
-            frameCounters_.drawShadowSpot +
-            frameCounters_.drawShadowPoint +
-            frameCounters_.drawLighting +
-            frameCounters_.drawOutput +
-            transparentDraws + frameCounters_.drawUi;
-        const ProfileCounterStatus uiAwareStatus = frameCounters_.uiUntrackedCallbacks == 0
-            ? ProfileCounterStatus::Exact
-            : ProfileCounterStatus::Estimated;
-        const ProfileCounterStatus materialUniqueStatus =
-            frameCounters_.materialUniqueOverflow == 0
-            ? ProfileCounterStatus::Exact
-            : ProfileCounterStatus::Estimated;
-        const ProfileCounterStatus pipelineUniqueStatus =
-            frameCounters_.pipelineUniqueOverflow == 0
-            ? ProfileCounterStatus::Exact
-            : ProfileCounterStatus::Estimated;
-
-        cpuProfiler_->recordCounter("draw.recorded.opaque", frameCounters_.drawOpaque);
-        cpuProfiler_->recordCounter("opaque.indirect.command_count",
-            frameCounters_.opaqueIndirectCommands);
-        cpuProfiler_->recordCounter("opaque.indirect.bin_count",
-            frameCounters_.opaqueIndirectBins);
-        cpuProfiler_->recordCounter("opaque.indirect.direct_fallback_packets",
-            frameCounters_.opaqueIndirectFallbackPackets);
-        cpuProfiler_->recordCounter("opaque.indirect.fallback_reason",
-            frameCounters_.opaqueIndirectFallbackReason);
-        cpuProfiler_->recordCounter("depth.occlusion.history_eligible",
-            frameCounters_.depthHistoryEligible);
-        cpuProfiler_->recordCounter("depth.occlusion.history_rejection",
-            frameCounters_.depthHistoryRejection);
-        cpuProfiler_->recordCounter("draw.recorded.selection", frameCounters_.drawSelection);
-        cpuProfiler_->recordCounter("draw.recorded.shadow.directional",
-            frameCounters_.drawShadowDirectional);
-        cpuProfiler_->recordCounter("draw.recorded.shadow.directional.alpha_mask",
-            frameCounters_.drawShadowDirectionalAlphaMask);
-        cpuProfiler_->recordCounter("shadow.directional.casters.tested",
-            frameCounters_.shadowDirectionalCastersTested);
-        cpuProfiler_->recordCounter("shadow.directional.casters.culled",
-            frameCounters_.shadowDirectionalCastersCulled);
-        cpuProfiler_->recordCounter("shadow.directional.indirect.commands",
-            frameCounters_.shadowDirectionalIndirectCommands);
-        cpuProfiler_->recordCounter("shadow.directional.indirect.bins",
-            frameCounters_.shadowDirectionalIndirectBins);
-        cpuProfiler_->recordCounter(
-            "shadow.directional.indirect.direct_fallback",
-            frameCounters_.shadowDirectionalDirectFallback);
-        cpuProfiler_->recordCounter(
-            "shadow.directional.indirect.fallback_reason",
-            frameCounters_.shadowDirectionalIndirectFallbackReason);
-        cpuProfiler_->recordCounter(
-            "shadow.directional.indirect.membership_cache_hit",
-            frameCounters_.shadowDirectionalMembershipCacheHit);
-        cpuProfiler_->recordCounter("draw.recorded.shadow.spot",
-            frameCounters_.drawShadowSpot);
-        cpuProfiler_->recordCounter("draw.recorded.shadow.spot.alpha_mask",
-            frameCounters_.drawShadowSpotAlphaMask);
-        cpuProfiler_->recordCounter("shadow.spot.casters.tested",
-            frameCounters_.shadowSpotCastersTested);
-        cpuProfiler_->recordCounter("shadow.spot.casters.culled",
-            frameCounters_.shadowSpotCastersCulled);
-        cpuProfiler_->recordCounter("shadow.spot.indirect.commands",
-            frameCounters_.shadowSpotIndirectCommands);
-        cpuProfiler_->recordCounter("shadow.spot.indirect.bins",
-            frameCounters_.shadowSpotIndirectBins);
-        cpuProfiler_->recordCounter("shadow.spot.indirect.direct_fallback",
-            frameCounters_.shadowSpotDirectFallback);
-        cpuProfiler_->recordCounter("shadow.spot.indirect.fallback_reason",
-            frameCounters_.shadowSpotIndirectFallbackReason);
-        cpuProfiler_->recordCounter("shadow.spot.indirect.membership_cache_hit",
-            frameCounters_.shadowSpotMembershipCacheHit);
-        cpuProfiler_->recordCounter("draw.recorded.shadow.point",
-            frameCounters_.drawShadowPoint);
-        cpuProfiler_->recordCounter("draw.recorded.shadow.point.alpha_mask",
-            frameCounters_.drawShadowPointAlphaMask);
-        cpuProfiler_->recordCounter("shadow.point.casters.tested",
-            frameCounters_.shadowPointCastersTested);
-        cpuProfiler_->recordCounter("shadow.point.casters.culled",
-            frameCounters_.shadowPointCastersCulled);
-        cpuProfiler_->recordCounter("shadow.point.indirect.commands",
-            frameCounters_.shadowPointIndirectCommands);
-        cpuProfiler_->recordCounter("shadow.point.indirect.bins",
-            frameCounters_.shadowPointIndirectBins);
-        cpuProfiler_->recordCounter("shadow.point.indirect.direct_fallback",
-            frameCounters_.shadowPointDirectFallback);
-        cpuProfiler_->recordCounter("shadow.point.indirect.fallback_reason",
-            frameCounters_.shadowPointIndirectFallbackReason);
-        cpuProfiler_->recordCounter("shadow.point.indirect.membership_cache_hit",
-            frameCounters_.shadowPointMembershipCacheHit);
-        cpuProfiler_->recordCounter("draw.recorded.lighting", frameCounters_.drawLighting);
-        cpuProfiler_->recordCounter("draw.recorded.output", frameCounters_.drawOutput);
-        cpuProfiler_->recordCounter("draw.recorded.transparent.depth",
-            frameCounters_.drawTransparentDepth);
-        cpuProfiler_->recordCounter("draw.recorded.transparent.forward",
-            frameCounters_.drawTransparentForward);
-        cpuProfiler_->recordCounter(
-            "draw.recorded.transparent.oit.accumulation",
-            frameCounters_.drawWeightedOitAccumulation);
-        cpuProfiler_->recordCounter("draw.recorded.transparent.oit.resolve",
-            frameCounters_.drawWeightedOitResolve);
-        cpuProfiler_->recordCounter("draw.recorded.forward.standard",
-            frameCounters_.drawStandardForward);
-        cpuProfiler_->recordCounter("draw.recorded.forward.complex",
-            frameCounters_.drawComplexForward);
-        cpuProfiler_->recordCounter("draw.recorded.forward.unlit",
-            frameCounters_.drawUnlitForward);
-        constexpr std::array<const char*, 8> LobeCounterNames{
-            "draw.recorded.lobe.clearcoat", "draw.recorded.lobe.sheen",
-            "draw.recorded.lobe.anisotropy", "draw.recorded.lobe.iridescence",
-            "draw.recorded.lobe.thin_transmission",
-            "draw.recorded.lobe.volume_transmission",
-            "draw.recorded.lobe.dispersion",
-            "draw.recorded.lobe.diffuse_transmission",
-        };
-        for (size_t index = 0; index < LobeCounterNames.size(); ++index)
-            cpuProfiler_->recordCounter(LobeCounterNames[index],
-                frameCounters_.complexLobeDraws[index]);
-        cpuProfiler_->recordCounter("draw.recorded.transparent", transparentDraws);
-        cpuProfiler_->recordCounter("draw.recorded.ui", frameCounters_.drawUi,
-            uiAwareStatus);
-        cpuProfiler_->recordCounter("draw.recorded.total", totalDraws, uiAwareStatus);
-        cpuProfiler_->recordCounter("dispatch.recorded",
-            frameCounters_.dispatchRecorded);
-        cpuProfiler_->recordCounter("triangle.submitted", frameCounters_.trianglesSubmitted,
-            uiAwareStatus);
-        cpuProfiler_->recordCounter("material.binds", frameCounters_.materialBinds);
-        cpuProfiler_->recordCounter("material.unique", uniqueMaterialIds_.size(),
-            materialUniqueStatus);
-        cpuProfiler_->recordCounter("material.unique_overflow",
-            frameCounters_.materialUniqueOverflow);
-        cpuProfiler_->recordCounter("pipeline.binds", frameCounters_.pipelineBinds);
-        cpuProfiler_->recordCounter("pipeline.unique", uniquePipelineIds_.size(),
-            pipelineUniqueStatus);
-        cpuProfiler_->recordCounter("pipeline.unique_overflow",
-            frameCounters_.pipelineUniqueOverflow);
-        cpuProfiler_->recordCounter("transparent.bucket.background_packets",
-            frameCounters_.transparentBackgroundPackets);
-        cpuProfiler_->recordCounter("transparent.bucket.foreground_packets",
-            frameCounters_.transparentForegroundPackets);
-        cpuProfiler_->recordCounter("transparent.bucket.nonempty",
-            frameCounters_.transparentNonemptyBuckets);
-        cpuProfiler_->recordCounter("transparent.sorted.packets",
-            frameCounters_.transparentSortedPackets);
-        cpuProfiler_->recordCounter("transparent.oit.packets",
-            frameCounters_.weightedOitPackets);
-        cpuProfiler_->recordCounter("transparent.oit.sorted_fallback_packets",
-            frameCounters_.weightedOitSortedFallbackPackets);
-        cpuProfiler_->recordCounter(
-            "transparent.oit.instance_capacity_fallback_packets",
-            frameCounters_.weightedOitInstanceCapacityFallbackPackets);
-        cpuProfiler_->recordCounter("transparent.oit.instances",
-            frameCounters_.weightedOitInstances);
-        cpuProfiler_->recordCounter("transparent.oit.instance_upload_bytes",
-            frameCounters_.weightedOitInstanceUploadBytes);
-        cpuProfiler_->recordCounter("transparent.oit.resident",
-            static_cast<uint64_t>(weightedOitResidency_.enabled()));
-        cpuProfiler_->recordCounter("transparent.oit.order_seed",
-            weightedOitOrderSeed_);
-        cpuProfiler_->recordCounter("transparent.pyramid.builds",
-            frameCounters_.transparencyPyramidBuilds);
-        cpuProfiler_->recordCounter("transparent.pyramid.mip_dispatches",
-            frameCounters_.transparencyPyramidMipDispatches);
-        cpuProfiler_->recordCounter("transparent.pyramid.resident",
-            static_cast<uint64_t>(transparencyPyramidResidency_.enabled()));
-        cpuProfiler_->recordCounter("transparent.pyramid.topology_rebuilds",
-            frameCounters_.transparencyPyramidTopologyRebuilds);
-        cpuProfiler_->recordCounter(
-            "transparent.pyramid.topology_rebuild_failures",
-            frameCounters_.transparencyPyramidTopologyRebuildFailures);
-        cpuProfiler_->recordCounter("transparent.pyramid.fallback_frames",
-            frameCounters_.transparencyPyramidFallbackFrames);
-        cpuProfiler_->recordCounter("transparent.ordinary2.probe_frames",
-            frameCounters_.ordinary2ProbeFrames);
-        cpuProfiler_->recordCounter("transparent.ordinary2.candidate_packets",
-            frameCounters_.ordinary2CandidatePackets);
-        cpuProfiler_->recordCounter("transparent.ordinary2.projected_packets",
-            frameCounters_.ordinary2ProjectedPackets);
-        cpuProfiler_->recordCounter(
-            "transparent.ordinary2.projection_culled_packets",
-            frameCounters_.ordinary2ProjectionCulledPackets);
-        cpuProfiler_->recordCounter(
-            "transparent.ordinary2.fallback.invalid_bounds_packets",
-            frameCounters_.ordinary2InvalidBoundsFallbackPackets);
-        cpuProfiler_->recordCounter(
-            "transparent.ordinary2.fallback.near_plane_packets",
-            frameCounters_.ordinary2NearPlaneFallbackPackets);
-        cpuProfiler_->recordCounter(
-            "transparent.ordinary2.fallback.unsafe_projection_packets",
-            frameCounters_.ordinary2UnsafeProjectionFallbackPackets);
-        cpuProfiler_->recordCounter(
-            "transparent.ordinary2.fallback.request_capacity_packets",
-            frameCounters_.ordinary2RequestCapacityFallbackPackets);
-        cpuProfiler_->recordCounter(
-            "transparent.ordinary2.atlas.accepted_packets",
-            frameCounters_.ordinary2AtlasAcceptedPackets);
-        cpuProfiler_->recordCounter(
-            "transparent.ordinary2.atlas.accepted_islands",
-            frameCounters_.ordinary2AtlasAcceptedIslands);
-        cpuProfiler_->recordCounter(
-            "transparent.ordinary2.atlas.rejected_packets",
-            frameCounters_.ordinary2AtlasRejectedPackets);
-        cpuProfiler_->recordCounter(
-            "transparent.ordinary2.atlas.allocated_texels",
-            frameCounters_.ordinary2AtlasAllocatedTexels);
-        cpuProfiler_->recordCounter(
-            "transparent.ordinary2.capture.prepared_draws",
-            frameCounters_.ordinary2CapturePreparedDraws);
-        cpuProfiler_->recordCounter(
-            "transparent.ordinary2.capture.preparation_fallback_packets",
-            frameCounters_.ordinary2CapturePreparationFallbackPackets);
-        cpuProfiler_->recordCounter(
-            "transparent.ordinary2.capture.entry_draws",
-            frameCounters_.ordinary2CaptureEntryDraws);
-        cpuProfiler_->recordCounter(
-            "transparent.ordinary2.capture.exit_draws",
-            frameCounters_.ordinary2CaptureExitDraws);
-        cpuProfiler_->recordCounter(
-            "transparent.ordinary2.local_composition_draws",
-            frameCounters_.ordinary2LocalCompositionDraws);
-        cpuProfiler_->recordCounter(
-            "transparent.ordinary2.scene_resolve_draws",
-            frameCounters_.ordinary2SceneResolveDraws);
-        cpuProfiler_->recordCounter(
-            "transparent.layered.deep.candidate_packets",
-            frameCounters_.deepLayeredCandidatePackets);
-        cpuProfiler_->recordCounter(
-            "transparent.layered.deep.projected_packets",
-            frameCounters_.deepLayeredProjectedPackets);
-        cpuProfiler_->recordCounter(
-            "transparent.layered.deep.atlas.accepted_packets",
-            frameCounters_.deepLayeredAtlasAcceptedPackets);
-        cpuProfiler_->recordCounter(
-            "transparent.layered.deep.atlas.accepted_islands",
-            frameCounters_.deepLayeredAtlasAcceptedIslands);
-        cpuProfiler_->recordCounter(
-            "transparent.layered.deep.atlas.rejected_packets",
-            frameCounters_.deepLayeredAtlasRejectedPackets);
-        cpuProfiler_->recordCounter(
-            "transparent.layered.deep.capture.prepared_draws",
-            frameCounters_.deepLayeredCapturePreparedDraws);
-        cpuProfiler_->recordCounter(
-            "transparent.layered.deep.capture.preparation_fallback_packets",
-            frameCounters_.deepLayeredCapturePreparationFallbackPackets);
-        cpuProfiler_->recordCounter(
-            "transparent.layered.deep.capture.interface_draws",
-            frameCounters_.deepLayeredInterfaceDraws);
-        cpuProfiler_->recordCounter(
-            "transparent.layered.deep.residual.probe_draws",
-            frameCounters_.deepLayeredResidualProbeDraws);
-        cpuProfiler_->recordCounter(
-            "transparent.layered.deep.local_composition_draws",
-            frameCounters_.deepLayeredLocalCompositionDraws);
-        cpuProfiler_->recordCounter(
-            "transparent.layered.deep.scene_resolve_draws",
-            frameCounters_.deepLayeredSceneResolveDraws);
-        cpuProfiler_->recordCounter("ui.untracked_callbacks",
-            frameCounters_.uiUntrackedCallbacks);
-        cpuProfiler_->recordCounter("texture.resident",
-            textureVault.activeCount() - retiredTextureCount_);
-        cpuProfiler_->recordCounter("texture.retired", retiredTextureCount_);
-        cpuProfiler_->recordCounter("texture.sampler.live", liveSamplerCount());
-        cpuProfiler_->recordCounter("texture.sampler.cached", samplerCache_.size());
-        cpuProfiler_->recordCounter("material.resident", materialVault.activeCount());
-        cpuProfiler_->recordCounter("material.descriptor.sets",
-            VulkanIndexedTextureTable::FrameSetCount *
-                VulkanIndexedTextureTable::SetsPerFrame);
-        cpuProfiler_->recordCounter("material.descriptor.indexed",
-            1);
-        cpuProfiler_->recordCounter("material.table.capacity",
-            canonicalMaterialCapacity_);
-        cpuProfiler_->recordCounter("material.table.maximum_capacity",
-            canonicalMaterialMaximumCapacity_);
-        cpuProfiler_->recordCounter("texture.descriptor.view_capacity",
-            indexedTextureTable_.frameCapacity(scheduler.currentFrameIndex()));
-        cpuProfiler_->recordCounter("texture.descriptor.sampler_capacity",
-            indexedTextureTable_.frameCapacity(scheduler.currentFrameIndex()));
-        cpuProfiler_->recordCounter("texture.descriptor.required_capacity",
-            indexedTextureTable_.requiredCapacity());
-        cpuProfiler_->recordCounter("texture.descriptor.maximum_capacity",
-            indexedTextureTable_.maximumCapacity());
+        const VulkanIndexedTextureTable& table = resources_.textureTable();
+        telemetry_.emit({
+            .weightedOitResident = weightedOitResidency_.enabled(),
+            .weightedOitOrderSeed = weightedOitOrderSeed_,
+            .refractionPyramidsResident = transparencyPyramidResidency_.enabled(),
+            .texturesResident = resources_.textures().activeCount() -
+                resources_.retiredTextureCount(),
+            .texturesRetired = resources_.retiredTextureCount(),
+            .samplersLive = resources_.liveSamplerCount(),
+            .samplersCached = resources_.cachedSamplerCount(),
+            .materialsResident = resources_.materials().activeCount(),
+            .materialTableCapacity = resources_.materialTableCapacity(),
+            .materialTableMaximumCapacity =
+                resources_.materialTableMaximumCapacity(),
+            .textureViewCapacity = table.frameCapacity(scheduler.currentFrameIndex()),
+            .textureSamplerCapacity = table.frameCapacity(scheduler.currentFrameIndex()),
+            .textureRequiredCapacity = table.requiredCapacity(),
+            .textureMaximumCapacity = table.maximumCapacity(),
+        });
     }
 
     void VulkanVertexBackend::bindMaterialDescriptors(
         VkPipelineLayout layout) {
-        const uint32_t frameIndex = scheduler.currentFrameIndex();
-        const auto sets = indexedTextureTable_.descriptorSets(frameIndex);
-        if (sets[0] == VK_NULL_HANDLE || sets[1] == VK_NULL_HANDLE) {
-            throw std::runtime_error(
-                "Indexed material descriptor sets are unavailable");
-        }
-        vkCmdBindDescriptorSets(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-            layout, 1, static_cast<uint32_t>(sets.size()),
-            sets.data(), 0, nullptr);
-    }
-
-    uint32_t VulkanVertexBackend::acquireSampler(const SamplerDesc& desc) {
-        for (uint32_t index = 0; index < samplerCache_.size(); ++index) {
-            CachedSampler& cached = samplerCache_[index];
-            if (cached.desc == desc) {
-                ++cached.referenceCount;
-                return index;
-            }
-        }
-
-        const auto toVkFilter = [](FilterMode mode) {
-            return mode == FilterMode::Nearest ? VK_FILTER_NEAREST : VK_FILTER_LINEAR;
-        };
-        const auto toVkAddressMode = [](SamplerAddressMode mode) {
-            switch (mode) {
-            case SamplerAddressMode::Repeat: return VK_SAMPLER_ADDRESS_MODE_REPEAT;
-            case SamplerAddressMode::MirroredRepeat:
-                return VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT;
-            case SamplerAddressMode::ClampToEdge:
-                return VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-            }
-            return VK_SAMPLER_ADDRESS_MODE_REPEAT;
-        };
-        const auto toVkCompareOp = [](SamplerCompareOp operation) {
-            switch (operation) {
-            case SamplerCompareOp::Never: return VK_COMPARE_OP_NEVER;
-            case SamplerCompareOp::Less: return VK_COMPARE_OP_LESS;
-            case SamplerCompareOp::LessOrEqual: return VK_COMPARE_OP_LESS_OR_EQUAL;
-            case SamplerCompareOp::Greater: return VK_COMPARE_OP_GREATER;
-            case SamplerCompareOp::GreaterOrEqual:
-                return VK_COMPARE_OP_GREATER_OR_EQUAL;
-            case SamplerCompareOp::Always: return VK_COMPARE_OP_ALWAYS;
-            }
-            return VK_COMPARE_OP_NEVER;
-        };
-
-        VkSamplerCreateInfo samplerInfo{ VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO };
-        samplerInfo.magFilter = toVkFilter(desc.magFilter);
-        samplerInfo.minFilter = toVkFilter(desc.minFilter);
-        samplerInfo.mipmapMode = desc.mipmapFilter == MipmapFilterMode::Nearest
-            ? VK_SAMPLER_MIPMAP_MODE_NEAREST : VK_SAMPLER_MIPMAP_MODE_LINEAR;
-        samplerInfo.addressModeU = toVkAddressMode(desc.addressU);
-        samplerInfo.addressModeV = toVkAddressMode(desc.addressV);
-        samplerInfo.addressModeW = toVkAddressMode(desc.addressW);
-        samplerInfo.minLod = static_cast<float>(desc.minLod);
-        samplerInfo.maxLod = static_cast<float>(desc.maxLod);
-        samplerInfo.anisotropyEnable = desc.maxAnisotropy > 1
-            ? VK_TRUE : VK_FALSE;
-        samplerInfo.maxAnisotropy =
-            static_cast<float>(std::max<uint8_t>(1, desc.maxAnisotropy));
-        samplerInfo.compareEnable = desc.compareEnable ? VK_TRUE : VK_FALSE;
-        samplerInfo.compareOp = toVkCompareOp(desc.compareOp);
-
-        VkSampler sampler = VK_NULL_HANDLE;
-        if (vkCreateSampler(vkContext->getDevice(), &samplerInfo, nullptr,
-                &sampler) != VK_SUCCESS) {
-            throw std::runtime_error("Failed to create texture sampler.");
-        }
-        samplerCache_.push_back(CachedSampler{
-            .desc = desc,
-            .sampler = sampler,
-            .referenceCount = 1,
-        });
-        return static_cast<uint32_t>(samplerCache_.size() - 1);
-    }
-
-    void VulkanVertexBackend::releaseSampler(uint32_t cacheIndex) noexcept {
-        if (cacheIndex >= samplerCache_.size()) {
-            return;
-        }
-        CachedSampler& cached = samplerCache_[cacheIndex];
-        if (cached.referenceCount > 0) {
-            --cached.referenceCount;
-        }
-    }
-
-    void VulkanVertexBackend::cleanupSamplerCache() noexcept {
-        if (!vkContext) {
-            samplerCache_.clear();
-            return;
-        }
-        for (CachedSampler& cached : samplerCache_) {
-            if (cached.sampler != VK_NULL_HANDLE) {
-                vkDestroySampler(vkContext->getDevice(), cached.sampler, nullptr);
-                cached.sampler = VK_NULL_HANDLE;
-            }
-        }
-        samplerCache_.clear();
-    }
-
-    uint64_t VulkanVertexBackend::liveSamplerCount() const noexcept {
-        return static_cast<uint64_t>(std::count_if(
-            samplerCache_.begin(), samplerCache_.end(),
-            [](const CachedSampler& cached) {
-                return cached.referenceCount > 0;
-            }));
+        resources_.bindMaterialDescriptors(currentCmd,
+            scheduler.currentFrameIndex(), layout);
     }
 
     VulkanProductionGraphFeatures
@@ -1661,7 +1148,7 @@ namespace Iridium {
             // The CPU profiler's enabled state is fixed for the process.
             .clusterTelemetryReadback =
                 cpuProfiler_ != nullptr && cpuProfiler_->isEnabled(),
-            .hooks = graphHooks_,
+            .hooks = extensionHooks_.graphHooks(),
             .pointShadowPoolCapacities = pointShadowCapacities_,
         };
     }
@@ -1953,7 +1440,7 @@ namespace Iridium {
             layeredSceneResolve_.rebuildDescriptors(frameTargets);
             weightedOit_.rebuildDescriptors(frameTargets);
             bindClusterBuffers();
-            if (VulkanTexturePayload* lut = textureVault.get(
+            if (VulkanTexturePayload* lut = resources_.textures().get(
                     outputTransformLut_); lut != nullptr && !lut->retired) {
                 outputPass.rebuildDescriptors(frameTargets,
                     lut->image.view, lut->sampler);
@@ -1998,12 +1485,12 @@ namespace Iridium {
             hero4AtlasExtent_ = nextHero4AtlasExtent;
             cinematic8AtlasExtent_ = nextCinematic8AtlasExtent;
             createTargets();
-            if (collectFrameCounters_)
-                ++frameCounters_.transparencyPyramidTopologyRebuilds;
+            if (telemetry_.collecting())
+                ++telemetry_.counters().transparencyPyramidTopologyRebuilds;
         }
         catch (const std::exception& exception) {
-            if (collectFrameCounters_)
-                ++frameCounters_.transparencyPyramidTopologyRebuildFailures;
+            if (telemetry_.collecting())
+                ++telemetry_.counters().transparencyPyramidTopologyRebuildFailures;
             try {
                 CpuScope restoreScope(cpuProfiler_,
                     "cpu.renderer.transparency_topology_restore");
@@ -2167,7 +1654,7 @@ namespace Iridium {
         layeredSceneResolve_.rebuildDescriptors(frameTargets);
         weightedOit_.rebuildDescriptors(frameTargets);
         bindClusterBuffers();
-        if (VulkanTexturePayload* lut = textureVault.get(outputTransformLut_);
+        if (VulkanTexturePayload* lut = resources_.textures().get(outputTransformLut_);
             lut != nullptr && !lut->retired) {
             outputPass.rebuildDescriptors(frameTargets, lut->image.view, lut->sampler);
         }
@@ -2326,7 +1813,7 @@ namespace Iridium {
             layeredSceneResolve_.rebuildDescriptors(frameTargets);
             weightedOit_.rebuildDescriptors(frameTargets);
             bindClusterBuffers();
-            if (VulkanTexturePayload* lut = textureVault.get(outputTransformLut_);
+            if (VulkanTexturePayload* lut = resources_.textures().get(outputTransformLut_);
                 lut != nullptr && !lut->retired) {
                 outputPass.rebuildDescriptors(frameTargets,
                     lut->image.view, lut->sampler);
@@ -2445,12 +1932,12 @@ namespace Iridium {
         info.swapchainColorSpace = colorSpaceName(vkSwapchain->getColorSpace());
         info.presentMode = presentModeName(vkSwapchain->getPresentMode());
         info.swapchainImageCount = vkSwapchain->getImageCount();
-        info.gpuSceneTransformCapacity = gpuSceneCapacity_.transforms;
-        info.gpuSceneInstanceCapacity = gpuSceneCapacity_.instances;
-        info.gpuScenePrimitiveCapacity = gpuSceneCapacity_.primitives;
-        info.gpuSceneGeometryCapacity = gpuSceneCapacity_.geometries;
-        info.gpuSceneUploadBytes = gpuSceneUploadTelemetry_.bytes;
-        info.gpuSceneUploadRanges = gpuSceneUploadTelemetry_.ranges;
+        info.gpuSceneTransformCapacity = gpuScene_.capacity().transforms;
+        info.gpuSceneInstanceCapacity = gpuScene_.capacity().instances;
+        info.gpuScenePrimitiveCapacity = gpuScene_.capacity().primitives;
+        info.gpuSceneGeometryCapacity = gpuScene_.capacity().geometries;
+        info.gpuSceneUploadBytes = gpuScene_.uploadTelemetry().bytes;
+        info.gpuSceneUploadRanges = gpuScene_.uploadTelemetry().ranges;
 		for (const Color::OutputTransport transport :
 			vkSwapchain->getSupportedOutputTransports()) {
 			info.supportedOutputTransports.emplace_back(outputTransportName(transport));
@@ -2649,443 +2136,46 @@ namespace Iridium {
 
     GeometryHandle VulkanVertexBackend::allocateGeometry(const GeometryDesc& desc,
         std::span<const std::byte> vertexBytes, std::span<const std::byte> indexBytes) {
-        const uint32_t indexSize = indexElementSize(desc.indexFormat);
-        if (desc.vertexStride == 0 || indexSize == 0) {
-            throw std::invalid_argument("Geometry format must define nonzero element sizes.");
-        }
-        if (indexBytes.size_bytes() % indexSize != 0) {
-            throw std::invalid_argument("Geometry index data is not aligned to its index format.");
-        }
-
-        VulkanGeometryPayload payload{};
-        payload.indexCount = static_cast<uint32_t>(indexBytes.size_bytes() / indexSize);
-        payload.indexFormat = desc.indexFormat;
-
-        payload.vertexBuffer = resourceAllocator.createBuffer(vertexBytes.size_bytes(),
-            VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, false,
-            ProfileMemoryCategory::GeometryVertex);
-        try {
-            payload.indexBuffer = resourceAllocator.createBuffer(indexBytes.size_bytes(),
-                VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
-                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, false,
-                ProfileMemoryCategory::GeometryIndex);
-
-            uploadContext.enqueueBufferUpload(payload.vertexBuffer, vertexBytes,
-                ResourceState::VertexBuffer);
-            uploadContext.enqueueBufferUpload(payload.indexBuffer, indexBytes,
-                ResourceState::IndexBuffer);
-        } catch (...) {
-            resourceAllocator.destroy(payload.indexBuffer);
-            resourceAllocator.destroy(payload.vertexBuffer);
-            throw;
-        }
-
-        return geometryVault.allocate(payload);
+        return resources_.allocateGeometry(desc, vertexBytes, indexBytes);
     }
 
     void VulkanVertexBackend::freeGeometry(GeometryHandle handle) {
-        auto* payload = geometryVault.get(handle);
-        if (payload) {
-            if (payload->arenaAllocation) {
-                throw std::logic_error(
-                    "Geometry-arena primitive handles must be retired together");
-            }
-            // Capture the Vulkan pointers by value so the lambda remembers them
-            // Defer the destruction! The GPU won't crash, and the CPU won't stall.
-            scheduler.defer([this,
-                vertex = payload->vertexBuffer, index = payload->indexBuffer]() mutable {
-                resourceAllocator.destroy(vertex);
-                resourceAllocator.destroy(index);
-                });
-
-            geometryVault.free(handle);
-        }
+        resources_.freeGeometry(handle);
     }
 
     GeometryArenaAllocation VulkanVertexBackend::allocateGeometryArena(
         uint32_t vertexStride,
         std::span<const std::byte> vertexBytes,
         const GeometryArenaData& arena) {
-        if (arena.abiVersion != GeometryArenaAbiVersion || vertexStride == 0 ||
-            arena.primitives.empty() ||
-            arena.vertexCount != vertexBytes.size_bytes() / vertexStride ||
-            arena.vertexCount * vertexStride != vertexBytes.size_bytes()) {
-            throw std::invalid_argument(
-                "Geometry arena has an unsupported ABI or vertex layout");
-        }
-        for (const GeometryArenaPrimitiveRange& range : arena.primitives) {
-            const uint64_t streamSize = range.indexStream ==
-                    GeometryArenaIndexStream::UInt16
-                ? arena.uint16Indices.size() : arena.uint32Indices.size();
-            if (range.indexCount == 0 || range.firstIndex > streamSize ||
-                range.indexCount > streamSize - range.firstIndex ||
-                range.vertexOffset < 0 ||
-                static_cast<uint64_t>(range.vertexOffset) >= arena.vertexCount) {
-                throw std::invalid_argument(
-                    "Geometry arena primitive range is out of bounds");
-            }
-        }
-
-        VulkanBufferResource vertexBuffer;
-        VulkanBufferResource uint16Buffer;
-        VulkanBufferResource uint32Buffer;
-        GeometryArenaAllocation allocation;
-        allocation.primitiveGeometry.reserve(arena.primitives.size());
-        try {
-            vertexBuffer = resourceAllocator.createBuffer(vertexBytes.size_bytes(),
-                VK_BUFFER_USAGE_TRANSFER_DST_BIT |
-                    VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, false,
-                ProfileMemoryCategory::GeometryVertex);
-            if (!arena.uint16Indices.empty()) {
-                uint16Buffer = resourceAllocator.createBuffer(
-                    arena.uint16Indices.size() * sizeof(uint16_t),
-                    VK_BUFFER_USAGE_TRANSFER_DST_BIT |
-                        VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
-                    VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, false,
-                    ProfileMemoryCategory::GeometryIndex);
-            }
-            if (!arena.uint32Indices.empty()) {
-                uint32Buffer = resourceAllocator.createBuffer(
-                    arena.uint32Indices.size() * sizeof(uint32_t),
-                    VK_BUFFER_USAGE_TRANSFER_DST_BIT |
-                        VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
-                    VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, false,
-                    ProfileMemoryCategory::GeometryIndex);
-            }
-
-            for (size_t index = 0; index < arena.primitives.size(); ++index) {
-                const GeometryArenaPrimitiveRange& range =
-                    arena.primitives[index];
-                VulkanGeometryPayload payload{
-                    .vertexBuffer = vertexBuffer,
-                    .indexBuffer = range.indexStream ==
-                            GeometryArenaIndexStream::UInt16
-                        ? uint16Buffer : uint32Buffer,
-                    .arenaUInt16IndexBuffer = uint16Buffer,
-                    .arenaUInt32IndexBuffer = uint32Buffer,
-                    .vertexOffset = static_cast<VkDeviceSize>(
-                        range.vertexOffset) * vertexStride,
-                    .indexCount = range.indexCount,
-                    .indexFormat = range.indexStream ==
-                            GeometryArenaIndexStream::UInt16
-                        ? IndexFormat::UInt16 : IndexFormat::UInt32,
-                    .arenaAllocation = true,
-                    .ownsArenaBuffers = index == 0,
-                };
-                allocation.primitiveGeometry.push_back(
-                    geometryVault.allocate(std::move(payload)));
-            }
-
-            uploadContext.enqueueBufferUpload(vertexBuffer, vertexBytes,
-                ResourceState::VertexBuffer);
-            if (!arena.uint16Indices.empty()) {
-                uploadContext.enqueueBufferUpload(uint16Buffer,
-                    std::as_bytes(std::span(arena.uint16Indices)),
-                    ResourceState::IndexBuffer);
-            }
-            if (!arena.uint32Indices.empty()) {
-                uploadContext.enqueueBufferUpload(uint32Buffer,
-                    std::as_bytes(std::span(arena.uint32Indices)),
-                    ResourceState::IndexBuffer);
-            }
-        }
-        catch (...) {
-            for (GeometryHandle handle : allocation.primitiveGeometry)
-                geometryVault.free(handle);
-            resourceAllocator.destroy(uint32Buffer);
-            resourceAllocator.destroy(uint16Buffer);
-            resourceAllocator.destroy(vertexBuffer);
-            throw;
-        }
-        return allocation;
+        return resources_.allocateGeometryArena(vertexStride, vertexBytes, arena);
     }
 
     void VulkanVertexBackend::freeGeometryArena(
         std::span<const GeometryHandle> primitiveGeometry) {
-        if (primitiveGeometry.empty()) return;
-        VulkanGeometryPayload* first = geometryVault.get(
-            primitiveGeometry.front());
-        if (!first || !first->arenaAllocation) {
-            throw std::invalid_argument(
-                "Geometry arena retirement requires live arena handles");
-        }
-        for (GeometryHandle handle : primitiveGeometry) {
-            VulkanGeometryPayload* payload = geometryVault.get(handle);
-            if (!payload || !payload->arenaAllocation ||
-                payload->vertexBuffer.buffer != first->vertexBuffer.buffer ||
-                payload->arenaUInt16IndexBuffer.buffer !=
-                    first->arenaUInt16IndexBuffer.buffer ||
-                payload->arenaUInt32IndexBuffer.buffer !=
-                    first->arenaUInt32IndexBuffer.buffer) {
-                throw std::invalid_argument(
-                    "Geometry arena retirement cannot mix allocations");
-            }
-        }
-        VulkanBufferResource vertex = first->vertexBuffer;
-        VulkanBufferResource uint16 = first->arenaUInt16IndexBuffer;
-        VulkanBufferResource uint32 = first->arenaUInt32IndexBuffer;
-        scheduler.defer([this, vertex, uint16, uint32]() mutable {
-            resourceAllocator.destroy(vertex);
-            resourceAllocator.destroy(uint16);
-            resourceAllocator.destroy(uint32);
-        });
-        for (GeometryHandle handle : primitiveGeometry)
-            geometryVault.free(handle);
+        resources_.freeGeometryArena(primitiveGeometry);
     }
 
     TextureHandle VulkanVertexBackend::allocateTexture(const TextureDesc& desc,
         std::span<const std::byte> pixelBytes) {
-        if (!validTextureTopology(desc)) {
-            throw std::invalid_argument(
-                "Texture dimensions, layers, mips, or topology are invalid");
-        }
-        if (pixelBytes.empty()) {
-            throw std::invalid_argument("Texture pixel data must be nonempty");
-        }
-
-        const size_t expectedBytes = static_cast<size_t>(textureDataSize(desc));
-        if (bytesPerBlock(desc.format) == 0 || pixelBytes.size() != expectedBytes) {
-            throw std::invalid_argument("Texture pixel data size does not match the descriptor");
-        }
-
-        VulkanTexturePayload payload{};
-        payload.format = desc.format;
-        payload.width = desc.width;
-        payload.height = desc.height;
-
-        VkFormat format = VK_FORMAT_UNDEFINED;
-        switch (desc.format) {
-        case TextureFormat::RGBA8_UNorm:
-            format = VK_FORMAT_R8G8B8A8_UNORM;
-            break;
-        case TextureFormat::RGBA8_sRGB:
-            format = VK_FORMAT_R8G8B8A8_SRGB;
-            break;
-        case TextureFormat::RGBA16_SFloat:
-            format = VK_FORMAT_R16G16B16A16_SFLOAT;
-            break;
-        case TextureFormat::RGBA32_SFloat:
-            format = VK_FORMAT_R32G32B32A32_SFLOAT;
-            break;
-        case TextureFormat::RG16_SFloat:
-            format = VK_FORMAT_R16G16_SFLOAT;
-            break;
-        case TextureFormat::BC4_UNorm:
-            format = VK_FORMAT_BC4_UNORM_BLOCK;
-            break;
-        case TextureFormat::BC5_UNorm:
-            format = VK_FORMAT_BC5_UNORM_BLOCK;
-            break;
-        case TextureFormat::BC6H_UFloat:
-            format = VK_FORMAT_BC6H_UFLOAT_BLOCK;
-            break;
-        case TextureFormat::BC7_UNorm:
-            format = VK_FORMAT_BC7_UNORM_BLOCK;
-            break;
-        case TextureFormat::BC7_sRGB:
-            format = VK_FORMAT_BC7_SRGB_BLOCK;
-            break;
-        }
-
-        const bool cube = desc.topology == TextureTopology::Cube;
-        const VkImageViewType viewType = cube ? VK_IMAGE_VIEW_TYPE_CUBE :
-            (desc.topology == TextureTopology::Texture2DArray
-                ? VK_IMAGE_VIEW_TYPE_2D_ARRAY : VK_IMAGE_VIEW_TYPE_2D);
-        payload.image = resourceAllocator.createImage2D({ desc.width, desc.height }, format,
-            VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-            VK_IMAGE_ASPECT_COLOR_BIT, desc.usageClass == TextureUsageClass::Environment
-                ? ProfileMemoryCategory::Environment
-                : ProfileMemoryCategory::Texture, desc.mipLevels,
-            desc.arrayLayers,
-            cube ? VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT : 0, viewType);
-
-        try {
-            payload.samplerCacheIndex = acquireSampler(desc.sampler);
-            payload.sampler =
-                samplerCache_[payload.samplerCacheIndex].sampler;
-        } catch (...) {
-            resourceAllocator.destroy(payload.image);
-            throw;
-        }
-
-        try {
-            CpuScope uploadScheduleScope(
-                cpuProfiler_, "cpu.texture.upload_schedule");
-            uploadContext.enqueueImageUpload(
-                payload.image, pixelBytes, ResourceState::ShaderResource);
-        } catch (...) {
-            releaseSampler(payload.samplerCacheIndex);
-            resourceAllocator.destroy(payload.image);
-            throw;
-        }
-
-        const TextureHandle handle = textureVault.allocate(payload);
-        if (indexedTextureTable_.active()) {
-            if (handle.getIndex() >= indexedTextureTable_.maximumCapacity()) {
-                uploadContext.flush();
-                textureVault.free(handle);
-                releaseSampler(payload.samplerCacheIndex);
-                resourceAllocator.destroy(payload.image);
-                throw std::runtime_error(
-                    "Indexed material texture table capacity was exhausted");
-            }
-            const uint32_t frameIndex = scheduler.currentFrameIndex();
-            if (handle.getIndex() >=
-                    indexedTextureTable_.frameCapacity(frameIndex) &&
-                frameOpen_) {
-                uploadContext.flush();
-                textureVault.free(handle);
-                releaseSampler(payload.samplerCacheIndex);
-                resourceAllocator.destroy(payload.image);
-                throw std::runtime_error(
-                    "Indexed material texture-table growth must occur at a "
-                    "frame boundary");
-            }
-            indexedTextureTable_.ensureFrameCapacity(
-                frameIndex, handle.getIndex() + 1);
-            indexedTextureTable_.write(handle.getIndex(), payload.image.view,
-                handle.getIndex(), payload.sampler);
-            // Pre-frame publication can batch descriptor synchronization into
-            // beginFrame. Mid-frame publication must make the current
-            // fence-owned set visible before draw submission.
-            if (frameOpen_) {
-                indexedTextureTable_.synchronizeFrame(
-                    frameIndex);
-            }
-        }
-        return handle;
+        return resources_.allocateTexture(desc, pixelBytes);
     }
 
-
-
     void VulkanVertexBackend::freeTexture(TextureHandle handle) {
-        auto* payload = textureVault.get(handle);
-        if (payload && !payload->retired) {
-            indexedTextureTable_.writeFallback(
-                handle.getIndex(), handle.getIndex());
-            if (indexedTextureTable_.active() &&
-                frameOpen_) {
-                indexedTextureTable_.synchronizeFrame(
-                    scheduler.currentFrameIndex());
-            }
-            const uint32_t samplerCacheIndex = payload->samplerCacheIndex;
-            VkDescriptorSet imguiDescriptor = payload->imguiDescriptor;
-            VulkanImageResource image = payload->image;
-            payload->retired = true;
-            ++retiredTextureCount_;
-
-            scheduler.defer([this, handle, imguiDescriptor, image]() mutable {
-                if (imguiDescriptor != VK_NULL_HANDLE && imguiInitialized_)
-                    ImGui_ImplVulkan_RemoveTexture(imguiDescriptor);
-                resourceAllocator.destroy(image);
-                textureVault.free(handle);
-                if (retiredTextureCount_ != 0) --retiredTextureCount_;
-                });
-
-            releaseSampler(samplerCacheIndex);
-        }
+        resources_.freeTexture(handle);
     }
 
     MaterialBinding VulkanVertexBackend::allocateCanonicalMaterial(
         const CanonicalMaterialAsset& asset) {
-        const bool deferred = asset.packed.closureClass ==
-                static_cast<uint32_t>(MaterialClosureClass::StandardDeferred) &&
-            asset.pipelineState.shaderProgram == ShaderProgram::CanonicalPbrGBuffer &&
-            asset.pipelineState.renderPass == RenderPassClass::GBuffer;
-        const bool complexProgram =
-            asset.pipelineState.shaderProgram ==
-                ShaderProgram::CanonicalComplexOpaqueForward ||
-            asset.pipelineState.shaderProgram ==
-                ShaderProgram::CanonicalComplexForward;
-        const bool forward = asset.packed.closureClass !=
-                static_cast<uint32_t>(MaterialClosureClass::StandardDeferred) &&
-            asset.packed.closureClass !=
-                static_cast<uint32_t>(MaterialClosureClass::Invalid) &&
-            complexProgram &&
-            asset.pipelineState.renderPass == RenderPassClass::Forward;
-        const bool transparent = asset.packed.closureClass !=
-                static_cast<uint32_t>(MaterialClosureClass::Invalid) &&
-            complexProgram &&
-            asset.pipelineState.renderPass == RenderPassClass::Transparent;
-        if (asset.packed.schemaVersion != PackedGpuMaterial::SchemaVersion ||
-            (!deferred && !forward && !transparent))
-            throw std::invalid_argument("canonical material asset has an incompatible contract");
-
-        std::array<VulkanTexturePayload*, PackedGpuMaterial::MaxTextureUses> textures{};
-        for (size_t index = 0; index < textures.size(); ++index) {
-            textures[index] = textureVault.get(asset.textures[index]);
-            if (!textures[index] || textures[index]->retired)
-                throw std::invalid_argument("canonical material has an invalid texture handle");
-        }
-
-        VulkanMaterialPayload materialPayload{};
-        materialPayload.pipeline = pipelineLibrary.getOrCreatePipeline(asset.pipelineState);
-        PipelineStateDesc mirroredPipelineState = asset.pipelineState;
-        if (mirroredPipelineState.renderPass ==
-                RenderPassClass::Transparent &&
-            mirroredPipelineState.cullMode != CullMode::None) {
-            mirroredPipelineState.frontFace =
-                mirroredPipelineState.frontFace == FrontFace::Clockwise
-                ? FrontFace::CounterClockwise : FrontFace::Clockwise;
-            materialPayload.mirroredPipeline =
-                pipelineLibrary.getOrCreatePipeline(mirroredPipelineState);
-        }
-        else {
-            materialPayload.mirroredPipeline = materialPayload.pipeline;
-        }
-        materialPayload.renderQueue = forward || transparent
-            ? (asset.pipelineState.blendMode == BlendMode::Opaque
-                ? RenderQueue::ForwardOpaque : RenderQueue::Transparent)
-            : RenderQueue::Opaque;
-        materialPayload.packed = asset.packed;
-        materialPayload.packedRevision = 1;
-
-        const MaterialHandle material = materialVault.allocate(materialPayload);
-        try {
-            ensureCanonicalMaterialCapacity(
-                material.getIndex() + 1u);
-            for (uint32_t frame = 0; frame <
-                VulkanFrameScheduler::FramesInFlight; ++frame) {
-                const auto sets = indexedTextureTable_.descriptorSets(frame);
-                if (sets[0] == VK_NULL_HANDLE ||
-                    sets[1] == VK_NULL_HANDLE) {
-                    throw std::runtime_error(
-                        "Indexed material descriptor sets are unavailable");
-                }
-            }
-        }
-        catch (...) {
-            materialVault.free(material);
-            throw;
-        }
-        VulkanMaterialPayload* stored =
-            materialVault.get(material);
-        return { material, stored->pipeline, stored->renderQueue,
-            makeOpaqueSortKey(stored->pipeline, material) };
+        return resources_.allocateCanonicalMaterial(asset);
     }
 
     void VulkanVertexBackend::updateCanonicalMaterial(MaterialHandle handle,
         const PackedGpuMaterial& material) {
-        VulkanMaterialPayload* payload = materialVault.get(handle);
-        if (!payload)
-            throw std::invalid_argument("canonical material update handle is invalid");
-        if (material.schemaVersion != PackedGpuMaterial::SchemaVersion ||
-            material.closureClass != payload->packed.closureClass)
-            throw std::invalid_argument("canonical material update changes its schema or closure");
-        payload->packed = material;
-        ++payload->packedRevision;
-        if (payload->packedRevision == 0) payload->packedRevision = 1;
+        resources_.updateCanonicalMaterial(handle, material);
     }
 
     void VulkanVertexBackend::freeMaterial(MaterialHandle handle) {
-        auto* payload = materialVault.get(handle);
-        if (!payload) {
-            return;
-        }
-
-        materialVault.free(handle);
+        resources_.freeMaterial(handle);
     }
 
     // --- PRIVATE HELPERS ---
@@ -3177,12 +2267,7 @@ namespace Iridium {
         finalCaptureHookRecorded_ = false;
         probeCaptureHandled_ = false;
         ordinary2ViewProjectionValid_ = false;
-        collectFrameCounters_ = cpuProfiler_ != nullptr && cpuProfiler_->isFrameOpen();
-        if (collectFrameCounters_ && uniqueMaterialIds_.capacity() == 0) {
-            uniqueMaterialIds_.reserve(MaxUniqueResourcesPerFrame);
-            uniquePipelineIds_.reserve(MaxUniqueResourcesPerFrame);
-        }
-        resetFrameCounters();
+        telemetry_.beginFrame();
         CpuScope beginFrameScope(cpuProfiler_, "cpu.renderer.begin_frame");
         uploadContext.flush();
         applyTransparencyPyramidTopologyChange();
@@ -3191,8 +2276,7 @@ namespace Iridium {
         const uint32_t frameSlot = scheduler.currentFrameIndex();
         // beginFrame has waited this slot's fence before returning, including
         // the out-of-date acquire path. Its capture readbacks are now CPU-safe.
-        for (IVulkanBackendExtension* extension : extensions_)
-            extension->onFrameSlotRetired(completedFrameIndex);
+        extensionHooks_.onFrameSlotRetired(completedFrameIndex);
         collectVirtualShadowRequests(completedFrameIndex);
         if (depthPyramidEnabled_) {
             depthPyramid_.onFrameFenceCompleted(completedFrameIndex,
@@ -3222,14 +2306,14 @@ namespace Iridium {
             return frame.status;
         }
 
-        if (indexedTextureTable_.active()) {
-            indexedTextureTable_.ensureFrameCapacity(
+        if (resources_.textureTable().active()) {
+            resources_.textureTable().ensureFrameCapacity(
                 scheduler.currentFrameIndex(),
-                indexedTextureTable_.requiredCapacity());
-            indexedTextureTable_.synchronizeFrame(
+                resources_.textureTable().requiredCapacity());
+            resources_.textureTable().synchronizeFrame(
                 scheduler.currentFrameIndex());
         }
-        uploadCanonicalMaterialsForFrame(scheduler.currentFrameIndex());
+        resources_.uploadCanonicalMaterialsForFrame(scheduler.currentFrameIndex());
         currentImageIndex = frame.imageIndex;
         currentCmd = frame.commandBuffer;
         if (frameEnvironments_[scheduler.currentFrameIndex()] != environmentLighting_)
@@ -3240,7 +2324,7 @@ namespace Iridium {
             .commandBuffer = currentCmd,
             .frameIndex = scheduler.currentFrameIndex(),
             .imageIndex = currentImageIndex,
-            .collectCounters = collectFrameCounters_,
+            .collectCounters = telemetry_.collecting(),
             .sceneExtent = sceneExtent_,
         });
         frameOpen_ = true;
@@ -3256,15 +2340,7 @@ namespace Iridium {
 
     VulkanIndirectScene VulkanVertexBackend::indirectScene(
         uint32_t frame) const noexcept {
-        const GpuSceneCpuMirror& scene = gpuSceneCpuMirrors_[frame];
-        return {
-            .transforms = scene.transforms,
-            .instances = scene.instances,
-            .primitives = scene.primitives,
-            .geometries = scene.geometries,
-            .identities = scene.primitiveIdentities,
-            .published = gpuScenePublishedCounts_,
-        };
+        return gpuScene_.indirectScene(frame);
     }
 
     VulkanIndirectAssetResolver VulkanVertexBackend::indirectAssets() const noexcept {
@@ -3274,7 +2350,7 @@ namespace Iridium {
                 VulkanIndirectGeometry& geometry) {
                 const VulkanGeometryPayload* payload =
                     static_cast<const VulkanVertexBackend*>(owner)->
-                        geometryVault.get(handle);
+                        resources_.geometries().get(handle);
                 if (payload == nullptr) return false;
                 geometry = { payload->vertexBuffer.buffer,
                     payload->indexBuffer.buffer, payload->indexFormat,
@@ -3285,7 +2361,7 @@ namespace Iridium {
                 VulkanIndirectMaterial& material) {
                 const VulkanMaterialPayload* payload =
                     static_cast<const VulkanVertexBackend*>(owner)->
-                        materialVault.get(handle);
+                        resources_.materials().get(handle);
                 if (payload == nullptr) return false;
                 material = { payload->packed.alphaMode,
                     payload->packed.doubleSided };
@@ -3380,7 +2456,7 @@ namespace Iridium {
             append(&caster.indexCount, sizeof(caster.indexCount));
             append(&caster.firstIndex, sizeof(caster.firstIndex));
             if (const VulkanMaterialPayload* material =
-                    materialVault.get(caster.material)) {
+                    resources_.materials().get(caster.material)) {
                 append(&material->packedRevision,
                     sizeof(material->packedRevision));
                 append(&material->packed.alphaMode,
@@ -3422,7 +2498,7 @@ namespace Iridium {
                 append(hash, &caster.indexCount, sizeof(caster.indexCount));
                 append(hash, &caster.firstIndex, sizeof(caster.firstIndex));
                 if (const VulkanMaterialPayload* material =
-                        materialVault.get(caster.material)) {
+                        resources_.materials().get(caster.material)) {
                     append(hash, &material->packedRevision,
                         sizeof(material->packedRevision));
                     append(hash, &material->packed.alphaMode,
@@ -3457,12 +2533,12 @@ namespace Iridium {
 
         if (!depthPyramidEnabled_) {
             currentDepthHistoryDecision_ = evaluateDepthPyramidHistory({});
-            frameCounters_.depthHistoryRejection = static_cast<uint32_t>(
+            telemetry_.counters().depthHistoryRejection = static_cast<uint32_t>(
                 currentDepthHistoryDecision_.rejection);
             return;
         }
 
-        const auto& view = gpuSceneCpuViews_[scheduler.currentFrameIndex()];
+        const auto& view = gpuScene_.views()[scheduler.currentFrameIndex()];
         bool projectionValid = true;
         for (uint32_t column = 0; column < 4u; ++column) {
             for (uint32_t row = 0; row < 4u; ++row) {
@@ -3474,7 +2550,7 @@ namespace Iridium {
         const DepthPyramidHistoryOwner currentOwner{
             .viewIdentity = currentViewHistory_.identity,
             .sceneEpoch = retainedRenderView_ == 0u
-                ? publishedGpuSceneEpoch_
+                ? gpuScene_.publishedEpoch()
                 : currentViewHistory_.identity,
             .depthContentRevision = currentDepthContentRevision_,
             .projectionRevision = currentProjectionRevision_,
@@ -3496,9 +2572,9 @@ namespace Iridium {
             .historyAvailable = history.available,
             .projectionValid = projectionValid,
         });
-        frameCounters_.depthHistoryEligible =
+        telemetry_.counters().depthHistoryEligible =
             currentDepthHistoryDecision_.eligible ? 1u : 0u;
-        frameCounters_.depthHistoryRejection = static_cast<uint32_t>(
+        telemetry_.counters().depthHistoryRejection = static_cast<uint32_t>(
             currentDepthHistoryDecision_.rejection);
     }
 
@@ -3516,19 +2592,19 @@ namespace Iridium {
             .scene = indirectScene(frame),
             .assets = indirectAssets(),
         }, directionalShadowWork(shadows), frame);
-        frameCounters_.shadowDirectionalIndirectFallbackReason =
+        telemetry_.counters().shadowDirectionalIndirectFallbackReason =
             static_cast<uint32_t>(directionalCuller_.fallbackReason());
         if (directionalCuller_.membershipCacheHit())
-            frameCounters_.shadowDirectionalMembershipCacheHit = 1u;
+            telemetry_.counters().shadowDirectionalMembershipCacheHit = 1u;
         if (!planned) {
             renderGraph_.skipPass(graphIds_.directionalIndirect.compact);
             return false;
         }
         renderGraph_.beginPass(currentCmd, graphIds_.directionalIndirect.compact);
-        frameCounters_.dispatchRecorded += directionalCuller_.recordCompaction(
+        telemetry_.counters().dispatchRecorded += directionalCuller_.recordCompaction(
             currentCmd, frame, {
                 .set0 = directionalShadow_.renderDescriptor(frame),
-                .gpuScene = gpuSceneDescriptorSets_[frame],
+                .gpuScene = gpuScene_.descriptorSets()[frame],
             });
         return true;
     }
@@ -3607,7 +2683,7 @@ namespace Iridium {
                 DirectionalVirtualShadowClipConfig clipConfig{};
                 clipConfig.lightOwner = shadows.front().selection.owner;
                 clipConfig.lightForward = shadows.front().selection.lightForward;
-                clipConfig.focusWorld = glm::vec3(gpuSceneCpuViews_[frameIndex].cameraPosition);
+                clipConfig.focusWorld = glm::vec3(gpuScene_.views()[frameIndex].cameraPosition);
                 clipConfig.pageSizeTexels = virtualShadowClipPageSize_;
                 clipConfig.virtualResolutionTexels = virtualShadowClipPageSize_ * 128u;
                 // No static/dynamic classification is claimed: invalidate both
@@ -3683,7 +2759,7 @@ namespace Iridium {
         renderGraph_.beginPass(currentCmd, graphIds_.shadowDirectional);
         IVulkanIndirectOracle* const shadowOracle =
             activeIndirectOracle(VulkanIndirectOracleView::DirectionalShadow);
-        frameCounters_.shadowDirectionalDirectFallback =
+        telemetry_.counters().shadowDirectionalDirectFallback =
             static_cast<uint64_t>(std::count_if(
                 shadowCasterScratch_.begin(), shadowCasterScratch_.end(),
                 [indirectValid](const ResolvedShadowCaster& caster) {
@@ -3715,10 +2791,10 @@ namespace Iridium {
                 caster.boundsSphereRadiusWorld, shadow.updateMask);
             directionalShadowCasterMaskScratch_[casterIndex] =
                 static_cast<uint8_t>(visibleMask);
-            if (collectFrameCounters_) {
-                frameCounters_.shadowDirectionalCastersTested +=
+            if (telemetry_.collecting()) {
+                telemetry_.counters().shadowDirectionalCastersTested +=
                     std::popcount(shadow.updateMask);
-                frameCounters_.shadowDirectionalCastersCulled +=
+                telemetry_.counters().shadowDirectionalCastersCulled +=
                     std::popcount(shadow.updateMask & ~visibleMask);
             }
           }
@@ -3736,7 +2812,7 @@ namespace Iridium {
             if (indirectValid) {
                 vkCmdBindDescriptorSets(currentCmd,
                     VK_PIPELINE_BIND_POINT_GRAPHICS, layout,
-                    3u, 1u, &gpuSceneDescriptorSets_[frameIndex],
+                    3u, 1u, &gpuScene_.descriptorSets()[frameIndex],
                     0u, nullptr);
                 if (directionalCuller_.anyAlphaMaskedBin()) {
                     bindMaterialDescriptors(layout);
@@ -3745,7 +2821,7 @@ namespace Iridium {
                 const uint32_t layer = shadow.shadowIndex *
                     kDirectionalShadowCascadeCount + cascade;
                 const uint32_t workIndex = directionalCuller_.workIndex(layer);
-                frameCounters_.shadowDirectionalIndirectBins +=
+                telemetry_.counters().shadowDirectionalIndirectBins +=
                     directionalCuller_.recordDraws(currentCmd, frameIndex,
                         workIndex, {
                             .layout = layout,
@@ -3769,9 +2845,9 @@ namespace Iridium {
                         densityLodMetric(lodContext));
                     recordIndirectOracleDraws(directionalShadowCasterMaskScratch_,
                         static_cast<uint8_t>(1u << cascade),
-                        frameCounters_.drawShadowDirectional,
-                        frameCounters_.shadowDirectionalIndirectCommands,
-                        frameCounters_.drawShadowDirectionalAlphaMask);
+                        telemetry_.counters().drawShadowDirectional,
+                        telemetry_.counters().shadowDirectionalIndirectCommands,
+                        telemetry_.counters().drawShadowDirectionalAlphaMask);
                 }
                 activePipeline = VK_NULL_HANDLE;
                 activeGeometry = {};
@@ -3786,8 +2862,8 @@ namespace Iridium {
                 if (indirectValid && caster.gpuScenePrimitiveIndex !=
                         InvalidGpuSceneIndex)
                     continue;
-                VulkanGeometryPayload* geometry = geometryVault.get(caster.geometry);
-                VulkanMaterialPayload* material = materialVault.get(caster.material);
+                VulkanGeometryPayload* geometry = resources_.geometries().get(caster.geometry);
+                VulkanMaterialPayload* material = resources_.materials().get(caster.material);
                 if (geometry == nullptr || material == nullptr) continue;
                 const bool alphaMasked = material->packed.alphaMode == 1u;
                 const bool doubleSided = material->packed.doubleSided != 0u;
@@ -3821,10 +2897,10 @@ namespace Iridium {
                     0, sizeof(push), &push);
                 vkCmdDrawIndexed(currentCmd, caster.indexCount, 1,
                     caster.firstIndex, 0, 0);
-                recordDraw(frameCounters_.drawShadowDirectional,
+                telemetry_.recordDraw(telemetry_.counters().drawShadowDirectional,
                     caster.indexCount / 3u);
-                if (collectFrameCounters_ && alphaMasked)
-                    ++frameCounters_.drawShadowDirectionalAlphaMask;
+                if (telemetry_.collecting() && alphaMasked)
+                    ++telemetry_.counters().drawShadowDirectionalAlphaMask;
             }
             directionalShadow_.endCascade(currentCmd);
           }
@@ -3846,19 +2922,19 @@ namespace Iridium {
             .scene = indirectScene(frame),
             .assets = indirectAssets(),
         }, spotShadowWork(shadows), frame);
-        frameCounters_.shadowSpotIndirectFallbackReason =
+        telemetry_.counters().shadowSpotIndirectFallbackReason =
             static_cast<uint32_t>(spotCuller_.fallbackReason());
         if (spotCuller_.membershipCacheHit())
-            frameCounters_.shadowSpotMembershipCacheHit = 1u;
+            telemetry_.counters().shadowSpotMembershipCacheHit = 1u;
         if (!planned) {
             renderGraph_.skipPass(graphIds_.spotIndirect.compact);
             return false;
         }
         renderGraph_.beginPass(currentCmd, graphIds_.spotIndirect.compact);
-        frameCounters_.dispatchRecorded += spotCuller_.recordCompaction(
+        telemetry_.counters().dispatchRecorded += spotCuller_.recordCompaction(
             currentCmd, frame, {
                 .set0 = spotShadow_.renderDescriptor(frame),
-                .gpuScene = gpuSceneDescriptorSets_[frame],
+                .gpuScene = gpuScene_.descriptorSets()[frame],
             });
         return true;
     }
@@ -3908,7 +2984,7 @@ namespace Iridium {
         renderGraph_.beginPass(currentCmd, graphIds_.shadowSpot);
         IVulkanIndirectOracle* const shadowOracle =
             activeIndirectOracle(VulkanIndirectOracleView::SpotShadow);
-        frameCounters_.shadowSpotDirectFallback =
+        telemetry_.counters().shadowSpotDirectFallback =
             static_cast<uint64_t>(std::count_if(
                 shadowCasterScratch_.begin(), shadowCasterScratch_.end(),
                 [indirectValid](const ResolvedShadowCaster& caster) {
@@ -3941,9 +3017,9 @@ namespace Iridium {
                     caster.boundsSphereRadiusWorld);
                 directionalShadowCasterMaskScratch_[casterIndex] =
                     visible ? 1u : 0u;
-                if (collectFrameCounters_) {
-                    ++frameCounters_.shadowSpotCastersTested;
-                    frameCounters_.shadowSpotCastersCulled += visible ? 0u : 1u;
+                if (telemetry_.collecting()) {
+                    ++telemetry_.counters().shadowSpotCastersTested;
+                    telemetry_.counters().shadowSpotCastersCulled += visible ? 0u : 1u;
                 }
             }
             spotShadow_.beginTile(currentCmd, shadow);
@@ -3956,7 +3032,7 @@ namespace Iridium {
             if (indirectValid) {
                 vkCmdBindDescriptorSets(currentCmd,
                     VK_PIPELINE_BIND_POINT_GRAPHICS, layout,
-                    3u, 1u, &gpuSceneDescriptorSets_[frameIndex],
+                    3u, 1u, &gpuScene_.descriptorSets()[frameIndex],
                     0u, nullptr);
                 if (spotCuller_.anyAlphaMaskedBin()) {
                     bindMaterialDescriptors(layout);
@@ -3964,7 +3040,7 @@ namespace Iridium {
                 }
                 const uint32_t workIndex =
                     spotCuller_.workIndex(shadow.shadowDataSlot);
-                frameCounters_.shadowSpotIndirectBins +=
+                telemetry_.counters().shadowSpotIndirectBins +=
                     spotCuller_.recordDraws(currentCmd, frameIndex, workIndex, {
                         .layout = layout,
                         .owner = &spotShadow_,
@@ -3986,9 +3062,9 @@ namespace Iridium {
                         directionalShadowCasterMaskScratch_, 1u,
                         perspectiveLodMetric(lodContext));
                     recordIndirectOracleDraws(directionalShadowCasterMaskScratch_,
-                        1u, frameCounters_.drawShadowSpot,
-                        frameCounters_.shadowSpotIndirectCommands,
-                        frameCounters_.drawShadowSpotAlphaMask);
+                        1u, telemetry_.counters().drawShadowSpot,
+                        telemetry_.counters().shadowSpotIndirectCommands,
+                        telemetry_.counters().drawShadowSpotAlphaMask);
                 }
                 activePipeline = VK_NULL_HANDLE;
                 activeGeometry = {};
@@ -4002,8 +3078,8 @@ namespace Iridium {
                 if (indirectValid && caster.gpuScenePrimitiveIndex !=
                         InvalidGpuSceneIndex)
                     continue;
-                VulkanGeometryPayload* geometry = geometryVault.get(caster.geometry);
-                VulkanMaterialPayload* material = materialVault.get(caster.material);
+                VulkanGeometryPayload* geometry = resources_.geometries().get(caster.geometry);
+                VulkanMaterialPayload* material = resources_.materials().get(caster.material);
                 if (geometry == nullptr || material == nullptr) continue;
                 const bool alphaMasked = material->packed.alphaMode == 1u;
                 const bool doubleSided = material->packed.doubleSided != 0u;
@@ -4036,10 +3112,10 @@ namespace Iridium {
                     0, sizeof(push), &push);
                 vkCmdDrawIndexed(currentCmd, caster.indexCount, 1,
                     caster.firstIndex, 0, 0);
-                recordDraw(frameCounters_.drawShadowSpot,
+                telemetry_.recordDraw(telemetry_.counters().drawShadowSpot,
                     caster.indexCount / 3u);
-                if (collectFrameCounters_ && alphaMasked)
-                    ++frameCounters_.drawShadowSpotAlphaMask;
+                if (telemetry_.collecting() && alphaMasked)
+                    ++telemetry_.counters().drawShadowSpotAlphaMask;
             }
             spotShadow_.endTile(currentCmd);
         }
@@ -4060,19 +3136,19 @@ namespace Iridium {
             .scene = indirectScene(frame),
             .assets = indirectAssets(),
         }, pointShadowWork(shadows), frame);
-        frameCounters_.shadowPointIndirectFallbackReason =
+        telemetry_.counters().shadowPointIndirectFallbackReason =
             static_cast<uint32_t>(pointCuller_.fallbackReason());
         if (pointCuller_.membershipCacheHit())
-            frameCounters_.shadowPointMembershipCacheHit = 1u;
+            telemetry_.counters().shadowPointMembershipCacheHit = 1u;
         if (!planned) {
             renderGraph_.skipPass(graphIds_.pointIndirect.compact);
             return false;
         }
         renderGraph_.beginPass(currentCmd, graphIds_.pointIndirect.compact);
-        frameCounters_.dispatchRecorded += pointCuller_.recordCompaction(
+        telemetry_.counters().dispatchRecorded += pointCuller_.recordCompaction(
             currentCmd, frame, {
                 .set0 = pointShadow_.renderDescriptor(frame),
-                .gpuScene = gpuSceneDescriptorSets_[frame],
+                .gpuScene = gpuScene_.descriptorSets()[frame],
             });
         return true;
     }
@@ -4122,7 +3198,7 @@ namespace Iridium {
         renderGraph_.beginPass(currentCmd, graphIds_.shadowPoint);
         IVulkanIndirectOracle* const shadowOracle =
             activeIndirectOracle(VulkanIndirectOracleView::PointShadow);
-        frameCounters_.shadowPointDirectFallback =
+        telemetry_.counters().shadowPointDirectFallback =
             static_cast<uint64_t>(std::count_if(
                 shadowCasterScratch_.begin(), shadowCasterScratch_.end(),
                 [indirectValid](const ResolvedShadowCaster& caster) {
@@ -4158,9 +3234,9 @@ namespace Iridium {
                             caster.boundsSphereRadiusWorld);
                     directionalShadowCasterMaskScratch_[casterIndex] =
                         visible ? 1u : 0u;
-                    if (collectFrameCounters_) {
-                        ++frameCounters_.shadowPointCastersTested;
-                        frameCounters_.shadowPointCastersCulled +=
+                    if (telemetry_.collecting()) {
+                        ++telemetry_.counters().shadowPointCastersTested;
+                        telemetry_.counters().shadowPointCastersCulled +=
                             visible ? 0u : 1u;
                     }
                 }
@@ -4174,7 +3250,7 @@ namespace Iridium {
                 if (indirectValid) {
                     vkCmdBindDescriptorSets(currentCmd,
                         VK_PIPELINE_BIND_POINT_GRAPHICS, layout,
-                        3u, 1u, &gpuSceneDescriptorSets_[frameIndex],
+                        3u, 1u, &gpuScene_.descriptorSets()[frameIndex],
                         0u, nullptr);
                     if (pointCuller_.anyAlphaMaskedBin()) {
                         bindMaterialDescriptors(layout);
@@ -4183,7 +3259,7 @@ namespace Iridium {
                     const uint32_t faceSlot =
                         shadow.shadowDataSlot * 6u + face;
                     const uint32_t workIndex = pointCuller_.workIndex(faceSlot);
-                    frameCounters_.shadowPointIndirectBins +=
+                    telemetry_.counters().shadowPointIndirectBins +=
                         pointCuller_.recordDraws(currentCmd, frameIndex,
                             workIndex, {
                                 .layout = layout,
@@ -4207,9 +3283,9 @@ namespace Iridium {
                             radialLodMetric(lodContext));
                         recordIndirectOracleDraws(
                             directionalShadowCasterMaskScratch_, 1u,
-                            frameCounters_.drawShadowPoint,
-                            frameCounters_.shadowPointIndirectCommands,
-                            frameCounters_.drawShadowPointAlphaMask);
+                            telemetry_.counters().drawShadowPoint,
+                            telemetry_.counters().shadowPointIndirectCommands,
+                            telemetry_.counters().drawShadowPointAlphaMask);
                     }
                     activePipeline = VK_NULL_HANDLE;
                     activeGeometry = {};
@@ -4225,9 +3301,9 @@ namespace Iridium {
                             InvalidGpuSceneIndex)
                         continue;
                     VulkanGeometryPayload* geometry =
-                        geometryVault.get(caster.geometry);
+                        resources_.geometries().get(caster.geometry);
                     VulkanMaterialPayload* material =
-                        materialVault.get(caster.material);
+                        resources_.materials().get(caster.material);
                     if (geometry == nullptr || material == nullptr) continue;
                     const bool alphaMasked = material->packed.alphaMode == 1u;
                     const bool doubleSided = material->packed.doubleSided != 0u;
@@ -4261,10 +3337,10 @@ namespace Iridium {
                         0, sizeof(push), &push);
                     vkCmdDrawIndexed(currentCmd, caster.indexCount, 1,
                         caster.firstIndex, 0, 0);
-                    recordDraw(frameCounters_.drawShadowPoint,
+                    telemetry_.recordDraw(telemetry_.counters().drawShadowPoint,
                         caster.indexCount / 3u);
-                    if (collectFrameCounters_ && alphaMasked)
-                        ++frameCounters_.drawShadowPointAlphaMask;
+                    if (telemetry_.collecting() && alphaMasked)
+                        ++telemetry_.counters().drawShadowPointAlphaMask;
                 }
                 pointShadow_.endFace(currentCmd);
             }
@@ -4288,7 +3364,7 @@ namespace Iridium {
             }, reflectionProbeWork(captures), frame))
             return false;
         // Per-face dispatches follow in recordReflectionProbeIndirectDispatch.
-        frameCounters_.dispatchRecorded +=
+        telemetry_.counters().dispatchRecorded +=
             probeCuller_.recordCompaction(currentCmd, frame, {});
         return true;
     }
@@ -4296,14 +3372,14 @@ namespace Iridium {
     void VulkanVertexBackend::recordReflectionProbeIndirectDispatch(
         uint32_t frameIndex, uint32_t faceRecord,
         uint32_t excludedInstanceIndex) {
-        frameCounters_.dispatchRecorded += probeCuller_.recordWorkItem(
+        telemetry_.counters().dispatchRecorded += probeCuller_.recordWorkItem(
             currentCmd, frameIndex, {
                 .set0 = reflectionProbeCapturePass_.faceComputeDescriptor(
                     frameIndex),
                 .set0DynamicOffset =
                     reflectionProbeCapturePass_.faceComputeDynamicOffset(
                         faceRecord),
-                .gpuScene = gpuSceneDescriptorSets_[frameIndex],
+                .gpuScene = gpuScene_.descriptorSets()[frameIndex],
             }, { excludedInstanceIndex, faceRecord, 0u });
     }
 
@@ -4369,8 +3445,8 @@ namespace Iridium {
             uint32_t excludedInstanceIndex = InvalidGpuSceneIndex;
             uint32_t gpuOwnerPrimitiveCount = 0u;
             if (indirectValid) {
-                const GpuSceneCpuMirror& scene =
-                    gpuSceneCpuMirrors_[frameIndex];
+                const VulkanGpuSceneState::CpuMirror& scene =
+                    gpuScene_.mirror(frameIndex);
                 for (uint32_t primitiveIndex :
                         probeCasters.gpuScenePrimitiveIndices) {
                     if (primitiveIndex >= scene.primitives.size() ||
@@ -4445,7 +3521,7 @@ namespace Iridium {
                 bindMaterialDescriptors(gpuSceneLayout);
                 vkCmdBindDescriptorSets(currentCmd,
                     VK_PIPELINE_BIND_POINT_GRAPHICS, gpuSceneLayout,
-                    4u, 1u, &gpuSceneDescriptorSets_[frameIndex],
+                    4u, 1u, &gpuScene_.descriptorSets()[frameIndex],
                     0u, nullptr);
                 VkPipeline activePipeline = VK_NULL_HANDLE;
                 GeometryHandle activeGeometry{};
@@ -4495,9 +3571,9 @@ namespace Iridium {
                     const ResolvedShadowCaster& caster =
                         shadowCasterScratch_[casterIndex];
                     VulkanGeometryPayload* geometry =
-                        geometryVault.get(caster.geometry);
+                        resources_.geometries().get(caster.geometry);
                     VulkanMaterialPayload* material =
-                        materialVault.get(caster.material);
+                        resources_.materials().get(caster.material);
                     if (geometry == nullptr || material == nullptr) continue;
                     const bool gpuScene = caster.gpuScenePrimitiveIndex !=
                         InvalidGpuSceneIndex;
@@ -4630,24 +3706,20 @@ namespace Iridium {
         if (!opaqueCuller_.plan({
                 .queue = opaqueQueue,
                 .scene = indirectScene(frame),
-                .sceneBuffersMapped =
-                    gpuScenePrimitiveBuffers_[frame].mapped != nullptr &&
-                    gpuSceneGeometryBuffers_[frame].mapped != nullptr &&
-                    gpuSceneInstanceBuffers_[frame].mapped != nullptr &&
-                    gpuSceneTransformBuffers_[frame].mapped != nullptr,
+                .sceneBuffersMapped = gpuScene_.buffersMapped(frame),
                 .assets = indirectAssets(),
                 .queryOcclusion = depthOcclusionQueryEnabled_ &&
                     currentDepthHistoryDecision_.eligible,
-                .view = &gpuSceneCpuViews_[frame],
+                .view = &gpuScene_.views()[frame],
             }, frame)) {
             renderGraph_.skipPass(graphIds_.opaqueIndirect.compact);
             return false;
         }
         renderGraph_.beginPass(currentCmd, graphIds_.opaqueIndirect.compact);
-        frameCounters_.dispatchRecorded += opaqueCuller_.recordCompaction(
+        telemetry_.counters().dispatchRecorded += opaqueCuller_.recordCompaction(
             currentCmd, frame, {
                 .globalSet = globalDescriptorSets[frame],
-                .gpuSceneSet = gpuSceneDescriptorSets_[frame],
+                .gpuSceneSet = gpuScene_.descriptorSets()[frame],
                 .retainedView = retainedRenderView_,
             });
         return true;
@@ -4720,18 +3792,18 @@ namespace Iridium {
         if (isWireframe) {
             // Editor wireframe is a deliberate fixed override, not a material PSO.
             vkCmdBindPipeline(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS, gBufferPipeline->getWireframePipeline());
-            recordPipelineBind(pipelineIdentity(FixedPipelineIdentity::GBufferWireframe));
+            telemetry_.recordPipelineBind(pipelineIdentity(FixedPipelineIdentity::GBufferWireframe));
             vkCmdBindDescriptorSets(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout,
                 0, 1, &globalDescriptorSets[scheduler.currentFrameIndex()], 0, nullptr);
 
             for (const auto& packet : opaqueQueue) {
-                auto* geometry = geometryVault.get(packet.geometry);
-                auto* material = materialVault.get(packet.material);
+                auto* geometry = resources_.geometries().get(packet.geometry);
+                auto* material = resources_.materials().get(packet.material);
                 if (!geometry || !material) continue;
 
                 if (packet.material != lastBoundMaterial) {
                     bindMaterialDescriptors(meshLayout);
-                    recordMaterialBind(packet.material);
+                    telemetry_.recordMaterialBind(packet.material);
                     lastBoundMaterial = packet.material;
                 }
                 if (packet.geometry != lastBoundGeometry) {
@@ -4749,7 +3821,7 @@ namespace Iridium {
                 vkCmdPushConstants(currentCmd, meshLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                     0, sizeof(push), &push);
                 vkCmdDrawIndexed(currentCmd, packet.indexCount, 1, packet.firstIndex, 0, 0);
-                recordDraw(frameCounters_.drawOpaque, packet.indexCount / 3);
+                telemetry_.recordDraw(telemetry_.counters().drawOpaque, packet.indexCount / 3);
             }
         }
         else {
@@ -4765,7 +3837,7 @@ namespace Iridium {
                     const VulkanOpaqueIndirectCuller::Bin& bin =
                         opaqueCuller_.bins()[binIndex];
                     const DrawPacket& packet = opaqueQueue[bin.packetBegin];
-                    auto* geometry = geometryVault.get(bin.geometry);
+                    auto* geometry = resources_.geometries().get(bin.geometry);
                     const VulkanPipelineRecord* record =
                         pipelineLibrary.get(bin.pipeline);
 
@@ -4773,21 +3845,21 @@ namespace Iridium {
                         vkCmdBindPipeline(currentCmd,
                             VK_PIPELINE_BIND_POINT_GRAPHICS,
                             record->gpuSceneIndirectPipeline);
-                        recordPipelineBind(bin.pipeline.id);
+                        telemetry_.recordPipelineBind(bin.pipeline.id);
                         activeLayout = record->pipelineLayout;
                         vkCmdBindDescriptorSets(currentCmd,
                             VK_PIPELINE_BIND_POINT_GRAPHICS, activeLayout,
                             0u, 1u, &globalDescriptorSets[frame], 0u, nullptr);
                         vkCmdBindDescriptorSets(currentCmd,
                             VK_PIPELINE_BIND_POINT_GRAPHICS, activeLayout,
-                            4u, 1u, &gpuSceneDescriptorSets_[frame],
+                            4u, 1u, &gpuScene_.descriptorSets()[frame],
                             0u, nullptr);
                         lastBoundPipeline = bin.pipeline;
                         lastBoundMaterial = MaterialHandle{};
                     }
                     if (bin.material != lastBoundMaterial) {
                         bindMaterialDescriptors(activeLayout);
-                        recordMaterialBind(bin.material);
+                        telemetry_.recordMaterialBind(bin.material);
                         lastBoundMaterial = bin.material;
                     }
                     // Commands carry exact signed base vertices; children in the
@@ -4830,23 +3902,23 @@ namespace Iridium {
                         const DrawPacket& drawn = opaqueQueue[
                             bin.packetBegin + command];
                         if (cpuVisibilityOracleVisible(drawn)) {
-                            recordDraw(frameCounters_.drawOpaque,
+                            telemetry_.recordDraw(telemetry_.counters().drawOpaque,
                                 drawn.indexCount / 3u);
                             ++oracleVisibleCommands;
                         }
                     }
                 }
-                frameCounters_.opaqueIndirectCommands =
+                telemetry_.counters().opaqueIndirectCommands =
                     oracleVisibleCommands;
-                frameCounters_.opaqueIndirectBins = opaqueCuller_.bins().size();
+                telemetry_.counters().opaqueIndirectBins = opaqueCuller_.bins().size();
             }
             else for (const auto& packet : opaqueQueue) {
                 if (!forceDirectGBufferReference_ && hasGpuScenePrimitive(packet) &&
                     !cpuVisibilityOracleVisible(packet)) {
                     continue;
                 }
-                auto* geometry = geometryVault.get(packet.geometry);
-                auto* material = materialVault.get(packet.material);
+                auto* geometry = resources_.geometries().get(packet.geometry);
+                auto* material = resources_.materials().get(packet.material);
                 const VulkanPipelineRecord* record = pipelineLibrary.get(packet.pipeline);
                 if (!geometry || !material) continue;
 
@@ -4859,7 +3931,7 @@ namespace Iridium {
 
                 if (packet.pipeline != lastBoundPipeline) {
                     vkCmdBindPipeline(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS, record->pipeline);
-                    recordPipelineBind(packet.pipeline.id);
+                    telemetry_.recordPipelineBind(packet.pipeline.id);
                     activeLayout = record->pipelineLayout;
                     vkCmdBindDescriptorSets(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS, activeLayout,
                         0, 1, &globalDescriptorSets[scheduler.currentFrameIndex()], 0, nullptr);
@@ -4868,7 +3940,7 @@ namespace Iridium {
                 }
                 if (packet.material != lastBoundMaterial) {
                     bindMaterialDescriptors(activeLayout);
-                    recordMaterialBind(packet.material);
+                    telemetry_.recordMaterialBind(packet.material);
                     lastBoundMaterial = packet.material;
                 }
                 if (packet.geometry != lastBoundGeometry) {
@@ -4887,17 +3959,17 @@ VkDeviceSize offset = geometry->vertexOffset;
                     VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                     0, sizeof(push), &push);
                 vkCmdDrawIndexed(currentCmd, packet.indexCount, 1, packet.firstIndex, 0, 0);
-                recordDraw(frameCounters_.drawOpaque, packet.indexCount / 3);
+                telemetry_.recordDraw(telemetry_.counters().drawOpaque, packet.indexCount / 3);
             }
             if (!indirectValid) {
-                frameCounters_.opaqueIndirectFallbackPackets = 0u;
+                telemetry_.counters().opaqueIndirectFallbackPackets = 0u;
                 for (const DrawPacket& packet : opaqueQueue) {
                     if (forceDirectGBufferReference_ || !hasGpuScenePrimitive(packet) ||
                         cpuVisibilityOracleVisible(packet)) {
-                        ++frameCounters_.opaqueIndirectFallbackPackets;
+                        ++telemetry_.counters().opaqueIndirectFallbackPackets;
                     }
                 }
-                frameCounters_.opaqueIndirectFallbackReason =
+                telemetry_.counters().opaqueIndirectFallbackReason =
                     static_cast<uint32_t>(opaqueCuller_.indirectPlan().fallbackReason ==
                             GpuSceneIndirectFallbackReason::None
                         ? GpuSceneIndirectFallbackReason::InvalidPacket
@@ -4914,7 +3986,7 @@ VkDeviceSize offset = geometry->vertexOffset;
             VulkanGpuRangeToken selectionGpuRange =
                 scheduler.beginGpuRange("gpu.gbuffer.selection");
             vkCmdBindPipeline(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS, gBufferPipeline->getOutlinePipeline());
-            recordPipelineBind(pipelineIdentity(FixedPipelineIdentity::SelectionMask));
+            telemetry_.recordPipelineBind(pipelineIdentity(FixedPipelineIdentity::SelectionMask));
             vkCmdBindDescriptorSets(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout,
                 0, 1, &globalDescriptorSets[scheduler.currentFrameIndex()], 0, nullptr);
 
@@ -4922,8 +3994,8 @@ VkDeviceSize offset = geometry->vertexOffset;
             lastBoundGeometry = GeometryHandle{};
 
             for (const auto& packet : selectionQueue) {
-                auto* geometry = geometryVault.get(packet.geometry);
-                auto* material = materialVault.get(packet.material);
+                auto* geometry = resources_.geometries().get(packet.geometry);
+                auto* material = resources_.materials().get(packet.material);
 
                 if (!geometry || !material) continue;
 
@@ -4935,7 +4007,7 @@ VkDeviceSize offset = geometry->vertexOffset;
 
                 if (packet.material != lastBoundMaterial) {
                     bindMaterialDescriptors(meshLayout);
-                    recordMaterialBind(packet.material);
+                    telemetry_.recordMaterialBind(packet.material);
                     lastBoundMaterial = packet.material;
                 }
                 if (packet.geometry != lastBoundGeometry) {
@@ -4950,115 +4022,13 @@ VkDeviceSize offset = geometry->vertexOffset;
                     0, sizeof(push), &push);
 
                 vkCmdDrawIndexed(currentCmd, packet.indexCount, 1, packet.firstIndex, 0, 0);
-                recordDraw(frameCounters_.drawSelection, packet.indexCount / 3);
+                telemetry_.recordDraw(telemetry_.counters().drawSelection, packet.indexCount / 3);
             }
             scheduler.endGpuRange(selectionGpuRange);
         }
 
         vkCmdEndRenderPass(currentCmd);
 
-    }
-
-    void VulkanVertexBackend::createCanonicalMaterialBuffers(
-        uint32_t capacity) {
-        if (capacity == 0 ||
-            capacity > canonicalMaterialMaximumCapacity_) {
-            throw std::invalid_argument(
-                "canonical material buffer capacity is outside the device limit");
-        }
-        const VkDeviceSize bytes =
-            static_cast<VkDeviceSize>(capacity) *
-            sizeof(PackedGpuMaterial);
-        std::array<VulkanBufferResource,
-            VulkanFrameScheduler::FramesInFlight>
-            replacement{};
-        try {
-            for (VulkanBufferResource& buffer :
-                replacement) {
-                buffer = resourceAllocator.createBuffer(bytes,
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                        VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                    true,
-                    ProfileMemoryCategory::MaterialGpu);
-            }
-        }
-        catch (...) {
-            for (VulkanBufferResource& buffer :
-                replacement) {
-                resourceAllocator.destroy(buffer);
-            }
-            throw;
-        }
-
-        if (canonicalMaterialCapacity_ != 0) {
-            if (frameOpen_) {
-                for (VulkanBufferResource& buffer :
-                    replacement) {
-                    resourceAllocator.destroy(buffer);
-                }
-                throw std::logic_error(
-                    "canonical material buffers may grow only at a frame boundary");
-            }
-            scheduler.waitForAllFrames();
-        }
-        for (VulkanBufferResource& buffer :
-            canonicalMaterialBuffers_) {
-            resourceAllocator.destroy(buffer);
-        }
-        canonicalMaterialBuffers_ = replacement;
-        canonicalMaterialCapacity_ = capacity;
-        for (uint32_t frame = 0;
-            frame < VulkanFrameScheduler::FramesInFlight;
-            ++frame) {
-            indexedTextureTable_.bindMaterialBuffer(
-                frame,
-                canonicalMaterialBuffers_[frame].buffer,
-                canonicalMaterialBuffers_[frame].size);
-        }
-        materialVault.forEach(
-            [](VulkanMaterialPayload& material) {
-                material.uploadedPackedRevisions.fill(0);
-            });
-    }
-
-    void VulkanVertexBackend::ensureCanonicalMaterialCapacity(
-        uint32_t requiredCapacity) {
-        if (requiredCapacity <=
-            canonicalMaterialCapacity_) {
-            return;
-        }
-        if (requiredCapacity >
-            canonicalMaterialMaximumCapacity_) {
-            throw std::overflow_error(
-                "canonical material table exhausted the device storage-buffer limit");
-        }
-        createCanonicalMaterialBuffers(
-            nextMaterialTableCapacity(
-                canonicalMaterialCapacity_,
-                requiredCapacity,
-                canonicalMaterialMaximumCapacity_));
-    }
-
-    void VulkanVertexBackend::uploadCanonicalMaterialsForFrame(uint32_t frameIndex) {
-        if (frameIndex >= canonicalMaterialBuffers_.size())
-            throw std::out_of_range("canonical material frame index is invalid");
-        VulkanBufferResource& buffer = canonicalMaterialBuffers_[frameIndex];
-        materialVault.forEachIndexed([&](MaterialHandle handle,
-            VulkanMaterialPayload& material) {
-            if (handle.getIndex() >=
-                canonicalMaterialCapacity_)
-                throw std::overflow_error("canonical material table capacity exceeded");
-            uint64_t& uploadedRevision =
-                material.uploadedPackedRevisions[frameIndex];
-            uint64_t nextUploadedRevision = uploadedRevision;
-            if (!consumeMaterialUploadRevision(material.packedRevision,
-                nextUploadedRevision)) return;
-            resourceAllocator.write(buffer,
-                static_cast<VkDeviceSize>(handle.getIndex()) * sizeof(PackedGpuMaterial),
-                std::as_bytes(std::span(&material.packed, size_t{ 1 })));
-            uploadedRevision = nextUploadedRevision;
-        });
     }
 
     void VulkanVertexBackend::createLightRecordBuffers(uint32_t capacity) {
@@ -5172,118 +4142,6 @@ VkDeviceSize offset = geometry->vertexOffset;
         bindClusterBuffers();
     }
 
-    void VulkanVertexBackend::createGpuSceneBuffers(
-        const GpuSceneCapacityRequirements& capacity) {
-        if (frameOpen_) {
-            throw std::logic_error(
-                "GPU-scene buffers may grow only at a frame boundary");
-        }
-        if (capacity.transforms == 0 || capacity.instances == 0 ||
-            capacity.primitives == 0 || capacity.geometries == 0 ||
-            capacity.transforms > gpuSceneMaximumCapacity_.transforms ||
-            capacity.instances > gpuSceneMaximumCapacity_.instances ||
-            capacity.primitives > gpuSceneMaximumCapacity_.primitives ||
-            capacity.geometries > gpuSceneMaximumCapacity_.geometries) {
-            throw std::invalid_argument(
-                "GPU-scene capacity is outside the device storage limit");
-        }
-        using Buffers = std::array<VulkanBufferResource,
-            VulkanFrameScheduler::FramesInFlight>;
-        Buffers transforms{}, instances{}, primitives{}, geometries{};
-        const auto create = [this](VulkanBufferResource& destination,
-            uint64_t count, uint64_t stride) {
-            destination = resourceAllocator.createBuffer(count * stride,
-                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                    VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                true, ProfileMemoryCategory::GpuScene);
-            std::memset(destination.mapped, 0,
-                static_cast<size_t>(count * stride));
-        };
-        try {
-            for (uint32_t frame = 0;
-                frame < VulkanFrameScheduler::FramesInFlight; ++frame) {
-                create(transforms[frame], capacity.transforms,
-                    sizeof(GpuSceneAffineTransform));
-                create(instances[frame], capacity.instances,
-                    sizeof(GpuSceneInstanceRecord));
-                create(primitives[frame], capacity.primitives,
-                    sizeof(GpuScenePrimitiveRecord));
-                create(geometries[frame], capacity.geometries,
-                    sizeof(GpuSceneGeometryRecord));
-            }
-        }
-        catch (...) {
-            for (Buffers* buffers : { &transforms, &instances,
-                    &primitives, &geometries })
-                for (VulkanBufferResource& buffer : *buffers)
-                    resourceAllocator.destroy(buffer);
-            throw;
-        }
-        if (gpuSceneCapacity_.instances != 0) scheduler.waitForAllFrames();
-        for (Buffers* buffers : { &gpuSceneTransformBuffers_,
-                &gpuSceneInstanceBuffers_, &gpuScenePrimitiveBuffers_,
-                &gpuSceneGeometryBuffers_ })
-            for (VulkanBufferResource& buffer : *buffers)
-                resourceAllocator.destroy(buffer);
-        gpuSceneTransformBuffers_ = transforms;
-        gpuSceneInstanceBuffers_ = instances;
-        gpuScenePrimitiveBuffers_ = primitives;
-        gpuSceneGeometryBuffers_ = geometries;
-        gpuSceneCapacity_ = capacity;
-        if (gpuSceneDescriptorSets_[0] != VK_NULL_HANDLE)
-            bindGpuSceneBuffers();
-        for (uint32_t frame = 0;
-            frame < VulkanFrameScheduler::FramesInFlight; ++frame) {
-            uploadedGpuSceneTransformRevisions_[frame].assign(
-                capacity.transforms, 0);
-            uploadedGpuSceneInstanceRevisions_[frame].assign(
-                capacity.instances, 0);
-            uploadedGpuScenePrimitiveRevisions_[frame].assign(
-                capacity.primitives, 0);
-            uploadedGpuSceneGeometryRevisions_[frame].assign(
-                capacity.geometries, 0);
-            auto& mirror = gpuSceneCpuMirrors_[frame];
-            mirror.transforms.resize(capacity.transforms);
-            mirror.instances.resize(capacity.instances);
-            mirror.primitives.resize(capacity.primitives);
-            mirror.geometries.resize(capacity.geometries);
-            mirror.primitiveIdentities.resize(capacity.primitives);
-        }
-        gpuSceneUploadRanges_.reserve((std::max)({ capacity.transforms,
-            capacity.instances, capacity.primitives, capacity.geometries }));
-    }
-
-    void VulkanVertexBackend::bindGpuSceneBuffers() {
-        for (uint32_t frame = 0;
-                frame < VulkanFrameScheduler::FramesInFlight; ++frame) {
-            const std::array<VkDescriptorBufferInfo, 4> infos{{
-                { gpuSceneTransformBuffers_[frame].buffer, 0,
-                    gpuSceneTransformBuffers_[frame].size },
-                { gpuSceneInstanceBuffers_[frame].buffer, 0,
-                    gpuSceneInstanceBuffers_[frame].size },
-                { gpuScenePrimitiveBuffers_[frame].buffer, 0,
-                    gpuScenePrimitiveBuffers_[frame].size },
-                { gpuSceneGeometryBuffers_[frame].buffer, 0,
-                    gpuSceneGeometryBuffers_[frame].size },
-            }};
-            std::array<VkWriteDescriptorSet, 4> writes{};
-            for (uint32_t binding = 0; binding < writes.size(); ++binding) {
-                writes[binding] = {
-                    VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
-                writes[binding].dstSet = gpuSceneDescriptorSets_[frame];
-                writes[binding].dstBinding = binding;
-                writes[binding].descriptorType =
-                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-                writes[binding].descriptorCount = 1u;
-                writes[binding].pBufferInfo = &infos[binding];
-            }
-            vkUpdateDescriptorSets(vkContext->getDevice(),
-                static_cast<uint32_t>(writes.size()), writes.data(),
-                0u, nullptr);
-        }
-    }
-
     VulkanCullerServices VulkanVertexBackend::cullerServices() {
         cullerDevice_ = { vkContext->getDevice(), &resourceAllocator,
             &descriptorAllocator, &scheduler };
@@ -5298,7 +4156,7 @@ VkDeviceSize offset = geometry->vertexOffset;
                 .maxDrawIndirectCount = vkContext->getMaxDrawIndirectCount(),
             },
             .profiler = cpuProfiler_,
-            .oracle = indirectOracle_,
+            .oracle = extensionHooks_.indirectOracle(),
             .streamObserver = activeIndirectStreamObserver(),
             .sceneOwner = this,
             .scene = [](const void* owner, uint32_t slot) {
@@ -5376,10 +4234,10 @@ VkDeviceSize offset = geometry->vertexOffset;
                 (visibility[casterIndex] & visibilityBit) == 0u)
                 continue;
             const VulkanMaterialPayload* material =
-                materialVault.get(caster.material);
-            recordDraw(drawCounter, caster.indexCount / 3u);
+                resources_.materials().get(caster.material);
+            telemetry_.recordDraw(drawCounter, caster.indexCount / 3u);
             ++commandCounter;
-            if (collectFrameCounters_ && material != nullptr &&
+            if (telemetry_.collecting() && material != nullptr &&
                 material->packed.alphaMode == 1u)
                 ++alphaMaskCounter;
         }
@@ -5600,7 +4458,7 @@ VkDeviceSize offset = geometry->vertexOffset;
     }
 
     void VulkanVertexBackend::bindReflectionProbeEnvironments() {
-        const VulkanTexturePayload* neutral = textureVault.get(
+        const VulkanTexturePayload* neutral = resources_.textures().get(
             neutralEnvironmentCube_);
         if (neutral == nullptr || neutral->retired ||
             neutral->image.viewType != VK_IMAGE_VIEW_TYPE_CUBE)
@@ -5615,7 +4473,7 @@ VkDeviceSize offset = geometry->vertexOffset;
             index < reflectionProbeEnvironments_.size(); ++index) {
             const EnvironmentLightingHandles& environment =
                 reflectionProbeEnvironments_[index];
-            const VulkanTexturePayload* prefiltered = textureVault.get(
+            const VulkanTexturePayload* prefiltered = resources_.textures().get(
                 environment.prefilteredSpecular);
             if (prefiltered == nullptr || prefiltered->retired ||
                 prefiltered->image.viewType != VK_IMAGE_VIEW_TYPE_CUBE ||
@@ -5931,27 +4789,7 @@ VkDeviceSize offset = geometry->vertexOffset;
             throw std::logic_error(
                 "GPU-scene capacity must be prepared before beginFrame");
         }
-        const auto grow = [](uint32_t current, uint32_t required,
-            uint32_t maximum) {
-            required = (std::max)(required, 1u);
-            return required <= current ? current : nextMaterialTableCapacity(
-                current, required, maximum);
-        };
-        GpuSceneCapacityRequirements next{
-            grow(gpuSceneCapacity_.transforms, requirements.transforms,
-                gpuSceneMaximumCapacity_.transforms),
-            grow(gpuSceneCapacity_.instances, requirements.instances,
-                gpuSceneMaximumCapacity_.instances),
-            grow(gpuSceneCapacity_.primitives, requirements.primitives,
-                gpuSceneMaximumCapacity_.primitives),
-            grow(gpuSceneCapacity_.geometries, requirements.geometries,
-                gpuSceneMaximumCapacity_.geometries),
-        };
-        if (next.transforms != gpuSceneCapacity_.transforms ||
-            next.instances != gpuSceneCapacity_.instances ||
-            next.primitives != gpuSceneCapacity_.primitives ||
-            next.geometries != gpuSceneCapacity_.geometries)
-            createGpuSceneBuffers(next);
+        gpuScene_.prepare(requirements);
         const uint32_t desiredIndirectCapacity = (std::min)(
             (std::max)(requirements.primitives, 1u),
             MaximumOpaqueIndirectCommandCapacity);
@@ -5978,91 +4816,11 @@ VkDeviceSize offset = geometry->vertexOffset;
             throw std::logic_error(
                 "GPU-scene publication requires an acquired frame context");
         }
-        if (scene.abiVersion != GpuSceneAbiVersion ||
-            scene.transforms.size() > gpuSceneCapacity_.transforms ||
-            scene.instances.size() > gpuSceneCapacity_.instances ||
-            scene.primitives.size() > gpuSceneCapacity_.primitives ||
-            scene.geometries.size() > gpuSceneCapacity_.geometries ||
-            scene.transformRevisions.size() != scene.transforms.size() ||
-            scene.instanceRevisions.size() != scene.instances.size() ||
-            scene.primitiveRevisions.size() != scene.primitives.size() ||
-            scene.geometryRevisions.size() != scene.geometries.size() ||
-            scene.primitiveIdentities.size() != scene.primitives.size()) {
-            throw std::out_of_range(
-                "GPU-scene publication is outside prepared capacity or ABI");
-        }
+        gpuScene_.validatePublication(scene);
         CpuScope uploadScope(cpuProfiler_, "cpu.gpu_scene.upload");
-        publishedGpuSceneEpoch_ = scene.sceneEpoch == 0u
-            ? 1u : scene.sceneEpoch;
         if (experimentalGpuLodErrorPixels_ > 0.0f) opaqueCuller_.lodHistory().publish(scene);
-        gpuScenePublishedCounts_ = {
-            static_cast<uint32_t>(scene.transforms.size()),
-            static_cast<uint32_t>(scene.instances.size()),
-            static_cast<uint32_t>(scene.primitives.size()),
-            static_cast<uint32_t>(scene.geometries.size()),
-        };
-        const uint32_t frame = scheduler.currentFrameIndex();
-        gpuSceneUploadTelemetry_ = {};
-        const auto upload = [this](auto records,
-            std::span<const uint64_t> revisions,
-            std::vector<uint64_t>& uploaded,
-            VulkanBufferResource& destination, auto& cpuMirror, uint32_t& tableRanges) {
-            buildGpuSceneUploadRanges(revisions, uploaded,
-                gpuSceneUploadRanges_);
-            tableRanges = static_cast<uint32_t>(gpuSceneUploadRanges_.size());
-            gpuSceneUploadTelemetry_.ranges += tableRanges;
-            using Record = typename decltype(records)::value_type;
-            for (const GpuSceneRecordRange range : gpuSceneUploadRanges_) {
-                const auto source = records.subspan(
-                    range.firstRecord, range.recordCount);
-                resourceAllocator.write(destination,
-                    static_cast<VkDeviceSize>(range.firstRecord) *
-                        sizeof(Record), std::as_bytes(source));
-                std::copy(source.begin(), source.end(), cpuMirror.begin() + range.firstRecord);
-                std::copy_n(revisions.begin() + range.firstRecord,
-                    range.recordCount,
-                    uploaded.begin() + range.firstRecord);
-                gpuSceneUploadTelemetry_.bytes +=
-                    static_cast<uint64_t>(range.recordCount) * sizeof(Record);
-            }
-        };
-        upload(std::span(scene.transforms), scene.transformRevisions,
-            uploadedGpuSceneTransformRevisions_[frame],
-            gpuSceneTransformBuffers_[frame],
-            gpuSceneCpuMirrors_[frame].transforms,
-            gpuSceneUploadTelemetry_.transformRanges);
-        upload(std::span(scene.instances), scene.instanceRevisions,
-            uploadedGpuSceneInstanceRevisions_[frame],
-            gpuSceneInstanceBuffers_[frame],
-            gpuSceneCpuMirrors_[frame].instances,
-            gpuSceneUploadTelemetry_.instanceRanges);
-        upload(std::span(scene.primitives), scene.primitiveRevisions,
-            uploadedGpuScenePrimitiveRevisions_[frame],
-            gpuScenePrimitiveBuffers_[frame],
-            gpuSceneCpuMirrors_[frame].primitives,
-            gpuSceneUploadTelemetry_.primitiveRanges);
-        for (const GpuSceneRecordRange range : gpuSceneUploadRanges_)
-            std::copy_n(scene.primitiveIdentities.begin() +
-                    range.firstRecord,
-                range.recordCount,
-                gpuSceneCpuMirrors_[frame].primitiveIdentities.begin() +
-                    range.firstRecord);
-        upload(std::span(scene.geometries), scene.geometryRevisions,
-            uploadedGpuSceneGeometryRevisions_[frame],
-            gpuSceneGeometryBuffers_[frame],
-            gpuSceneCpuMirrors_[frame].geometries,
-            gpuSceneUploadTelemetry_.geometryRanges);
+        gpuScene_.publish(scene, scheduler.currentFrameIndex());
         if (cpuProfiler_ != nullptr) {
-            uint64_t mirrorBytes = 0;
-            for (const auto& mirror : gpuSceneCpuMirrors_)
-                mirrorBytes += mirror.transforms.capacity() * sizeof(GpuSceneAffineTransform) +
-                    mirror.instances.capacity() * sizeof(GpuSceneInstanceRecord) +
-                    mirror.primitives.capacity() * sizeof(GpuScenePrimitiveRecord) +
-                    mirror.geometries.capacity() * sizeof(GpuSceneGeometryRecord) +
-                    mirror.primitiveIdentities.capacity() *
-                        sizeof(GpuScenePrimitiveIdentity);
-            cpuProfiler_->recordCounter("gpu_scene.cpu_mirror.capacity_bytes", mirrorBytes,
-                ProfileCounterStatus::Exact, ProfileCounterUnit::Bytes);
             cpuProfiler_->recordCounter("gpu_scene.lod.history_buffer_bytes",
                 opaqueCuller_.lodHistoryBufferBytes(),
                 ProfileCounterStatus::Exact, ProfileCounterUnit::Bytes);
@@ -6258,7 +5016,7 @@ VkDeviceSize offset = geometry->vertexOffset;
         currentProjectionRevision_ = viewProjectionRevision(
             view.view, view.projection);
         if (experimentalGpuLodErrorPixels_ > 0.0f) opaqueCuller_.lodHistory().updateView(view, history);
-        gpuSceneCpuViews_[scheduler.currentFrameIndex()] = view;
+        gpuScene_.views()[scheduler.currentFrameIndex()] = view;
         UniformBufferObject ubo{};
         ubo.model = glm::mat4(1.0f); // Handled individually via push constants
         ubo.view = view.view;
@@ -6311,7 +5069,7 @@ VkDeviceSize offset = geometry->vertexOffset;
             }
             else {
                 renderGraph_.beginPass(currentCmd, graphIds_.probeCluster);
-                frameCounters_.dispatchRecorded += reflectionProbePipeline_.record(
+                telemetry_.counters().dispatchRecorded += reflectionProbePipeline_.record(
                     currentCmd, frameIndex,
                     static_cast<uint32_t>(probeDimensions.clusterCount()));
             }
@@ -6325,7 +5083,7 @@ VkDeviceSize offset = geometry->vertexOffset;
                     view, proj });
             VulkanGpuRangeToken clusterGpuRange =
                 scheduler.beginGpuRange("gpu.lighting.cluster");
-            frameCounters_.dispatchRecorded += clusteredLighting_.record(
+            telemetry_.counters().dispatchRecorded += clusteredLighting_.record(
                 currentCmd, renderGraph_, graphIds_.cluster, frameIndex,
                 static_cast<uint32_t>(dimensions.clusterCount()),
                 lights.stats.activeLightCount);
@@ -6361,7 +5119,7 @@ VkDeviceSize offset = geometry->vertexOffset;
         VulkanGpuRangeToken deferredGpuRange =
             scheduler.beginGpuRange("gpu.lighting.deferred");
         vkCmdBindPipeline(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS, lightingPipeline->getPipeline());
-        recordPipelineBind(pipelineIdentity(FixedPipelineIdentity::DeferredLighting));
+        telemetry_.recordPipelineBind(pipelineIdentity(FixedPipelineIdentity::DeferredLighting));
 
         // Bind the G-Buffer Textures internally managed by the backend
         const VkDescriptorSet sceneSet = sceneDescriptors.get(
@@ -6380,7 +5138,7 @@ VkDeviceSize offset = geometry->vertexOffset;
 
         // Draw the full screen triangle without vertex buffers
         vkCmdDraw(currentCmd, 3, 1, 0, 0);
-        recordDraw(frameCounters_.drawLighting, 1);
+        telemetry_.recordDraw(telemetry_.counters().drawLighting, 1);
         scheduler.endGpuRange(deferredGpuRange);
 
         vkCmdEndRenderPass(currentCmd);
@@ -6435,7 +5193,7 @@ VkDeviceSize offset = geometry->vertexOffset;
             layeredInterfaceCapture_.pipelineLayout();
         vkCmdBindPipeline(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
             layeredInterfaceCapture_.pipeline());
-        recordPipelineBind(pipelineIdentity(
+        telemetry_.recordPipelineBind(pipelineIdentity(
             FixedPipelineIdentity::LayeredInterfaceCapture));
         const VkDescriptorSet globalSet = globalDescriptorSets[
             scheduler.currentFrameIndex()];
@@ -6454,8 +5212,8 @@ VkDeviceSize offset = geometry->vertexOffset;
                 continue;
             const DrawPacket& packet = packets[draw.packetIndex];
             const VulkanGeometryPayload* geometry =
-                geometryVault.get(packet.geometry);
-            if (geometry == nullptr || materialVault.get(packet.material) == nullptr)
+                resources_.geometries().get(packet.geometry);
+            if (geometry == nullptr || resources_.materials().get(packet.material) == nullptr)
                 continue;
             const VkViewport viewport{
                 -static_cast<float>(draw.viewportOffsetX),
@@ -6495,11 +5253,11 @@ VkDeviceSize offset = geometry->vertexOffset;
             vkCmdDrawIndexed(currentCmd, packet.indexCount, 1u,
                 packet.firstIndex, 0, 0u);
             if (exitCapture) {
-                recordDraw(frameCounters_.ordinary2CaptureExitDraws,
+                telemetry_.recordDraw(telemetry_.counters().ordinary2CaptureExitDraws,
                     packet.indexCount / 3u);
             }
             else {
-                recordDraw(frameCounters_.ordinary2CaptureEntryDraws,
+                telemetry_.recordDraw(telemetry_.counters().ordinary2CaptureEntryDraws,
                     packet.indexCount / 3u);
             }
         }
@@ -6585,7 +5343,7 @@ VkDeviceSize offset = geometry->vertexOffset;
             layeredInterfaceCapture_.pipelineLayout();
         vkCmdBindPipeline(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
             layeredInterfaceCapture_.pipeline());
-        recordPipelineBind(pipelineIdentity(
+        telemetry_.recordPipelineBind(pipelineIdentity(
             FixedPipelineIdentity::LayeredInterfaceCapture));
         const VkDescriptorSet globalSet = globalDescriptorSets[frameIndex];
         vkCmdBindDescriptorSets(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -6603,9 +5361,9 @@ VkDeviceSize offset = geometry->vertexOffset;
                 continue;
             const DrawPacket& packet = packets[draw.packetIndex];
             const VulkanGeometryPayload* geometry =
-                geometryVault.get(packet.geometry);
+                resources_.geometries().get(packet.geometry);
             if (geometry == nullptr ||
-                materialVault.get(packet.material) == nullptr) {
+                resources_.materials().get(packet.material) == nullptr) {
                 continue;
             }
             const VkViewport viewport{
@@ -6648,7 +5406,7 @@ const VkDeviceSize offset = geometry->vertexOffset;
                 0u, sizeof(push), &push);
             vkCmdDrawIndexed(currentCmd, packet.indexCount, 1u,
                 packet.firstIndex, 0, 0u);
-            recordDraw(frameCounters_.deepLayeredInterfaceDraws,
+            telemetry_.recordDraw(telemetry_.counters().deepLayeredInterfaceDraws,
                 packet.indexCount / 3u);
         }
         vkCmdEndRenderPass(currentCmd);
@@ -6717,7 +5475,7 @@ const VkDeviceSize offset = geometry->vertexOffset;
         renderGraph_.beginPass(currentCmd, pass);
         layeredInterfaceCapture_.recordTileTermination(currentCmd,
             frameIndex, quality, interfaceIndex, tier.atlasExtent);
-        recordPipelineBind(pipelineIdentity(
+        telemetry_.recordPipelineBind(pipelineIdentity(
             FixedPipelineIdentity::LayeredTileTermination));
         scheduler.endGpuRange(gpuRange);
     }
@@ -6801,7 +5559,7 @@ const VkDeviceSize offset = geometry->vertexOffset;
         // without adding another interface image or per-frame allocation.
         vkCmdBindPipeline(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
             layeredLocalComposition_.deepResidualPipeline());
-        recordPipelineBind(pipelineIdentity(
+        telemetry_.recordPipelineBind(pipelineIdentity(
             FixedPipelineIdentity::LayeredResidualComposition));
         const uint32_t residualQuerySlot = quality ==
                 TransparencyQuality::Hero4
@@ -6813,9 +5571,9 @@ const VkDeviceSize offset = geometry->vertexOffset;
                 continue;
             const DrawPacket& packet = packets[draw.packetIndex];
             const VulkanGeometryPayload* geometry =
-                geometryVault.get(packet.geometry);
+                resources_.geometries().get(packet.geometry);
             if (geometry == nullptr ||
-                materialVault.get(packet.material) == nullptr) {
+                resources_.materials().get(packet.material) == nullptr) {
                 continue;
             }
             const VkViewport viewport{
@@ -6854,7 +5612,7 @@ const VkDeviceSize offset = geometry->vertexOffset;
                 0u, sizeof(push), &push);
             vkCmdDrawIndexed(currentCmd, packet.indexCount, 1u,
                 packet.firstIndex, 0, 0u);
-            recordDraw(frameCounters_.deepLayeredResidualProbeDraws,
+            telemetry_.recordDraw(telemetry_.counters().deepLayeredResidualProbeDraws,
                 packet.indexCount / 3u);
         }
         if (residualQueryActive)
@@ -6862,7 +5620,7 @@ const VkDeviceSize offset = geometry->vertexOffset;
 
         vkCmdBindPipeline(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
             layeredLocalComposition_.deepPipeline());
-        recordPipelineBind(pipelineIdentity(
+        telemetry_.recordPipelineBind(pipelineIdentity(
             FixedPipelineIdentity::LayeredLocalComposition));
         // Captured slots are front-to-back. Rerasterizing them in reverse
         // makes premultiplied over blending deterministic per pixel without a
@@ -6877,9 +5635,9 @@ const VkDeviceSize offset = geometry->vertexOffset;
                 }
                 const DrawPacket& packet = packets[draw.packetIndex];
                 const VulkanGeometryPayload* geometry =
-                    geometryVault.get(packet.geometry);
+                    resources_.geometries().get(packet.geometry);
                 if (geometry == nullptr ||
-                    materialVault.get(packet.material) == nullptr) {
+                    resources_.materials().get(packet.material) == nullptr) {
                     continue;
                 }
                 const VkViewport viewport{
@@ -6920,7 +5678,7 @@ const VkDeviceSize offset = geometry->vertexOffset;
                     0u, sizeof(push), &push);
                 vkCmdDrawIndexed(currentCmd, packet.indexCount, 1u,
                     packet.firstIndex, 0, 0u);
-                recordDraw(frameCounters_.deepLayeredLocalCompositionDraws,
+                telemetry_.recordDraw(telemetry_.counters().deepLayeredLocalCompositionDraws,
                     packet.indexCount / 3u);
             }
         }
@@ -6968,7 +5726,7 @@ const VkDeviceSize offset = geometry->vertexOffset;
             layeredLocalComposition_.pipelineLayout();
         vkCmdBindPipeline(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
             layeredLocalComposition_.pipeline());
-        recordPipelineBind(pipelineIdentity(
+        telemetry_.recordPipelineBind(pipelineIdentity(
             FixedPipelineIdentity::LayeredLocalComposition));
         const VkDescriptorSet globalSet = globalDescriptorSets[frameIndex];
         vkCmdBindDescriptorSets(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -6992,9 +5750,9 @@ const VkDeviceSize offset = geometry->vertexOffset;
                 continue;
             const DrawPacket& packet = packets[draw.packetIndex];
             const VulkanGeometryPayload* geometry =
-                geometryVault.get(packet.geometry);
+                resources_.geometries().get(packet.geometry);
             if (geometry == nullptr ||
-                materialVault.get(packet.material) == nullptr)
+                resources_.materials().get(packet.material) == nullptr)
                 continue;
             const VkViewport viewport{
                 -static_cast<float>(draw.viewportOffsetX),
@@ -7030,7 +5788,7 @@ const VkDeviceSize offset = geometry->vertexOffset;
                 0u, sizeof(push), &push);
             vkCmdDrawIndexed(currentCmd, packet.indexCount, 1u,
                 packet.firstIndex, 0, 0u);
-            recordDraw(frameCounters_.ordinary2LocalCompositionDraws,
+            telemetry_.recordDraw(telemetry_.counters().ordinary2LocalCompositionDraws,
                 packet.indexCount / 3u);
         }
         vkCmdEndRenderPass(currentCmd);
@@ -7131,7 +5889,7 @@ const VkDeviceSize offset = geometry->vertexOffset;
             layeredSceneResolve_.pipelineLayout();
         vkCmdBindPipeline(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
             layeredSceneResolve_.pipeline());
-        recordPipelineBind(pipelineIdentity(
+        telemetry_.recordPipelineBind(pipelineIdentity(
             FixedPipelineIdentity::LayeredSceneResolve));
         const VkDescriptorSet globalSet = globalDescriptorSets[frameIndex];
         vkCmdBindDescriptorSets(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -7152,7 +5910,7 @@ const VkDeviceSize offset = geometry->vertexOffset;
                 continue;
             const DrawPacket& packet = packets[draw.packetIndex];
             const VulkanGeometryPayload* geometry =
-                geometryVault.get(packet.geometry);
+                resources_.geometries().get(packet.geometry);
             if (geometry == nullptr)
                 continue;
             const int64_t screenX = static_cast<int64_t>(draw.atlasX) +
@@ -7199,7 +5957,7 @@ const VkDeviceSize offset = geometry->vertexOffset;
                 0u, sizeof(push), &push);
             vkCmdDrawIndexed(currentCmd, packet.indexCount, 1u,
                 packet.firstIndex, 0, 0u);
-            recordDraw(frameCounters_.ordinary2SceneResolveDraws,
+            telemetry_.recordDraw(telemetry_.counters().ordinary2SceneResolveDraws,
                 packet.indexCount / 3u);
         }
         vkCmdEndRenderPass(currentCmd);
@@ -7247,7 +6005,7 @@ const VkDeviceSize offset = geometry->vertexOffset;
             layeredSceneResolve_.pipelineLayout();
         vkCmdBindPipeline(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
             layeredSceneResolve_.pipeline());
-        recordPipelineBind(pipelineIdentity(
+        telemetry_.recordPipelineBind(pipelineIdentity(
             FixedPipelineIdentity::LayeredSceneResolve));
         const VkDescriptorSet globalSet = globalDescriptorSets[frameIndex];
         vkCmdBindDescriptorSets(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -7275,7 +6033,7 @@ const VkDeviceSize offset = geometry->vertexOffset;
             if (draw.packetIndex >= packets.size()) continue;
             const DrawPacket& packet = packets[draw.packetIndex];
             const VulkanGeometryPayload* geometry =
-                geometryVault.get(packet.geometry);
+                resources_.geometries().get(packet.geometry);
             if (geometry == nullptr) continue;
             const int64_t screenX = static_cast<int64_t>(draw.atlasX) +
                 draw.viewportOffsetX;
@@ -7333,13 +6091,13 @@ const VkDeviceSize offset = geometry->vertexOffset;
                 0u, sizeof(push), &push);
             vkCmdDrawIndexed(currentCmd, packet.indexCount, 1u,
                 packet.firstIndex, 0, 0u);
-            recordDraw(frameCounters_.deepLayeredSceneResolveDraws,
+            telemetry_.recordDraw(telemetry_.counters().deepLayeredSceneResolveDraws,
                 packet.indexCount / 3u);
             ++sceneResolveDrawCounts[layeredQualityTierIndex(draw.quality)];
         }
         vkCmdEndRenderPass(currentCmd);
         scheduler.endGpuRange(gpuRange);
-        notifyHook({ .point = VulkanHookPoint::DeepLayeredResolveCounts,
+        extensionHooks_.notify({ .point = VulkanHookPoint::DeepLayeredResolveCounts,
             .cmd = currentCmd, .slot = frameIndex,
             .payload = VulkanDeepResolveCountsPayload{ sceneResolveDrawCounts } });
     }
@@ -7347,7 +6105,7 @@ const VkDeviceSize offset = geometry->vertexOffset;
     void VulkanVertexBackend::recordDeepLayeredValidationHook(
         std::span<const LayeredCaptureDraw> draws,
         TransparencyQuality quality) {
-        if (!graphHooks_.layeredValidation) return;
+        if (!extensionHooks_.graphHooks().layeredValidation) return;
         const uint32_t interfaceCount = layeredQualityTierContract(
             quality).maximumInterfaceCount;
         if (quality != TransparencyQuality::Hero4 &&
@@ -7379,10 +6137,10 @@ const VkDeviceSize offset = geometry->vertexOffset;
         std::span<const DrawPacket> compatibilityTransparentQueue,
         std::span<const glm::mat4> instanceTransforms) {
         if (!opaqueForwardQueue.empty()) {
-            frameCounters_.opaqueIndirectFallbackPackets +=
+            telemetry_.counters().opaqueIndirectFallbackPackets +=
                 opaqueForwardQueue.size();
-            if (frameCounters_.opaqueIndirectFallbackReason == 0u) {
-                frameCounters_.opaqueIndirectFallbackReason =
+            if (telemetry_.counters().opaqueIndirectFallbackReason == 0u) {
+                telemetry_.counters().opaqueIndirectFallbackReason =
                     static_cast<uint32_t>(
                         GpuSceneIndirectFallbackReason::UnsupportedPass);
             }
@@ -7439,11 +6197,11 @@ const VkDeviceSize offset = geometry->vertexOffset;
         const bool weightedOitExecutionEnabled =
             weightedOitResidency_.enabled() &&
             weightedOitInstanceCount <= weightedOitInstanceCapacity_;
-        if (collectFrameCounters_) {
-            frameCounters_.weightedOitPackets = weightedOitPacketCount;
-            frameCounters_.weightedOitSortedFallbackPackets =
+        if (telemetry_.collecting()) {
+            telemetry_.counters().weightedOitPackets = weightedOitPacketCount;
+            telemetry_.counters().weightedOitSortedFallbackPackets =
                 weightedOitExecutionEnabled ? 0u : weightedOitPacketCount;
-            frameCounters_.weightedOitInstanceCapacityFallbackPackets =
+            telemetry_.counters().weightedOitInstanceCapacityFallbackPackets =
                 weightedOitResidency_.enabled() &&
                     !weightedOitExecutionEnabled
                 ? weightedOitPacketCount : 0u;
@@ -7452,7 +6210,7 @@ const VkDeviceSize offset = geometry->vertexOffset;
         // Active Ordinary2 topology prepares the fixed-capacity draw plan every
         // frame. When inactive, profiler frames retain the earlier demand probe
         // without changing topology or recording commands.
-        if ((ordinary2CaptureTopologyActive || collectFrameCounters_) &&
+        if ((ordinary2CaptureTopologyActive || telemetry_.collecting()) &&
             ordinary2ViewProjectionValid_) {
             CpuScope preparationScope(cpuProfiler_,
                 ordinary2CaptureTopologyActive
@@ -7469,38 +6227,38 @@ const VkDeviceSize offset = geometry->vertexOffset;
                 compatibilityTransparentQueue,
                 ordinary2AtlasPlan_.atlasExtent());
             ordinary2PreparedThisFrame = true;
-            if (collectFrameCounters_) {
+            if (telemetry_.collecting()) {
                 const Ordinary2RequestCollectionStats& collection =
                     ordinary2RequestCollector_.stats();
                 const Ordinary2AtlasStats& atlas = ordinary2AtlasPlan_.stats();
                 const Ordinary2CaptureDrawStats& capture =
                     ordinary2CaptureDrawPlan_.stats();
-                ++frameCounters_.ordinary2ProbeFrames;
-                frameCounters_.ordinary2CandidatePackets =
+                ++telemetry_.counters().ordinary2ProbeFrames;
+                telemetry_.counters().ordinary2CandidatePackets =
                     collection.candidatePacketCount;
-                frameCounters_.ordinary2ProjectedPackets =
+                telemetry_.counters().ordinary2ProjectedPackets =
                     collection.projectedPacketCount;
-                frameCounters_.ordinary2ProjectionCulledPackets =
+                telemetry_.counters().ordinary2ProjectionCulledPackets =
                     collection.culledPacketCount;
-                frameCounters_.ordinary2InvalidBoundsFallbackPackets =
+                telemetry_.counters().ordinary2InvalidBoundsFallbackPackets =
                     collection.invalidBoundsFallbackCount;
-                frameCounters_.ordinary2NearPlaneFallbackPackets =
+                telemetry_.counters().ordinary2NearPlaneFallbackPackets =
                     collection.nearPlaneFallbackCount;
-                frameCounters_.ordinary2UnsafeProjectionFallbackPackets =
+                telemetry_.counters().ordinary2UnsafeProjectionFallbackPackets =
                     collection.unsafeProjectionFallbackCount;
-                frameCounters_.ordinary2RequestCapacityFallbackPackets =
+                telemetry_.counters().ordinary2RequestCapacityFallbackPackets =
                     collection.requestCapacityFallbackCount;
-                frameCounters_.ordinary2AtlasAcceptedPackets =
+                telemetry_.counters().ordinary2AtlasAcceptedPackets =
                     atlas.acceptedPacketCount;
-                frameCounters_.ordinary2AtlasAcceptedIslands =
+                telemetry_.counters().ordinary2AtlasAcceptedIslands =
                     atlas.acceptedIslandCount;
-                frameCounters_.ordinary2AtlasRejectedPackets =
+                telemetry_.counters().ordinary2AtlasRejectedPackets =
                     atlas.requestCount - atlas.acceptedPacketCount;
-                frameCounters_.ordinary2AtlasAllocatedTexels =
+                telemetry_.counters().ordinary2AtlasAllocatedTexels =
                     atlas.allocatedTexelCount;
-                frameCounters_.ordinary2CapturePreparedDraws =
+                telemetry_.counters().ordinary2CapturePreparedDraws =
                     capture.preparedDrawCount;
-                frameCounters_.ordinary2CapturePreparationFallbackPackets =
+                telemetry_.counters().ordinary2CapturePreparationFallbackPackets =
                     capture.invalidPacketIndexCount +
                     capture.incompatiblePacketCount +
                     capture.invalidPlacementCount;
@@ -7547,26 +6305,26 @@ const VkDeviceSize offset = geometry->vertexOffset;
                 deepLayeredAtlasPlan_.decisions(),
                 compatibilityTransparentQueue, residentExtents);
             deepCaptureDraws = deepLayeredCaptureDrawPlan_.draws();
-            if (collectFrameCounters_) {
+            if (telemetry_.collecting()) {
                 const LayeredRequestCollectionStats& collection =
                     deepLayeredRequestCollector_.stats();
                 const LayeredAtlasStats& atlas =
                     deepLayeredAtlasPlan_.stats();
                 const LayeredCaptureDrawStats& capture =
                     deepLayeredCaptureDrawPlan_.stats();
-                frameCounters_.deepLayeredCandidatePackets =
+                telemetry_.counters().deepLayeredCandidatePackets =
                     collection.candidatePacketCount;
-                frameCounters_.deepLayeredProjectedPackets =
+                telemetry_.counters().deepLayeredProjectedPackets =
                     collection.projectedPacketCount;
-                frameCounters_.deepLayeredAtlasAcceptedPackets =
+                telemetry_.counters().deepLayeredAtlasAcceptedPackets =
                     atlas.acceptedPacketCount;
-                frameCounters_.deepLayeredAtlasAcceptedIslands =
+                telemetry_.counters().deepLayeredAtlasAcceptedIslands =
                     atlas.acceptedIslandCount;
-                frameCounters_.deepLayeredAtlasRejectedPackets =
+                telemetry_.counters().deepLayeredAtlasRejectedPackets =
                     atlas.requestCount - atlas.acceptedPacketCount;
-                frameCounters_.deepLayeredCapturePreparedDraws =
+                telemetry_.counters().deepLayeredCapturePreparedDraws =
                     capture.preparedDrawCount;
-                frameCounters_.deepLayeredCapturePreparationFallbackPackets =
+                telemetry_.counters().deepLayeredCapturePreparationFallbackPackets =
                     capture.invalidPacketIndexCount +
                     capture.incompatiblePacketCount +
                     capture.invalidPlacementCount;
@@ -7631,8 +6389,8 @@ const VkDeviceSize offset = geometry->vertexOffset;
                     if (isLayeredPacketResolved(packetIndex))
                         continue;
                 }
-                auto* geometry = geometryVault.get(packet.geometry);
-                auto* material = materialVault.get(packet.material);
+                auto* geometry = resources_.geometries().get(packet.geometry);
+                auto* material = resources_.materials().get(packet.material);
                 const bool mirrored = (packet.transparentWorkFlags &
                     TransparentWorkMirrored) != 0;
                 const PipelineHandle effectivePipeline = mirrored
@@ -7650,7 +6408,7 @@ const VkDeviceSize offset = geometry->vertexOffset;
                 if (effectivePipeline != lastBoundPipeline) {
                     vkCmdBindPipeline(currentCmd,
                         VK_PIPELINE_BIND_POINT_GRAPHICS, record->pipeline);
-                    recordPipelineBind(effectivePipeline.id);
+                    telemetry_.recordPipelineBind(effectivePipeline.id);
                     activeLayout = record->pipelineLayout;
                     vkCmdBindDescriptorSets(currentCmd,
                         VK_PIPELINE_BIND_POINT_GRAPHICS, activeLayout,
@@ -7665,7 +6423,7 @@ const VkDeviceSize offset = geometry->vertexOffset;
                 }
                 if (packet.material != lastBoundMaterial) {
                     bindMaterialDescriptors(activeLayout);
-                    recordMaterialBind(packet.material);
+                    telemetry_.recordMaterialBind(packet.material);
                     lastBoundMaterial = packet.material;
                 }
                 if (packet.geometry != lastBoundGeometry) {
@@ -7689,28 +6447,28 @@ const VkDeviceSize offset = geometry->vertexOffset;
                     0, sizeof(push), &push);
                 vkCmdDrawIndexed(currentCmd, packet.indexCount, 1,
                     packet.firstIndex, 0, 0);
-                recordDraw(frameCounters_.drawTransparentForward,
+                telemetry_.recordDraw(telemetry_.counters().drawTransparentForward,
                     packet.indexCount / 3);
-                if (collectFrameCounters_) {
+                if (telemetry_.collecting()) {
                     const MaterialClosureClass closure =
                         static_cast<MaterialClosureClass>(
                             material->packed.closureClass);
                     if (closure == MaterialClosureClass::StandardForward) {
-                        ++frameCounters_.drawStandardForward;
+                        ++telemetry_.counters().drawStandardForward;
                     }
                     else if (closure == MaterialClosureClass::ComplexForward) {
-                        ++frameCounters_.drawComplexForward;
+                        ++telemetry_.counters().drawComplexForward;
                         for (uint32_t lobe = 0;
                             lobe < material->packed.complexLobeCount; ++lobe) {
                             const uint32_t type =
                                 material->packed.complexLobes[lobe].type;
-                            if (type < frameCounters_.complexLobeDraws.size()) {
-                                ++frameCounters_.complexLobeDraws[type];
+                            if (type < telemetry_.counters().complexLobeDraws.size()) {
+                                ++telemetry_.counters().complexLobeDraws[type];
                             }
                         }
                     }
                     else if (closure == MaterialClosureClass::Unlit) {
-                        ++frameCounters_.drawUnlitForward;
+                        ++telemetry_.counters().drawUnlitForward;
                     }
                 }
             }
@@ -7728,7 +6486,7 @@ const VkDeviceSize offset = geometry->vertexOffset;
         if (virtualShadowResources_.initialized()) {
             const uint32_t slot = scheduler.currentFrameIndex();
             const auto& packet = virtualShadowFrameClipPlans_[slot];
-            const auto& view = gpuSceneCpuViews_[slot];
+            const auto& view = gpuScene_.views()[slot];
             auto gpuRange = scheduler.beginGpuRange("gpu.shadow.virtual.depth-demand");
             renderGraph_.beginPass(currentCmd, graphIds_.virtualShadowDepthMark);
             if (packet) {
@@ -7751,8 +6509,8 @@ const VkDeviceSize offset = geometry->vertexOffset;
             renderGraph_.beginPass(currentCmd, graphIds_.virtualShadowRequestReadback);
             if constexpr (kQualificationBuild) {
                 // Explicit qualification copies the exact depth consumed above.
-                if (packet && graphHooks_.virtualShadowDepthSnapshot)
-                    notifyHook({ .point = VulkanHookPoint::VirtualShadowDepthSnapshot,
+                if (packet && extensionHooks_.graphHooks().virtualShadowDepthSnapshot)
+                    extensionHooks_.notify({ .point = VulkanHookPoint::VirtualShadowDepthSnapshot,
                         .cmd = currentCmd, .slot = slot,
                         .payload = VulkanVirtualShadowDepthPayload{ &targets.depth,
                             sceneExtent_, view.inverseView * view.inverseProjection } });
@@ -7777,8 +6535,8 @@ const VkDeviceSize offset = geometry->vertexOffset;
             !compatibilityTransparentQueue.empty();
         transparencyPyramidResidency_.observe(requiresRefractionPyramids);
         if (transparencyPyramidResidency_.requiresFallback(
-                requiresRefractionPyramids) && collectFrameCounters_) {
-            ++frameCounters_.transparencyPyramidFallbackFrames;
+                requiresRefractionPyramids) && telemetry_.collecting()) {
+            ++telemetry_.counters().transparencyPyramidFallbackFrames;
         }
         if (transparencyPyramidResidency_.enabled() &&
             !requiresRefractionPyramids) {
@@ -7792,11 +6550,11 @@ const VkDeviceSize offset = geometry->vertexOffset;
                 currentCmd, scheduler.currentFrameIndex(),
                 globalDescriptorSets[scheduler.currentFrameIndex()],
                 frameTargets);
-            if (collectFrameCounters_)
-                frameCounters_.dispatchRecorded += dispatches;
-            if (collectFrameCounters_) {
-                ++frameCounters_.transparencyPyramidBuilds;
-                frameCounters_.transparencyPyramidMipDispatches += dispatches;
+            if (telemetry_.collecting())
+                telemetry_.counters().dispatchRecorded += dispatches;
+            if (telemetry_.collecting()) {
+                ++telemetry_.counters().transparencyPyramidBuilds;
+                telemetry_.counters().transparencyPyramidMipDispatches += dispatches;
             }
             scheduler.endGpuRange(pyramidGpuRange);
         }
@@ -7806,7 +6564,7 @@ const VkDeviceSize offset = geometry->vertexOffset;
             const DepthPyramidHistoryOwner owner{
                 .viewIdentity = currentViewHistory_.identity,
                 .sceneEpoch = retainedRenderView_ == 0u
-                    ? publishedGpuSceneEpoch_
+                    ? gpuScene_.publishedEpoch()
                     : currentViewHistory_.identity,
                 .depthContentRevision = currentDepthContentRevision_,
                 .projectionRevision = currentProjectionRevision_,
@@ -7815,13 +6573,13 @@ const VkDeviceSize offset = geometry->vertexOffset;
             const uint32_t dispatches = depthPyramid_.record(currentCmd,
                 scheduler.currentFrameIndex(), retainedRenderView_, owner,
                 scheduler.lastSubmittedSerial() + 1u);
-            if (collectFrameCounters_)
-                frameCounters_.dispatchRecorded += dispatches;
+            if (telemetry_.collecting())
+                telemetry_.counters().dispatchRecorded += dispatches;
             scheduler.endGpuRange(range);
             runPassHook({ .point = VulkanHookPoint::DepthPyramidValidation,
                     .cmd = currentCmd, .slot = scheduler.currentFrameIndex(),
                     .payload = VulkanDepthPyramidHookPayload{ retainedRenderView_ } },
-                graphHooks_.depthPyramidValidation,
+                extensionHooks_.graphHooks().depthPyramidValidation,
                 graphIds_.depthPyramidValidationHook,
                 "gpu.depth.occlusion-pyramid.validation-readback");
         }
@@ -7829,8 +6587,8 @@ const VkDeviceSize offset = geometry->vertexOffset;
             "gpu.transparency.sorted.forward", transparentPass->getRenderPass(),
             targets.transparentFramebuffer, RenderPassClass::Transparent,
             false, weightedOitExecutionEnabled);
-        if (collectFrameCounters_) {
-            frameCounters_.transparentSortedPackets = sortedSurfaceQueue.size() -
+        if (telemetry_.collecting()) {
+            telemetry_.counters().transparentSortedPackets = sortedSurfaceQueue.size() -
                 (weightedOitExecutionEnabled
                     ? weightedOitPacketCount : 0u);
         }
@@ -7845,7 +6603,7 @@ const VkDeviceSize offset = geometry->vertexOffset;
                         static_cast<uint32_t>(captureDraws.size()),
                         static_cast<uint32_t>(
                             ordinary2AtlasPlan_.workIdentities().size()) } },
-                graphHooks_.layeredValidation,
+                extensionHooks_.graphHooks().layeredValidation,
                 graphIds_.ordinary2ValidationHook,
                 "gpu.transparency.layered.validation-readback");
             recordOrdinary2SceneResolve(compatibilityTransparentQueue,
@@ -7873,10 +6631,10 @@ const VkDeviceSize offset = geometry->vertexOffset;
                 deepCaptureDraws);
         }
 
-        if (collectFrameCounters_) {
-            frameCounters_.transparentBackgroundPackets = 0u;
-            frameCounters_.transparentForegroundPackets = 0u;
-            frameCounters_.transparentNonemptyBuckets = 0u;
+        if (telemetry_.collecting()) {
+            telemetry_.counters().transparentBackgroundPackets = 0u;
+            telemetry_.counters().transparentForegroundPackets = 0u;
+            telemetry_.counters().transparentNonemptyBuckets = 0u;
         }
         recordForwardPass(compatibilityTransparentQueue,
             graphIds_.compatibilityForward,
@@ -7914,8 +6672,8 @@ const VkDeviceSize offset = geometry->vertexOffset;
                     ordinal, oitQueueSize, weightedOitOrderSeed_);
                 const DrawPacket& packet = sortedSurfaceQueue[packetIndex];
                 if (!isWeightedOitPacket(packet) ||
-                    geometryVault.get(packet.geometry) == nullptr ||
-                    materialVault.get(packet.material) == nullptr) {
+                    resources_.geometries().get(packet.geometry) == nullptr ||
+                    resources_.materials().get(packet.material) == nullptr) {
                     continue;
                 }
                 if (packet.firstInstanceTransform == UINT32_MAX) {
@@ -7934,9 +6692,9 @@ const VkDeviceSize offset = geometry->vertexOffset;
                 }
                 preparedInstanceCount += packet.instanceCount;
             }
-            if (collectFrameCounters_) {
-                frameCounters_.weightedOitInstances = preparedInstanceCount;
-                frameCounters_.weightedOitInstanceUploadBytes =
+            if (telemetry_.collecting()) {
+                telemetry_.counters().weightedOitInstances = preparedInstanceCount;
+                telemetry_.counters().weightedOitInstanceUploadBytes =
                     weightedOitInstanceStreamBytes(preparedInstanceCount);
             }
 
@@ -7965,7 +6723,7 @@ const VkDeviceSize offset = geometry->vertexOffset;
                 weightedOit_.accumulationPipelineLayout();
             vkCmdBindPipeline(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                 weightedOit_.accumulationPipeline());
-            recordPipelineBind(pipelineIdentity(
+            telemetry_.recordPipelineBind(pipelineIdentity(
                 FixedPipelineIdentity::WeightedOitAccumulation));
             const VkDescriptorSet globalSet =
                 globalDescriptorSets[oitFrameIndex];
@@ -8005,7 +6763,7 @@ const VkDeviceSize offset = geometry->vertexOffset;
                 }
                 if (batchPacket->material != lastMaterial) {
                     bindMaterialDescriptors(accumulationLayout);
-                    recordMaterialBind(batchPacket->material);
+                    telemetry_.recordMaterialBind(batchPacket->material);
                     lastMaterial = batchPacket->material;
                 }
                 if (batchPacket->geometry != lastGeometry) {
@@ -8031,27 +6789,27 @@ const VkDeviceSize offset = geometry->vertexOffset;
                 vkCmdDrawIndexed(currentCmd, batchPacket->indexCount,
                     batchInstanceCount, batchPacket->firstIndex, 0,
                     batchFirstInstance);
-                recordDraw(frameCounters_.drawWeightedOitAccumulation,
+                telemetry_.recordDraw(telemetry_.counters().drawWeightedOitAccumulation,
                     static_cast<uint64_t>(batchPacket->indexCount / 3u) *
                         batchInstanceCount);
-                if (collectFrameCounters_) {
+                if (telemetry_.collecting()) {
                     const MaterialClosureClass closure =
                         static_cast<MaterialClosureClass>(
                             batchMaterial->packed.closureClass);
                     if (closure == MaterialClosureClass::StandardForward)
-                        ++frameCounters_.drawStandardForward;
+                        ++telemetry_.counters().drawStandardForward;
                     else if (closure == MaterialClosureClass::ComplexForward) {
-                        ++frameCounters_.drawComplexForward;
+                        ++telemetry_.counters().drawComplexForward;
                         for (uint32_t lobe = 0u;
                             lobe < batchMaterial->packed.complexLobeCount; ++lobe) {
                             const uint32_t type =
                                 batchMaterial->packed.complexLobes[lobe].type;
-                            if (type < frameCounters_.complexLobeDraws.size())
-                                ++frameCounters_.complexLobeDraws[type];
+                            if (type < telemetry_.counters().complexLobeDraws.size())
+                                ++telemetry_.counters().complexLobeDraws[type];
                         }
                     }
                     else if (closure == MaterialClosureClass::Unlit)
-                        ++frameCounters_.drawUnlitForward;
+                        ++telemetry_.counters().drawUnlitForward;
                 }
                 batchPacket = nullptr;
                 batchGeometry = nullptr;
@@ -8064,9 +6822,9 @@ const VkDeviceSize offset = geometry->vertexOffset;
                     ordinal, oitQueueSize, weightedOitOrderSeed_);
                 const DrawPacket& packet = sortedSurfaceQueue[packetIndex];
                 if (!isWeightedOitPacket(packet)) continue;
-                VulkanGeometryPayload* geometry = geometryVault.get(
+                VulkanGeometryPayload* geometry = resources_.geometries().get(
                     packet.geometry);
-                VulkanMaterialPayload* material = materialVault.get(
+                VulkanMaterialPayload* material = resources_.materials().get(
                     packet.material);
                 if (geometry == nullptr || material == nullptr) continue;
                 if (batchPacket != nullptr &&
@@ -8105,7 +6863,7 @@ const VkDeviceSize offset = geometry->vertexOffset;
             vkCmdSetScissor(currentCmd, 0u, 1u, &scissor);
             vkCmdBindPipeline(currentCmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                 weightedOit_.resolvePipeline());
-            recordPipelineBind(pipelineIdentity(
+            telemetry_.recordPipelineBind(pipelineIdentity(
                 FixedPipelineIdentity::WeightedOitResolve));
             const VkPipelineLayout resolveLayout =
                 weightedOit_.resolvePipelineLayout();
@@ -8120,7 +6878,7 @@ const VkDeviceSize offset = geometry->vertexOffset;
                 VK_SHADER_STAGE_FRAGMENT_BIT, 0u,
                 sizeof(resolveDebugView), &resolveDebugView);
             vkCmdDraw(currentCmd, 3u, 1u, 0u, 0u);
-            recordDraw(frameCounters_.drawWeightedOitResolve, 1u);
+            telemetry_.recordDraw(telemetry_.counters().drawWeightedOitResolve, 1u);
             vkCmdEndRenderPass(currentCmd);
             scheduler.endGpuRange(resolveRange);
         }
@@ -8155,7 +6913,7 @@ const VkDeviceSize offset = geometry->vertexOffset;
         if (point == FrameCapturePoint::SceneLinear) {
             // R3b.5: the declared hook pass moves scene.color to
             // TransferSource; output-transform's begin returns it.
-            if (!graphHooks_.sceneColorCapture)
+            if (!extensionHooks_.graphHooks().sceneColorCapture)
                 throw std::logic_error(
                     "Scene-linear capture requires the scene-color-capture-hook pass");
             renderGraph_.beginPass(currentCmd, graphIds_.sceneColorCaptureHook);
@@ -8171,15 +6929,15 @@ const VkDeviceSize offset = geometry->vertexOffset;
         FrameCapturePoint capturePoint) {
         VulkanHookContext context{ .point = point, .cmd = currentCmd,
             .slot = scheduler.currentFrameIndex() };
-        if (!anyExtensionWants(context)) {
+        if (!extensionHooks_.anyWants(context)) {
             if (capturePoint == FrameCapturePoint::SceneLinear &&
-                graphHooks_.sceneColorCapture)
+                extensionHooks_.graphHooks().sceneColorCapture)
                 renderGraph_.skipPass(graphIds_.sceneColorCaptureHook);
             return;
         }
         recordCaptureCopy(capturePoint, [&](const VulkanCaptureHookPayload& source) {
             context.payload = source;
-            notifyHook(context);
+            extensionHooks_.notify(context);
         });
     }
 
@@ -8204,10 +6962,10 @@ const VkDeviceSize offset = geometry->vertexOffset;
                     static_cast<uint32_t>(outputOperator_),
                     static_cast<uint32_t>(outputTransport_), paperWhiteNits_, peakNits_,
                     selectionOutlineActive_, viewportGridOverlay_);
-                if (collectFrameCounters_) {
-                    recordPipelineBind(pipelineIdentity(
+                if (telemetry_.collecting()) {
+                    telemetry_.recordPipelineBind(pipelineIdentity(
                         FixedPipelineIdentity::OutputTransform));
-                    recordDraw(frameCounters_.drawOutput, 1);
+                    telemetry_.recordDraw(telemetry_.counters().drawOutput, 1);
                 }
             }
         }
@@ -8247,19 +7005,19 @@ const VkDeviceSize offset = geometry->vertexOffset;
                 draw_data->DisplaySize.x * draw_data->FramebufferScale.x);
             const int framebufferHeight = static_cast<int>(
                 draw_data->DisplaySize.y * draw_data->FramebufferScale.y);
-            if (collectFrameCounters_ && framebufferWidth > 0 && framebufferHeight > 0) {
-                recordPipelineBind(pipelineIdentity(FixedPipelineIdentity::ImGui));
+            if (telemetry_.collecting() && framebufferWidth > 0 && framebufferHeight > 0) {
+                telemetry_.recordPipelineBind(pipelineIdentity(FixedPipelineIdentity::ImGui));
                 const ImVec2 clipOffset = draw_data->DisplayPos;
                 const ImVec2 clipScale = draw_data->FramebufferScale;
                 for (const ImDrawList* drawList : draw_data->CmdLists) {
                     for (const ImDrawCmd& command : drawList->CmdBuffer) {
                         if (command.UserCallback != nullptr) {
                             if (command.UserCallback == ImDrawCallback_ResetRenderState) {
-                                recordPipelineBind(
+                                telemetry_.recordPipelineBind(
                                     pipelineIdentity(FixedPipelineIdentity::ImGui));
                             }
                             else {
-                                ++frameCounters_.uiUntrackedCallbacks;
+                                ++telemetry_.counters().uiUntrackedCallbacks;
                             }
                             continue;
                         }
@@ -8281,7 +7039,7 @@ const VkDeviceSize offset = geometry->vertexOffset;
                             continue;
                         }
 
-                        recordDraw(frameCounters_.drawUi, command.ElemCount / 3);
+                        telemetry_.recordDraw(telemetry_.counters().drawUi, command.ElemCount / 3);
                     }
                 }
             }
@@ -8296,10 +7054,10 @@ const VkDeviceSize offset = geometry->vertexOffset;
             hdrEncodePass.record(currentCmd, scheduler.currentFrameIndex(),
                 currentImageIndex, vkSwapchain->getExtent(), paperWhiteNits_,
                 peakNits_);
-            if (collectFrameCounters_) {
-                recordPipelineBind(pipelineIdentity(
+            if (telemetry_.collecting()) {
+                telemetry_.recordPipelineBind(pipelineIdentity(
                     FixedPipelineIdentity::OutputTransform));
-                recordDraw(frameCounters_.drawOutput, 1);
+                telemetry_.recordDraw(telemetry_.counters().drawOutput, 1);
             }
         }
         renderGraph_.finishFrameExecution();
@@ -8309,7 +7067,7 @@ const VkDeviceSize offset = geometry->vertexOffset;
         const FrameStatus status = scheduler.endFrame(
             vkSwapchain->getSwapchain(), currentImageIndex);
         frameOpen_ = false;
-        if (collectFrameCounters_ && cpuProfiler_ != nullptr) {
+        if (telemetry_.collecting() && cpuProfiler_ != nullptr) {
             cpuProfiler_->recordMemorySnapshot(memorySnapshot());
         }
         emitFrameCounters();
@@ -8428,7 +7186,7 @@ const VkDeviceSize offset = geometry->vertexOffset;
     }
 
     void* VulkanVertexBackend::getEditorTextureID(TextureHandle texture) {
-        VulkanTexturePayload* payload = textureVault.get(texture);
+        VulkanTexturePayload* payload = resources_.textures().get(texture);
         if (payload == nullptr || payload->retired || !imguiInitialized_) {
             return nullptr;
         }

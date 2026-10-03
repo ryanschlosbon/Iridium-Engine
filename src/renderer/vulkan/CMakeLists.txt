@@ -13,8 +13,11 @@ add_library(iridium_vulkan STATIC
         VulkanClusteredLightingPipeline.cpp
         VulkanDepthPyramid.cpp
         VulkanDirectionalShadowMap.cpp
+        VulkanExtensionHooks.cpp
         VulkanFrameScheduler.cpp
         VulkanFrameTargets.cpp
+        VulkanFrameTelemetry.cpp
+        VulkanGpuSceneState.cpp
         VulkanHdrEncodePass.cpp
         VulkanIndexedTextureTable.cpp
         VulkanIndirectCullerShared.cpp
@@ -34,6 +37,7 @@ add_library(iridium_vulkan STATIC
         VulkanReflectionProbePipeline.cpp
         VulkanRenderGraphExecutor.cpp
         VulkanResourceAllocator.cpp
+        VulkanResourceRegistry.cpp
         VulkanResourceState.cpp
         VulkanSceneDescriptors.cpp
         VulkanSpotShadowAtlas.cpp

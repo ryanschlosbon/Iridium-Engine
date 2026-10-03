@@ -34,6 +34,11 @@
 #include "VulkanSceneDescriptors.h"
 #include "VulkanProductionRenderGraph.h"
 #include "VulkanBackendExtension.h"
+#include "VulkanExtensionHooks.h"
+#include "VulkanFeatureContext.h"
+#include "VulkanFrameTelemetry.h"
+#include "VulkanGpuSceneState.h"
+#include "VulkanResourceRegistry.h"
 #include "VulkanIndirectCullerShared.h"
 #include "VulkanIndirectViewCuller.h"
 #include "VulkanOpaqueIndirectCuller.h"
@@ -65,149 +70,11 @@
 namespace Iridium {
 
     // ==============================================================================
-    // THE INTERNAL PAYLOADS
-    // These structs only exist inside the Backend. The ECS never sees them.
-    // ==============================================================================
-
-    struct VulkanGeometryPayload {
-        VulkanBufferResource vertexBuffer;
-        VulkanBufferResource indexBuffer;
-        VulkanBufferResource arenaUInt16IndexBuffer;
-        VulkanBufferResource arenaUInt32IndexBuffer;
-        VkDeviceSize vertexOffset = 0;
-        uint32_t indexCount = 0;
-        IndexFormat indexFormat = IndexFormat::UInt32;
-        bool arenaAllocation = false;
-        bool ownsArenaBuffers = false;
-    };
-
-    struct VulkanTexturePayload {
-        VulkanImageResource image;
-        VkSampler sampler = VK_NULL_HANDLE;
-        uint32_t samplerCacheIndex = UINT32_MAX;
-        VkDescriptorSet imguiDescriptor = VK_NULL_HANDLE;
-        TextureFormat format = TextureFormat::RGBA8_UNorm;
-        uint32_t width = 0;
-        uint32_t height = 0;
-        bool retired = false;
-    };
-
-    struct VulkanMaterialPayload {
-        PipelineHandle pipeline;
-        PipelineHandle mirroredPipeline;
-        RenderQueue renderQueue = RenderQueue::Opaque;
-        PackedGpuMaterial packed{};
-        uint64_t packedRevision = 0;
-        std::array<uint64_t, VulkanFrameScheduler::FramesInFlight>
-            uploadedPackedRevisions{};
-    };
-
-    // ==============================================================================
     // THE CONCRETE BACKEND
     // ==============================================================================
 
     class VulkanVertexBackend : public IRenderBackend {
     private:
-        struct FrameCounters {
-            uint64_t drawOpaque = 0;
-            uint64_t opaqueIndirectCommands = 0;
-            uint64_t opaqueIndirectBins = 0;
-            uint64_t opaqueIndirectFallbackPackets = 0;
-            uint64_t opaqueIndirectFallbackReason = 0;
-            uint64_t depthHistoryEligible = 0;
-            uint64_t depthHistoryRejection = 0;
-            uint64_t drawSelection = 0;
-            uint64_t drawShadowDirectional = 0;
-            uint64_t drawShadowDirectionalAlphaMask = 0;
-            uint64_t shadowDirectionalCastersTested = 0;
-            uint64_t shadowDirectionalCastersCulled = 0;
-            uint64_t shadowDirectionalIndirectCommands = 0;
-            uint64_t shadowDirectionalIndirectBins = 0;
-            uint64_t shadowDirectionalDirectFallback = 0;
-            uint64_t shadowDirectionalIndirectFallbackReason = 0;
-            uint64_t shadowDirectionalMembershipCacheHit = 0;
-            uint64_t drawShadowSpot = 0;
-            uint64_t drawShadowSpotAlphaMask = 0;
-            uint64_t shadowSpotCastersTested = 0;
-            uint64_t shadowSpotCastersCulled = 0;
-            uint64_t shadowSpotIndirectCommands = 0;
-            uint64_t shadowSpotIndirectBins = 0;
-            uint64_t shadowSpotDirectFallback = 0;
-            uint64_t shadowSpotIndirectFallbackReason = 0;
-            uint64_t shadowSpotMembershipCacheHit = 0;
-            uint64_t drawShadowPoint = 0;
-            uint64_t drawShadowPointAlphaMask = 0;
-            uint64_t shadowPointCastersTested = 0;
-            uint64_t shadowPointCastersCulled = 0;
-            uint64_t shadowPointIndirectCommands = 0;
-            uint64_t shadowPointIndirectBins = 0;
-            uint64_t shadowPointDirectFallback = 0;
-            uint64_t shadowPointIndirectFallbackReason = 0;
-            uint64_t shadowPointMembershipCacheHit = 0;
-            uint64_t drawLighting = 0;
-            uint64_t drawOutput = 0;
-            uint64_t drawTransparentDepth = 0;
-            uint64_t drawTransparentForward = 0;
-            uint64_t drawStandardForward = 0;
-            uint64_t drawComplexForward = 0;
-            uint64_t drawUnlitForward = 0;
-            std::array<uint64_t, 8> complexLobeDraws{};
-            uint64_t drawUi = 0;
-            uint64_t dispatchRecorded = 0;
-            uint64_t trianglesSubmitted = 0;
-            uint64_t materialBinds = 0;
-            uint64_t pipelineBinds = 0;
-            uint64_t transparentBackgroundPackets = 0;
-            uint64_t transparentForegroundPackets = 0;
-            uint64_t transparentNonemptyBuckets = 0;
-            uint64_t transparentSortedPackets = 0;
-            uint64_t weightedOitPackets = 0;
-            uint64_t weightedOitSortedFallbackPackets = 0;
-            uint64_t weightedOitInstanceCapacityFallbackPackets = 0;
-            uint64_t weightedOitInstances = 0;
-            uint64_t weightedOitInstanceUploadBytes = 0;
-            uint64_t drawWeightedOitAccumulation = 0;
-            uint64_t drawWeightedOitResolve = 0;
-            uint64_t transparencyPyramidBuilds = 0;
-            uint64_t transparencyPyramidMipDispatches = 0;
-            uint64_t transparencyPyramidTopologyRebuilds = 0;
-            uint64_t transparencyPyramidTopologyRebuildFailures = 0;
-            uint64_t transparencyPyramidFallbackFrames = 0;
-            uint64_t ordinary2ProbeFrames = 0;
-            uint64_t ordinary2CandidatePackets = 0;
-            uint64_t ordinary2ProjectedPackets = 0;
-            uint64_t ordinary2ProjectionCulledPackets = 0;
-            uint64_t ordinary2InvalidBoundsFallbackPackets = 0;
-            uint64_t ordinary2NearPlaneFallbackPackets = 0;
-            uint64_t ordinary2UnsafeProjectionFallbackPackets = 0;
-            uint64_t ordinary2RequestCapacityFallbackPackets = 0;
-            uint64_t ordinary2AtlasAcceptedPackets = 0;
-            uint64_t ordinary2AtlasAcceptedIslands = 0;
-            uint64_t ordinary2AtlasRejectedPackets = 0;
-            uint64_t ordinary2AtlasAllocatedTexels = 0;
-            uint64_t ordinary2CapturePreparedDraws = 0;
-            uint64_t ordinary2CapturePreparationFallbackPackets = 0;
-            uint64_t ordinary2CaptureEntryDraws = 0;
-            uint64_t ordinary2CaptureExitDraws = 0;
-            uint64_t ordinary2LocalCompositionDraws = 0;
-            uint64_t ordinary2SceneResolveDraws = 0;
-            uint64_t deepLayeredCandidatePackets = 0;
-            uint64_t deepLayeredProjectedPackets = 0;
-            uint64_t deepLayeredAtlasAcceptedPackets = 0;
-            uint64_t deepLayeredAtlasAcceptedIslands = 0;
-            uint64_t deepLayeredAtlasRejectedPackets = 0;
-            uint64_t deepLayeredCapturePreparedDraws = 0;
-            uint64_t deepLayeredCapturePreparationFallbackPackets = 0;
-            uint64_t deepLayeredInterfaceDraws = 0;
-            uint64_t deepLayeredResidualProbeDraws = 0;
-            uint64_t deepLayeredLocalCompositionDraws = 0;
-            uint64_t deepLayeredSceneResolveDraws = 0;
-            uint64_t uiUntrackedCallbacks = 0;
-            uint64_t materialUniqueOverflow = 0;
-            uint64_t pipelineUniqueOverflow = 0;
-        };
-
-        static constexpr size_t MaxUniqueResourcesPerFrame = 512;
 
         // --- 1. THE SUBSYSTEMS (Composition) ---
         // We moved all of these pointers out of Application.cpp and into here.
@@ -219,7 +86,6 @@ namespace Iridium {
         DescriptorAllocator descriptorAllocator;
         VulkanPipelineLibrary pipelineLibrary;
         VulkanMeshLayouts meshLayouts;
-        VulkanIndexedTextureTable indexedTextureTable_;
 
         // G-Buffer Pass (Opaque)
         std::unique_ptr<VkRenderPassWrapper> gBufferPass;
@@ -288,12 +154,6 @@ namespace Iridium {
         TextureHandle neutralEnvironmentCube_;
         TextureHandle neutralEnvironmentBrdfLut_;
 
-        struct CachedSampler {
-            SamplerDesc desc{};
-            VkSampler sampler = VK_NULL_HANDLE;
-            uint32_t referenceCount = 0;
-        };
-        std::vector<CachedSampler> samplerCache_;
 
         // Translucency Pass Raw Images
 
@@ -330,22 +190,8 @@ namespace Iridium {
         // Global Camera Data
         std::vector<VulkanBufferResource> uniformBuffers;
         std::vector<VkDescriptorSet> globalDescriptorSets;
-        std::array<VkDescriptorSet, VulkanFrameScheduler::FramesInFlight>
-            gpuSceneDescriptorSets_{};
-        std::array<VulkanBufferResource, VulkanFrameScheduler::FramesInFlight>
-            canonicalMaterialBuffers_{};
-        uint32_t canonicalMaterialCapacity_ = 0;
-        uint32_t canonicalMaterialMaximumCapacity_ = 0;
         std::array<VulkanBufferResource, VulkanFrameScheduler::FramesInFlight>
             lightRecordBuffers_{};
-        std::array<VulkanBufferResource, VulkanFrameScheduler::FramesInFlight>
-            gpuSceneTransformBuffers_{};
-        std::array<VulkanBufferResource, VulkanFrameScheduler::FramesInFlight>
-            gpuSceneInstanceBuffers_{};
-        std::array<VulkanBufferResource, VulkanFrameScheduler::FramesInFlight>
-            gpuScenePrimitiveBuffers_{};
-        std::array<VulkanBufferResource, VulkanFrameScheduler::FramesInFlight>
-            gpuSceneGeometryBuffers_{};
 
         // GPU-driven shadow/probe caster compaction (M7R R3a). The shared
         // 3-binding indirect set layout is owned here; each culler owns its
@@ -405,16 +251,6 @@ namespace Iridium {
         std::vector<LightRecordRange> lightUploadRanges_;
         uint32_t lightRecordCapacity_ = 0;
         uint32_t lightRecordMaximumCapacity_ = 0;
-        GpuSceneCapacityRequirements gpuSceneCapacity_{};
-        GpuSceneCapacityRequirements gpuSceneMaximumCapacity_{};
-        GpuSceneCapacityRequirements gpuScenePublishedCounts_{};
-        struct GpuSceneCpuMirror {
-            std::vector<GpuSceneAffineTransform> transforms;
-            std::vector<GpuSceneInstanceRecord> instances;
-            std::vector<GpuScenePrimitiveRecord> primitives;
-            std::vector<GpuSceneGeometryRecord> geometries;
-            std::vector<GpuScenePrimitiveIdentity> primitiveIdentities;
-        };
         [[nodiscard]] bool resolveGpuSceneCaster(uint32_t primitiveIndex,
             uint32_t consumerMask,
             ResolvedShadowCaster& caster) const noexcept;
@@ -430,20 +266,6 @@ namespace Iridium {
         void visitReflectionProbeCasters(
             const ReflectionProbeCasterSubmission& submission,
             Visitor&& visitor) const;
-        // Upload heaps can be uncached/write-combined. CPU validation must use
-        // an owned mirror updated by the exact same per-context dirty ranges.
-        std::array<GpuSceneCpuMirror, VulkanFrameScheduler::FramesInFlight> gpuSceneCpuMirrors_;
-        std::array<ViewTransportRecord, VulkanFrameScheduler::FramesInFlight> gpuSceneCpuViews_;
-        std::array<std::vector<uint64_t>, VulkanFrameScheduler::FramesInFlight>
-            uploadedGpuSceneTransformRevisions_{};
-        std::array<std::vector<uint64_t>, VulkanFrameScheduler::FramesInFlight>
-            uploadedGpuSceneInstanceRevisions_{};
-        std::array<std::vector<uint64_t>, VulkanFrameScheduler::FramesInFlight>
-            uploadedGpuScenePrimitiveRevisions_{};
-        std::array<std::vector<uint64_t>, VulkanFrameScheduler::FramesInFlight>
-            uploadedGpuSceneGeometryRevisions_{};
-        std::vector<GpuSceneRecordRange> gpuSceneUploadRanges_;
-        GpuSceneUploadTelemetry gpuSceneUploadTelemetry_{};
         static constexpr uint32_t MaximumOpaqueIndirectCommandCapacity = 65536u;
         uint32_t activeLightCount_ = 0;
         uint64_t lightUploadBytes_ = 0;
@@ -475,11 +297,15 @@ namespace Iridium {
         ReflectionProbeCaptureTelemetry reflectionProbeCaptureTelemetry_{};
         uint32_t reflectionProbePrefilterSampleCount_ = 256;
 
-        // --- 2. THE MEMORY VAULTS ---
-        // This is where the Handles are mapped to the physical Vulkan memory.
-        ResourcePool<VulkanGeometryPayload, GeometryHandle> geometryVault;
-        ResourcePool<VulkanTexturePayload, TextureHandle> textureVault;
-        ResourcePool<VulkanMaterialPayload, MaterialHandle> materialVault;
+        // --- 2. SHARED STATE (M7R R3c.0) ---
+        // Vaults, samplers and material descriptors; the GPU-scene tables;
+        // the per-frame counters; the attached extensions. Feature owners
+        // reach them through featureContext_.
+        VulkanResourceRegistry resources_;
+        VulkanGpuSceneState gpuScene_;
+        VulkanFrameTelemetry telemetry_;
+        VulkanExtensionHooks extensionHooks_;
+        std::optional<VulkanFeatureContext> featureContext_;
 
 
         // --- 3. RUNTIME STATE ---
@@ -493,11 +319,8 @@ namespace Iridium {
         uint64_t currentDepthContentRevision_ = 1;
         DepthPyramidHistoryDecision currentDepthHistoryDecision_{};
         bool depthHistoryPrepared_ = false;
-        uint64_t publishedGpuSceneEpoch_ = 1;
         bool imguiInitialized_ = false;
         CpuProfiler* cpuProfiler_ = nullptr;
-        bool collectFrameCounters_ = false;
-        FrameCounters frameCounters_{};
         uint64_t weightedOitOrderSeed_ = 0;
         bool forceDirectGBufferReference_ = false;
         bool forceDirectShadowReference_ = false;
@@ -512,8 +335,6 @@ namespace Iridium {
         uint32_t probeLodMaximumLevel_ = 15u;
         glm::mat4 ordinary2ViewProjection_{ 1.0f };
         bool ordinary2ViewProjectionValid_ = false;
-        std::vector<uint32_t> uniqueMaterialIds_;
-        std::vector<uint64_t> uniquePipelineIds_;
         uint64_t externalSwapchainRequestedPeakBytes_ = 0;
         uint64_t externalSwapchainPeakImageCount_ = 0;
         RenderDebugView debugView_ = RenderDebugView::Final;
@@ -535,30 +356,15 @@ namespace Iridium {
         float peakNits_ = 1000.0f;
         bool selectionOutlineActive_ = false;
         ViewportGridOverlay viewportGridOverlay_{};
-        uint64_t retiredTextureCount_ = 0;
         TextureHandle outputTransformLut_{};
         bool finalCaptureHookRecorded_ = false;
         // "probe.capture" begun or skipped this frame (R3b.8).
         bool probeCaptureHandled_ = false;
 
-        // --- 4. EXTENSIONS (M7R R2.7) ---
-        // Attached by the factory before init(); not owned (each must outlive
-        // the backend). None attached is the null object (no hook passes, no
-        // oracle work).
-        std::vector<IVulkanBackendExtension*> extensions_;
-        IVulkanIndirectOracle* indirectOracle_ = nullptr;
-        IVulkanIndirectStreamObserver* indirectStreamObserver_ = nullptr;
-        VulkanGraphHooks graphHooks_ = VulkanGraphHooks::none();
 
         // Private helpers that Application.cpp no longer needs to worry about
         void createUniformBuffers();
-        void createCanonicalMaterialBuffers(uint32_t capacity);
-        void ensureCanonicalMaterialCapacity(uint32_t requiredCapacity);
-        void uploadCanonicalMaterialsForFrame(uint32_t frameIndex);
         void createLightRecordBuffers(uint32_t capacity);
-        void createGpuSceneBuffers(
-            const GpuSceneCapacityRequirements& capacity);
-        void bindGpuSceneBuffers();
         void createGpuSceneCullPipeline();
         [[nodiscard]] VulkanCullerServices cullerServices();
         void createDirectionalShadowIndirectPipeline();
@@ -649,10 +455,6 @@ namespace Iridium {
         void setWeightedOitInstanceCapacity(uint32_t capacity);
         void updateUniformBuffer(const glm::mat4& view, const glm::mat4& proj);
         void createLightingRenderPass();
-        void resetFrameCounters();
-        void recordMaterialBind(MaterialHandle material);
-        void recordPipelineBind(uint64_t pipelineIdentity);
-        void recordDraw(uint64_t& drawCounter, uint64_t submittedTriangles);
         void emitFrameCounters();
         void bindMaterialDescriptors(VkPipelineLayout layout);
         void recordOrdinary2InterfaceCapture(
@@ -696,21 +498,14 @@ namespace Iridium {
             uint32_t packetIndex) const noexcept;
         [[nodiscard]] bool isLayeredPacketResolved(
             uint32_t packetIndex) const noexcept;
-        [[nodiscard]] uint32_t acquireSampler(const SamplerDesc& desc);
-        void releaseSampler(uint32_t cacheIndex) noexcept;
-        void cleanupSamplerCache() noexcept;
-        [[nodiscard]] uint64_t liveSamplerCount() const noexcept;
         void recordDeepLayeredValidationHook(
             std::span<const LayeredCaptureDraw> draws,
             TransparencyQuality quality);
         // Extension hooks (R2.7). A pass hook does nothing when undeclared,
         // skips its pass when no extension wants it, or begins the GPU range
         // and pass and calls every extension that wants it.
-        [[nodiscard]] bool anyExtensionWants(
-            const VulkanHookContext& context) const;
         void runPassHook(const VulkanHookContext& context, bool declared,
             RenderGraph::PassId pass, const char* gpuRangeName);
-        void notifyHook(const VulkanHookContext& context);
         // Brackets a capture copy: scene-linear copies run in the declared
         // scene-color-capture-hook pass (output-transform returns scene.color
         // to SampledRead); final output runs in final-capture-hook.
@@ -725,8 +520,9 @@ namespace Iridium {
         [[nodiscard]] IVulkanIndirectOracle* activeIndirectOracle(
             VulkanIndirectOracleView view) const noexcept {
             if constexpr (kQualificationBuild) {
-                if (indirectOracle_ != nullptr && indirectOracle_->enabled(view))
-                    return indirectOracle_;
+                IVulkanIndirectOracle* oracle = extensionHooks_.indirectOracle();
+                if (oracle != nullptr && oracle->enabled(view))
+                    return oracle;
             }
             return nullptr;
         }
@@ -735,7 +531,7 @@ namespace Iridium {
         [[nodiscard]] IVulkanIndirectStreamObserver*
             activeIndirectStreamObserver() const noexcept {
             if constexpr (kQualificationBuild)
-                return indirectStreamObserver_;
+                return extensionHooks_.indirectStreamObserver();
             return nullptr;
         }
         [[nodiscard]] FrameMemoryProfile memorySnapshot();
@@ -770,7 +566,7 @@ namespace Iridium {
                 scheduler.completedSerial() };
         }
         [[nodiscard]] GpuSceneUploadTelemetry getGpuSceneUploadTelemetry()
-            const noexcept override { return gpuSceneUploadTelemetry_; }
+            const noexcept override { return gpuScene_.uploadTelemetry(); }
         void prepareReflectionProbes(uint32_t requiredCapacity,
             std::span<const EnvironmentLightingHandles> environments) override;
         [[nodiscard]] std::vector<ReflectionProbeCaptureCompletion>
