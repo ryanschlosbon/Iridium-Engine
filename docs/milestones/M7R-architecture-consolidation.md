@@ -751,6 +751,67 @@ Rerun (`timing/r1-rerun`, A,B,B,A; the machine was still in use):
   - The likely cause is memory placement from the changed resource-creation order, not extra GPU work.
 - **Accepted as a watch item:** R4b re-places all memory (VMA), and R4b and R6 re-measure. If the delta persists after R4b, bisect by pass ownership.
 
+### R4 result (2026-10-03, R4a–R4c through `c10c182`; R4d pending)
+
+**Structure**
+- **Dynamic rendering (R4a):** 0 `vkCreateRenderPass`/`vkCreateFramebuffer` calls outside `src/vendor`. Pipelines use `VkPipelineRenderingCreateInfo`. The swapchain and shadow maps are `ExecutorOwned` imports (ADR-0016 item 4 note).
+- **VMA v3.4.0 (R4b.1–2):** behind `VulkanResourceAllocator`, with the 19 memory-profile categories preserved.
+- **Transient aliasing (R4b.3–6):** on by default; `--render-graph-aliasing off` is kept until R6 (ADR-0016 item 9 note).
+- **Deferred deletion (R4c.1–3):** a fence-keyed deletion queue, capacity growth by slot-retirement swap, and probe changes that no longer drain.
+- **Pipeline cache (R4c.4):** a persisted `VkPipelineCache` with a validated header; `--pipeline-cache DIR|off`. Evidence scripts default to `off`.
+
+**Memory** (native 4K, default SDR, pyramids resident; render-graph committed bytes, both frame slots)
+
+| | Aliasing off | Aliasing on |
+|---|---|---|
+| Graph committed | 1,183.6 MB | **842.0 MB** (−341.6 MB) |
+| Per slot | | 571.9 MB requested → 401.1 MB in one alias heap (1.43x); 10 aliased images |
+
+**Pipeline cache** (F1-all, backend init; the payload is about 2.51 MB)
+
+| Driver shader cache | off | cold | warm |
+|---|---|---|---|
+| Warm (normal) | 336–338 ms | 380–402 ms | 342–349 ms |
+| Disabled | 392–422 ms | 374–376 ms | 349–359 ms |
+
+A warm cache saves time only when the driver's own cache is cold, for example on first run or after a driver update.
+
+**Verification** (main at `c10c182`)
+
+| Check | Result |
+|---|---|
+| Frozen set `r4b-main`, `--validation-sync`, vs `r0` | Identical or within envelopes; 0 hazards, 0 validation messages |
+| Indirect digest `r4b-main-digest` vs `r3a0` | Identical |
+| Sweep `r4b-main-sweep` | 36/36. Deltas: pipeline-cache header fields, the manifest path, R00 probe publish count (varies run to run), X02 within the woit-order envelope |
+| Probe sweep routes (V02, R00–R03) | Capture moved to frame 4. Since R4c.3, frame 2 can race the fence-gated probe promotion. The images equal `r3-sweep`; 3/3 repeat runs are identical |
+| Aliasing gates (lane) | Frozen set with aliasing on, and with alias poison, identical; editor smoke with sdr/hdr10/scrgb clean; shipping smoke clean |
+| Tests | 103/103 Release and Debug |
+
+**Timing pair** (`timing/r4-accept`, A = R0 worktree, B = `c10c182`, A,B,B,A, 500 + 10,000 frames, quiet machine, steady-frame allocations 0)
+
+| Route | CPU median A / B | Non-wait CPU median A / B | GPU median A / B |
+|---|---|---|---|
+| T-F1-all | 1.540 / 1.347 ms (−12.5%) | 0.418 / 0.348 ms (−16.8%) | 1.126 / **1.003** ms (−11.0%) |
+| T-F7-stack | 6.968 / 5.382 ms (−22.8%) | 4.957 / 3.495 ms (−29.5%) | 2.034 / **1.918** ms (−5.7%) |
+
+The R3 GPU watch item (+0.28% on F1, +0.57% on F7) is closed: GPU time is now below R0 on both routes. Aliasing alone accounts for −6.4% (F1) and −3.2% (F7) in its on/off pair (`timing/r4b6-onoff-short`).
+
+**Hitch scenario** (`hitch/r4-accept-hitch`, A = `c666d32` (R4b.3, before R4c.1), B = `c10c182`, A,B,B,A, quiet machine)
+
+| Route | Side | Median ms | p99 ms | Drain frames | Hitches (over 2x the run median) |
+|---|---|---|---|---|---|
+| H-stress | A | 46.02 | 48.82 | 8 | 4.5 |
+| H-stress | B | 45.81 | 48.60 | **0** | 4.0 |
+| H-probe | A | 4.09 | 8.38 | 272 | 222.5 |
+| H-probe | B | 4.10 | **7.28** | **0** | **84** |
+
+- The remaining H-stress event costs (85–200 ms at `add_instances`) are CPU work in extraction and sorting, not GPU drains. They go to R5 (change-driven extraction).
+- **Watch item, intermittent spike:**
+  - A single-frame 0.7–1.2 s spike lands on a scripted-event frame in 3 of 14 H-stress runs of post-R4c builds: `add_lights` at 1500 (894 ms), `add_instances` at 3500 (1,155 ms, aliasing off) and `add_lights` at 8500 (668 ms).
+  - It occurs with aliasing on and off. It was not seen in 2 runs of the pre-R4c baseline, so the evidence is too thin to bisect.
+  - The profiler's detailed window (512 frames) did not cover those frames. The harness now records scope detail for any frame of 250 ms or more (`b360e3a`, `scripted_slow_frame`), and 4 further runs did not reproduce it.
+  - R4d and R6 hitch runs will attribute it if it recurs.
+
 ## Completion report
 
 (Written at R6.)
