@@ -8,6 +8,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <exception>
 #include <filesystem>
 #include <iostream>
@@ -210,6 +211,49 @@ namespace {
         CHECK(samples[1].frameId == 12u && samples[1].drainCount == 1u);
         CHECK(samples[2].frameId == 13u);
         CHECK(samples[1].cpuFrameNanoseconds >= samples[1].drainNanoseconds);
+        CHECK(timeline.slowFrames().empty());
+        return true;
+    }
+
+    bool testTimelineKeepsLongestScopesOfSlowFrames() {
+        ScriptedFrameTimeline timeline;
+        timeline.reserve(4);
+        timeline.setSlowFrameThreshold(100);
+        CpuFrameProfile fast;
+        fast.frameId = 7;
+        fast.events.push_back({ "cpu.frame.total", 1, 0, 0, 0, 99 });
+        CHECK(timeline.observe(fast));
+        CpuFrameProfile slow;
+        slow.frameId = 8;
+        slow.events.push_back({ "cpu.frame.total", 1, 0, 0, 0, 1000 });
+        // More scopes than the capacity: the shortest ones are dropped.
+        for (uint64_t i = 0; i < ScriptedSlowFrame::kEventCapacity + 8; ++i)
+            slow.events.push_back({ "cpu.child", 2 + i, 1, 0, 0, 10 + i });
+        CHECK(timeline.observe(slow));
+        const auto slowFrames = timeline.slowFrames();
+        CHECK(slowFrames.size() == 1u);
+        CHECK(slowFrames[0].frameId == 8u);
+        CHECK(slowFrames[0].eventCount == ScriptedSlowFrame::kEventCapacity);
+        uint64_t shortest = ~0ull;
+        bool total = false;
+        for (uint32_t i = 0; i < slowFrames[0].eventCount; ++i) {
+            const auto& event = slowFrames[0].events[i];
+            shortest = std::min(shortest, event.durationNanoseconds);
+            total = total || event.eventId == 1;
+        }
+        CHECK(total);
+        CHECK(shortest == 10u + 9u); // 8 of 56 children dropped, plus the total kept
+        std::ostringstream stream;
+        writeScriptedChangeJsonLines(stream, ScriptedChangeScenario{}, "s.json", 0,
+            {}, timeline.samples(), timeline.slowFrames());
+        std::istringstream lines(stream.str());
+        std::vector<nlohmann::json> records;
+        for (std::string line; std::getline(lines, line);)
+            records.push_back(nlohmann::json::parse(line));
+        CHECK(records.size() == 4u);
+        CHECK(records[3]["type"] == "scripted_slow_frame");
+        CHECK(records[3]["m"] == 7);
+        CHECK(records[3]["events"].size() == ScriptedSlowFrame::kEventCapacity);
         return true;
     }
 
@@ -312,6 +356,8 @@ int main() {
         { "Frame sampling", testFrameSampling },
         { "Timeline samples each profiled frame once",
             testTimelineSamplesEachProfiledFrameOnce },
+        { "Timeline keeps the longest scopes of slow frames",
+            testTimelineKeepsLongestScopesOfSlowFrames },
         { "JSON Lines records", testJsonLinesRecords },
         { "Tracked hitch scenarios", testTrackedHitchScenarios },
     };

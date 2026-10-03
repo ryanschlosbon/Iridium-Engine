@@ -4,6 +4,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <fstream>
@@ -242,6 +243,26 @@ namespace Iridium {
         if (frame.frameId == 0 || frame.frameId == lastFrameId_) return false;
         lastFrameId_ = frame.frameId;
         samples_.push_back(sampleScriptedFrame(frame));
+        if (samples_.back().cpuFrameNanoseconds >= slowFrameNanoseconds_ &&
+            slowFrames_.size() < kSlowFrameCapacity) {
+            ScriptedSlowFrame& slow = slowFrames_.emplace_back();
+            slow.frameId = frame.frameId;
+            // Keep the longest scopes: fill, then replace the shortest kept one.
+            for (const CpuProfileEvent& event : frame.events) {
+                const ScriptedSlowFrame::Event kept{ event.name, event.eventId,
+                    event.parentEventId, event.durationNanoseconds };
+                if (slow.eventCount < ScriptedSlowFrame::kEventCapacity) {
+                    slow.events[slow.eventCount++] = kept;
+                    continue;
+                }
+                auto shortest = std::min_element(slow.events.begin(),
+                    slow.events.end(), [](const auto& a, const auto& b) {
+                        return a.durationNanoseconds < b.durationNanoseconds;
+                    });
+                if (kept.durationNanoseconds > shortest->durationNanoseconds)
+                    *shortest = kept;
+            }
+        }
         return true;
     }
 
@@ -268,7 +289,8 @@ namespace Iridium {
     void writeScriptedChangeJsonLines(std::ostream& output,
         const ScriptedChangeScenario& scenario, std::string_view scenarioPath,
         uint64_t warmupFrames, std::span<const AppliedScriptedChange> applied,
-        std::span<const ScriptedFrameSample> samples) {
+        std::span<const ScriptedFrameSample> samples,
+        std::span<const ScriptedSlowFrame> slowFrames) {
         Json events = Json::array();
         for (const AppliedScriptedChange& record : applied) {
             if (record.eventIndex >= scenario.events.size()) continue;
@@ -298,6 +320,25 @@ namespace Iridium {
                 << ",\"upload_wait\":" << sample.uploadWaitCount
                 << ",\"upload_wait_ns\":" << sample.uploadWaitNanoseconds
                 << "}\n";
+        }
+        for (const ScriptedSlowFrame& slow : slowFrames) {
+            Json events = Json::array();
+            for (uint32_t i = 0; i < slow.eventCount; ++i) {
+                const ScriptedSlowFrame::Event& event = slow.events[i];
+                events.push_back({
+                    { "name", event.name ? event.name : "" },
+                    { "id", event.eventId },
+                    { "parent", event.parentEventId },
+                    { "ns", event.durationNanoseconds },
+                });
+            }
+            const Json record{
+                { "type", "scripted_slow_frame" },
+                { "m", static_cast<int64_t>(slow.frameId) - 1 -
+                    static_cast<int64_t>(warmupFrames) },
+                { "events", events },
+            };
+            output << record.dump() << '\n';
         }
     }
 

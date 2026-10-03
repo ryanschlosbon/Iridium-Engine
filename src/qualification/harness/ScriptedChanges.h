@@ -29,6 +29,7 @@
 // FrameBeginPhase::PreSceneUpdate of that frame, in file order. Frames must be
 // non-decreasing. Unknown keys are errors.
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -129,19 +130,49 @@ namespace Iridium {
     [[nodiscard]] ScriptedFrameSample sampleScriptedFrame(
         const CpuFrameProfile& frame) noexcept;
 
+    // Scope detail for a frame whose cpu.frame.total reaches the slow-frame
+    // threshold, so isolated spikes outside the profiler's detailed-frame window
+    // can still be attributed. Keeps the longest kEventCapacity scopes.
+    struct ScriptedSlowFrame {
+        struct Event {
+            const char* name = nullptr; // profiler scope names are static strings
+            uint64_t eventId = 0;
+            uint64_t parentEventId = 0;
+            uint64_t durationNanoseconds = 0;
+        };
+        static constexpr size_t kEventCapacity = 48;
+        uint64_t frameId = 0;
+        uint32_t eventCount = 0;
+        std::array<Event, kEventCapacity> events{};
+    };
+
     // Samples the profiler's latest completed frame once per frame id into
     // reserved storage (no steady-frame allocations once reserved).
     class ScriptedFrameTimeline {
     public:
-        void reserve(size_t frames) { samples_.reserve(frames); }
+        static constexpr size_t kSlowFrameCapacity = 32;
+        static constexpr uint64_t kDefaultSlowFrameNanoseconds = 250'000'000;
+
+        void reserve(size_t frames) {
+            samples_.reserve(frames);
+            slowFrames_.reserve(kSlowFrameCapacity);
+        }
+        void setSlowFrameThreshold(uint64_t nanoseconds) noexcept {
+            slowFrameNanoseconds_ = nanoseconds;
+        }
         // Returns true when a new frame was recorded.
         bool observe(const CpuProfiler& profiler);
         bool observe(const CpuFrameProfile& frame);
         [[nodiscard]] std::span<const ScriptedFrameSample> samples()
             const noexcept { return samples_; }
+        // The first kSlowFrameCapacity frames at or above the threshold.
+        [[nodiscard]] std::span<const ScriptedSlowFrame> slowFrames()
+            const noexcept { return slowFrames_; }
 
     private:
         std::vector<ScriptedFrameSample> samples_;
+        std::vector<ScriptedSlowFrame> slowFrames_;
+        uint64_t slowFrameNanoseconds_ = kDefaultSlowFrameNanoseconds;
         uint64_t lastFrameId_ = 0;
     };
 
@@ -161,11 +192,13 @@ namespace Iridium {
         const ScriptedChangeEvent& event, const AppliedScriptedChange& applied);
 
     // Appends {"type":"scripted_changes",...} followed by one
-    // {"type":"scripted_frame",...} record per sample. Measured frame
+    // {"type":"scripted_frame",...} record per sample and one
+    // {"type":"scripted_slow_frame",...} record per slow frame. Measured frame
     // m = frameId - 1 - warmupFrames.
     void writeScriptedChangeJsonLines(std::ostream& output,
         const ScriptedChangeScenario& scenario, std::string_view scenarioPath,
         uint64_t warmupFrames, std::span<const AppliedScriptedChange> applied,
-        std::span<const ScriptedFrameSample> samples);
+        std::span<const ScriptedFrameSample> samples,
+        std::span<const ScriptedSlowFrame> slowFrames = {});
 
 } // namespace Iridium

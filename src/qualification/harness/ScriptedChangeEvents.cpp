@@ -526,7 +526,8 @@ namespace Iridium {
                 "Unable to append scripted-change records to the CPU profile");
         writeScriptedChangeJsonLines(output, scripted_->scenario,
             scripted_->path.generic_string(), scripted_->warmupFrames,
-            scripted_->applied, scripted_->timeline.samples());
+            scripted_->applied, scripted_->timeline.samples(),
+            scripted_->timeline.slowFrames());
         if (!output)
             throw std::runtime_error(
                 "Unable to append scripted-change records to the CPU profile");
