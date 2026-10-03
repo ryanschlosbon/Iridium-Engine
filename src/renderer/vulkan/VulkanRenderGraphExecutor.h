@@ -317,6 +317,11 @@ namespace Iridium {
         // pass must be begun or skipped in compiled order.
         void beginPass(VkCommandBuffer commandBuffer, RenderGraph::PassId pass);
         void skipPass(RenderGraph::PassId pass);
+        // Explicit drain point (R3c): runs the registered passes from the
+        // cursor through `last` (inclusive) in compiled order. It throws if
+        // that would skip an unregistered pass, if `last` is not registered or
+        // was already handled; an invalid id (undeclared pass) is a no-op.
+        void drainRegisteredThrough(RenderGraph::PassId last);
         // Drains the remaining registered passes, then requires every pass to
         // have been handled.
         void finishFrameExecution();

@@ -1141,6 +1141,39 @@ namespace {
         return true;
     }
 
+    // R3c explicit drain points: the owner runs its registered passes where
+    // they used to be recorded, in compiled order, never past an imperative one.
+    bool testExplicitDrainPoints() {
+        ChainFixture fixture;
+        auto& executor = fixture.executor;
+        auto& log = fixture.log;
+        executor.registerPass(ChainFixture::pass(1), testCallbacks(fixture.owner, 1, "gpu.p1"));
+        executor.registerPass(ChainFixture::pass(2), testCallbacks(fixture.owner, 2));
+        executor.registerPass(ChainFixture::pass(4), testCallbacks(fixture.owner, 4));
+        executor.beginFrameExecution(0);
+        executor.beginPass(FakeCommandBuffer, ChainFixture::pass(0));
+        // An undeclared (invalid) pass is a no-op; an unregistered target throws.
+        executor.drainRegisteredThrough(RenderGraph::PassId{});
+        CHECK(throws([&] { executor.drainRegisteredThrough(ChainFixture::pass(3)); }));
+        CHECK(fixture.owner.executions[1] == 0);
+        log.count = 0;
+        executor.drainRegisteredThrough(ChainFixture::pass(1));
+        // Only p1 ran: active, range, barrier, execute, range end.
+        CHECK(fixture.owner.executions[1] == 1 && fixture.owner.executions[2] == 0);
+        CHECK(log.count == 5 && log.recorded()[1].kind == EventKind::RangeBegin);
+        CHECK(throws([&] { executor.drainRegisteredThrough(ChainFixture::pass(1)); }));
+        executor.drainRegisteredThrough(ChainFixture::pass(2));
+        CHECK(fixture.owner.executions[2] == 1);
+        // Draining through p4 would skip the imperative p3.
+        CHECK(throws([&] { executor.drainRegisteredThrough(ChainFixture::pass(4)); }));
+        CHECK(fixture.owner.executions[4] == 0);
+        executor.beginPass(FakeCommandBuffer, ChainFixture::pass(3));
+        executor.drainRegisteredThrough(ChainFixture::pass(4));
+        CHECK(fixture.owner.executions[4] == 1);
+        executor.finishFrameExecution();
+        return true;
+    }
+
     bool testCallbackContextAndReentry() {
         ChainFixture fixture;
         auto& executor = fixture.executor;
@@ -1797,6 +1830,7 @@ int main() {
         { "drain rejects unregistered skips", testDrainRejectsUnregisteredSkips },
         { "finish drains and rollback", testFinishDrainsAndRollback },
         { "GPU range placement and groups", testGpuRangePlacementAndGroups },
+        { "explicit drain points", testExplicitDrainPoints },
         { "callback context and reentry", testCallbackContextAndReentry },
         { "History pair lifetime", testHistoryPairLifetime },
         { "History validity", testHistoryValidity },

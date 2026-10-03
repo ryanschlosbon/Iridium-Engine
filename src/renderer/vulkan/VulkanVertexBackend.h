@@ -34,6 +34,7 @@
 #include "VulkanSceneDescriptors.h"
 #include "VulkanProductionRenderGraph.h"
 #include "VulkanBackendExtension.h"
+#include "VulkanClusterLightingFeature.h"
 #include "VulkanExtensionHooks.h"
 #include "VulkanFeatureContext.h"
 #include "VulkanFrameTelemetry.h"
@@ -132,8 +133,8 @@ namespace Iridium {
 
         // Lighting Pass Raw Images & Descriptors
         VulkanSceneDescriptors sceneDescriptors;
-        VulkanClusteredLightingPipeline clusteredLighting_;
-        VulkanReflectionProbePipeline reflectionProbePipeline_;
+        // R3c.1: clustered lighting and probe clustering.
+        VulkanClusterLightingFeature clusterLighting_;
         VulkanReflectionProbeCapturePass reflectionProbeCapturePass_;
         VulkanReflectionProbeCaptureTargets reflectionProbeCaptureTargets_;
         VulkanDirectionalShadowMap directionalShadow_;
@@ -190,8 +191,6 @@ namespace Iridium {
         // Global Camera Data
         std::vector<VulkanBufferResource> uniformBuffers;
         std::vector<VkDescriptorSet> globalDescriptorSets;
-        std::array<VulkanBufferResource, VulkanFrameScheduler::FramesInFlight>
-            lightRecordBuffers_{};
 
         // GPU-driven shadow/probe caster compaction (M7R R3a). The shared
         // 3-binding indirect set layout is owned here; each culler owns its
@@ -205,14 +204,6 @@ namespace Iridium {
         // Main-view opaque compaction (sibling of the view cullers).
         VulkanOpaqueIndirectCuller opaqueCuller_;
         std::array<VulkanBufferResource, VulkanFrameScheduler::FramesInFlight>
-            activeLightSlotBuffers_{};
-        std::array<VulkanBufferResource, VulkanFrameScheduler::FramesInFlight>
-            fallbackCandidateBuffers_{};
-        std::array<VulkanBufferResource, VulkanFrameScheduler::FramesInFlight>
-            clusterParameterBuffers_{};
-        std::array<VulkanBufferResource, VulkanFrameScheduler::FramesInFlight>
-            clusterDiagnosticReadbackBuffers_{};
-        std::array<VulkanBufferResource, VulkanFrameScheduler::FramesInFlight>
             reflectionProbeRecordBuffers_{};
         std::array<VulkanBufferResource, VulkanFrameScheduler::FramesInFlight>
             reflectionProbeActiveSlotBuffers_{};
@@ -222,21 +213,6 @@ namespace Iridium {
             reflectionProbeClusterHeaderBuffers_{};
         std::array<VulkanBufferResource, VulkanFrameScheduler::FramesInFlight>
             reflectionProbeClusterIndexBuffers_{};
-        std::array<bool, VulkanFrameScheduler::FramesInFlight>
-            clusterDiagnosticReadbackPending_{};
-        std::array<uint32_t, VulkanFrameScheduler::FramesInFlight>
-            submittedClusterCounts_{};
-        ClusteredLightingTelemetry clusterTelemetry_{};
-        std::array<std::vector<uint64_t>, VulkanFrameScheduler::FramesInFlight>
-            uploadedLightRevisions_{};
-        std::array<uint64_t, VulkanFrameScheduler::FramesInFlight>
-            uploadedActiveListRevisions_{};
-        std::array<uint64_t, VulkanFrameScheduler::FramesInFlight>
-            uploadedSpotShadowMappingRevisions_{};
-        std::array<uint64_t, VulkanFrameScheduler::FramesInFlight>
-            uploadedPointShadowMappingRevisions_{};
-        std::vector<uint32_t> spotShadowDataSlots_;
-        std::vector<uint32_t> pointShadowDataSlots_;
         using ResolvedShadowCaster = VulkanResolvedCaster;
 
         std::vector<uint32_t> spotShadowMappingScratch_;
@@ -244,13 +220,6 @@ namespace Iridium {
         std::vector<ResolvedShadowCaster> shadowCasterScratch_;
         std::vector<uint8_t> directionalShadowCasterMaskScratch_;
 
-        std::vector<PackedGpuLight> patchedLightRecordsScratch_;
-        uint64_t spotShadowMappingRevision_ = 1;
-        uint64_t pointShadowMappingRevision_ = 1;
-        std::vector<uint32_t> fallbackSelectionScratch_;
-        std::vector<LightRecordRange> lightUploadRanges_;
-        uint32_t lightRecordCapacity_ = 0;
-        uint32_t lightRecordMaximumCapacity_ = 0;
         [[nodiscard]] bool resolveGpuSceneCaster(uint32_t primitiveIndex,
             uint32_t consumerMask,
             ResolvedShadowCaster& caster) const noexcept;
@@ -267,9 +236,6 @@ namespace Iridium {
             const ReflectionProbeCasterSubmission& submission,
             Visitor&& visitor) const;
         static constexpr uint32_t MaximumOpaqueIndirectCommandCapacity = 65536u;
-        uint32_t activeLightCount_ = 0;
-        uint64_t lightUploadBytes_ = 0;
-        uint32_t lightUploadRangeCount_ = 0;
         std::array<std::vector<uint64_t>, VulkanFrameScheduler::FramesInFlight>
             uploadedReflectionProbeRevisions_{};
         std::array<uint64_t, VulkanFrameScheduler::FramesInFlight>
@@ -364,7 +330,6 @@ namespace Iridium {
 
         // Private helpers that Application.cpp no longer needs to worry about
         void createUniformBuffers();
-        void createLightRecordBuffers(uint32_t capacity);
         void createGpuSceneCullPipeline();
         [[nodiscard]] VulkanCullerServices cullerServices();
         void createDirectionalShadowIndirectPipeline();
@@ -403,7 +368,6 @@ namespace Iridium {
         [[nodiscard]] bool prepareOpaqueIndirectSubmission(
             std::span<const DrawPacket> opaqueQueue);
         void bindLightRecordBuffers();
-        void bindClusterBuffers();
         void bindSceneClusterBuffers();
         void createNeutralEnvironmentProducts();
         void bindEnvironmentProducts(uint32_t frame = UINT32_MAX);
@@ -420,14 +384,10 @@ namespace Iridium {
         void updateReflectionProbeParameters(uint32_t frameIndex,
             const glm::mat4& view, const glm::mat4& projection,
             float nearPlane, float farPlane, uint32_t activeProbeCount);
-        void uploadLightsForFrame(uint32_t frameIndex,
-            const LightingFramePacket& lights);
-        void updateClusterParameters(uint32_t frameIndex,
-            const glm::mat4& view, const glm::mat4& projection,
-            float nearPlane, float farPlane, uint32_t activeLightCount);
-        void updateClusterFallbackCandidates(uint32_t frameIndex,
-            const glm::mat4& view, const LightingFramePacket& lights);
-        void collectClusterDiagnostics(uint32_t frameIndex) noexcept;
+        // Feature owners in registration (and graph) order.
+        [[nodiscard]] std::array<IVulkanFeature*, 1> features() noexcept {
+            return { &clusterLighting_ };
+        }
         void initFrameTargets();
         void rebuildRenderGraphAfterDeviceIdle();
         // R3b.6 imported images: swapchain (per frame) and shadow maps (global).
@@ -624,12 +584,11 @@ namespace Iridium {
             const ReflectionProbeGpuFramePacket& reflectionProbes) override;
         [[nodiscard]] LightingUploadTelemetry
             getLightingUploadTelemetry() const noexcept override {
-            return { lightUploadBytes_, lightUploadRangeCount_,
-                activeLightCount_, lightRecordCapacity_ };
+            return clusterLighting_.uploadTelemetry();
         }
         [[nodiscard]] ClusteredLightingTelemetry
             getClusteredLightingTelemetry() const noexcept override {
-            return clusterTelemetry_;
+            return clusterLighting_.clusterTelemetry();
         }
         void submitForwardQueues(std::span<const DrawPacket> opaqueForwardQueue,
             std::span<const DrawPacket> sortedSurfaceQueue,

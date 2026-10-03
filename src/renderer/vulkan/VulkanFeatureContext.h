@@ -12,6 +12,14 @@
 // that pass's drain point, and stay valid until the callback ran. Owners
 // stage into fixed members (spans and PODs, never containers that grow), so
 // a steady frame allocates nothing.
+//
+// Drain points. Until submitFrame (R3c.11) the backend still sequences the
+// frame with its submit* calls, interleaved with imperative passes. Each owner
+// therefore runs its registered passes at the point where they used to be
+// recorded: it stages, then calls VulkanRenderGraphExecutor::
+// drainRegisteredThrough(lastPass) inside the same CPU scope as before. The
+// executor still decides activity, emits the barriers and GPU ranges, and runs
+// the callbacks in compiled order, so the command stream is unchanged.
 
 #include "renderer/vulkan/VulkanProductionGraphIds.h"
 
@@ -54,6 +62,8 @@ namespace Iridium {
         // Draw/dispatch/bind counters of the frame being recorded.
         VulkanFrameTelemetry& telemetry;
         VulkanExtensionHooks& extensions;
+        // The backend's open-frame flag (capacity changes are frame-boundary only).
+        const bool& frameOpen;
     };
 
     // Owner lifecycle, driven by the backend:

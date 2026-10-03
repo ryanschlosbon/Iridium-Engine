@@ -1243,6 +1243,18 @@ void VulkanRenderGraphExecutor::skipPass(RenderGraph::PassId pass) {
     ++nextPass_;
 }
 
+void VulkanRenderGraphExecutor::drainRegisteredThrough(RenderGraph::PassId last) {
+    const RenderGraph::CompiledGraph& graph = executingGraph();
+    if (inCallback_)
+        throw std::logic_error("Render-graph passes cannot drain inside a pass callback");
+    if (!last.isValid()) return;
+    if (last.order >= graph.passes().size() || callbacks_[last.order].execute == nullptr)
+        throw std::logic_error("Render-graph drain target is not a registered pass");
+    if (last.order < nextPass_)
+        throw std::logic_error("Render-graph drain target was already handled");
+    drainRegisteredBefore(last.order + 1);
+}
+
 void VulkanRenderGraphExecutor::finishFrameExecution() {
     const RenderGraph::CompiledGraph& graph = executingGraph();
     if (inCallback_)

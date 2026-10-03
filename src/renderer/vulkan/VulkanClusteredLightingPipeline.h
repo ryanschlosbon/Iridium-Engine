@@ -31,9 +31,19 @@ namespace Iridium {
             std::span<const VkDescriptorBufferInfo> fallbackCandidates,
             std::span<const VkDescriptorBufferInfo> parameters);
         void clearDescriptors();
-        [[nodiscard]] uint32_t record(VkCommandBuffer commandBuffer,
-            VulkanRenderGraphExecutor& graph, const VulkanClusterGraphIds& ids,
-            uint32_t frameIndex, uint32_t clusterCount, uint32_t activeLightCount);
+        // One stage per graph pass ("lighting.cluster.{clear,count,scan,fill,
+        // finalize}", R3c.1); the executor begins each pass. Each returns its
+        // dispatch count.
+        [[nodiscard]] uint32_t recordClear(VkCommandBuffer commandBuffer,
+            uint32_t frameIndex, uint32_t clusterCount);
+        [[nodiscard]] uint32_t recordCount(VkCommandBuffer commandBuffer,
+            uint32_t frameIndex, uint32_t activeLightCount);
+        [[nodiscard]] uint32_t recordScan(VkCommandBuffer commandBuffer,
+            uint32_t frameIndex, uint32_t clusterCount);
+        [[nodiscard]] uint32_t recordFill(VkCommandBuffer commandBuffer,
+            uint32_t frameIndex, uint32_t activeLightCount);
+        [[nodiscard]] uint32_t recordFinalize(VkCommandBuffer commandBuffer,
+            uint32_t frameIndex, VkBuffer indirect);
         void cleanup() noexcept;
 
     private:

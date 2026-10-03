@@ -10,6 +10,7 @@ add_library(iridium_vulkan STATIC
         VkRenderPass.cpp
         VkSwapchain.cpp
         VkUIRenderPass.cpp
+        VulkanClusterLightingFeature.cpp
         VulkanClusteredLightingPipeline.cpp
         VulkanDepthPyramid.cpp
         VulkanDirectionalShadowMap.cpp

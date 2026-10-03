@@ -365,6 +365,7 @@ namespace Iridium {
             .profiler = cpuProfiler_,
             .telemetry = telemetry_,
             .extensions = extensionHooks_,
+            .frameOpen = frameOpen_,
         });
         descriptorAllocator.init(vkContext->getDevice());
         // Keep initial driver allocation modest; the per-frame tables grow
@@ -396,9 +397,13 @@ namespace Iridium {
         createLightingRenderPass();
         lightingPipeline = std::make_unique<VkLightingPipeline>(vkContext.get(),
             lightingRenderPass, gBufferLayout_);
-        clusteredLighting_.init(vkContext->getDevice(), descriptorAllocator);
-        reflectionProbePipeline_.init(vkContext->getDevice(),
-            descriptorAllocator);
+        clusterLighting_.configure(clusterConfig_, (std::min)(
+            static_cast<uint32_t>(
+                vkContext->getPhysicalDeviceProperties()
+                    .limits.maxStorageBufferRange /
+                sizeof(PackedGpuLight)),
+            kMaximumGpuLightCapacity));
+        clusterLighting_.create(*featureContext_);
         meshLayouts.init(vkContext->getDevice(),
             lightingPipeline->getDescriptorSetLayout(),
             resources_.textureTable().materialViewLayout(),
@@ -523,18 +528,12 @@ namespace Iridium {
         resources_.createCanonicalMaterialBuffers(
             (std::min)(DesiredCapacity,
                 resources_.materialTableMaximumCapacity()));
-        lightRecordMaximumCapacity_ = (std::min)(
-            static_cast<uint32_t>(
-                vkContext->getPhysicalDeviceProperties()
-                    .limits.maxStorageBufferRange /
-                sizeof(PackedGpuLight)),
-            kMaximumGpuLightCapacity);
-        if (lightRecordMaximumCapacity_ == 0) {
+        if (clusterLighting_.lightRecordMaximumCapacity() == 0) {
             throw std::runtime_error(
                 "Vulkan storage-buffer range cannot hold one GPU light record");
         }
-        createLightRecordBuffers((std::min)(kInitialGpuLightCapacity,
-            lightRecordMaximumCapacity_));
+        clusterLighting_.createLightRecordBuffers((std::min)(kInitialGpuLightCapacity,
+            clusterLighting_.lightRecordMaximumCapacity()));
         const uint64_t storageRange = vkContext->getPhysicalDeviceProperties()
             .limits.maxStorageBufferRange;
         gpuScene_.init(vkContext->getDevice(), resourceAllocator, scheduler,
@@ -966,8 +965,6 @@ namespace Iridium {
         }
 
         sceneDescriptors.cleanup();
-        clusteredLighting_.clearDescriptors();
-        reflectionProbePipeline_.clearDescriptors();
         outputPass.clearDescriptors();
         hdrEncodePass.clearTargets();
         transparencyPyramid_.clearDescriptors();
@@ -1009,18 +1006,8 @@ namespace Iridium {
         }
         for (VulkanBufferResource& buffer : weightedOitInstanceBuffers_)
             resourceAllocator.destroy(buffer);
-        for (VulkanBufferResource& buffer : lightRecordBuffers_)
-            resourceAllocator.destroy(buffer);
         gpuScene_.destroy();
         opaqueCuller_.destroy(device);
-        for (VulkanBufferResource& buffer : activeLightSlotBuffers_)
-            resourceAllocator.destroy(buffer);
-        for (VulkanBufferResource& buffer : fallbackCandidateBuffers_)
-            resourceAllocator.destroy(buffer);
-        for (VulkanBufferResource& buffer : clusterParameterBuffers_)
-            resourceAllocator.destroy(buffer);
-        for (VulkanBufferResource& buffer : clusterDiagnosticReadbackBuffers_)
-            resourceAllocator.destroy(buffer);
         for (VulkanBufferResource& buffer : reflectionProbeRecordBuffers_)
             resourceAllocator.destroy(buffer);
         for (VulkanBufferResource& buffer : reflectionProbeActiveSlotBuffers_)
@@ -1059,8 +1046,7 @@ namespace Iridium {
 
         meshLayouts.cleanup();
         resources_.textureTable().cleanup();
-        clusteredLighting_.cleanup();
-        reflectionProbePipeline_.cleanup();
+        clusterLighting_.destroy();
         descriptorAllocator.cleanup();
 
         scheduler.cleanup();
@@ -1294,6 +1280,14 @@ namespace Iridium {
             }
             virtualShadowDepthBindings_.fill(VK_NULL_HANDLE);
         }
+        // R3c: feature owners re-query graph resources and register their
+        // callbacks on the new plan (a rebuild cleared every registration).
+        if (featureContext_) {
+            for (IVulkanFeature* feature : features()) {
+                feature->onGraphRebuilt(graphIds_);
+                feature->registerPasses(renderGraph_);
+            }
+        }
     }
 
     void VulkanVertexBackend::setWeightedOitInstanceCapacity(uint32_t capacity) {
@@ -1399,7 +1393,7 @@ namespace Iridium {
             uiSceneTextures.clear();
             uiDepthTextures.clear();
             sceneDescriptors.cleanup();
-            clusteredLighting_.clearDescriptors();
+            clusterLighting_.onGraphReleased();
             outputPass.clearDescriptors();
             hdrEncodePass.clearTargets();
             transparencyPyramid_.clearDescriptors();
@@ -1439,7 +1433,6 @@ namespace Iridium {
             layeredLocalComposition_.rebuildDescriptors(frameTargets);
             layeredSceneResolve_.rebuildDescriptors(frameTargets);
             weightedOit_.rebuildDescriptors(frameTargets);
-            bindClusterBuffers();
             if (VulkanTexturePayload* lut = resources_.textures().get(
                     outputTransformLut_); lut != nullptr && !lut->retired) {
                 outputPass.rebuildDescriptors(frameTargets,
@@ -1579,7 +1572,7 @@ namespace Iridium {
         // The clustered pass owns descriptor sets that reference transient
         // render-graph buffers.  Swapchain recreation rebuilds that graph, so
         // retire the bindings before the buffers and recreate them afterward.
-        clusteredLighting_.clearDescriptors();
+        clusterLighting_.onGraphReleased();
         outputPass.clearDescriptors();
         hdrEncodePass.clearTargets();
         transparencyPyramid_.clearDescriptors();
@@ -1653,7 +1646,6 @@ namespace Iridium {
         layeredLocalComposition_.rebuildDescriptors(frameTargets);
         layeredSceneResolve_.rebuildDescriptors(frameTargets);
         weightedOit_.rebuildDescriptors(frameTargets);
-        bindClusterBuffers();
         if (VulkanTexturePayload* lut = resources_.textures().get(outputTransformLut_);
             lut != nullptr && !lut->retired) {
             outputPass.rebuildDescriptors(frameTargets, lut->image.view, lut->sampler);
@@ -1772,7 +1764,7 @@ namespace Iridium {
             uiSceneTextures.clear();
             uiDepthTextures.clear();
             sceneDescriptors.cleanup();
-            clusteredLighting_.clearDescriptors();
+            clusterLighting_.onGraphReleased();
             outputPass.clearDescriptors();
             hdrEncodePass.clearTargets();
             transparencyPyramid_.clearDescriptors();
@@ -1812,7 +1804,6 @@ namespace Iridium {
             layeredLocalComposition_.rebuildDescriptors(frameTargets);
             layeredSceneResolve_.rebuildDescriptors(frameTargets);
             weightedOit_.rebuildDescriptors(frameTargets);
-            bindClusterBuffers();
             if (VulkanTexturePayload* lut = resources_.textures().get(outputTransformLut_);
                 lut != nullptr && !lut->retired) {
                 outputPass.rebuildDescriptors(frameTargets,
@@ -1885,7 +1876,7 @@ namespace Iridium {
             .indexedTextureViews = vkContext->hasDescriptorIndexing(),
             .separateTextureSamplers = vkContext->hasDescriptorIndexing(),
             .descriptorUpdateAfterBind = vkContext->hasDescriptorIndexing(),
-            .gpuLightRecords = lightRecordCapacity_ != 0,
+            .gpuLightRecords = clusterLighting_.lightRecordCapacity() != 0,
             .multiDrawIndirect = vkContext->hasMultiDrawIndirect(),
             .drawIndirectFirstInstance =
                 vkContext->hasDrawIndirectFirstInstance(),
@@ -1894,7 +1885,7 @@ namespace Iridium {
             .maxIndexedSamplers = vkContext->getMaxIndexedSamplers(),
             .maxUpdateAfterBindDescriptors =
                 vkContext->getMaxUpdateAfterBindDescriptors(),
-            .maxGpuLightRecords = lightRecordMaximumCapacity_,
+            .maxGpuLightRecords = clusterLighting_.lightRecordMaximumCapacity(),
             .maxDrawIndirectCount = vkContext->getMaxDrawIndirectCount(),
         };
     }
@@ -2017,10 +2008,11 @@ namespace Iridium {
         info.frameTopologyPrewarmChanged = frameTopologyPrewarm_.changed;
         info.frameTopologyPrewarmNanoseconds =
             frameTopologyPrewarm_.durationNanoseconds;
-        info.gpuLightCapacity = lightRecordCapacity_;
-        info.gpuLightActiveCount = activeLightCount_;
-        info.gpuLightUploadBytes = lightUploadBytes_;
-        info.gpuLightUploadRanges = lightUploadRangeCount_;
+        const LightingUploadTelemetry lightUploads = clusterLighting_.uploadTelemetry();
+        info.gpuLightCapacity = lightUploads.capacity;
+        info.gpuLightActiveCount = lightUploads.activeLights;
+        info.gpuLightUploadBytes = lightUploads.bytes;
+        info.gpuLightUploadRanges = lightUploads.ranges;
         info.uploads = uploadContext.telemetry();
         return info;
     }
@@ -2282,7 +2274,8 @@ namespace Iridium {
             depthPyramid_.onFrameFenceCompleted(completedFrameIndex,
                 scheduler.completedSerial());
         }
-        collectClusterDiagnostics(completedFrameIndex);
+        for (IVulkanFeature* feature : features())
+            feature->onFrameSlotRetired(completedFrameIndex);
         opaqueCuller_.collect(completedFrameIndex);
         collectIndirectViewValidations(completedFrameIndex);
         {
@@ -2947,10 +2940,10 @@ namespace Iridium {
         const uint32_t frameIndex = scheduler.currentFrameIndex();
         spotShadow_.updateFrame(frameIndex, shadows);
 
-        spotShadowMappingScratch_.assign(lightRecordCapacity_,
+        spotShadowMappingScratch_.assign(clusterLighting_.lightRecordCapacity(),
             kInvalidShadowDataSlot);
         for (const SpotShadowFramePacket& shadow : shadows) {
-            if (shadow.lightSlot >= lightRecordCapacity_ ||
+            if (shadow.lightSlot >= clusterLighting_.lightRecordCapacity() ||
                 shadow.shadowDataSlot >= kSpotShadowEntryCapacity)
                 throw std::out_of_range(
                     "Spot shadow light or data slot is invalid");
@@ -2958,12 +2951,7 @@ namespace Iridium {
                 spotShadowMappingScratch_[shadow.lightSlot] =
                     shadow.shadowDataSlot;
         }
-        if (spotShadowMappingScratch_ != spotShadowDataSlots_) {
-            spotShadowDataSlots_ = spotShadowMappingScratch_;
-            ++spotShadowMappingRevision_;
-            if (spotShadowMappingRevision_ == 0u)
-                ++spotShadowMappingRevision_;
-        }
+        clusterLighting_.publishSpotShadowSlots(spotShadowMappingScratch_);
 
         const bool hasUpdates = std::ranges::any_of(shadows,
             [](const SpotShadowFramePacket& shadow) { return shadow.update; });
@@ -3161,10 +3149,10 @@ namespace Iridium {
         const uint32_t frameIndex = scheduler.currentFrameIndex();
         pointShadow_.updateFrame(frameIndex, shadows);
 
-        pointShadowMappingScratch_.assign(lightRecordCapacity_,
+        pointShadowMappingScratch_.assign(clusterLighting_.lightRecordCapacity(),
             kInvalidShadowDataSlot);
         for (const PointShadowFramePacket& shadow : shadows) {
-            if (shadow.lightSlot >= lightRecordCapacity_ ||
+            if (shadow.lightSlot >= clusterLighting_.lightRecordCapacity() ||
                 shadow.shadowDataSlot >= kPointShadowEntryCapacity)
                 throw std::out_of_range(
                     "Point shadow light or data slot is invalid");
@@ -3172,12 +3160,7 @@ namespace Iridium {
                 pointShadowMappingScratch_[shadow.lightSlot] =
                     shadow.shadowDataSlot;
         }
-        if (pointShadowMappingScratch_ != pointShadowDataSlots_) {
-            pointShadowDataSlots_ = pointShadowMappingScratch_;
-            ++pointShadowMappingRevision_;
-            if (pointShadowMappingRevision_ == 0u)
-                ++pointShadowMappingRevision_;
-        }
+        clusterLighting_.publishPointShadowSlots(pointShadowMappingScratch_);
 
         const bool hasUpdates = std::ranges::any_of(shadows,
             [](const PointShadowFramePacket& shadow) { return shadow.update; });
@@ -3405,7 +3388,7 @@ namespace Iridium {
             "cpu.render.record.probe_capture");
         renderGraph_.beginPass(currentCmd, graphIds_.probeCapture);
         const uint32_t frameIndex = scheduler.currentFrameIndex();
-        uploadLightsForFrame(frameIndex, lights);
+        clusterLighting_.uploadLights(frameIndex, lights);
         const VkDescriptorSet sceneSet = sceneDescriptors.get(frameIndex);
         const VkPipelineLayout layout =
             reflectionProbeCapturePass_.graphicsLayout();
@@ -4031,117 +4014,6 @@ VkDeviceSize offset = geometry->vertexOffset;
 
     }
 
-    void VulkanVertexBackend::createLightRecordBuffers(uint32_t capacity) {
-        if (capacity == 0 || capacity > lightRecordMaximumCapacity_) {
-            throw std::invalid_argument(
-                "GPU light record capacity is outside the device limit");
-        }
-        if (frameOpen_) {
-            throw std::logic_error(
-                "GPU light record buffers may grow only at a frame boundary");
-        }
-        const VkDeviceSize recordBytes = static_cast<VkDeviceSize>(capacity) *
-            sizeof(PackedGpuLight);
-        const VkDeviceSize activeBytes = static_cast<VkDeviceSize>(capacity) *
-            sizeof(uint32_t);
-        std::array<VulkanBufferResource,
-            VulkanFrameScheduler::FramesInFlight> recordReplacement{};
-        std::array<VulkanBufferResource,
-            VulkanFrameScheduler::FramesInFlight> activeReplacement{};
-        std::array<VulkanBufferResource,
-            VulkanFrameScheduler::FramesInFlight> fallbackReplacement{};
-        std::array<VulkanBufferResource,
-            VulkanFrameScheduler::FramesInFlight> parameterReplacement{};
-        std::array<VulkanBufferResource,
-            VulkanFrameScheduler::FramesInFlight> readbackReplacement{};
-        const bool createParameters = !clusterParameterBuffers_[0].isValid();
-        try {
-            for (uint32_t frame = 0;
-                frame < VulkanFrameScheduler::FramesInFlight; ++frame) {
-                recordReplacement[frame] = resourceAllocator.createBuffer(recordBytes,
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                        VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                    true, ProfileMemoryCategory::LightGpu);
-                activeReplacement[frame] = resourceAllocator.createBuffer(activeBytes,
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                        VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                    true, ProfileMemoryCategory::LightGpu);
-                if (createParameters) {
-                    fallbackReplacement[frame] = resourceAllocator.createBuffer(
-                        kMaximumClusterFallbackLights * sizeof(uint32_t),
-                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                            VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                        true, ProfileMemoryCategory::LightGpu);
-                    parameterReplacement[frame] = resourceAllocator.createBuffer(
-                        sizeof(PackedGpuClusterParameters),
-                        VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-                        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                            VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                        true, ProfileMemoryCategory::LightGpu);
-                    readbackReplacement[frame] = resourceAllocator.createBuffer(
-                        64, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                            VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                        true, ProfileMemoryCategory::LightGpu);
-                }
-                std::memset(recordReplacement[frame].mapped, 0,
-                    static_cast<size_t>(recordBytes));
-                std::memset(activeReplacement[frame].mapped, 0,
-                    static_cast<size_t>(activeBytes));
-                if (createParameters) {
-                    std::memset(fallbackReplacement[frame].mapped, 0xff,
-                        kMaximumClusterFallbackLights * sizeof(uint32_t));
-                    std::memset(parameterReplacement[frame].mapped, 0,
-                        sizeof(PackedGpuClusterParameters));
-                    std::memset(readbackReplacement[frame].mapped, 0, 64);
-                }
-            }
-        }
-        catch (...) {
-            for (uint32_t frame = 0;
-                frame < VulkanFrameScheduler::FramesInFlight; ++frame) {
-                resourceAllocator.destroy(recordReplacement[frame]);
-                resourceAllocator.destroy(activeReplacement[frame]);
-                resourceAllocator.destroy(fallbackReplacement[frame]);
-                resourceAllocator.destroy(parameterReplacement[frame]);
-                resourceAllocator.destroy(readbackReplacement[frame]);
-            }
-            throw;
-        }
-        if (lightRecordCapacity_ != 0) scheduler.waitForAllFrames();
-        clusteredLighting_.clearDescriptors();
-        for (VulkanBufferResource& buffer : lightRecordBuffers_) {
-            resourceAllocator.destroy(buffer);
-        }
-        for (VulkanBufferResource& buffer : activeLightSlotBuffers_)
-            resourceAllocator.destroy(buffer);
-        lightRecordBuffers_ = recordReplacement;
-        activeLightSlotBuffers_ = activeReplacement;
-        if (createParameters) {
-            fallbackCandidateBuffers_ = fallbackReplacement;
-            clusterParameterBuffers_ = parameterReplacement;
-            clusterDiagnosticReadbackBuffers_ = readbackReplacement;
-        }
-        lightRecordCapacity_ = capacity;
-        for (std::vector<uint64_t>& revisions : uploadedLightRevisions_) {
-            revisions.assign(capacity, uint64_t{ 0 });
-        }
-        uploadedActiveListRevisions_.fill(0);
-        uploadedSpotShadowMappingRevisions_.fill(0);
-        uploadedPointShadowMappingRevisions_.fill(0);
-        clusterDiagnosticReadbackPending_.fill(false);
-        lightUploadRanges_.reserve(capacity);
-        fallbackSelectionScratch_.reserve(capacity);
-        if (sceneDescriptors.size() != 0) {
-            bindLightRecordBuffers();
-            bindSceneClusterBuffers();
-        }
-        bindClusterBuffers();
-    }
-
     VulkanCullerServices VulkanVertexBackend::cullerServices() {
         cullerDevice_ = { vkContext->getDevice(), &resourceAllocator,
             &descriptorAllocator, &scheduler };
@@ -4262,61 +4134,11 @@ VkDeviceSize offset = geometry->vertexOffset;
     }
 
     void VulkanVertexBackend::bindLightRecordBuffers() {
-        std::array<VkDescriptorBufferInfo,
-            VulkanFrameScheduler::FramesInFlight> descriptors{};
-        for (uint32_t frame = 0;
-            frame < VulkanFrameScheduler::FramesInFlight; ++frame) {
-            descriptors[frame].buffer = lightRecordBuffers_[frame].buffer;
-            descriptors[frame].range = lightRecordBuffers_[frame].size;
-        }
-        sceneDescriptors.setLightBuffers(descriptors);
-    }
-
-    void VulkanVertexBackend::bindClusterBuffers() {
-        std::array<VkDescriptorBufferInfo,
-            VulkanFrameScheduler::FramesInFlight> records{};
-        std::array<VkDescriptorBufferInfo,
-            VulkanFrameScheduler::FramesInFlight> active{};
-        std::array<VkDescriptorBufferInfo,
-            VulkanFrameScheduler::FramesInFlight> fallbackCandidates{};
-        std::array<VkDescriptorBufferInfo,
-            VulkanFrameScheduler::FramesInFlight> parameters{};
-        for (uint32_t frame = 0;
-            frame < VulkanFrameScheduler::FramesInFlight; ++frame) {
-            records[frame] = { lightRecordBuffers_[frame].buffer, 0,
-                lightRecordBuffers_[frame].size };
-            active[frame] = { activeLightSlotBuffers_[frame].buffer, 0,
-                activeLightSlotBuffers_[frame].size };
-            fallbackCandidates[frame] = {
-                fallbackCandidateBuffers_[frame].buffer, 0,
-                fallbackCandidateBuffers_[frame].size };
-            parameters[frame] = { clusterParameterBuffers_[frame].buffer, 0,
-                sizeof(PackedGpuClusterParameters) };
-        }
-        clusteredLighting_.rebuildDescriptors(renderGraph_, graphIds_.cluster,
-            records, active,
-            fallbackCandidates, parameters);
+        sceneDescriptors.setLightBuffers(clusterLighting_.lightRecordDescriptors());
     }
 
     void VulkanVertexBackend::bindSceneClusterBuffers() {
-        std::array<VulkanClusterSceneBufferDescriptors,
-            VulkanFrameScheduler::FramesInFlight> descriptors{};
-        for (uint32_t frame = 0;
-            frame < VulkanFrameScheduler::FramesInFlight; ++frame) {
-            const auto info = [](const VulkanBufferResource& buffer) {
-                return VkDescriptorBufferInfo{ buffer.buffer, 0, buffer.size };
-            };
-            descriptors[frame] = {
-                info(renderGraph_.buffer(frame, graphIds_.cluster.global)),
-                info(renderGraph_.buffer(frame, graphIds_.cluster.headers)),
-                info(renderGraph_.buffer(frame, graphIds_.cluster.indices)),
-                info(renderGraph_.buffer(frame, graphIds_.cluster.fallback)),
-                info(renderGraph_.buffer(frame, graphIds_.cluster.diagnostics)),
-                { clusterParameterBuffers_[frame].buffer, 0,
-                    sizeof(PackedGpuClusterParameters) },
-            };
-        }
-        sceneDescriptors.setClusterBuffers(descriptors);
+        sceneDescriptors.setClusterBuffers(clusterLighting_.sceneClusterDescriptors());
     }
 
     void VulkanVertexBackend::createReflectionProbeBuffers(
@@ -4396,7 +4218,7 @@ VkDeviceSize offset = geometry->vertexOffset;
             throw;
         }
         if (reflectionProbeRecordCapacity_ != 0) scheduler.waitForAllFrames();
-        reflectionProbePipeline_.clearDescriptors();
+        clusterLighting_.probeClusterPipeline().clearDescriptors();
         for (VulkanBufferResource& buffer : reflectionProbeRecordBuffers_)
             resourceAllocator.destroy(buffer);
         for (VulkanBufferResource& buffer : reflectionProbeActiveSlotBuffers_)
@@ -4453,7 +4275,7 @@ VkDeviceSize offset = geometry->vertexOffset;
             scene[frame] = { records[frame], headers[frame], indices[frame] };
         }
         sceneDescriptors.setReflectionProbeBuffers(scene);
-        reflectionProbePipeline_.rebuildDescriptors(records, active,
+        clusterLighting_.probeClusterPipeline().rebuildDescriptors(records, active,
             parameters, headers, indices);
     }
 
@@ -4770,14 +4592,11 @@ VkDeviceSize offset = geometry->vertexOffset;
             throw std::logic_error(
                 "Lighting capacity must be prepared before beginFrame");
         }
-        if (requiredCapacity <= lightRecordCapacity_) return;
-        if (requiredCapacity > lightRecordMaximumCapacity_) {
-            throw std::overflow_error(
-                "GPU light records exhausted the device storage-buffer limit");
+        if (clusterLighting_.prepare(requiredCapacity) &&
+            sceneDescriptors.size() != 0) {
+            bindLightRecordBuffers();
+            bindSceneClusterBuffers();
         }
-        createLightRecordBuffers(nextMaterialTableCapacity(
-            lightRecordCapacity_, requiredCapacity,
-            lightRecordMaximumCapacity_));
     }
 
     void VulkanVertexBackend::prepareGpuScene(
@@ -4827,190 +4646,6 @@ VkDeviceSize offset = geometry->vertexOffset;
         }
     }
 
-    void VulkanVertexBackend::uploadLightsForFrame(uint32_t frameIndex,
-        const LightingFramePacket& lights) {
-        CpuScope uploadScope(cpuProfiler_, "cpu.light.upload");
-        if (frameIndex >= lightRecordBuffers_.size() ||
-            lights.records.size() > lightRecordCapacity_ ||
-            lights.recordRevisions.size() < lights.records.size() ||
-            lights.selectionMetadata.size() < lights.records.size() ||
-            lights.activeSlots.size() > lightRecordCapacity_) {
-            throw std::out_of_range("GPU light packet is outside prepared capacity");
-        }
-        std::vector<uint64_t>& uploaded = uploadedLightRevisions_[frameIndex];
-        const bool shadowMappingChanged =
-            uploadedSpotShadowMappingRevisions_[frameIndex] !=
-                spotShadowMappingRevision_ ||
-            uploadedPointShadowMappingRevisions_[frameIndex] !=
-                pointShadowMappingRevision_;
-        if (shadowMappingChanged) {
-            lightUploadRanges_.clear();
-            if (!lights.records.empty())
-                lightUploadRanges_.push_back({ 0,
-                    static_cast<uint32_t>(lights.records.size()) });
-        }
-        else {
-            buildLightUploadRanges(lights.recordRevisions.first(
-                lights.records.size()), uploaded, lightUploadRanges_);
-        }
-        lightUploadBytes_ = 0;
-        for (const LightRecordRange range : lightUploadRanges_) {
-            const std::span<const PackedGpuLight> records =
-                lights.records.subspan(range.firstRecord, range.recordCount);
-            patchedLightRecordsScratch_.assign(records.begin(), records.end());
-            for (uint32_t index = 0; index < range.recordCount; ++index) {
-                const uint32_t slot = range.firstRecord + index;
-                const uint32_t type = std::bit_cast<uint32_t>(
-                    patchedLightRecordsScratch_[index].shapeMetadata.z) & 3u;
-                uint32_t shadowDataSlot = kInvalidShadowDataSlot;
-                if (type == static_cast<uint32_t>(
-                        PackedGpuLightType::Spot) &&
-                    slot < spotShadowDataSlots_.size())
-                    shadowDataSlot = spotShadowDataSlots_[slot];
-                else if (type == static_cast<uint32_t>(
-                        PackedGpuLightType::Point) &&
-                    slot < pointShadowDataSlots_.size())
-                    shadowDataSlot = pointShadowDataSlots_[slot];
-                patchedLightRecordsScratch_[index].shapeMetadata.w =
-                    std::bit_cast<float>(shadowDataSlot);
-            }
-            resourceAllocator.write(lightRecordBuffers_[frameIndex],
-                static_cast<VkDeviceSize>(range.firstRecord) *
-                    sizeof(PackedGpuLight),
-                std::as_bytes(std::span(patchedLightRecordsScratch_)));
-            for (uint32_t slot = range.firstRecord;
-                slot < range.firstRecord + range.recordCount; ++slot) {
-                uploaded[slot] = lights.recordRevisions[slot];
-            }
-            lightUploadBytes_ += static_cast<uint64_t>(range.recordCount) *
-                sizeof(PackedGpuLight);
-        }
-        uploadedSpotShadowMappingRevisions_[frameIndex] =
-            spotShadowMappingRevision_;
-        uploadedPointShadowMappingRevisions_[frameIndex] =
-            pointShadowMappingRevision_;
-        lightUploadRangeCount_ = static_cast<uint32_t>(lightUploadRanges_.size());
-
-        if (uploadedActiveListRevisions_[frameIndex] !=
-            lights.activeListRevision) {
-            if (!lights.activeSlots.empty()) {
-                resourceAllocator.write(activeLightSlotBuffers_[frameIndex], 0,
-                    std::as_bytes(lights.activeSlots));
-            }
-            uploadedActiveListRevisions_[frameIndex] =
-                lights.activeListRevision;
-            lightUploadBytes_ += static_cast<uint64_t>(lights.activeSlots.size()) *
-                sizeof(uint32_t);
-            ++lightUploadRangeCount_;
-        }
-        activeLightCount_ = lights.stats.activeLightCount;
-    }
-
-    void VulkanVertexBackend::updateClusterParameters(uint32_t frameIndex,
-        const glm::mat4& view, const glm::mat4& projection,
-        float nearPlane, float farPlane, uint32_t activeLightCount) {
-        if (frameIndex >= clusterParameterBuffers_.size() ||
-            !(nearPlane > 0.0f) || !(farPlane > nearPlane)) {
-            throw std::invalid_argument("Invalid clustered-lighting frame parameters");
-        }
-        const ClusterFrameParameters frame{
-            sceneExtent_.width, sceneExtent_.height, nearPlane, farPlane,
-            view, projection };
-        const ClusterGridDimensions dimensions = clusterGridDimensions(
-            clusterConfig_, frame);
-        const uint64_t clusterCount = dimensions.clusterCount();
-        if (clusterCount > (std::numeric_limits<uint32_t>::max)()) {
-            throw std::overflow_error("Cluster grid exceeds the GPU index domain");
-        }
-        PackedGpuClusterParameters parameters{};
-        parameters.view = view;
-        parameters.projection = projection;
-        parameters.grid = { sceneExtent_.width, sceneExtent_.height,
-            dimensions.tilesX, dimensions.tilesY };
-        parameters.depth = { nearPlane, farPlane,
-            static_cast<float>(clusterConfig_.depthSlices) /
-                std::log(farPlane / nearPlane), 0.0f };
-        parameters.limits = { clusterConfig_.depthSlices,
-            clusterConfig_.maximumLightsPerCluster,
-            clusterConfig_.maximumLightReferences,
-            clusterConfig_.maximumDirectionalLights };
-        parameters.input = { activeLightCount,
-            clusterConfig_.maximumFallbackLights,
-            clusterConfig_.tileWidth, clusterConfig_.tileHeight };
-        const uint32_t environmentFlags =
-            (environmentLightingSettings_.visibleToCamera ? 1u : 0u) |
-            (environmentLightingSettings_.affectsLighting ? 2u : 0u);
-        parameters.environment = {
-            environmentLightingSettings_.lightingIntensity,
-            environmentLightingSettings_.backgroundIntensity,
-            environmentLightingSettings_.rotationRadians,
-            static_cast<float>(environmentFlags),
-        };
-        resourceAllocator.write(clusterParameterBuffers_[frameIndex], 0,
-            std::as_bytes(std::span(&parameters, size_t{ 1 })));
-        lightUploadBytes_ += sizeof(parameters);
-        ++lightUploadRangeCount_;
-    }
-
-    void VulkanVertexBackend::updateClusterFallbackCandidates(
-        uint32_t frameIndex, const glm::mat4& view,
-        const LightingFramePacket& lights) {
-        CpuScope fallbackScope(cpuProfiler_, "cpu.light.cluster_fallback");
-        if (frameIndex >= fallbackCandidateBuffers_.size() ||
-            lights.selectionMetadata.size() < lights.records.size()) {
-            throw std::out_of_range(
-                "Cluster fallback inputs are outside the prepared frame");
-        }
-        selectClusterFallbackLights(lights, view,
-            kMaximumClusterFallbackLights, fallbackSelectionScratch_);
-        const size_t selectedCount = fallbackSelectionScratch_.size();
-        std::array<uint32_t, kMaximumClusterFallbackLights> selected{};
-        selected.fill(UINT32_MAX);
-        std::copy_n(fallbackSelectionScratch_.begin(), selectedCount,
-            selected.begin());
-        resourceAllocator.write(fallbackCandidateBuffers_[frameIndex], 0,
-            std::as_bytes(std::span(selected)));
-        lightUploadBytes_ += sizeof(selected);
-        ++lightUploadRangeCount_;
-    }
-
-    void VulkanVertexBackend::collectClusterDiagnostics(
-        uint32_t frameIndex) noexcept {
-        if (frameIndex >= clusterDiagnosticReadbackBuffers_.size() ||
-            !clusterDiagnosticReadbackPending_[frameIndex] ||
-            clusterDiagnosticReadbackBuffers_[frameIndex].mapped == nullptr) {
-            return;
-        }
-        std::array<uint32_t, 16> values{};
-        std::memcpy(values.data(),
-            clusterDiagnosticReadbackBuffers_[frameIndex].mapped,
-            sizeof(values));
-        const uint64_t clusterCount = submittedClusterCounts_[frameIndex];
-        const uint64_t bufferBytesPerFrame =
-            static_cast<uint64_t>(clusterConfig_.maximumDirectionalLights) * 4u +
-            clusterCount * sizeof(ClusterLightHeader) +
-            static_cast<uint64_t>(clusterConfig_.maximumLightReferences) * 4u +
-            static_cast<uint64_t>(clusterConfig_.maximumFallbackLights) * 4u +
-            64u + clusterCount * 4u + clusterCount * 4u +
-            clusterScanScratchElementCount(clusterCount) * 4u + 32u;
-        clusterTelemetry_ = {
-            .bufferBytesPerFrame = bufferBytesPerFrame,
-            .clusterCount = submittedClusterCounts_[frameIndex],
-            .activeLights = values[0],
-            .directionalLights = values[1],
-            .localLights = values[2],
-            .clustersUsed = values[6],
-            .maximumOccupancy = values[7],
-            .requestedReferences = values[4],
-            .publishedReferences = values[5],
-            .fallbackLights = values[8],
-            .droppedLights = values[9],
-            .overflowCode = values[3],
-            .available = true,
-        };
-        clusterDiagnosticReadbackPending_[frameIndex] = false;
-    }
-
     void VulkanVertexBackend::updateCamera(const ViewTransportRecord& view, ViewHistoryContext history) {
         currentViewHistory_ = history;
         currentProjectionRevision_ = viewProjectionRevision(
@@ -5047,60 +4682,25 @@ VkDeviceSize offset = geometry->vertexOffset;
         ordinary2ViewProjection_ = proj * view;
         ordinary2ViewProjectionValid_ = true;
         const uint32_t frameIndex = scheduler.currentFrameIndex();
-        uploadLightsForFrame(frameIndex, lights);
-        updateClusterFallbackCandidates(frameIndex, view, lights);
-        updateClusterParameters(frameIndex, view, proj, nearPlane, farPlane,
-            lights.stats.activeLightCount);
+        clusterLighting_.uploadFrame(frameIndex, view, proj, nearPlane, farPlane,
+            lights, sceneExtent_, environmentLightingSettings_);
         uploadReflectionProbesForFrame(frameIndex, reflectionProbes);
         updateReflectionProbeParameters(frameIndex, view, proj,
             nearPlane, farPlane, reflectionProbes.stats.activeProbeCount);
         const ClusterGridDimensions probeDimensions = clusterGridDimensions(
             clusterConfig_, { sceneExtent_.width, sceneExtent_.height,
                 nearPlane, farPlane, view, proj });
-        {
-            CpuScope probeClusterScope(cpuProfiler_,
-                "cpu.render.record.probe_cluster");
-            VulkanGpuRangeToken probeGpuRange =
-                scheduler.beginGpuRange("gpu.lighting.probe_cluster");
-            // R3b.7: "lighting.probe-cluster" (the dispatch's consumers
-            // receive the compute -> fragment barrier from the executor).
-            if (probeDimensions.clusterCount() == 0u) {
-                renderGraph_.skipPass(graphIds_.probeCluster);
-            }
-            else {
-                renderGraph_.beginPass(currentCmd, graphIds_.probeCluster);
-                telemetry_.counters().dispatchRecorded += reflectionProbePipeline_.record(
-                    currentCmd, frameIndex,
-                    static_cast<uint32_t>(probeDimensions.clusterCount()));
-            }
-            scheduler.endGpuRange(probeGpuRange);
-        }
-        {
-            CpuScope clusterRecordScope(cpuProfiler_, "cpu.render.record.cluster");
-            const ClusterGridDimensions dimensions = clusterGridDimensions(
-                clusterConfig_,
-                { sceneExtent_.width, sceneExtent_.height, nearPlane, farPlane,
-                    view, proj });
-            VulkanGpuRangeToken clusterGpuRange =
-                scheduler.beginGpuRange("gpu.lighting.cluster");
-            telemetry_.counters().dispatchRecorded += clusteredLighting_.record(
-                currentCmd, renderGraph_, graphIds_.cluster, frameIndex,
-                static_cast<uint32_t>(dimensions.clusterCount()),
-                lights.stats.activeLightCount);
-            if (productionGraphFeatures().clusterTelemetryReadback) {
-                renderGraph_.beginPass(currentCmd, graphIds_.clusterReadback);
-                const VulkanBufferResource& diagnostics = renderGraph_.buffer(
-                    frameIndex, graphIds_.cluster.diagnostics);
-                const VkBufferCopy copy{ 0, 0, 64 };
-                vkCmdCopyBuffer(currentCmd, diagnostics.buffer,
-                    clusterDiagnosticReadbackBuffers_[frameIndex].buffer,
-                    1, &copy);
-                clusterDiagnosticReadbackPending_[frameIndex] = true;
-            }
-            submittedClusterCounts_[frameIndex] =
-                static_cast<uint32_t>(dimensions.clusterCount());
-            scheduler.endGpuRange(clusterGpuRange);
-        }
+        // R3c.1 drain points: "lighting.probe-cluster" and the cluster build
+        // run here, where they were recorded imperatively.
+        clusterLighting_.recordProbeCluster(
+            static_cast<uint32_t>(probeDimensions.clusterCount()));
+        const ClusterGridDimensions dimensions = clusterGridDimensions(
+            clusterConfig_,
+            { sceneExtent_.width, sceneExtent_.height, nearPlane, farPlane,
+                view, proj });
+        clusterLighting_.recordClusters(frameIndex,
+            static_cast<uint32_t>(dimensions.clusterCount()),
+            lights.stats.activeLightCount);
         VulkanFrameContextTargets& targets = frameTargets.get(
             scheduler.currentFrameIndex());
         renderGraph_.beginPass(currentCmd, graphIds_.lighting);

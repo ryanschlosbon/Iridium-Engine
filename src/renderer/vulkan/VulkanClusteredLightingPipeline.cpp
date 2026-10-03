@@ -194,26 +194,28 @@ void VulkanClusteredLightingPipeline::computeBarrier(
         0, nullptr, 0, nullptr);
 }
 
-uint32_t VulkanClusteredLightingPipeline::record(VkCommandBuffer commandBuffer,
-    VulkanRenderGraphExecutor& graph, const VulkanClusterGraphIds& ids,
-    uint32_t frameIndex, uint32_t clusterCount, uint32_t activeLightCount) {
+uint32_t VulkanClusteredLightingPipeline::recordClear(VkCommandBuffer commandBuffer,
+    uint32_t frameIndex, uint32_t clusterCount) {
     if (commandBuffer == VK_NULL_HANDLE || clusterCount == 0) {
         throw std::invalid_argument(
             "Clustered-lighting recording requires a valid frame");
     }
-    graph.beginPass(commandBuffer, ids.clear);
     bindAndDispatch(commandBuffer, clearPipeline_, frameIndex,
         (clusterCount + 255u) / 256u);
-    uint32_t dispatchCount = 1;
+    return 1;
+}
 
-    graph.beginPass(commandBuffer, ids.count);
-    if (activeLightCount != 0) {
-        bindAndDispatch(commandBuffer, countPipeline_, frameIndex,
-            activeLightCount);
-        ++dispatchCount;
-    }
+uint32_t VulkanClusteredLightingPipeline::recordCount(VkCommandBuffer commandBuffer,
+    uint32_t frameIndex, uint32_t activeLightCount) {
+    if (activeLightCount == 0) return 0;
+    bindAndDispatch(commandBuffer, countPipeline_, frameIndex,
+        activeLightCount);
+    return 1;
+}
 
-    graph.beginPass(commandBuffer, ids.scan);
+uint32_t VulkanClusteredLightingPipeline::recordScan(VkCommandBuffer commandBuffer,
+    uint32_t frameIndex, uint32_t clusterCount) {
+    uint32_t dispatchCount = 0;
     std::array<uint32_t, 8> levelCounts{};
     std::array<uint32_t, 8> levelOffsets{};
     uint32_t levelCount = 0;
@@ -264,8 +266,12 @@ uint32_t VulkanClusteredLightingPipeline::record(VkCommandBuffer commandBuffer,
         VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(headerAdd), &headerAdd);
     vkCmdDispatch(commandBuffer, (clusterCount + 255u) / 256u, 1, 1);
     ++dispatchCount;
+    return dispatchCount;
+}
 
-    graph.beginPass(commandBuffer, ids.fill);
+uint32_t VulkanClusteredLightingPipeline::recordFill(VkCommandBuffer commandBuffer,
+    uint32_t frameIndex, uint32_t activeLightCount) {
+    uint32_t dispatchCount = 0;
     if (activeLightCount != 0) {
         bindAndDispatch(commandBuffer, fillPipeline_, frameIndex,
             activeLightCount);
@@ -274,20 +280,22 @@ uint32_t VulkanClusteredLightingPipeline::record(VkCommandBuffer commandBuffer,
     computeBarrier(commandBuffer);
     bindAndDispatch(commandBuffer, sortPreparePipeline_, frameIndex, 1);
     ++dispatchCount;
+    return dispatchCount;
+}
 
-    graph.beginPass(commandBuffer, ids.finalize);
-    const VulkanBufferResource& indirect = graph.buffer(frameIndex, ids.indirect);
+uint32_t VulkanClusteredLightingPipeline::recordFinalize(VkCommandBuffer commandBuffer,
+    uint32_t frameIndex, VkBuffer indirect) {
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
         sortPipeline_);
     vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
         pipelineLayout_, 0, 1, &descriptorSets_[frameIndex], 0, nullptr);
-    vkCmdDispatchIndirect(commandBuffer, indirect.buffer, 0);
+    vkCmdDispatchIndirect(commandBuffer, indirect, 0);
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
         denseSortPipeline_);
-    vkCmdDispatchIndirect(commandBuffer, indirect.buffer, 16);
+    vkCmdDispatchIndirect(commandBuffer, indirect, 16);
     computeBarrier(commandBuffer);
     bindAndDispatch(commandBuffer, finalizePipeline_, frameIndex, 1);
-    return dispatchCount + 3;
+    return 3;
 }
 
 void VulkanClusteredLightingPipeline::cleanup() noexcept {
