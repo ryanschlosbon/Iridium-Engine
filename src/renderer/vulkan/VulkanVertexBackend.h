@@ -622,10 +622,20 @@ namespace Iridium {
             const ShadowCasterSubmission& shadowCasters,
             std::span<const PointShadowFramePacket> shadows);
         void createReflectionProbeIndirectPipeline();
-        // Device telemetry (+ oracle verdict) for a shadow/probe consumer.
-        void collectShadowIndirectValidation(VulkanIndirectOracleView view,
-            uint32_t frameIndex);
-        void collectShadowIndirectValidations(uint32_t frameIndex);
+        // The view cullers in collection order: directional, spot, point,
+        // reflection probe.
+        [[nodiscard]] std::array<VulkanIndirectViewCuller*, kIndirectViewKindCount>
+            indirectViewCullers() noexcept {
+            return { &directionalCuller_, &spotCuller_, &pointCuller_,
+                &probeCuller_ };
+        }
+        // Device telemetry (+ oracle verdict) of every view's retired slot.
+        void collectIndirectViewValidations(uint32_t frameIndex);
+        // Draw counters for the GPU-scene casters an oracle-checked shadow
+        // work item drew (visibility[i] & visibilityBit).
+        void recordIndirectOracleDraws(std::span<const uint8_t> visibility,
+            uint8_t visibilityBit, uint64_t& drawCounter,
+            uint64_t& commandCounter, uint64_t& alphaMaskCounter);
         [[nodiscard]] bool prepareReflectionProbeIndirectSubmission(
             const ReflectionProbeCasterSubmission& probeCasters,
             std::span<const ReflectionProbeCaptureScheduleEntry> captures);

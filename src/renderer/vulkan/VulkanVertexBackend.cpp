@@ -1019,14 +1019,10 @@ namespace Iridium {
         for (uint32_t frame = 0;
                 frame < VulkanFrameScheduler::FramesInFlight; ++frame)
             collectOpaqueIndirectValidation(frame);
-        for (const VulkanIndirectOracleView view : {
-                VulkanIndirectOracleView::DirectionalShadow,
-                VulkanIndirectOracleView::SpotShadow,
-                VulkanIndirectOracleView::PointShadow,
-                VulkanIndirectOracleView::ReflectionProbe })
+        for (VulkanIndirectViewCuller* culler : indirectViewCullers())
             for (uint32_t frame = 0;
                     frame < VulkanFrameScheduler::FramesInFlight; ++frame)
-                collectShadowIndirectValidation(view, frame);
+                culler->collect(frame);
         for (IVulkanBackendExtension* extension : extensions_)
             extension->onBeforeDeviceDestroy();
 
@@ -3142,7 +3138,7 @@ namespace Iridium {
         }
         collectClusterDiagnostics(completedFrameIndex);
         collectOpaqueIndirectValidation(completedFrameIndex);
-        collectShadowIndirectValidations(completedFrameIndex);
+        collectIndirectViewValidations(completedFrameIndex);
         {
             CpuScope graphScope(cpuProfiler_, "cpu.render_graph.lookup");
             renderGraph_.onFrameFenceCompleted(completedFrameIndex);
@@ -3686,24 +3682,11 @@ namespace Iridium {
                         directionalShadowCasterMaskScratch_,
                         static_cast<uint8_t>(1u << cascade),
                         densityLodMetric(lodContext));
-                    for (size_t casterIndex = 0;
-                            casterIndex < shadowCasterScratch_.size();
-                            ++casterIndex) {
-                        const ResolvedShadowCaster& caster =
-                            shadowCasterScratch_[casterIndex];
-                        if (caster.gpuScenePrimitiveIndex == InvalidGpuSceneIndex ||
-                            (directionalShadowCasterMaskScratch_[casterIndex] &
-                                (1u << cascade)) == 0u)
-                            continue;
-                        const VulkanMaterialPayload* material =
-                            materialVault.get(caster.material);
-                        recordDraw(frameCounters_.drawShadowDirectional,
-                            caster.indexCount / 3u);
-                        ++frameCounters_.shadowDirectionalIndirectCommands;
-                        if (collectFrameCounters_ && material != nullptr &&
-                            material->packed.alphaMode == 1u)
-                            ++frameCounters_.drawShadowDirectionalAlphaMask;
-                    }
+                    recordIndirectOracleDraws(directionalShadowCasterMaskScratch_,
+                        static_cast<uint8_t>(1u << cascade),
+                        frameCounters_.drawShadowDirectional,
+                        frameCounters_.shadowDirectionalIndirectCommands,
+                        frameCounters_.drawShadowDirectionalAlphaMask);
                 }
                 activePipeline = VK_NULL_HANDLE;
                 activeGeometry = {};
@@ -3912,22 +3895,10 @@ namespace Iridium {
                         workIndex, shadowCasterScratch_,
                         directionalShadowCasterMaskScratch_, 1u,
                         perspectiveLodMetric(lodContext));
-                    for (size_t casterIndex = 0;
-                            casterIndex < shadowCasterScratch_.size(); ++casterIndex) {
-                        const ResolvedShadowCaster& caster =
-                            shadowCasterScratch_[casterIndex];
-                        if (caster.gpuScenePrimitiveIndex == InvalidGpuSceneIndex ||
-                            directionalShadowCasterMaskScratch_[casterIndex] == 0u)
-                            continue;
-                        const VulkanMaterialPayload* material =
-                            materialVault.get(caster.material);
-                        recordDraw(frameCounters_.drawShadowSpot,
-                            caster.indexCount / 3u);
-                        ++frameCounters_.shadowSpotIndirectCommands;
-                        if (collectFrameCounters_ && material != nullptr &&
-                            material->packed.alphaMode == 1u)
-                            ++frameCounters_.drawShadowSpotAlphaMask;
-                    }
+                    recordIndirectOracleDraws(directionalShadowCasterMaskScratch_,
+                        1u, frameCounters_.drawShadowSpot,
+                        frameCounters_.shadowSpotIndirectCommands,
+                        frameCounters_.drawShadowSpotAlphaMask);
                 }
                 activePipeline = VK_NULL_HANDLE;
                 activeGeometry = {};
@@ -4139,25 +4110,11 @@ namespace Iridium {
                             workIndex, shadowCasterScratch_,
                             directionalShadowCasterMaskScratch_, 1u,
                             radialLodMetric(lodContext));
-                        for (size_t casterIndex = 0;
-                                casterIndex < shadowCasterScratch_.size();
-                                ++casterIndex) {
-                            const ResolvedShadowCaster& caster =
-                                shadowCasterScratch_[casterIndex];
-                            if (caster.gpuScenePrimitiveIndex ==
-                                    InvalidGpuSceneIndex ||
-                                directionalShadowCasterMaskScratch_[casterIndex] ==
-                                    0u)
-                                continue;
-                            const VulkanMaterialPayload* material =
-                                materialVault.get(caster.material);
-                            recordDraw(frameCounters_.drawShadowPoint,
-                                caster.indexCount / 3u);
-                            ++frameCounters_.shadowPointIndirectCommands;
-                            if (collectFrameCounters_ && material != nullptr &&
-                                material->packed.alphaMode == 1u)
-                                ++frameCounters_.drawShadowPointAlphaMask;
-                        }
+                        recordIndirectOracleDraws(
+                            directionalShadowCasterMaskScratch_, 1u,
+                            frameCounters_.drawShadowPoint,
+                            frameCounters_.shadowPointIndirectCommands,
+                            frameCounters_.drawShadowPointAlphaMask);
                     }
                     activePipeline = VK_NULL_HANDLE;
                     activeGeometry = {};
@@ -5736,36 +5693,28 @@ VkDeviceSize offset = geometry->vertexOffset;
             activeIndirectOracle(VulkanIndirectOracleView::ReflectionProbe));
     }
 
-    void VulkanVertexBackend::collectShadowIndirectValidations(
-        uint32_t frameIndex) {
-        collectShadowIndirectValidation(
-            VulkanIndirectOracleView::DirectionalShadow, frameIndex);
-        collectShadowIndirectValidation(
-            VulkanIndirectOracleView::SpotShadow, frameIndex);
-        collectShadowIndirectValidation(
-            VulkanIndirectOracleView::PointShadow, frameIndex);
-        collectShadowIndirectValidation(
-            VulkanIndirectOracleView::ReflectionProbe, frameIndex);
+    void VulkanVertexBackend::collectIndirectViewValidations(uint32_t frameIndex) {
+        for (VulkanIndirectViewCuller* culler : indirectViewCullers())
+            culler->collect(frameIndex);
     }
 
-    void VulkanVertexBackend::collectShadowIndirectValidation(
-        VulkanIndirectOracleView view, uint32_t frameIndex) {
-        switch (view) {
-        case VulkanIndirectOracleView::DirectionalShadow:
-            directionalCuller_.collect(frameIndex);
-            return;
-        case VulkanIndirectOracleView::SpotShadow:
-            spotCuller_.collect(frameIndex);
-            return;
-        case VulkanIndirectOracleView::PointShadow:
-            pointCuller_.collect(frameIndex);
-            return;
-        case VulkanIndirectOracleView::ReflectionProbe:
-            probeCuller_.collect(frameIndex);
-            return;
-        default:
-            throw std::invalid_argument(
-                "Shadow indirect telemetry requires a shadow/probe consumer");
+    void VulkanVertexBackend::recordIndirectOracleDraws(
+        std::span<const uint8_t> visibility, uint8_t visibilityBit,
+        uint64_t& drawCounter, uint64_t& commandCounter,
+        uint64_t& alphaMaskCounter) {
+        for (size_t casterIndex = 0; casterIndex < shadowCasterScratch_.size();
+                ++casterIndex) {
+            const ResolvedShadowCaster& caster = shadowCasterScratch_[casterIndex];
+            if (caster.gpuScenePrimitiveIndex == InvalidGpuSceneIndex ||
+                (visibility[casterIndex] & visibilityBit) == 0u)
+                continue;
+            const VulkanMaterialPayload* material =
+                materialVault.get(caster.material);
+            recordDraw(drawCounter, caster.indexCount / 3u);
+            ++commandCounter;
+            if (collectFrameCounters_ && material != nullptr &&
+                material->packed.alphaMode == 1u)
+                ++alphaMaskCounter;
         }
     }
 
