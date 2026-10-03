@@ -1,7 +1,9 @@
 # ADR-0016: Render-Graph Execution Model
 
-- Status: Proposed (M7R R3). This record is accepted when R3b's call-site
-  migration lands and synchronization validation is clean.
+- Status: Accepted 2026-10-02 (M7R R3b). Every production call site addresses the
+  graph by id, string APIs are removed, imported images and compaction/probe/history
+  work are declared, and synchronization validation reports zero hazards on the
+  frozen set. Callback registration by feature owners proceeds in R3c.
 - Date: 2026-10-02
 - Owners: Renderer, RHI, and Vulkan backend
 - Refines: ADR-0002. Its scene-linear HDR and output-transform decisions are unchanged.
