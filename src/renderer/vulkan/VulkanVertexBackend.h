@@ -355,26 +355,9 @@ namespace Iridium {
         VulkanCullerDevice cullerDevice_{};
         VkDescriptorSetLayout indirectCullerSetLayout_ = VK_NULL_HANDLE;
         VulkanIndirectViewCuller directionalCuller_;
-        std::array<VulkanBufferResource, VulkanFrameScheduler::FramesInFlight>
-            spotShadowIndirectCommandBuffers_{};
-        std::array<VulkanBufferResource, VulkanFrameScheduler::FramesInFlight>
-            spotShadowIndirectCountBuffers_{};
-        std::array<VulkanBufferResource, VulkanFrameScheduler::FramesInFlight>
-            spotShadowIndirectCandidateBuffers_{};
-        std::array<VkDescriptorSet, VulkanFrameScheduler::FramesInFlight>
-            spotShadowIndirectDescriptorSets_{};
-        VkPipelineLayout spotShadowCompactPipelineLayout_ = VK_NULL_HANDLE;
-        VkPipeline spotShadowCompactPipeline_ = VK_NULL_HANDLE;
-        std::array<VulkanBufferResource, VulkanFrameScheduler::FramesInFlight>
-            pointShadowIndirectCommandBuffers_{};
-        std::array<VulkanBufferResource, VulkanFrameScheduler::FramesInFlight>
-            pointShadowIndirectCountBuffers_{};
-        std::array<VulkanBufferResource, VulkanFrameScheduler::FramesInFlight>
-            pointShadowIndirectCandidateBuffers_{};
-        std::array<VkDescriptorSet, VulkanFrameScheduler::FramesInFlight>
-            pointShadowIndirectDescriptorSets_{};
-        VkPipelineLayout pointShadowCompactPipelineLayout_ = VK_NULL_HANDLE;
-        VkPipeline pointShadowCompactPipeline_ = VK_NULL_HANDLE;
+        VulkanIndirectViewCuller spotCuller_;
+        VulkanIndirectViewCuller pointCuller_;
+
         std::array<VulkanBufferResource, VulkanFrameScheduler::FramesInFlight>
             reflectionProbeIndirectCommandBuffers_{};
         std::array<VulkanBufferResource, VulkanFrameScheduler::FramesInFlight>
@@ -458,42 +441,7 @@ namespace Iridium {
             std::vector<uint32_t> commandOffsets;
             bool pending = false;
         };
-        std::vector<ShadowIndirectBin> spotShadowIndirectBins_;
-        std::vector<GpuSceneIndirectCandidate>
-            spotShadowIndirectCandidates_;
-        std::vector<GpuSceneIndirectCandidate>
-            spotShadowIndirectUnsortedCandidates_;
-        std::vector<uint32_t> spotShadowIndirectBinCursorScratch_;
-        std::vector<uint32_t> spotShadowIndirectPrimitiveBinScratch_;
-        std::array<uint32_t, kSpotShadowEntryCapacity>
-            spotShadowIndirectWorkIndices_{};
-        std::array<PendingShadowIndirectValidation,
-            VulkanFrameScheduler::FramesInFlight>
-            pendingSpotShadowIndirectValidations_{};
-        uint32_t spotShadowIndirectPrimitiveCapacity_ = 0;
-        uint32_t spotShadowIndirectCommandCapacity_ = 0;
-        uint32_t spotShadowIndirectCountCapacity_ = 0;
-        uint64_t spotShadowMembershipRevision_ = 0;
-        uint32_t spotShadowMembershipLodErrorBits_ = 0;
-        uint32_t spotShadowMembershipMaximumLod_ = 0;
-        std::vector<ShadowIndirectBin> pointShadowIndirectBins_;
-        std::vector<GpuSceneIndirectCandidate>
-            pointShadowIndirectCandidates_;
-        std::vector<GpuSceneIndirectCandidate>
-            pointShadowIndirectUnsortedCandidates_;
-        std::vector<uint32_t> pointShadowIndirectBinCursorScratch_;
-        std::vector<uint32_t> pointShadowIndirectPrimitiveBinScratch_;
-        std::array<uint32_t, kPointShadowEntryCapacity * 6u>
-            pointShadowIndirectWorkIndices_{};
-        std::array<PendingShadowIndirectValidation,
-            VulkanFrameScheduler::FramesInFlight>
-            pendingPointShadowIndirectValidations_{};
-        uint32_t pointShadowIndirectPrimitiveCapacity_ = 0;
-        uint32_t pointShadowIndirectCommandCapacity_ = 0;
-        uint32_t pointShadowIndirectCountCapacity_ = 0;
-        uint64_t pointShadowMembershipRevision_ = 0;
-        uint32_t pointShadowMembershipLodErrorBits_ = 0;
-        uint32_t pointShadowMembershipMaximumLod_ = 0;
+
         std::vector<ShadowIndirectBin> reflectionProbeIndirectBins_;
         std::vector<GpuSceneIndirectCandidate>
             reflectionProbeIndirectCandidates_;
@@ -709,14 +657,10 @@ namespace Iridium {
             const ShadowCasterSubmission& shadowCasters,
             std::span<const DirectionalShadowFramePacket> shadows);
         void createSpotShadowIndirectPipeline();
-        void createSpotShadowIndirectBuffers(uint32_t primitiveCapacity);
-        void bindSpotShadowIndirectBuffers();
         [[nodiscard]] bool prepareSpotShadowIndirectSubmission(
             const ShadowCasterSubmission& shadowCasters,
             std::span<const SpotShadowFramePacket> shadows);
         void createPointShadowIndirectPipeline();
-        void createPointShadowIndirectBuffers(uint32_t primitiveCapacity);
-        void bindPointShadowIndirectBuffers();
         [[nodiscard]] bool preparePointShadowIndirectSubmission(
             const ShadowCasterSubmission& shadowCasters,
             std::span<const PointShadowFramePacket> shadows);
