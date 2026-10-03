@@ -3,7 +3,7 @@
 ## Header
 
 - **Milestone:** M7R — Architecture consolidation
-- **Status:** In Progress — plan approved by owner 2026-10-02; R0, R1 and R2 accepted 2026-10-02; R3 active
+- **Status:** In Progress — plan approved by owner 2026-10-02; R0–R2 accepted 2026-10-02, R3 accepted 2026-10-03; R4 active
 - **Lead:** M7R milestone-lead session (Claude Code); integration owner for all slices
 - **Branch / PR:** `m7r-consolidation` off `Render-Refactor-for-Modularity`; one PR
   for the milestone
@@ -309,7 +309,7 @@ the R0 tooling plus every validator flag once.
 - **Tests:** source-text tests are replaced by behavioral tests (see `M7R-R2-assertion-disposition.md`).
 - **Sizes:** `Application.cpp` 6,703 → 4,544 lines; `VulkanVertexBackend.cpp` 13,286 → 11,554.
 
-### R3 — Graph-driven execution and backend decomposition (`In Progress`)
+### R3 — Graph-driven execution and backend decomposition (`Accepted` 2026-10-03)
 
 The implementation design, with the current-state inventory, culler interface, executor/sync2/history model, owner
 migration order and ordered sub-steps R3.0–R3c.12, is in `docs/milestones/M7R-R3-graph-execution-design.md`.
@@ -355,7 +355,7 @@ migration order and ordered sub-steps R3.0–R3c.12, is in `docs/milestones/M7R-
 - synchronization validation is clean;
 - byte-identical output.
 
-### R4 — Vulkan modernization (`Proposed`)
+### R4 — Vulkan modernization (`In Progress`)
 
 **R4a — Dynamic rendering.**
 - The graph carries clear values per attachment usage.
@@ -694,6 +694,40 @@ Rerun (`timing/r1-rerun`, A,B,B,A; the machine was still in use):
 - R2 removes work (oracles, readbacks) from the frame and adds none, so a real regression is implausible.
 
 **R2.10 cleanup:** the frozen 6b000ad parser copy and the parity corpus are retired. The per-flag table keeps every flag's config, implication and exact-message contract.
+
+### R3 result (2026-10-03, `bd89494`)
+
+**Structure**
+- **Executor (ADR-0016, accepted):** index-addressed and drives callbacks; one `vkCmdPipelineBarrier2` per pass; History, imported-image policies and `variableSize` imports.
+- **Passes:** 59 of the production passes plus `ui` run as registered feature-owner callbacks.
+- **Feature owners:** `VulkanClusterLightingFeature`, `VulkanOutputFeature`, `VulkanWeightedOitFeature`, `VulkanHookPasses`, `VulkanShadowFeature`, `VulkanLocalShadowFeature`, `VulkanReflectionProbeFeature`, `VulkanOpaqueFeature`, `VulkanDeferredLightingFeature`, `VulkanForwardFeature`, `VulkanLayeredTransparencyFeature` and `VulkanUiFeature`.
+- **Shared culling:** `VulkanIndirectViewCuller` plus `VulkanOpaqueIndirectCuller` replace five duplicated culler paths.
+- **Editor UI:** lives in `iridium_vulkan_imgui` behind `IEditorRenderBridge`; `iridium_vulkan` no longer links ImGui.
+- **`IRenderBackend`:** 67 → 37 methods. Frame work goes through `submitFrame(const RenderFrame&)`.
+- **Size:** `VulkanVertexBackend.cpp` 13,286 → **2,073** lines.
+
+**Verification**
+
+| Check | Result |
+|---|---|
+| Frozen set `r3` with `--validation-sync`, vs `r0` | Identical or within envelopes; **0 hazards**, 0 validation messages |
+| Pre-existing local-shadow READ_AFTER_WRITE hazard | Fixed in R3b.6 (spot-atlas and point-pool render-pass dependencies) |
+| Indirect digest vs `r3a0` | Identical |
+| Sweep `r3-sweep` vs `r3c11-sweep` | 0 changed entries |
+| Tests | 97/97 Release and Debug; shipping preset 91/91 |
+
+**Timing pair** (`timing/r3`, A = R0 worktree, B = R3, A,B,B,A; machine idle, 0% CPU load)
+
+| Route | CPU frame median A / B | Non-wait CPU median A / B | GPU median A / B | GPU p99 A / B |
+|---|---|---|---|---|
+| T-F1-all | 1.536 / 1.478 ms | 0.417 / **0.371** ms (−11%) | 1.1204 / 1.1235 ms | 1.120–1.135 / 1.132–1.133 |
+| T-F7-stack | 6.978 / 5.558 ms | 4.958 / **3.539** ms (−29%) | 2.0442 / 2.0558 ms (+0.57%) | 2.056–2.069 / 2.070–2.073 |
+
+- **CPU:** improves strongly, from O(1) graph lookups, batched barriers and less per-pass bookkeeping. Allocations and drains are 0 on every run.
+- **GPU:** +0.28% on F1 and +0.57% (+11.6 µs) on F7, consistent in both orders. The F7 delta is slightly above the ±0.3% R0 noise band.
+  - Per pass it is spread inside draw-heavy passes: forward-opaque +4.6 µs, deferred lighting +2.6 µs, G-buffer +2.0 µs. Barrier and compaction ranges are unchanged, and the command-stream digest is identical.
+  - The likely cause is memory placement from the changed resource-creation order, not extra GPU work.
+- **Accepted as a watch item:** R4b re-places all memory (VMA), and R4b and R6 re-measure. If the delta persists after R4b, bisect by pass ownership.
 
 ## Completion report
 
