@@ -32,6 +32,7 @@
 namespace Iridium {
 
     class AssetIntegration;
+    namespace Tasks { class TaskSystem; }
     class CpuProfiler;
     class EditorHost;
     class EngineLog;
@@ -42,6 +43,9 @@ namespace Iridium {
     struct FrameOrchestratorContext {
         ApplicationConfig& config;
         CpuProfiler& profiler;
+        // Its Periodic work runs on the frame tick; its counters are recorded
+        // per profiled frame (M7R R5b.2).
+        Tasks::TaskSystem& tasks;
         EngineLog& log;
         IFrameObserver* observer = nullptr;
         // Set by Application::run before the window exists.
@@ -117,6 +121,7 @@ namespace Iridium {
 
         ApplicationConfig& config_;
         CpuProfiler& cpuProfiler_;
+        Tasks::TaskSystem& tasks_;
         EngineLog& engineLog_;
         IFrameObserver* observer_ = nullptr;
         const AppRunPolicy& policy_;

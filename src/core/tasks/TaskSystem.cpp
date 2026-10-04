@@ -8,10 +8,22 @@
 #include <algorithm>
 #include <cassert>
 #include <chrono>
+#include <cwchar>
+#include <iterator>
 #include <limits>
 #include <new>
 #include <stdexcept>
 #include <thread>
+
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <Windows.h>
+#endif
 
 namespace Iridium::Tasks {
 
@@ -92,6 +104,40 @@ namespace Iridium::Tasks {
             }
         }
 
+        // The live TaskSystem (at most one exists) and its I/O thread index, for
+        // current() and the thread-start hook (enkiTS callbacks carry no user data).
+        std::atomic<TaskSystem*> liveSystem{ nullptr };
+        std::atomic<uint32_t> liveIoThread{ NoThreadIndex };
+
+        // enkiTS thread-start hook (M7R R5b.2): names the thread so profilers,
+        // debuggers and the thread inventory can tell workers and the I/O thread
+        // apart. SetThreadDescription is resolved at run time (Windows 10 1607+).
+        void onTaskThreadStart(uint32_t threadNum) {
+#if defined(_WIN32)
+            using SetDescription = HRESULT(WINAPI*)(HANDLE, PCWSTR);
+            static const SetDescription setDescription = [] {
+                const HMODULE kernel = GetModuleHandleW(L"kernel32.dll");
+                return kernel != nullptr
+                    ? reinterpret_cast<SetDescription>(reinterpret_cast<void*>(
+                        GetProcAddress(kernel, "SetThreadDescription")))
+                    : nullptr;
+            }();
+            if (setDescription == nullptr) {
+                return;
+            }
+            wchar_t name[48]{};
+            if (threadNum == liveIoThread.load(std::memory_order_acquire)) {
+                (void)swprintf(name, std::size(name), L"iridium.task.io");
+            }
+            else {
+                (void)swprintf(name, std::size(name), L"iridium.task.worker.%u", threadNum);
+            }
+            (void)setDescription(GetCurrentThread(), name);
+#else
+            (void)threadNum;
+#endif
+        }
+
     } // namespace
 
     namespace detail {
@@ -143,6 +189,10 @@ namespace Iridium::Tasks {
         uint32_t pendingCount = 0;
         uint32_t activeSlots = 0;
         uint32_t peakActiveSlots = 0;
+
+        // Periodic registrations (M7R R5b.2), ticked by tickPeriodic.
+        std::mutex periodicMutex;
+        Periodic* periodicHead = nullptr;
 
         std::atomic<uint64_t> frameTaskCount{ 0 };
         std::atomic<uint64_t> frameStartLatencyMax{ 0 };
@@ -658,14 +708,20 @@ namespace Iridium::Tasks {
             schedulerConfig.customAllocator.userData = &impl;
         }
         impl.threadCount = schedulerConfig.numTaskThreadsToCreate + 1;
+        schedulerConfig.profilerCallbacks.threadStart = &onTaskThreadStart;
+        liveIoThread.store(config.pinnedIoThread ? impl.threadCount - 1 : NoThreadIndex,
+            std::memory_order_release);
 
         impl.profiler = config.profiler;
         if (impl.profiler != nullptr) {
-            impl.profiler->prepareWorkerStreams(impl.threadCount);
+            // Threads past the profiler's stream capacity record no scopes.
+            impl.profiler->prepareWorkerStreams(static_cast<uint32_t>((std::min)(
+                static_cast<size_t>(impl.threadCount), CpuProfiler::MaxWorkerStreams)));
         }
 
         impl.scheduler.Initialize(schedulerConfig);
         TaskSystemAccess::bindThread(impl, 0);
+        liveSystem.store(this, std::memory_order_release);
 
         if (config.pinnedIoThread) {
             // The I/O thread enters its pinned loop before construction returns,
@@ -708,12 +764,43 @@ namespace Iridium::Tasks {
         if (impl.scheduler.GetThreadNum() != 0) {
             throw std::logic_error("TaskSystem::shutdown must run on the main thread");
         }
+        TaskSystem* self = this;
+        (void)liveSystem.compare_exchange_strong(self, nullptr, std::memory_order_acq_rel);
         TaskSystemAccess::cancelPending(impl);
         // Finishes started work (the main thread helps with every priority here)
         // and stops the workers and the I/O loop.
         impl.scheduler.WaitforAllAndShutdown();
         impl.stopped.store(true, std::memory_order_release);
+        liveIoThread.store(NoThreadIndex, std::memory_order_release);
         tlsBoundSystem = nullptr;
+    }
+
+    TaskSystem* TaskSystem::current() noexcept {
+        return liveSystem.load(std::memory_order_acquire);
+    }
+
+    TaskSystem* TaskSystem::forCurrentThread() noexcept {
+        TaskSystem* system = current();
+        if (system == nullptr || system->isShutdownRequested() ||
+            system->currentThreadIndex() == NoThreadIndex) {
+            return nullptr;
+        }
+        return system;
+    }
+
+    void TaskSystem::tickPeriodic() noexcept {
+        Impl& impl = *impl_;
+        const uint64_t now = nowNanoseconds();
+        std::lock_guard lock(impl.periodicMutex);
+        for (Periodic* periodic = impl.periodicHead; periodic != nullptr;
+            periodic = periodic->next_) {
+            try {
+                periodic->tick(now);
+            }
+            catch (...) {
+                impl.exceptions.fetch_add(1, std::memory_order_relaxed);
+            }
+        }
     }
 
     bool TaskSystem::isShutdownRequested() const noexcept {
@@ -908,6 +995,141 @@ namespace Iridium::Tasks {
     bool Strand::isIdle() const {
         std::lock_guard lock(mutex_);
         return !scheduled_;
+    }
+
+    // --- Periodic (M7R R5b.2) -------------------------------------------------------
+
+    Periodic::Periodic(TaskSystem& system, std::chrono::nanoseconds interval,
+        Target target, std::function<void()> work, const char* scopeName)
+        : system_(system),
+          intervalNanoseconds_(static_cast<uint64_t>((std::max)(
+              interval.count(), std::chrono::nanoseconds::rep{ 0 }))),
+          target_(target),
+          work_(std::move(work)),
+          setRun_(*this, target == Target::Normal
+              ? TaskPriority::Normal
+              : TaskPriority::Background, scopeName),
+          pinnedRun_(*this, scopeName) {
+        if (!work_) {
+            throw std::invalid_argument("Periodic work must be callable.");
+        }
+        if (target_ == Target::PinnedIo &&
+            system_.pinnedIoThreadIndex() == NoThreadIndex) {
+            throw std::logic_error("A pinned Periodic needs the pinned I/O thread.");
+        }
+        // The first run starts on the first tick.
+        TaskSystem::Impl& impl = *system_.impl_;
+        std::lock_guard lock(impl.periodicMutex);
+        next_ = impl.periodicHead;
+        impl.periodicHead = this;
+        registered_ = true;
+    }
+
+    Periodic::~Periodic() {
+        stop();
+    }
+
+    void Periodic::stop() {
+        {
+            TaskSystem::Impl& impl = *system_.impl_;
+            std::lock_guard lock(impl.periodicMutex);
+            if (registered_) {
+                Periodic** link = &impl.periodicHead;
+                while (*link != nullptr && *link != this) {
+                    link = &(*link)->next_;
+                }
+                if (*link == this) {
+                    *link = next_;
+                }
+                next_ = nullptr;
+                registered_ = false;
+            }
+        }
+        // No tick submits after the unlink; wait for a run in flight.
+        if (target_ == Target::PinnedIo) {
+            if (!pinnedRun_.isComplete()) {
+                system_.wait(pinnedRun_);
+            }
+        }
+        else if (!setRun_.isComplete()) {
+            system_.wait(setRun_);
+        }
+    }
+
+    bool Periodic::idle() const noexcept {
+        return target_ == Target::PinnedIo
+            ? pinnedRun_.isComplete()
+            : setRun_.isComplete();
+    }
+
+    void Periodic::tick(uint64_t nowNanoseconds) {
+        if (nowNanoseconds < nextDueNanoseconds_ || !idle()) {
+            return;
+        }
+        nextDueNanoseconds_ = nowNanoseconds + intervalNanoseconds_;
+        if (target_ == Target::PinnedIo) {
+            system_.submitPinnedIo(pinnedRun_);
+        }
+        else {
+            system_.submit(setRun_);
+        }
+    }
+
+    void Periodic::run() {
+        runs_.fetch_add(1, std::memory_order_relaxed);
+        work_();
+    }
+
+    void Periodic::SetRun::execute(TaskRange, uint32_t) {
+        owner_.run();
+    }
+
+    void Periodic::PinnedRun::execute() {
+        owner_.run();
+    }
+
+    // --- FunctionStrand (M7R R5b.2) -------------------------------------------------
+
+    struct FunctionStrand::Item final : StrandItem {
+        explicit Item(std::function<void()> callable) : work(std::move(callable)) {}
+        std::function<void()> work;
+
+    protected:
+        void run() override {
+            work();
+        }
+    };
+
+    FunctionStrand::FunctionStrand(TaskSystem& system, TaskPriority priority,
+        const char* scopeName)
+        : system_(system),
+          strand_(std::make_unique<Strand>(system, priority, scopeName)) {}
+
+    FunctionStrand::~FunctionStrand() {
+        waitIdle();
+    }
+
+    bool FunctionStrand::post(std::function<void()> work) {
+        auto item = std::make_unique<Item>(std::move(work));
+        // Posted before it is listed: an item is reclaimed only once it reached a
+        // final state, and a fresh item already reads as final (idle).
+        const bool posted = strand_->post(*item);
+        std::lock_guard lock(mutex_);
+        reclaimLocked();
+        items_.push_back(std::move(item));
+        return posted;
+    }
+
+    void FunctionStrand::waitIdle() {
+        strand_->waitIdle();
+        std::lock_guard lock(mutex_);
+        reclaimLocked();
+    }
+
+    void FunctionStrand::reclaimLocked() {
+        std::erase_if(items_, [](const std::unique_ptr<Item>& item) {
+            return item->isComplete();
+        });
     }
 
 } // namespace Iridium::Tasks

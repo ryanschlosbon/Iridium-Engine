@@ -40,11 +40,13 @@ namespace Iridium {
     class IEditorRenderBridge;
     class IRenderBackend;
     class LocalDerivedDataCache;
+    namespace Tasks { class TaskSystem; }
 
     class AssetIntegration final {
     public:
+        // The task system runs every asset service's work (M7R R5b.2).
         AssetIntegration(ApplicationConfig& config, CpuProfiler& profiler,
-            EngineLog& log, SceneWorld& scene,
+            EngineLog& log, Tasks::TaskSystem& tasks, SceneWorld& scene,
             EditorSceneDocumentService& sceneDocuments);
         ~AssetIntegration();
 
@@ -149,6 +151,7 @@ namespace Iridium {
         ApplicationConfig& config_;
         CpuProfiler& cpuProfiler_;
         EngineLog& engineLog_;
+        Tasks::TaskSystem& tasks_;
         SceneWorld& sceneWorld_;
         Registry& registry;
         EditorSceneDocumentService& sceneDocumentService_;

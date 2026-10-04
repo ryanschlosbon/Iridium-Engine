@@ -23,12 +23,15 @@
 // I/O thread; wait() and the passive waits work from any thread.
 
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <type_traits>
 #include <utility>
+#include <vector>
 
 namespace Iridium {
     class CpuProfiler;
@@ -241,10 +244,121 @@ namespace Iridium::Tasks {
         // since-last statistics. Main thread.
         void recordFrameCounters(CpuProfiler& profiler) noexcept;
 
+        // M7R R5b.2: runs every registered Periodic whose interval elapsed and
+        // whose previous run completed. The frame orchestrator calls it once per
+        // frame on the main thread; it allocates nothing.
+        void tickPeriodic() noexcept;
+
+        // The live TaskSystem (ADR-0015: at most one exists at a time), or null.
+        [[nodiscard]] static TaskSystem* current() noexcept;
+        // current(), when the calling thread is one it runs (main, worker or
+        // I/O) and it is not shutting down; otherwise null. Library kernels use
+        // it to run parallel and fall back to a serial loop without one.
+        [[nodiscard]] static TaskSystem* forCurrentThread() noexcept;
+
     private:
         friend struct detail::TaskSystemAccess;
+        friend class Periodic;
         struct Impl;
         std::unique_ptr<Impl> impl_;
+    };
+
+    // M7R R5b.2: work that the frame tick (TaskSystem::tickPeriodic) starts again
+    // once `interval` has passed since its previous start and that run completed.
+    // Runs never overlap. Target selects a Background or Normal task set, or the
+    // pinned I/O thread. Construct and stop on the main thread.
+    class Periodic final {
+    public:
+        enum class Target : uint8_t {
+            Background,
+            Normal,
+            PinnedIo,
+        };
+
+        Periodic(TaskSystem& system, std::chrono::nanoseconds interval, Target target,
+            std::function<void()> work, const char* scopeName = nullptr);
+        // Calls stop().
+        ~Periodic();
+
+        Periodic(const Periodic&) = delete;
+        Periodic& operator=(const Periodic&) = delete;
+
+        // Unregisters from the tick and waits for a run in flight. Idempotent.
+        void stop();
+        [[nodiscard]] uint64_t runCount() const noexcept {
+            return runs_.load(std::memory_order_relaxed);
+        }
+
+    private:
+        friend class TaskSystem;
+
+        class SetRun final : public TaskSet {
+        public:
+            SetRun(Periodic& owner, TaskPriority priority, const char* scopeName) noexcept
+                : TaskSet(priority, 1, 1, scopeName), owner_(owner) {}
+
+        private:
+            void execute(TaskRange range, uint32_t threadIndex) override;
+            Periodic& owner_;
+        };
+
+        class PinnedRun final : public PinnedTask {
+        public:
+            PinnedRun(Periodic& owner, const char* scopeName) noexcept
+                : PinnedTask(scopeName), owner_(owner) {}
+
+        private:
+            void execute() override;
+            Periodic& owner_;
+        };
+
+        void tick(uint64_t nowNanoseconds);
+        [[nodiscard]] bool idle() const noexcept;
+        void run();
+
+        TaskSystem& system_;
+        uint64_t intervalNanoseconds_ = 0;
+        uint64_t nextDueNanoseconds_ = 0;
+        Target target_ = Target::Background;
+        std::function<void()> work_;
+        std::atomic<uint64_t> runs_{ 0 };
+        Periodic* next_ = nullptr;
+        bool registered_ = false;
+        SetRun setRun_;
+        PinnedRun pinnedRun_;
+    };
+
+    class Strand;
+
+    // M7R R5b.2: posts callables to a Strand. Each post allocates one item (this
+    // is service work, never frame work); completed items are reclaimed on later
+    // posts. Items run one at a time in post order at the strand's priority.
+    class FunctionStrand final {
+    public:
+        FunctionStrand(TaskSystem& system, TaskPriority priority,
+            const char* scopeName = nullptr);
+        // Waits for posted work (it is cancelled if the system is shutting down).
+        ~FunctionStrand();
+
+        FunctionStrand(const FunctionStrand&) = delete;
+        FunctionStrand& operator=(const FunctionStrand&) = delete;
+
+        // Returns false (the callable never runs) after the task system began
+        // shutting down. Callable from any thread the task system runs.
+        bool post(std::function<void()> work);
+        // Blocks (without running work) until everything posted ran or was
+        // cancelled.
+        void waitIdle();
+        [[nodiscard]] TaskSystem& system() const noexcept { return system_; }
+
+    private:
+        struct Item;
+        void reclaimLocked();
+
+        TaskSystem& system_;
+        std::unique_ptr<Strand> strand_;
+        std::mutex mutex_;
+        std::vector<std::unique_ptr<Item>> items_;
     };
 
     // A serial queue: items run one at a time, in post order, at the strand's

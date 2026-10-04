@@ -2,6 +2,8 @@
 // AssetIntegration.h.
 #include "app/AssetIntegration.h"
 
+#include "core/tasks/TaskSystem.h"
+
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -150,11 +152,12 @@ namespace Iridium {
     }
 
     AssetIntegration::AssetIntegration(ApplicationConfig& config,
-        CpuProfiler& profiler, EngineLog& log, SceneWorld& scene,
-        EditorSceneDocumentService& sceneDocuments)
+        CpuProfiler& profiler, EngineLog& log, Tasks::TaskSystem& tasks,
+        SceneWorld& scene, EditorSceneDocumentService& sceneDocuments)
         : config_(config),
           cpuProfiler_(profiler),
           engineLog_(log),
+          tasks_(tasks),
           sceneWorld_(scene),
           registry(scene.registry()),
           sceneDocumentService_(sceneDocuments) {}
@@ -170,6 +173,7 @@ namespace Iridium {
             transparencyExecutionMode,
             gpuLodMinimumResidentLevel);
         assetManager_->setEditorRenderBridge(editorBridge);
+        assetManager_->setTaskSystem(&tasks_);
         return *assetManager_;
     }
 

@@ -52,6 +52,7 @@ target_link_libraries(iridium_assets PUBLIC
         iridium_material
         iridium_color
         iridium_core
+        iridium_tasks
         iridium_vendor_gltf
         iridium_vendor_stb
         nlohmann_json::nlohmann_json

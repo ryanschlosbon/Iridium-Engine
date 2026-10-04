@@ -20,6 +20,7 @@
 #include "app/FrameObserver.h"
 #include "app/FrameOrchestrator.h"
 #include "core/EngineLog.h"
+#include "core/tasks/TaskSystem.h"
 #include "editor/EditorHost.h"
 #include "editor/EditorSceneDocumentService.h"
 #include "editor/EditorTransactionService.h"
@@ -45,6 +46,10 @@ namespace Iridium {
         ApplicationConfig config_;
         EngineLog engineLog_;
         CpuProfiler cpuProfiler_;
+        // The engine task system (M7R R5b.2, ADR-0015): the only owner of worker
+        // threads. Constructed on the main thread before every unit that uses it
+        // and destroyed after them.
+        Tasks::TaskSystem tasks_;
         GLFWwindow* window = nullptr;
         bool glfwInitialized_ = false;
         IFrameObserver* observer_ = nullptr;

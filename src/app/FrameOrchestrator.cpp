@@ -21,6 +21,7 @@
 #include "core/EngineLog.h"
 #include "editor/EditorHost.h"
 #include "extraction/RenderExtractor.h"
+#include "core/tasks/TaskSystem.h"
 #include "profiling/CpuAllocationProfile.h"
 #include "profiling/CpuProfiler.h"
 #include "renderer/color/AcesOutputLut.h"
@@ -30,6 +31,7 @@ namespace Iridium {
     FrameOrchestrator::FrameOrchestrator(const FrameOrchestratorContext& context)
         : config_(context.config),
           cpuProfiler_(context.profiler),
+          tasks_(context.tasks),
           engineLog_(context.log),
           observer_(context.observer),
           policy_(context.policy),
@@ -152,6 +154,10 @@ namespace Iridium {
                         FrameBeginPhase::PreSceneUpdate, frame);
                 }
 
+                // Periodic background work (source monitoring) starts on the
+                // frame tick (M7R R5b.2); this only submits tasks.
+                tasks_.tickPeriodic();
+
                 // 2. Process delayed ECS events (like swapping meshes on the main thread)
                 assets_.processMeshSwaps();
 
@@ -182,6 +188,19 @@ namespace Iridium {
                     allocationSample.allocationCount);
                 cpuProfiler_.recordCounter("allocation.cpp.bytes",
                     allocationSample.requestedBytes);
+                // M7R R5b.2: allocations of every other thread during the frame
+                // (task workers outside frame-critical work, the I/O thread);
+                // not part of the steady-frame invariant.
+                cpuProfiler_.recordCounter("allocation.cpp.background.calls",
+                    allocationSample.backgroundAllocationCount);
+                cpuProfiler_.recordCounter("allocation.cpp.background.bytes",
+                    allocationSample.backgroundRequestedBytes);
+            }
+            // task.frame.count, task.frame.start_latency_us, task.background.active
+            // (recorded only into a profiled frame; the statistics reset every
+            // frame either way).
+            tasks_.recordFrameCounters(cpuProfiler_);
+            if (profileFrame) {
                 (void)cpuProfiler_.endFrame();
             }
 

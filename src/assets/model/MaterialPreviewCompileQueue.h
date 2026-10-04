@@ -1,15 +1,22 @@
 #pragma once
 
 #include "assets/model/ModelRuntimeProduct.h"
-#include <condition_variable>
-#include <mutex>
-#include <thread>
+#include "core/tasks/TaskSystem.h"
+
 #include <functional>
+#include <mutex>
 #include <optional>
+#include <stdexcept>
+#include <string>
+#include <thread>
 
 namespace Iridium {
     // One in-flight CPU job. Callers retain/coalesce newer requests, and reject
     // stale completions by serial before touching any renderer resource.
+    //
+    // M7R R5b.2 (ADR-0015): the job is a Normal-priority task on the engine task
+    // system (one slot, latest wins at the caller), not a lazily started thread.
+    // Without a task system (tools, tests) a submitted job compiles inline.
     class MaterialPreviewCompileQueue {
     public:
         struct Completion {
@@ -17,20 +24,35 @@ namespace Iridium {
             RuntimeCanonicalMaterialResult result;
             std::string diagnostic;
         };
-        ~MaterialPreviewCompileQueue() {
-            worker_.request_stop();
-            condition_.notify_all();
+
+        MaterialPreviewCompileQueue() = default;
+        ~MaterialPreviewCompileQueue() { waitIdle(); }
+
+        MaterialPreviewCompileQueue(const MaterialPreviewCompileQueue&) = delete;
+        MaterialPreviewCompileQueue& operator=(const MaterialPreviewCompileQueue&) = delete;
+
+        // Main thread, while no job is in flight.
+        void setTaskSystem(Tasks::TaskSystem* tasks) {
+            waitIdle();
+            tasks_ = tasks;
         }
         [[nodiscard]] bool busy() const {
             std::lock_guard lock(mutex_);
-            return running_ || task_.has_value() || completion_.has_value();
+            return running_ || completion_.has_value();
         }
         bool submit(uint64_t serial, std::function<RuntimeCanonicalMaterialResult()> compile) {
-            std::lock_guard lock(mutex_);
-            if (running_ || task_ || completion_) return false;
-            if (!worker_.joinable()) worker_ = std::jthread([this](std::stop_token stop) { run(stop); });
-            task_ = Task{serial, std::move(compile)};
-            condition_.notify_one();
+            {
+                std::lock_guard lock(mutex_);
+                if (running_ || completion_) return false;
+                running_ = true;
+            }
+            // running_ was false, so the previous job's execute() has returned;
+            // its task becomes complete right after (a short window).
+            while (!job_.isComplete()) std::this_thread::yield();
+            job_.serial = serial;
+            job_.compile = std::move(compile);
+            if (tasks_ != nullptr) tasks_->submit(job_);
+            else job_.runInline();
             return true;
         }
         [[nodiscard]] std::optional<Completion> poll() {
@@ -39,39 +61,44 @@ namespace Iridium {
             completion_.reset();
             return result;
         }
+
     private:
-        struct Task {
-            uint64_t serial;
+        class Job final : public Tasks::TaskSet {
+        public:
+            explicit Job(MaterialPreviewCompileQueue& owner)
+                : TaskSet(Tasks::TaskPriority::Normal, 1, 1, "asset.material_preview.compile"),
+                  owner_(owner) {}
+
+            void runInline() { run(); }
+
+            uint64_t serial = 0;
             std::function<RuntimeCanonicalMaterialResult()> compile;
-        };
-        void run(std::stop_token stop) {
-            while (!stop.stop_requested()) {
-                std::optional<Task> task;
-                {
-                    std::unique_lock lock(mutex_);
-                    if (!condition_.wait(lock, stop, [this] { return task_.has_value(); })) return;
-                    task = std::move(task_);
-                    task_.reset();
-                    running_ = true;
-                }
-                Completion result{.serial = task->serial};
-                try { result.result = task->compile(); }
+
+        private:
+            void execute(Tasks::TaskRange, uint32_t) override { run(); }
+            void run() {
+                Completion result{ .serial = serial };
+                try { result.result = compile(); }
                 catch (const std::exception& error) { result.diagnostic = error.what(); }
                 catch (...) { result.diagnostic = "Unknown material preview compilation failure"; }
-                {
-                    std::lock_guard lock(mutex_);
-                    completion_ = std::move(result);
-                    running_ = false;
-                }
+                compile = {};
+                std::lock_guard lock(owner_.mutex_);
+                owner_.completion_ = std::move(result);
+                owner_.running_ = false;
             }
+
+            MaterialPreviewCompileQueue& owner_;
+        };
+
+        void waitIdle() {
+            if (tasks_ != nullptr && !job_.isComplete()) tasks_->wait(job_);
         }
+
         mutable std::mutex mutex_;
-        std::condition_variable_any condition_;
-        std::optional<Task> task_;
         std::optional<Completion> completion_;
         bool running_ = false;
-        // Declared last so shutdown joins before destroying mutex/state. This
-        // worker is reused across drags, not recreated for every slider update.
-        std::jthread worker_;
+        Tasks::TaskSystem* tasks_ = nullptr;
+        // Declared last: destroyed first, after the destructor waited for it.
+        Job job_{ *this };
     };
 }

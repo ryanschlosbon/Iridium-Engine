@@ -56,6 +56,11 @@ namespace Iridium {
         void setEditorRenderBridge(IEditorRenderBridge* bridge) noexcept {
             editorBridge_ = bridge;
         }
+        // Material-preview compiles run as Normal tasks on it (M7R R5b.2); null
+        // compiles them inline.
+        void setTaskSystem(Tasks::TaskSystem* tasks) {
+            previewCompiler_.setTaskSystem(tasks);
+        }
 
         std::shared_ptr<ModelAsset> loadModelFromCookedArtifact(
             const CookedArtifact& artifact,

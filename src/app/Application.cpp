@@ -41,18 +41,22 @@ namespace Iridium {
         IFrameObserver* observer)
         : config_(std::move(config)),
           cpuProfiler_(config_.enableCpuProfiling),
+          // Worker scope streams are prepared even while profiling is off, so
+          // enabling the profiler later (editor) still sees worker scopes.
+          tasks_(Tasks::TaskSystemConfig{ .profiler = &cpuProfiler_ }),
           observer_(observer),
           extractor_(cpuProfiler_, sceneWorld_, config_.shadowSettings,
               config_.reflectionProbeSettings),
           sceneDocumentService_(sceneWorld_),
           transactionService_(sceneDocumentService_),
           registry(sceneWorld_.registry()),
-          assets_(config_, cpuProfiler_, engineLog_, sceneWorld_,
+          assets_(config_, cpuProfiler_, engineLog_, tasks_, sceneWorld_,
               sceneDocumentService_),
           editorHost_(cpuProfiler_),
           orchestrator_({
               .config = config_,
               .profiler = cpuProfiler_,
+              .tasks = tasks_,
               .log = engineLog_,
               .observer = observer_,
               .policy = policy_,
@@ -426,6 +430,8 @@ namespace Iridium {
         notifyShutdown(ShutdownPhase::ReleaseResources, completed);
         editorHost_.cleanup();
         assets_.shutdown();
+        // Every service is gone: finish started work and join the workers.
+        tasks_.shutdown();
 
         if (renderBackend) orchestrator_.releaseOutputTransformLut();
 

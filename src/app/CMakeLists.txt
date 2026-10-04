@@ -26,6 +26,7 @@ target_link_libraries(iridium_app PUBLIC
         iridium_color
         iridium_platform
         iridium_profiling
+        iridium_tasks
         iridium_ecs
         iridium_core
         iridium_vendor_imgui

@@ -745,6 +745,95 @@ namespace {
         return true;
     }
 
+    // M7R R5b.2: Periodic runs on the frame tick, never overlaps, honours its
+    // interval, runs on the pinned I/O thread when asked, and stop() waits.
+    bool testPeriodic() {
+        TaskSystem system(TaskSystemConfig{ .workerThreadCount = 3 });
+        std::atomic<uint32_t> backgroundRuns{ 0 };
+        std::atomic<uint32_t> active{ 0 };
+        std::atomic<bool> overlapped{ false };
+        std::atomic<bool> hold{ true };
+        Periodic background(system, std::chrono::nanoseconds(0),
+            Periodic::Target::Background, [&] {
+                if (active.fetch_add(1) != 0) overlapped = true;
+                while (hold.load()) std::this_thread::yield();
+                backgroundRuns.fetch_add(1);
+                active.fetch_sub(1);
+            }, "task.test.periodic");
+        std::atomic<uint32_t> ioThread{ NoThreadIndex };
+        std::atomic<uint32_t> ioRuns{ 0 };
+        Periodic pinned(system, std::chrono::hours(1), Periodic::Target::PinnedIo,
+            [&] {
+                ioThread = system.currentThreadIndex();
+                ioRuns.fetch_add(1);
+            });
+        // Nothing runs before the first tick.
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        CHECK(background.runCount() == 0 && pinned.runCount() == 0);
+        system.tickPeriodic();
+        CHECK(waitUntil([&] { return active.load() == 1; }));
+        CHECK(waitUntil([&] { return ioRuns.load() == 1; }));
+        CHECK(ioThread.load() == system.pinnedIoThreadIndex());
+        // A tick while the previous run is in flight does not start another.
+        for (int tick = 0; tick < 50; ++tick) system.tickPeriodic();
+        CHECK(background.runCount() == 1);
+        hold = false;
+        CHECK(waitUntil([&] { return backgroundRuns.load() == 1; }));
+        CHECK(waitUntil([&] {
+            system.tickPeriodic();
+            return backgroundRuns.load() >= 3;
+        }));
+        CHECK(!overlapped.load());
+        // The one-hour pinned interval has not elapsed.
+        CHECK(ioRuns.load() == 1);
+        background.stop();
+        const uint64_t stopped = background.runCount();
+        for (int tick = 0; tick < 20; ++tick) system.tickPeriodic();
+        CHECK(background.runCount() == stopped);
+        pinned.stop();
+        return true;
+    }
+
+    // M7R R5b.2: FunctionStrand runs posted callables serially in post order,
+    // accepts posts from inside its own work and reclaims completed items.
+    bool testFunctionStrand() {
+        TaskSystem system(TaskSystemConfig{ .workerThreadCount = 4, .pinnedIoThread = false });
+        CHECK(TaskSystem::current() == &system);
+        CHECK(TaskSystem::forCurrentThread() == &system);
+        FunctionStrand strand(system, TaskPriority::Background, "task.test.function_strand");
+        OrderLog log;
+        std::atomic<uint32_t> active{ 0 };
+        std::atomic<bool> overlapped{ false };
+        std::atomic<bool> workerSeesSystem{ true };
+        for (int id = 0; id < 40; ++id) {
+            CHECK(strand.post([&, id] {
+                if (active.fetch_add(1) != 0) overlapped = true;
+                log.record(id);
+                if (TaskSystem::forCurrentThread() != &system) workerSeesSystem = false;
+                if (id == 39) {
+                    // Posting from inside the strand queues behind the current item.
+                    (void)strand.post([&] { log.record(40); });
+                }
+                active.fetch_sub(1);
+            }));
+        }
+        strand.waitIdle();
+        CHECK(!overlapped.load());
+        CHECK(workerSeesSystem.load());
+        CHECK(log.next.load() == 41);
+        for (int id = 0; id <= 40; ++id) CHECK(log.ids[id].load() == id);
+        // A foreign thread is not one the system runs.
+        std::atomic<bool> foreignSeesNone{ false };
+        std::thread([&] {
+            foreignSeesNone = TaskSystem::forCurrentThread() == nullptr;
+        }).join();
+        CHECK(foreignSeesNone.load());
+        system.shutdown();
+        CHECK(TaskSystem::current() == nullptr);
+        CHECK(!strand.post([&] { log.record(99); }));
+        return true;
+    }
+
 } // namespace
 
 int main() {
@@ -763,6 +852,8 @@ int main() {
         { "thread-scoped allocation counters", testThreadScopedAllocationCounters },
         { "per-worker profiler scopes", testWorkerProfilerScopes },
         { "no steady allocations", testNoSteadyAllocations },
+        { "periodic work on the frame tick", testPeriodic },
+        { "function strand", testFunctionStrand },
     };
     for (const auto& test : tests) {
         std::cout << test.name << std::endl;

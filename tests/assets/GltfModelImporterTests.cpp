@@ -145,7 +145,11 @@ namespace {
     }
 
     bool testBoundedAsyncMaterialPreviewCompiler() {
+        // M7R R5b.2: the compile is a Normal task on the engine task system.
+        Tasks::TaskSystem tasks(Tasks::TaskSystemConfig{
+            .workerThreadCount = 2, .pinnedIoThread = false });
         MaterialPreviewCompileQueue queue;
+        queue.setTaskSystem(&tasks);
         std::promise<void> release;
         const auto gate = release.get_future().share();
         const auto caller = std::this_thread::get_id();
