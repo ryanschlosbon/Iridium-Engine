@@ -52,6 +52,96 @@ namespace Iridium {
     };
     static_assert(sizeof(TransparentCompatibilitySortKey) == 40);
 
+    // M7R R5c.7: the key builders and key comparators the helpers below use,
+    // for callers that sort keys themselves (the parallel transparent sorts in
+    // extraction). `packets` is the queue the keys' indices refer to; the
+    // final TransparentWorkIdentity comparison reads the packet through it.
+    [[nodiscard]] inline TransparentWorkSortKey makeTransparentWorkSortKey(
+        const DrawPacket& packet, uint32_t index) noexcept {
+        return {
+            .priority = packet.transparency.priority,
+            .workFlags = packet.transparentWorkFlags,
+            .farDepth = packet.transparentFarDepth,
+            .nearDepth = packet.transparentNearDepth,
+            .packet = index,
+        };
+    }
+
+    [[nodiscard]] inline TransparentCompatibilitySortKey
+        makeTransparentCompatibilitySortKey(const DrawPacket& packet,
+            uint32_t index) noexcept {
+        return {
+            .work = makeTransparentWorkSortKey(packet, index),
+            .distanceToCamera = packet.distanceToCamera,
+            .pipeline = packet.pipeline,
+            .material = packet.material,
+            .geometry = packet.geometry,
+            .executionMode = packet.transparencyExecutionMode,
+        };
+    }
+
+    // transparentWorkLess over keys.
+    [[nodiscard]] inline bool transparentWorkKeyLess(
+        const TransparentWorkSortKey& lhs, const TransparentWorkSortKey& rhs,
+        std::span<const DrawPacket> packets) noexcept {
+        if (lhs.priority != rhs.priority)
+            return lhs.priority < rhs.priority;
+        const bool lhsValid = (lhs.workFlags &
+            TransparentWorkIntervalValid) != 0;
+        const bool rhsValid = (rhs.workFlags &
+            TransparentWorkIntervalValid) != 0;
+        if (lhsValid != rhsValid) return lhsValid;
+        if (lhsValid) {
+            const bool lhsIntersects = (lhs.workFlags &
+                TransparentWorkCameraIntersecting) != 0;
+            const bool rhsIntersects = (rhs.workFlags &
+                TransparentWorkCameraIntersecting) != 0;
+            if (lhsIntersects != rhsIntersects) return !lhsIntersects;
+            if (lhs.farDepth != rhs.farDepth)
+                return lhs.farDepth > rhs.farDepth;
+            if (lhs.nearDepth != rhs.nearDepth)
+                return lhs.nearDepth > rhs.nearDepth;
+        }
+        return transparentWorkIdentity(packets[lhs.packet]) <
+            transparentWorkIdentity(packets[rhs.packet]);
+    }
+
+    // transparentCompatibilityLess over keys.
+    [[nodiscard]] inline bool transparentCompatibilityKeyLess(
+        const TransparentCompatibilitySortKey& lhs,
+        const TransparentCompatibilitySortKey& rhs,
+        std::span<const DrawPacket> packets) noexcept {
+        if (lhs.executionMode != rhs.executionMode)
+            return lhs.executionMode < rhs.executionMode;
+        if (lhs.executionMode == TransparencyExecutionMode::Classified)
+            return transparentWorkKeyLess(lhs.work, rhs.work, packets);
+        if (lhs.distanceToCamera != rhs.distanceToCamera)
+            return lhs.distanceToCamera > rhs.distanceToCamera;
+        if (lhs.pipeline != rhs.pipeline) return lhs.pipeline < rhs.pipeline;
+        if (lhs.material != rhs.material) return lhs.material < rhs.material;
+        return lhs.geometry < rhs.geometry;
+    }
+
+    // M7R R5c.7: sweepAmbiguousTransparentIntervals over the keys of a queue
+    // sorted by transparentWorkLess, in that order (the endpoints, groups and
+    // arithmetic are those of the sorted packets, so the count is identical).
+    [[nodiscard]] inline uint64_t sweepAmbiguousTransparentIntervals(
+        std::span<const TransparentWorkSortKey> sortedKeys,
+        std::span<TransparentIntervalEndpoint> endpointScratch,
+        std::span<float> nearScratch,
+        std::span<uint32_t> fenwickScratch) {
+        return sweepAmbiguousTransparentIntervalsOf(sortedKeys.size(),
+            [sortedKeys](size_t index) {
+                const TransparentWorkSortKey& key = sortedKeys[index];
+                return TransparentIntervalSample{
+                    .priority = key.priority,
+                    .valid = (key.workFlags & TransparentWorkIntervalValid) != 0,
+                    .nearDepth = key.nearDepth,
+                    .farDepth = key.farDepth,
+                };
+            }, endpointScratch, nearScratch, fenwickScratch);
+    }
+
     // Caller-owned key scratch shared by the sorts of one frame. Its vectors
     // keep their capacity, so steady frames do not allocate.
     struct CompactDrawSortScratch {

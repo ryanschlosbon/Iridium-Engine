@@ -46,7 +46,7 @@ namespace Iridium {
           tasks_(Tasks::TaskSystemConfig{ .profiler = &cpuProfiler_ }),
           observer_(observer),
           extractor_(cpuProfiler_, sceneWorld_, config_.shadowSettings,
-              config_.reflectionProbeSettings),
+              config_.reflectionProbeSettings, &tasks_),
           sceneDocumentService_(sceneWorld_),
           transactionService_(sceneDocumentService_),
           registry(sceneWorld_.registry()),

@@ -6,6 +6,7 @@
 # in tests/CMakeLists.txt).
 add_library(iridium_render_extraction STATIC
         GpuSceneObservation.cpp
+        ParallelDrawSort.cpp
         RenderExtractor.cpp
 )
 target_link_libraries(iridium_render_extraction PUBLIC
@@ -16,6 +17,7 @@ target_link_libraries(iridium_render_extraction PUBLIC
         iridium_rhi
         iridium_profiling
         iridium_ecs
+        iridium_tasks
         iridium_core)
 # RenderExtractor.cpp builds the scene projection with Vulkan [0, 1] clip depth
 # (GLM_FORCE_DEPTH_ZERO_TO_ONE before its first GLM include), so this target's

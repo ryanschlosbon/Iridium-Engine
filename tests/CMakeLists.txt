@@ -254,6 +254,13 @@ iridium_add_test(CompactDrawSortTests
         SOURCES renderer/CompactDrawSortTests.cpp
         LIBS iridium_rhi)
 
+# M7R R5c.7: the parallel transparent sorts keep the serial compact sorts' order
+# and allocate nothing in steady frames.
+iridium_add_test(ParallelDrawSortTests
+        SOURCES renderer/ParallelDrawSortTests.cpp
+        LIBS iridium_render_extraction iridium_tasks
+        ALLOCATION_PROFILE)
+
 iridium_add_test(GpuSceneVisibilityTests
         SOURCES renderer/GpuSceneVisibilityTests.cpp
         LIBS iridium_rhi)

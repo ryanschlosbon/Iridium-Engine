@@ -5,6 +5,8 @@
 #include <array>
 #include <iostream>
 #include <limits>
+#include <random>
+#include <vector>
 
 using namespace Iridium;
 
@@ -107,6 +109,103 @@ namespace {
         CHECK(first.visiblePrimitiveIndices == second.visiblePrimitiveIndices);
         CHECK(first.abiVersion == GpuSceneVisibilityAbiVersion);
     }
+
+    bool sameStats(const GpuSceneVisibilityStats& a,
+        const GpuSceneVisibilityStats& b) {
+        return a.requestedInstances == b.requestedInstances &&
+            a.visibleInstances == b.visibleInstances &&
+            a.frustumRejectedInstances == b.frustumRejectedInstances &&
+            a.requestedPrimitives == b.requestedPrimitives &&
+            a.visiblePrimitives == b.visiblePrimitives &&
+            a.frustumRejectedPrimitives == b.frustumRejectedPrimitives &&
+            a.failVisibleInstances == b.failVisibleInstances &&
+            a.failVisiblePrimitives == b.failVisiblePrimitives &&
+            a.requestedTriangles == b.requestedTriangles &&
+            a.visibleTriangles == b.visibleTriangles;
+    }
+
+    // M7R R5c.7: classifying consecutive instance ranges and merging the
+    // parts in range order equals the whole-scene classification.
+    void rangeClassificationMatchesWhole() {
+        std::mt19937 random(7);
+        std::uniform_real_distribution<float> position(-30.0f, 30.0f);
+        std::uniform_real_distribution<float> extent(0.05f, 2.0f);
+        for (uint32_t trial = 0; trial < 40; ++trial) {
+            GpuScenePackedTables scene;
+            const uint32_t instanceCount = 1u + random() % 300u;
+            for (uint32_t instance = 0; instance < instanceCount; ++instance) {
+                const glm::vec3 center(position(random), position(random),
+                    position(random));
+                const float radius = extent(random);
+                scene.transforms.push_back(packGpuSceneAffine(
+                    glm::translate(glm::mat4(1.0f), center)));
+                const uint32_t primitives = random() % 6u;
+                const uint32_t firstPrimitive =
+                    static_cast<uint32_t>(scene.primitives.size());
+                uint32_t state = (random() % 8u != 0u) ? GpuSceneInstanceEnabled : 0u;
+                if (random() % 25u == 0u)
+                    state |= GpuSceneInstanceInvalidBoundsFailVisible;
+                GpuSceneInstanceRecord record{
+                    .worldBoundsSphere = { center.x, center.y, center.z, radius },
+                    .worldBoundsMin = { center.x - radius, center.y - radius,
+                        center.z - radius, 0.0f },
+                    .worldBoundsMax = { center.x + radius, center.y + radius,
+                        center.z + radius, 0.0f },
+                    .references = { instance, 0, firstPrimitive, primitives },
+                    .state = { 1, 0, state, (random() % 5u == 0u)
+                        ? GpuSceneConsumerShadow
+                        : GpuSceneConsumerMainOpaque | GpuSceneConsumerForwardOpaque },
+                };
+                if (random() % 40u == 0u) record.references.x = 1'000'000u;
+                scene.instances.push_back(record);
+                for (uint32_t primitive = 0; primitive < primitives; ++primitive) {
+                    const uint32_t geometry =
+                        static_cast<uint32_t>(scene.geometries.size());
+                    scene.primitives.push_back({
+                        .binding = { instance, random() % 30u == 0u
+                            ? 1'000'000u : geometry, 1, 1 },
+                        .state = { 1, GpuScenePrimitiveOpaque, 0,
+                            random() % 2u == 0u ? GpuSceneConsumerMainOpaque
+                                : GpuSceneConsumerForwardOpaque },
+                    });
+                    const float offset = position(random) * 0.05f;
+                    const float half = extent(random) * 0.5f;
+                    scene.geometries.push_back({
+                        .localBoundsSphere = { offset, 0, 0, half },
+                        .localBoundsMin = { offset - half, -half, -half, 0 },
+                        .localBoundsMax = { offset + half, half, half, 0 },
+                        .draw = { 0, 3u * (1u + random() % 500u), 0, 0 },
+                    });
+                }
+            }
+            const glm::mat4 clip = glm::perspective(glm::radians(60.0f),
+                16.0f / 9.0f, 0.1f, 40.0f) * glm::lookAt(
+                    glm::vec3(position(random), 2.0f, position(random)),
+                    glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+            const GpuSceneFrustum frustum = makeGpuSceneFrustum(clip);
+            const uint32_t mask = GpuSceneConsumerMainOpaque |
+                GpuSceneConsumerForwardOpaque;
+            GpuSceneVisibilityResult whole;
+            classifyGpuSceneFrustum(scene, frustum, mask, whole);
+            for (const uint32_t ranges : { 1u, 2u, 3u, 7u, 32u, instanceCount }) {
+                GpuSceneVisibilityResult merged;
+                beginGpuSceneVisibility(scene, merged);
+                std::vector<GpuSceneVisibilityPart> parts(ranges);
+                for (uint32_t range = 0; range < ranges; ++range) {
+                    classifyGpuSceneFrustumRange(scene, frustum, mask,
+                        instanceCount * range / ranges,
+                        instanceCount * (range + 1u) / ranges,
+                        merged.primitiveVisibility, parts[range]);
+                }
+                for (const GpuSceneVisibilityPart& part : parts)
+                    mergeGpuSceneVisibility(part, merged);
+                CHECK(merged.visibleInstanceIndices == whole.visibleInstanceIndices);
+                CHECK(merged.visiblePrimitiveIndices == whole.visiblePrimitiveIndices);
+                CHECK(merged.primitiveVisibility == whole.primitiveVisibility);
+                CHECK(sameStats(merged.stats, whole.stats));
+            }
+        }
+    }
 }
 
 int main() {
@@ -114,6 +213,7 @@ int main() {
     primitiveSecondStage();
     invalidDataFailsVisible();
     consumerMaskAndDeterminism();
+    rangeClassificationMatchesWhole();
     if (failures == 0) std::cout << "GpuSceneVisibilityTests passed\n";
     return failures == 0 ? 0 : 1;
 }

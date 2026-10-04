@@ -87,22 +87,23 @@ namespace {
         return result;
     }
 
-    void classifyGpuSceneFrustum(const GpuScenePackedTables& scene,
+    // The classification of instances [instanceBegin, instanceEnd), appended
+    // to the lists and added to the statistics (M7R R5c.7: shared by the
+    // whole-scene and the range forms).
+    static void classifyInstances(const GpuScenePackedTables& scene,
         const GpuSceneFrustum& frustum, uint32_t consumerMask,
-        GpuSceneVisibilityResult& result) {
-        result.abiVersion = GpuSceneVisibilityAbiVersion;
-        result.visibleInstanceIndices.clear();
-        result.visiblePrimitiveIndices.clear();
-        result.primitiveVisibility.assign(scene.primitives.size(), 0u);
-        result.stats = {};
-
-        for (uint32_t instanceIndex = 0;
-            instanceIndex < scene.instances.size(); ++instanceIndex) {
+        uint32_t instanceBegin, uint32_t instanceEnd,
+        std::vector<uint32_t>& visibleInstanceIndices,
+        std::vector<uint32_t>& visiblePrimitiveIndices,
+        std::span<uint8_t> primitiveVisibility,
+        GpuSceneVisibilityStats& stats) {
+        for (uint32_t instanceIndex = instanceBegin;
+            instanceIndex < instanceEnd; ++instanceIndex) {
             const GpuSceneInstanceRecord& instance = scene.instances[instanceIndex];
             if ((instance.state.w & consumerMask) == 0 ||
                 (instance.state.z & GpuSceneInstanceEnabled) == 0)
                 continue;
-            ++result.stats.requestedInstances;
+            ++stats.requestedInstances;
 
             const bool referencesValid = instance.references.x <
                     scene.transforms.size() &&
@@ -130,18 +131,18 @@ namespace {
                         instanceTriangleCount +=
                             scene.geometries[primitive.binding.y].draw.y / 3u;
                 }
-                result.stats.requestedPrimitives += instancePrimitiveCount;
-                result.stats.requestedTriangles += instanceTriangleCount;
+                stats.requestedPrimitives += instancePrimitiveCount;
+                stats.requestedTriangles += instanceTriangleCount;
             }
             if (!failVisible && rejected(frustum, instanceMinimum,
                     instanceMaximum)) {
-                ++result.stats.frustumRejectedInstances;
-                result.stats.frustumRejectedPrimitives += instancePrimitiveCount;
+                ++stats.frustumRejectedInstances;
+                stats.frustumRejectedPrimitives += instancePrimitiveCount;
                 continue;
             }
-            result.visibleInstanceIndices.push_back(instanceIndex);
-            ++result.stats.visibleInstances;
-            if (failVisible) ++result.stats.failVisibleInstances;
+            visibleInstanceIndices.push_back(instanceIndex);
+            ++stats.visibleInstances;
+            if (failVisible) ++stats.failVisibleInstances;
             if (!referencesValid) continue;
 
             for (uint32_t offset = 0; offset < instance.references.w; ++offset) {
@@ -158,17 +159,69 @@ namespace {
                     !transformedBounds(scene.transforms[instance.references.x],
                         *geometry, minimum, maximum);
                 if (!primitiveFailVisible && rejected(frustum, minimum, maximum)) {
-                    ++result.stats.frustumRejectedPrimitives;
+                    ++stats.frustumRejectedPrimitives;
                     continue;
                 }
-                result.visiblePrimitiveIndices.push_back(primitiveIndex);
-                result.primitiveVisibility[primitiveIndex] = 1u;
-                ++result.stats.visiblePrimitives;
-                if (primitiveFailVisible) ++result.stats.failVisiblePrimitives;
+                visiblePrimitiveIndices.push_back(primitiveIndex);
+                primitiveVisibility[primitiveIndex] = 1u;
+                ++stats.visiblePrimitives;
+                if (primitiveFailVisible) ++stats.failVisiblePrimitives;
                 if (geometry)
-                    result.stats.visibleTriangles += geometry->draw.y / 3u;
+                    stats.visibleTriangles += geometry->draw.y / 3u;
             }
         }
+    }
+
+
+    void classifyGpuSceneFrustum(const GpuScenePackedTables& scene,
+        const GpuSceneFrustum& frustum, uint32_t consumerMask,
+        GpuSceneVisibilityResult& result) {
+        beginGpuSceneVisibility(scene, result);
+        classifyInstances(scene, frustum, consumerMask, 0u,
+            static_cast<uint32_t>(scene.instances.size()),
+            result.visibleInstanceIndices, result.visiblePrimitiveIndices,
+            result.primitiveVisibility, result.stats);
+    }
+
+    void classifyGpuSceneFrustumRange(const GpuScenePackedTables& scene,
+        const GpuSceneFrustum& frustum, uint32_t consumerMask,
+        uint32_t instanceBegin, uint32_t instanceEnd,
+        std::span<uint8_t> primitiveVisibility, GpuSceneVisibilityPart& part) {
+        classifyInstances(scene, frustum, consumerMask, instanceBegin,
+            instanceEnd, part.visibleInstanceIndices,
+            part.visiblePrimitiveIndices, primitiveVisibility, part.stats);
+    }
+
+    void beginGpuSceneVisibility(const GpuScenePackedTables& scene,
+        GpuSceneVisibilityResult& result) {
+        result.abiVersion = GpuSceneVisibilityAbiVersion;
+        result.visibleInstanceIndices.clear();
+        result.visiblePrimitiveIndices.clear();
+        result.primitiveVisibility.assign(scene.primitives.size(), 0u);
+        result.stats = {};
+    }
+
+    void mergeGpuSceneVisibility(const GpuSceneVisibilityPart& part,
+        GpuSceneVisibilityResult& result) {
+        result.visibleInstanceIndices.insert(
+            result.visibleInstanceIndices.end(),
+            part.visibleInstanceIndices.begin(),
+            part.visibleInstanceIndices.end());
+        result.visiblePrimitiveIndices.insert(
+            result.visiblePrimitiveIndices.end(),
+            part.visiblePrimitiveIndices.begin(),
+            part.visiblePrimitiveIndices.end());
+        GpuSceneVisibilityStats& stats = result.stats;
+        stats.requestedInstances += part.stats.requestedInstances;
+        stats.visibleInstances += part.stats.visibleInstances;
+        stats.frustumRejectedInstances += part.stats.frustumRejectedInstances;
+        stats.requestedPrimitives += part.stats.requestedPrimitives;
+        stats.visiblePrimitives += part.stats.visiblePrimitives;
+        stats.frustumRejectedPrimitives += part.stats.frustumRejectedPrimitives;
+        stats.failVisibleInstances += part.stats.failVisibleInstances;
+        stats.failVisiblePrimitives += part.stats.failVisiblePrimitives;
+        stats.requestedTriangles += part.stats.requestedTriangles;
+        stats.visibleTriangles += part.stats.visibleTriangles;
     }
 
 } // namespace Iridium

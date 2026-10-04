@@ -16,6 +16,7 @@
 #include <vector>
 #include <cstdint>
 #include <cstring>
+#include <exception>
 #include <iostream>
 #include <string>
 #include <limits>
@@ -25,6 +26,7 @@
 
 #include "assets/AssetManager.h"
 #include "core/BuildFeatures.h"
+#include "core/tasks/TaskSystem.h"
 #include "renderer/lighting/ShadowCasterCulling.h"
 #include "renderer/rhi/TransparencyQualityOverride.h"
 #include "renderer/transparency/WeightedOit.h"
@@ -83,7 +85,8 @@ namespace Iridium {
 
     RenderExtractor::RenderExtractor(CpuProfiler& profiler, SceneWorld& scene,
         const ProjectShadowSettings& shadowSettings,
-        const ProjectReflectionProbeSettings& probeSettings)
+        const ProjectReflectionProbeSettings& probeSettings,
+        Tasks::TaskSystem* tasks)
         : cpuProfiler_(profiler),
           sceneWorld_(scene),
           registry(scene.registry()),
@@ -116,7 +119,9 @@ namespace Iridium {
               .maximumRenderedTexels = shadowSettings.
                   maximumPointRenderedTexelsPerFrame,
               .maximumCompatibleStaleFrames = shadowSettings.
-                  maximumCompatiblePointStaleFrames }) {}
+                  maximumCompatiblePointStaleFrames }),
+          tasks_(tasks),
+          transparentSorter_(tasks) {}
 
     RenderExtractor::~RenderExtractor() {
         if constexpr (kQualificationBuild) {
@@ -864,14 +869,13 @@ namespace Iridium {
     }
 
     void RenderExtractor::clearQueues() {
-        opaqueQueue.clear();
-        forwardOpaqueQueue.clear();
-        transparentQueue.clear();
-        sortedSurfaceQueue.clear();
-        selectionQueue.clear();
+        // M7R R5c.7: the opaque, forward-opaque, transparent, sorted-surface
+        // and selection queues and the instance transforms are not cleared:
+        // every extraction sizes them exactly in mergeExtractionChunks, and
+        // keeping their sizes means a steady frame constructs no packets
+        // before the parallel copy overwrites them.
         shadowCasterQueue.clear();
         probeCasterQueue_.clear();
-        forwardInstanceTransforms_.clear();
     }
 
     void RenderExtractor::beginView(const EditorViewState& preBuildView,
@@ -973,22 +977,10 @@ namespace Iridium {
         ReflectionProbeGpuFramePacket& publishedProbes = publishedProbes_;
         RenderFrame& renderFrame = renderFrame_;
         ++extractionFrame_;
-        lastTransparentSubmeshList_ = nullptr;
+        lastTransparentSubmeshModel_ = nullptr;
+        lastTransparentSubmeshList_ = UINT32_MAX;
 
         // --- 3. THE EXTRACTION PHASE (Data-Oriented Design) ---
-        uint64_t requestedModelRecords = 0;
-        uint64_t requestedInstances = 0;
-        uint64_t requestedSubmeshes = 0;
-        uint64_t requestedSourceTriangles = 0;
-        uint64_t requestedSourceIndexBytes = 0;
-        uint64_t requestedArenaIndexBytes = 0;
-        uint64_t requestedArenaSavedIndexBytes = 0;
-        uint64_t requestedUInt16Indices = 0;
-        uint64_t requestedUInt32Indices = 0;
-        uint64_t requestedLodFallbackChains = 0;
-        uint64_t requestedLodWithheldRanges = 0;
-        uint64_t requestedLodWithheldIndexBytes = 0;
-        uint32_t maximumRequestedLodResidentBase = 0;
         GpuSceneVisibilityStats gpuSceneVisibilityStats{};
         uint64_t gpuSceneDeferredCandidateCount = 0;
         uint64_t gpuSceneDeferredCandidateTriangles = 0;
@@ -996,17 +988,17 @@ namespace Iridium {
         uint64_t gpuSceneForwardVisibleTriangles = 0;
         if (!assetPreviewActive && gpuSceneFrame_) {
             CpuScope classifyScope(cpuProfiler_, "cpu.render.classify");
-            classifyGpuSceneFrustum(*gpuSceneFrame_,
-                makeGpuSceneFrustum(projMatrix * viewMatrix),
-                GpuSceneConsumerMainOpaque |
-                    GpuSceneConsumerForwardOpaque,
-                gpuSceneVisibility_);
+            classifyMainView(projMatrix * viewMatrix);
             gpuSceneVisibilityStats = gpuSceneVisibility_.stats;
         }
-        uint64_t transparentCulled = 0;
+        ExtractionCounters extracted{};
         {
             CpuScope extractionScope(cpuProfiler_, "cpu.render.extract");
-            const auto appendModel = [&](const ModelAsset& model,
+            // M7R R5c.7: appends one model's packets, transforms and counters
+            // to `out`, a chunk's scratch (see ExtractionChunk). It reads only
+            // frame-constant state, so chunks run concurrently.
+            const auto appendModel = [&](ExtractionChunk& out,
+                    const ModelAsset& model,
                     const glm::mat4& worldTransform,
                     const MeshComponent* meshComponent,
                     const RenderInstanceBatchComponent* instanceBatch,
@@ -1026,51 +1018,55 @@ namespace Iridium {
                         instanceBatch->localTransforms.size())
                     : 1u;
                 if (instanceCount == 0u) return;
-                ++requestedModelRecords;
-                requestedSourceIndexBytes += model.sourceIndexBytes;
-                requestedArenaIndexBytes += model.arenaIndexBytes;
-                requestedArenaSavedIndexBytes += model.arenaSavedIndexBytes;
-                requestedUInt16Indices += model.arenaUInt16IndexCount;
-                requestedUInt32Indices += model.arenaUInt32IndexCount;
-                requestedLodFallbackChains += model.lodFallbackChainCount;
-                requestedLodWithheldRanges +=
+                ExtractionCounters& counters = out.counters;
+                ++counters.modelRecords;
+                counters.sourceIndexBytes += model.sourceIndexBytes;
+                counters.arenaIndexBytes += model.arenaIndexBytes;
+                counters.arenaSavedIndexBytes += model.arenaSavedIndexBytes;
+                counters.uint16Indices += model.arenaUInt16IndexCount;
+                counters.uint32Indices += model.arenaUInt32IndexCount;
+                counters.lodFallbackChains += model.lodFallbackChainCount;
+                counters.lodWithheldRanges +=
                     model.lodWithheldPrimitiveRangeCount;
-                requestedLodWithheldIndexBytes +=
+                counters.lodWithheldIndexBytes +=
                     model.lodWithheldIndexBytes;
-                maximumRequestedLodResidentBase = (std::max)(
-                    maximumRequestedLodResidentBase,
+                counters.maximumLodResidentBase = (std::max)(
+                    counters.maximumLodResidentBase,
                     model.lodResidentBaseLevel);
                 if (instanceBatch && selected) {
                     throw std::logic_error(
                         "Render instance batch selection is not implemented");
                 }
+                // Chunk-local; the merge adds the chunk's offset.
+                std::vector<glm::mat4>& instanceTransforms =
+                    out.instanceTransforms;
                 const uint32_t firstInstanceTransform = static_cast<uint32_t>(
-                    forwardInstanceTransforms_.size());
+                    instanceTransforms.size());
                 if (instanceBatch) {
-                    forwardInstanceTransforms_.reserve(
-                        forwardInstanceTransforms_.size() + instanceCount);
+                    instanceTransforms.reserve(
+                        instanceTransforms.size() + instanceCount);
                     const glm::mat4 identity(1.0f);
                     if (std::memcmp(&worldTransform, &identity,
                             sizeof(glm::mat4)) == 0) {
-                        forwardInstanceTransforms_.insert(
-                            forwardInstanceTransforms_.end(),
+                        instanceTransforms.insert(
+                            instanceTransforms.end(),
                             instanceBatch->localTransforms.begin(),
                             instanceBatch->localTransforms.end());
                     }
                     else {
                         const size_t first =
-                            forwardInstanceTransforms_.size();
-                        forwardInstanceTransforms_.resize(first +
+                            instanceTransforms.size();
+                        instanceTransforms.resize(first +
                             instanceCount);
                         for (uint32_t index = 0u;
                             index < instanceCount; ++index) {
-                            forwardInstanceTransforms_[first + index] =
+                            instanceTransforms[first + index] =
                                 worldTransform *
                                 instanceBatch->localTransforms[index];
                         }
                     }
                 }
-                requestedInstances += instanceCount;
+                counters.instances += instanceCount;
                 const float distanceToCamera = glm::distance(
                     renderCameraPosition, glm::vec3(worldTransform[3]));
                 // One submesh with its effective binding, after the
@@ -1154,7 +1150,7 @@ namespace Iridium {
                             renderCameraFarPlane);
                         if (!visible && effectiveExecutionMode ==
                                 TransparencyExecutionMode::Classified) {
-                            ++transparentCulled;
+                            ++counters.transparentCulled;
                             return;
                         }
                         if (effectiveExecutionMode ==
@@ -1162,10 +1158,11 @@ namespace Iridium {
                             (packet.transparency.resolvedClass ==
                                     TransparencyClass::SortedSurface ||
                                 isWeightedOitPacket(packet))) {
-                            sortedSurfaceQueue.push_back(packet);
+                            out.queues[ExtractionSortedSurface].push_back(
+                                packet);
                         }
                         else {
-                            transparentQueue.push_back(packet);
+                            out.queues[ExtractionTransparent].push_back(packet);
                         }
                     }
                     else if (binding->renderQueue == RenderQueue::ForwardOpaque) {
@@ -1173,14 +1170,14 @@ namespace Iridium {
                             throw std::logic_error(
                                 "Forward-opaque instance batches are not implemented");
                         }
-                        forwardOpaqueQueue.push_back(packet);
+                        out.queues[ExtractionForwardOpaque].push_back(packet);
                     }
                     else {
                         if (instanceBatch) {
                             throw std::logic_error(
                                 "Opaque instance batches are not implemented");
                         }
-                        opaqueQueue.push_back(packet);
+                        out.queues[ExtractionOpaque].push_back(packet);
                     }
                     const bool previewHovered = assetPreviewActive &&
                         !view.previewIsolateSelectedPart && !view.previewHoveredPart.isNil() &&
@@ -1190,7 +1187,7 @@ namespace Iridium {
                         packet.selectionFeedback = static_cast<uint8_t>(
                             ((selected || previewPartSelected) ? 1u : 0u) |
                             (previewHovered ? 2u : 0u));
-                        selectionQueue.push_back(packet);
+                        out.selection.push_back(packet);
                     }
                 };
                 // M7R R5c.7: a GPU-scene owner without material overrides
@@ -1201,10 +1198,10 @@ namespace Iridium {
                 if (transparentList && persistentOpaque && !forcedMaterial &&
                     !assetPreviewActive && meshComponent &&
                     meshComponent->materialOverrides.empty()) {
-                    requestedSubmeshes +=
+                    counters.submeshes +=
                         static_cast<uint64_t>(model.subMeshes.size()) *
                         instanceCount;
-                    requestedSourceTriangles +=
+                    counters.sourceTriangles +=
                         transparentList->sourceTriangles * instanceCount;
                     for (const uint32_t subMeshIndex :
                             transparentList->submeshes) {
@@ -1226,8 +1223,8 @@ namespace Iridium {
                             ? subMesh.materialGuid : subMesh.sourcePrimitiveGuid);
                     if (assetPreviewActive &&
                         view.previewIsolateSelectedPart && !previewPartSelected) continue;
-                    requestedSubmeshes += instanceCount;
-                    requestedSourceTriangles +=
+                    counters.submeshes += instanceCount;
+                    counters.sourceTriangles +=
                         (static_cast<uint64_t>(subMesh.indexCount) / 3u) *
                         instanceCount;
                     const int materialIndex = subMesh.materialIndex;
@@ -1280,52 +1277,134 @@ namespace Iridium {
                 }
             };
 
+            const auto resetChunk = [](ExtractionChunk& chunk) {
+                for (std::vector<DrawPacket>& queue : chunk.queues) queue.clear();
+                chunk.selection.clear();
+                chunk.instanceTransforms.clear();
+                chunk.counters = {};
+                chunk.failure = nullptr;
+            };
+
+            uint32_t extractionChunkCount = 0;
+            uint32_t parityChunkCount = 0;
             if (assetPreviewActive) {
+                if (extractionChunks_.empty()) extractionChunks_.resize(1);
+                ExtractionChunk& chunk = extractionChunks_.front();
+                resetChunk(chunk);
                 if (previewModel) {
-                    appendModel(*previewModel, glm::mat4(1.0f), nullptr,
+                    appendModel(chunk, *previewModel, glm::mat4(1.0f), nullptr,
                         nullptr,
                         nullptr, false,
                         {}, false, nullptr);
                 }
+                extractionChunkCount = 1;
             }
             else {
                 auto* transformPool = registry.getPool<TransformComponent>();
                 auto* meshPool = registry.getPool<MeshComponent>();
                 auto* instanceBatchPool = registry.findPool<
                     RenderInstanceBatchComponent>();
+                // Serial pre-pass in mesh-pool order: the entities the
+                // former loop drew, their components and model lists, and
+                // a visit estimate that balances the chunks.
+                extractionItems_.clear();
+                uint64_t totalVisits = 0;
                 if (transformPool && meshPool) {
-                    for (Entity entity : meshPool->entities) {
-                        const MeshComponent& meshComponent =
-                            std::as_const(*meshPool).get(entity);
+                    const ComponentPool<MeshComponent>& meshes =
+                        std::as_const(*meshPool);
+                    for (Entity entity : meshes.entities) {
+                        const MeshComponent& meshComponent = meshes.get(entity);
                         if (!meshComponent.enabled || !meshComponent.model ||
                             !transformPool->has(entity)) {
                             continue;
                         }
-                        const SceneEntityUuid owner = sceneWorld_.identities()
-                            .persistentId(entity).value_or(
-                                SceneEntityUuid{});
-                        bool persistentOpaque = false;
-                        if (gpuSceneFrame_ && !owner.isNil()) {
-                            const auto found = std::ranges::lower_bound(
-                                gpuSceneFrame_->instanceIdentities, owner, {},
-                                &GpuSceneInstanceIdentity::owner);
-                            persistentOpaque = found !=
-                                gpuSceneFrame_->instanceIdentities.end() &&
-                                found->owner == owner;
-                        }
-                        appendModel(*meshComponent.model,
-                            transformPool->get(entity).worldMatrix,
-                            &meshComponent,
-                            instanceBatchPool && instanceBatchPool->has(entity)
-                                ? &instanceBatchPool->get(entity) : nullptr,
-                            nullptr,
-                            entity == selectedEntity, owner,
-                            persistentOpaque,
-                            persistentOpaque
-                                ? transparentSubmeshes(*meshComponent.model)
-                                : nullptr);
+                        const ModelAsset& model = *meshComponent.model;
+                        const uint32_t list = transparentSubmeshes(model);
+                        const size_t visits = meshComponent.materialOverrides.empty()
+                            ? transparentSubmeshLists_[list].submeshes.size()
+                            : model.subMeshes.size();
+                        totalVisits += 1u + visits;
+                        extractionItems_.push_back({
+                            .entity = entity,
+                            .mesh = &meshComponent,
+                            .batch = instanceBatchPool &&
+                                    instanceBatchPool->has(entity)
+                                ? &std::as_const(*instanceBatchPool).get(entity)
+                                : nullptr,
+                            .transform = &std::as_const(*transformPool).get(entity),
+                            .transparentList = list,
+                            .visits = static_cast<uint32_t>(1u + visits),
+                        });
                     }
                 }
+                const uint32_t chunkCount = chunkCountFor(totalVisits,
+                    ExtractionVisitsPerChunk);
+                if (extractionChunks_.size() < chunkCount)
+                    extractionChunks_.resize(chunkCount);
+                {
+                    // Contiguous item ranges of about equal visits.
+                    uint32_t chunk = 0;
+                    uint64_t accumulated = 0;
+                    extractionChunks_[0].firstItem = 0;
+                    for (uint32_t item = 0; item < extractionItems_.size(); ++item) {
+                        while (chunk + 1u < chunkCount && accumulated >=
+                                totalVisits * (chunk + 1u) / chunkCount) {
+                            extractionChunks_[chunk].endItem = item;
+                            extractionChunks_[++chunk].firstItem = item;
+                        }
+                        accumulated += extractionItems_[item].visits;
+                    }
+                    const uint32_t itemCount =
+                        static_cast<uint32_t>(extractionItems_.size());
+                    extractionChunks_[chunk].endItem = itemCount;
+                    while (++chunk < chunkCount) {
+                        extractionChunks_[chunk].firstItem = itemCount;
+                        extractionChunks_[chunk].endItem = itemCount;
+                    }
+                }
+                const GpuScenePackedTables* const gpuSceneFrame = gpuSceneFrame_;
+                runChunks(chunkCount, "cpu.render.extract.chunk",
+                    [&](uint32_t chunkIndex) {
+                    ExtractionChunk& chunk = extractionChunks_[chunkIndex];
+                    resetChunk(chunk);
+                    try {
+                        for (uint32_t index = chunk.firstItem;
+                                index < chunk.endItem; ++index) {
+                            const ExtractionItem& item = extractionItems_[index];
+                            const SceneEntityUuid owner = sceneWorld_.identities()
+                                .persistentId(item.entity).value_or(
+                                    SceneEntityUuid{});
+                            bool persistentOpaque = false;
+                            if (gpuSceneFrame && !owner.isNil()) {
+                                const auto found = std::ranges::lower_bound(
+                                    gpuSceneFrame->instanceIdentities, owner, {},
+                                    &GpuSceneInstanceIdentity::owner);
+                                persistentOpaque = found !=
+                                    gpuSceneFrame->instanceIdentities.end() &&
+                                    found->owner == owner;
+                            }
+                            appendModel(chunk, *item.mesh->model,
+                                item.transform->worldMatrix,
+                                item.mesh,
+                                item.batch,
+                                nullptr,
+                                item.entity == selectedEntity, owner,
+                                persistentOpaque,
+                                persistentOpaque
+                                    ? &transparentSubmeshLists_[item.transparentList]
+                                    : nullptr);
+                        }
+                    }
+                    catch (...) {
+                        // The serial loop stopped at its first failure; the
+                        // first failing chunk holds that one (rethrown below).
+                        chunk.failure = std::current_exception();
+                    }
+                });
+                for (uint32_t chunk = 0; chunk < chunkCount; ++chunk)
+                    if (extractionChunks_[chunk].failure)
+                        std::rethrow_exception(extractionChunks_[chunk].failure);
+                extractionChunkCount = chunkCount;
                 evictTransparentSubmeshLists();
             }
 
@@ -1334,46 +1413,96 @@ namespace Iridium {
             // are still built for visible forward-opaque primitives and, from
             // the instance selection flag, for the selected instance's visible
             // primitives. Transparent and explicit fallback owners above use
-            // the M6 packet path.
+            // the M6 packet path. M7R R5c.7: primitive ranges in parallel,
+            // appended in range order.
             if (!assetPreviewActive && gpuSceneFrame_) {
                 CpuScope parityScope(cpuProfiler_, "cpu.render.extract.parity");
-                for (uint32_t primitiveIndex = 0;
-                        primitiveIndex < gpuSceneFrame_->primitives.size();
-                        ++primitiveIndex) {
-                    const GpuScenePrimitiveRecord& primitive =
-                        gpuSceneFrame_->primitives[primitiveIndex];
-                    const bool cpuVisible = primitiveIndex <
-                            gpuSceneVisibility_.primitiveVisibility.size() &&
-                        gpuSceneVisibility_.primitiveVisibility[primitiveIndex] != 0u;
-                    const uint32_t instanceIndex = primitive.binding.x;
-                    if (instanceIndex >= gpuSceneFrame_->instances.size() ||
-                        instanceIndex >= gpuSceneFrame_->instanceIdentities.size() ||
-                        primitive.binding.y >= gpuSceneFrame_->geometries.size() ||
-                        primitiveIndex >= gpuSceneFrame_->primitiveIdentities.size()) {
-                        throw std::logic_error(
-                            "Published visible GPU-scene references are invalid");
-                    }
-                    const GpuSceneInstanceRecord& instance =
-                        gpuSceneFrame_->instances[instanceIndex];
-                    if (instance.references.x >= gpuSceneFrame_->transforms.size()) {
-                        throw std::logic_error(
-                            "Published visible GPU-scene transform is invalid");
-                    }
-                    const bool forward = (primitive.state.w &
-                        GpuSceneConsumerForwardOpaque) != 0;
-                    if (!forward && (primitive.state.w &
-                            GpuSceneConsumerMainOpaque) != 0) {
-                        ++gpuSceneDeferredCandidateCount;
-                        gpuSceneDeferredCandidateTriangles +=
-                            gpuSceneFrame_->geometries[primitive.binding.y].draw.y / 3u;
-                    }
-                    if (!forward || !cpuVisible) continue;
-                    const DrawPacket packet = gpuSceneParityPacket(
-                        primitiveIndex, cpuVisible);
-                    forwardOpaqueQueue.push_back(packet);
-                    ++gpuSceneForwardVisibleCount;
-                    gpuSceneForwardVisibleTriangles += packet.indexCount / 3u;
+                const uint32_t primitiveCount = static_cast<uint32_t>(
+                    gpuSceneFrame_->primitives.size());
+                const uint32_t chunkCount = chunkCountFor(primitiveCount,
+                    ParityPrimitivesPerChunk);
+                if (parityChunks_.size() < chunkCount)
+                    parityChunks_.resize(chunkCount);
+                for (uint32_t chunk = 0; chunk < chunkCount; ++chunk) {
+                    parityChunks_[chunk].firstPrimitive = static_cast<uint32_t>(
+                        uint64_t{ primitiveCount } * chunk / chunkCount);
+                    parityChunks_[chunk].endPrimitive = static_cast<uint32_t>(
+                        uint64_t{ primitiveCount } * (chunk + 1u) / chunkCount);
                 }
+                runChunks(chunkCount, "cpu.render.extract.parity.chunk",
+                    [&](uint32_t chunkIndex) {
+                    ParityChunk& chunk = parityChunks_[chunkIndex];
+                    chunk.forward.clear();
+                    chunk.deferredCandidates = 0;
+                    chunk.deferredCandidateTriangles = 0;
+                    chunk.forwardVisible = 0;
+                    chunk.forwardVisibleTriangles = 0;
+                    chunk.failure = nullptr;
+                    try {
+                        for (uint32_t primitiveIndex = chunk.firstPrimitive;
+                                primitiveIndex < chunk.endPrimitive;
+                                ++primitiveIndex) {
+                            const GpuScenePrimitiveRecord& primitive =
+                                gpuSceneFrame_->primitives[primitiveIndex];
+                            const bool cpuVisible = primitiveIndex <
+                                    gpuSceneVisibility_.primitiveVisibility.size() &&
+                                gpuSceneVisibility_.primitiveVisibility[primitiveIndex] != 0u;
+                            const uint32_t instanceIndex = primitive.binding.x;
+                            if (instanceIndex >= gpuSceneFrame_->instances.size() ||
+                                instanceIndex >= gpuSceneFrame_->instanceIdentities.size() ||
+                                primitive.binding.y >= gpuSceneFrame_->geometries.size() ||
+                                primitiveIndex >= gpuSceneFrame_->primitiveIdentities.size()) {
+                                throw std::logic_error(
+                                    "Published visible GPU-scene references are invalid");
+                            }
+                            const GpuSceneInstanceRecord& instance =
+                                gpuSceneFrame_->instances[instanceIndex];
+                            if (instance.references.x >= gpuSceneFrame_->transforms.size()) {
+                                throw std::logic_error(
+                                    "Published visible GPU-scene transform is invalid");
+                            }
+                            const bool forward = (primitive.state.w &
+                                GpuSceneConsumerForwardOpaque) != 0;
+                            if (!forward && (primitive.state.w &
+                                    GpuSceneConsumerMainOpaque) != 0) {
+                                ++chunk.deferredCandidates;
+                                chunk.deferredCandidateTriangles +=
+                                    gpuSceneFrame_->geometries[primitive.binding.y].draw.y / 3u;
+                            }
+                            if (!forward || !cpuVisible) continue;
+                            const DrawPacket packet = gpuSceneParityPacket(
+                                primitiveIndex, cpuVisible);
+                            chunk.forward.push_back(packet);
+                            ++chunk.forwardVisible;
+                            chunk.forwardVisibleTriangles += packet.indexCount / 3u;
+                        }
+                    }
+                    catch (...) {
+                        chunk.failure = std::current_exception();
+                    }
+                });
+                for (uint32_t chunk = 0; chunk < chunkCount; ++chunk)
+                    if (parityChunks_[chunk].failure)
+                        std::rethrow_exception(parityChunks_[chunk].failure);
+                for (uint32_t chunk = 0; chunk < chunkCount; ++chunk) {
+                    const ParityChunk& part = parityChunks_[chunk];
+                    gpuSceneDeferredCandidateCount += part.deferredCandidates;
+                    gpuSceneDeferredCandidateTriangles +=
+                        part.deferredCandidateTriangles;
+                    gpuSceneForwardVisibleCount += part.forwardVisible;
+                    gpuSceneForwardVisibleTriangles +=
+                        part.forwardVisibleTriangles;
+                }
+                parityChunkCount = chunkCount;
+            }
+
+            // The chunks' packets, transforms and counters into the frame's
+            // queues, in chunk order (forward-opaque parity packets after the
+            // extraction chunks', as the serial stages appended them).
+            mergeExtractionChunks(extractionChunkCount, parityChunkCount,
+                extracted);
+
+            if (!assetPreviewActive && gpuSceneFrame_) {
                 // M7R R5c.4e: the selection outline from the instance flag:
                 // the selected instances' visible primitives, in dense order
                 // (as the parity loop appended them).
@@ -1397,6 +1526,23 @@ namespace Iridium {
                 }
             }
         }
+        const uint64_t requestedModelRecords = extracted.modelRecords;
+        const uint64_t requestedInstances = extracted.instances;
+        const uint64_t requestedSubmeshes = extracted.submeshes;
+        const uint64_t requestedSourceTriangles = extracted.sourceTriangles;
+        const uint64_t requestedSourceIndexBytes = extracted.sourceIndexBytes;
+        const uint64_t requestedArenaIndexBytes = extracted.arenaIndexBytes;
+        const uint64_t requestedArenaSavedIndexBytes =
+            extracted.arenaSavedIndexBytes;
+        const uint64_t requestedUInt16Indices = extracted.uint16Indices;
+        const uint64_t requestedUInt32Indices = extracted.uint32Indices;
+        const uint64_t requestedLodFallbackChains = extracted.lodFallbackChains;
+        const uint64_t requestedLodWithheldRanges = extracted.lodWithheldRanges;
+        const uint64_t requestedLodWithheldIndexBytes =
+            extracted.lodWithheldIndexBytes;
+        const uint32_t maximumRequestedLodResidentBase =
+            extracted.maximumLodResidentBase;
+        const uint64_t transparentCulled = extracted.transparentCulled;
 
         // The main-opaque GPU-scene primitives of this view (ascending).
         const std::span<const uint32_t> gpuSceneOpaquePrimitives =
@@ -1651,9 +1797,10 @@ namespace Iridium {
         // Sort transparent objects Back-to-Front to ensure perfect alpha blending and refraction
         {
             CpuScope sortScope(cpuProfiler_, "cpu.render.sort.transparent");
-            sortTransparentCompatibilityDrawPackets(transparentQueue,
-                drawSortScratch_);
-            sortTransparentWorkDrawPackets(sortedSurfaceQueue,
+            // M7R R5c.7: parallel above a threshold, same order (see
+            // ParallelDrawSort.h); the sorted-surface interval count may run
+            // on a worker until the intervals scope below joins it.
+            transparentSorter_.sort(transparentQueue, sortedSurfaceQueue,
                 drawSortScratch_);
         }
         cpuProfiler_.recordCounter("transparent.work.invalid_bounds",
@@ -1670,15 +1817,8 @@ namespace Iridium {
                 }));
         {
             CpuScope intervalScope(cpuProfiler_, "cpu.render.transparent.intervals");
-            transparentIntervalEndpointScratch.resize(sortedSurfaceQueue.size());
-            transparentIntervalNearScratch.resize(sortedSurfaceQueue.size());
-            transparentIntervalFenwickScratch.resize(
-                sortedSurfaceQueue.size() + 1u);
             cpuProfiler_.recordCounter("transparent.sort.ambiguous_intervals",
-                sweepAmbiguousTransparentIntervals(sortedSurfaceQueue,
-                    transparentIntervalEndpointScratch,
-                    transparentIntervalNearScratch,
-                    transparentIntervalFenwickScratch));
+                transparentSorter_.ambiguousIntervals(sortedSurfaceQueue));
         }
 
         // --- 5. THE SUBMISSION PHASE (The Black Box) ---
@@ -1846,23 +1986,184 @@ namespace Iridium {
         opaqueQueue.swap(opaqueDirectScratch_);
     }
 
-    const RenderExtractor::TransparentSubmeshList*
-        RenderExtractor::transparentSubmeshes(const ModelAsset& model) {
-        if (lastTransparentSubmeshList_ &&
-            lastTransparentSubmeshList_->model == &model &&
-            lastTransparentSubmeshList_->usedFrame == extractionFrame_)
+    template <class Fn>
+    void RenderExtractor::runChunks(uint32_t count, const char* scope, Fn&& fn) {
+        if (count == 0) return;
+        if (count == 1 || !tasks_) {
+            for (uint32_t chunk = 0; chunk < count; ++chunk) fn(chunk);
+            return;
+        }
+        // Frame-critical: the main thread joins it (and runs chunks itself);
+        // each chunk writes only its own scratch, so the schedule does not
+        // affect the output.
+        tasks_->parallelFor(Tasks::TaskPriority::FrameCritical, count, 1,
+            [&fn](Tasks::TaskRange range, uint32_t) {
+                for (uint32_t chunk = range.begin; chunk < range.end; ++chunk)
+                    fn(chunk);
+            }, scope);
+    }
+
+    uint32_t RenderExtractor::chunkCountFor(uint64_t work,
+        uint64_t unitsPerChunk) const noexcept {
+        if (!tasks_ || work <= unitsPerChunk) return 1;
+        return static_cast<uint32_t>((std::min<uint64_t>)(MaximumChunks,
+            (work + unitsPerChunk - 1u) / unitsPerChunk));
+    }
+
+    void RenderExtractor::classifyMainView(const glm::mat4& clipFromWorld) {
+        const GpuScenePackedTables& scene = *gpuSceneFrame_;
+        const GpuSceneFrustum frustum = makeGpuSceneFrustum(clipFromWorld);
+        constexpr uint32_t consumerMask =
+            GpuSceneConsumerMainOpaque | GpuSceneConsumerForwardOpaque;
+        const uint32_t chunkCount = chunkCountFor(scene.primitives.size(),
+            ClassifyPrimitivesPerChunk);
+        if (chunkCount <= 1) {
+            classifyGpuSceneFrustum(scene, frustum, consumerMask,
+                gpuSceneVisibility_);
+            return;
+        }
+        // M7R R5c.7: instance ranges in parallel. Each range sets the
+        // visibility bytes of its own instances' primitives and appends to
+        // its own lists; merging the lists and statistics in range order
+        // gives classifyGpuSceneFrustum's result.
+        beginGpuSceneVisibility(scene, gpuSceneVisibility_);
+        if (classifyChunks_.size() < chunkCount)
+            classifyChunks_.resize(chunkCount);
+        const uint64_t instanceCount = scene.instances.size();
+        for (uint32_t chunk = 0; chunk < chunkCount; ++chunk) {
+            classifyChunks_[chunk].firstInstance = static_cast<uint32_t>(
+                instanceCount * chunk / chunkCount);
+            classifyChunks_[chunk].endInstance = static_cast<uint32_t>(
+                instanceCount * (chunk + 1u) / chunkCount);
+        }
+        const std::span<uint8_t> visibility =
+            gpuSceneVisibility_.primitiveVisibility;
+        runChunks(chunkCount, "cpu.render.classify.chunk",
+            [&](uint32_t chunkIndex) {
+            ClassifyChunk& chunk = classifyChunks_[chunkIndex];
+            chunk.part.visibleInstanceIndices.clear();
+            chunk.part.visiblePrimitiveIndices.clear();
+            chunk.part.stats = {};
+            chunk.failure = nullptr;
+            try {
+                classifyGpuSceneFrustumRange(scene, frustum, consumerMask,
+                    chunk.firstInstance, chunk.endInstance, visibility,
+                    chunk.part);
+            }
+            catch (...) {
+                chunk.failure = std::current_exception();
+            }
+        });
+        for (uint32_t chunk = 0; chunk < chunkCount; ++chunk)
+            if (classifyChunks_[chunk].failure)
+                std::rethrow_exception(classifyChunks_[chunk].failure);
+        for (uint32_t chunk = 0; chunk < chunkCount; ++chunk)
+            mergeGpuSceneVisibility(classifyChunks_[chunk].part,
+                gpuSceneVisibility_);
+    }
+
+    void RenderExtractor::mergeExtractionChunks(uint32_t extractionChunkCount,
+        uint32_t parityChunkCount, ExtractionCounters& extracted) {
+        // Offsets: every destination range is a prefix sum in chunk order.
+        std::array<size_t, ExtractionQueueCount> totals{};
+        size_t selectionTotal = 0;
+        size_t transformTotal = 0;
+        for (uint32_t index = 0; index < extractionChunkCount; ++index) {
+            ExtractionChunk& chunk = extractionChunks_[index];
+            for (uint32_t queue = 0; queue < ExtractionQueueCount; ++queue) {
+                chunk.queueOffsets[queue] = totals[queue];
+                totals[queue] += chunk.queues[queue].size();
+            }
+            chunk.selectionOffset = selectionTotal;
+            selectionTotal += chunk.selection.size();
+            chunk.transformOffset = transformTotal;
+            transformTotal += chunk.instanceTransforms.size();
+            const ExtractionCounters& counters = chunk.counters;
+            extracted.modelRecords += counters.modelRecords;
+            extracted.instances += counters.instances;
+            extracted.submeshes += counters.submeshes;
+            extracted.sourceTriangles += counters.sourceTriangles;
+            extracted.sourceIndexBytes += counters.sourceIndexBytes;
+            extracted.arenaIndexBytes += counters.arenaIndexBytes;
+            extracted.arenaSavedIndexBytes += counters.arenaSavedIndexBytes;
+            extracted.uint16Indices += counters.uint16Indices;
+            extracted.uint32Indices += counters.uint32Indices;
+            extracted.lodFallbackChains += counters.lodFallbackChains;
+            extracted.lodWithheldRanges += counters.lodWithheldRanges;
+            extracted.lodWithheldIndexBytes += counters.lodWithheldIndexBytes;
+            extracted.transparentCulled += counters.transparentCulled;
+            extracted.maximumLodResidentBase = (std::max)(
+                extracted.maximumLodResidentBase,
+                counters.maximumLodResidentBase);
+        }
+        for (uint32_t index = 0; index < parityChunkCount; ++index) {
+            ParityChunk& chunk = parityChunks_[index];
+            chunk.forwardOffset = totals[ExtractionForwardOpaque];
+            totals[ExtractionForwardOpaque] += chunk.forward.size();
+        }
+        if (transformTotal > UINT32_MAX)
+            throw std::length_error(
+                "Instance transform stream exceeds 32-bit indices");
+        // Exact sizes. A steady frame has the previous frame's sizes, so
+        // these construct nothing; every element is overwritten below.
+        opaqueQueue.resize(totals[ExtractionOpaque]);
+        forwardOpaqueQueue.resize(totals[ExtractionForwardOpaque]);
+        transparentQueue.resize(totals[ExtractionTransparent]);
+        sortedSurfaceQueue.resize(totals[ExtractionSortedSurface]);
+        selectionQueue.resize(selectionTotal);
+        forwardInstanceTransforms_.resize(transformTotal);
+        const std::array<std::vector<DrawPacket>*, ExtractionQueueCount>
+            destinations{ &opaqueQueue, &forwardOpaqueQueue, &transparentQueue,
+                &sortedSurfaceQueue };
+        // One copy task per chunk; each writes only its own ranges.
+        runChunks(extractionChunkCount + parityChunkCount,
+            "cpu.render.extract.merge.chunk", [&](uint32_t index) {
+            if (index >= extractionChunkCount) {
+                const ParityChunk& chunk =
+                    parityChunks_[index - extractionChunkCount];
+                std::copy(chunk.forward.begin(), chunk.forward.end(),
+                    forwardOpaqueQueue.data() + chunk.forwardOffset);
+                return;
+            }
+            const ExtractionChunk& chunk = extractionChunks_[index];
+            // Instance-batch packets index the chunk's transforms; rebase them
+            // onto the frame's stream (non-batch packets hold UINT32_MAX).
+            const uint32_t rebase = static_cast<uint32_t>(chunk.transformOffset);
+            const auto copy = [rebase](const std::vector<DrawPacket>& source,
+                std::vector<DrawPacket>& destination, size_t offset) {
+                DrawPacket* const target = destination.data() + offset;
+                std::copy(source.begin(), source.end(), target);
+                if (rebase == 0u) return;
+                for (size_t packet = 0; packet < source.size(); ++packet)
+                    if (target[packet].firstInstanceTransform != UINT32_MAX)
+                        target[packet].firstInstanceTransform += rebase;
+            };
+            for (uint32_t queue = 0; queue < ExtractionQueueCount; ++queue)
+                copy(chunk.queues[queue], *destinations[queue],
+                    chunk.queueOffsets[queue]);
+            copy(chunk.selection, selectionQueue, chunk.selectionOffset);
+            std::copy(chunk.instanceTransforms.begin(),
+                chunk.instanceTransforms.end(),
+                forwardInstanceTransforms_.data() + chunk.transformOffset);
+        });
+    }
+
+    uint32_t RenderExtractor::transparentSubmeshes(const ModelAsset& model) {
+        // Consecutive mesh entities usually share a model.
+        if (lastTransparentSubmeshModel_ == &model)
             return lastTransparentSubmeshList_;
-        TransparentSubmeshList* list = nullptr;
+        uint32_t listIndex = 0;
         const auto found = transparentSubmeshListIndex_.find(&model);
         if (found != transparentSubmeshListIndex_.end()) {
-            list = &transparentSubmeshLists_[found->second];
+            listIndex = found->second;
         }
         else {
-            transparentSubmeshListIndex_.emplace(&model,
-                static_cast<uint32_t>(transparentSubmeshLists_.size()));
-            list = &transparentSubmeshLists_.emplace_back();
-            list->model = &model;
+            listIndex = static_cast<uint32_t>(transparentSubmeshLists_.size());
+            transparentSubmeshListIndex_.emplace(&model, listIndex);
+            transparentSubmeshLists_.emplace_back().model = &model;
         }
+        TransparentSubmeshList* const list =
+            &transparentSubmeshLists_[listIndex];
         if (list->usedFrame != extractionFrame_) {
             // Exact check of every input the list is a function of; a model
             // reallocated at the same address is caught the same way.
@@ -1910,15 +2211,17 @@ namespace Iridium {
             }
             list->usedFrame = extractionFrame_;
         }
-        lastTransparentSubmeshList_ = list;
-        return list;
+        lastTransparentSubmeshModel_ = &model;
+        lastTransparentSubmeshList_ = listIndex;
+        return listIndex;
     }
 
     void RenderExtractor::evictTransparentSubmeshLists() {
         // Lists unused for a while are dropped (models that left the scene);
         // a short absence keeps the list and its storage.
         constexpr uint64_t RetainedFrames = 256;
-        lastTransparentSubmeshList_ = nullptr;
+        lastTransparentSubmeshModel_ = nullptr;
+        lastTransparentSubmeshList_ = UINT32_MAX;
         for (size_t index = 0; index < transparentSubmeshLists_.size();) {
             TransparentSubmeshList& list = transparentSubmeshLists_[index];
             if (list.usedFrame + RetainedFrames >= extractionFrame_) {

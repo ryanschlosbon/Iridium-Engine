@@ -42,43 +42,6 @@ namespace {
         }
     }
 
-    TransparentWorkSortKey transparentWorkKey(const DrawPacket& packet,
-        uint32_t index) noexcept {
-        return {
-            .priority = packet.transparency.priority,
-            .workFlags = packet.transparentWorkFlags,
-            .farDepth = packet.transparentFarDepth,
-            .nearDepth = packet.transparentNearDepth,
-            .packet = index,
-        };
-    }
-
-    // transparentWorkLess over keys; identity from the unsorted packets.
-    bool transparentWorkKeyLess(const TransparentWorkSortKey& lhs,
-        const TransparentWorkSortKey& rhs,
-        std::span<const DrawPacket> packets) noexcept {
-        if (lhs.priority != rhs.priority)
-            return lhs.priority < rhs.priority;
-        const bool lhsValid = (lhs.workFlags &
-            TransparentWorkIntervalValid) != 0;
-        const bool rhsValid = (rhs.workFlags &
-            TransparentWorkIntervalValid) != 0;
-        if (lhsValid != rhsValid) return lhsValid;
-        if (lhsValid) {
-            const bool lhsIntersects = (lhs.workFlags &
-                TransparentWorkCameraIntersecting) != 0;
-            const bool rhsIntersects = (rhs.workFlags &
-                TransparentWorkCameraIntersecting) != 0;
-            if (lhsIntersects != rhsIntersects) return !lhsIntersects;
-            if (lhs.farDepth != rhs.farDepth)
-                return lhs.farDepth > rhs.farDepth;
-            if (lhs.nearDepth != rhs.nearDepth)
-                return lhs.nearDepth > rhs.nearDepth;
-        }
-        return transparentWorkIdentity(packets[lhs.packet]) <
-            transparentWorkIdentity(packets[rhs.packet]);
-    }
-
 } // namespace
 
     void sortOpaqueDrawPackets(std::span<DrawPacket> packets,
@@ -116,7 +79,7 @@ namespace {
         auto& keys = scratch.transparentWorkKeys;
         keys.resize(packets.size());
         for (size_t index = 0; index < packets.size(); ++index)
-            keys[index] = transparentWorkKey(packets[index],
+            keys[index] = makeTransparentWorkSortKey(packets[index],
                 static_cast<uint32_t>(index));
         const std::span<const DrawPacket> unsorted = packets;
         std::sort(keys.begin(), keys.end(),
@@ -133,30 +96,14 @@ namespace {
         checkPacketCount(packets.size());
         auto& keys = scratch.transparentCompatibilityKeys;
         keys.resize(packets.size());
-        for (size_t index = 0; index < packets.size(); ++index) {
-            const DrawPacket& packet = packets[index];
-            keys[index] = {
-                .work = transparentWorkKey(packet, static_cast<uint32_t>(index)),
-                .distanceToCamera = packet.distanceToCamera,
-                .pipeline = packet.pipeline,
-                .material = packet.material,
-                .geometry = packet.geometry,
-                .executionMode = packet.transparencyExecutionMode,
-            };
-        }
+        for (size_t index = 0; index < packets.size(); ++index)
+            keys[index] = makeTransparentCompatibilitySortKey(packets[index],
+                static_cast<uint32_t>(index));
         const std::span<const DrawPacket> unsorted = packets;
         std::sort(keys.begin(), keys.end(),
             [unsorted](const TransparentCompatibilitySortKey& lhs,
                 const TransparentCompatibilitySortKey& rhs) {
-                if (lhs.executionMode != rhs.executionMode)
-                    return lhs.executionMode < rhs.executionMode;
-                if (lhs.executionMode == TransparencyExecutionMode::Classified)
-                    return transparentWorkKeyLess(lhs.work, rhs.work, unsorted);
-                if (lhs.distanceToCamera != rhs.distanceToCamera)
-                    return lhs.distanceToCamera > rhs.distanceToCamera;
-                if (lhs.pipeline != rhs.pipeline) return lhs.pipeline < rhs.pipeline;
-                if (lhs.material != rhs.material) return lhs.material < rhs.material;
-                return lhs.geometry < rhs.geometry;
+                return transparentCompatibilityKeyLess(lhs, rhs, unsorted);
             });
         permutePackets(packets, keys,
             [](TransparentCompatibilitySortKey& key) -> uint32_t& {

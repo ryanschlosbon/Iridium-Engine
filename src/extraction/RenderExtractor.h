@@ -13,6 +13,7 @@
 
 #include <array>
 #include <cstdint>
+#include <exception>
 #include <map>
 #include <optional>
 #include <span>
@@ -23,6 +24,7 @@
 
 #include "ecs/Entity.h"
 #include "extraction/EditorViewState.h"
+#include "extraction/ParallelDrawSort.h"
 #include "extraction/GpuSceneObservation.h"
 #include "renderer/lighting/DirectionalShadow.h"
 #include "renderer/lighting/LightExtractor.h"
@@ -41,8 +43,13 @@
 #include "renderer/scene/GpuScenePublisher.h"
 #include "scene/SceneWorld.h"
 
+struct MeshComponent;
+struct RenderInstanceBatchComponent;
+struct TransformComponent;
+
 namespace Iridium {
 
+    namespace Tasks { class TaskSystem; }
     class AssetManager;
     struct LoadedEnvironmentAsset;
     class CpuProfiler;
@@ -100,9 +107,13 @@ namespace Iridium {
     public:
         // shadowSettings is read every frame (the project settings may change
         // between frames); the probe settings configure the capture scheduler.
+        // With a task system, classification and draw-packet extraction run
+        // as frame-critical parallel work (M7R R5c.7); without one, serially.
+        // Their output is identical either way.
         RenderExtractor(CpuProfiler& profiler, SceneWorld& scene,
             const ProjectShadowSettings& shadowSettings,
-            const ProjectReflectionProbeSettings& probeSettings);
+            const ProjectReflectionProbeSettings& probeSettings,
+            Tasks::TaskSystem* tasks = nullptr);
         ~RenderExtractor();
 
         RenderExtractor(const RenderExtractor&) = delete;
@@ -202,10 +213,103 @@ namespace Iridium {
             uint64_t sourceTriangles = 0;
             uint64_t usedFrame = 0;
         };
-        // The model's list, revalidated once per frame (null without a model).
-        [[nodiscard]] const TransparentSubmeshList* transparentSubmeshes(
-            const ModelAsset& model);
+        // The index of the model's list in transparentSubmeshLists_,
+        // revalidated on its first use in a frame.
+        [[nodiscard]] uint32_t transparentSubmeshes(const ModelAsset& model);
         void evictTransparentSubmeshLists();
+
+        // M7R R5c.7 parallel extraction. Each stage splits its input into
+        // contiguous chunks in input order (mesh-pool order, instance order,
+        // primitive order); every chunk writes only its own scratch, and the
+        // chunks' outputs are appended to the frame's queues in chunk order,
+        // so every queue holds exactly the sequence the serial loop produced.
+        // Counters are integer sums (and one maximum) of the chunks'.
+        enum ExtractionQueue : uint8_t {
+            ExtractionOpaque,
+            ExtractionForwardOpaque,
+            ExtractionTransparent,
+            ExtractionSortedSurface,
+            ExtractionQueueCount,
+        };
+        struct ExtractionCounters {
+            uint64_t modelRecords = 0;
+            uint64_t instances = 0;
+            uint64_t submeshes = 0;
+            uint64_t sourceTriangles = 0;
+            uint64_t sourceIndexBytes = 0;
+            uint64_t arenaIndexBytes = 0;
+            uint64_t arenaSavedIndexBytes = 0;
+            uint64_t uint16Indices = 0;
+            uint64_t uint32Indices = 0;
+            uint64_t lodFallbackChains = 0;
+            uint64_t lodWithheldRanges = 0;
+            uint64_t lodWithheldIndexBytes = 0;
+            uint64_t transparentCulled = 0;
+            uint32_t maximumLodResidentBase = 0;
+        };
+        // One mesh entity accepted by the serial pre-pass.
+        struct ExtractionItem {
+            Entity entity = NULL_ENTITY;
+            const MeshComponent* mesh = nullptr;
+            const RenderInstanceBatchComponent* batch = nullptr;
+            const TransformComponent* transform = nullptr;
+            uint32_t transparentList = UINT32_MAX;
+            // Submesh visits plus one (balances the chunks only).
+            uint32_t visits = 1;
+        };
+        // A chunk's scratch; vectors keep their capacity across frames.
+        struct ExtractionChunk {
+            uint32_t firstItem = 0;
+            uint32_t endItem = 0;
+            std::array<std::vector<DrawPacket>, ExtractionQueueCount> queues;
+            std::vector<DrawPacket> selection;
+            // Instance-batch transforms; packets index them chunk-locally.
+            std::vector<glm::mat4> instanceTransforms;
+            ExtractionCounters counters;
+            std::exception_ptr failure;
+            // Destination offsets (mergeExtractionChunks).
+            std::array<size_t, ExtractionQueueCount> queueOffsets{};
+            size_t selectionOffset = 0;
+            size_t transformOffset = 0;
+        };
+        struct ParityChunk {
+            uint32_t firstPrimitive = 0;
+            uint32_t endPrimitive = 0;
+            std::vector<DrawPacket> forward;
+            uint64_t deferredCandidates = 0;
+            uint64_t deferredCandidateTriangles = 0;
+            uint64_t forwardVisible = 0;
+            uint64_t forwardVisibleTriangles = 0;
+            std::exception_ptr failure;
+            size_t forwardOffset = 0;
+        };
+        struct ClassifyChunk {
+            uint32_t firstInstance = 0;
+            uint32_t endInstance = 0;
+            GpuSceneVisibilityPart part;
+            std::exception_ptr failure;
+        };
+        // Chunk sizes (work per chunk at which a stage splits; one chunk runs
+        // inline) and the chunk cap, which also bounds the worker scope
+        // events per stage and frame.
+        static constexpr uint64_t ExtractionVisitsPerChunk = 256;
+        static constexpr uint64_t ClassifyPrimitivesPerChunk = 2048;
+        static constexpr uint64_t ParityPrimitivesPerChunk = 8192;
+        static constexpr uint32_t MaximumChunks = 32;
+        // Runs fn(chunk) for chunk in [0, count): inline when count is 1 or
+        // there is no task system, otherwise as one frame-critical task set
+        // that the main thread joins (and helps with). `scope` names the
+        // worker scopes.
+        template <class Fn>
+        void runChunks(uint32_t count, const char* scope, Fn&& fn);
+        // Chunk count for `work` units at about `unitsPerChunk` units each.
+        [[nodiscard]] uint32_t chunkCountFor(uint64_t work,
+            uint64_t unitsPerChunk) const noexcept;
+        void classifyMainView(const glm::mat4& clipFromWorld);
+        // Sizes the frame's queues and copies the chunks into them, in
+        // parallel; adds the chunks' counters to `extracted`.
+        void mergeExtractionChunks(uint32_t extractionChunkCount,
+            uint32_t parityChunkCount, ExtractionCounters& extracted);
 
         void usePreviewCamera(const EditorViewState& view);
         // The M7.2 parity packet of a published primitive (forward-opaque,
@@ -249,10 +353,8 @@ namespace Iridium {
         std::vector<uint32_t> gpuSceneOpaqueOrder_;
         uint64_t gpuSceneOpaqueOrderRevision_ = 0;
         std::vector<DrawPacket> opaqueDirectScratch_;
-        std::vector<TransparentIntervalEndpoint>
-            transparentIntervalEndpointScratch;
-        std::vector<float> transparentIntervalNearScratch;
-        std::vector<uint32_t> transparentIntervalFenwickScratch;
+        // M7R R5c.7: the transparent sorts and the interval count.
+        TransparentDrawSorter transparentSorter_;
         std::vector<DrawPacket> selectionQueue;
         // Dense GPU-scene primitive references are the production shadow path;
         // shadowCasterQueue contains compatibility packets only.
@@ -267,8 +369,15 @@ namespace Iridium {
         std::vector<TransparentSubmeshList> transparentSubmeshLists_;
         std::unordered_map<const ModelAsset*, uint32_t>
             transparentSubmeshListIndex_;
-        const TransparentSubmeshList* lastTransparentSubmeshList_ = nullptr;
+        const ModelAsset* lastTransparentSubmeshModel_ = nullptr;
+        uint32_t lastTransparentSubmeshList_ = UINT32_MAX;
         uint64_t extractionFrame_ = 0;
+        // M7R R5c.7 parallel extraction state (see ExtractionChunk).
+        Tasks::TaskSystem* tasks_ = nullptr;
+        std::vector<ExtractionItem> extractionItems_;
+        std::vector<ExtractionChunk> extractionChunks_;
+        std::vector<ParityChunk> parityChunks_;
+        std::vector<ClassifyChunk> classifyChunks_;
 
         // This frame's view (beginView to extract).
         float aspect_ = 16.0f / 9.0f;

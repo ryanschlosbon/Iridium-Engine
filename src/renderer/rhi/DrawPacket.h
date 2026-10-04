@@ -242,26 +242,54 @@ namespace Iridium {
         return lhs.geometry < rhs.geometry;
     }
 
-    [[nodiscard]] inline uint64_t countAmbiguousTransparentIntervals(
-        std::span<const DrawPacket> sortedWork) noexcept {
-        uint64_t count = 0;
-        for (size_t outer = 0; outer < sortedWork.size(); ++outer) {
-            const DrawPacket& lhs = sortedWork[outer];
-            if ((lhs.transparentWorkFlags & TransparentWorkIntervalValid) == 0)
+    // M7R R5c.7: what the ambiguous-interval count reads from one work item,
+    // so the count runs over packets or over their sort keys alike.
+    struct TransparentIntervalSample {
+        int32_t priority = 0;
+        bool valid = false;
+        float nearDepth = 0.0f;
+        float farDepth = 0.0f;
+    };
+
+    template <class SampleOf>
+    [[nodiscard]] uint64_t countAmbiguousTransparentIntervalsOf(size_t count,
+        SampleOf&& sampleOf) {
+        uint64_t result = 0;
+        for (size_t outer = 0; outer < count; ++outer) {
+            const TransparentIntervalSample lhs = sampleOf(outer);
+            if (!lhs.valid)
                 continue;
-            for (size_t inner = outer + 1; inner < sortedWork.size(); ++inner) {
-                const DrawPacket& rhs = sortedWork[inner];
-                if (rhs.transparency.priority != lhs.transparency.priority)
+            for (size_t inner = outer + 1; inner < count; ++inner) {
+                const TransparentIntervalSample rhs = sampleOf(inner);
+                if (rhs.priority != lhs.priority)
                     continue;
-                if ((rhs.transparentWorkFlags &
-                        TransparentWorkIntervalValid) == 0)
+                if (!rhs.valid)
                     continue;
-                if (lhs.transparentNearDepth <= rhs.transparentFarDepth &&
-                    rhs.transparentNearDepth <= lhs.transparentFarDepth)
-                    ++count;
+                if (lhs.nearDepth <= rhs.farDepth &&
+                    rhs.nearDepth <= lhs.farDepth)
+                    ++result;
             }
         }
-        return count;
+        return result;
+    }
+
+    [[nodiscard]] inline TransparentIntervalSample transparentIntervalSample(
+        const DrawPacket& packet) noexcept {
+        return {
+            .priority = packet.transparency.priority,
+            .valid = (packet.transparentWorkFlags &
+                TransparentWorkIntervalValid) != 0,
+            .nearDepth = packet.transparentNearDepth,
+            .farDepth = packet.transparentFarDepth,
+        };
+    }
+
+    [[nodiscard]] inline uint64_t countAmbiguousTransparentIntervals(
+        std::span<const DrawPacket> sortedWork) noexcept {
+        return countAmbiguousTransparentIntervalsOf(sortedWork.size(),
+            [sortedWork](size_t index) {
+                return transparentIntervalSample(sortedWork[index]);
+            });
     }
 
     struct TransparentIntervalEndpoint {
@@ -271,39 +299,38 @@ namespace Iridium {
 
     // Exact O(n log n) interval sweep using caller-owned scratch. Work may be
     // sorted by the render order; the sweep independently orders endpoints by
-    // far depth inside each author-priority group.
-    [[nodiscard]] inline uint64_t sweepAmbiguousTransparentIntervals(
-        std::span<const DrawPacket> sortedWork,
+    // far depth inside each author-priority group (a run of equal priority).
+    template <class SampleOf>
+    [[nodiscard]] uint64_t sweepAmbiguousTransparentIntervalsOf(size_t workCount,
+        SampleOf&& sampleOf,
         std::span<TransparentIntervalEndpoint> endpointScratch,
         std::span<float> nearScratch,
         std::span<uint32_t> fenwickScratch) {
-        if (endpointScratch.size() < sortedWork.size() ||
-            nearScratch.size() < sortedWork.size() ||
-            fenwickScratch.size() < sortedWork.size() + 1u) {
-            return countAmbiguousTransparentIntervals(sortedWork);
+        if (endpointScratch.size() < workCount ||
+            nearScratch.size() < workCount ||
+            fenwickScratch.size() < workCount + 1u) {
+            return countAmbiguousTransparentIntervalsOf(workCount, sampleOf);
         }
 
         uint64_t count = 0;
         size_t groupBegin = 0;
-        while (groupBegin < sortedWork.size()) {
-            const int32_t priority =
-                sortedWork[groupBegin].transparency.priority;
+        while (groupBegin < workCount) {
+            const int32_t priority = sampleOf(groupBegin).priority;
             size_t groupEnd = groupBegin + 1;
-            while (groupEnd < sortedWork.size() &&
-                sortedWork[groupEnd].transparency.priority == priority) {
+            while (groupEnd < workCount &&
+                sampleOf(groupEnd).priority == priority) {
                 ++groupEnd;
             }
 
             size_t endpointCount = 0;
             for (size_t index = groupBegin; index < groupEnd; ++index) {
-                const DrawPacket& packet = sortedWork[index];
-                if ((packet.transparentWorkFlags &
-                        TransparentWorkIntervalValid) == 0) {
+                const TransparentIntervalSample sample = sampleOf(index);
+                if (!sample.valid) {
                     continue;
                 }
                 endpointScratch[endpointCount++] = {
-                    .nearDepth = packet.transparentNearDepth,
-                    .farDepth = packet.transparentFarDepth,
+                    .nearDepth = sample.nearDepth,
+                    .farDepth = sample.farDepth,
                 };
             }
             auto endpoints = endpointScratch.first(endpointCount);
@@ -345,6 +372,17 @@ namespace Iridium {
             groupBegin = groupEnd;
         }
         return count;
+    }
+
+    [[nodiscard]] inline uint64_t sweepAmbiguousTransparentIntervals(
+        std::span<const DrawPacket> sortedWork,
+        std::span<TransparentIntervalEndpoint> endpointScratch,
+        std::span<float> nearScratch,
+        std::span<uint32_t> fenwickScratch) {
+        return sweepAmbiguousTransparentIntervalsOf(sortedWork.size(),
+            [sortedWork](size_t index) {
+                return transparentIntervalSample(sortedWork[index]);
+            }, endpointScratch, nearScratch, fenwickScratch);
     }
 
 } // namespace Iridium
