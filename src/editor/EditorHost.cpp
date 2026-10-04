@@ -24,6 +24,7 @@
 #include "assets/model/AssetModelPreparationService.h"
 #include "assets/runtime/AssetRuntimeService.h"
 #include "editor/EditorAssetDocumentService.h"
+#include "editor/EditorPreviewImageFit.h"
 #include "editor/EditorSystem.h"
 #include "profiling/CpuProfiler.h"
 #include "renderer/rhi/EditorRenderBridge.h"
@@ -311,7 +312,8 @@ namespace Iridium {
                 previewDocument->isolateSelectedPart;
             view.previewHoveredPart = viewer.hoveredPart;
             view.previewHoveredPartIsMaterial = viewer.hoveredPartIsMaterial;
-            view.previewRequestedExtent = viewer.requestedRenderExtent;
+            const auto extent = viewer.requestedRenderExtent;
+            view.previewProjectionScale = previewImageFit(aspect, extent.height ? static_cast<float>(extent.width) / extent.height : aspect).projectionScale;
             const EditorPreviewLighting lighting = viewer.activeLighting();
             view.previewEnvironmentSettings = lighting.environmentSettings();
             view.previewExposureEv = lighting.exposureEv;

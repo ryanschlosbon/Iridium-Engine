@@ -18,6 +18,7 @@
 #   iridium_lighting      renderer/lighting                                -> scene, rhi
 #   iridium_vulkan        renderer/vulkan                                  -> lighting, transparency, rhi, graph, profiling, color, Vulkan, glfw
 #   iridium_vulkan_imgui  renderer/vulkan_imgui (IEditorRenderBridge)      -> vulkan, imgui, glfw
+#   iridium_render_extraction extraction/* (M7R R5a.3)                     -> lighting, transparency, scene, assets, rhi, profiling (no imgui, editor or glfw)
 #   iridium_editor        editor/**                                        -> scene, assets, rhi, platform, profiling, imgui
 #   iridium_app           app/* except main.cpp (runtime/editor/renderer CLI) -> everything above except capture, benchmarks
 #   IridiumEngine         app/main.cpp                                     -> app, allocation profile, shaders (+ qualification when ON)
@@ -38,6 +39,7 @@ add_subdirectory(material)
 add_subdirectory(renderer)
 add_subdirectory(assets)
 add_subdirectory(scene)
+add_subdirectory(extraction)
 add_subdirectory(editor)
 add_subdirectory(app)
 add_subdirectory(qualification)

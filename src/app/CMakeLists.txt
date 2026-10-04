@@ -6,13 +6,13 @@ add_library(iridium_app STATIC
         Application.cpp
         ApplicationConfig.cpp
         AssetIntegration.cpp
-        ../extraction/RenderExtractor.cpp
         cli/CliValueParsers.cpp
         cli/RuntimeOptions.cpp
         cli/EditorOptions.cpp
         cli/RendererOptions.cpp
 )
 target_link_libraries(iridium_app PUBLIC
+        iridium_render_extraction
         iridium_vulkan
         iridium_vulkan_imgui
         iridium_editor

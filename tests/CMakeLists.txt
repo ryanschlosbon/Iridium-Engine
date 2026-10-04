@@ -365,16 +365,24 @@ function(_iridium_assert_no_link_path target forbidden visited)
     endif()
     foreach(_link IN LISTS _links)
         if(_link STREQUAL forbidden)
-            message(FATAL_ERROR "${target} links ${forbidden}; the editor UI belongs "
-                "to iridium_vulkan_imgui (M7R R3c.10)")
+            message(FATAL_ERROR "${target} links ${forbidden}, which its layering "
+                "forbids (editor UI: iridium_vulkan_imgui, M7R R3c.10; render "
+                "extraction: no editor, ImGui or GLFW, M7R R5a.3)")
         endif()
         _iridium_assert_no_link_path(${_link} ${forbidden} ${visited})
         set(${visited} "${${visited}}" PARENT_SCOPE)
     endforeach()
 endfunction()
-foreach(_ui_free_target IN ITEMS iridium_rhi iridium_vulkan)
+foreach(_ui_free_target IN ITEMS iridium_rhi iridium_vulkan iridium_render_extraction)
     set(_iridium_visited "")
     _iridium_assert_no_link_path(${_ui_free_target} iridium_vendor_imgui _iridium_visited)
+endforeach()
+# M7R R5a.3: render extraction reads the editor only through EditorViewState;
+# it links neither the editor nor GLFW.
+foreach(_extraction_forbidden IN ITEMS iridium_editor iridium_vulkan_imgui glfw)
+    set(_iridium_visited "")
+    _iridium_assert_no_link_path(iridium_render_extraction ${_extraction_forbidden}
+        _iridium_visited)
 endforeach()
 
 iridium_add_test(EditorRenderBridgeTests

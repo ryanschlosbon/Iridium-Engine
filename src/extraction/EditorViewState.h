@@ -33,7 +33,9 @@ namespace Iridium {
         bool previewIsolateSelectedPart = false;
         AssetGuid previewHoveredPart;
         bool previewHoveredPartIsMaterial = false;
-        RenderExtent previewRequestedExtent{};
+        // Projection scale that fits the preview into the asset viewer's
+        // requested extent at the frame aspect (previewImageFit).
+        float previewProjectionScale = 1.0f;
         EnvironmentLightingSettings previewEnvironmentSettings{};
         float previewExposureEv = 0.0f;
         // The active preview's orbit camera (projection at the frame aspect).

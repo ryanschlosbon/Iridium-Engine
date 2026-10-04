@@ -87,25 +87,7 @@ namespace Iridium {
         // This single pointer replaces 40+ Vulkan variables!
         std::unique_ptr<IRenderBackend> renderBackend;
 
-        // The Data-Driven Extraction Queues
-        std::vector<DrawPacket> opaqueQueue;
-        std::vector<DrawPacket> forwardOpaqueQueue;
-        std::vector<DrawPacket> transparentQueue;
-        std::vector<DrawPacket> sortedSurfaceQueue;
-        std::vector<TransparentIntervalEndpoint>
-            transparentIntervalEndpointScratch;
-        std::vector<float> transparentIntervalNearScratch;
-        std::vector<uint32_t> transparentIntervalFenwickScratch;
-        std::vector<DrawPacket> selectionQueue;
-        // Dense GPU-scene primitive references are the production shadow path;
-        // shadowCasterQueue contains compatibility packets only.
-        std::vector<DrawPacket> shadowCasterQueue;
-        std::vector<DrawPacket> probeCasterQueue_;
-        // Backend-neutral, frame-local transforms referenced by DrawPacket
-        // instance ranges. Existing single-instance packets leave this empty.
-        std::vector<glm::mat4> forwardInstanceTransforms_;
         std::vector<Entity> changedTransformEntities_;
-        GpuSceneVisibilityResult gpuSceneVisibility_;
 
         // --- SUBSYSTEMS ---
         SceneWorld sceneWorld_;
