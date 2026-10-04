@@ -435,7 +435,7 @@ namespace Iridium {
         // DirectionalShadow.
         const DirectionalShadowCascadePlan* plan = nullptr;
         // DepthHistory.
-        std::span<const DrawPacket> opaqueQueue{};
+        const OpaqueSubmission* opaque = nullptr;
         std::span<const DrawPacket> forwardQueue{};
         // Membership: the published tables.
         const GpuScenePackedTables* tables = nullptr;

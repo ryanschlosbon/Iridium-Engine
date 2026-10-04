@@ -336,8 +336,57 @@ namespace Iridium {
         return changed;
     }
 
+    bool VulkanDepthContentRevision::update(Queue& queue,
+        const VulkanIndirectScene& scene, const OpaqueSubmission& opaque,
+        bool contentTrigger, const VulkanCasterMaterialSource& materials) {
+        const std::span<const uint32_t> order = opaque.order;
+        // A GPU-scene entry's content is a function of its primitive and the
+        // published tables, so an unchanged publication only needs its
+        // primitive index; direct packets are compared field by field.
+        if (!contentTrigger && queue.keys.size() == order.size()) {
+            bool same = true;
+            for (size_t index = 0; index < order.size() && same; ++index) {
+                const uint32_t entry = order[index];
+                const bool direct = OpaqueSubmission::isDirect(entry);
+                const uint32_t key = direct ? InvalidGpuSceneIndex : entry;
+                same = key == queue.keys[index] && (!direct || sameDirect(
+                    opaque.directPackets[OpaqueSubmission::indexOf(entry)],
+                    queue.contents[index]));
+            }
+            if (same) return false;
+        }
+        queue.scratchKeys.resize(order.size());
+        queue.scratchContents.resize(order.size());
+        const bool sameSize = order.size() == queue.contents.size();
+        bool changed = !sameSize;
+        VulkanResolvedCaster caster{};
+        for (size_t index = 0; index < order.size(); ++index) {
+            const uint32_t entry = order[index];
+            VulkanCasterContent& content = queue.scratchContents[index];
+            if (OpaqueSubmission::isDirect(entry)) {
+                queue.scratchKeys[index] = InvalidGpuSceneIndex;
+                makeCasterContent(content,
+                    opaque.directPackets[OpaqueSubmission::indexOf(entry)],
+                    materials);
+            }
+            else {
+                queue.scratchKeys[index] = entry;
+                if (resolveIndirectCaster(scene, entry,
+                        GpuSceneConsumerMainOpaque, caster))
+                    makeCasterContent(content, caster, materials);
+                else
+                    content = {};
+            }
+            if (!changed)
+                changed = !sameCasterContent(content, queue.contents[index]);
+        }
+        queue.keys.swap(queue.scratchKeys);
+        queue.contents.swap(queue.scratchContents);
+        return changed;
+    }
+
     uint64_t VulkanDepthContentRevision::evaluate(
-        std::span<const DrawPacket> opaqueQueue,
+        const VulkanIndirectScene& scene, const OpaqueSubmission& opaque,
         std::span<const DrawPacket> forwardQueue,
         const VulkanCasterMaterialSource& materials) {
         const Trigger trigger{
@@ -347,8 +396,8 @@ namespace Iridium {
             .materialRevision = materials.revision,
         };
         const bool contentTrigger = trigger != trigger_;
-        const bool opaqueChanged = update(opaque_, opaqueQueue, contentTrigger,
-            materials);
+        const bool opaqueChanged = update(opaque_, scene, opaque,
+            contentTrigger, materials);
         const bool forwardChanged = update(forward_, forwardQueue,
             contentTrigger, materials);
         trigger_ = trigger;

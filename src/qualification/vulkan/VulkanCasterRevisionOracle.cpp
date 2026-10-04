@@ -96,11 +96,27 @@ namespace Iridium {
 
     uint64_t legacyDepthContentHash(const VulkanIndirectScene& scene,
         const VulkanResourceRegistry& resources,
-        std::span<const DrawPacket> opaqueQueue,
+        const OpaqueSubmission& opaque,
         std::span<const DrawPacket> forwardQueue) noexcept {
-        uint64_t hash = legacyShadowCasterHash(scene, resources, {
-            .directPackets = opaqueQueue,
-        });
+        // The parity queue, packet by packet, in draw order.
+        uint64_t hash = FnvOffset;
+        for (const uint32_t entry : opaque.order) {
+            if (OpaqueSubmission::isDirect(entry)) {
+                const DrawPacket& packet =
+                    opaque.directPackets[OpaqueSubmission::indexOf(entry)];
+                visitIndirectCasters(scene, ShadowCasterSubmission{
+                    .directPackets = std::span<const DrawPacket>(&packet, 1u) },
+                    GpuSceneConsumerShadow,
+                    [&](const VulkanResolvedCaster& caster) {
+                        appendCaster(hash, resources, caster);
+                    });
+                continue;
+            }
+            VulkanResolvedCaster caster{};
+            if (resolveIndirectCaster(scene, entry, GpuSceneConsumerMainOpaque,
+                    caster))
+                appendCaster(hash, resources, caster);
+        }
         const uint64_t forwardHash = legacyShadowCasterHash(scene, resources, {
             .directPackets = forwardQueue,
         });
@@ -195,10 +211,10 @@ namespace Iridium {
             return;
         }
         case VulkanCasterRevisionStream::DepthHistory:
-            if (sample.revisions.size() != 1u) return;
+            if (sample.revisions.size() != 1u || sample.opaque == nullptr) return;
             (void)compare(sample.stream, 0, 0, sample.frameSerial,
                 legacyDepthContentHash(*sample.scene, *sample.resources,
-                    sample.opaqueQueue, sample.forwardQueue), sample.revisions[0]);
+                    *sample.opaque, sample.forwardQueue), sample.revisions[0]);
             return;
         case VulkanCasterRevisionStream::Membership:
             return;

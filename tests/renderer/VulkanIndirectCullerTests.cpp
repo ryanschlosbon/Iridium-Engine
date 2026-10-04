@@ -808,30 +808,23 @@ namespace {
         culler.bindBuffers();
         context.recorder.log.clear();
 
-        // Packets p0..p7 in queue order; bins are runs of equal pipeline,
+        // Primitives p0..p7 in draw order (M7R R5c.4b: the opaque submission;
+        // handles come from the records); bins are runs of equal pipeline,
         // material and vertex/index buffers: [p0 p1] [p2] [p3] [p4] [p5] [p6] [p7].
-        std::vector<DrawPacket> queue(8u);
-        for (uint32_t index = 0; index < queue.size(); ++index) {
-            const GeometrySpec& geometry = Geometries[Primitives[index][0]];
-            DrawPacket& packet = queue[index];
-            packet.geometry = GeometryHandle{ Primitives[index][0] + 1u };
-            packet.material = MaterialHandle{ Primitives[index][1] };
-            packet.pipeline = PipelineHandle{ 1u };
-            packet.indexCount = geometry.indexCount;
-            packet.firstIndex = geometry.firstIndex;
-            packet.firstInstanceTransform = index;
-            packet.executionFlags = DrawPacketGpuScenePrimitive |
-                DrawPacketCpuVisibilityOracle;
-        }
+        const std::vector<uint32_t> order{ 0, 1, 2, 3, 4, 5, 6, 7 };
+        const std::vector<uint8_t> visibility(order.size(), 1u);
+        const OpaqueSubmission submission{ .order = order,
+            .gpuScenePrimitiveCount = static_cast<uint32_t>(order.size()),
+            .cpuVisibility = visibility };
         const ViewTransportRecord view{};
-        CHECK(culler.plan({ .queue = queue, .scene = context.scene.view(),
+        CHECK(culler.plan({ .submission = &submission, .scene = context.scene.view(),
             .sceneBuffersMapped = true, .assets = fakeAssets(), .view = &view }, 0u));
         constexpr std::array<uint32_t, 8> bin{ 0, 0, 1, 2, 3, 4, 5, 6 };
         constexpr std::array<uint32_t, 8> base{ 0, 0, 2, 3, 4, 5, 6, 7 };
         constexpr std::array<uint32_t, 8> size{ 2, 2, 1, 1, 1, 1, 1, 1 };
         CHECK(culler.bins().size() == 7u);
         std::vector<GpuSceneIndirectCandidate> expected;
-        for (uint32_t index = 0; index < queue.size(); ++index)
+        for (uint32_t index = 0; index < order.size(); ++index)
             expected.push_back({ .primitiveIndex = index, .binIndex = bin[index],
                 .commandBase = base[index], .commandCapacity = size[index] });
         CHECK(sameBytes(culler.buffers().candidates[0].mapped, expected.data(),
@@ -859,7 +852,7 @@ namespace {
             culler.resize(256u, false);
             CHECK(context.recorder.retired.size() == 1u);
             CHECK(context.recorder.descriptorWrites == writes + 4u);
-            CHECK(culler.plan({ .queue = queue, .scene = context.scene.view(),
+            CHECK(culler.plan({ .submission = &submission, .scene = context.scene.view(),
                 .sceneBuffersMapped = true, .assets = fakeAssets(), .view = &view }, 0u));
         }
 
@@ -886,10 +879,10 @@ namespace {
         culler.collect(0u);
 
         // A pipeline without a GPU-scene variant falls the frame back.
-        queue[3].pipeline = PipelineHandle{ 2u };
-        CHECK(!culler.plan({ .queue = queue, .scene = context.scene.view(),
+        context.scene.primitives[3].binding.w = 2u;
+        CHECK(!culler.plan({ .submission = &submission, .scene = context.scene.view(),
             .sceneBuffersMapped = true, .assets = fakeAssets(), .view = &view }, 0u));
-        CHECK(!culler.plan({ .queue = queue, .scene = context.scene.view(),
+        CHECK(!culler.plan({ .submission = &submission, .scene = context.scene.view(),
             .sceneBuffersMapped = false, .assets = fakeAssets(), .view = &view }, 0u));
         CHECK(culler.indirectPlan().fallbackReason ==
             GpuSceneIndirectFallbackReason::InvalidPacket);

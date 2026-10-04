@@ -44,9 +44,11 @@ namespace Iridium {
             const VulkanResourceRegistry& resources,
             const ShadowCasterSubmission& casters,
             const DirectionalShadowCascadePlan& plan) noexcept;
+    // M7R R5c.4b: the opaque input is the submission; GPU-scene entries are
+    // resolved to the casters their M7.2 parity packets were, in draw order.
     [[nodiscard]] uint64_t legacyDepthContentHash(const VulkanIndirectScene& scene,
         const VulkanResourceRegistry& resources,
-        std::span<const DrawPacket> opaqueQueue,
+        const OpaqueSubmission& opaque,
         std::span<const DrawPacket> forwardQueue) noexcept;
 
     class VulkanCasterRevisionOracle final : public IVulkanCasterRevisionObserver {

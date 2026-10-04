@@ -18,6 +18,40 @@
 namespace Iridium {
 
     namespace {
+        // One entry of the opaque submission as the direct and wireframe
+        // loops draw it: a direct packet's fields, or a GPU-scene primitive
+        // resolved from the slot's published records (the values the M7.2
+        // parity packet carried).
+        struct OpaqueDirectDraw {
+            GeometryHandle geometry;
+            MaterialHandle material;
+            PipelineHandle pipeline;
+            glm::mat4 worldTransform{ 1.0f };
+            uint32_t indexCount = 0;
+            uint32_t firstIndex = 0;
+            bool gpuScene = false;
+        };
+
+        bool resolveOpaqueDraw(const VulkanIndirectScene& scene,
+            const OpaqueSubmission& opaque, uint32_t entry,
+            OpaqueDirectDraw& draw) noexcept {
+            if (OpaqueSubmission::isDirect(entry)) {
+                const DrawPacket& packet =
+                    opaque.directPackets[OpaqueSubmission::indexOf(entry)];
+                draw = { packet.geometry, packet.material, packet.pipeline,
+                    packet.worldTransform, packet.indexCount, packet.firstIndex,
+                    hasGpuScenePrimitive(packet) };
+                return true;
+            }
+            VulkanResolvedCaster caster{};
+            if (!resolveIndirectCaster(scene, entry, GpuSceneConsumerMainOpaque,
+                    caster))
+                return false;
+            draw = { caster.geometry, caster.material, caster.pipeline,
+                caster.worldTransform, caster.indexCount, caster.firstIndex, true };
+            return true;
+        }
+
         void appendFnv1a(uint64_t& hash, const void* data, size_t size) noexcept {
             const auto* bytes = static_cast<const uint8_t*>(data);
             for (size_t index = 0; index < size; ++index) {
@@ -155,7 +189,7 @@ namespace Iridium {
     }
 
     void VulkanOpaqueFeature::prepareDepthHistory(
-        std::span<const DrawPacket> opaqueQueue,
+        const OpaqueSubmission& opaque,
         std::span<const DrawPacket> opaqueForwardQueue) {
         const uint32_t frame = context_->scheduler.currentFrameIndex();
         VulkanFrameTelemetry& telemetry = context_->telemetry;
@@ -173,7 +207,8 @@ namespace Iridium {
         // pyramid, so it is evaluated only here).
         {
             CpuScope depthScope(context_->profiler, "cpu.render.depth_history.revision");
-            depthContentRevision_ = depthContent_.evaluate(opaqueQueue,
+            depthContentRevision_ = depthContent_.evaluate(
+                context_->gpuScene.indirectScene(frame), opaque,
                 opaqueForwardQueue, vulkanCasterMaterials(context_->resources));
         }
         if constexpr (kQualificationBuild) {
@@ -186,7 +221,7 @@ namespace Iridium {
                     .frameSerial = context_->scheduler.lastSubmittedSerial() + 1u,
                     .scene = &scene,
                     .resources = &context_->resources,
-                    .opaqueQueue = opaqueQueue,
+                    .opaque = &opaque,
                     .forwardQueue = opaqueForwardQueue,
                     .revisions = { &depthContentRevision_, 1u },
                 });
@@ -234,7 +269,7 @@ namespace Iridium {
         if (!inputs.wireframe) {
             const uint32_t frame = context_->scheduler.currentFrameIndex();
             stagedIndirectValid_ = culler_.plan({
-                .queue = inputs.opaqueQueue,
+                .submission = &staged_.opaque,
                 .scene = context_->gpuScene.indirectScene(frame),
                 .sceneBuffersMapped = context_->gpuScene.buffersMapped(frame),
                 .assets = vulkanIndirectAssets(*context_),
@@ -289,7 +324,8 @@ namespace Iridium {
         VulkanFrameTelemetry& telemetry = context_->telemetry;
         VulkanResourceRegistry& resources = context_->resources;
         const VulkanPipelineLibrary& pipelineLibrary = context_->pipelines;
-        const std::span<const DrawPacket> opaqueQueue = staged_.opaqueQueue;
+        const OpaqueSubmission& opaque = staged_.opaque;
+        const VulkanIndirectScene scene = context_->gpuScene.indirectScene(frame);
         const std::span<const DrawPacket> selectionQueue = staged_.selectionQueue;
         const VkDescriptorSet globalSet = staged_.globalSet;
         const uint32_t debugView = static_cast<uint32_t>(staged_.debugView);
@@ -331,7 +367,9 @@ namespace Iridium {
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, meshLayout,
                 0, 1, &globalSet, 0, nullptr);
 
-            for (const auto& packet : opaqueQueue) {
+            for (const uint32_t entry : opaque.order) {
+                OpaqueDirectDraw packet{};
+                if (!resolveOpaqueDraw(scene, opaque, entry, packet)) continue;
                 auto* geometry = resources.geometries().get(packet.geometry);
                 auto* material = resources.materials().get(packet.material);
                 if (!geometry || !material) continue;
@@ -434,11 +472,12 @@ namespace Iridium {
                         bin.commandCount);
                     for (uint32_t command = 0;
                             command < bin.commandCount; ++command) {
-                        const DrawPacket& drawn = opaqueQueue[
+                        const uint32_t primitiveIndex = culler_.gpuOrder()[
                             bin.packetBegin + command];
-                        if (cpuVisibilityOracleVisible(drawn)) {
+                        if (opaque.cpuVisible(primitiveIndex)) {
                             telemetry.recordDraw(telemetry.counters().drawOpaque,
-                                drawn.indexCount / 3u);
+                                scene.geometries[scene.primitives[primitiveIndex].
+                                    binding.y].draw.y / 3u);
                             ++oracleVisibleCommands;
                         }
                     }
@@ -446,11 +485,13 @@ namespace Iridium {
                 telemetry.counters().opaqueIndirectCommands = oracleVisibleCommands;
                 telemetry.counters().opaqueIndirectBins = culler_.bins().size();
             }
-            else for (const auto& packet : opaqueQueue) {
-                if (!settings_.forceDirectGBufferReference && hasGpuScenePrimitive(packet) &&
-                    !cpuVisibilityOracleVisible(packet)) {
+            else for (const uint32_t entry : opaque.order) {
+                if (!settings_.forceDirectGBufferReference &&
+                    !OpaqueSubmission::isDirect(entry) && !opaque.cpuVisible(entry)) {
                     continue;
                 }
+                OpaqueDirectDraw packet{};
+                if (!resolveOpaqueDraw(scene, opaque, entry, packet)) continue;
                 auto* geometry = resources.geometries().get(packet.geometry);
                 auto* material = resources.materials().get(packet.material);
                 const VulkanPipelineRecord* record = pipelineLibrary.get(packet.pipeline);
@@ -497,9 +538,10 @@ namespace Iridium {
             }
             if (!stagedIndirectValid_) {
                 telemetry.counters().opaqueIndirectFallbackPackets = 0u;
-                for (const DrawPacket& packet : opaqueQueue) {
-                    if (settings_.forceDirectGBufferReference || !hasGpuScenePrimitive(packet) ||
-                        cpuVisibilityOracleVisible(packet)) {
+                for (const uint32_t entry : opaque.order) {
+                    if (settings_.forceDirectGBufferReference ||
+                        OpaqueSubmission::isDirect(entry) ||
+                        opaque.cpuVisible(entry)) {
                         ++telemetry.counters().opaqueIndirectFallbackPackets;
                     }
                 }

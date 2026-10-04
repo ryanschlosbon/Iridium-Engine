@@ -63,6 +63,10 @@ namespace Iridium {
     // Same order as std::sort(queue, opaque comparator) above.
     void sortOpaqueDrawPackets(std::span<DrawPacket> packets,
         CompactDrawSortScratch& scratch);
+    // M7R R5c.4b: std::sort of keys built by the caller with the opaque
+    // comparator; the order of keys (and of their `packet` payloads) is the one
+    // the packets they describe would take.
+    void sortOpaqueDrawKeys(std::span<OpaqueDrawSortKey> keys);
     // Same order as std::sort(queue, transparentWorkLess).
     void sortTransparentWorkDrawPackets(std::span<DrawPacket> packets,
         CompactDrawSortScratch& scratch);

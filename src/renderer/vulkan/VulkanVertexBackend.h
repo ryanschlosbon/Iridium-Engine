@@ -328,10 +328,9 @@ namespace Iridium {
             const ReflectionProbeCasterSubmission& probeCasters,
             std::span<const ReflectionProbeCaptureScheduleEntry> captures,
             const LightingFramePacket& lights);
-        void prepareDepthPyramidHistory(
-            std::span<const DrawPacket> opaqueQueue,
+        void prepareDepthPyramidHistory(const OpaqueSubmission& opaque,
             std::span<const DrawPacket> opaqueForwardQueue);
-        void submitOpaqueQueue(std::span<const DrawPacket> opaqueQueue,
+        void submitOpaqueQueue(const OpaqueSubmission& opaque,
             std::span<const DrawPacket> selectionQueue, bool isWireframe);
         void submitLightingPass(const glm::vec3& cameraPos,
             const glm::mat4& view, const glm::mat4& proj,

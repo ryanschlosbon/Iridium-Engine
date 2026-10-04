@@ -17,6 +17,7 @@
 #include "renderer/rhi/GpuScene.h"
 #include "renderer/rhi/Mesh.h"
 #include "renderer/rhi/RenderDebugView.h"
+#include "renderer/rhi/RenderFrame.h"
 
 #include "VkGraphicsPipeline.h"
 #include "VulkanCasterRevisions.h"
@@ -52,7 +53,7 @@ namespace Iridium {
 
         // Per-frame inputs (submitOpaqueQueue), valid until the drain.
         struct FrameInputs {
-            std::span<const DrawPacket> opaqueQueue{};
+            OpaqueSubmission opaque{};
             std::span<const DrawPacket> selectionQueue{};
             bool wireframe = false;
             VkDescriptorSet globalSet = VK_NULL_HANDLE;
@@ -110,7 +111,7 @@ namespace Iridium {
         void bindHistory(bool reset);
         void updateView(const ViewTransportRecord& view, ViewHistoryContext history);
         void publishScene(const GpuScenePackedTables& scene);
-        void prepareDepthHistory(std::span<const DrawPacket> opaqueQueue,
+        void prepareDepthHistory(const OpaqueSubmission& opaque,
             std::span<const DrawPacket> opaqueForwardQueue);
         void submit(const FrameInputs& inputs);
         void recordDepthPyramid();

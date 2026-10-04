@@ -185,16 +185,21 @@ namespace Iridium {
         Stats stats_{};
     };
 
-    // The main view's depth-history content revision: the opaque and
-    // forward-opaque queues as the depth pyramid's occluders saw them.
+    // The main view's depth-history content revision: the opaque submission
+    // and the forward-opaque queue as the depth pyramid's occluders saw them.
+    // M7R R5c.4d: the opaque input is the submission's draw order; a
+    // GPU-scene entry's content is resolved from the slot's published records
+    // (the values its M7.2 parity packet carried), so the change frames are
+    // those of the parity queue.
     class VulkanDepthContentRevision {
     public:
         void publishScene(const GpuScenePackedTables& scene) noexcept {
             sceneEpoch_ = scene.sceneEpoch;
             publicationRevision_ = scene.publicationRevision;
         }
-        // Advances exactly when either queue's packet content sequence changes.
-        uint64_t evaluate(std::span<const DrawPacket> opaqueQueue,
+        // Advances exactly when either input's content sequence changes.
+        uint64_t evaluate(const VulkanIndirectScene& scene,
+            const OpaqueSubmission& opaque,
             std::span<const DrawPacket> forwardQueue,
             const VulkanCasterMaterialSource& materials);
         [[nodiscard]] uint64_t revision() const noexcept { return revision_; }
@@ -217,6 +222,9 @@ namespace Iridium {
         // True when the queue's content sequence changed.
         static bool update(Queue& queue, std::span<const DrawPacket> packets,
             bool contentTrigger, const VulkanCasterMaterialSource& materials);
+        static bool update(Queue& queue, const VulkanIndirectScene& scene,
+            const OpaqueSubmission& opaque, bool contentTrigger,
+            const VulkanCasterMaterialSource& materials);
 
         uint64_t sceneEpoch_ = 0;
         uint64_t publicationRevision_ = 0;

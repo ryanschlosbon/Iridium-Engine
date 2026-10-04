@@ -184,6 +184,12 @@ namespace Iridium {
 
     private:
         void usePreviewCamera(const EditorViewState& view);
+        // The M7.2 parity packet of a published primitive (forward-opaque,
+        // selection and the direct probe-capture reference still use packets).
+        [[nodiscard]] DrawPacket gpuSceneParityPacket(uint32_t primitiveIndex,
+            bool cpuVisible) const;
+        // Sorts the direct opaque packets and fills opaqueOrder_.
+        void buildOpaqueOrder(std::span<const uint32_t> gpuScenePrimitives);
         // Directional cascades, spot atlas tiles and point cubes against the
         // cache schedulers, then scene probe captures; fills the frame's
         // shadow and capture fields.
@@ -211,6 +217,14 @@ namespace Iridium {
         // M7R R5c.3: key scratch shared by the four queue sorts (keeps its
         // capacity across frames).
         CompactDrawSortScratch drawSortScratch_;
+        // M7R R5c.4b: opaqueQueue holds direct packets only; the main view's
+        // opaque draw order (OpaqueSubmission::order), the cached order of the
+        // main-opaque list (rebuilt when its membership revision changes) and
+        // the scratch of the mixed permutation.
+        std::vector<uint32_t> opaqueOrder_;
+        std::vector<uint32_t> gpuSceneOpaqueOrder_;
+        uint64_t gpuSceneOpaqueOrderRevision_ = 0;
+        std::vector<DrawPacket> opaqueDirectScratch_;
         std::vector<TransparentIntervalEndpoint>
             transparentIntervalEndpointScratch;
         std::vector<float> transparentIntervalNearScratch;

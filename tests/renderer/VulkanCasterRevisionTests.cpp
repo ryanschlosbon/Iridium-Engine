@@ -486,24 +486,35 @@ namespace {
         return hash;
     }
 
+    // M7R R5c.4b/d: the revision reads the opaque submission (GPU-scene
+    // primitives resolved from the records, direct packets); the reference is
+    // the retired hash over the parity queue those entries stand for.
     bool depthRevisionFollowsQueues() {
         World world = makeWorld(4);
         VulkanDepthContentRevision depth;
         uint64_t hash = 0, revision = 0;
         bool primed = false;
         std::vector<DrawPacket> opaque, forward;
+        std::vector<DrawPacket> directs;
+        std::vector<uint32_t> order;
         const auto build = [&](std::vector<uint32_t> forwardVisible) {
-            opaque.clear();
+            directs.clear();
             forward.clear();
-            for (uint32_t index = 0; index < 2u; ++index)
-                opaque.push_back(parityPacket(world, index));
             for (uint32_t index : forwardVisible)
                 forward.push_back(parityPacket(world, index));
         };
         const auto step = [&]() {
+            // GPU-scene primitives 0 and 1, then the direct packets.
+            order = { 0u, 1u };
+            opaque = { parityPacket(world, 0), parityPacket(world, 1) };
+            for (uint32_t index = 0; index < directs.size(); ++index) {
+                order.push_back(OpaqueSubmissionDirectBit | index);
+                opaque.push_back(directs[index]);
+            }
             depth.publishScene(*world.packed);
-            const uint64_t nextRevision = depth.evaluate(opaque, forward,
-                world.materials.source());
+            const uint64_t nextRevision = depth.evaluate(world.scene(),
+                OpaqueSubmission{ .order = order, .directPackets = directs },
+                forward, world.materials.source());
             const uint64_t nextHash = referenceDepthHash(opaque, forward,
                 world.materials);
             const bool hashChanged = primed && nextHash != hash;
@@ -532,11 +543,11 @@ namespace {
         direct.material = MaterialHandle::fromParts(3, 1);
         direct.pipeline = PipelineHandle::fromParts(6, 1);
         direct.indexCount = 3;
-        opaque.push_back(direct);
+        directs.push_back(direct);
         CHECK(step() == 1);
-        opaque.back().distanceToCamera = 3.0f;         // not content
+        directs.back().distanceToCamera = 3.0f;        // not content
         CHECK(step() == 0);
-        opaque.back().worldTransform[3].y = 2.0f;
+        directs.back().worldTransform[3].y = 2.0f;
         CHECK(step() == 1);
         world.materials.set(MaterialHandle::fromParts(3, 1), { .packedRevision = 4 });
         CHECK(step() == 1);

@@ -1285,9 +1285,11 @@ namespace Iridium {
                 }
             }
 
-            // M7.2 parity stage: ordinary scene opaque work is reconstructed
-            // from the persistent publication. Transparent and explicit
-            // fallback owners above continue to use the M6 packet path.
+            // M7.2 parity stage, reduced by M7R R5c.4b: main-opaque work is
+            // the published main-opaque list (see OpaqueSubmission); packets
+            // are still built for visible forward-opaque primitives and for
+            // the selected instance's visible primitives. Transparent and
+            // explicit fallback owners above use the M6 packet path.
             if (!assetPreviewActive && gpuSceneFrame_) {
                 CpuScope parityScope(cpuProfiler_, "cpu.render.extract.parity");
                 for (uint32_t primitiveIndex = 0;
@@ -1312,74 +1314,40 @@ namespace Iridium {
                         throw std::logic_error(
                             "Published visible GPU-scene transform is invalid");
                     }
-                    const glm::mat4 worldTransform = unpackGpuSceneAffine(
-                        gpuSceneFrame_->transforms[instance.references.x]);
-                    const SceneEntityUuid owner = gpuSceneFrame_->
-                        instanceIdentities[instanceIndex].owner;
                     const bool selected = (instance.state.z &
                         GpuSceneInstanceSelected) != 0;
-                    const GpuSceneGeometryRecord& geometry =
-                        gpuSceneFrame_->geometries[primitive.binding.y];
-                        DrawPacket packet{};
-                        packet.geometry = GeometryHandle{ geometry.storage.x };
-                        packet.material = MaterialHandle{ primitive.binding.z };
-                        packet.pipeline = PipelineHandle{ primitive.binding.w };
-                        packet.opaqueSortKey =
-                            (static_cast<uint64_t>(primitive.binding.w) << 32u) |
-                            primitive.binding.z;
-                        packet.indexCount = geometry.draw.y;
-                        packet.firstIndex = geometry.draw.x;
-                        packet.executionFlags =
-                            DrawPacketGpuScenePrimitive;
-                        if (cpuVisible) {
-                            packet.executionFlags |=
-                                DrawPacketCpuVisibilityOracle;
-                        }
-                        packet.firstInstanceTransform = primitiveIndex;
-                        packet.worldTransform = worldTransform;
-                        packet.distanceToCamera = glm::distance(
-                            renderCameraPosition, glm::vec3(worldTransform[3]));
-                        packet.isSelected = selected ? 1 : 0;
-                        packet.owner = owner;
-                        const GpuScenePrimitiveIdentity& identity =
-                            gpuSceneFrame_->primitiveIdentities[primitiveIndex];
-                        packet.sourcePrimitiveGuid = identity.sourcePrimitiveGuid;
-                        packet.primitiveGuid = identity.primitiveGuid;
-                        packet.materialGuid = identity.effectiveMaterialGuid;
-                        packet.coverage = (primitive.state.y &
-                            GpuScenePrimitiveAlphaMask) != 0
-                            ? static_cast<uint8_t>(ModelCoverage::Masked)
-                            : static_cast<uint8_t>(ModelCoverage::Opaque);
-                        packet.boundsSphereCenterWorld = {
-                            instance.worldBoundsSphere.x,
-                            instance.worldBoundsSphere.y,
-                            instance.worldBoundsSphere.z,
-                        };
-                        packet.boundsSphereRadiusWorld =
-                            instance.worldBoundsSphere.w;
-                        if ((primitive.state.w &
-                                GpuSceneConsumerForwardOpaque) != 0) {
-                            if (cpuVisible) {
-                                forwardOpaqueQueue.push_back(packet);
-                                ++gpuSceneForwardVisibleCount;
-                                gpuSceneForwardVisibleTriangles +=
-                                    packet.indexCount / 3u;
-                            }
-                        }
-                        else if ((primitive.state.w &
-                                GpuSceneConsumerMainOpaque) != 0) {
-                            opaqueQueue.push_back(packet);
-                            ++gpuSceneDeferredCandidateCount;
-                            gpuSceneDeferredCandidateTriangles +=
-                                packet.indexCount / 3u;
-                        }
-                    if (selected && cpuVisible)
-                        selectionQueue.push_back(packet);
+                    const bool forward = (primitive.state.w &
+                        GpuSceneConsumerForwardOpaque) != 0;
+                    if (!forward && (primitive.state.w &
+                            GpuSceneConsumerMainOpaque) != 0) {
+                        ++gpuSceneDeferredCandidateCount;
+                        gpuSceneDeferredCandidateTriangles +=
+                            gpuSceneFrame_->geometries[primitive.binding.y].draw.y / 3u;
+                    }
+                    const bool forwardVisible = forward && cpuVisible;
+                    const bool selectionVisible = selected && cpuVisible;
+                    if (!forwardVisible && !selectionVisible) continue;
+                    const DrawPacket packet = gpuSceneParityPacket(
+                        primitiveIndex, cpuVisible);
+                    if (forwardVisible) {
+                        forwardOpaqueQueue.push_back(packet);
+                        ++gpuSceneForwardVisibleCount;
+                        gpuSceneForwardVisibleTriangles += packet.indexCount / 3u;
+                    }
+                    if (selectionVisible) selectionQueue.push_back(packet);
                 }
             }
         }
 
-        cpuProfiler_.recordCounter("draw.requested.opaque", opaqueQueue.size());
+        // The main-opaque GPU-scene primitives of this view (ascending).
+        const std::span<const uint32_t> gpuSceneOpaquePrimitives =
+            !assetPreviewActive && gpuSceneFrame_
+                ? std::span<const uint32_t>(
+                    gpuSceneFrame_->mainOpaqueConsumerPrimitiveIndices)
+                : std::span<const uint32_t>{};
+
+        cpuProfiler_.recordCounter("draw.requested.opaque",
+            opaqueQueue.size() + gpuSceneOpaquePrimitives.size());
         cpuProfiler_.recordCounter("draw.requested.forward_opaque",
             forwardOpaqueQueue.size());
         const uint64_t requestedTransparent =
@@ -1414,8 +1382,8 @@ namespace Iridium {
             ProfileCounterUnit::Bytes);
         const uint64_t gpuSceneQueuedPrimitives =
             gpuSceneDeferredCandidateCount + gpuSceneForwardVisibleCount;
-        const uint64_t totalQueuedPrimitives =
-            opaqueQueue.size() + forwardOpaqueQueue.size();
+        const uint64_t totalQueuedPrimitives = opaqueQueue.size() +
+            gpuSceneOpaquePrimitives.size() + forwardOpaqueQueue.size();
         const uint64_t directOpaquePrimitives = totalQueuedPrimitives >=
                 gpuSceneQueuedPrimitives
             ? totalQueuedPrimitives - gpuSceneQueuedPrimitives : 0;
@@ -1432,7 +1400,7 @@ namespace Iridium {
             return triangles;
         };
         const uint64_t totalQueuedTriangles =
-            submittedTriangles(opaqueQueue) +
+            submittedTriangles(opaqueQueue) + gpuSceneDeferredCandidateTriangles +
             submittedTriangles(forwardOpaqueQueue);
         const uint64_t gpuSceneQueuedTriangles =
             gpuSceneDeferredCandidateTriangles +
@@ -1549,9 +1517,9 @@ namespace Iridium {
         // Group opaque objects by the PSO/material identity carried by each binding.
         {
             CpuScope sortScope(cpuProfiler_, "cpu.render.sort.opaque");
-            // M7R R5c.3: compact (key, index) sort; same permutation as the
-            // packet sort (opaqueSortKey, geometry, firstIndex).
-            sortOpaqueDrawPackets(opaqueQueue, drawSortScratch_);
+            // M7R R5c.3: compact (key, index) sorts; M7R R5c.4b: the opaque
+            // draw order over the direct packets and the main-opaque list.
+            buildOpaqueOrder(gpuSceneOpaquePrimitives);
         }
         {
             CpuScope sortScope(cpuProfiler_, "cpu.render.sort.forward_opaque");
@@ -1568,15 +1536,27 @@ namespace Iridium {
         };
         appendDirectShadowFallbacks(opaqueQueue);
         appendDirectShadowFallbacks(forwardOpaqueQueue);
+        const bool directProbeReference =
+            policy_.forceDirectGBufferReference ||
+            policy_.forceDirectProbeCaptureReference;
         const auto appendDirectProbeFallbacks = [&](const auto& queue) {
             for (const DrawPacket& packet : queue) {
-                if (policy_.forceDirectGBufferReference ||
-                    policy_.forceDirectProbeCaptureReference ||
-                    !hasGpuScenePrimitive(packet))
+                if (directProbeReference || !hasGpuScenePrimitive(packet))
                     probeCasterQueue_.push_back(packet);
             }
         };
-        appendDirectProbeFallbacks(opaqueQueue);
+        if (directProbeReference) {
+            // The direct reference routes capture every opaque packet the
+            // parity queue held, in its draw order (M7R R5c.4b).
+            for (const uint32_t entry : opaqueOrder_) {
+                probeCasterQueue_.push_back(OpaqueSubmission::isDirect(entry)
+                    ? opaqueQueue[OpaqueSubmission::indexOf(entry)]
+                    : gpuSceneParityPacket(entry, gpuSceneVisibility_.
+                        primitiveVisibility.size() > entry &&
+                        gpuSceneVisibility_.primitiveVisibility[entry] != 0u));
+            }
+        }
+        else appendDirectProbeFallbacks(opaqueQueue);
         appendDirectProbeFallbacks(forwardOpaqueQueue);
         const ShadowCasterSubmission shadowCasters{
             .gpuScenePrimitiveIndices = shadowGpuScenePrimitiveIndices,
@@ -1663,7 +1643,17 @@ namespace Iridium {
             debugView == RenderDebugView::Final
             ? std::span<const DrawPacket>(selectionQueue.data(), selectionQueue.size())
             : std::span<const DrawPacket>{};
-        renderFrame.opaqueQueue = opaqueQueue;
+        renderFrame.opaque = {
+            .order = opaqueOrder_,
+            .directPackets = opaqueQueue,
+            .gpuScenePrimitiveCount =
+                static_cast<uint32_t>(gpuSceneOpaquePrimitives.size()),
+            .membershipRevision = !gpuSceneOpaquePrimitives.empty()
+                ? gpuSceneFrame_->mainOpaqueConsumerMembershipRevision : 0u,
+            .cpuVisibility = !gpuSceneOpaquePrimitives.empty()
+                ? std::span<const uint8_t>(gpuSceneVisibility_.primitiveVisibility)
+                : std::span<const uint8_t>{},
+        };
         renderFrame.selectionQueue = activeSelectionQueue;
         renderFrame.wireframe = isWireframe;
         renderFrame.forwardOpaqueQueue = forwardOpaqueQueue;
@@ -1674,6 +1664,127 @@ namespace Iridium {
         renderFrame.reflectionProbes = &publishedProbes;
         renderFrame.stageObserver = inputs.stageObserver;
         return renderFrame_;
+    }
+
+    DrawPacket RenderExtractor::gpuSceneParityPacket(uint32_t primitiveIndex,
+        bool cpuVisible) const {
+        // The M7.2 parity packet of one published primitive (references were
+        // validated by the parity stage).
+        const GpuScenePackedTables& frame = *gpuSceneFrame_;
+        const GpuScenePrimitiveRecord& primitive = frame.primitives[primitiveIndex];
+        const GpuSceneInstanceRecord& instance = frame.instances[primitive.binding.x];
+        const glm::mat4 worldTransform = unpackGpuSceneAffine(
+            frame.transforms[instance.references.x]);
+        const GpuSceneGeometryRecord& geometry = frame.geometries[primitive.binding.y];
+        DrawPacket packet{};
+        packet.geometry = GeometryHandle{ geometry.storage.x };
+        packet.material = MaterialHandle{ primitive.binding.z };
+        packet.pipeline = PipelineHandle{ primitive.binding.w };
+        packet.opaqueSortKey =
+            (static_cast<uint64_t>(primitive.binding.w) << 32u) |
+            primitive.binding.z;
+        packet.indexCount = geometry.draw.y;
+        packet.firstIndex = geometry.draw.x;
+        packet.executionFlags = DrawPacketGpuScenePrimitive;
+        if (cpuVisible) packet.executionFlags |= DrawPacketCpuVisibilityOracle;
+        packet.firstInstanceTransform = primitiveIndex;
+        packet.worldTransform = worldTransform;
+        packet.distanceToCamera = glm::distance(
+            renderCameraPosition_, glm::vec3(worldTransform[3]));
+        packet.isSelected = (instance.state.z & GpuSceneInstanceSelected) != 0
+            ? 1 : 0;
+        packet.owner = frame.instanceIdentities[primitive.binding.x].owner;
+        const GpuScenePrimitiveIdentity& identity =
+            frame.primitiveIdentities[primitiveIndex];
+        packet.sourcePrimitiveGuid = identity.sourcePrimitiveGuid;
+        packet.primitiveGuid = identity.primitiveGuid;
+        packet.materialGuid = identity.effectiveMaterialGuid;
+        packet.coverage = (primitive.state.y & GpuScenePrimitiveAlphaMask) != 0
+            ? static_cast<uint8_t>(ModelCoverage::Masked)
+            : static_cast<uint8_t>(ModelCoverage::Opaque);
+        packet.boundsSphereCenterWorld = {
+            instance.worldBoundsSphere.x,
+            instance.worldBoundsSphere.y,
+            instance.worldBoundsSphere.z,
+        };
+        packet.boundsSphereRadiusWorld = instance.worldBoundsSphere.w;
+        return packet;
+    }
+
+    void RenderExtractor::buildOpaqueOrder(
+        std::span<const uint32_t> gpuScenePrimitives) {
+        // The parity queue held the direct packets (append order) followed by
+        // one packet per main-opaque primitive (ascending) and was sorted with
+        // the opaque comparator. The same std::sort over keys in that input
+        // order gives the same permutation (CompactDrawSort.h).
+        opaqueOrder_.clear();
+        if (gpuScenePrimitives.empty()) {
+            sortOpaqueDrawPackets(opaqueQueue, drawSortScratch_);
+            for (uint32_t index = 0; index < opaqueQueue.size(); ++index)
+                opaqueOrder_.push_back(OpaqueSubmissionDirectBit | index);
+            return;
+        }
+        const GpuScenePackedTables& frame = *gpuSceneFrame_;
+        const auto gpuKey = [&frame](uint32_t primitiveIndex) {
+            const GpuScenePrimitiveRecord& primitive =
+                frame.primitives[primitiveIndex];
+            const GpuSceneGeometryRecord& geometry =
+                frame.geometries[primitive.binding.y];
+            return OpaqueDrawSortKey{
+                .opaqueSortKey =
+                    (static_cast<uint64_t>(primitive.binding.w) << 32u) |
+                    primitive.binding.z,
+                .geometry = GeometryHandle{ geometry.storage.x },
+                .firstIndex = geometry.draw.x,
+                .packet = primitiveIndex,
+            };
+        };
+        if (opaqueQueue.empty()) {
+            // Only GPU-scene work: the order is a function of the main-opaque
+            // membership inputs, so it is rebuilt only when they change.
+            const uint64_t revision = frame.mainOpaqueConsumerMembershipRevision;
+            if (revision == 0u || revision != gpuSceneOpaqueOrderRevision_) {
+                auto& keys = drawSortScratch_.opaqueKeys;
+                keys.resize(gpuScenePrimitives.size());
+                for (size_t index = 0; index < gpuScenePrimitives.size(); ++index)
+                    keys[index] = gpuKey(gpuScenePrimitives[index]);
+                sortOpaqueDrawKeys(keys);
+                gpuSceneOpaqueOrder_.resize(keys.size());
+                for (size_t index = 0; index < keys.size(); ++index)
+                    gpuSceneOpaqueOrder_[index] = keys[index].packet;
+                gpuSceneOpaqueOrderRevision_ = revision;
+            }
+            opaqueOrder_.assign(gpuSceneOpaqueOrder_.begin(),
+                gpuSceneOpaqueOrder_.end());
+            return;
+        }
+        // Mixed: one sort over both, then the direct packets are permuted
+        // into their order within it.
+        auto& keys = drawSortScratch_.opaqueKeys;
+        keys.resize(opaqueQueue.size() + gpuScenePrimitives.size());
+        for (uint32_t index = 0; index < opaqueQueue.size(); ++index) {
+            const DrawPacket& packet = opaqueQueue[index];
+            keys[index] = {
+                .opaqueSortKey = packet.opaqueSortKey,
+                .geometry = packet.geometry,
+                .firstIndex = packet.firstIndex,
+                .packet = OpaqueSubmissionDirectBit | index,
+            };
+        }
+        for (size_t index = 0; index < gpuScenePrimitives.size(); ++index)
+            keys[opaqueQueue.size() + index] = gpuKey(gpuScenePrimitives[index]);
+        sortOpaqueDrawKeys(keys);
+        opaqueDirectScratch_.clear();
+        for (const OpaqueDrawSortKey& key : keys) {
+            if (OpaqueSubmission::isDirect(key.packet)) {
+                opaqueOrder_.push_back(OpaqueSubmissionDirectBit |
+                    static_cast<uint32_t>(opaqueDirectScratch_.size()));
+                opaqueDirectScratch_.push_back(
+                    opaqueQueue[OpaqueSubmission::indexOf(key.packet)]);
+            }
+            else opaqueOrder_.push_back(key.packet);
+        }
+        opaqueQueue.swap(opaqueDirectScratch_);
     }
 
     void RenderExtractor::releaseFrame() {

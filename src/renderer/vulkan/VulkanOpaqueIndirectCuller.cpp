@@ -272,7 +272,10 @@ namespace Iridium {
 
     bool VulkanOpaqueIndirectCuller::plan(const OpaqueIndirectInputs& inputs,
         uint32_t frame) {
-        const std::span<const DrawPacket> opaqueQueue = inputs.queue;
+        const OpaqueSubmission& submission = *inputs.submission;
+        gpuOrder_.clear();
+        for (const uint32_t entry : submission.order)
+            if (!OpaqueSubmission::isDirect(entry)) gpuOrder_.push_back(entry);
         const GpuSceneIndirectPolicy policy{
             .multiDrawIndirect = services_.capabilities.multiDrawIndirect,
             .drawIndirectFirstInstance =
@@ -293,36 +296,43 @@ namespace Iridium {
         const auto geometryRecords = inputs.scene.geometries.first(published.geometries);
         const auto instanceRecords = inputs.scene.instances.first(published.instances);
         const auto transformRecords = inputs.scene.transforms.first(published.transforms);
-        buildGpuSceneIndirectPlan(opaqueQueue, policy, indirectPlan_,
-            primitiveRecords, geometryRecords);
+        // Direct packets only: the packet plan, as before (it falls back).
+        if (gpuOrder_.empty())
+            buildGpuSceneIndirectPlan(submission.directPackets, policy,
+                indirectPlan_, primitiveRecords, geometryRecords);
+        else
+            buildGpuSceneIndirectPlan(gpuOrder_, submission.directPackets.size(),
+                policy, indirectPlan_, primitiveRecords, geometryRecords);
         bins_.clear();
         candidates_.clear();
         bool valid = indirectPlan_.usesIndirect();
         if (lodEnabled())
             seenHistory_.assign(primitiveRecords.size(), 0);
         const VulkanIndirectAssetResolver& assets = inputs.assets;
-        for (uint32_t index = 0; valid && index < opaqueQueue.size(); ++index) {
-            const DrawPacket& packet = opaqueQueue[index];
-            if (lodEnabled() &&
-                seenHistory_[packet.firstInstanceTransform]++ != 0) {
+        for (uint32_t index = 0; valid && index < gpuOrder_.size(); ++index) {
+            const uint32_t primitiveIndex = gpuOrder_[index];
+            if (lodEnabled() && seenHistory_[primitiveIndex]++ != 0) {
                 indirectPlan_.fallbackReason = GpuSceneIndirectFallbackReason::InvalidPacket;
                 return false; // Never dispatch two writers to the same history slot.
             }
+            const auto& primitive = primitiveRecords[primitiveIndex];
+            const auto& packedGeometry = geometryRecords[primitive.binding.y];
+            // The handles the parity packet carried.
+            const GeometryHandle geometryHandle{ packedGeometry.storage.x };
+            const MaterialHandle materialHandle{ primitive.binding.z };
+            const PipelineHandle pipelineHandle{ primitive.binding.w };
             VulkanIndirectGeometry geometry{};
             VulkanIndirectMaterial material{};
-            if (!assets.geometry(assets.owner, packet.geometry, geometry) ||
-                !assets.material(assets.owner, packet.material, material) ||
-                !assets.gbufferIndirectPipeline(assets.owner, packet.pipeline)) {
+            if (!assets.geometry(assets.owner, geometryHandle, geometry) ||
+                !assets.material(assets.owner, materialHandle, material) ||
+                !assets.gbufferIndirectPipeline(assets.owner, pipelineHandle)) {
                 valid = false;
                 break;
             }
 
-            const auto& primitive = primitiveRecords[packet.firstInstanceTransform];
-            const auto& packedGeometry = geometryRecords[primitive.binding.y];
             if (primitive.binding.x >= instanceRecords.size() ||
                 instanceRecords[primitive.binding.x].references.x >= transformRecords.size() ||
                 (packedGeometry.storage.w & GpuSceneGeometryLegacyRhiHandle) == 0 ||
-                packedGeometry.storage.x != packet.geometry.id ||
                 packedGeometry.draw.w != static_cast<uint32_t>(geometry.indexFormat) ||
                 std::bit_cast<int32_t>(packedGeometry.draw.z) < 0 ||
                 static_cast<uint64_t>(packedGeometry.draw.z) * sizeof(Vertex) != geometry.vertexOffset) {
@@ -337,8 +347,8 @@ namespace Iridium {
                 VulkanIndirectGeometry previousGeometry{};
                 const bool previousResolved = assets.geometry(assets.owner,
                     previous.geometry, previousGeometry);
-                startsBin = previous.pipeline != packet.pipeline ||
-                    previous.material != packet.material ||
+                startsBin = previous.pipeline != pipelineHandle ||
+                    previous.material != materialHandle ||
                     !previousResolved ||
                     previousGeometry.vertexBuffer != geometry.vertexBuffer ||
                     previousGeometry.indexBuffer != geometry.indexBuffer ||
@@ -349,9 +359,9 @@ namespace Iridium {
                     .packetBegin = index,
                     .commandBegin = index,
                     .commandCount = 1u,
-                    .pipeline = packet.pipeline,
-                    .material = packet.material,
-                    .geometry = packet.geometry,
+                    .pipeline = pipelineHandle,
+                    .material = materialHandle,
+                    .geometry = geometryHandle,
                 });
             }
             else {
@@ -360,14 +370,13 @@ namespace Iridium {
         }
         if (!valid) return false;
 
-        candidates_.resize(opaqueQueue.size());
+        candidates_.resize(gpuOrder_.size());
         for (uint32_t binIndex = 0; binIndex < bins_.size(); ++binIndex) {
             const Bin& bin = bins_[binIndex];
             for (uint32_t command = 0; command < bin.commandCount; ++command) {
                 const uint32_t packetIndex = bin.packetBegin + command;
                 candidates_[packetIndex] = {
-                    .primitiveIndex =
-                        opaqueQueue[packetIndex].firstInstanceTransform,
+                    .primitiveIndex = gpuOrder_[packetIndex],
                     .binIndex = binIndex,
                     .commandBase = bin.commandBegin,
                     .commandCapacity = bin.commandCount,
@@ -379,8 +388,9 @@ namespace Iridium {
                     candidate.historyTokenLow = history.tokenLow;
                     candidate.historyTokenHigh = history.tokenHigh;
                     VulkanIndirectGeometry base{};
-                    (void)assets.geometry(assets.owner,
-                        opaqueQueue[packetIndex].geometry, base);
+                    (void)assets.geometry(assets.owner, GeometryHandle{
+                        geometryRecords[primitiveRecords[candidate.primitiveIndex].
+                            binding.y].storage.x }, base);
                     candidate.maximumLod = residentLodPrefix(geometryRecords,
                         instanceRecords, primitiveRecords[candidate.primitiveIndex],
                         config_.lodMaximumLevel, base, assets);
@@ -442,7 +452,7 @@ namespace Iridium {
             validation.binCapacities[binIndex] = bin.commandCount;
             for (uint32_t command = 0; command < bin.commandCount; ++command) {
                 const uint32_t packetIndex = bin.packetBegin + command;
-                if (!cpuVisibilityOracleVisible(opaqueQueue[packetIndex])) continue;
+                if (!submission.cpuVisible(gpuOrder_[packetIndex])) continue;
                 if (occlusionOracle != nullptr)
                     occlusionOracle->expectOpaqueVisibleCandidate(frame, packetIndex);
                 ++validation.expectedBinCounts[binIndex];

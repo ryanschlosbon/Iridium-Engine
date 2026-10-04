@@ -67,6 +67,48 @@ namespace Iridium {
         }
     };
 
+    // M7R R5c.4b: the main view's G-buffer work. It replaces the M7.2 parity
+    // packets (one DrawPacket rebuilt per published primitive every frame):
+    // GPU-scene work is the published main-opaque list, addressed by dense
+    // primitive index; direct packets remain for producers outside the
+    // publication.
+    inline constexpr uint32_t OpaqueSubmissionDirectBit = 1u << 31u;
+
+    struct OpaqueSubmission {
+        // Draw order. One std::sort with the opaque comparator
+        // (opaqueSortKey, geometry, firstIndex) over the direct packets in
+        // append order followed by the main-opaque primitives in ascending
+        // order, as the parity queue was sorted. An entry is a dense
+        // GPU-scene primitive index, or OpaqueSubmissionDirectBit | the index
+        // of a direct packet.
+        std::span<const uint32_t> order;
+        // In draw order (their entries in `order` count up from 0).
+        std::span<const DrawPacket> directPackets;
+        uint32_t gpuScenePrimitiveCount = 0;
+        uint64_t membershipRevision = 0;
+        // Per dense primitive: the CPU frustum classification of this view
+        // (the former DrawPacketCpuVisibilityOracle bit). Empty when the
+        // frame has no GPU-scene work.
+        std::span<const uint8_t> cpuVisibility;
+
+        [[nodiscard]] static constexpr bool isDirect(uint32_t entry) noexcept {
+            return (entry & OpaqueSubmissionDirectBit) != 0u;
+        }
+        [[nodiscard]] static constexpr uint32_t indexOf(uint32_t entry) noexcept {
+            return entry & ~OpaqueSubmissionDirectBit;
+        }
+        [[nodiscard]] bool cpuVisible(uint32_t primitiveIndex) const noexcept {
+            return primitiveIndex < cpuVisibility.size() &&
+                cpuVisibility[primitiveIndex] != 0u;
+        }
+        [[nodiscard]] constexpr size_t size() const noexcept {
+            return order.size();
+        }
+        [[nodiscard]] constexpr bool empty() const noexcept {
+            return order.empty();
+        }
+    };
+
     // One shadow kind's casters and its (possibly empty) frame packets.
     // Cached storage is updated before any opaque/forward consumer reads it;
     // an empty packet list disables sampling of that kind.
@@ -130,9 +172,9 @@ namespace Iridium {
         ReflectionProbeCasterSubmission probeCasters{};
         std::span<const ReflectionProbeCaptureScheduleEntry> probeCaptureSchedule{};
 
-        // Main-view queues. Both depth-writing queues freeze the depth-pyramid
+        // Main-view work. Both depth-writing inputs freeze the depth-pyramid
         // history identity before main-view compaction.
-        std::span<const DrawPacket> opaqueQueue{};
+        OpaqueSubmission opaque{};
         std::span<const DrawPacket> selectionQueue{};
         bool wireframe = false;
         std::span<const DrawPacket> forwardOpaqueQueue{};

@@ -95,6 +95,12 @@ namespace {
                 .packet = static_cast<uint32_t>(index),
             };
         }
+        sortOpaqueDrawKeys(keys);
+        permutePackets(packets, keys,
+            [](OpaqueDrawSortKey& key) -> uint32_t& { return key.packet; });
+    }
+
+    void sortOpaqueDrawKeys(std::span<OpaqueDrawSortKey> keys) {
         std::sort(keys.begin(), keys.end(),
             [](const OpaqueDrawSortKey& a, const OpaqueDrawSortKey& b) {
                 if (a.opaqueSortKey != b.opaqueSortKey)
@@ -102,8 +108,6 @@ namespace {
                 if (a.geometry != b.geometry) return a.geometry < b.geometry;
                 return a.firstIndex < b.firstIndex;
             });
-        permutePackets(packets, keys,
-            [](OpaqueDrawSortKey& key) -> uint32_t& { return key.packet; });
     }
 
     void sortTransparentWorkDrawPackets(std::span<DrawPacket> packets,

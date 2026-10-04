@@ -75,4 +75,72 @@ namespace Iridium {
         }
     }
 
+    void buildGpuSceneIndirectPlan(std::span<const uint32_t> primitiveIndices,
+        size_t directPacketCount, const GpuSceneIndirectPolicy& policy,
+        GpuSceneIndirectPlan& result,
+        std::span<const GpuScenePrimitiveRecord> primitives,
+        std::span<const GpuSceneGeometryRecord> geometries) {
+        result.abiVersion = GpuSceneIndirectAbiVersion;
+        result.fallbackReason = GpuSceneIndirectFallbackReason::None;
+        result.commands.clear();
+        result.packetIndices.clear();
+
+        // The packet plan's checks, in its order, over the same entry count.
+        const size_t count = primitiveIndices.size() + directPacketCount;
+        if (count == 0u) return;
+        if (policy.forceDirectReference) {
+            result.fallbackReason = GpuSceneIndirectFallbackReason::DirectReference;
+            return;
+        }
+        if (!policy.multiDrawIndirect ||
+            !policy.drawIndirectFirstInstance ||
+            !policy.drawIndirectCount ||
+            policy.maxDrawIndirectCount == 0u) {
+            result.fallbackReason =
+                GpuSceneIndirectFallbackReason::MissingCapability;
+            return;
+        }
+        if (count < policy.minimumCommandCount) {
+            result.fallbackReason =
+                GpuSceneIndirectFallbackReason::TinyWorkload;
+            return;
+        }
+        if (count > policy.maxDrawIndirectCount ||
+            count > std::numeric_limits<uint32_t>::max()) {
+            result.fallbackReason =
+                GpuSceneIndirectFallbackReason::CapacityExceeded;
+            return;
+        }
+        if (directPacketCount != 0u) {
+            result.fallbackReason = GpuSceneIndirectFallbackReason::InvalidPacket;
+            return;
+        }
+
+        result.commands.reserve(primitiveIndices.size());
+        result.packetIndices.reserve(primitiveIndices.size());
+        for (uint32_t index = 0;
+                index < static_cast<uint32_t>(primitiveIndices.size()); ++index) {
+            const uint32_t primitiveIndex = primitiveIndices[index];
+            const GpuSceneGeometryRecord* geometry = nullptr;
+            if (primitiveIndex < primitives.size() &&
+                primitives[primitiveIndex].binding.y < geometries.size())
+                geometry = &geometries[primitives[primitiveIndex].binding.y];
+            if (geometry == nullptr || geometry->draw.y == 0u) {
+                result.commands.clear();
+                result.packetIndices.clear();
+                result.fallbackReason =
+                    GpuSceneIndirectFallbackReason::InvalidPacket;
+                return;
+            }
+            result.commands.push_back({
+                .indexCount = geometry->draw.y,
+                .instanceCount = 1u,
+                .firstIndex = geometry->draw.x,
+                .vertexOffset = std::bit_cast<int32_t>(geometry->draw.z),
+                .firstInstance = primitiveIndex,
+            });
+            result.packetIndices.push_back(index);
+        }
+    }
+
 } // namespace Iridium

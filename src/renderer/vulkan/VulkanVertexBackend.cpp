@@ -1811,12 +1811,12 @@ namespace Iridium {
     }
 
     void VulkanVertexBackend::prepareDepthPyramidHistory(
-        std::span<const DrawPacket> opaqueQueue,
+        const OpaqueSubmission& opaque,
         std::span<const DrawPacket> opaqueForwardQueue) {
         if (!frameOpen_)
             throw std::logic_error(
                 "Depth-pyramid history preparation requires an open frame");
-        opaque_.prepareDepthHistory(opaqueQueue, opaqueForwardQueue);
+        opaque_.prepareDepthHistory(opaque, opaqueForwardQueue);
     }
 
     void VulkanVertexBackend::submitFrame(const RenderFrame& frame) {
@@ -1851,9 +1851,9 @@ namespace Iridium {
 
         {
             CpuScope historyScope(cpuProfiler_, "cpu.render.prepare.depth_history");
-            prepareDepthPyramidHistory(frame.opaqueQueue, frame.forwardOpaqueQueue);
+            prepareDepthPyramidHistory(frame.opaque, frame.forwardOpaqueQueue);
         }
-        submitOpaqueQueue(frame.opaqueQueue, frame.selectionQueue, frame.wireframe);
+        submitOpaqueQueue(frame.opaque, frame.selectionQueue, frame.wireframe);
         // The camera position, matrices and planes are the view record's
         // (bit-identical to the former submitLightingPass arguments).
         submitLightingPass(glm::vec3(frame.view.cameraPosition), frame.view.view,
@@ -1921,7 +1921,7 @@ namespace Iridium {
             lighting_.sceneSet(scheduler.currentFrameIndex()));
     }
 
-    void VulkanVertexBackend::submitOpaqueQueue(std::span<const DrawPacket> opaqueQueue,
+    void VulkanVertexBackend::submitOpaqueQueue(const OpaqueSubmission& opaque,
         std::span<const DrawPacket> selectionQueue, bool isWireframe) {
         if (opaque_.depthPyramidEnabled() && !opaque_.historyPrepared())
             throw std::logic_error(
@@ -1932,7 +1932,7 @@ namespace Iridium {
         probes_.skipCaptureIfUnhandled();
         // R3c.7 drain point: "gpu-scene.opaque.compact" and "gbuffer".
         opaque_.submit({
-            .opaqueQueue = opaqueQueue,
+            .opaque = opaque,
             .selectionQueue = selectionQueue,
             .wireframe = isWireframe,
             .globalSet = view_.globalSet(scheduler.currentFrameIndex()),

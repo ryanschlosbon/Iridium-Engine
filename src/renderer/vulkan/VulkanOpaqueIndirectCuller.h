@@ -5,8 +5,9 @@
 // core (VulkanIndirectCullerShared: command/resource seams, indirect buffer
 // set, resident-LOD prefix, compute pipeline helpers, stream digest tap), not a
 // subclass. Its extension over the view core:
-//   - binning follows the sorted DrawPacket runs (GpuSceneIndirectPlan) rather
-//     than the shared (buffers, alpha, sidedness) bins;
+//   - binning follows the runs of the submission's sorted GPU-scene
+//     primitives (GpuSceneIndirectPlan) rather than the shared (buffers,
+//     alpha, sidedness) bins;
 //   - a 6-binding set (candidates, commands, counts, LOD history, fused
 //     occlusion results, depth-pyramid history sampler);
 //   - the frustum cull pipeline and its fused-occlusion variant/fallback;
@@ -21,6 +22,7 @@
 #include "renderer/rhi/DrawPacket.h"
 #include "renderer/rhi/GpuSceneLod.h"
 #include "renderer/rhi/Mesh.h"
+#include "renderer/rhi/RenderFrame.h"
 
 #include <array>
 #include <cstdint>
@@ -59,7 +61,9 @@ namespace Iridium {
         VkDescriptorSetLayout globalLayout, VkDescriptorSetLayout gpuSceneLayout);
 
     struct OpaqueIndirectInputs {
-        std::span<const DrawPacket> queue{};
+        // M7R R5c.4b: the main-opaque submission (GPU-scene primitives in
+        // draw order, read from their records; direct packets).
+        const OpaqueSubmission* submission = nullptr;
         VulkanIndirectScene scene{};
         // Every GPU-scene table of the slot is mapped.
         bool sceneBuffersMapped = false;
@@ -78,6 +82,7 @@ namespace Iridium {
     class VulkanOpaqueIndirectCuller {
     public:
         struct Bin {
+            // Index of the bin's first command in gpuOrder().
             uint32_t packetBegin = 0;
             uint32_t commandBegin = 0;
             uint32_t commandCount = 0;
@@ -119,6 +124,11 @@ namespace Iridium {
         void collect(uint32_t frame);
 
         [[nodiscard]] std::span<const Bin> bins() const noexcept { return bins_; }
+        // The submission's GPU-scene primitives in draw order (the plan's
+        // command order), as of the last plan().
+        [[nodiscard]] std::span<const uint32_t> gpuOrder() const noexcept {
+            return gpuOrder_;
+        }
         [[nodiscard]] const GpuSceneIndirectPlan& indirectPlan() const noexcept {
             return indirectPlan_;
         }
@@ -182,6 +192,7 @@ namespace Iridium {
 
         GpuSceneIndirectPlan indirectPlan_;
         std::vector<Bin> bins_;
+        std::vector<uint32_t> gpuOrder_;
         std::vector<GpuSceneIndirectCandidate> candidates_;
         std::vector<uint8_t> seenHistory_;
         std::vector<DepthPyramidDeviceQuery> occlusionQueries_;
