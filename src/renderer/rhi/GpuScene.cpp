@@ -112,6 +112,8 @@ namespace {
             scene.shadowConsumerPrimitiveIndices);
         collectGpuSceneConsumerPrimitiveIndices(scene, GpuSceneConsumerProbe,
             scene.probeConsumerPrimitiveIndices);
+        collectGpuSceneConsumerPrimitiveIndices(scene, GpuSceneConsumerMainOpaque,
+            scene.mainOpaqueConsumerPrimitiveIndices);
 
         // M7R R5c.5: until R5c.5 each revision was an FNV-1a hash, one byte at
         // a time, over the epoch, the consumer mask, the list size and, per
@@ -217,17 +219,22 @@ namespace {
             scene.shadowConsumerPrimitiveIndices, history.shadowMembers);
         const bool probeChanged = membershipChanged(
             scene.probeConsumerPrimitiveIndices, history.probeMembers);
+        const bool mainOpaqueChanged = membershipChanged(
+            scene.mainOpaqueConsumerPrimitiveIndices, history.mainOpaqueMembers);
         if (shadowChanged)
             scene.shadowConsumerMembershipRevision = history.nextRevision++;
         if (probeChanged)
             scene.probeConsumerMembershipRevision = history.nextRevision++;
+        if (mainOpaqueChanged)
+            scene.mainOpaqueConsumerMembershipRevision = history.nextRevision++;
         // Unchanged lists compared equal on every input they read, so the
         // stored inputs stay exact for them; refresh after any change.
-        if (shadowChanged || probeChanged) {
+        if (shadowChanged || probeChanged || mainOpaqueChanged) {
             history.valid = true;
             history.sceneEpoch = scene.sceneEpoch;
             history.shadowMembers = scene.shadowConsumerPrimitiveIndices;
             history.probeMembers = scene.probeConsumerPrimitiveIndices;
+            history.mainOpaqueMembers = scene.mainOpaqueConsumerPrimitiveIndices;
             history.primitives = scene.primitives;
             history.instanceStates.resize(scene.instances.size());
             for (size_t index = 0; index < scene.instances.size(); ++index)
@@ -244,6 +251,9 @@ namespace {
             scene, scene.shadowConsumerPrimitiveIndices);
         scene.probeConsumerContentWatermark = gpuSceneConsumerContentWatermark(
             scene, scene.probeConsumerPrimitiveIndices);
+        scene.mainOpaqueConsumerContentWatermark =
+            gpuSceneConsumerContentWatermark(scene,
+                scene.mainOpaqueConsumerPrimitiveIndices);
     }
 
     GpuScenePackedTables packGpuSceneReference(

@@ -417,8 +417,8 @@ namespace Iridium {
         Shadow,             // the shadow submission's sequence revision
         DirectionalShadow,  // one revision per cascade of one directional light
         DepthHistory,       // the main view's depth-content revision
-        // M7R R5c.5: the published shadow and probe membership revisions
-        // (revisions[0] shadow, revisions[1] probe), once per publication.
+        // M7R R5c.5: the published membership revisions (revisions[0] shadow,
+        // [1] probe, [2] main opaque), once per publication.
         Membership,
     };
 

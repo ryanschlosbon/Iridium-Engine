@@ -661,8 +661,8 @@ namespace {
             }
             scene.transforms.resize(instanceCount * 2u);
 
-            uint64_t shadowHash = 0, probeHash = 0;
-            uint64_t shadowRevision = 0, probeRevision = 0;
+            uint64_t shadowHash = 0, probeHash = 0, mainHash = 0;
+            uint64_t shadowRevision = 0, probeRevision = 0, mainRevision = 0;
             for (uint32_t step = 0; step < 96u; ++step) {
                 if (step != 0u) {
                     // One to three mutations; many touch nothing hashed.
@@ -703,6 +703,9 @@ namespace {
                         case 23: primitive.binding.w = 1u + pick(3); break;
                         case 24: primitive.revisions.y = pick(3); break;
                         case 25: geometry.draw.z ^= 1u; break;
+                        case 26: primitive.state.w ^= GpuSceneConsumerMainOpaque |
+                            GpuSceneConsumerForwardOpaque; break;
+                        case 27: instance.state.w ^= GpuSceneConsumerMainOpaque; break;
                         default: break;                                     // no-op call
                         }
                     }
@@ -712,6 +715,10 @@ namespace {
                     GpuSceneConsumerShadow, scene.shadowConsumerPrimitiveIndices);
                 const uint64_t newProbeHash = legacyGpuSceneMembershipHash(scene,
                     GpuSceneConsumerProbe, scene.probeConsumerPrimitiveIndices);
+                const uint64_t newMainHash = legacyGpuSceneMembershipHash(scene,
+                    GpuSceneConsumerMainOpaque,
+                    scene.mainOpaqueConsumerPrimitiveIndices);
+                CHECK(scene.mainOpaqueConsumerMembershipRevision != 0u);
                 CHECK(scene.shadowConsumerMembershipRevision != 0u);
                 CHECK(scene.probeConsumerMembershipRevision != 0u);
                 if (step != 0u) {
@@ -719,6 +726,8 @@ namespace {
                         (scene.shadowConsumerMembershipRevision != shadowRevision));
                     CHECK((newProbeHash != probeHash) ==
                         (scene.probeConsumerMembershipRevision != probeRevision));
+                    CHECK((newMainHash != mainHash) ==
+                        (scene.mainOpaqueConsumerMembershipRevision != mainRevision));
                     compared += 2u;
                     changed += (newShadowHash != shadowHash ? 1u : 0u) +
                         (newProbeHash != probeHash ? 1u : 0u);
@@ -728,6 +737,8 @@ namespace {
                     scene.probeConsumerMembershipRevision);
                 shadowHash = newShadowHash;
                 probeHash = newProbeHash;
+                mainHash = newMainHash;
+                mainRevision = scene.mainOpaqueConsumerMembershipRevision;
                 shadowRevision = scene.shadowConsumerMembershipRevision;
                 probeRevision = scene.probeConsumerMembershipRevision;
             }

@@ -86,6 +86,15 @@ namespace {
         IRIDIUM_COMPARE(probeConsumerPrimitiveIndices, bytesEqual(
             expected.probeConsumerPrimitiveIndices,
             actual.probeConsumerPrimitiveIndices))
+        IRIDIUM_COMPARE(mainOpaqueConsumerPrimitiveIndices, bytesEqual(
+            expected.mainOpaqueConsumerPrimitiveIndices,
+            actual.mainOpaqueConsumerPrimitiveIndices))
+        IRIDIUM_COMPARE(mainOpaqueConsumerMembershipRevision,
+            expected.mainOpaqueConsumerMembershipRevision ==
+                actual.mainOpaqueConsumerMembershipRevision)
+        IRIDIUM_COMPARE(mainOpaqueConsumerContentWatermark,
+            expected.mainOpaqueConsumerContentWatermark ==
+                actual.mainOpaqueConsumerContentWatermark)
         IRIDIUM_COMPARE(shadowConsumerMembershipRevision,
             expected.shadowConsumerMembershipRevision ==
                 actual.shadowConsumerMembershipRevision)
@@ -419,8 +428,8 @@ namespace {
         // M7R R5c.5: the retired FNV-1a membership revisions of the previous
         // publication; the published revisions must change exactly with them.
         bool legacyValid = false;
-        uint64_t legacyShadow = 0, legacyProbe = 0;
-        uint64_t shadowRevision = 0, probeRevision = 0;
+        uint64_t legacyShadow = 0, legacyProbe = 0, legacyMain = 0;
+        uint64_t shadowRevision = 0, probeRevision = 0, mainRevision = 0;
         size_t membershipChanges = 0;
 
         explicit Replay(GpuSceneCapacity capacity)
@@ -464,6 +473,10 @@ namespace {
                     GpuSceneConsumerShadow, actual.shadowConsumerPrimitiveIndices);
                 const uint64_t probe = legacyGpuSceneMembershipHash(actual,
                     GpuSceneConsumerProbe, actual.probeConsumerPrimitiveIndices);
+                // The main-opaque list (R5c.4a) follows the same rule.
+                const uint64_t main = legacyGpuSceneMembershipHash(actual,
+                    GpuSceneConsumerMainOpaque,
+                    actual.mainOpaqueConsumerPrimitiveIndices);
                 if (legacyValid) {
                     if ((shadow != legacyShadow) !=
                         (actual.shadowConsumerMembershipRevision != shadowRevision))
@@ -471,12 +484,17 @@ namespace {
                     else if ((probe != legacyProbe) !=
                         (actual.probeConsumerMembershipRevision != probeRevision))
                         difference = "probe membership change relation";
+                    else if ((main != legacyMain) !=
+                        (actual.mainOpaqueConsumerMembershipRevision != mainRevision))
+                        difference = "main-opaque membership change relation";
                     membershipChanges += (shadow != legacyShadow ? 1u : 0u) +
                         (probe != legacyProbe ? 1u : 0u);
                 }
                 legacyValid = true;
                 legacyShadow = shadow;
                 legacyProbe = probe;
+                legacyMain = main;
+                mainRevision = actual.mainOpaqueConsumerMembershipRevision;
                 shadowRevision = actual.shadowConsumerMembershipRevision;
                 probeRevision = actual.probeConsumerMembershipRevision;
             }

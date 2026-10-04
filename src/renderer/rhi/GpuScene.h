@@ -267,6 +267,7 @@ namespace Iridium {
         uint64_t nextRevision = 1;
         std::vector<uint32_t> shadowMembers;
         std::vector<uint32_t> probeMembers;
+        std::vector<uint32_t> mainOpaqueMembers;
         // The tables as of the last publication that changed a revision
         // (only the membership fields are compared).
         std::vector<GpuScenePrimitiveRecord> primitives;
@@ -304,12 +305,18 @@ namespace Iridium {
         std::vector<uint32_t> probeConsumerPrimitiveIndices;
         uint64_t shadowConsumerMembershipRevision = 0;
         uint64_t probeConsumerMembershipRevision = 0;
+        // M7R R5c.4a: the main view's G-buffer (MainOpaque) primitives, in
+        // ascending dense order, with the same revision rule. They replace the
+        // M7.2 per-frame parity packets as the main view's opaque input.
+        std::vector<uint32_t> mainOpaqueConsumerPrimitiveIndices;
+        uint64_t mainOpaqueConsumerMembershipRevision = 0;
         // M7R R5c.1: the largest primitive, transform or geometry record
         // revision a member resolves through (see
         // gpuSceneConsumerContentWatermark). Consumers use it with the
         // membership revision as a change trigger for derived caster content.
         uint64_t shadowConsumerContentWatermark = 0;
         uint64_t probeConsumerContentWatermark = 0;
+        uint64_t mainOpaqueConsumerContentWatermark = 0;
         uint32_t invalidSourceCount = 0;
         uint32_t capacityOmittedInstanceCount = 0;
         GpuSceneMembershipHistory membershipHistory;
@@ -333,13 +340,14 @@ namespace Iridium {
     [[nodiscard]] uint64_t gpuSceneConsumerContentWatermark(
         const GpuScenePackedTables& scene,
         std::span<const uint32_t> primitiveIndices) noexcept;
-    // Recomputes only the two content watermarks over the current membership
+    // Recomputes only the content watermarks over the current membership
     // lists. A publisher that rewrites records in place without changing any
     // membership input (for example transforms only) must call this, because
     // the watermarks include transform revisions.
     void refreshGpuSceneConsumerContentWatermarks(
         GpuScenePackedTables& scene) noexcept;
-    // Rebuilds the shadow and probe membership lists and advances each list's
+    // Rebuilds the shadow, probe and main-opaque membership lists and advances
+    // each list's
     // membership revision exactly when its membership input changed since the
     // previous call on this table: the scene epoch, the list, and per member
     // its primitive record (binding, state x/y/w, revisions), its instance's

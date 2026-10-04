@@ -2065,9 +2065,10 @@ namespace Iridium {
         if constexpr (kQualificationBuild) {
             if (IVulkanCasterRevisionObserver* observer =
                     extensionHooks_.casterRevisionObserver()) {
-                const std::array<uint64_t, 2> membership{
+                const std::array<uint64_t, 3> membership{
                     scene.shadowConsumerMembershipRevision,
-                    scene.probeConsumerMembershipRevision };
+                    scene.probeConsumerMembershipRevision,
+                    scene.mainOpaqueConsumerMembershipRevision };
                 observer->observeCasterRevision({
                     .stream = VulkanCasterRevisionStream::Membership,
                     .frameSerial = scheduler.lastSubmittedSerial() + 1u,

@@ -94,7 +94,7 @@ namespace Iridium {
         std::ostream* output_ = nullptr;
         State shadow_{};
         State depth_{};
-        std::array<State, 2> membership_{};   // shadow, probe
+        std::array<State, 3> membership_{};   // shadow, probe, main opaque
         std::vector<State> directional_;   // ordinal * cascade count + cascade
         std::array<Totals, StreamCount> totals_{};
         uint32_t printedDivergences_ = 0;
