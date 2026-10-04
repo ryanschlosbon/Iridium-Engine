@@ -1740,22 +1740,13 @@ namespace Iridium {
         // Group opaque objects by the PSO/material identity carried by each binding.
         {
             CpuScope sortScope(cpuProfiler_, "cpu.render.sort.opaque");
-            std::sort(opaqueQueue.begin(), opaqueQueue.end(), [](const DrawPacket& a, const DrawPacket& b) {
-                if (a.opaqueSortKey != b.opaqueSortKey) return a.opaqueSortKey < b.opaqueSortKey;
-                if (a.geometry != b.geometry) return a.geometry < b.geometry;
-                return a.firstIndex < b.firstIndex;
-                });
+            // M7R R5c.3: compact (key, index) sort; same permutation as the
+            // packet sort (opaqueSortKey, geometry, firstIndex).
+            sortOpaqueDrawPackets(opaqueQueue, drawSortScratch_);
         }
         {
             CpuScope sortScope(cpuProfiler_, "cpu.render.sort.forward_opaque");
-            std::sort(forwardOpaqueQueue.begin(), forwardOpaqueQueue.end(),
-                [](const DrawPacket& a, const DrawPacket& b) {
-                    if (a.opaqueSortKey != b.opaqueSortKey) {
-                        return a.opaqueSortKey < b.opaqueSortKey;
-                    }
-                    if (a.geometry != b.geometry) return a.geometry < b.geometry;
-                    return a.firstIndex < b.firstIndex;
-                });
+            sortOpaqueDrawPackets(forwardOpaqueQueue, drawSortScratch_);
         }
 
         shadowCasterQueue.reserve(
@@ -1812,10 +1803,10 @@ namespace Iridium {
         // Sort transparent objects Back-to-Front to ensure perfect alpha blending and refraction
         {
             CpuScope sortScope(cpuProfiler_, "cpu.render.sort.transparent");
-            std::sort(transparentQueue.begin(), transparentQueue.end(),
-                transparentCompatibilityLess);
-            std::sort(sortedSurfaceQueue.begin(), sortedSurfaceQueue.end(),
-                transparentWorkLess);
+            sortTransparentCompatibilityDrawPackets(transparentQueue,
+                drawSortScratch_);
+            sortTransparentWorkDrawPackets(sortedSurfaceQueue,
+                drawSortScratch_);
         }
         cpuProfiler_.recordCounter("transparent.work.invalid_bounds",
             std::ranges::count_if(sortedSurfaceQueue,

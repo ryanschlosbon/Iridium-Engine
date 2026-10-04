@@ -26,6 +26,7 @@
 #include "renderer/lighting/LightExtractor.h"
 #include "renderer/lighting/LocalShadow.h"
 #include "renderer/lighting/ReflectionProbe.h"
+#include "renderer/rhi/CompactDrawSort.h"
 #include "renderer/rhi/DrawPacket.h"
 #include "renderer/rhi/GpuScene.h"
 #include "renderer/rhi/GpuSceneVisibility.h"
@@ -199,6 +200,9 @@ namespace Iridium {
         std::vector<DrawPacket> forwardOpaqueQueue;
         std::vector<DrawPacket> transparentQueue;
         std::vector<DrawPacket> sortedSurfaceQueue;
+        // M7R R5c.3: key scratch shared by the four queue sorts (keeps its
+        // capacity across frames).
+        CompactDrawSortScratch drawSortScratch_;
         std::vector<TransparentIntervalEndpoint>
             transparentIntervalEndpointScratch;
         std::vector<float> transparentIntervalNearScratch;
