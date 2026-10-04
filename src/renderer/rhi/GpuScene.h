@@ -310,6 +310,12 @@ namespace Iridium {
     [[nodiscard]] uint64_t gpuSceneConsumerContentWatermark(
         const GpuScenePackedTables& scene,
         std::span<const uint32_t> primitiveIndices) noexcept;
+    // Recomputes only the two content watermarks over the current membership
+    // lists. A publisher that rewrites records in place without changing any
+    // membership input (for example transforms only) must call this, because
+    // the watermarks include transform revisions.
+    void refreshGpuSceneConsumerContentWatermarks(
+        GpuScenePackedTables& scene) noexcept;
     void publishGpuSceneConsumerMembership(GpuScenePackedTables& scene);
     [[nodiscard]] GpuScenePackedTables packGpuSceneReference(
         const GpuScenePublicationInput& input, const GpuSceneCapacity& capacity);

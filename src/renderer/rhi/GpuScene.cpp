@@ -172,6 +172,11 @@ namespace {
             GpuSceneConsumerShadow, scene.shadowConsumerPrimitiveIndices);
         scene.probeConsumerMembershipRevision = revisionFor(
             GpuSceneConsumerProbe, scene.probeConsumerPrimitiveIndices);
+        refreshGpuSceneConsumerContentWatermarks(scene);
+    }
+
+    void refreshGpuSceneConsumerContentWatermarks(
+        GpuScenePackedTables& scene) noexcept {
         scene.shadowConsumerContentWatermark = gpuSceneConsumerContentWatermark(
             scene, scene.shadowConsumerPrimitiveIndices);
         scene.probeConsumerContentWatermark = gpuSceneConsumerContentWatermark(

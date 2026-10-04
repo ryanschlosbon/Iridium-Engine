@@ -87,6 +87,12 @@ namespace {
         IRIDIUM_COMPARE(probeConsumerMembershipRevision,
             expected.probeConsumerMembershipRevision ==
                 actual.probeConsumerMembershipRevision)
+        IRIDIUM_COMPARE(shadowConsumerContentWatermark,
+            expected.shadowConsumerContentWatermark ==
+                actual.shadowConsumerContentWatermark)
+        IRIDIUM_COMPARE(probeConsumerContentWatermark,
+            expected.probeConsumerContentWatermark ==
+                actual.probeConsumerContentWatermark)
         IRIDIUM_COMPARE(invalidSourceCount,
             expected.invalidSourceCount == actual.invalidSourceCount)
         IRIDIUM_COMPARE(capacityOmittedInstanceCount,

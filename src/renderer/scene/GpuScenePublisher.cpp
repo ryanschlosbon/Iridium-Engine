@@ -1174,8 +1174,11 @@ namespace {
         }
         // Membership lists and revisions are a pure function of the epoch,
         // primitive records, instance state words, geometry records and
-        // geometry revisions; transforms and bounds do not participate.
+        // geometry revisions; transforms and bounds do not participate. The
+        // content watermarks do include transform revisions, so they are
+        // refreshed whenever membership is not republished.
         if (membershipInputsChanged) publishGpuSceneConsumerMembership(packed_);
+        else refreshGpuSceneConsumerContentWatermarks(packed_);
     }
 
     uint32_t GpuScenePublisher::allocateInstanceState() {
