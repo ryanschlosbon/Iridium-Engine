@@ -2,6 +2,7 @@
 # renderer/scene (GPU-scene publication) belongs to this library; the header-only
 # renderer/transparency is iridium_transparency, which depends on it.
 add_library(iridium_rhi STATIC
+        CompactDrawSort.cpp
         DepthPyramid.cpp
         GeometryArena.cpp
         GpuScene.cpp

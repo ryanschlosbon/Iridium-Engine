@@ -244,6 +244,11 @@ iridium_add_test(GpuScenePublisherReplayTests
                 renderer/support/ReferenceGpuScenePublisher.cpp
         LIBS iridium_rhi)
 
+# M7R R5c.3: compact (key, index) queue sorts keep the packet sorts' permutation.
+iridium_add_test(CompactDrawSortTests
+        SOURCES renderer/CompactDrawSortTests.cpp
+        LIBS iridium_rhi)
+
 iridium_add_test(GpuSceneVisibilityTests
         SOURCES renderer/GpuSceneVisibilityTests.cpp
         LIBS iridium_rhi)
