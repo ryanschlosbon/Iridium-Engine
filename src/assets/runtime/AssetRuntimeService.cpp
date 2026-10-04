@@ -16,7 +16,8 @@ namespace Iridium {
               config.debounceNanoseconds,
               config.scanInterval,
               std::move(hasher),
-              config.startSourceWorkers) {}
+              config.startSourceWorkers,
+              config.tasks) {}
 
     AssetRuntimeService::~AssetRuntimeService() {
         shutdown();

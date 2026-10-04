@@ -39,6 +39,9 @@ namespace Iridium {
             64ull * 1024ull * 1024ull;
         std::optional<uint64_t> gpuResidencyBudgetBytes;
         bool startSourceWorkers = true;
+        // Runs the source watcher and monitor (M7R R5b.2); required when
+        // startSourceWorkers is set.
+        Tasks::TaskSystem* tasks = nullptr;
     };
 
     struct AssetRuntimeServiceTick {

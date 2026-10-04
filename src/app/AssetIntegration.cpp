@@ -185,6 +185,7 @@ namespace Iridium {
                         EditorRuntimeUploadBudgetBytes,
                     .startSourceWorkers =
                         !deterministicContent,
+                    .tasks = &tasks_,
                 });
         const std::filesystem::path assetRoot =
             std::filesystem::path(PROJECT_ROOT_DIR) / "assets";

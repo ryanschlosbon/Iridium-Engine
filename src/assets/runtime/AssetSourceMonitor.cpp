@@ -31,8 +31,9 @@ namespace Iridium {
         uint64_t debounceNanoseconds,
         std::chrono::milliseconds scanInterval,
         ContentHasher hasher,
-        bool startWorkers)
-        : watcher_(scanInterval, startWorkers),
+        bool startWorkers,
+        Tasks::TaskSystem* tasks)
+        : watcher_(scanInterval, startWorkers, tasks),
           tracker_(debounceNanoseconds),
           hasher_(std::move(hasher)),
           automatic_(startWorkers) {

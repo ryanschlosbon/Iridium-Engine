@@ -33,11 +33,14 @@ namespace Iridium {
         using ContentHasher =
             SourceChangeTracker::ContentHasher;
 
+        // startWorkers processes sources automatically on the task system
+        // (M7R R5b.2), which `tasks` must then provide.
         AssetSourceMonitor(
             uint64_t debounceNanoseconds,
             std::chrono::milliseconds scanInterval,
             ContentHasher hasher = {},
-            bool startWorkers = true);
+            bool startWorkers = true,
+            Tasks::TaskSystem* tasks = nullptr);
         ~AssetSourceMonitor();
 
         AssetSourceMonitor(

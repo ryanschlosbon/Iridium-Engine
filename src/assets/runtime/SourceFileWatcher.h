@@ -3,17 +3,20 @@
 #include "core/types/AssetGuid.h"
 
 #include <chrono>
-#include <condition_variable>
 #include <cstdint>
 #include <filesystem>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <set>
-#include <stop_token>
-#include <thread>
 #include <vector>
 
 namespace Iridium {
+
+    namespace Tasks {
+        class Periodic;
+        class TaskSystem;
+    }
 
     struct SourceFileChangeEvent {
         AssetGuid assetGuid;
@@ -32,10 +35,14 @@ namespace Iridium {
 
     class SourceFileWatcher {
     public:
+        // startWorker scans automatically every scanInterval: a Periodic on the
+        // task system's pinned I/O thread (M7R R5b.2), which `tasks` must
+        // provide. Without it, scanNow() is the only scan.
         explicit SourceFileWatcher(
             std::chrono::milliseconds scanInterval =
                 std::chrono::milliseconds(250),
-            bool startWorker = true);
+            bool startWorker = true,
+            Tasks::TaskSystem* tasks = nullptr);
         ~SourceFileWatcher();
 
         SourceFileWatcher(const SourceFileWatcher&) = delete;
@@ -52,7 +59,8 @@ namespace Iridium {
         void clear();
 
         // Used by deterministic tests and tools. The application uses the
-        // background worker so filesystem queries never run on the frame tick.
+        // periodic scan so filesystem queries never run on the frame tick. The
+        // stat calls run outside the watcher's mutex.
         void scanNow();
         [[nodiscard]] std::vector<SourceFileChangeEvent>
             drainEvents();
@@ -72,24 +80,27 @@ namespace Iridium {
         struct WatchedFile {
             FileStamp stamp;
             std::set<AssetGuid> owners;
+            // Distinguishes a re-watched path from the entry a scan read.
+            uint64_t generation = 0;
         };
 
         [[nodiscard]] static std::filesystem::path
             normalizePath(
                 const std::filesystem::path& path);
-        [[nodiscard]] FileStamp readStamp(
-            const std::filesystem::path& path);
-        void workerLoop(std::stop_token stopToken);
+        [[nodiscard]] static FileStamp readStamp(
+            const std::filesystem::path& path,
+            uint64_t& statFailures);
 
         std::chrono::milliseconds scanInterval_;
         mutable std::mutex mutex_;
-        std::condition_variable_any condition_;
         std::map<std::filesystem::path, WatchedFile>
             watched_;
         std::vector<SourceFileChangeEvent> events_;
         SourceFileWatcherStats stats_;
+        uint64_t nextGeneration_ = 0;
         bool shutdown_ = false;
-        std::jthread worker_;
+        // Declared last: stopped in shutdown() before the state above goes.
+        std::unique_ptr<Tasks::Periodic> periodic_;
     };
 
 } // namespace Iridium
