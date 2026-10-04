@@ -1,6 +1,6 @@
 #pragma once
 
-#include "assets/AssetGuid.h"
+#include "core/types/AssetGuid.h"
 #include "assets/runtime/AssetRuntimePublisher.h"
 
 #include <cstdint>

@@ -23,7 +23,7 @@ void computeBarrier(VkCommandBuffer command) {
 }
 }
 
-void VulkanVirtualShadowMarkingPass::init(VkDevice device,
+void VulkanVirtualShadowMarkingPass::init(VkDevice device, VkPipelineCache pipelineCache,
     std::span<const VkBuffer> workingSets,
     const VirtualShadowGpuWorkingSetLayout& layout,
     const VirtualShadowResourceConfig& config,
@@ -36,6 +36,7 @@ void VulkanVirtualShadowMarkingPass::init(VkDevice device,
     if (layout.scratchCapacity != config.receiverMarkCapacity)
         throw std::invalid_argument("Virtual shadow compute layout capacity mismatch");
     device_ = device;
+    pipelineCache_ = pipelineCache;
     config_ = config;
     try {
         const VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
@@ -77,7 +78,7 @@ void VulkanVirtualShadowMarkingPass::init(VkDevice device,
             compute.stage = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
                 nullptr, 0, VK_SHADER_STAGE_COMPUTE_BIT, shader, "main", nullptr};
             compute.layout = pipeline.layout;
-            const auto result = vkCreateComputePipelines(device_, VK_NULL_HANDLE,
+            const auto result = vkCreateComputePipelines(device_, pipelineCache_,
                 1, &compute, nullptr, &pipeline.handle);
             vkDestroyShaderModule(device_, shader, nullptr);
             require(result);

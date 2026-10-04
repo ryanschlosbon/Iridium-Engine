@@ -1,7 +1,7 @@
 #pragma once
 
 #include "renderer/rhi/IRenderBackend.h"
-#include "assets/AssetGuid.h"
+#include "core/types/AssetGuid.h"
 #include <cmath>
 
 namespace Iridium {

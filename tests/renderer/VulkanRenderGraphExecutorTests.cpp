@@ -11,7 +11,10 @@
 #include <iostream>
 #include <limits>
 #include <stdexcept>
+#include <string>
 #include <string_view>
+#include <vector>
+#include <algorithm>
 #include <utility>
 #include <tuple>
 
@@ -72,14 +75,16 @@ namespace {
             return buildVulkanProductionRenderGraph(extent,
                 VK_FORMAT_B8G8R8A8_SRGB, VK_FORMAT_B8G8R8A8_SRGB, false,
                 GBufferLayout::CanonicalReference, {}, 4096, 8192, false,
-                {}, false, enabled);
+                {}, { .depthPyramid = enabled });
         };
         const auto disabled = makeGraph({127, 73}, false);
         CHECK(std::ranges::none_of(disabled.resources(), [](const auto& resource) {
             return resource.name == "depth.occlusion-pyramid";
         }));
         const auto enabled = makeGraph({127, 73}, true);
-        CHECK(enabled.resources().size() == disabled.resources().size());
+        // R3b.9: the pyramid history is one imported image (no pool slot).
+        CHECK(enabled.resources().size() == disabled.resources().size() + 1);
+        CHECK(enabled.physicalSlots().size() == disabled.physicalSlots().size());
         CHECK(enabled.passes().size() == disabled.passes().size() + 2);
         CHECK(std::ranges::none_of(enabled.resources(), [](const auto& resource) {
             return resource.name == "depth.occlusion-pyramid";
@@ -150,26 +155,42 @@ namespace {
     bool testProductionTopologyContract() {
         const RenderGraph::CompiledGraph graph = buildVulkanProductionRenderGraph(
             { 3840, 2160 }, VK_FORMAT_B8G8R8A8_SRGB);
-        CHECK(graph.passes().size() == 19);
-        CHECK(graph.resources().size() == 26);
+        // R3b.5: the default hooks declare scene-color-capture-hook. R3b.7:
+        // the shadow/opaque compaction and probe-cluster passes are declared
+        // (their ten indirect/cluster buffers are imported). R3b.8:
+        // probe.capture follows the shadow passes.
+        CHECK(graph.passes().size() == 26);
+        CHECK(graph.resources().size() == 36);
         CHECK(!graph.transitions().empty());
-        CHECK(graph.passes().front().name == "shadow.directional");
+        CHECK(graph.passes().front().name == "shadow.directional.compact");
         CHECK(graph.passes().back().name == "ui-present");
-        CHECK(graph.passes()[1].name == "shadow.spot");
-        CHECK(graph.passes()[2].name == "shadow.point");
-        CHECK(graph.passes()[3].name == "gbuffer");
-        CHECK(graph.passes()[4].name == "lighting.cluster.clear");
-        CHECK(graph.passes()[8].name == "lighting.cluster.finalize");
-        CHECK(graph.passes()[9].name == "lighting.cluster.readback");
-        CHECK(graph.passes()[11].name == "forward-opaque");
-        CHECK(graph.passes()[12].name == "transparent.refraction-pyramids");
-        CHECK(graph.passes()[12].queue == RenderGraph::QueueClass::Compute);
-        CHECK(graph.passes()[13].name == "transparent.sorted.forward");
-        CHECK(graph.passes()[14].name ==
+        CHECK(graph.passes()[1].name == "shadow.directional");
+        CHECK(graph.passes()[2].name == "shadow.spot.compact");
+        CHECK(graph.passes()[3].name == "shadow.spot");
+        CHECK(graph.passes()[4].name == "shadow.point.compact");
+        CHECK(graph.passes()[5].name == "shadow.point");
+        CHECK(graph.passes()[6].name == "probe.capture");
+        CHECK(graph.passes()[6].queue == RenderGraph::QueueClass::Graphics);
+        CHECK(graph.passes()[7].name == "gpu-scene.opaque.compact");
+        CHECK(graph.passes()[8].name == "gbuffer");
+        CHECK(graph.passes()[9].name == "lighting.probe-cluster");
+        CHECK(graph.passes()[10].name == "lighting.cluster.clear");
+        CHECK(graph.passes()[14].name == "lighting.cluster.finalize");
+        CHECK(graph.passes()[15].name == "lighting.cluster.readback");
+        CHECK(graph.passes()[17].name == "forward-opaque");
+        CHECK(graph.passes()[18].name == "transparent.refraction-pyramids");
+        CHECK(graph.passes()[18].queue == RenderGraph::QueueClass::Compute);
+        CHECK(graph.passes()[19].name == "transparent.sorted.forward");
+        CHECK(graph.passes()[20].name ==
             "transparent.compatibility.forward");
+        CHECK(graph.passes()[21].name == "scene-color-capture-hook");
+        CHECK(graph.passes()[21].queue == RenderGraph::QueueClass::Transfer);
+        CHECK(graph.passes()[22].name == "bloom-hook");
+        for (const size_t compact : { 0u, 2u, 4u, 7u, 9u })
+            CHECK(graph.passes()[compact].queue == RenderGraph::QueueClass::Compute);
         bool sortedReadsDepth = false;
         bool sortedLoadsSceneColor = false;
-        const RenderGraph::CompiledPass& sortedPass = graph.passes()[13];
+        const RenderGraph::CompiledPass& sortedPass = graph.passes()[19];
         for (uint32_t usageIndex = sortedPass.firstUsage;
             usageIndex < sortedPass.firstUsage + sortedPass.usageCount;
             ++usageIndex) {
@@ -193,7 +214,7 @@ namespace {
         }
         CHECK(sortedReadsDepth);
         CHECK(sortedLoadsSceneColor);
-        for (size_t passIndex = 4; passIndex <= 8; ++passIndex) {
+        for (size_t passIndex = 10; passIndex <= 14; ++passIndex) {
             CHECK(graph.passes()[passIndex].queue ==
                 RenderGraph::QueueClass::Compute);
         }
@@ -270,7 +291,7 @@ namespace {
             120ull * 68ull * 32ull * sizeof(ClusterLightHeader));
         CHECK(coarse.topologyHash() != graph.topologyHash());
 
-        const RenderGraph::CompiledResource& swapchain = graph.resources().back();
+        const RenderGraph::CompiledResource& swapchain = *findResource("swapchain");
         CHECK(swapchain.desc.lifetime == RenderGraph::ResourceLifetime::External);
         CHECK(swapchain.desc.imported);
         CHECK(swapchain.physicalSlot == RenderGraph::InvalidIndex);
@@ -313,26 +334,21 @@ namespace {
         CHECK((output->usages & RenderGraph::usageBit(
             RenderGraph::Access::TransferSource)) != 0);
 
-        const RenderGraph::CompiledGraph legacy =
-            buildVulkanProductionRenderGraph({ 3840, 2160 },
-                VK_FORMAT_B8G8R8A8_SRGB,
-                VK_FORMAT_B8G8R8A8_SRGB, false,
-                GBufferLayout::CanonicalReference, {}, 4096, 8192, true,
-                {}, true);
-        CHECK(legacy.passes().size() == 22);
-        CHECK(legacy.resources().size() == 27);
-        CHECK(std::ranges::any_of(legacy.resources(),
+        // M7R R2: the retired two-bucket topology no longer exists in any
+        // configuration; classified transparency keeps one compatibility pass.
+        CHECK(std::ranges::none_of(graph.resources(),
             [](const RenderGraph::CompiledResource& resource) {
                 return resource.name == "depth.glass";
             }));
-        CHECK(std::ranges::any_of(legacy.passes(),
+        CHECK(std::ranges::none_of(graph.passes(),
             [](const RenderGraph::CompiledPass& pass) {
-                return pass.name == "transparent.background.depth";
+                return pass.name.starts_with("transparent.background.") ||
+                    pass.name.starts_with("transparent.foreground.");
             }));
-        CHECK(std::ranges::none_of(legacy.passes(),
+        CHECK(std::ranges::count_if(graph.passes(),
             [](const RenderGraph::CompiledPass& pass) {
                 return pass.name == "transparent.compatibility.forward";
-            }));
+            }) == 1);
         return true;
     }
 
@@ -340,9 +356,9 @@ namespace {
         const RenderGraph::CompiledGraph graph = buildVulkanProductionRenderGraph(
             { 3840, 2160 }, VK_FORMAT_A2B10G10R10_UNORM_PACK32,
             VK_FORMAT_R16G16B16A16_SFLOAT, true);
-        CHECK(graph.passes().size() == 20);
-        CHECK(graph.resources().size() == 27);
-        CHECK(graph.passes()[18].name == "ui-compose");
+        CHECK(graph.passes().size() == 27);
+        CHECK(graph.resources().size() == 37);
+        CHECK(graph.passes()[25].name == "ui-compose");
         CHECK(graph.passes().back().name == "hdr10-encode-present");
         const auto composition = std::find_if(graph.resources().begin(),
             graph.resources().end(), [](const RenderGraph::CompiledResource& resource) {
@@ -354,8 +370,10 @@ namespace {
             RenderGraph::Access::ColorAttachment)) != 0);
         CHECK((composition->usages & RenderGraph::usageBit(
             RenderGraph::Access::SampledRead)) != 0);
-        CHECK(graph.resources().back().desc.image.format ==
-            RenderGraph::Format::Rgb10A2Unorm);
+        CHECK(std::ranges::find_if(graph.resources(),
+            [](const RenderGraph::CompiledResource& resource) {
+                return resource.name == "swapchain";
+            })->desc.image.format == RenderGraph::Format::Rgb10A2Unorm);
         return true;
     }
 
@@ -964,8 +982,8 @@ namespace {
 
         const VulkanGraphStats stats = executor.stats();
         CHECK(stats.enabled);
-        CHECK(stats.passCount == 19);
-        CHECK(stats.logicalResourceCount == 26);
+        CHECK(stats.passCount == 26);
+        CHECK(stats.logicalResourceCount == 36);
         CHECK(stats.physicalSlotCount == 19);
         CHECK(stats.barrierCount == transitionCount);
         CHECK(stats.frameCount == 2);
@@ -987,10 +1005,16 @@ namespace {
         CHECK(executor.stats().cacheMissCount == 0);
 
         constexpr std::string_view passNames[] = {
+            "shadow.directional.compact",
             "shadow.directional",
+            "shadow.spot.compact",
             "shadow.spot",
+            "shadow.point.compact",
             "shadow.point",
+            "probe.capture",
+            "gpu-scene.opaque.compact",
             "gbuffer",
+            "lighting.probe-cluster",
             "lighting.cluster.clear",
             "lighting.cluster.count",
             "lighting.cluster.scan",
@@ -1002,6 +1026,7 @@ namespace {
             "transparent.refraction-pyramids",
             "transparent.sorted.forward",
             "transparent.compatibility.forward",
+            "scene-color-capture-hook",
             "bloom-hook",
             "output-transform",
             "final-capture-hook",
@@ -1009,21 +1034,21 @@ namespace {
         };
         executor.beginFrameExecution(0);
         for (const std::string_view passName : passNames) {
-            executor.skipPass(passName);
+            executor.skipPass(executor.passId(passName));
         }
         executor.finishFrameExecution();
 
         bool orderRejected = false;
         executor.beginFrameExecution(1);
         try {
-            executor.skipPass("lighting");
+            executor.skipPass(executor.passId("lighting"));
         }
         catch (const std::logic_error&) {
             orderRejected = true;
         }
         CHECK(orderRejected);
         for (const std::string_view passName : passNames) {
-            executor.skipPass(passName);
+            executor.skipPass(executor.passId(passName));
         }
         executor.finishFrameExecution();
 
@@ -1050,11 +1075,12 @@ namespace {
         VulkanRenderGraphExecutor executor;
         executor.init(factory, 2);
         executor.rebuild(*compiled.graph);
-        CHECK(executor.bufferResource(0, "lighting.cluster.headers").isValid());
-        CHECK(executor.bufferResource(1, "lighting.cluster.headers").isValid());
+        const auto headers = executor.resourceId("lighting.cluster.headers");
+        CHECK(executor.buffer(0, headers).isValid());
+        CHECK(executor.buffer(1, headers).isValid());
         bool rejectedImage = false;
         try {
-            (void)executor.imageResource(0, "lighting.cluster.headers");
+            (void)executor.image(0, headers);
         }
         catch (const std::out_of_range&) {
             rejectedImage = true;
@@ -1064,11 +1090,104 @@ namespace {
         return true;
     }
 
+    // M7R R2.3: telemetry/qualification-only graph work is declared only when
+    // its consumer is active; defaults reproduce the production graph.
+    bool testOptionalTelemetryAndQualificationReadbacks() {
+        const auto build = [](VulkanProductionGraphFeatures features) {
+            return buildVulkanProductionRenderGraph({127, 73},
+                VK_FORMAT_B8G8R8A8_SRGB, VK_FORMAT_B8G8R8A8_SRGB, false,
+                GBufferLayout::CanonicalReference, {}, 4096, 8192, true, {},
+                features);
+        };
+        const auto hasPass = [](const RenderGraph::CompiledGraph& graph,
+            std::string_view name) {
+            return std::ranges::any_of(graph.passes(),
+                [name](const auto& pass) { return pass.name == name; });
+        };
+        const auto hasResource = [](const RenderGraph::CompiledGraph& graph,
+            std::string_view name) {
+            return std::ranges::any_of(graph.resources(),
+                [name](const auto& resource) { return resource.name == name; });
+        };
+        const auto defaults = build({});
+        CHECK(hasPass(defaults, "lighting.cluster.readback"));
+        CHECK(hasResource(defaults, "lighting.cluster.diagnostics-readback"));
+        const auto noTelemetry = build({ .clusterTelemetryReadback = false });
+        CHECK(!hasPass(noTelemetry, "lighting.cluster.readback"));
+        CHECK(!hasResource(noTelemetry, "lighting.cluster.diagnostics-readback"));
+        CHECK(noTelemetry.passes().size() + 1 == defaults.passes().size());
+
+        const auto depthUsages = [](const RenderGraph::CompiledGraph& graph) {
+            const auto depth = std::ranges::find_if(graph.resources(),
+                [](const auto& resource) { return resource.name == "depth.opaque"; });
+            return depth == graph.resources().end() ? 0u : depth->usages;
+        };
+        const auto transferSource = RenderGraph::usageBit(
+            RenderGraph::Access::TransferSource);
+        const auto vsmOracle = build({ .virtualShadowWorkingSetBytes = 8'192 });
+        const auto vsmNoOracle = build({ .virtualShadowWorkingSetBytes = 8'192,
+            .hooks = { .virtualShadowDepthSnapshot = false } });
+        CHECK(hasPass(vsmNoOracle, "shadow.virtual.request-readback"));
+        CHECK((depthUsages(vsmOracle) & transferSource) != 0);
+        CHECK((depthUsages(vsmNoOracle) & transferSource) == 0);
+        return true;
+    }
+
+    // M7R R2.7: extension hook passes are declared by VulkanGraphHooks. The
+    // defaults (what the qualification extension declares) reproduce the
+    // pre-extension graph; with no extension none are declared, while the
+    // final-capture hook stays (retained editor views copy through it).
+    bool testExtensionHookPassDeclarations() {
+        const VulkanLayeredGraphConfig layered{ { 256u, 128u },
+            { 256u, 128u }, { 256u, 128u }, false };
+        const auto build = [&](VulkanGraphHooks hooks) {
+            return buildVulkanProductionRenderGraph({ 1920, 1080 },
+                VK_FORMAT_B8G8R8A8_SRGB, VK_FORMAT_B8G8R8A8_SRGB, false,
+                GBufferLayout::CanonicalReference, {}, 4096, 8192, true,
+                layered, { .depthPyramid = true,
+                    .virtualShadowWorkingSetBytes = 8'192, .hooks = hooks });
+        };
+        const auto passNames = [](const RenderGraph::CompiledGraph& graph) {
+            std::vector<std::string> names;
+            for (const auto& pass : graph.passes()) names.push_back(pass.name);
+            return names;
+        };
+        const auto has = [](const std::vector<std::string>& names,
+            std::string_view name) {
+            return std::ranges::find(names, name) != names.end();
+        };
+        const auto declared = passNames(build({}));
+        const auto none = passNames(build(VulkanGraphHooks::none()));
+        constexpr std::array<std::string_view, 5> hookPasses{
+            "depth.occlusion-pyramid.validation-readback-hook",
+            "transparent.layered.validation-readback-hook",
+            "transparent.layered.hero4.validation-readback-hook",
+            "transparent.layered.cinematic8.validation-readback-hook",
+            "scene-color-capture-hook" };
+        for (std::string_view hook : hookPasses) {
+            CHECK(has(declared, hook));
+            CHECK(!has(none, hook));
+        }
+        CHECK(has(declared, "final-capture-hook"));
+        CHECK(has(none, "final-capture-hook"));
+        CHECK(declared.size() == none.size() + hookPasses.size());
+        // Removing the hooks leaves the order of every other pass unchanged.
+        std::vector<std::string> withoutHooks;
+        for (const std::string& name : declared)
+            if (std::ranges::find(hookPasses, name) == hookPasses.end())
+                withoutHooks.push_back(name);
+        CHECK(withoutHooks == none);
+        const auto partial = passNames(build({ .depthPyramidValidation = false }));
+        CHECK(!has(partial, hookPasses[0]));
+        CHECK(has(partial, hookPasses[1]));
+        return true;
+    }
+
     bool testExternalBufferBindingAndUploadTopology() {
         const auto normal = buildVulkanProductionRenderGraph({127, 73}, VK_FORMAT_B8G8R8A8_SRGB);
         const auto upload = buildVulkanProductionRenderGraph({127, 73}, VK_FORMAT_B8G8R8A8_SRGB,
             VK_FORMAT_B8G8R8A8_SRGB, false, GBufferLayout::CanonicalReference, {},
-            4096, 8192, true, {}, false, false, 8'192);
+            4096, 8192, true, {}, { .virtualShadowWorkingSetBytes = 8'192 });
         CHECK(upload.passes().size() == normal.passes().size() + 3);
         CHECK(upload.resources().size() == normal.resources().size() + 1);
         CHECK(upload.physicalSlots().size() == normal.physicalSlots().size());
@@ -1104,7 +1223,7 @@ namespace {
         const auto handle = reinterpret_cast<VkBuffer>(uintptr_t{123});
         const auto other = reinterpret_cast<VkBuffer>(uintptr_t{456});
         const auto rejects = [&](uint32_t slot, std::string_view name, VkBuffer value, uint64_t bytes) {
-            try { executor.bindExternalBuffer(slot, name, value, bytes); }
+            try { executor.bindExternalBuffer(slot, executor.findResource(name), value, bytes); }
             catch (const std::invalid_argument&) { return true; }
             return false;
         };
@@ -1112,17 +1231,18 @@ namespace {
         CHECK(rejects(2, "external", handle, 256));
         CHECK(rejects(0, "unknown", handle, 256));
         CHECK(rejects(0, "external", handle, 255));
-        executor.bindExternalBuffer(0, "external", handle, 256);
+        const auto external = executor.resourceId("external");
+        executor.bindExternalBuffer(0, external, handle, 256);
         CHECK(executor.validateFrame(0)); CHECK(!executor.validateFrame(1));
         CHECK(rejects(1, "external", handle, 256));
-        executor.bindExternalBuffer(1, "external", other, 256);
+        executor.bindExternalBuffer(1, external, other, 256);
         CHECK(executor.validateFrame(1));
         executor.beginFrameExecution(0);
         CHECK(rejects(0, "external", handle, 256));
-        executor.skipPass("upload"); executor.finishFrameExecution();
+        executor.skipPass(executor.passId("upload")); executor.finishFrameExecution();
         CHECK(rejects(0, "external", handle, 256));
         executor.onFrameFenceCompleted(0);
-        executor.bindExternalBuffer(0, "external", handle, 256);
+        executor.bindExternalBuffer(0, external, handle, 256);
         executor.cleanupAfterDeviceIdle();
         CHECK(factory.createCount == 0 && factory.destroyCount == 0);
         return true;
@@ -1139,6 +1259,8 @@ int main() {
         { "external buffer binding and clip upload topology", testExternalBufferBindingAndUploadTopology },
         { "access and format mappings", testAccessAndFormatMappings },
         { "optional occlusion depth pyramid", testOptionalOcclusionDepthPyramid },
+        { "optional telemetry and qualification readbacks", testOptionalTelemetryAndQualificationReadbacks },
+        { "extension hook pass declarations", testExtensionHookPassDeclarations },
         { "production topology contract", testProductionTopologyContract },
         { "HDR10 topology contract", testHdr10TopologyContract },
         { "scene and presentation extent separation",

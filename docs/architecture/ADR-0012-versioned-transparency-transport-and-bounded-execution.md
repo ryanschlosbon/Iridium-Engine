@@ -3,7 +3,7 @@
 - Status: Accepted; implemented and production-qualified by M6
 - Date: 2026-08-13
 - Accepted: 2026-08-13
-- Last updated: 2026-08-27
+- Last updated: 2026-10-02 (M7R amendment: developer legacy path removed)
 - Owners: Renderer, material compiler, asset cooker, RHI, and editor
 - Refines: ADR-0005; does not supersede its classified-hybrid direction
 
@@ -111,6 +111,16 @@ the legacy topology remains a post-M6 diagnostic comparison path and is never se
 as an automatic fallback. A classified packet rejected by a bounded specialist path
 uses one direct compatibility-forward pass rather than reviving the retired glass-depth
 approximation.
+
+**M7R amendment (2026-10-02, owner-approved).** The `--developer-legacy-transparency`
+option and its two-bucket topology are removed: the `depth.glass` resource, the
+background/foreground depth and forward passes, the glass-depth pipeline and render
+pass, and their frame targets. Classified execution is now the only runtime
+transparency topology. The serialized `LegacyTwoBucket` execution-mode value, the
+schema-1 migration that produces it, and its name remain readable, so existing
+metadata and CookKeys are unchanged and nothing is silently rewritten. The value no
+longer selects any runtime path. Historical M6 A/B evidence remains valid as a dated
+record. Fixed pipeline identity 5 (glass depth) stays reserved and is not reused.
 
 ## Consequences
 

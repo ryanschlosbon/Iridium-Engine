@@ -30,6 +30,18 @@ namespace Iridium {
         const LocalShadowRequest& right) noexcept;
     [[nodiscard]] std::vector<LocalShadowRequest> buildLocalShadowRequests(
         const LightingFramePacket& lighting, glm::vec3 cameraPosition);
+    // M7R R5c.6: the same requests written into caller-owned storage, so a
+    // steady frame reuses its capacity instead of allocating.
+    void buildLocalShadowRequests(const LightingFramePacket& lighting,
+        glm::vec3 cameraPosition, std::vector<LocalShadowRequest>& requests);
+
+    namespace local_shadow_detail {
+        struct RankedRequest {
+            LocalShadowRequest request;
+            uint32_t resolution = 0;
+            bool accepted = false;
+        };
+    } // namespace local_shadow_detail
 
     struct LocalShadowAllocationStats {
         uint32_t requested = 0;
@@ -71,6 +83,10 @@ namespace Iridium {
     private:
         SpotShadowAtlasConfig config_;
         std::vector<SpotShadowTile> allocations_;
+        // Per-call scratch kept for its capacity (M7R R5c.6).
+        std::vector<local_shadow_detail::RankedRequest> ranked_;
+        std::vector<SpotShadowTile> ideal_;
+        std::vector<SpotShadowTile> next_;
     };
 
     struct PointShadowSlot {
@@ -101,6 +117,9 @@ namespace Iridium {
     private:
         PointShadowPoolConfig config_;
         std::vector<PointShadowSlot> allocations_;
+        // Per-call scratch kept for its capacity (M7R R5c.6).
+        std::vector<local_shadow_detail::RankedRequest> ranked_;
+        std::vector<PointShadowSlot> next_;
     };
 
     struct PointShadowFace {
@@ -199,7 +218,11 @@ namespace Iridium {
         std::vector<State> states_;
         std::vector<SceneEntityUuid> stateOwners_;
         std::vector<PendingUpdate> pendingUpdates_;
-        std::optional<LocalShadowSchedule> currentSchedule_;
+        // The schedule and ranking storage persist across frames for their
+        // capacity; scheduled_ marks a schedule awaiting markScheduledRendered.
+        std::vector<LocalShadowCacheInput> ranked_;
+        LocalShadowSchedule schedule_;
+        bool scheduled_ = false;
     };
 
 } // namespace Iridium

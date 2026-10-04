@@ -30,7 +30,7 @@ namespace {
 
 } // namespace
 
-void VulkanTransparencyPyramid::init(VkDevice device,
+void VulkanTransparencyPyramid::init(VkDevice device, VkPipelineCache pipelineCache,
     ::DescriptorAllocator& descriptors, VkDescriptorSetLayout globalLayout) {
     if (device == VK_NULL_HANDLE || globalLayout == VK_NULL_HANDLE)
         throw std::invalid_argument(
@@ -38,6 +38,7 @@ void VulkanTransparencyPyramid::init(VkDevice device,
     if (device_ != VK_NULL_HANDLE)
         throw std::logic_error("Transparency pyramid initialized twice");
     device_ = device;
+    pipelineCache_ = pipelineCache;
     descriptors_ = &descriptors;
     try {
         const std::array bindings{
@@ -92,7 +93,7 @@ void VulkanTransparencyPyramid::init(VkDevice device,
             VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO, nullptr, 0,
             stage, pipelineLayout_, VK_NULL_HANDLE, -1 };
         const VkResult pipelineResult = vkCreateComputePipelines(device_,
-            VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &pipeline_);
+            pipelineCache_, 1, &pipelineInfo, nullptr, &pipeline_);
         vkDestroyShaderModule(device_, shader, nullptr);
         requireSuccess(pipelineResult,
             "vkCreateComputePipelines(transparency pyramid)");

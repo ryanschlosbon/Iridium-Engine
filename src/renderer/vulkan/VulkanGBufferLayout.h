@@ -2,6 +2,7 @@
 
 #include "renderer/rhi/GBufferLayout.h"
 
+#include <array>
 #include <cstdint>
 #include <vulkan/vulkan.h>
 
@@ -35,5 +36,16 @@ namespace Iridium {
                 VK_FORMAT_R16_UINT, 18, 5, 16, false };
         }
         return {};
+    }
+
+    // Colour attachment formats of the G-buffer pass in attachment order
+    // (normal/F90, diffuse/AO, emissive, F0/roughness, material flags): the
+    // graph's gbuffer usage-declaration order, which the rendering plan and
+    // every G-buffer pipeline share (M7R R4a).
+    [[nodiscard]] constexpr std::array<VkFormat, 5> vulkanGBufferColorAttachmentFormats(
+        GBufferLayout layout) noexcept {
+        const VulkanGBufferFormats formats = vulkanGBufferFormats(layout);
+        return { formats.normalF90, formats.diffuseAo, formats.emissive,
+            formats.f0Roughness, formats.materialFlags };
     }
 }

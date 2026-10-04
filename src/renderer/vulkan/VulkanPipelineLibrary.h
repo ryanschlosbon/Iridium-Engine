@@ -4,6 +4,7 @@
 #include "renderer/rhi/ResourcePool.h"
 #include "renderer/rhi/GBufferLayout.h"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -13,10 +14,16 @@
 
 namespace Iridium {
 
+    inline constexpr uint32_t VulkanPipelineMaxColorTargets = 5;
+
+    // M7R R4a: a material pipeline target is its attachment formats and
+    // pipeline layout; pipelines chain VkPipelineRenderingCreateInfo and are
+    // recorded inside the passes' dynamic-rendering scopes.
     struct VulkanPipelineTarget {
-        VkRenderPass renderPass = VK_NULL_HANDLE;
-        VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
+        std::array<VkFormat, VulkanPipelineMaxColorTargets> colorFormats{};
         uint32_t colorAttachmentCount = 0;
+        VkFormat depthFormat = VK_FORMAT_UNDEFINED;
+        VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
     };
 
     struct VulkanPipelineRecord {
@@ -58,7 +65,8 @@ namespace Iridium {
         VulkanPipelineLibrary(VulkanPipelineLibrary&&) = delete;
         VulkanPipelineLibrary& operator=(VulkanPipelineLibrary&&) = delete;
 
-        void init(VkDevice device, VulkanPipelineTarget gBufferTarget,
+        void init(VkDevice device, VkPipelineCache pipelineCache,
+            VulkanPipelineTarget gBufferTarget,
             VulkanPipelineTarget forwardTarget,
             VulkanPipelineTarget transparentTarget,
             GBufferLayout gBufferLayout);
@@ -70,6 +78,7 @@ namespace Iridium {
 
     private:
         VkDevice device_ = VK_NULL_HANDLE;
+        VkPipelineCache pipelineCache_ = VK_NULL_HANDLE;
         VulkanPipelineTarget gBufferTarget_{};
         VulkanPipelineTarget forwardTarget_{};
         VulkanPipelineTarget transparentTarget_{};

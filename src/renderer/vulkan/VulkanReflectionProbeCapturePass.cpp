@@ -32,7 +32,7 @@ namespace {
 
 } // namespace
 
-void VulkanReflectionProbeCapturePass::init(VkDevice device,
+void VulkanReflectionProbeCapturePass::init(VkDevice device, VkPipelineCache pipelineCache,
     VkPhysicalDevice physicalDevice, VulkanResourceAllocator& allocator,
     ::DescriptorAllocator& descriptors, VkDescriptorSetLayout materialLayout,
     VkDescriptorSetLayout samplerLayout, VkDescriptorSetLayout sceneLayout,
@@ -44,66 +44,10 @@ void VulkanReflectionProbeCapturePass::init(VkDevice device,
         throw std::invalid_argument(
             "Invalid reflection-probe capture-pass initialization");
     device_ = device;
+    pipelineCache_ = pipelineCache;
     allocator_ = &allocator;
     descriptors_ = &descriptors;
     try {
-        std::array<VkAttachmentDescription, 2> attachments{};
-        attachments[0].format = VK_FORMAT_R16G16B16A16_SFLOAT;
-        attachments[0].samples = VK_SAMPLE_COUNT_1_BIT;
-        attachments[0].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-        attachments[0].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-        attachments[0].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-        attachments[0].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-        attachments[0].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        attachments[0].finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        attachments[1].format = VK_FORMAT_D32_SFLOAT;
-        attachments[1].samples = VK_SAMPLE_COUNT_1_BIT;
-        attachments[1].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-        attachments[1].storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-        attachments[1].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-        attachments[1].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-        attachments[1].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        attachments[1].finalLayout =
-            VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-        const VkAttachmentReference color{ 0,
-            VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL };
-        const VkAttachmentReference depth{ 1,
-            VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL };
-        VkSubpassDescription subpass{};
-        subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-        subpass.colorAttachmentCount = 1;
-        subpass.pColorAttachments = &color;
-        subpass.pDepthStencilAttachment = &depth;
-        std::array<VkSubpassDependency, 2> dependencies{};
-        dependencies[0].srcSubpass = VK_SUBPASS_EXTERNAL;
-        dependencies[0].dstSubpass = 0;
-        dependencies[0].srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
-            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
-        dependencies[0].dstStageMask =
-            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
-            VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
-        dependencies[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        dependencies[0].dstAccessMask =
-            VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
-            VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-        dependencies[1].srcSubpass = 0;
-        dependencies[1].dstSubpass = VK_SUBPASS_EXTERNAL;
-        dependencies[1].srcStageMask =
-            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-        dependencies[1].dstStageMask = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
-        dependencies[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-        dependencies[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        VkRenderPassCreateInfo renderPass{
-            VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO };
-        renderPass.attachmentCount = static_cast<uint32_t>(attachments.size());
-        renderPass.pAttachments = attachments.data();
-        renderPass.subpassCount = 1;
-        renderPass.pSubpasses = &subpass;
-        renderPass.dependencyCount = static_cast<uint32_t>(dependencies.size());
-        renderPass.pDependencies = dependencies.data();
-        requireSuccess(vkCreateRenderPass(device_, &renderPass, nullptr,
-            &renderPass_), "vkCreateRenderPass(reflection probe capture)");
-
         const VkDescriptorSetLayoutBinding captureBinding{ 0,
             VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1,
             VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT |
@@ -205,7 +149,7 @@ void VulkanReflectionProbeCapturePass::init(VkDevice device,
             VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO, nullptr, 0,
             stage, filterPipelineLayout_, VK_NULL_HANDLE, -1 };
         const VkResult filterResult = vkCreateComputePipelines(device_,
-            VK_NULL_HANDLE, 1, &filterPipeline, nullptr, &filterPipeline_);
+            pipelineCache_, 1, &filterPipeline, nullptr, &filterPipeline_);
         vkDestroyShaderModule(device_, filterShader, nullptr);
         requireSuccess(filterResult,
             "vkCreateComputePipelines(reflection probe prefilter)");
@@ -319,8 +263,16 @@ VkPipeline VulkanReflectionProbeCapturePass::createGraphicsPipeline(bool sky,
         pipeline.pColorBlendState = &colorBlend;
         pipeline.pDynamicState = &dynamic;
         pipeline.layout = gpuScene ? gpuSceneGraphicsLayout_ : graphicsLayout_;
-        pipeline.renderPass = renderPass_;
-        requireSuccess(vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1,
+        // M7R R4a: dynamic rendering (RGBA16F radiance + D32 depth).
+        const VkFormat colorFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
+        VkPipelineRenderingCreateInfo rendering{
+            VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO };
+        rendering.colorAttachmentCount = 1;
+        rendering.pColorAttachmentFormats = &colorFormat;
+        rendering.depthAttachmentFormat = VK_FORMAT_D32_SFLOAT;
+        pipeline.pNext = &rendering;
+        pipeline.renderPass = VK_NULL_HANDLE;
+        requireSuccess(vkCreateGraphicsPipelines(device_, pipelineCache_, 1,
             &pipeline, nullptr, &result),
             "vkCreateGraphicsPipelines(reflection probe capture)");
     }
@@ -364,19 +316,64 @@ void VulkanReflectionProbeCapturePass::beginFace(VkCommandBuffer commandBuffer,
     VkDescriptorSet sceneDescriptor) const {
     if (faceIndex >= kReflectionProbeCaptureFaceCount ||
         frameIndex >= faceDescriptors_.size() ||
-        target.framebuffers[faceIndex] == VK_NULL_HANDLE)
+        target.rawFaceViews[faceIndex] == VK_NULL_HANDLE ||
+        target.depthFaceViews[faceIndex] == VK_NULL_HANDLE)
         throw std::out_of_range("Reflection-probe capture face is invalid");
-    const std::array<VkClearValue, 2> clear{
-        VkClearValue{ .color = { { 0.0f, 0.0f, 0.0f, 1.0f } } },
-        VkClearValue{ .depthStencil = { 1.0f, 0u } },
-    };
-    VkRenderPassBeginInfo begin{ VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
-    begin.renderPass = renderPass_;
-    begin.framebuffer = target.framebuffers[faceIndex];
-    begin.renderArea.extent = { target.resolution, target.resolution };
-    begin.clearValueCount = static_cast<uint32_t>(clear.size());
-    begin.pClearValues = clear.data();
-    vkCmdBeginRenderPass(commandBuffer, &begin, VK_SUBPASS_CONTENTS_INLINE);
+    // M7R R4a, owner-managed (ADR-0016 rule 6): this face's raw-radiance and
+    // depth layers start from UNDEFINED (both are cleared) after earlier
+    // fragment/compute reads of the radiance cube and depth writes of an
+    // earlier capture of the layer; the old render pass's EXTERNAL -> 0
+    // dependency and initial layouts.
+    std::array<VkImageMemoryBarrier, 2> toAttachment{};
+    for (VkImageMemoryBarrier& barrier : toAttachment) {
+        barrier = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
+        barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.subresourceRange.baseMipLevel = 0;
+        barrier.subresourceRange.levelCount = 1;
+        barrier.subresourceRange.baseArrayLayer = faceIndex;
+        barrier.subresourceRange.layerCount = 1;
+    }
+    toAttachment[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    toAttachment[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    toAttachment[0].newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    toAttachment[0].image = target.rawRadiance.image;
+    toAttachment[0].subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    toAttachment[1].srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    toAttachment[1].dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
+        VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    toAttachment[1].newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+    toAttachment[1].image = target.depth.image;
+    toAttachment[1].subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+    vkCmdPipelineBarrier(commandBuffer,
+        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
+            VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+            VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
+            VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+        0, 0, nullptr, 0, nullptr,
+        static_cast<uint32_t>(toAttachment.size()), toAttachment.data());
+
+    VkRenderingAttachmentInfo color{ VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
+    color.imageView = target.rawFaceViews[faceIndex];
+    color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    color.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    color.clearValue.color = { { 0.0f, 0.0f, 0.0f, 1.0f } };
+    VkRenderingAttachmentInfo depth{ VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
+    depth.imageView = target.depthFaceViews[faceIndex];
+    depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+    depth.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    depth.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    depth.clearValue.depthStencil = { 1.0f, 0u };
+    VkRenderingInfo rendering{ VK_STRUCTURE_TYPE_RENDERING_INFO };
+    rendering.renderArea.extent = { target.resolution, target.resolution };
+    rendering.layerCount = 1;
+    rendering.colorAttachmentCount = 1;
+    rendering.pColorAttachments = &color;
+    rendering.pDepthAttachment = &depth;
+    vkCmdBeginRendering(commandBuffer, &rendering);
     const VkViewport viewport{ 0.0f, 0.0f,
         static_cast<float>(target.resolution),
         static_cast<float>(target.resolution), 0.0f, 1.0f };
@@ -416,9 +413,35 @@ void VulkanReflectionProbeCapturePass::bindFaceComputeDescriptor(
         pipelineLayout, 0u, 1u, &faceDescriptors_[frameIndex], 1u, &offset);
 }
 
-void VulkanReflectionProbeCapturePass::endFace(
-    VkCommandBuffer commandBuffer) const {
-    vkCmdEndRenderPass(commandBuffer);
+VkDescriptorSet VulkanReflectionProbeCapturePass::faceComputeDescriptor(
+    uint32_t frameIndex) const {
+    if (frameIndex >= faceDescriptors_.size())
+        throw std::out_of_range(
+            "Reflection-probe compute face descriptor is invalid");
+    return faceDescriptors_[frameIndex];
+}
+
+uint32_t VulkanReflectionProbeCapturePass::faceComputeDynamicOffset(
+    uint32_t recordIndex) const {
+    return static_cast<uint32_t>(dynamicOffset(recordIndex));
+}
+
+void VulkanReflectionProbeCapturePass::endFace(VkCommandBuffer commandBuffer,
+    const VulkanReflectionProbeCaptureStaging& target, uint32_t faceIndex) const {
+    vkCmdEndRendering(commandBuffer);
+    // The old render pass's final layout and 0 -> EXTERNAL dependency: the
+    // per-face compaction and the prefilter sample the face in compute.
+    VkImageMemoryBarrier toSample{ VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
+    toSample.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    toSample.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    toSample.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    toSample.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    toSample.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    toSample.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    toSample.image = target.rawRadiance.image;
+    toSample.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, faceIndex, 1 };
+    vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &toSample);
 }
 
 VkPipeline VulkanReflectionProbeCapturePass::pipeline(bool alphaMasked,
@@ -652,8 +675,6 @@ void VulkanReflectionProbeCapturePass::cleanup() noexcept {
         vkDestroyPipelineLayout(device_, gpuSceneGraphicsLayout_, nullptr);
     if (captureLayout_ != VK_NULL_HANDLE)
         vkDestroyDescriptorSetLayout(device_, captureLayout_, nullptr);
-    if (renderPass_ != VK_NULL_HANDLE)
-        vkDestroyRenderPass(device_, renderPass_, nullptr);
     *this = {};
 }
 

@@ -1,7 +1,7 @@
 #pragma once
 
 #include "assets/cooker/CookTypes.h"
-#include "renderer/rhi/TextureTypes.h"
+#include "core/types/TextureTypes.h"
 
 #include <cstdint>
 #include <optional>

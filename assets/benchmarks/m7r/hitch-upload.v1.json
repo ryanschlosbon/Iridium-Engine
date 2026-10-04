@@ -1,0 +1,13 @@
+{
+  "schema": "iridium.qualification.scripted_changes.v1",
+  "id": "m7r_hitch_upload_v1",
+  "description": "M7R R4d hitch route H-upload on m7_three_dense_all_visible_v1: fresh RGBA8 mip-chained textures uploaded mid-run (never sampled), sized to exercise the 64 MiB staging ring (8 x 1024: 45 MB in the ring), a batch larger than the ring (16 x 1024: 89 MB, the overflow uses dedicated staging), many small uploads (64 x 256), and dedicated staging for uploads above a quarter of the ring (2 x 2048, 1 x 4096). Compare --upload-queue legacy-blocking (A) with auto (B) on one build.",
+  "runner": { "route": "H-upload", "fixture": "F1-all", "warmup_frames": 500, "measured_frames": 5000 },
+  "events": [
+    { "frame": 500, "action": "add_textures", "count": 8, "resolution": 1024 },
+    { "frame": 1500, "action": "add_textures", "count": 16, "resolution": 1024 },
+    { "frame": 2500, "action": "add_textures", "count": 64, "resolution": 256 },
+    { "frame": 3500, "action": "add_textures", "count": 2, "resolution": 2048 },
+    { "frame": 4500, "action": "add_textures", "count": 1, "resolution": 4096 }
+  ]
+}

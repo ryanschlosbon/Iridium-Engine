@@ -46,52 +46,16 @@ namespace Iridium {
         cleanup();
     }
 
-    void VulkanOutputPass::init(VkContext& context,
+    void VulkanOutputPass::init(VkContext& context, VkPipelineCache pipelineCache,
         ::DescriptorAllocator& allocator, VkFormat outputFormat) {
         if (device_ != VK_NULL_HANDLE || outputFormat == VK_FORMAT_UNDEFINED) {
             throw std::logic_error("Output pass initialized incorrectly.");
         }
         device_ = context.getDevice();
+        pipelineCache_ = pipelineCache;
         allocator_ = &allocator;
 
         try {
-            VkAttachmentDescription attachment{};
-            attachment.format = outputFormat;
-            attachment.samples = VK_SAMPLE_COUNT_1_BIT;
-            attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-            attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-            attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-            attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-            attachment.initialLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-            attachment.finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-            VkAttachmentReference attachmentRef{ 0,
-                VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL };
-            VkSubpassDescription subpass{};
-            subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-            subpass.colorAttachmentCount = 1;
-            subpass.pColorAttachments = &attachmentRef;
-            VkSubpassDependency dependency{};
-            dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
-            dependency.dstSubpass = 0;
-            dependency.srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
-                VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-            dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-            dependency.srcAccessMask = VK_ACCESS_SHADER_READ_BIT |
-                VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-            dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-            VkRenderPassCreateInfo renderPassInfo{
-                VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO };
-            renderPassInfo.attachmentCount = 1;
-            renderPassInfo.pAttachments = &attachment;
-            renderPassInfo.subpassCount = 1;
-            renderPassInfo.pSubpasses = &subpass;
-            renderPassInfo.dependencyCount = 1;
-            renderPassInfo.pDependencies = &dependency;
-            if (vkCreateRenderPass(device_, &renderPassInfo, nullptr,
-                &renderPass_) != VK_SUCCESS) {
-                throw std::runtime_error("Failed to create output render pass.");
-            }
-
             std::array<VkDescriptorSetLayoutBinding, 4> bindings{};
             for (uint32_t index = 0; index < bindings.size(); ++index) {
                 bindings[index].binding = index;
@@ -183,8 +147,14 @@ namespace Iridium {
                 pipelineInfo.pColorBlendState = &blending;
                 pipelineInfo.pDynamicState = &dynamic;
                 pipelineInfo.layout = pipelineLayout_;
-                pipelineInfo.renderPass = renderPass_;
-                if (vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1,
+                // R4a: recorded with dynamic rendering into the output target.
+                VkPipelineRenderingCreateInfo rendering{
+                    VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO };
+                rendering.colorAttachmentCount = 1;
+                rendering.pColorAttachmentFormats = &outputFormat;
+                pipelineInfo.pNext = &rendering;
+                pipelineInfo.renderPass = VK_NULL_HANDLE;
+                if (vkCreateGraphicsPipelines(device_, pipelineCache_, 1,
                     &pipelineInfo, nullptr, &pipeline_) != VK_SUCCESS) {
                     throw std::runtime_error("Failed to create output pipeline.");
                 }
@@ -277,7 +247,7 @@ namespace Iridium {
     }
 
     void VulkanOutputPass::record(VkCommandBuffer commandBuffer, uint32_t frameIndex,
-        VkFramebuffer framebuffer, VkExtent2D extent,
+        VkExtent2D extent,
         float manualExposureEv, uint32_t outputOperator,
         uint32_t outputTransport, float paperWhiteNits,
         float peakNits, bool selectionActive,
@@ -285,14 +255,6 @@ namespace Iridium {
         if (frameIndex >= descriptorSets_.size()) {
             throw std::out_of_range("Output descriptor frame index is out of range.");
         }
-        VkRenderPassBeginInfo begin{ VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
-        begin.renderPass = renderPass_;
-        begin.framebuffer = framebuffer;
-        begin.renderArea.extent = extent;
-        const VkClearValue clear{ { { 0.0f, 0.0f, 0.0f, 1.0f } } };
-        begin.clearValueCount = 1;
-        begin.pClearValues = &clear;
-        vkCmdBeginRenderPass(commandBuffer, &begin, VK_SUBPASS_CONTENTS_INLINE);
         vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_);
         vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
             pipelineLayout_, 0, 1, &descriptorSets_[frameIndex], 0, nullptr);
@@ -335,7 +297,6 @@ namespace Iridium {
         vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
         vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
         vkCmdDraw(commandBuffer, 3, 1, 0, 0);
-        vkCmdEndRenderPass(commandBuffer);
     }
 
     void VulkanOutputPass::cleanup() {
@@ -348,14 +309,10 @@ namespace Iridium {
             if (descriptorSetLayout_ != VK_NULL_HANDLE) {
                 vkDestroyDescriptorSetLayout(device_, descriptorSetLayout_, nullptr);
             }
-            if (renderPass_ != VK_NULL_HANDLE) {
-                vkDestroyRenderPass(device_, renderPass_, nullptr);
-            }
         }
         pipeline_ = VK_NULL_HANDLE;
         pipelineLayout_ = VK_NULL_HANDLE;
         descriptorSetLayout_ = VK_NULL_HANDLE;
-        renderPass_ = VK_NULL_HANDLE;
         allocator_ = nullptr;
         device_ = VK_NULL_HANDLE;
     }

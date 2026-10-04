@@ -1,18 +1,18 @@
 #include "VkGraphicsPipeline.h"
 #include "renderer/rhi/Mesh.h"
+#include "VulkanGBufferLayout.h"
 #include "VulkanVertexUtils.h"
 #include <stdexcept>
 #include <iostream>
 #include <array>
 
-VkGraphicsPipeline::VkGraphicsPipeline(VkContext* context, VkSwapchain* swapchain, VkRenderPassWrapper* renderPass,
+VkGraphicsPipeline::VkGraphicsPipeline(VkContext* context,
+    VkPipelineCache pipelineCache, VkSwapchain* swapchain,
     VkPipelineLayout pipelineLayout, Iridium::GBufferLayout layout)
-	: context(context), pipelineLayout(pipelineLayout) {
-    
-    wireframePipeline = createPipeline(swapchain, renderPass, true, false,
-        layout);
-    outlinePipeline = createPipeline(swapchain, renderPass, false, true,
-        layout);
+	: context(context), pipelineCache(pipelineCache), pipelineLayout(pipelineLayout) {
+
+    wireframePipeline = createPipeline(swapchain, true, false, layout);
+    outlinePipeline = createPipeline(swapchain, false, true, layout);
 }
 
 VkGraphicsPipeline::~VkGraphicsPipeline() {
@@ -32,7 +32,7 @@ VkShaderModule VkGraphicsPipeline::createShaderModule(const std::vector<char>& c
 	return shaderModule;
 }
 
-VkPipeline VkGraphicsPipeline::createPipeline(VkSwapchain* swapchain, VkRenderPassWrapper* renderPass, 
+VkPipeline VkGraphicsPipeline::createPipeline(VkSwapchain* swapchain,
     bool isWireframe, bool isOutline, Iridium::GBufferLayout layout) {
     // -------------------------------------------------------------
     // 1. SHADER LOADING
@@ -199,12 +199,19 @@ VkPipeline VkGraphicsPipeline::createPipeline(VkSwapchain* swapchain, VkRenderPa
     // The layout is owned by VulkanMeshLayouts and borrowed by this fixed wrapper.
     pipelineInfo.layout = pipelineLayout;
 
-    pipelineInfo.renderPass = renderPass->getRenderPass();
+    const std::array<VkFormat, 5> colorFormats =
+        Iridium::vulkanGBufferColorAttachmentFormats(layout);
+    VkPipelineRenderingCreateInfo rendering{ VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO };
+    rendering.colorAttachmentCount = static_cast<uint32_t>(colorFormats.size());
+    rendering.pColorAttachmentFormats = colorFormats.data();
+    rendering.depthAttachmentFormat = VK_FORMAT_D32_SFLOAT;
+    pipelineInfo.pNext = &rendering;
+    pipelineInfo.renderPass = VK_NULL_HANDLE;
     pipelineInfo.subpass = 0;
     pipelineInfo.pDynamicState = &dynamicState;
 
     VkPipeline newPipeline;
-    if (vkCreateGraphicsPipelines(context->getDevice(), VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &newPipeline) != VK_SUCCESS) {
+    if (vkCreateGraphicsPipelines(context->getDevice(), pipelineCache, 1, &pipelineInfo, nullptr, &newPipeline) != VK_SUCCESS) {
         throw std::runtime_error("failed to create graphics pipeline!");
     }
 

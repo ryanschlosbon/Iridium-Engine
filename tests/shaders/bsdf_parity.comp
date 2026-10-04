@@ -1,0 +1,41 @@
+#version 450
+// Parity kernel: evaluates the shared BSDF (assets/shaders/include/
+// material_bsdf.glsl) through both the forward (standard) and deferred
+// (canonical) entry points for CPU comparison with
+// src/material/StandardMaterialShading.h.
+#include "include/material_bsdf.glsl"
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+// Per sample: baseColor.rgb + metallic, f0.rgb + roughness, f90, normal, view,
+// light.
+layout(std430, set = 0, binding = 0) readonly buffer Samples {
+    vec4 values[];
+} samples;
+// Per sample: standard BRDF, canonical BRDF on the metallic-weighted albedo.
+layout(std430, set = 0, binding = 1) writeonly buffer Results {
+    vec4 values[];
+} results;
+
+layout(push_constant) uniform Parameters {
+    uint count;
+} parameters;
+
+void main() {
+    uint index = gl_GlobalInvocationID.x;
+    if (index >= parameters.count) return;
+    uint base = 6u * index;
+    vec4 baseMetallic = samples.values[base];
+    vec4 f0Roughness = samples.values[base + 1u];
+    vec3 f90 = samples.values[base + 2u].xyz;
+    vec3 normal = samples.values[base + 3u].xyz;
+    vec3 view = samples.values[base + 4u].xyz;
+    vec3 light = samples.values[base + 5u].xyz;
+    vec3 standard = materialEvaluateStandardBrdf(baseMetallic.rgb, f0Roughness.rgb,
+        f90, baseMetallic.a, f0Roughness.a, normal, view, light);
+    vec3 diffuseAlbedo = baseMetallic.rgb * (1.0 - clamp(baseMetallic.a, 0.0, 1.0));
+    vec3 canonical = materialEvaluateCanonicalBrdf(diffuseAlbedo, f0Roughness.rgb,
+        f90, f0Roughness.a, normal, view, light);
+    results.values[2u * index] = vec4(standard, 0.0);
+    results.values[2u * index + 1u] = vec4(canonical, 0.0);
+}

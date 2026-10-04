@@ -1,7 +1,7 @@
 #pragma once
 
 #include "../EditorPanel.h"
-#include "assets/AssetGuid.h"
+#include "core/types/AssetGuid.h"
 #include "editor/ComponentCollectionUI.h"
 #include "editor/EditorComponentDrawerRegistry.h"
 #include "editor/EditorComponentRegistry.h"

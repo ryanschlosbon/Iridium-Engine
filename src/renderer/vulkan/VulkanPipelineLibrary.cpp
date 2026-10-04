@@ -112,28 +112,38 @@ namespace Iridium {
         }
     }
 
-    void VulkanPipelineLibrary::init(VkDevice device, VulkanPipelineTarget gBufferTarget,
+    void VulkanPipelineLibrary::init(VkDevice device, VkPipelineCache pipelineCache,
+        VulkanPipelineTarget gBufferTarget,
         VulkanPipelineTarget forwardTarget,
         VulkanPipelineTarget transparentTarget,
         GBufferLayout gBufferLayout) {
         if (device_ != VK_NULL_HANDLE) {
             throw std::logic_error("VulkanPipelineLibrary is already initialized");
         }
+        const auto hasAttachments = [](const VulkanPipelineTarget& target) {
+            if (target.colorAttachmentCount > target.colorFormats.size() ||
+                target.depthFormat == VK_FORMAT_UNDEFINED)
+                return false;
+            for (uint32_t index = 0; index < target.colorAttachmentCount; ++index)
+                if (target.colorFormats[index] == VK_FORMAT_UNDEFINED) return false;
+            return true;
+        };
         if (device == VK_NULL_HANDLE
-            || gBufferTarget.renderPass == VK_NULL_HANDLE
+            || !hasAttachments(gBufferTarget)
             || gBufferTarget.pipelineLayout == VK_NULL_HANDLE
             || (gBufferTarget.colorAttachmentCount != 3 &&
                 gBufferTarget.colorAttachmentCount != 5)
-            || forwardTarget.renderPass == VK_NULL_HANDLE
+            || !hasAttachments(forwardTarget)
             || forwardTarget.pipelineLayout == VK_NULL_HANDLE
             || forwardTarget.colorAttachmentCount != 1
-            || transparentTarget.renderPass == VK_NULL_HANDLE
+            || !hasAttachments(transparentTarget)
             || transparentTarget.pipelineLayout == VK_NULL_HANDLE
             || transparentTarget.colorAttachmentCount != 1) {
             throw std::invalid_argument("VulkanPipelineLibrary requires valid targets and device");
         }
 
         device_ = device;
+        pipelineCache_ = pipelineCache;
         gBufferTarget_ = gBufferTarget;
         forwardTarget_ = forwardTarget;
         transparentTarget_ = transparentTarget;
@@ -316,11 +326,16 @@ namespace Iridium {
             pipelineInfo.pColorBlendState = &colorBlending;
             pipelineInfo.pDynamicState = &dynamicState;
             pipelineInfo.layout = target.pipelineLayout;
-            pipelineInfo.renderPass = target.renderPass;
+            VkPipelineRenderingCreateInfo rendering{ VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO };
+            rendering.colorAttachmentCount = target.colorAttachmentCount;
+            rendering.pColorAttachmentFormats = target.colorFormats.data();
+            rendering.depthAttachmentFormat = target.depthFormat;
+            pipelineInfo.pNext = &rendering;
+            pipelineInfo.renderPass = VK_NULL_HANDLE;
             pipelineInfo.subpass = 0;
 
             VkPipeline pipeline = VK_NULL_HANDLE;
-            if (vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &pipeline) != VK_SUCCESS) {
+            if (vkCreateGraphicsPipelines(device_, pipelineCache_, 1, &pipelineInfo, nullptr, &pipeline) != VK_SUCCESS) {
                 throw std::runtime_error("failed to create Vulkan graphics pipeline");
             }
 

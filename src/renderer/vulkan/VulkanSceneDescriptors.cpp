@@ -234,7 +234,8 @@ namespace Iridium {
     }
 
     void VulkanSceneDescriptors::setReflectionProbeBuffers(
-        std::span<const VulkanReflectionProbeBufferDescriptors> buffers) {
+        std::span<const VulkanReflectionProbeBufferDescriptors> buffers,
+        uint32_t onlyFrame) {
         if (device_ == VK_NULL_HANDLE || allocator_ == nullptr)
             throw std::logic_error("Scene descriptors are not initialized.");
         if (buffers.empty() || (!sets_.empty() && buffers.size() != sets_.size()))
@@ -251,6 +252,7 @@ namespace Iridium {
         }
         reflectionProbeBuffers_.assign(buffers.begin(), buffers.end());
         for (size_t frame = 0; frame < sets_.size(); ++frame) {
+            if (onlyFrame != UINT32_MAX && frame != onlyFrame) continue;
             std::array<VkWriteDescriptorSet, 3> writes{
                 bufferWrite(sets_[frame], 28,
                     reflectionProbeBuffers_[frame].records),
@@ -264,7 +266,7 @@ namespace Iridium {
     }
 
     void VulkanSceneDescriptors::setReflectionProbeImages(
-        std::span<const VkDescriptorImageInfo> images) {
+        std::span<const VkDescriptorImageInfo> images, uint32_t frame) {
         if (device_ == VK_NULL_HANDLE || allocator_ == nullptr)
             throw std::logic_error("Scene descriptors are not initialized.");
         if (images.size() != reflectionProbeImages_.size())
@@ -279,8 +281,9 @@ namespace Iridium {
         }
         std::copy(images.begin(), images.end(), reflectionProbeImages_.begin());
         hasReflectionProbeImages_ = true;
-        for (VkDescriptorSet set : sets_) {
-            const VkWriteDescriptorSet write = imageArrayWrite(set, 31,
+        for (uint32_t index = 0; index < sets_.size(); ++index) {
+            if (frame != UINT32_MAX && index != frame) continue;
+            const VkWriteDescriptorSet write = imageArrayWrite(sets_[index], 31,
                 reflectionProbeImages_);
             vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
         }
@@ -375,7 +378,7 @@ namespace Iridium {
     }
 
     void VulkanSceneDescriptors::setLightBuffers(
-        std::span<const VkDescriptorBufferInfo> buffers) {
+        std::span<const VkDescriptorBufferInfo> buffers, uint32_t frame) {
         if (device_ == VK_NULL_HANDLE || allocator_ == nullptr) {
             throw std::logic_error("Scene descriptors are not initialized.");
         }
@@ -393,6 +396,7 @@ namespace Iridium {
         }
         lightBuffers_.assign(buffers.begin(), buffers.end());
         for (size_t index = 0; index < sets_.size(); ++index) {
+            if (frame != UINT32_MAX && index != frame) continue;
             const VkWriteDescriptorSet write = bufferWrite(
                 sets_[index], 9, lightBuffers_[index]);
             vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
@@ -400,7 +404,8 @@ namespace Iridium {
     }
 
     void VulkanSceneDescriptors::setClusterBuffers(
-        std::span<const VulkanClusterSceneBufferDescriptors> buffers) {
+        std::span<const VulkanClusterSceneBufferDescriptors> buffers,
+        uint32_t onlyFrame) {
         if (device_ == VK_NULL_HANDLE || allocator_ == nullptr) {
             throw std::logic_error("Scene descriptors are not initialized.");
         }
@@ -421,6 +426,7 @@ namespace Iridium {
         }
         clusterBuffers_.assign(buffers.begin(), buffers.end());
         for (size_t frame = 0; frame < sets_.size(); ++frame) {
+            if (onlyFrame != UINT32_MAX && frame != onlyFrame) continue;
             const auto& cluster = clusterBuffers_[frame];
             std::array<VkDescriptorBufferInfo, 6> infos{
                 cluster.global, cluster.headers, cluster.indices,

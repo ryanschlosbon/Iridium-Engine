@@ -1,0 +1,26 @@
+#version 450
+// Parity kernel: evaluates the production scene-colour conversions
+// (assets/shaders/include/scene_color.glsl) for CPU comparison with
+// src/renderer/color/SceneColor.h.
+#include "include/scene_color.glsl"
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, set = 0, binding = 0) readonly buffer Inputs {
+    vec4 values[];
+} inputs;
+layout(std430, set = 0, binding = 1) writeonly buffer Outputs {
+    vec4 values[]; // [2i] = linearSrgbToAcesCg, [2i + 1] = acesCgToLinearSrgb
+} outputs;
+
+layout(push_constant) uniform Parameters {
+    uint count;
+} parameters;
+
+void main() {
+    uint index = gl_GlobalInvocationID.x;
+    if (index >= parameters.count) return;
+    vec3 value = inputs.values[index].xyz;
+    outputs.values[2u * index] = vec4(linearSrgbToAcesCg(value), 0.0);
+    outputs.values[2u * index + 1u] = vec4(acesCgToLinearSrgb(value), 0.0);
+}

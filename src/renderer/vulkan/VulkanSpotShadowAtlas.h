@@ -44,7 +44,8 @@ namespace Iridium {
         VulkanSpotShadowAtlas() = default;
         VulkanSpotShadowAtlas(const VulkanSpotShadowAtlas&) = delete;
         VulkanSpotShadowAtlas& operator=(const VulkanSpotShadowAtlas&) = delete;
-        void init(VkDevice device, VulkanResourceAllocator& allocator,
+        void init(VkDevice device, VkPipelineCache pipelineCache,
+            VulkanResourceAllocator& allocator,
             VulkanUploadContext& uploads, ::DescriptorAllocator& descriptors,
             VkDescriptorSetLayout materialLayout,
             VkDescriptorSetLayout samplerLayout,
@@ -53,9 +54,13 @@ namespace Iridium {
 
         void updateFrame(uint32_t frameIndex,
             std::span<const SpotShadowFramePacket> packets);
+        // M7R R4a: the shadow owner records the whole pass in one dynamic
+        // rendering instance over the atlas (LOAD); beginTile clears the
+        // tile (vkCmdClearAttachments) and sets its viewport, scissor and
+        // bias. Separate instances on the one subresource would race
+        // through their loads without a barrier.
         void beginTile(VkCommandBuffer commandBuffer,
             const SpotShadowFramePacket& packet) const;
-        void endTile(VkCommandBuffer commandBuffer) const;
 
         [[nodiscard]] VkPipeline pipeline(bool alphaMasked,
             bool doubleSided, bool gpuSceneIndirect = false) const noexcept;
@@ -73,6 +78,10 @@ namespace Iridium {
         [[nodiscard]] uint32_t resolution() const noexcept {
             return resolution_;
         }
+        // The atlas (graph import "shadow.spot").
+        [[nodiscard]] const VulkanImageResource& image() const noexcept {
+            return image_;
+        }
 
     private:
         VkPipeline createPipeline(bool alphaMasked, bool doubleSided,
@@ -80,11 +89,10 @@ namespace Iridium {
         VkShaderModule createShaderModule(const char* relativePath) const;
 
         VkDevice device_ = VK_NULL_HANDLE;
+        VkPipelineCache pipelineCache_ = VK_NULL_HANDLE;
         VulkanResourceAllocator* allocator_ = nullptr;
         VulkanImageResource image_;
         VkSampler sampler_ = VK_NULL_HANDLE;
-        VkRenderPass renderPass_ = VK_NULL_HANDLE;
-        VkFramebuffer framebuffer_ = VK_NULL_HANDLE;
         VkDescriptorSetLayout renderSetLayout_ = VK_NULL_HANDLE;
         VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;
         std::array<VkPipeline, 8> pipelines_{};

@@ -1,6 +1,7 @@
 #pragma once
 
-#include "assets/AssetGuid.h"
+#include "core/types/AssetGuid.h"
+#include "core/types/ReflectionProbeModes.h"
 
 #include <cstdint>
 #include <string>
@@ -8,22 +9,6 @@
 #include <glm/glm.hpp>
 
 namespace Iridium {
-
-    enum class ReflectionProbeShape : int32_t {
-        Sphere = 0,
-        Box = 1,
-    };
-
-    enum class ReflectionProbeUpdateMode : int32_t {
-        Baked = 0,
-        OnDemand = 1,
-        Realtime = 2,
-    };
-
-    enum class ReflectionProbeParallaxMode : int32_t {
-        None = 0,
-        BoxProjection = 1,
-    };
 
     // Renderer-neutral authoring contract. TransformComponent owns probe position
     // and orientation; these values define influence, capture, and publication.

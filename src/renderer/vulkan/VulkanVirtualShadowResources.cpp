@@ -6,7 +6,8 @@
 
 namespace Iridium {
     void VulkanVirtualShadowResources::init(
-        VkDevice device, VulkanResourceAllocator& allocator,
+        VkDevice device, VkPipelineCache pipelineCache,
+        VulkanResourceAllocator& allocator,
         const VkPhysicalDeviceLimits& limits,
         const VirtualShadowResourceConfig& config,
         uint32_t workingSetCount) {
@@ -70,11 +71,11 @@ namespace Iridium {
             std::vector<VkBuffer> buffers;
             for (const auto& workingSet : workingSets_)
                 buffers.push_back(workingSet.buffer);
-            markingPass_.init(device, buffers, workingSetLayout, config,
+            markingPass_.init(device, pipelineCache, buffers, workingSetLayout, config,
                 std::filesystem::path(PROJECT_ROOT_DIR) / "assets/shaders");
-            depthReceiverPass_.init(device, buffers, workingSetLayout,
+            depthReceiverPass_.init(device, pipelineCache, buffers, workingSetLayout,
                 std::filesystem::path(PROJECT_ROOT_DIR) / "assets/shaders");
-            fullViewPass_.init(device, buffers, workingSetLayout,
+            fullViewPass_.init(device, pipelineCache, buffers, workingSetLayout,
                 std::filesystem::path(PROJECT_ROOT_DIR) / "assets/shaders");
         }
         catch (...) {

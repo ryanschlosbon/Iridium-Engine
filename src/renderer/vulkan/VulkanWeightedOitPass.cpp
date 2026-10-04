@@ -64,7 +64,7 @@ namespace {
 
 } // namespace
 
-void VulkanWeightedOitPass::init(VkDevice device,
+void VulkanWeightedOitPass::init(VkDevice device, VkPipelineCache pipelineCache,
     ::DescriptorAllocator& descriptors,
     VkPipelineLayout forwardPipelineLayout) {
     if (device_ != VK_NULL_HANDLE || device == VK_NULL_HANDLE ||
@@ -72,10 +72,10 @@ void VulkanWeightedOitPass::init(VkDevice device,
         throw std::invalid_argument("Invalid WeightedOIT initialization");
     }
     device_ = device;
+    pipelineCache_ = pipelineCache;
     descriptors_ = &descriptors;
     accumulationPipelineLayout_ = forwardPipelineLayout;
     try {
-        createRenderPasses();
         const std::array<VkDescriptorSetLayoutBinding, 2> bindings{{
             { 0u, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1u,
                 VK_SHADER_STAGE_FRAGMENT_BIT, nullptr },
@@ -107,103 +107,6 @@ void VulkanWeightedOitPass::init(VkDevice device,
         cleanup();
         throw;
     }
-}
-
-void VulkanWeightedOitPass::createRenderPasses() {
-    std::array<VkAttachmentDescription, 3> accumulationAttachments{};
-    accumulationAttachments[0] = {
-        0u, VK_FORMAT_R16G16B16A16_SFLOAT, VK_SAMPLE_COUNT_1_BIT,
-        VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE,
-        VK_ATTACHMENT_LOAD_OP_DONT_CARE, VK_ATTACHMENT_STORE_OP_DONT_CARE,
-        VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-        VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL };
-    accumulationAttachments[1] = {
-        0u, VK_FORMAT_R16_SFLOAT, VK_SAMPLE_COUNT_1_BIT,
-        VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE,
-        VK_ATTACHMENT_LOAD_OP_DONT_CARE, VK_ATTACHMENT_STORE_OP_DONT_CARE,
-        VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-        VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL };
-    accumulationAttachments[2] = {
-        0u, VK_FORMAT_D32_SFLOAT, VK_SAMPLE_COUNT_1_BIT,
-        VK_ATTACHMENT_LOAD_OP_LOAD, VK_ATTACHMENT_STORE_OP_STORE,
-        VK_ATTACHMENT_LOAD_OP_DONT_CARE, VK_ATTACHMENT_STORE_OP_DONT_CARE,
-        VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
-        VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL };
-    const std::array<VkAttachmentReference, 2> colorReferences{{
-        { 0u, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL },
-        { 1u, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL },
-    }};
-    const VkAttachmentReference depthReference{
-        2u, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL };
-    VkSubpassDescription accumulationSubpass{};
-    accumulationSubpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-    accumulationSubpass.colorAttachmentCount =
-        static_cast<uint32_t>(colorReferences.size());
-    accumulationSubpass.pColorAttachments = colorReferences.data();
-    accumulationSubpass.pDepthStencilAttachment = &depthReference;
-    VkSubpassDependency accumulationDependency{};
-    accumulationDependency.srcSubpass = VK_SUBPASS_EXTERNAL;
-    accumulationDependency.dstSubpass = 0u;
-    accumulationDependency.srcStageMask =
-        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
-        VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
-    accumulationDependency.dstStageMask =
-        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
-        VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
-    accumulationDependency.srcAccessMask =
-        VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
-        VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-    accumulationDependency.dstAccessMask =
-        VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
-        VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
-        VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
-    VkRenderPassCreateInfo accumulationInfo{
-        VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO };
-    accumulationInfo.attachmentCount = static_cast<uint32_t>(
-        accumulationAttachments.size());
-    accumulationInfo.pAttachments = accumulationAttachments.data();
-    accumulationInfo.subpassCount = 1u;
-    accumulationInfo.pSubpasses = &accumulationSubpass;
-    accumulationInfo.dependencyCount = 1u;
-    accumulationInfo.pDependencies = &accumulationDependency;
-    requireSuccess(vkCreateRenderPass(device_, &accumulationInfo, nullptr,
-        &accumulationRenderPass_),
-        "vkCreateRenderPass(WeightedOIT accumulation)");
-
-    const VkAttachmentDescription resolveAttachment{
-        0u, VulkanSceneColorFormat, VK_SAMPLE_COUNT_1_BIT,
-        VK_ATTACHMENT_LOAD_OP_LOAD, VK_ATTACHMENT_STORE_OP_STORE,
-        VK_ATTACHMENT_LOAD_OP_DONT_CARE, VK_ATTACHMENT_STORE_OP_DONT_CARE,
-        VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-        VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL };
-    const VkAttachmentReference resolveReference{
-        0u, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL };
-    VkSubpassDescription resolveSubpass{};
-    resolveSubpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-    resolveSubpass.colorAttachmentCount = 1u;
-    resolveSubpass.pColorAttachments = &resolveReference;
-    VkSubpassDependency resolveDependency{};
-    resolveDependency.srcSubpass = VK_SUBPASS_EXTERNAL;
-    resolveDependency.dstSubpass = 0u;
-    resolveDependency.srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
-        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-    resolveDependency.dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
-        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-    resolveDependency.srcAccessMask = VK_ACCESS_SHADER_READ_BIT |
-        VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-    resolveDependency.dstAccessMask = VK_ACCESS_SHADER_READ_BIT |
-        VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
-        VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-    VkRenderPassCreateInfo resolveInfo{
-        VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO };
-    resolveInfo.attachmentCount = 1u;
-    resolveInfo.pAttachments = &resolveAttachment;
-    resolveInfo.subpassCount = 1u;
-    resolveInfo.pSubpasses = &resolveSubpass;
-    resolveInfo.dependencyCount = 1u;
-    resolveInfo.pDependencies = &resolveDependency;
-    requireSuccess(vkCreateRenderPass(device_, &resolveInfo, nullptr,
-        &resolveRenderPass_), "vkCreateRenderPass(WeightedOIT resolve)");
 }
 
 VkPipeline VulkanWeightedOitPass::createAccumulationPipeline() const {
@@ -288,9 +191,19 @@ VkPipeline VulkanWeightedOitPass::createAccumulationPipeline() const {
         info.pColorBlendState = &colorBlend;
         info.pDynamicState = &dynamicState;
         info.layout = accumulationPipelineLayout_;
-        info.renderPass = accumulationRenderPass_;
+        // R4a: dynamic rendering into accumulation + revealage, testing the
+        // opaque depth read-only (DEPTH_STENCIL_READ_ONLY_OPTIMAL, STORE_OP_NONE).
+        const std::array<VkFormat, 2> colorFormats{
+            VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_R16_SFLOAT };
+        VkPipelineRenderingCreateInfo rendering{
+            VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO };
+        rendering.colorAttachmentCount = static_cast<uint32_t>(colorFormats.size());
+        rendering.pColorAttachmentFormats = colorFormats.data();
+        rendering.depthAttachmentFormat = VK_FORMAT_D32_SFLOAT;
+        info.pNext = &rendering;
+        info.renderPass = VK_NULL_HANDLE;
         VkPipeline pipeline = VK_NULL_HANDLE;
-        requireSuccess(vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1u,
+        requireSuccess(vkCreateGraphicsPipelines(device_, pipelineCache_, 1u,
             &info, nullptr, &pipeline),
             "vkCreateGraphicsPipelines(WeightedOIT accumulation)");
         vkDestroyShaderModule(device_, fragment, nullptr);
@@ -360,9 +273,16 @@ VkPipeline VulkanWeightedOitPass::createResolvePipeline() const {
         info.pColorBlendState = &colorBlend;
         info.pDynamicState = &dynamicState;
         info.layout = resolvePipelineLayout_;
-        info.renderPass = resolveRenderPass_;
+        // R4a: dynamic rendering into scene colour (no depth attachment).
+        const VkFormat colorFormat = VulkanSceneColorFormat;
+        VkPipelineRenderingCreateInfo rendering{
+            VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO };
+        rendering.colorAttachmentCount = 1u;
+        rendering.pColorAttachmentFormats = &colorFormat;
+        info.pNext = &rendering;
+        info.renderPass = VK_NULL_HANDLE;
         VkPipeline pipeline = VK_NULL_HANDLE;
-        requireSuccess(vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1u,
+        requireSuccess(vkCreateGraphicsPipelines(device_, pipelineCache_, 1u,
             &info, nullptr, &pipeline),
             "vkCreateGraphicsPipelines(WeightedOIT resolve)");
         vkDestroyShaderModule(device_, fragment, nullptr);
@@ -459,14 +379,8 @@ void VulkanWeightedOitPass::cleanup() noexcept {
         vkDestroyPipelineLayout(device_, resolvePipelineLayout_, nullptr);
     if (resolveDescriptorLayout_ != VK_NULL_HANDLE)
         vkDestroyDescriptorSetLayout(device_, resolveDescriptorLayout_, nullptr);
-    if (resolveRenderPass_ != VK_NULL_HANDLE)
-        vkDestroyRenderPass(device_, resolveRenderPass_, nullptr);
-    if (accumulationRenderPass_ != VK_NULL_HANDLE)
-        vkDestroyRenderPass(device_, accumulationRenderPass_, nullptr);
     device_ = VK_NULL_HANDLE;
     descriptors_ = nullptr;
-    accumulationRenderPass_ = VK_NULL_HANDLE;
-    resolveRenderPass_ = VK_NULL_HANDLE;
     accumulationPipelineLayout_ = VK_NULL_HANDLE;
     resolveDescriptorLayout_ = VK_NULL_HANDLE;
     resolvePipelineLayout_ = VK_NULL_HANDLE;

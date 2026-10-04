@@ -6,3 +6,12 @@ assets/benchmarks/** text eol=lf
 
 # M4 production-contract fixture hashes include exact source bytes.
 tests/scene/fixtures/m4_acceptance_schema1.iridium.scene.json text eol=lf
+
+# M7R: tests and run reports hash these files' exact bytes (fixture manifests,
+# documentation-pinned evidence, test fixtures). Keep them LF in every checkout,
+# including git worktrees created with core.autocrlf=true.
+assets/*.json text eol=lf
+assets/scenes/** text eol=lf
+tests/**/fixtures/** text eol=lf
+docs/** text eol=lf
+*.md text eol=lf
