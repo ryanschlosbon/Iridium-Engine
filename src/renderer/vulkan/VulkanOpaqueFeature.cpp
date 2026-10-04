@@ -264,9 +264,21 @@ namespace Iridium {
         staged_ = inputs;
         stagedCompact_ = false;
         stagedIndirectValid_ = false;
+        stagedWireframeIndirect_ = false;
         // R3b.7: "gpu-scene.opaque.compact" runs or is skipped before
-        // "gbuffer"; wireframe frames always skip it.
-        if (!inputs.wireframe) {
+        // "gbuffer"; wireframe frames always skip it (M7R R5c.4f: they draw
+        // every GPU-scene command of the bins indirectly).
+        if (inputs.wireframe) {
+            const uint32_t frame = context_->scheduler.currentFrameIndex();
+            stagedWireframeIndirect_ = culler_.planWireframe({
+                .submission = &staged_.opaque,
+                .scene = context_->gpuScene.indirectScene(frame),
+                .sceneBuffersMapped = context_->gpuScene.buffersMapped(frame),
+                .assets = vulkanIndirectAssets(*context_),
+                .view = &context_->gpuScene.views()[frame],
+            }, frame);
+        }
+        else {
             const uint32_t frame = context_->scheduler.currentFrameIndex();
             stagedIndirectValid_ = culler_.plan({
                 .submission = &staged_.opaque,
@@ -359,7 +371,103 @@ namespace Iridium {
         MaterialHandle lastBoundMaterial{};
         GeometryHandle lastBoundGeometry{};
 
-        if (staged_.wireframe) {
+        if (staged_.wireframe && stagedWireframeIndirect_) {
+            // M7R R5c.4f: the fixed wireframe override with the GPU-scene
+            // vertex shader, every command of each bin, in the draw order;
+            // direct packets keep the push-constant wireframe pipeline.
+            const VkDescriptorSet gpuSceneSet =
+                context_->gpuScene.descriptorSets()[frame];
+            VkPipeline boundPipeline = VK_NULL_HANDLE;
+            const auto bindWireframe = [&](VkPipeline pipeline, bool gpuScene) {
+                if (pipeline == boundPipeline) return;
+                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+                telemetry.recordPipelineBind(
+                    pipelineIdentity(FixedPipelineIdentity::GBufferWireframe));
+                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                    meshLayout, 0, 1, &globalSet, 0, nullptr);
+                if (gpuScene)
+                    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                        meshLayout, 4u, 1u, &gpuSceneSet, 0u, nullptr);
+                boundPipeline = pipeline;
+                lastBoundMaterial = MaterialHandle{};
+                lastBoundGeometry = GeometryHandle{};
+            };
+            uint32_t binIndex = 0;
+            for (size_t position = 0; position < opaque.order.size();) {
+                const uint32_t entry = opaque.order[position];
+                if (OpaqueSubmission::isDirect(entry)) {
+                    ++position;
+                    OpaqueDirectDraw packet{};
+                    if (!resolveOpaqueDraw(scene, opaque, entry, packet)) continue;
+                    auto* geometry = resources.geometries().get(packet.geometry);
+                    auto* material = resources.materials().get(packet.material);
+                    if (!geometry || !material) continue;
+                    bindWireframe(gBufferPipeline_->getWireframePipeline(), false);
+                    if (packet.material != lastBoundMaterial) {
+                        resources.bindMaterialDescriptors(cmd, frame, meshLayout);
+                        telemetry.recordMaterialBind(packet.material);
+                        lastBoundMaterial = packet.material;
+                    }
+                    if (packet.geometry != lastBoundGeometry) {
+                        VkDeviceSize offset = geometry->vertexOffset;
+                        vkCmdBindVertexBuffers(cmd, 0, 1, &geometry->vertexBuffer.buffer, &offset);
+                        vkCmdBindIndexBuffer(cmd, geometry->indexBuffer.buffer, 0,
+                            toVkIndexType(geometry->indexFormat));
+                        lastBoundGeometry = packet.geometry;
+                    }
+                    CanonicalMeshPushConstants push{};
+                    push.renderMatrix = packet.worldTransform;
+                    push.materialIndex = packet.material.getIndex();
+                    push.padding[0] = debugView;
+                    vkCmdPushConstants(cmd, meshLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                        0, sizeof(push), &push);
+                    vkCmdDrawIndexed(cmd, packet.indexCount, 1, packet.firstIndex, 0, 0);
+                    telemetry.recordDraw(telemetry.counters().drawOpaque, packet.indexCount / 3);
+                    continue;
+                }
+                if (binIndex >= culler_.bins().size() ||
+                    culler_.bins()[binIndex].orderBegin != position)
+                    throw std::logic_error(
+                        "opaque wireframe bins do not follow the draw order");
+                const VulkanOpaqueIndirectCuller::Bin& bin = culler_.bins()[binIndex];
+                position += bin.commandCount;
+                auto* geometry = resources.geometries().get(bin.geometry);
+                bindWireframe(gBufferPipeline_->getWireframeIndirectPipeline(), true);
+                if (bin.material != lastBoundMaterial) {
+                    resources.bindMaterialDescriptors(cmd, frame, meshLayout);
+                    telemetry.recordMaterialBind(bin.material);
+                    lastBoundMaterial = bin.material;
+                }
+                // Commands carry exact signed base vertices.
+                const VkDeviceSize vertexOffset = 0;
+                vkCmdBindVertexBuffers(cmd, 0u, 1u,
+                    &geometry->vertexBuffer.buffer, &vertexOffset);
+                vkCmdBindIndexBuffer(cmd, geometry->indexBuffer.buffer, 0u,
+                    toVkIndexType(geometry->indexFormat));
+                lastBoundGeometry = GeometryHandle{};
+                CanonicalMeshPushConstants push{};
+                push.materialIndex = bin.material.getIndex();
+                push.padding[0] = debugView;
+                vkCmdPushConstants(cmd, meshLayout,
+                    VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                    0u, sizeof(push), &push);
+                vkCmdDrawIndexedIndirect(cmd,
+                    culler_.buffers().commands[frame].buffer,
+                    static_cast<VkDeviceSize>(bin.commandBegin) *
+                        sizeof(GpuSceneIndexedIndirectCommand),
+                    bin.commandCount, sizeof(GpuSceneIndexedIndirectCommand));
+                for (uint32_t command = 0; command < bin.commandCount; ++command) {
+                    const uint32_t primitiveIndex = culler_.gpuOrder()[
+                        bin.packetBegin + command];
+                    telemetry.recordDraw(telemetry.counters().drawOpaque,
+                        scene.geometries[scene.primitives[primitiveIndex].
+                            binding.y].draw.y / 3u);
+                }
+                ++binIndex;
+            }
+            telemetry.counters().opaqueIndirectBins = culler_.bins().size();
+        }
+        else if (staged_.wireframe) {
             // Editor wireframe is a deliberate fixed override, not a material PSO.
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                 gBufferPipeline_->getWireframePipeline());

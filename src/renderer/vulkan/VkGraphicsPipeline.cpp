@@ -12,11 +12,14 @@ VkGraphicsPipeline::VkGraphicsPipeline(VkContext* context,
 	: context(context), pipelineCache(pipelineCache), pipelineLayout(pipelineLayout) {
 
     wireframePipeline = createPipeline(swapchain, true, false, layout);
+    wireframeIndirectPipeline = createPipeline(swapchain, true, false, layout,
+        "assets/shaders/gpu_scene_material_vert.spv");
     outlinePipeline = createPipeline(swapchain, false, true, layout);
 }
 
 VkGraphicsPipeline::~VkGraphicsPipeline() {
     vkDestroyPipeline(context->getDevice(), wireframePipeline, nullptr);
+    vkDestroyPipeline(context->getDevice(), wireframeIndirectPipeline, nullptr);
     vkDestroyPipeline(context->getDevice(), outlinePipeline, nullptr);
 }
 
@@ -33,12 +36,12 @@ VkShaderModule VkGraphicsPipeline::createShaderModule(const std::vector<char>& c
 }
 
 VkPipeline VkGraphicsPipeline::createPipeline(VkSwapchain* swapchain,
-    bool isWireframe, bool isOutline, Iridium::GBufferLayout layout) {
+    bool isWireframe, bool isOutline, Iridium::GBufferLayout layout,
+    const char* vertexShader) {
     // -------------------------------------------------------------
     // 1. SHADER LOADING
     // -------------------------------------------------------------
-    auto vertCode = readFile(std::string(PROJECT_ROOT_DIR) +
-        "assets/shaders/canonical_material_vert.spv");
+    auto vertCode = readFile(std::string(PROJECT_ROOT_DIR) + vertexShader);
     const char* canonicalGBufferShader = nullptr;
     if (layout == Iridium::GBufferLayout::CanonicalReference) {
         canonicalGBufferShader =

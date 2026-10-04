@@ -270,8 +270,8 @@ namespace Iridium {
         return true;
     }
 
-    bool VulkanOpaqueIndirectCuller::plan(const OpaqueIndirectInputs& inputs,
-        uint32_t frame) {
+    bool VulkanOpaqueIndirectCuller::buildBins(const OpaqueIndirectInputs& inputs,
+        bool wireframe) {
         const OpaqueSubmission& submission = *inputs.submission;
         gpuOrder_.clear();
         gpuOrderPosition_.clear();
@@ -321,12 +321,13 @@ namespace Iridium {
         bins_.clear();
         candidates_.clear();
         bool valid = indirectPlan_.usesIndirect();
-        if (lodEnabled())
+        const bool lodHistory = lodEnabled() && !wireframe;
+        if (lodHistory)
             seenHistory_.assign(primitiveRecords.size(), 0);
         const VulkanIndirectAssetResolver& assets = inputs.assets;
         for (uint32_t index = 0; valid && index < gpuOrder_.size(); ++index) {
             const uint32_t primitiveIndex = gpuOrder_[index];
-            if (lodEnabled() && seenHistory_[primitiveIndex]++ != 0) {
+            if (lodHistory && seenHistory_[primitiveIndex]++ != 0) {
                 indirectPlan_.fallbackReason = GpuSceneIndirectFallbackReason::InvalidPacket;
                 return false; // Never dispatch two writers to the same history slot.
             }
@@ -384,7 +385,31 @@ namespace Iridium {
                 ++bins_.back().commandCount;
             }
         }
-        if (!valid) return false;
+        return valid;
+    }
+
+    bool VulkanOpaqueIndirectCuller::planWireframe(
+        const OpaqueIndirectInputs& inputs, uint32_t frame) {
+        // M7R R5c.4f: the same bins, every command drawn (no compaction, no
+        // validation): the plan's commands are written to the slot's command
+        // buffer for vkCmdDrawIndexedIndirect.
+        if (!buildBins(inputs, true)) return false;
+        std::memcpy(buffers_.commands[frame].mapped,
+            indirectPlan_.commands.data(),
+            indirectPlan_.commands.size() * sizeof(GpuSceneIndexedIndirectCommand));
+        return true;
+    }
+
+    bool VulkanOpaqueIndirectCuller::plan(const OpaqueIndirectInputs& inputs,
+        uint32_t frame) {
+        if (!buildBins(inputs, false)) return false;
+        const OpaqueSubmission& submission = *inputs.submission;
+        const GpuSceneCapacityRequirements& published = inputs.scene.published;
+        const auto primitiveRecords = inputs.scene.primitives.first(published.primitives);
+        const auto geometryRecords = inputs.scene.geometries.first(published.geometries);
+        const auto instanceRecords = inputs.scene.instances.first(published.instances);
+        const auto transformRecords = inputs.scene.transforms.first(published.transforms);
+        const VulkanIndirectAssetResolver& assets = inputs.assets;
 
         candidates_.resize(gpuOrder_.size());
         for (uint32_t binIndex = 0; binIndex < bins_.size(); ++binIndex) {

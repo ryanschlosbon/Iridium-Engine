@@ -154,6 +154,8 @@ namespace Iridium {
         FrameInputs staged_{};
         bool stagedCompact_ = false;
         bool stagedIndirectValid_ = false;
+        // M7R R5c.4f: wireframe frames draw the GPU-scene bins indirectly.
+        bool stagedWireframeIndirect_ = false;
     };
 
 } // namespace Iridium

@@ -120,6 +120,12 @@ namespace Iridium {
         // CPU visibility/LOD/occlusion planning, oracle expectations and the
         // host writes. False selects the direct fallback.
         [[nodiscard]] bool plan(const OpaqueIndirectInputs& inputs, uint32_t frame);
+        // M7R R5c.4f: the editor wireframe's bins. Every command is drawn: the
+        // plan's commands go to the slot's command buffer from the host, with
+        // no compaction, culling, LOD or validation. False selects the direct
+        // wireframe loop.
+        [[nodiscard]] bool planWireframe(const OpaqueIndirectInputs& inputs,
+            uint32_t frame);
         // After a successful plan(): barriers, the cull dispatch and the
         // occlusion queries. Returns the dispatches recorded.
         uint32_t recordCompaction(VkCommandBuffer cmd, uint32_t frame,
@@ -173,6 +179,10 @@ namespace Iridium {
         }
         void bindSlot(uint32_t frame);
         void destroySlot(uint32_t frame) noexcept;
+        // gpuOrder_, the indirect plan and the bins; false when the frame
+        // falls back to direct draws.
+        [[nodiscard]] bool buildBins(const OpaqueIndirectInputs& inputs,
+            bool wireframe);
 
         VulkanCullerServices services_{};
         VulkanOpaqueCullerConfig config_{};
