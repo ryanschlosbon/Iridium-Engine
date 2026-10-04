@@ -111,11 +111,7 @@ namespace Iridium {
         SceneWorld sceneWorld_;
         // GPU-scene publication and render extraction (M7R R5a.3).
         RenderExtractor extractor_;
-        LightExtractor lightExtractor_;
-        ReflectionProbePublisher reflectionProbePublisher_;
         ReflectionProbeCaptureScheduler reflectionProbeCaptureScheduler_;
-        std::vector<EnvironmentLightingHandles>
-            reflectionProbeEnvironments_;
         std::array<DirectionalShadowCache,
             kDirectionalShadowLightCapacity> directionalShadowCaches_;
         StableSpotShadowAtlas spotShadowAtlas_;

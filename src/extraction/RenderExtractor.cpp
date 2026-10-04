@@ -7,6 +7,9 @@
 #include "extraction/RenderExtractor.h"
 
 #include <algorithm>
+#include <iterator>
+#include <map>
+#include <vector>
 #include <cstdint>
 #include <cstring>
 #include <limits>
@@ -335,6 +338,92 @@ namespace Iridium {
             stats.unchangedFastPath);
         cpuProfiler_.recordCounter("gpu_scene.direct_fallback",
             gpuSceneDirectFallbackCount_ + stats.capacityFallbackInstances);
+    }
+
+    void RenderExtractor::prepareLightsAndProbes(SceneWorld& lightingWorld,
+        const std::map<AssetGuid, LoadedEnvironmentAsset>& loadedEnvironments) {
+        loadedEnvironments_ = &loadedEnvironments;
+        LightingFramePacket& lightingFrame = lightingFrame_;
+        {
+            CpuScope lightScope(cpuProfiler_, "cpu.light.extract");
+            lightingFrame = lightExtractor_.extract(lightingWorld);
+        }
+        {
+            CpuScope lightScope(cpuProfiler_, "cpu.light.prepare");
+            renderBackend->prepareLighting(lightingFrame.requiredCapacity);
+        }
+        ReflectionProbeFramePacket& extractedProbes = extractedProbes_;
+        {
+            CpuScope probeScope(cpuProfiler_, "cpu.probe.extract");
+            extractedProbes = extractReflectionProbes(sceneWorld_,
+                [&loadedEnvironments](AssetGuid environment) {
+                    return loadedEnvironments.contains(environment);
+                });
+            std::vector<SceneEntityUuid> runtimeCaptureOwners;
+            runtimeCaptureOwners.reserve(extractedProbes.candidates.size());
+            for (const ReflectionProbeCandidate& candidate :
+                    extractedProbes.candidates)
+                if (candidate.probe.environmentAssetGuid.isNil())
+                    runtimeCaptureOwners.push_back(candidate.owner);
+            renderBackend->synchronizeReflectionProbeCaptureOwners(
+                runtimeCaptureOwners);
+            for (ReflectionProbeCandidate& candidate :
+                    extractedProbes.candidates) {
+                if (!candidate.probe.environmentAssetGuid.isNil()) continue;
+                candidate.runtimeEnvironmentSlot = renderBackend->
+                    capturedReflectionProbeEnvironmentSlot(candidate.owner);
+                if (candidate.runtimeEnvironmentSlot)
+                    candidate.resident = true;
+            }
+        }
+        ReflectionProbeGpuFramePacket& publishedProbes = publishedProbes_;
+        {
+            CpuScope probeScope(cpuProfiler_, "cpu.probe.publish");
+            reflectionProbeEnvironments_.clear();
+            reflectionProbeEnvironments_.reserve(
+                kMaximumGpuReflectionProbeEnvironments);
+            for (const auto& [guid, environment] : loadedEnvironments) {
+                (void)guid;
+                if (reflectionProbeEnvironments_.size() >=
+                    kMaximumGpuReflectionProbeEnvironments) break;
+                reflectionProbeEnvironments_.push_back(environment.lighting);
+            }
+            publishedProbes = reflectionProbePublisher_.publish(
+                extractedProbes.candidates,
+                [this](AssetGuid environment) -> std::optional<uint32_t> {
+                    const auto& environments = *loadedEnvironments_;
+                    const auto found = environments.find(environment);
+                    if (found == environments.end()) return std::nullopt;
+                    const size_t index = static_cast<size_t>(std::distance(
+                        environments.begin(), found));
+                    if (index >= reflectionProbeEnvironments_.size())
+                        return std::nullopt;
+                    return static_cast<uint32_t>(index);
+                });
+        }
+        {
+            CpuScope probeScope(cpuProfiler_, "cpu.probe.prepare");
+            renderBackend->prepareReflectionProbes(
+                publishedProbes.requiredCapacity, reflectionProbeEnvironments_);
+        }
+        cpuProfiler_.recordCounter("probe.extracted",
+            publishedProbes.stats.extractedCandidateCount);
+        cpuProfiler_.recordCounter("probe.active",
+            publishedProbes.stats.activeProbeCount);
+        cpuProfiler_.recordCounter("probe.nonresident",
+            publishedProbes.stats.nonresidentProbeCount);
+        cpuProfiler_.recordCounter("probe.environment_unresolved",
+            publishedProbes.stats.unresolvedEnvironmentCount);
+        cpuProfiler_.recordCounter("probe.capacity_omitted",
+            publishedProbes.stats.capacityOmittedCount);
+        cpuProfiler_.recordCounter("probe.publish.changed_bytes",
+            publishedProbes.stats.changedRecordBytes);
+    }
+
+    void RenderExtractor::releaseFrame() {
+        lightingFrame_ = {};
+        extractedProbes_ = {};
+        publishedProbes_ = {};
     }
 
 } // namespace Iridium

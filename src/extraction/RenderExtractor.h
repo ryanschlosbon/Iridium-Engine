@@ -12,18 +12,23 @@
 #include <glm/glm.hpp>
 
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
 
 #include "ecs/Entity.h"
+#include "renderer/lighting/LightExtractor.h"
+#include "renderer/lighting/ReflectionProbe.h"
 #include "renderer/rhi/GpuScene.h"
+#include "renderer/rhi/IRenderBackend.h"
 #include "renderer/scene/GpuScenePublisher.h"
 #include "scene/SceneWorld.h"
 
 namespace Iridium {
 
     class AssetManager;
+    struct LoadedEnvironmentAsset;
     class CpuProfiler;
     class IRenderBackend;
     struct ModelAsset;
@@ -53,6 +58,27 @@ namespace Iridium {
             return gpuScenePublisher_.get();
         }
 
+        // --- Lights and reflection probes (before beginFrame) ---
+        // Extracts and prepares the lights of `lightingWorld` (the scene, or
+        // the asset preview's lighting world) and extracts, publishes and
+        // prepares the scene's reflection probes over the loaded environments.
+        void prepareLightsAndProbes(SceneWorld& lightingWorld,
+            const std::map<AssetGuid, LoadedEnvironmentAsset>& loadedEnvironments);
+        [[nodiscard]] LightingFramePacket& lightingFrame() noexcept {
+            return lightingFrame_;
+        }
+        [[nodiscard]] ReflectionProbeFramePacket& extractedProbes() noexcept {
+            return extractedProbes_;
+        }
+        [[nodiscard]] ReflectionProbeGpuFramePacket& publishedProbes() noexcept {
+            return publishedProbes_;
+        }
+
+        // After submitFrame (or when the frame does not open): releases the
+        // frame's packets. They are re-created every frame, as the former
+        // drawFrame locals were, so steady-frame allocations are unchanged.
+        void releaseFrame();
+
     private:
         CpuProfiler& cpuProfiler_;
         SceneWorld& sceneWorld_;
@@ -78,6 +104,17 @@ namespace Iridium {
             gpuSceneObservationMetadata_;
         const GpuScenePackedTables* gpuSceneFrame_ = nullptr;
         uint32_t gpuSceneDirectFallbackCount_ = 0;
+
+        LightExtractor lightExtractor_;
+        ReflectionProbePublisher reflectionProbePublisher_;
+        std::vector<EnvironmentLightingHandles>
+            reflectionProbeEnvironments_;
+        const std::map<AssetGuid, LoadedEnvironmentAsset>* loadedEnvironments_ =
+            nullptr;
+        // This frame's packets (valid until releaseFrame).
+        LightingFramePacket lightingFrame_;
+        ReflectionProbeFramePacket extractedProbes_;
+        ReflectionProbeGpuFramePacket publishedProbes_;
     };
 
 } // namespace Iridium

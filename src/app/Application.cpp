@@ -829,83 +829,18 @@ namespace Iridium {
         }
         const std::map<AssetGuid, LoadedEnvironmentAsset>& loadedEnvironments =
             assets_.loadedEnvironments();
-        LightingFramePacket lightingFrame;
-        {
-            CpuScope lightScope(cpuProfiler_, "cpu.light.extract");
-            if (SceneWorld* previewWorld = editorHost_.previewLightingWorld())
-                lightingFrame = lightExtractor_.extract(*previewWorld);
-            else lightingFrame = lightExtractor_.extract(sceneWorld_);
-        }
-        {
-            CpuScope lightScope(cpuProfiler_, "cpu.light.prepare");
-            renderBackend->prepareLighting(lightingFrame.requiredCapacity);
-        }
-        ReflectionProbeFramePacket extractedProbes;
-        {
-            CpuScope probeScope(cpuProfiler_, "cpu.probe.extract");
-            extractedProbes = extractReflectionProbes(sceneWorld_,
-                [&loadedEnvironments](AssetGuid environment) {
-                    return loadedEnvironments.contains(environment);
-                });
-            std::vector<SceneEntityUuid> runtimeCaptureOwners;
-            runtimeCaptureOwners.reserve(extractedProbes.candidates.size());
-            for (const ReflectionProbeCandidate& candidate :
-                    extractedProbes.candidates)
-                if (candidate.probe.environmentAssetGuid.isNil())
-                    runtimeCaptureOwners.push_back(candidate.owner);
-            renderBackend->synchronizeReflectionProbeCaptureOwners(
-                runtimeCaptureOwners);
-            for (ReflectionProbeCandidate& candidate :
-                    extractedProbes.candidates) {
-                if (!candidate.probe.environmentAssetGuid.isNil()) continue;
-                candidate.runtimeEnvironmentSlot = renderBackend->
-                    capturedReflectionProbeEnvironmentSlot(candidate.owner);
-                if (candidate.runtimeEnvironmentSlot)
-                    candidate.resident = true;
-            }
-        }
-        ReflectionProbeGpuFramePacket publishedProbes;
-        {
-            CpuScope probeScope(cpuProfiler_, "cpu.probe.publish");
-            reflectionProbeEnvironments_.clear();
-            reflectionProbeEnvironments_.reserve(
-                kMaximumGpuReflectionProbeEnvironments);
-            for (const auto& [guid, environment] : loadedEnvironments) {
-                (void)guid;
-                if (reflectionProbeEnvironments_.size() >=
-                    kMaximumGpuReflectionProbeEnvironments) break;
-                reflectionProbeEnvironments_.push_back(environment.lighting);
-            }
-            publishedProbes = reflectionProbePublisher_.publish(
-                extractedProbes.candidates,
-                [this](AssetGuid environment) -> std::optional<uint32_t> {
-                    const auto& environments = assets_.loadedEnvironments();
-                    const auto found = environments.find(environment);
-                    if (found == environments.end()) return std::nullopt;
-                    const size_t index = static_cast<size_t>(std::distance(
-                        environments.begin(), found));
-                    if (index >= reflectionProbeEnvironments_.size())
-                        return std::nullopt;
-                    return static_cast<uint32_t>(index);
-                });
-        }
-        {
-            CpuScope probeScope(cpuProfiler_, "cpu.probe.prepare");
-            renderBackend->prepareReflectionProbes(
-                publishedProbes.requiredCapacity, reflectionProbeEnvironments_);
-        }
-        cpuProfiler_.recordCounter("probe.extracted",
-            publishedProbes.stats.extractedCandidateCount);
-        cpuProfiler_.recordCounter("probe.active",
-            publishedProbes.stats.activeProbeCount);
-        cpuProfiler_.recordCounter("probe.nonresident",
-            publishedProbes.stats.nonresidentProbeCount);
-        cpuProfiler_.recordCounter("probe.environment_unresolved",
-            publishedProbes.stats.unresolvedEnvironmentCount);
-        cpuProfiler_.recordCounter("probe.capacity_omitted",
-            publishedProbes.stats.capacityOmittedCount);
-        cpuProfiler_.recordCounter("probe.publish.changed_bytes",
-            publishedProbes.stats.changedRecordBytes);
+        // Light and probe extraction run before beginFrame; their packets stay
+        // valid until the frame is released after submitFrame.
+        SceneWorld* const previewLightingWorld =
+            editorHost_.previewLightingWorld();
+        extractor_.prepareLightsAndProbes(
+            previewLightingWorld ? *previewLightingWorld : sceneWorld_,
+            loadedEnvironments);
+        LightingFramePacket& lightingFrame = extractor_.lightingFrame();
+        ReflectionProbeFramePacket& extractedProbes =
+            extractor_.extractedProbes();
+        ReflectionProbeGpuFramePacket& publishedProbes =
+            extractor_.publishedProbes();
         assets_.processMaterialPreviews(editorHost_.assetDocuments());
         extractor_.prepareGpuScenePublication(editorHost_.selectedEntity());
         const GpuScenePackedTables* const gpuSceneFrame_ =
@@ -921,6 +856,7 @@ namespace Iridium {
         // If the window was resized, OR acquire requests a swapchain rebuild:
         if (framebufferResized || renderBackend->beginFrame() == FrameStatus::RecreateSwapchain) {
             framebufferResized = false;
+            extractor_.releaseFrame();
             recreateSwapchain();
             return;
         }
@@ -2159,6 +2095,7 @@ namespace Iridium {
         // output submit points are reported from the stage boundaries.
         renderBackend->submitFrame(renderFrame);
         frameStage_ = {};
+        extractor_.releaseFrame();
 
         if (renderBackend->endFrame() == FrameStatus::RecreateSwapchain) {
             framebufferResized = false;
