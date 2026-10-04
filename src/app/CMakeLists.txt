@@ -6,6 +6,7 @@ add_library(iridium_app STATIC
         Application.cpp
         ApplicationConfig.cpp
         AssetIntegration.cpp
+        ../extraction/RenderExtractor.cpp
         cli/CliValueParsers.cpp
         cli/RuntimeOptions.cpp
         cli/EditorOptions.cpp

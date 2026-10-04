@@ -14,6 +14,7 @@
 // --- ENGINE SUBSYSTEMS ---
 #include "app/ApplicationConfig.h"
 #include "app/AssetIntegration.h"
+#include "extraction/RenderExtractor.h"
 #include "app/FrameObserver.h"
 #include "core/EngineLog.h"
 #include "profiling/CpuProfiler.h"
@@ -104,28 +105,12 @@ namespace Iridium {
         // instance ranges. Existing single-instance packets leave this empty.
         std::vector<glm::mat4> forwardInstanceTransforms_;
         std::vector<Entity> changedTransformEntities_;
-        std::unique_ptr<GpuScenePublisher> gpuScenePublisher_;
-        std::vector<GpuSceneObservedInstance> gpuSceneObservations_;
-        struct GpuSceneObservationMetadata {
-            SceneEntityUuid owner;
-            const ModelAsset* model = nullptr;
-            GeometryHandle geometry;
-            std::string cookKey;
-            uint64_t materialOverrideSignature = 0;
-            uint64_t observationRevision = 0;
-            glm::vec3 localMinimum{ 0.0f };
-            glm::vec3 localMaximum{ 0.0f };
-            uint32_t baseConsumerMask = 0;
-            bool valid = false;
-        };
-        std::vector<GpuSceneObservationMetadata>
-            gpuSceneObservationMetadata_;
-        const GpuScenePackedTables* gpuSceneFrame_ = nullptr;
         GpuSceneVisibilityResult gpuSceneVisibility_;
-        uint32_t gpuSceneDirectFallbackCount_ = 0;
 
         // --- SUBSYSTEMS ---
         SceneWorld sceneWorld_;
+        // GPU-scene publication and render extraction (M7R R5a.3).
+        RenderExtractor extractor_;
         LightExtractor lightExtractor_;
         ReflectionProbePublisher reflectionProbePublisher_;
         ReflectionProbeCaptureScheduler reflectionProbeCaptureScheduler_;
@@ -207,7 +192,6 @@ namespace Iridium {
         void drawFrame(AppFrameContext& frame);
         // The only runtime-configuration writes the editor causes.
         void applyEditorFrameRequests(const EditorFrameRequests& requests);
-        void prepareGpuScenePublication(Entity selectedEntity);
 
         void processInput(GLFWwindow* window);
         void recreateSwapchain();
