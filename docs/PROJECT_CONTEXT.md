@@ -1,15 +1,32 @@
 # Iridium Engine Project Context
 
-## Current direction (2026-10-02, read first)
+## Current direction (2026-10-04, read first)
 
-Claude Code took over from Codex on 2026-10-02. All prior work is committed on
-`Render-Refactor-for-Modularity` (PR #6). M7 is paused at the M7.8 checkpoint. The
-active milestone is **M7R architecture consolidation**
-(`docs/milestones/M7R-task-lead-prompt.md`), followed by M9 native temporal AA,
-motion vectors, bloom, and auto-exposure; then M7.9-M7.12, M8, resumed M7.8 Virtual
-Shadow Maps, M10, and M11. Evidence tiers and the 6.94 ms budget are in
-`docs/performance/FRAME_BUDGET.md`. Third-party content is never committed. The
-history below is a dated record; prefer ROADMAP.md and the active plan for status.
+Claude Code took over from Codex on 2026-10-02.
+
+- **M7R architecture consolidation is accepted** (2026-10-04, branch
+  `m7r-consolidation`, PR #7; completion report in
+  `docs/milestones/M7R-architecture-consolidation.md`). Rendered output is unchanged.
+- **The engine now has:**
+  - a single-compile module build, and qualification outside production code;
+  - an index-addressed render graph with feature-owner callbacks, batched
+    synchronization2 barriers, dynamic rendering, VMA, transient aliasing and a
+    deletion queue (ADR-0016);
+  - a pipeline cache, transfer-queue uploads, and timeline-semaphore frame pacing;
+  - an enkiTS task system (ADR-0015);
+  - change-driven, parallel extraction with zero steady-frame allocations.
+- **Reference measurement (T-F7):** frame 6.9 → 1.9 ms; serial main thread 1.39 ms
+  against the 3.0 ms target. Every timing route is now GPU-bound.
+- **Next milestone: M9** (native temporal AA, motion vectors, bloom, auto-exposure).
+  Start from `docs/milestones/M7R-to-M9-handoff.md`, which lists the gaps to close
+  first (per-view history keying, previous-transform semantics, jitter versus the
+  Hi-Z history).
+- **After M9:** M7.9–M7.12, M8, resumed M7.8 Virtual Shadow Maps, M10 and M11.
+- Evidence tiers, the 6.94 ms budget and the M7R CPU baseline are in
+  `docs/performance/FRAME_BUDGET.md`.
+- Third-party content is never committed.
+- The history below is a dated record; prefer ROADMAP.md and the active plan for
+  status.
 
 ## Why this document exists
 

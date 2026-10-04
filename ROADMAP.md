@@ -939,9 +939,9 @@ fallback.
 
 ### M7R - Architecture consolidation
 
-Status: `In Progress` (execution plan
-`docs/milestones/M7R-architecture-consolidation.md` approved 2026-10-02; R0-R4 accepted
-(2026-10-02/03), R5 accepted 2026-10-04, R6 in progress; lead prompt `docs/milestones/M7R-task-lead-prompt.md`)
+Status: `Accepted` 2026-10-04 (execution plan
+`docs/milestones/M7R-architecture-consolidation.md`; completion report there; R0-R6
+accepted 2026-10-02/04; M9 hand-off `docs/milestones/M7R-to-M9-handoff.md`; lead prompt `docs/milestones/M7R-task-lead-prompt.md`)
 
 Dependencies: accepted M0-M7.7 and the committed M7.8 checkpoint.
 
@@ -1008,7 +1008,11 @@ Acceptance gate: mesh shaders produce matching images and visibility identities 
 Status: `Proposed`
 
 Dependencies: M1, M2, M7R, and the current/previous transform data already provided
-by the accepted M7.1/M7.2 GPU scene. Scheduled immediately after M7R (2026-10-02).
+by the accepted M7.1/M7.2 GPU scene. Scheduled immediately after M7R (2026-10-02). M7R is accepted (2026-10-04). Its hand-off
+(`docs/milestones/M7R-to-M9-handoff.md`) notes that the GPU scene's previous transform
+changes only when the transform changes (a stopped object keeps stale motion), that
+direct-packet draws carry no previous matrix, and that graph History is not yet keyed
+per view. M9 closes these first.
 As the raster target is native 4K, M9's first production deliverable is native-
 resolution temporal AA plus motion vectors; sub-native reconstruction serves the RT
 tier.

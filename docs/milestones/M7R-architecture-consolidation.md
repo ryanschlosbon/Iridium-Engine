@@ -3,7 +3,7 @@
 ## Header
 
 - **Milestone:** M7R — Architecture consolidation
-- **Status:** In Progress — plan approved by owner 2026-10-02; R0–R2 accepted 2026-10-02, R3 and R4 accepted 2026-10-03; R5 accepted 2026-10-04; R6 active
+- **Status:** Accepted — plan approved by owner 2026-10-02; R0–R2 accepted 2026-10-02, R3 and R4 accepted 2026-10-03; R5 and R6 accepted 2026-10-04. **M7R Accepted 2026-10-04.**
 - **Lead:** M7R milestone-lead session (Claude Code); integration owner for all slices
 - **Branch / PR:** `m7r-consolidation` off `Render-Refactor-for-Modularity`; one PR
   for the milestone
@@ -422,7 +422,7 @@ planner, deletion queue, pipeline cache, hitch harness, transfer queue and seque
 critical-path and aggregate worker time reported per stage. `FRAME_BUDGET.md` is
 updated.
 
-### R6 — Qualification and handoff (`Proposed`)
+### R6 — Qualification and handoff (`Accepted` 2026-10-04)
 
 **Verification:**
 - full Debug and Release suites;
@@ -999,4 +999,113 @@ F7 is now GPU-bound, and the F7 serial main thread runs at 1.74 ms against the �
 
 ## Completion report
 
-(Written at R6.)
+M7R R6, 2026-10-04. Branch `m7r-consolidation`, PR #7. All slices R0–R6 are
+accepted. Rendered output is unchanged: the frozen set is byte-identical or within the
+R0 envelopes at every slice.
+
+### Changed behaviour and architecture
+
+| Slice | What changed |
+|---|---|
+| R1 build | 191 production sources compile once (was 339). Module DAG with link guards. Shader depfiles. Configure-time build provenance. Clean Release build 109.5 → 61.3 s at R1. |
+| R2 harness | Qualification lives in `iridium_qualification` behind `IFrameObserver`. One `CliOptionRegistry`. `IRIDIUM_QUALIFICATION=OFF` shipping preset. `--developer-legacy-transparency` removed (owner decision; ADR-0012 amendment). |
+| R3 graph | ADR-0016. Index-addressed graph. Feature-owner callbacks for every production pass. One `vkCmdPipelineBarrier2` per pass. History, imported-image policies and variable-size imports. `VulkanVertexBackend.cpp` 13,286 → 2,334 lines. `IRenderBackend` 67 → 37 methods. Editor UI behind `IEditorRenderBridge`. |
+| R4 Vulkan | Dynamic rendering: 0 render passes or framebuffers. VMA v3.4.0. Transient aliasing (−341.6 MB of graph memory at 4K). Fence-keyed deletion queue; capacity growth and probe changes without drains. Persisted pipeline cache. Transfer queue with ownership transfers, staging ring, timeline semaphores, `vkQueueSubmit2`. |
+| R5 CPU frame | ADR-0015 enkiTS task system; every service thread migrated. `Application` split into composition root, `FrameOrchestrator`, `AssetIntegration`, `EditorHost` and the `iridium_render_extraction` library. Change-driven revisions, publication, observation, lights and probes. Parity packets retired for main opaque. Parallel extraction. Zero steady-frame allocations on every non-qualification route. |
+
+Bugs found and fixed along the way, all pre-existing unless noted:
+- the `LightExtractor` use-after-free on capacity growth;
+- the local-shadow READ_AFTER_WRITE hazard (R3b.6);
+- the idle-slot import rebind with recycled handles (R4c.2, fixed in R4b.6);
+- the image-owner fence serialization, which made every frame wait for the previous frame's GPU work (R4d.4);
+- the texture-table descriptor-pool destruction (R4d);
+- the R5c.5 + R5c.1 watermark interaction, found at integration;
+- `imgui.ini` written by hidden-window runs.
+
+### Interfaces affected
+
+- **New RHI contracts and types:**
+  - `RenderFrame` / `submitFrame`;
+  - `OpaqueSubmission`;
+  - `GpuScenePackedTables` membership revisions and content watermarks;
+  - `CompactDrawSort`;
+  - the shadow-caster revision getters, now non-const;
+  - `finalizeReflectionProbeCaptures` returning a span.
+- **Graph:** `PassId` and `GraphResourceId` addressing; `createHistory`; `declareWholeResourceWrite` / `excludeFromAliasing`; clear values and `StoreOp::None`.
+- **App:** `IFrameObserver` phases, `AppRunPolicy`, `EditorFrameRequests`, `EditorViewState`.
+- **Core:** `Iridium::Tasks::TaskSystem`, plus thread-scoped allocation counters and worker profiler streams.
+- **CLI:** 94 flags (renderer 32, qualification 44). New renderer flags: `--render-graph-aliasing`, `--pipeline-cache`, `--upload-queue`.
+
+### Verification (final)
+
+Run on the final code (`cdd6d1e`, the same code as `e98261b`), quiet machine:
+
+| Check | Result |
+|---|---|
+| Frozen set `r6-final` with `--validation-sync`, vs `r0` | 24/24 identical or within the R0 envelopes (F3-stress and F7-lod depth-tie, 1–2 pixels; F4-woit woit-order); **0 validation messages, 0 hazards** |
+| Indirect digests `r6-final` / `r6-final-ext` | Identical to `r3a0` / `r3a0-ext` |
+| Extraction verifier and caster-revision oracle (`r5c78b-verify`) | 48/48 payloads passed |
+| Sweep `r6-final-sweep` vs `r5-main-3-sweep` | 36/36. Deltas: allocation counters (down), the probe-promotion race, X02 within woit-order |
+| Tests | Release 113/113, Debug 113/113, shipping preset 106/106 |
+| Shipping smoke | Hidden 120 frames with `--validation-sync`: exit 0, 0 messages; `--benchmark` rejected |
+| Editor smoke | Hidden 120 frames with `--validation-sync`: 0 messages; `imgui.ini` unchanged |
+| Starvation test (`starvation/r5b3`) | Pass |
+
+### Performance against the R0 baseline
+
+R0 → final (`timing/r6-r0-final`: A = R0 worktree `2c50b36`, B = final; A,B,B,A, 500 + 10,000 frames, native 4K). The machine state is recorded in `timing/r6-machine-state.txt`; the R0 side matches the earlier quiet runs.
+
+| Route | CPU frame median R0 / final | Non-wait CPU R0 / final | GPU median R0 / final | Steady allocations R0 / final |
+|---|---|---|---|---|
+| T-F1-all | 1.555 / **1.114** ms (−28%) | 0.417 / **0.289** ms (−31%) | 1.142 / 1.129 ms (−1.1%) | 0 / 0 |
+| T-F7-stack | 6.914 / **1.919** ms (−72%) | 4.857 / **1.386** ms (−71%) | 2.058 / 1.942 ms (−5.7%) | 0 / 0 |
+| T-F5-hetero | 3.620 / **2.974** ms (−18%) | 0.656 / **0.561** ms (−14%) | 3.051 / 2.997 ms (−1.8%) | 16 / **0** |
+| T-F6-probecap | 4.043 / **3.649** ms (−10%) | 0.745 / **0.343** ms (−54%) | 3.605 / 3.669 ms (**+1.8%**) | 8 / **0** (drain frames 333 → 0) |
+
+- **F6 GPU +1.8%:**
+  - `gpu.transparency.refraction-pyramids` accounts for +0.038 ms (0.165 → 0.203).
+  - `gpu.lighting.cluster` accounts for +0.022 ms (2.237 → 2.256, +0.9%). Bisection with short F6 runs puts this step at R4b.2, the VMA switch: `bd89494` 2.237 ms, `d38ff80` 2.255 ms.
+  - Memory types are pinned to the legacy choice, so the cause is placement within VMA blocks. Forcing dedicated buffer allocations recovered about half of the cluster delta, but not the pyramid, which is an image.
+  - The refraction pyramid swings between 0.130 and 0.205 ms with no code change across builds and machine states. On F1 it was faster than R0 in the quiet R4 pair.
+  - Accepted as a tracked watch item: F6 is a probe route added in R5, not one of the original gating routes; F1 and F7 GPU improved; and the cause is allocator placement, not work. The follow-up is a placement policy for the placement-sensitive resources (dedicated or aligned allocations for the refraction pyramids and cluster buffers), measured with the full protocol, in M9 preparation.
+- **Hitch** (`hitch/r5-final-hitch` against R4 accepted; `hitch/r4-accept-hitch` against `c666d32` for R4c):
+  - drain frames 8 → 0 (H-stress) and 272 → 0 (H-probe);
+  - upload waits → 0;
+  - H-stress median 46.0 → 6.6 ms and maximum 186 → 39.5 ms;
+  - H-probe p99 8.4 → 7.0 ms.
+- **Memory:** native-4K graph memory 1,183.6 → 842.0 MB (aliasing); +64 MiB upload staging ring; pipeline cache about 2.5 MB on disk.
+- **Build times** (clean worktree, 14900K):
+
+| Step | R0 Release | Final Release | R0 Debug | Final Debug |
+|---|---:|---:|---:|---:|
+| Configure (clean) | 53.7 s | 41.2 s | 53.3 s | 41.7 s |
+| Clean build | 109.5 s (664 steps) | **66.5 s** (668 steps) | 90.8 s | 69.6 s (821 steps, more test executables) |
+| Touch `Application.cpp` | 10.9 s | **4.0 s** | 8.6 s | 5.6 s |
+| Touch `rhi/Mesh.h` | 36.6 s | **19.3 s** (208 steps) | 20.7 s | 18.4 s |
+| Touch `shadow_filter.glsl` | 0.9 s | 0.4 s | 1.1 s | 0.5 s |
+
+### Remaining risks and deferred work
+
+- **GPU placement sensitivity:** see above. R4b.2 VMA placement and the refraction pyramid; a placement-policy follow-up.
+- **Intermittent scripted-event spike:** single frames of 0.5–1.2 s in 4 of about 20 H-stress runs before R5. It was not reproduced in any R5 run, and the harness now captures scope detail for frames of 250 ms or more.
+- **Probe-promotion race (R4c.3):** probe sweep counters vary run to run; images are unaffected.
+- **Deferred by decision:**
+  - the R5c.4e classification restriction;
+  - the deterministic opaque tie-break (M9);
+  - parallel command recording (the largest H-stress CPU cost);
+  - async compute;
+  - `/W4`.
+- **Files over 2,500 lines:** `GltfModelImporter.cpp` (3,550) and `AssetBrowserPanel.cpp` (3,273), both deferred exceptions.
+- **History for M9:** not yet keyed per view (ADR-0016 note). Previous-transform semantics are change-based. See `docs/milestones/M7R-to-M9-handoff.md`.
+- **Tooling:** no script yet runs the five-process feature-admission protocol. `Run-TimingPair` runs four processes.
+
+### ADR and roadmap status
+
+- **ADR-0016** (render-graph execution model): new, Accepted, with as-implemented notes for items 3, 4, 5, 7 and 9.
+- **ADR-0015** (threading and task model): new, Accepted.
+- **ADR-0012:** amended (legacy transparency diagnostic removed).
+- **Third-party libraries:**
+  - VMA v3.4.0, adopted;
+  - enkiTS v1.12, owner-approved and adopted;
+  - Tracy, deferred.
+- **ROADMAP:** M7R Accepted. The next milestone is M9 (native TAA, motion vectors, bloom, auto-exposure), then M7.9–M7.12, M8, resumed M7.8 VSM, M10 and M11.
