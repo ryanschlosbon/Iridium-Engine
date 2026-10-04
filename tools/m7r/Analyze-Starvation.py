@@ -85,6 +85,12 @@ def relative_delta(a_values, b_values):
     }
 
 
+def isolated_cook_seconds(runs):
+    """Mean isolated cook time of the candidate (side B) cook runs, if any."""
+    seconds = [r["seconds"] for r in runs if r.get("kind") == "cook" and r.get("side") == "B"]
+    return statistics.mean(seconds) if seconds else None
+
+
 def main(directory):
     out = Path(directory)
     runs = json.loads((out / "runs.json").read_text(encoding="utf-8-sig"))
@@ -136,14 +142,37 @@ def main(directory):
         })
         cooks = [r["cook"] for r in b if r["cook"]]
         result["background_cooks"] = cooks
+        # A run shorter than one isolated cook cannot complete one (T-F1 at
+        # 10,000 frames lasts about 18 s against a ~35 s cook). Such a run passes
+        # when a cook was still in flight at exit (cancelled by shutdown) and
+        # none failed; completed cooks must all produce one artifact hash.
+        isolated = isolated_cook_seconds(runs)
+
+        def cook_ok(c):
+            if c["failed"] != 0 or not c["artifact_hashes_identical"]:
+                return False
+            if c["completed"] > 0:
+                return True
+            return isolated is not None and c["run_seconds"] < isolated and c["cancelled"] >= 1
+
+        completed_hashes = {c["artifact_hash"] for c in cooks if c["completed"] > 0}
         criteria.append({
             "route": route,
-            "criterion": "background cooks completed with identical artifacts (B)",
-            "value": ", ".join(f"{c['completed']} cooks, {c['cooks_per_minute']:.2f}/min" for c in cooks) or "missing",
-            "pass": bool(cooks) and all(c["completed"] > 0 and c["failed"] == 0 and
-                c["artifact_hashes_identical"] for c in cooks) and
-                len({c["artifact_hash"] for c in cooks}) == 1,
+            "criterion": "background cooks completed with identical artifacts, or one in flight for a run shorter than a cook (B)",
+            "value": ", ".join(
+                f"{c['completed']} cooks, {c['cooks_per_minute']:.2f}/min" if c["completed"] > 0
+                else f"in flight for the whole {c['run_seconds']:.1f} s run" for c in cooks) or "missing",
+            "pass": bool(cooks) and all(cook_ok(c) for c in cooks) and len(completed_hashes) <= 1,
         })
+        firsts = [c["first_cook_seconds"] for c in cooks if c["completed"] > 0]
+        if firsts and isolated:
+            worst = max(firsts) / isolated
+            criteria.append({
+                "route": route,
+                "criterion": "first cook while rendering within 110% of the isolated cook (B)",
+                "value": ", ".join(f"{f:.1f} s" for f in firsts) + f" against {isolated:.1f} s ({worst * 100:.1f}%)",
+                "pass": worst <= 1.10,
+            })
         result["runs"] = {"A": a, "B": b}
         route_results[route] = result
 

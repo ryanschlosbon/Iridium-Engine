@@ -897,6 +897,51 @@ R0 vs R4 (`timing/r4-final-2`, A = R0, B = `1edaab6`, A,B,B,A, 10,000 frames, sl
 - **GPU:** the deltas are spread evenly over the draw-heavy passes in both directions (F1 forward/lighting about +5 µs each; F7 G-buffer −42 µs and forward −39 µs), and the command stream and images are identical. This reads as GPU clock and pacing behaviour, not workload; on F7 the GPU now idles far less between frames. The R5 final pair re-measures it.
 - Steady-frame allocations stay at 0.
 
+### R5 wave 2 (2026-10-04, `0f148ad` and later: R5b.2–3, R5c.3 call sites, R5c.4a–f except the R5c.4e remainder, R5c.5, R5c.6)
+
+**Verification** (main at `0f148ad`)
+
+| Check | Result |
+|---|---|
+| Frozen set `r5-main-3` with `--validation-sync` | Identical or within envelopes; 0 hazards, 0 validation messages |
+| Digests `r5-main-3` / `-ext` | Identical to `r3a0` / `r3a0-ext` |
+| `--qualification-extraction-verifier` + `--qualification-caster-revision-oracle` on the frozen set | 24/24 passed; 0 revision-only and 0 hash-only evaluations in every stream (shadow, directional, depth history, membership) |
+| Sweep `r5-main-3-sweep` vs `r5-main-2-sweep` | 36/36 with identical capture images |
+
+Sweep deltas against `r5-main-2-sweep`:
+- allocation counts, lower on the light and probe routes;
+- X04 `opaque.indirect.bin_count` 0 → 3 (the indirect wireframe path);
+- V02, O03 and R00–R03 publish probe captures earlier (+2 publications) as frames got faster. This is the R4c.3 promotion race; images are identical.
+
+Tests pass 112/112 in Release and Debug, and the editor smoke is clean.
+
+**Timing pair** (`timing/r5-wave2`, A = `9f2a28e` (R4 accepted), B = `0f148ad`, A,B,B,A, 10,000 frames, quiet machine state)
+
+| Route | CPU frame median A / B | Non-wait CPU A / B | GPU median A / B |
+|---|---|---|---|
+| T-F1-all | 1.120 / 1.120 ms | 0.359 / **0.291** ms (−19%) | 1.126 / 1.136 ms; B2 1.145 with a disturbed p99 of 1.278, B3 1.127 (+0.1%) |
+| T-F7-stack | 3.462 / **1.927** ms (−44%) | 3.389 / **1.744** ms (−49%) | 1.943 / 1.945 ms (+0.08%) |
+
+F7 is now GPU-bound, and the F7 serial main thread runs at 1.74 ms against the ≤ 3.0 ms R5 target. Steady-frame allocations are 0 on both routes.
+
+**Hitch scenario** (`hitch/r5-wave2-hitch`, A = `9f2a28e`, B = `0f148ad`)
+
+| Route | Median ms A / B | p99 ms A / B | Max ms A / B |
+|---|---|---|---|
+| H-stress | 39.70 / **13.76** | 40.40 / **14.16** | 186.4 / **46.6** |
+| H-probe | 3.70 / 3.69 | 7.08 / 7.07 | 10.6 / 10.5 |
+| H-upload | 1.13 / 1.12 | 1.29 / 1.30 | 8.4 / 7.1 |
+
+**Starvation test** (`starvation/r5b3`, R5b.3, quiet machine; cook baseline `f2cc899`, before R5b.2): **pass**.
+- Non-wait CPU with cooking is within the noise band: F1 +1.35% median, F7 +1.50%.
+- Frame-task worker start p99 is 24 µs on F1 and 37 µs on F7.
+- 0 frames over 2× the median come from frame-task waits.
+- The first cook while rendering took 35.5 s and 34.2 s against 35.2 s isolated (100.7%).
+- Isolated cook throughput is 97.7% of the pre-R5b build, with identical artifact hashes.
+- The analyzer's cook criterion was corrected:
+  - A T-F1 run (18 s) is shorter than one cook, so it now passes when a cook is in flight for the whole run with no failures.
+  - A new criterion bounds the first in-render cook at 110% of the isolated time.
+
 ## Completion report
 
 (Written at R6.)
