@@ -54,7 +54,7 @@ namespace Iridium {
             assets_.modelPreparation,
             assets_.thumbnails,
             assets_.runtime,
-            init.log, init.sceneDocuments, init.transactions);
+            init.log, init.sceneDocuments, init.transactions, init.tasks);
     }
 
     void EditorHost::setOutputTransportStatus(Color::OutputTransport requested,

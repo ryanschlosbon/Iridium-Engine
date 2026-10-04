@@ -16,11 +16,31 @@
 MenuBarPanel::MenuBarPanel(Entity* selectedEntityPtr, EditorUIState* uiStatePtr,
     Iridium::EditorSceneDocumentService* sceneDocumentService,
     Iridium::EditorTransactionService* transactionService,
-    Iridium::EditorSceneCommandService* sceneCommands)
+    Iridium::EditorSceneCommandService* sceneCommands,
+    Iridium::Tasks::TaskSystem* tasks)
     : selectedEntity(selectedEntityPtr), uiState(uiStatePtr),
       sceneDocumentService_(sceneDocumentService),
       transactionService_(transactionService),
-      sceneCommands_(sceneCommands) {}
+      sceneCommands_(sceneCommands),
+      tasks_(tasks) {}
+
+MenuBarPanel::~MenuBarPanel() {
+    if (tasks_ != nullptr && !orphanScan_.isComplete()) tasks_->wait(orphanScan_);
+}
+
+MenuBarPanel::OrphanScan::OrphanScan()
+    : TaskSet(Iridium::Tasks::TaskPriority::Normal, 1, 1,
+        "editor.scene.orphan_scan") {}
+
+void MenuBarPanel::OrphanScan::execute(Iridium::Tasks::TaskRange, uint32_t) {
+    try {
+        found = Iridium::findOrphanedSceneTemporaries(requested);
+    }
+    catch (const std::exception& error) {
+        std::cerr << "Orphaned scene-temporary scan failed: " << error.what() << '\n';
+        found.clear();
+    }
+}
 
 namespace {
     std::filesystem::path sceneDirectory() {
@@ -48,26 +68,28 @@ void MenuBarPanel::openSceneDialog(
 void MenuBarPanel::requestOrphanScan(
     const std::filesystem::path& destination) {
     if (destination.empty() || !destination.has_filename()) return;
-    if (orphanScan_.valid() && orphanScan_.wait_for(
-            std::chrono::seconds(0)) != std::future_status::ready) {
+    if (orphanScanInFlight_ && !orphanScan_.isComplete()) {
         orphanScanPending_ = true;
         orphanScanPath_ = destination.lexically_normal();
         return;
     }
-    if (orphanScan_.valid()) orphanedTemporaries_ = orphanScan_.get();
+    // A finished scan for an older destination is discarded.
+    orphanScanInFlight_ = false;
     orphanScanPath_ = destination.lexically_normal();
     orphanScanPending_ = false;
     orphanedTemporaries_.clear();
-    const std::filesystem::path requested = orphanScanPath_;
-    orphanScan_ = std::async(std::launch::async, [requested] {
-        return Iridium::findOrphanedSceneTemporaries(requested);
-    });
+    orphanScan_.requested = orphanScanPath_;
+    orphanScan_.found.clear();
+    orphanScanInFlight_ = true;
+    if (tasks_ != nullptr) tasks_->submit(orphanScan_);
+    else orphanScan_.runInline();
 }
 
 void MenuBarPanel::pollOrphanScan() {
-    if (!orphanScan_.valid() || orphanScan_.wait_for(
-            std::chrono::seconds(0)) != std::future_status::ready) return;
-    orphanedTemporaries_ = orphanScan_.get();
+    if (!orphanScanInFlight_ || !orphanScan_.isComplete()) return;
+    orphanScanInFlight_ = false;
+    orphanedTemporaries_ = std::move(orphanScan_.found);
+    orphanScan_.found.clear();
     if (orphanScanPending_) {
         const std::filesystem::path pending = orphanScanPath_;
         orphanScanPending_ = false;

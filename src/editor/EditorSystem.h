@@ -28,6 +28,7 @@ namespace Iridium {
     class EditorSceneDocumentService;
     class EditorSceneCommandService;
     class EditorTransactionService;
+    namespace Tasks { class TaskSystem; }
 }
 struct GLFWwindow;
 
@@ -52,7 +53,8 @@ public:
         Iridium::AssetRuntimeService* assetRuntimeService,
         Iridium::EngineLog* engineLog,
         Iridium::EditorSceneDocumentService* sceneDocumentService,
-        Iridium::EditorTransactionService* transactionService);
+        Iridium::EditorTransactionService* transactionService,
+        Iridium::Tasks::TaskSystem* tasks = nullptr);
 
     // Backend now handles the physical Vulkan cleanup; this cleans up UI state
     void cleanup();

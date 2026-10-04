@@ -280,6 +280,7 @@ namespace Iridium {
             .log = &engineLog_,
             .sceneDocuments = &sceneDocumentService_,
             .transactions = &transactionService_,
+            .tasks = &tasks_,
         });
         orchestrator_.refreshOutputTransportStatus();
         // The backend starts from the configured output settings; each

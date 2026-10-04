@@ -43,6 +43,7 @@ namespace Iridium {
     class AssetRuntimeService;
     class AssetThumbnailService;
     class CpuProfiler;
+    namespace Tasks { class TaskSystem; }
     class EditorAssetDocumentService;
     class EditorSceneDocumentService;
     class EditorTransactionService;
@@ -81,6 +82,8 @@ namespace Iridium {
         EngineLog* log = nullptr;
         EditorSceneDocumentService* sceneDocuments = nullptr;
         EditorTransactionService* transactions = nullptr;
+        // Editor background work (menu-bar scans) runs on it (M7R R5b.2).
+        Tasks::TaskSystem* tasks = nullptr;
     };
 
     // The scene camera the editor build draws against (gizmos, picking).
