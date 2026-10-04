@@ -715,20 +715,23 @@ hitch pair, `FRAME_BUDGET.md`).
 - **Present serialization (finding 3).** It hides R5's gains in frame time. It is
   not an R5 regression.
 
-### Owner decisions needed
+### Decisions (resolved 2026-10-03)
 
-1. **Adopt enkiTS** (zlib) under the third-party rule. Pin `v1.12` (`0289cf6`), or
-   `404a3bf` if `Dependency` objects must move.
-2. **Tracy:** defer (recommended), or adopt compiled-out in R5b.
-3. **Image-owner fence wait** (`VulkanFrameScheduler.cpp:276-281`) under mailbox
-   serializes CPU and GPU (1.8 ms of F7's 5.38 ms). Choose:
-   - fix it in R4d or a new R5d by moving image-independent CPU work (lights,
-     publication, extraction, sorts) ahead of acquire and keying the UI's
-     per-image descriptors by frame slot;
-   - or leave it for M9.
-4. **Optional deterministic opaque tie-break.** It changes images on depth-tie
-   fixtures, so it needs the feature tier.
-5. **Widen the allocation invariant** from "timing routes" to every
-   non-qualification route, and add lit/probe routes to the timing set.
-6. **Accept the mixed-bin behaviour change** (R5c.4c): direct opaque packets no
-   longer force the whole queue to the direct path.
+1. **enkiTS adopted.** Owner approved enkiTS (zlib) at `v1.12` (`0289cf6`) for R5b.
+   If R5b needs movable `Dependency` objects, the move to `404a3bf` goes back to the
+   owner as a new pin.
+2. **Tracy is deferred.** The per-worker profiler scopes in R5b cover attribution.
+3. **The image-owner fence wait is fixed in R4d.4.** The cause was not mailbox
+   presentation. The per-image map stored the slot fence, and with 3 images and 2
+   slots that fence had already been reused by the newer frame, so every frame
+   waited on the previous frame's GPU work. Per-image timeline serials took the
+   T-F7 wait from 1.97 ms to 0.003 ms; T-F7 CPU frame went from 5.41 to 3.40 ms
+   (`timing/r4d-short`). Finding 3 above describes the pre-R4d state.
+4. **The deterministic opaque tie-break is out of scope for M7R.** It changes
+   images, so it would need the feature tier. It is recorded for M9, where TAA
+   history makes tie stability matter.
+5. **The allocation invariant is widened** to every non-qualification route in
+   R5c.8. A lit route and a probe route join the timing set.
+6. **Mixed bins (R5c.4c) are accepted.** Frozen images must stay identical. The
+   indirect digest changes only on fixtures with direct packets, and each change
+   is explained in the slice's evidence.
