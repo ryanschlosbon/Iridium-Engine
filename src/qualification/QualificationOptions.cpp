@@ -215,6 +215,9 @@ namespace Iridium {
         addSwitch(registry, owner, "--qualification-caster-revision-oracle",
             "Recompute the retired per-frame caster hashes and compare change frames with the caster revisions",
             [&q] { q.casterRevisionOracle = true; });
+        addSwitch(registry, owner, "--qualification-extraction-verifier",
+            "Run the full-walk GPU-scene observation beside the change-driven one every frame and fail on any difference",
+            [&q] { q.extractionVerifier = true; });
         addSwitch(registry, owner, "--qualification-alias-poison",
             "Fill render-graph alias heaps with NaN at frame start (implies aliasing on)",
             [&q, &c] {

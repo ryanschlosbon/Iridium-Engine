@@ -417,6 +417,9 @@ namespace Iridium {
         Shadow,             // the shadow submission's sequence revision
         DirectionalShadow,  // one revision per cascade of one directional light
         DepthHistory,       // the main view's depth-content revision
+        // M7R R5c.5: the published shadow and probe membership revisions
+        // (revisions[0] shadow, revisions[1] probe), once per publication.
+        Membership,
     };
 
     struct VulkanCasterRevisionSample {
@@ -434,6 +437,8 @@ namespace Iridium {
         // DepthHistory.
         std::span<const DrawPacket> opaqueQueue{};
         std::span<const DrawPacket> forwardQueue{};
+        // Membership: the published tables.
+        const GpuScenePackedTables* tables = nullptr;
         // One value, or one per cascade.
         std::span<const uint64_t> revisions{};
     };

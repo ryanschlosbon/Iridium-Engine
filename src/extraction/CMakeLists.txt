@@ -5,6 +5,7 @@
 # value type; it must not reach ImGui, the editor or GLFW (configure-time check
 # in tests/CMakeLists.txt).
 add_library(iridium_render_extraction STATIC
+        GpuSceneObservation.cpp
         RenderExtractor.cpp
 )
 target_link_libraries(iridium_render_extraction PUBLIC

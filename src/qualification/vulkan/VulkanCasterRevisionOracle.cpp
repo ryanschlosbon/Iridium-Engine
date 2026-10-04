@@ -1,5 +1,6 @@
 #include "qualification/vulkan/VulkanCasterRevisionOracle.h"
 
+#include "qualification/LegacyGpuSceneMembershipHash.h"
 #include "renderer/lighting/DirectionalShadow.h"
 #include "renderer/vulkan/VulkanResourceRegistry.h"
 #include "renderer/vulkan/VulkanShadowCasters.h"
@@ -44,6 +45,7 @@ namespace Iridium {
             case VulkanCasterRevisionStream::Shadow: return "shadow";
             case VulkanCasterRevisionStream::DirectionalShadow: return "directional";
             case VulkanCasterRevisionStream::DepthHistory: return "depth_history";
+            case VulkanCasterRevisionStream::Membership: return "membership";
             }
             return "unknown";
         }
@@ -110,6 +112,8 @@ namespace Iridium {
         switch (stream) {
         case VulkanCasterRevisionStream::Shadow: return shadow_;
         case VulkanCasterRevisionStream::DepthHistory: return depth_;
+        case VulkanCasterRevisionStream::Membership:
+            return membership_[ordinal == 0u ? 0u : 1u];
         case VulkanCasterRevisionStream::DirectionalShadow: break;
         }
         const size_t index = static_cast<size_t>(ordinal) *
@@ -154,6 +158,18 @@ namespace Iridium {
 
     void VulkanCasterRevisionOracle::observeCasterRevision(
         const VulkanCasterRevisionSample& sample) {
+        if (sample.stream == VulkanCasterRevisionStream::Membership) {
+            // Ordinal 0: the shadow list; 1: the probe list.
+            if (sample.tables == nullptr || sample.revisions.size() != 2u) return;
+            const GpuScenePackedTables& tables = *sample.tables;
+            (void)compare(sample.stream, 0, 0, sample.frameSerial,
+                legacyGpuSceneMembershipHash(tables, GpuSceneConsumerShadow,
+                    tables.shadowConsumerPrimitiveIndices), sample.revisions[0]);
+            (void)compare(sample.stream, 1, 0, sample.frameSerial,
+                legacyGpuSceneMembershipHash(tables, GpuSceneConsumerProbe,
+                    tables.probeConsumerPrimitiveIndices), sample.revisions[1]);
+            return;
+        }
         if (sample.scene == nullptr || sample.resources == nullptr) return;
         switch (sample.stream) {
         case VulkanCasterRevisionStream::Shadow:
@@ -179,6 +195,8 @@ namespace Iridium {
             (void)compare(sample.stream, 0, 0, sample.frameSerial,
                 legacyDepthContentHash(*sample.scene, *sample.resources,
                     sample.opaqueQueue, sample.forwardQueue), sample.revisions[0]);
+            return;
+        case VulkanCasterRevisionStream::Membership:
             return;
         }
     }

@@ -33,6 +33,7 @@ namespace Iridium {
                     options.forceDirectProbeCaptureReference,
                 .weightedOitOrderSeed = options.weightedOitOrderSeed,
                 .gpuLodMinimumResidentLevel = options.gpuLodMinimumResidentLevel,
+                .verifyGpuSceneObservations = options.extractionVerifier,
             },
         };
     }

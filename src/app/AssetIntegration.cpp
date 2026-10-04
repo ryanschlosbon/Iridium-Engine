@@ -1095,6 +1095,12 @@ namespace Iridium {
         if (!meshPool) return;
 
         for (Entity entity : meshPool->entities) {
+            // Read first: a mutable access is recorded in the pool's write
+            // journal (M7R R5c.5), and most entities need no change here.
+            const MeshComponent& meshView =
+                std::as_const(*meshPool).get(entity);
+            if (meshView.requestedAssetGuid.isNil() &&
+                meshView.materialOverrides.empty()) continue;
             auto& meshComp = meshPool->get(entity);
             if (!meshComp.requestedAssetGuid.isNil()) {
                 const AssetGuid requestedGuid =

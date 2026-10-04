@@ -9,11 +9,16 @@
 // revision that advances whenever the slot's content changes (slot metadata is
 // dropped when the observation count shrinks).
 //
+// Since R5c.5 the membership revisions are change counters; every step also
+// checks that they change exactly when the retired FNV-1a revision
+// (qualification/LegacyGpuSceneMembershipHash.h) of the published tables does.
+//
 // Run with --scale for an H-stress sized replay (1,024 instances, 113
 // primitives each) that also prints synchronize durations of both publishers.
 
 #include "renderer/scene/GpuScenePublisher.h"
 #include "support/ReferenceGpuScenePublisher.h"
+#include "qualification/LegacyGpuSceneMembershipHash.h"
 
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -411,6 +416,12 @@ namespace {
         size_t steps = 0;
         double incrementalSeconds = 0.0, referenceSeconds = 0.0;
         double maximumIncrementalSeconds = 0.0, maximumReferenceSeconds = 0.0;
+        // M7R R5c.5: the retired FNV-1a membership revisions of the previous
+        // publication; the published revisions must change exactly with them.
+        bool legacyValid = false;
+        uint64_t legacyShadow = 0, legacyProbe = 0;
+        uint64_t shadowRevision = 0, probeRevision = 0;
+        size_t membershipChanges = 0;
 
         explicit Replay(GpuSceneCapacity capacity)
             : incremental(capacity), reference(capacity) {}
@@ -447,6 +458,27 @@ namespace {
                 const auto b = incremental.directFallbackOwners();
                 if (!std::equal(a.begin(), a.end(), b.begin(), b.end()))
                     difference = "directFallbackOwners";
+            }
+            if (difference.empty()) {
+                const uint64_t shadow = legacyGpuSceneMembershipHash(actual,
+                    GpuSceneConsumerShadow, actual.shadowConsumerPrimitiveIndices);
+                const uint64_t probe = legacyGpuSceneMembershipHash(actual,
+                    GpuSceneConsumerProbe, actual.probeConsumerPrimitiveIndices);
+                if (legacyValid) {
+                    if ((shadow != legacyShadow) !=
+                        (actual.shadowConsumerMembershipRevision != shadowRevision))
+                        difference = "shadow membership change relation";
+                    else if ((probe != legacyProbe) !=
+                        (actual.probeConsumerMembershipRevision != probeRevision))
+                        difference = "probe membership change relation";
+                    membershipChanges += (shadow != legacyShadow ? 1u : 0u) +
+                        (probe != legacyProbe ? 1u : 0u);
+                }
+                legacyValid = true;
+                legacyShadow = shadow;
+                legacyProbe = probe;
+                shadowRevision = actual.shadowConsumerMembershipRevision;
+                probeRevision = actual.probeConsumerMembershipRevision;
             }
             if (!difference.empty()) {
                 std::cerr << "replay diverged at frame " << frame << " (" << label

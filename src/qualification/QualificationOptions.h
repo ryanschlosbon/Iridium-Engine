@@ -51,6 +51,10 @@ namespace Iridium {
         // compare their change frames with the backend's revisions
         // (VulkanCasterRevisionOracle); observes only, changes no work.
         bool casterRevisionOracle = false;
+        // M7R R5c.5: run the full-walk GPU-scene observation beside the
+        // change-driven one every frame and fail on any difference
+        // (ExtractionVerifier); observes only, changes no work.
+        bool extractionVerifier = false;
         // M7R R4b.5: fill every render-graph alias heap with a NaN pattern at
         // frame start (--qualification-alias-poison; implies aliasing on).
         bool aliasPoison = false;

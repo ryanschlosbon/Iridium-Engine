@@ -8,7 +8,8 @@
 // For every evaluation the backend reports, this oracle recomputes the retired
 // hash from the same inputs, exactly as the pre-R5c code did, and compares the
 // change relation per stream (the shadow submission, each cascade of each
-// directional light, the depth history) against the previous evaluation:
+// directional light, the depth history and, since R5c.5, the published shadow
+// and probe membership revisions) against the previous evaluation:
 //
 //   - unchanged / both changed: equivalent;
 //   - revision only: the revision advanced while the hash did not. This is the
@@ -51,7 +52,7 @@ namespace Iridium {
     class VulkanCasterRevisionOracle final : public IVulkanCasterRevisionObserver {
     public:
         enum class Relation : uint8_t { Unchanged, BothChanged, RevisionOnly, HashOnly };
-        static constexpr uint32_t StreamCount = 3;
+        static constexpr uint32_t StreamCount = 4;
 
         struct Totals {
             uint64_t samples = 0;     // compared evaluations (after the first)
@@ -93,6 +94,7 @@ namespace Iridium {
         std::ostream* output_ = nullptr;
         State shadow_{};
         State depth_{};
+        std::array<State, 2> membership_{};   // shadow, probe
         std::vector<State> directional_;   // ordinal * cascade count + cascade
         std::array<Totals, StreamCount> totals_{};
         uint32_t printedDivergences_ = 0;

@@ -244,6 +244,11 @@ iridium_add_test(GpuScenePublisherReplayTests
                 renderer/support/ReferenceGpuScenePublisher.cpp
         LIBS iridium_rhi)
 
+# M7R R5c.5: the change-driven GPU-scene observation against the full walk.
+iridium_add_test(GpuSceneObservationTests
+        SOURCES renderer/GpuSceneObservationTests.cpp
+        LIBS iridium_render_extraction)
+
 # M7R R5c.3: compact (key, index) queue sorts keep the packet sorts' permutation.
 iridium_add_test(CompactDrawSortTests
         SOURCES renderer/CompactDrawSortTests.cpp

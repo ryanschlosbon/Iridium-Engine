@@ -79,6 +79,9 @@ namespace Iridium {
         uint64_t weightedOitOrderSeed = 0;
         // Physically withheld finer LOD index ranges (0 keeps every level).
         uint32_t gpuLodMinimumResidentLevel = 0;
+        // M7R R5c.5 ExtractionVerifier: the full-walk GPU-scene observation
+        // beside the change-driven one, compared every frame.
+        bool verifyGpuSceneObservations = false;
     };
 
     // How the Application runs when an observer owns the run. Defaults are the

@@ -22,6 +22,7 @@
 
 #include "ecs/Entity.h"
 #include "extraction/EditorViewState.h"
+#include "extraction/GpuSceneObservation.h"
 #include "renderer/lighting/DirectionalShadow.h"
 #include "renderer/lighting/LightExtractor.h"
 #include "renderer/lighting/LocalShadow.h"
@@ -54,6 +55,10 @@ namespace Iridium {
         bool deterministicContent = false;
         bool forceDirectGBufferReference = false;
         bool forceDirectProbeCaptureReference = false;
+        // Qualification builds only (--qualification-extraction-verifier):
+        // run the full-walk GPU-scene observation beside the change-driven
+        // one every frame and fail on any difference (M7R R5c.5).
+        bool verifyGpuSceneObservations = false;
     };
 
     // The scene camera (the application's free camera).
@@ -109,10 +114,13 @@ namespace Iridium {
         void attachAssets(AssetManager& assets);
 
         // --- GPU-scene publication (before beginFrame) ---
-        // Observes the scene's mesh instances, synchronizes the persistent
-        // publication and grows backend capacity; the tables are published
-        // right after beginFrame.
-        void prepareGpuScenePublication(Entity selectedEntity);
+        // Observes the scene's mesh instances (change-driven; see
+        // GpuSceneObservation.h), synchronizes the persistent publication and
+        // grows backend capacity; the tables are published right after
+        // beginFrame. `changedTransforms` is the transform system's journal
+        // for this frame.
+        void prepareGpuScenePublication(Entity selectedEntity,
+            std::span<const Entity> changedTransforms);
         [[nodiscard]] const GpuScenePackedTables* gpuSceneFrame() const noexcept {
             return gpuSceneFrame_;
         }
@@ -231,21 +239,11 @@ namespace Iridium {
         RenderFrame renderFrame_{};
 
         std::unique_ptr<GpuScenePublisher> gpuScenePublisher_;
-        std::vector<GpuSceneObservedInstance> gpuSceneObservations_;
-        struct GpuSceneObservationMetadata {
-            SceneEntityUuid owner;
-            const ModelAsset* model = nullptr;
-            GeometryHandle geometry;
-            std::string cookKey;
-            uint64_t materialOverrideSignature = 0;
-            uint64_t observationRevision = 0;
-            glm::vec3 localMinimum{ 0.0f };
-            glm::vec3 localMaximum{ 0.0f };
-            uint32_t baseConsumerMask = 0;
-            bool valid = false;
-        };
-        std::vector<GpuSceneObservationMetadata>
-            gpuSceneObservationMetadata_;
+        GpuSceneObservation gpuSceneObservation_;
+        // Qualification ExtractionVerifier (null otherwise).
+        std::unique_ptr<GpuSceneObservation> observationVerifier_;
+        uint64_t verifiedObservationFrames_ = 0;
+        void verifyGpuSceneObservation(const GpuSceneObservationInputs& inputs);
         const GpuScenePackedTables* gpuSceneFrame_ = nullptr;
         uint32_t gpuSceneDirectFallbackCount_ = 0;
 

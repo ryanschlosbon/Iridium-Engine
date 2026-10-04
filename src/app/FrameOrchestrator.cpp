@@ -306,7 +306,8 @@ namespace Iridium {
             previewLightingWorld ? *previewLightingWorld : sceneWorld_,
             loadedEnvironments);
         assets_.processMaterialPreviews(editorHost_.assetDocuments());
-        extractor_.prepareGpuScenePublication(editorHost_.selectedEntity());
+        extractor_.prepareGpuScenePublication(editorHost_.selectedEntity(),
+            changedTransformEntities_);
         const GpuScenePackedTables* const gpuSceneFrame =
             extractor_.gpuSceneFrame();
         // Descriptor publication waits for old users and must precede acquisition.

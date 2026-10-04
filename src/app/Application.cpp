@@ -230,6 +230,7 @@ namespace Iridium {
             .forceDirectGBufferReference = routing.forceDirectGBufferReference,
             .forceDirectProbeCaptureReference =
                 routing.forceDirectProbeCaptureReference,
+            .verifyGpuSceneObservations = routing.verifyGpuSceneObservations,
         });
         startupProfile_.backendNanoseconds = static_cast<uint64_t>(
             std::chrono::duration_cast<std::chrono::nanoseconds>(

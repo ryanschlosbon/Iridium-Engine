@@ -2062,6 +2062,20 @@ namespace Iridium {
         CpuScope uploadScope(cpuProfiler_, "cpu.gpu_scene.upload");
         casterRevisions_.publishScene(scene);
         opaque_.publishScene(scene);
+        if constexpr (kQualificationBuild) {
+            if (IVulkanCasterRevisionObserver* observer =
+                    extensionHooks_.casterRevisionObserver()) {
+                const std::array<uint64_t, 2> membership{
+                    scene.shadowConsumerMembershipRevision,
+                    scene.probeConsumerMembershipRevision };
+                observer->observeCasterRevision({
+                    .stream = VulkanCasterRevisionStream::Membership,
+                    .frameSerial = scheduler.lastSubmittedSerial() + 1u,
+                    .tables = &scene,
+                    .revisions = membership,
+                });
+            }
+        }
         gpuScene_.publish(scene, scheduler.currentFrameIndex());
         if (cpuProfiler_ != nullptr) {
             cpuProfiler_->recordCounter("gpu_scene.lod.history_buffer_bytes",

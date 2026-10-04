@@ -256,6 +256,28 @@ namespace Iridium {
         std::span<const GpuSceneInstanceSource> instances;
     };
 
+    // M7R R5c.5: the previous publication's membership inputs, so the consumer
+    // membership revisions advance by exact comparison instead of hashing.
+    // Only publishGpuSceneConsumerMembership reads or writes it.
+    struct GpuSceneMembershipHistory {
+        bool valid = false;
+        uint64_t sceneEpoch = 0;
+        // Shared by both consumers, so their revisions never coincide while
+        // their lists differ. Starts at 1: zero means "no membership".
+        uint64_t nextRevision = 1;
+        std::vector<uint32_t> shadowMembers;
+        std::vector<uint32_t> probeMembers;
+        // The tables as of the last publication that changed a revision
+        // (only the membership fields are compared).
+        std::vector<GpuScenePrimitiveRecord> primitives;
+        std::vector<GpuSceneUint4> instanceStates;
+        std::vector<GpuSceneGeometryRecord> geometries;
+        std::vector<uint64_t> geometryRevisions;
+        // Per-call memo: 0 unknown, 1 same, 2 differs.
+        std::vector<uint8_t> instanceMemo;
+        std::vector<uint8_t> geometryMemo;
+    };
+
     struct GpuScenePackedTables {
         uint32_t abiVersion = GpuSceneAbiVersion;
         uint64_t sceneEpoch = 0, publicationRevision = 0;
@@ -290,6 +312,7 @@ namespace Iridium {
         uint64_t probeConsumerContentWatermark = 0;
         uint32_t invalidSourceCount = 0;
         uint32_t capacityOmittedInstanceCount = 0;
+        GpuSceneMembershipHistory membershipHistory;
     };
 
     [[nodiscard]] GpuSceneAffineTransform packGpuSceneAffine(const glm::mat4& transform);
@@ -316,6 +339,15 @@ namespace Iridium {
     // the watermarks include transform revisions.
     void refreshGpuSceneConsumerContentWatermarks(
         GpuScenePackedTables& scene) noexcept;
+    // Rebuilds the shadow and probe membership lists and advances each list's
+    // membership revision exactly when its membership input changed since the
+    // previous call on this table: the scene epoch, the list, and per member
+    // its primitive record (binding, state x/y/w, revisions), its instance's
+    // state x/z/w and its geometry LOD chain (index, draw, storage, state x/z/w
+    // and record revision). These are the values the M7.2 FNV-1a revision
+    // hashed (M7R R5c.5 replaced the hash; the change frames are identical).
+    // Transforms and bounds do not participate. Revision values are unique
+    // within one table's lifetime; A -> B -> A gets a new value.
     void publishGpuSceneConsumerMembership(GpuScenePackedTables& scene);
     [[nodiscard]] GpuScenePackedTables packGpuSceneReference(
         const GpuScenePublicationInput& input, const GpuSceneCapacity& capacity);

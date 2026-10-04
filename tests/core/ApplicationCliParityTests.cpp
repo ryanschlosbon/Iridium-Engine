@@ -112,6 +112,7 @@ namespace {
         flag("depthOcclusionQualificationOracle", c.depthOcclusionQualificationOracle);
         flag("indirectStreamDigest", c.indirectStreamDigest);
         flag("casterRevisionOracle", c.casterRevisionOracle);
+        flag("extractionVerifier", c.extractionVerifier);
         flag("renderGraphAliasing", c.renderGraphAliasing);
         field("uploadQueue", exact(enumValue(c.uploadQueue)));
         flag("aliasPoison", c.aliasPoison);
@@ -474,7 +475,7 @@ namespace {
                 "--upload-queue requires auto, graphics or legacy-blocking",
                 { { "transfer", "--upload-queue requires auto, graphics or legacy-blocking" },
                   { "", "--upload-queue requires auto, graphics or legacy-blocking" } } },
-            // --- qualification (40) ---
+            // --- qualification (43) ---
             { "--validate-texture-residency-churn", Q, {}, {}, [](C& c) {
                 c.validateTextureResidencyChurn = true; }, {}, {} },
             { "--validate-reflection-probes", Q, {}, {}, [](C& c) {
@@ -552,6 +553,9 @@ namespace {
             // M7R R5c.1 (not in 6b000ad).
             { "--qualification-caster-revision-oracle", Q, {}, {}, [](C& c) {
                 c.casterRevisionOracle = true; }, {}, {} },
+            // M7R R5c.5 (not in 6b000ad).
+            { "--qualification-extraction-verifier", Q, {}, {}, [](C& c) {
+                c.extractionVerifier = true; }, {}, {} },
             // M7R R4b.5 (not in 6b000ad): implies --render-graph-aliasing on.
             { "--qualification-alias-poison", Q, {}, {}, [](C& c) {
                 c.renderGraphAliasing = true;
@@ -619,8 +623,8 @@ namespace {
         Cli::CliOptionRegistry registry;
         registerEngineOptions(registry, scratch);
 
-        CHECK(table.size() == 92);
-        CHECK(registry.options().size() == 92);
+        CHECK(table.size() == 93);
+        CHECK(registry.options().size() == 93);
         std::set<std::string_view> names;
         std::map<std::string_view, size_t> ownerCounts;
         for (const FlagCase& row : table) {
@@ -684,7 +688,7 @@ namespace {
         CHECK(ownerCounts[R] == 14);
         CHECK(ownerCounts[E] == 4);
         CHECK(ownerCounts[G] == 32);
-        CHECK(ownerCounts[Q] == 42);
+        CHECK(ownerCounts[Q] == 43);
         std::cout << "  owners: runtime " << ownerCounts[R] << ", editor " << ownerCounts[E]
                   << ", renderer " << ownerCounts[G] << ", qualification "
                   << ownerCounts[Q] << '\n';
@@ -735,7 +739,7 @@ namespace {
     bool testUsageParity() {
         const std::string usage = engineUsage();
         CHECK(usage.starts_with("Usage: IridiumEngine [options]\n"));
-        CHECK(optionLines(usage).size() == 92);
+        CHECK(optionLines(usage).size() == 93);
         // Groups appear in owner order: runtime, editor, renderer, qualification.
         const size_t runtime = usage.find("runtime options:");
         const size_t editor = usage.find("editor options:");
@@ -810,7 +814,7 @@ int main() {
     };
 
     constexpr TestCase tests[] = {
-        { "Per-flag table (90 flags)", testFlagTable },
+        { "Per-flag table (91 flags)", testFlagTable },
         { "Aliases and removed flags", testAliasesAndRemovedFlags },
         { "Usage parity", testUsageParity },
         { "Registry without qualification", testRegistryWithoutQualification },
