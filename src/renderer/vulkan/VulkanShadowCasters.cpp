@@ -9,46 +9,6 @@
 
 namespace Iridium {
 
-    namespace {
-        void appendFnv1a(uint64_t& hash, const void* data, size_t size) noexcept {
-            const auto* bytes = static_cast<const uint8_t*>(data);
-            for (size_t index = 0; index < size; ++index) {
-                hash ^= bytes[index];
-                hash *= 1099511628211ull;
-            }
-        }
-
-        void appendCaster(uint64_t& hash, const VulkanResourceRegistry& resources,
-            const VulkanResolvedCaster& caster) noexcept {
-            appendFnv1a(hash, &caster.worldTransform, sizeof(caster.worldTransform));
-            appendFnv1a(hash, &caster.geometry.id, sizeof(caster.geometry.id));
-            appendFnv1a(hash, &caster.material.id, sizeof(caster.material.id));
-            appendFnv1a(hash, &caster.pipeline.id, sizeof(caster.pipeline.id));
-            appendFnv1a(hash, &caster.indexCount, sizeof(caster.indexCount));
-            appendFnv1a(hash, &caster.firstIndex, sizeof(caster.firstIndex));
-            if (const VulkanMaterialPayload* material =
-                    resources.materials().get(caster.material)) {
-                appendFnv1a(hash, &material->packedRevision,
-                    sizeof(material->packedRevision));
-                appendFnv1a(hash, &material->packed.alphaMode,
-                    sizeof(material->packed.alphaMode));
-                appendFnv1a(hash, &material->packed.doubleSided,
-                    sizeof(material->packed.doubleSided));
-            }
-        }
-    }
-
-    uint64_t shadowCasterRevision(const VulkanIndirectScene& scene,
-        const VulkanResourceRegistry& resources,
-        const ShadowCasterSubmission& casters) noexcept {
-        uint64_t hash = 1469598103934665603ull;
-        visitIndirectCasters(scene, casters, GpuSceneConsumerShadow,
-            [&](const VulkanResolvedCaster& caster) {
-                appendCaster(hash, resources, caster);
-            });
-        return hash;
-    }
-
     VulkanIndirectAssetResolver vulkanIndirectAssets(
         const VulkanFeatureContext& context) noexcept {
         return {

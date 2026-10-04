@@ -2,10 +2,11 @@
 
 // M7R R3c.5: what the shadow and reflection-probe feature owners share:
 // caster resolution (the submission's GPU-scene primitives for one consumer,
-// then its direct packets), the caster-content revision, the per-frame caster
+// then its direct packets), the per-frame caster
 // scratch, the direct-fallback shadow draw loop, the qualification-oracle draw
 // counters and the oracle's CPU LOD selectors. Moved out of the backend
-// unchanged.
+// unchanged. M7R R5c.1: the per-frame caster-content hash is replaced by the
+// change-driven revisions in VulkanCasterRevisions.h.
 
 #include "VulkanFeatureContext.h"
 #include "VulkanExtensionHooks.h"
@@ -75,13 +76,6 @@ namespace Iridium {
             });
     }
 
-    // FNV-1a over the shadow casters' content (transform, handles, index
-    // range, material revision and shadow-relevant state). M7R R5c.1: only
-    // the depth-history revision still uses it; the shadow revisions are the
-    // change-driven ones in VulkanCasterRevisions.h.
-    [[nodiscard]] uint64_t shadowCasterRevision(const VulkanIndirectScene& scene,
-        const VulkanResourceRegistry& resources,
-        const ShadowCasterSubmission& casters) noexcept;
     // Geometry/material/pipeline payload lookups for the indirect cullers.
     [[nodiscard]] VulkanIndirectAssetResolver vulkanIndirectAssets(
         const VulkanFeatureContext& context) noexcept;

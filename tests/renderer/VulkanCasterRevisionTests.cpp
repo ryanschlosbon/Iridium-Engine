@@ -457,6 +457,94 @@ namespace {
         return true;
     }
 
+    // Depth history: opaque and forward queues of parity and direct packets.
+    DrawPacket parityPacket(const World& world, uint32_t primitiveIndex) {
+        const GpuScenePackedTables& tables = *world.packed;
+        const GpuScenePrimitiveRecord& primitive = tables.primitives[primitiveIndex];
+        const GpuSceneInstanceRecord& instance = tables.instances[primitive.binding.x];
+        const GpuSceneGeometryRecord& geometry = tables.geometries[primitive.binding.y];
+        DrawPacket packet{};
+        packet.worldTransform = unpackGpuSceneAffine(
+            tables.transforms[instance.references.x]);
+        packet.geometry = GeometryHandle{ geometry.storage.x };
+        packet.material = MaterialHandle{ primitive.binding.z };
+        packet.pipeline = PipelineHandle{ primitive.binding.w };
+        packet.indexCount = geometry.draw.y;
+        packet.firstIndex = geometry.draw.x;
+        packet.executionFlags = DrawPacketGpuScenePrimitive;
+        packet.firstInstanceTransform = primitiveIndex;
+        return packet;
+    }
+
+    uint64_t referenceDepthHash(std::span<const DrawPacket> opaque,
+        std::span<const DrawPacket> forward, const FakeMaterials& materials) {
+        const VulkanIndirectScene empty{};
+        uint64_t hash = referenceHash(empty, { .directPackets = opaque }, materials);
+        const uint64_t forwardHash = referenceHash(empty,
+            { .directPackets = forward }, materials);
+        fnv(hash, &forwardHash, sizeof(forwardHash));
+        return hash;
+    }
+
+    bool depthRevisionFollowsQueues() {
+        World world = makeWorld(4);
+        VulkanDepthContentRevision depth;
+        uint64_t hash = 0, revision = 0;
+        bool primed = false;
+        std::vector<DrawPacket> opaque, forward;
+        const auto build = [&](std::vector<uint32_t> forwardVisible) {
+            opaque.clear();
+            forward.clear();
+            for (uint32_t index = 0; index < 2u; ++index)
+                opaque.push_back(parityPacket(world, index));
+            for (uint32_t index : forwardVisible)
+                forward.push_back(parityPacket(world, index));
+        };
+        const auto step = [&]() {
+            depth.publishScene(*world.packed);
+            const uint64_t nextRevision = depth.evaluate(opaque, forward,
+                world.materials.source());
+            const uint64_t nextHash = referenceDepthHash(opaque, forward,
+                world.materials);
+            const bool hashChanged = primed && nextHash != hash;
+            const bool revisionChanged = primed && nextRevision != revision;
+            hash = nextHash;
+            revision = nextRevision;
+            primed = true;
+            if (hashChanged != revisionChanged) return -1;
+            return hashChanged ? 1 : 0;
+        };
+        build({ 2, 3 });
+        CHECK(step() == 0);
+        CHECK(step() == 0);
+        build({ 2 });                                 // forward visibility
+        CHECK(step() == 1);
+        CHECK(step() == 0);
+        world.publish();                              // unchanged publication
+        build({ 2 });
+        CHECK(step() == 0);
+        world.casters[0].position.x += 0.5f;          // opaque occluder moved
+        world.publish();
+        build({ 2 });
+        CHECK(step() == 1);
+        DrawPacket direct{};                           // a direct opaque packet
+        direct.geometry = GeometryHandle::fromParts(9, 1);
+        direct.material = MaterialHandle::fromParts(3, 1);
+        direct.pipeline = PipelineHandle::fromParts(6, 1);
+        direct.indexCount = 3;
+        opaque.push_back(direct);
+        CHECK(step() == 1);
+        opaque.back().distanceToCamera = 3.0f;         // not content
+        CHECK(step() == 0);
+        opaque.back().worldTransform[3].y = 2.0f;
+        CHECK(step() == 1);
+        world.materials.set(MaterialHandle::fromParts(3, 1), { .packedRevision = 4 });
+        CHECK(step() == 1);
+        world.materials.set(MaterialHandle::fromParts(4, 1), { .packedRevision = 4 });
+        CHECK(step() == 0);
+        return true;
+    }
+
     // Many mixed steps: the local and directional relations always match.
     bool randomizedEquivalence() {
         std::mt19937 random(20261003u);
@@ -507,6 +595,7 @@ int main() {
         { "Shadow revision: material state", shadowRevisionFollowsMaterials },
         { "Shadow revision: direct packets", shadowRevisionFollowsDirectPackets },
         { "Directional revisions: cascade membership", directionalRevisionsFollowCascadeMembership },
+        { "Depth-history revision: queues", depthRevisionFollowsQueues },
         { "Randomized change-relation equivalence", randomizedEquivalence },
     };
     size_t failures = 0;

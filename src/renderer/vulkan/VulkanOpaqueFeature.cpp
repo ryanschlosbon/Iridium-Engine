@@ -8,6 +8,7 @@
 #include "VulkanPipelineLibrary.h"
 #include "VulkanResourceRegistry.h"
 #include "VulkanShadowCasters.h"
+#include "VulkanCasterRevisions.h"
 #include "core/BuildFeatures.h"
 #include "profiling/CpuProfiler.h"
 
@@ -137,6 +138,7 @@ namespace Iridium {
     }
 
     void VulkanOpaqueFeature::publishScene(const GpuScenePackedTables& scene) {
+        depthContent_.publishScene(scene);
         if (lodEnabled()) culler_.lodHistory().publish(scene);
     }
 
@@ -156,19 +158,7 @@ namespace Iridium {
         std::span<const DrawPacket> opaqueQueue,
         std::span<const DrawPacket> opaqueForwardQueue) {
         const uint32_t frame = context_->scheduler.currentFrameIndex();
-        const VulkanIndirectScene scene = context_->gpuScene.indirectScene(frame);
         VulkanFrameTelemetry& telemetry = context_->telemetry;
-        depthContentRevision_ = shadowCasterRevision(scene, context_->resources, {
-            .directPackets = opaqueQueue,
-        });
-        const uint64_t forwardRevision = shadowCasterRevision(scene,
-            context_->resources, {
-                .directPackets = opaqueForwardQueue,
-            });
-        appendFnv1a(depthContentRevision_, &forwardRevision,
-            sizeof(forwardRevision));
-        if (depthContentRevision_ == 0u)
-            depthContentRevision_ = 1u;
         historyPrepared_ = true;
 
         if (!settings_.depthPyramid) {
@@ -176,6 +166,31 @@ namespace Iridium {
             telemetry.counters().depthHistoryRejection = static_cast<uint32_t>(
                 historyDecision_.rejection);
             return;
+        }
+
+        // M7R R5c.2: the history's content revision advances exactly when the
+        // queues' occluder content changes (it has no consumer without the
+        // pyramid, so it is evaluated only here).
+        {
+            CpuScope depthScope(context_->profiler, "cpu.render.depth_history.revision");
+            depthContentRevision_ = depthContent_.evaluate(opaqueQueue,
+                opaqueForwardQueue, vulkanCasterMaterials(context_->resources));
+        }
+        if constexpr (kQualificationBuild) {
+            if (IVulkanCasterRevisionObserver* observer =
+                    context_->extensions.casterRevisionObserver()) {
+                const VulkanIndirectScene scene =
+                    context_->gpuScene.indirectScene(frame);
+                observer->observeCasterRevision({
+                    .stream = VulkanCasterRevisionStream::DepthHistory,
+                    .frameSerial = context_->scheduler.lastSubmittedSerial() + 1u,
+                    .scene = &scene,
+                    .resources = &context_->resources,
+                    .opaqueQueue = opaqueQueue,
+                    .forwardQueue = opaqueForwardQueue,
+                    .revisions = { &depthContentRevision_, 1u },
+                });
+            }
         }
 
         const auto& view = context_->gpuScene.views()[frame];

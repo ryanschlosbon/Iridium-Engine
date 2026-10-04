@@ -185,4 +185,45 @@ namespace Iridium {
         Stats stats_{};
     };
 
+    // The main view's depth-history content revision: the opaque and
+    // forward-opaque queues as the depth pyramid's occluders saw them.
+    class VulkanDepthContentRevision {
+    public:
+        void publishScene(const GpuScenePackedTables& scene) noexcept {
+            sceneEpoch_ = scene.sceneEpoch;
+            publicationRevision_ = scene.publicationRevision;
+        }
+        // Advances exactly when either queue's packet content sequence changes.
+        uint64_t evaluate(std::span<const DrawPacket> opaqueQueue,
+            std::span<const DrawPacket> forwardQueue,
+            const VulkanCasterMaterialSource& materials);
+        [[nodiscard]] uint64_t revision() const noexcept { return revision_; }
+
+    private:
+        struct Queue {
+            // Per packet: its GPU-scene primitive, or InvalidGpuSceneIndex.
+            std::vector<uint32_t> keys;
+            std::vector<VulkanCasterContent> contents;
+            std::vector<uint32_t> scratchKeys;
+            std::vector<VulkanCasterContent> scratchContents;
+        };
+        struct Trigger {
+            bool valid = false;
+            uint64_t sceneEpoch = 0;
+            uint64_t publicationRevision = 0;
+            uint64_t materialRevision = 0;
+            bool operator==(const Trigger&) const = default;
+        };
+        // True when the queue's content sequence changed.
+        static bool update(Queue& queue, std::span<const DrawPacket> packets,
+            bool contentTrigger, const VulkanCasterMaterialSource& materials);
+
+        uint64_t sceneEpoch_ = 0;
+        uint64_t publicationRevision_ = 0;
+        Trigger trigger_{};
+        Queue opaque_;
+        Queue forward_;
+        uint64_t revision_ = 1;
+    };
+
 } // namespace Iridium

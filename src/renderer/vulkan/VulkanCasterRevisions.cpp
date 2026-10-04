@@ -296,4 +296,64 @@ namespace Iridium {
         }
     }
 
+    // ---------------------------------------------------------------------
+    // Depth-history content
+    // ---------------------------------------------------------------------
+
+    bool VulkanDepthContentRevision::update(Queue& queue,
+        std::span<const DrawPacket> packets, bool contentTrigger,
+        const VulkanCasterMaterialSource& materials) {
+        // A GPU-scene parity packet's content is a function of its primitive
+        // and the published tables, so an unchanged publication only needs its
+        // primitive index; direct packets are compared field by field.
+        if (!contentTrigger && queue.keys.size() == packets.size()) {
+            bool same = true;
+            for (size_t index = 0; index < packets.size() && same; ++index) {
+                const DrawPacket& packet = packets[index];
+                const uint32_t key = hasGpuScenePrimitive(packet)
+                    ? packet.firstInstanceTransform : InvalidGpuSceneIndex;
+                same = key == queue.keys[index] &&
+                    (key != InvalidGpuSceneIndex ||
+                        sameDirect(packet, queue.contents[index]));
+            }
+            if (same) return false;
+        }
+        queue.scratchKeys.resize(packets.size());
+        queue.scratchContents.resize(packets.size());
+        const bool sameSize = packets.size() == queue.contents.size();
+        bool changed = !sameSize;
+        for (size_t index = 0; index < packets.size(); ++index) {
+            const DrawPacket& packet = packets[index];
+            queue.scratchKeys[index] = hasGpuScenePrimitive(packet)
+                ? packet.firstInstanceTransform : InvalidGpuSceneIndex;
+            makeCasterContent(queue.scratchContents[index], packet, materials);
+            if (!changed)
+                changed = !sameCasterContent(queue.scratchContents[index],
+                    queue.contents[index]);
+        }
+        queue.keys.swap(queue.scratchKeys);
+        queue.contents.swap(queue.scratchContents);
+        return changed;
+    }
+
+    uint64_t VulkanDepthContentRevision::evaluate(
+        std::span<const DrawPacket> opaqueQueue,
+        std::span<const DrawPacket> forwardQueue,
+        const VulkanCasterMaterialSource& materials) {
+        const Trigger trigger{
+            .valid = true,
+            .sceneEpoch = sceneEpoch_,
+            .publicationRevision = publicationRevision_,
+            .materialRevision = materials.revision,
+        };
+        const bool contentTrigger = trigger != trigger_;
+        const bool opaqueChanged = update(opaque_, opaqueQueue, contentTrigger,
+            materials);
+        const bool forwardChanged = update(forward_, forwardQueue,
+            contentTrigger, materials);
+        trigger_ = trigger;
+        if (opaqueChanged || forwardChanged) ++revision_;
+        return revision_;
+    }
+
 } // namespace Iridium

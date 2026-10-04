@@ -19,6 +19,7 @@
 #include "renderer/rhi/RenderDebugView.h"
 
 #include "VkGraphicsPipeline.h"
+#include "VulkanCasterRevisions.h"
 #include "VulkanDepthPyramid.h"
 #include "VulkanFeatureContext.h"
 #include "VulkanFrameScheduler.h"
@@ -143,6 +144,8 @@ namespace Iridium {
         ViewHistoryContext viewHistory_{};
         uint64_t projectionRevision_ = 1;
         uint64_t depthContentRevision_ = 1;
+        // M7R R5c.2: replaces the per-frame hash of both queues.
+        VulkanDepthContentRevision depthContent_;
         DepthPyramidHistoryDecision historyDecision_{};
         bool historyPrepared_ = false;
 
