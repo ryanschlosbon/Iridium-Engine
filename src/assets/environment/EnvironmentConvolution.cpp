@@ -1,5 +1,6 @@
 #include "assets/environment/EnvironmentConvolution.h"
 
+#include "core/tasks/TaskSystem.h"
 #include "material/MaterialRuntime.h"
 #include "material/StandardMaterialShading.h"
 #include "renderer/color/SceneColor.h"
@@ -8,7 +9,6 @@
 #include <array>
 #include <cmath>
 #include <cstring>
-#include <execution>
 #include <numbers>
 #include <stdexcept>
 
@@ -16,6 +16,26 @@ namespace Iridium {
 namespace {
 
     constexpr float Pi = std::numbers::pi_v<float>;
+
+    // M7R R5b.2 (ADR-0015): a Background parallelFor on the engine task system
+    // replaces std::execution::par. Every element is computed independently,
+    // so the bytes do not depend on the schedule; without a task system on
+    // this thread (tools, tests) the loop runs serially.
+    template <class Element, class Fn>
+    void forEachElementParallel(std::vector<Element>& elements, Fn&& fn) {
+        Tasks::TaskSystem* const tasks = Tasks::TaskSystem::forCurrentThread();
+        if (tasks == nullptr) {
+            for (Element& element : elements) fn(element);
+            return;
+        }
+        tasks->parallelFor(Tasks::TaskPriority::Background,
+            static_cast<uint32_t>(elements.size()), 256,
+            [&](Tasks::TaskRange range, uint32_t) {
+                for (uint32_t index = range.begin; index < range.end; ++index) {
+                    fn(elements[index]);
+                }
+            }, "asset.environment.convolution");
+    }
 
     uint32_t fullMipCount(uint32_t size) noexcept {
         uint32_t result = 0;
@@ -489,7 +509,7 @@ ConvolvedEnvironment convolveEnvironmentReference(
         cancel();
         const uint32_t size = mipSize(settings.radianceSize, mip);
         auto pixels = makeCubeMip(size);
-        std::for_each(std::execution::par, pixels.begin(), pixels.end(),
+        forEachElementParallel(pixels,
             [&](glm::vec4& output) {
                 if (stopToken.stop_requested()) return;
                 const size_t index = static_cast<size_t>(&output - pixels.data());
@@ -525,7 +545,7 @@ ConvolvedEnvironment convolveEnvironmentReference(
     const IrradianceSh irradianceSh =
         projectDiffuseIrradiance(source, settings, stopToken);
     auto irradiance = makeCubeMip(settings.irradianceSize);
-    std::for_each(std::execution::par, irradiance.begin(), irradiance.end(),
+    forEachElementParallel(irradiance,
         [&](glm::vec4& output) {
             if (stopToken.stop_requested()) return;
             const uint32_t size = settings.irradianceSize;
@@ -562,7 +582,7 @@ ConvolvedEnvironment convolveEnvironmentReference(
             ? 1u : settings.prefilteredSamples;
         const float sourceTexelSolidAngle = 4.0f * Pi /
             (6.0f * settings.radianceSize * settings.radianceSize);
-        std::for_each(std::execution::par, pixels.begin(), pixels.end(),
+        forEachElementParallel(pixels,
             [&](glm::vec4& output) {
                 if (stopToken.stop_requested()) return;
                 const size_t index = static_cast<size_t>(&output - pixels.data());
@@ -615,8 +635,8 @@ ConvolvedEnvironment convolveEnvironmentReference(
     result.brdfLut.resize(static_cast<size_t>(settings.brdfLutSize) *
         settings.brdfLutSize);
     const glm::vec3 normal{ 0.0f, 0.0f, 1.0f };
-    std::for_each(std::execution::par, result.brdfLut.begin(),
-        result.brdfLut.end(), [&](glm::vec2& output) {
+    forEachElementParallel(result.brdfLut,
+        [&](glm::vec2& output) {
             if (stopToken.stop_requested()) return;
             const size_t index = static_cast<size_t>(
                 &output - result.brdfLut.data());
