@@ -2122,36 +2122,48 @@ namespace Iridium {
         const std::array<std::vector<DrawPacket>*, ExtractionQueueCount>
             destinations{ &opaqueQueue, &forwardOpaqueQueue, &transparentQueue,
                 &sortedSurfaceQueue };
-        // One copy task per chunk; each writes only its own ranges.
-        runChunks(extractionChunkCount + parityChunkCount,
-            "cpu.render.extract.merge.chunk", [&](uint32_t index) {
-            if (index >= extractionChunkCount) {
-                const ParityChunk& chunk =
-                    parityChunks_[index - extractionChunkCount];
-                std::copy(chunk.forward.begin(), chunk.forward.end(),
-                    forwardOpaqueQueue.data() + chunk.forwardOffset);
+        // One copy task per chunk; each writes only its own ranges. A small
+        // frame copies inline (a task round trip would cost more).
+        const size_t copiedPackets = totals[ExtractionOpaque] +
+            totals[ExtractionForwardOpaque] + totals[ExtractionTransparent] +
+            totals[ExtractionSortedSurface] + selectionTotal;
+        const uint32_t copyTasks = extractionChunkCount + parityChunkCount;
+        runChunks(copiedPackets >= MergeParallelMinimumPackets ? copyTasks : 1u,
+            "cpu.render.extract.merge.chunk", [&](uint32_t task) {
+            const auto copyItem = [&](uint32_t index) {
+                if (index >= extractionChunkCount) {
+                    const ParityChunk& chunk =
+                        parityChunks_[index - extractionChunkCount];
+                    std::copy(chunk.forward.begin(), chunk.forward.end(),
+                        forwardOpaqueQueue.data() + chunk.forwardOffset);
+                    return;
+                }
+                const ExtractionChunk& chunk = extractionChunks_[index];
+                // Instance-batch packets index the chunk's transforms; rebase them
+                // onto the frame's stream (non-batch packets hold UINT32_MAX).
+                const uint32_t rebase = static_cast<uint32_t>(chunk.transformOffset);
+                const auto copy = [rebase](const std::vector<DrawPacket>& source,
+                    std::vector<DrawPacket>& destination, size_t offset) {
+                    DrawPacket* const target = destination.data() + offset;
+                    std::copy(source.begin(), source.end(), target);
+                    if (rebase == 0u) return;
+                    for (size_t packet = 0; packet < source.size(); ++packet)
+                        if (target[packet].firstInstanceTransform != UINT32_MAX)
+                            target[packet].firstInstanceTransform += rebase;
+                };
+                for (uint32_t queue = 0; queue < ExtractionQueueCount; ++queue)
+                    copy(chunk.queues[queue], *destinations[queue],
+                        chunk.queueOffsets[queue]);
+                copy(chunk.selection, selectionQueue, chunk.selectionOffset);
+                std::copy(chunk.instanceTransforms.begin(),
+                    chunk.instanceTransforms.end(),
+                    forwardInstanceTransforms_.data() + chunk.transformOffset);
+            };
+            if (copiedPackets >= MergeParallelMinimumPackets) {
+                copyItem(task);
                 return;
             }
-            const ExtractionChunk& chunk = extractionChunks_[index];
-            // Instance-batch packets index the chunk's transforms; rebase them
-            // onto the frame's stream (non-batch packets hold UINT32_MAX).
-            const uint32_t rebase = static_cast<uint32_t>(chunk.transformOffset);
-            const auto copy = [rebase](const std::vector<DrawPacket>& source,
-                std::vector<DrawPacket>& destination, size_t offset) {
-                DrawPacket* const target = destination.data() + offset;
-                std::copy(source.begin(), source.end(), target);
-                if (rebase == 0u) return;
-                for (size_t packet = 0; packet < source.size(); ++packet)
-                    if (target[packet].firstInstanceTransform != UINT32_MAX)
-                        target[packet].firstInstanceTransform += rebase;
-            };
-            for (uint32_t queue = 0; queue < ExtractionQueueCount; ++queue)
-                copy(chunk.queues[queue], *destinations[queue],
-                    chunk.queueOffsets[queue]);
-            copy(chunk.selection, selectionQueue, chunk.selectionOffset);
-            std::copy(chunk.instanceTransforms.begin(),
-                chunk.instanceTransforms.end(),
-                forwardInstanceTransforms_.data() + chunk.transformOffset);
+            for (uint32_t index = 0; index < copyTasks; ++index) copyItem(index);
         });
     }
 

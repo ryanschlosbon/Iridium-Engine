@@ -295,6 +295,8 @@ namespace Iridium {
         static constexpr uint64_t ExtractionVisitsPerChunk = 256;
         static constexpr uint64_t ClassifyPrimitivesPerChunk = 2048;
         static constexpr uint64_t ParityPrimitivesPerChunk = 8192;
+        // Below this many packets the merge copies on the calling thread.
+        static constexpr size_t MergeParallelMinimumPackets = 2048;
         static constexpr uint32_t MaximumChunks = 32;
         // Runs fn(chunk) for chunk in [0, count): inline when count is 1 or
         // there is no task system, otherwise as one frame-critical task set
