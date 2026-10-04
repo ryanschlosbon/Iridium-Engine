@@ -375,7 +375,7 @@ namespace Iridium {
         }
         void prepareReflectionProbes(uint32_t requiredCapacity,
             std::span<const EnvironmentLightingHandles> environments) override;
-        [[nodiscard]] std::vector<ReflectionProbeCaptureCompletion>
+        [[nodiscard]] std::span<const ReflectionProbeCaptureCompletion>
             finalizeReflectionProbeCaptures() override;
         [[nodiscard]] std::optional<uint32_t>
             capturedReflectionProbeEnvironmentSlot(

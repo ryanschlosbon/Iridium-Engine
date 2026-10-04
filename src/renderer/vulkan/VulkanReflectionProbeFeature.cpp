@@ -109,6 +109,8 @@ namespace Iridium {
         }
         pendingSlots_ = {};
         pendingCaptures_.clear();
+        spareDescriptorLists_.clear();
+        completed_.clear();
         captureTargets_.cleanup();
         capturePass_.cleanup();
         environments_.clear();
@@ -349,12 +351,13 @@ namespace Iridium {
         notifyEnvironmentsChanged();
     }
 
-    std::vector<ReflectionProbeCaptureCompletion>
+    std::span<const ReflectionProbeCaptureCompletion>
         VulkanReflectionProbeFeature::finalizeCaptures() {
         if (context_->frameOpen)
             throw std::logic_error(
                 "Reflection-probe captures must finalize before beginFrame");
-        std::vector<ReflectionProbeCaptureCompletion> completed;
+        std::vector<ReflectionProbeCaptureCompletion>& completed = completed_;
+        completed.clear();
         if (pendingCaptures_.empty()) return completed;
         // R4c.3: no drain. Only captures whose recording frame has completed
         // are promoted (their prefilter and readback are then CPU-visible);
@@ -369,6 +372,8 @@ namespace Iridium {
         for (PendingCapture& pending : pendingCaptures_) {
             if (!ready(pending)) continue;
             capturePass_.releaseDescriptors(pending.filterDescriptors);
+            pending.filterDescriptors.clear();
+            spareDescriptorLists_.push_back(std::move(pending.filterDescriptors));
             captureTargets_.promote(pending.owner, pending.captureTicket);
             auto found = capturedSlots_.find(pending.owner);
             if (found == capturedSlots_.end()) {
@@ -832,11 +837,17 @@ namespace Iridium {
                 if (duplicate != self.pendingCaptures_.end())
                     throw std::logic_error(
                         "Reflection-probe capture publication is duplicated");
+                std::vector<VkDescriptorSet> filterDescriptors;
+                if (!self.spareDescriptorLists_.empty()) {
+                    filterDescriptors = std::move(self.spareDescriptorLists_.back());
+                    self.spareDescriptorLists_.pop_back();
+                }
+                capturePass.recordPrefilter(cmd, target,
+                    self.prefilterSampleCount_, filterDescriptors);
                 PendingCapture pending{
                     .owner = capture.owner,
                     .captureTicket = capture.captureTicket,
-                    .filterDescriptors = capturePass.recordPrefilter(
-                        cmd, target, self.prefilterSampleCount_),
+                    .filterDescriptors = std::move(filterDescriptors),
                     .resolution = target.resolution,
                     .mipLevels = target.mipLevels,
                 };

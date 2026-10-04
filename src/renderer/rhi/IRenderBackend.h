@@ -121,7 +121,8 @@ namespace Iridium {
         virtual void prepareReflectionProbes(uint32_t requiredCapacity,
             std::span<const EnvironmentLightingHandles> environments) = 0;
         // Completes fence-safe runtime capture publication before a frame opens.
-        [[nodiscard]] virtual std::vector<ReflectionProbeCaptureCompletion>
+        // The completions are valid until the next call (backend storage).
+        [[nodiscard]] virtual std::span<const ReflectionProbeCaptureCompletion>
             finalizeReflectionProbeCaptures() = 0;
         [[nodiscard]] virtual std::optional<uint32_t>
             capturedReflectionProbeEnvironmentSlot(

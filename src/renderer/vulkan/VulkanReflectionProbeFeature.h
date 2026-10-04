@@ -119,7 +119,10 @@ namespace Iridium {
         void prepare(uint32_t requiredCapacity,
             std::span<const EnvironmentLightingHandles> environments,
             VkExtent2D sceneExtent);
-        [[nodiscard]] std::vector<ReflectionProbeCaptureCompletion> finalizeCaptures();
+        // The completions stay valid until the next call (M7R R5c.8: member
+        // storage, so steady frames do not allocate).
+        [[nodiscard]] std::span<const ReflectionProbeCaptureCompletion>
+            finalizeCaptures();
         [[nodiscard]] std::optional<uint32_t> capturedEnvironmentSlot(
             SceneEntityUuid owner) const noexcept;
         void synchronizeCaptureOwners(std::span<const SceneEntityUuid> owners);
@@ -223,6 +226,10 @@ namespace Iridium {
         uint32_t clusterCapacity_ = 0;
         uint32_t referenceCapacity_ = 0;
         std::vector<PendingCapture> pendingCaptures_;
+        // M7R R5c.8: descriptor-set lists of promoted captures, reused by
+        // later captures, and the completions of the last finalizeCaptures.
+        std::vector<std::vector<VkDescriptorSet>> spareDescriptorLists_;
+        std::vector<ReflectionProbeCaptureCompletion> completed_;
         std::unordered_map<SceneEntityUuid, uint32_t, SceneEntityUuidHash> capturedSlots_;
         ReflectionProbeCaptureTelemetry telemetry_{};
         uint32_t prefilterSampleCount_ = 256;

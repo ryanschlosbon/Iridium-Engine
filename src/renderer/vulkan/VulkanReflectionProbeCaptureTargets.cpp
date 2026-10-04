@@ -114,6 +114,10 @@ VulkanReflectionProbeCaptureTargets::acquire(SceneEntityUuid owner,
     }
 
     VulkanReflectionProbeCaptureStaging staging;
+    // M7R R5c.8: reuse the owner's previous mip-view storage (kept empty).
+    staging.prefilteredMipArrayViews =
+        std::move(state->staging.prefilteredMipArrayViews);
+    staging.prefilteredMipArrayViews.clear();
     staging.owner = owner;
     staging.captureTicket = captureTicket;
     staging.resolution = resolution;
@@ -208,7 +212,15 @@ void VulkanReflectionProbeCaptureTargets::destroyStaging(
     releaseImage(staging.rawRadiance);
     releaseImage(staging.depth);
     releaseImage(staging.prefilteredRadiance);
+    resetStaging(staging);
+}
+
+void VulkanReflectionProbeCaptureTargets::resetStaging(
+    VulkanReflectionProbeCaptureStaging& staging) noexcept {
+    std::vector<VkImageView> views = std::move(staging.prefilteredMipArrayViews);
+    views.clear();
     staging = {};
+    staging.prefilteredMipArrayViews = std::move(views);
 }
 
 void VulkanReflectionProbeCaptureTargets::abandon(SceneEntityUuid owner,
@@ -260,7 +272,7 @@ void VulkanReflectionProbeCaptureTargets::promote(SceneEntityUuid owner,
     state->publishedLogicalBytes = newPublishedBytes;
     state->hasPublished = true;
     state->hasStaging = false;
-    state->staging = {};
+    resetStaging(state->staging);
     publishedLogicalBytes_ += newPublishedBytes;
 }
 

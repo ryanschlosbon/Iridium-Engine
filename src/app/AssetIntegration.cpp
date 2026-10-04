@@ -17,6 +17,7 @@
 #include <map>
 #include <span>
 #include <stdexcept>
+#include <charconv>
 #include <string>
 #include <utility>
 #include <vector>
@@ -379,12 +380,22 @@ namespace Iridium {
         auto* probePool = registry.findPool<ReflectionProbeComponent>();
         if (entity && registry.isAlive(*entity) && probePool &&
             probePool->has(*entity)) {
-            probePool->get(*entity).publicationDiagnostic =
-                completion.bakedProduct
-                ? persistBakedReflectionProbe(completion.owner,
-                    *completion.bakedProduct)
-                : "Runtime capture published in environment slot " +
-                    std::to_string(completion.environmentSlot) + ".";
+            std::string& diagnostic = probePool->get(*entity).publicationDiagnostic;
+            if (completion.bakedProduct) {
+                diagnostic = persistBakedReflectionProbe(completion.owner,
+                    *completion.bakedProduct);
+            }
+            else {
+                // M7R R5c.8: the same text, formatted into the existing
+                // string's storage (a runtime capture republishes every few
+                // frames).
+                char slot[16]{};
+                const auto written = std::to_chars(slot, slot + sizeof(slot),
+                    completion.environmentSlot);
+                diagnostic.assign("Runtime capture published in environment slot ");
+                diagnostic.append(slot, written.ptr);
+                diagnostic.push_back('.');
+            }
         }
     }
 

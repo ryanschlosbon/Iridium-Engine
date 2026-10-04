@@ -72,7 +72,7 @@ namespace IridiumTest {
         }
         void prepareReflectionProbes(uint32_t,
             std::span<const EnvironmentLightingHandles>) override {}
-        std::vector<ReflectionProbeCaptureCompletion>
+        std::span<const ReflectionProbeCaptureCompletion>
             finalizeReflectionProbeCaptures() override { return {}; }
         std::optional<uint32_t> capturedReflectionProbeEnvironmentSlot(
             SceneEntityUuid) const noexcept override { return std::nullopt; }

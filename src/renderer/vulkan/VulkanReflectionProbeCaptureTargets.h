@@ -98,6 +98,9 @@ namespace Iridium {
             VkFormat format, VkImageAspectFlags aspect,
             VkImageViewType type, uint32_t baseMip, uint32_t mipCount,
             uint32_t baseLayer, uint32_t layerCount) const;
+        // Clears a staging record; its mip-view vector keeps its storage
+        // for the owner's next capture (M7R R5c.8).
+        static void resetStaging(VulkanReflectionProbeCaptureStaging& staging) noexcept;
         void destroyStaging(VulkanReflectionProbeCaptureStaging& staging)
             noexcept;
         [[nodiscard]] bool deferDestruction() const noexcept;

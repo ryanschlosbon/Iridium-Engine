@@ -20,6 +20,11 @@ private:
     VkDescriptorPool currentPool = VK_NULL_HANDLE;
     std::vector<VkDescriptorPool> activePools;
     std::unordered_map<VkDescriptorSet, VkDescriptorPool> setOwners;
+    // M7R R5c.8: nodes of freed entries, reused by later allocations, so a
+    // steady allocate/free cycle (probe-capture prefilter sets) does not
+    // allocate a map node per descriptor set.
+    std::vector<std::unordered_map<VkDescriptorSet, VkDescriptorPool>::node_type>
+        spareOwnerNodes;
 
     // Helper to spin up a new "chunk" of memory
     VkDescriptorPool createNewPool();

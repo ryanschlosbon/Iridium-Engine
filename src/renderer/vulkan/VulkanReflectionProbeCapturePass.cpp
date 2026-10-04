@@ -451,11 +451,10 @@ VkPipeline VulkanReflectionProbeCapturePass::pipeline(bool alphaMasked,
     return gpuScene ? gpuScenePipelines_[index] : pipelines_[index];
 }
 
-std::vector<VkDescriptorSet>
-VulkanReflectionProbeCapturePass::recordPrefilter(
+void VulkanReflectionProbeCapturePass::recordPrefilter(
     VkCommandBuffer commandBuffer,
     const VulkanReflectionProbeCaptureStaging& target,
-    uint32_t sampleCount) {
+    uint32_t sampleCount, std::vector<VkDescriptorSet>& sets) {
     if (sampleCount == 0 || target.prefilteredMipArrayViews.size() !=
         target.mipLevels)
         throw std::invalid_argument(
@@ -471,7 +470,7 @@ VulkanReflectionProbeCapturePass::recordPrefilter(
     vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr,
         1, &toGeneral);
-    std::vector<VkDescriptorSet> sets;
+    sets.clear();
     sets.reserve(target.mipLevels);
     try {
         vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
@@ -507,6 +506,7 @@ VulkanReflectionProbeCapturePass::recordPrefilter(
     }
     catch (...) {
         releaseDescriptors(sets);
+        sets.clear();
         throw;
     }
     VkImageMemoryBarrier toSample{ VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
@@ -520,7 +520,6 @@ VulkanReflectionProbeCapturePass::recordPrefilter(
     vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr,
         1, &toSample);
-    return sets;
 }
 
 VulkanReflectionProbeCaptureReadback

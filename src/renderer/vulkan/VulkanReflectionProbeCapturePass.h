@@ -83,10 +83,11 @@ namespace Iridium {
             const VulkanReflectionProbeCaptureStaging& target,
             uint32_t faceIndex) const;
 
-        [[nodiscard]] std::vector<VkDescriptorSet> recordPrefilter(
-            VkCommandBuffer commandBuffer,
+        // Fills `sets` (cleared first; caller-owned so its storage is reused,
+        // M7R R5c.8) with the prefilter's descriptor sets, one per mip.
+        void recordPrefilter(VkCommandBuffer commandBuffer,
             const VulkanReflectionProbeCaptureStaging& target,
-            uint32_t sampleCount);
+            uint32_t sampleCount, std::vector<VkDescriptorSet>& sets);
         [[nodiscard]] VulkanReflectionProbeCaptureReadback recordReadback(
             VkCommandBuffer commandBuffer,
             const VulkanReflectionProbeCaptureStaging& target);

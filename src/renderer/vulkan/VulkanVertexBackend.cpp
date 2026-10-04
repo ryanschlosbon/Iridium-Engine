@@ -1995,7 +1995,7 @@ namespace Iridium {
         probes_.configureCaptures(settings);
     }
 
-    std::vector<ReflectionProbeCaptureCompletion>
+    std::span<const ReflectionProbeCaptureCompletion>
     VulkanVertexBackend::finalizeReflectionProbeCaptures() {
         return probes_.finalizeCaptures();
     }
