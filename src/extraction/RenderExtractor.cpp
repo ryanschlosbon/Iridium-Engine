@@ -1879,9 +1879,12 @@ namespace Iridium {
         lightingFrame_ = {};
         extractedProbes_ = {};
         publishedProbes_ = {};
-        directionalShadows_ = {};
-        spotShadows_ = {};
-        pointShadows_ = {};
+        // `vector = {}` assigns an empty initializer list and keeps the
+        // capacity; swapping with an empty vector frees it, as the former
+        // drawFrame locals did, so the next frame allocates them again.
+        std::vector<DirectionalShadowFramePacket>().swap(directionalShadows_);
+        std::vector<SpotShadowFramePacket>().swap(spotShadows_);
+        std::vector<PointShadowFramePacket>().swap(pointShadows_);
     }
 
 } // namespace Iridium
