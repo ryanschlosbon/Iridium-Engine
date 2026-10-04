@@ -1849,7 +1849,10 @@ namespace Iridium {
             stageComplete(RenderFrameStage::ReflectionProbeCaptures);
         }
 
-        prepareDepthPyramidHistory(frame.opaqueQueue, frame.forwardOpaqueQueue);
+        {
+            CpuScope historyScope(cpuProfiler_, "cpu.render.prepare.depth_history");
+            prepareDepthPyramidHistory(frame.opaqueQueue, frame.forwardOpaqueQueue);
+        }
         submitOpaqueQueue(frame.opaqueQueue, frame.selectionQueue, frame.wireframe);
         // The camera position, matrices and planes are the view record's
         // (bit-identical to the former submitLightingPass arguments).

@@ -1527,6 +1527,8 @@ namespace Iridium {
                 editor.getAssetViewerPanel().backgroundFramesPerSecond);
         } else editorViewScheduler_.reset();
         editor.renderingAssetView = renderView == 1;
+        {
+        CpuScope finalizeScope(cpuProfiler_, "cpu.probe.capture.finalize");
         for (const ReflectionProbeCaptureCompletion& completion :
                 renderBackend->finalizeReflectionProbeCaptures()) {
             reflectionProbeCaptureScheduler_.markPublished(
@@ -1543,6 +1545,7 @@ namespace Iridium {
                     : "Runtime capture published in environment slot " +
                         std::to_string(completion.environmentSlot) + ".";
             }
+        }
         }
         LightingFramePacket lightingFrame;
         {
@@ -1615,8 +1618,11 @@ namespace Iridium {
                     return static_cast<uint32_t>(index);
                 });
         }
-        renderBackend->prepareReflectionProbes(
-            publishedProbes.requiredCapacity, reflectionProbeEnvironments_);
+        {
+            CpuScope probeScope(cpuProfiler_, "cpu.probe.prepare");
+            renderBackend->prepareReflectionProbes(
+                publishedProbes.requiredCapacity, reflectionProbeEnvironments_);
+        }
         cpuProfiler_.recordCounter("probe.extracted",
             publishedProbes.stats.extractedCandidateCount);
         cpuProfiler_.recordCounter("probe.active",
@@ -1629,9 +1635,12 @@ namespace Iridium {
             publishedProbes.stats.capacityOmittedCount);
         cpuProfiler_.recordCounter("probe.publish.changed_bytes",
             publishedProbes.stats.changedRecordBytes);
-        std::vector<AssetGuid> previewDocuments;
-        for (const auto& document : editor.assetDocuments().documents()) previewDocuments.push_back(document.assetGuid);
-        assetManager->processMaterialPreviews(previewDocuments);
+        {
+            CpuScope previewScope(cpuProfiler_, "cpu.asset.material_previews");
+            std::vector<AssetGuid> previewDocuments;
+            for (const auto& document : editor.assetDocuments().documents()) previewDocuments.push_back(document.assetGuid);
+            assetManager->processMaterialPreviews(previewDocuments);
+        }
         prepareGpuScenePublication(editor.getSelectedEntity());
         // Descriptor publication waits for old users and must precede acquisition.
         // Keep the authored scene environment identity separate from this binding.
@@ -1891,6 +1900,7 @@ namespace Iridium {
         uint64_t gpuSceneForwardVisibleCount = 0;
         uint64_t gpuSceneForwardVisibleTriangles = 0;
         if (!assetPreviewActive && gpuSceneFrame_) {
+            CpuScope classifyScope(cpuProfiler_, "cpu.render.classify");
             classifyGpuSceneFrustum(*gpuSceneFrame_,
                 makeGpuSceneFrustum(projMatrix * viewMatrix),
                 GpuSceneConsumerMainOpaque |
@@ -2186,6 +2196,7 @@ namespace Iridium {
             // from the persistent publication. Transparent and explicit
             // fallback owners above continue to use the M6 packet path.
             if (!assetPreviewActive && gpuSceneFrame_) {
+                CpuScope parityScope(cpuProfiler_, "cpu.render.extract.parity");
                 for (uint32_t primitiveIndex = 0;
                         primitiveIndex < gpuSceneFrame_->primitives.size();
                         ++primitiveIndex) {
@@ -2534,19 +2545,24 @@ namespace Iridium {
                     return (packet.transparentWorkFlags &
                         TransparentWorkNearClipped) != 0;
                 }));
-        transparentIntervalEndpointScratch.resize(sortedSurfaceQueue.size());
-        transparentIntervalNearScratch.resize(sortedSurfaceQueue.size());
-        transparentIntervalFenwickScratch.resize(
-            sortedSurfaceQueue.size() + 1u);
-        cpuProfiler_.recordCounter("transparent.sort.ambiguous_intervals",
-            sweepAmbiguousTransparentIntervals(sortedSurfaceQueue,
-                transparentIntervalEndpointScratch,
-                transparentIntervalNearScratch,
-                transparentIntervalFenwickScratch));
+        {
+            CpuScope intervalScope(cpuProfiler_, "cpu.render.transparent.intervals");
+            transparentIntervalEndpointScratch.resize(sortedSurfaceQueue.size());
+            transparentIntervalNearScratch.resize(sortedSurfaceQueue.size());
+            transparentIntervalFenwickScratch.resize(
+                sortedSurfaceQueue.size() + 1u);
+            cpuProfiler_.recordCounter("transparent.sort.ambiguous_intervals",
+                sweepAmbiguousTransparentIntervals(sortedSurfaceQueue,
+                    transparentIntervalEndpointScratch,
+                    transparentIntervalNearScratch,
+                    transparentIntervalFenwickScratch));
+        }
 
         // --- 5. THE SUBMISSION PHASE (The Black Box) ---
 
         std::vector<DirectionalShadowFramePacket> directionalShadows;
+        {
+        CpuScope directionalScope(cpuProfiler_, "cpu.shadow.directional.schedule");
         const std::vector<DirectionalShadowSelection> shadowSelections =
             selectDirectionalShadowLights(lightingFrame,
                 config_.shadowSettings.maximumDirectionalLights);
@@ -2587,9 +2603,15 @@ namespace Iridium {
                 const uint64_t lightRevision = selection.lightSlot <
                     lightingFrame.recordRevisions.size()
                     ? lightingFrame.recordRevisions[selection.lightSlot] : 0;
-                const auto casterRevisions = renderBackend->
-                    getDirectionalShadowCasterRevisions(
-                        shadowCasters, plan);
+                std::array<uint64_t, kDirectionalShadowCascadeCount>
+                    casterRevisions{};
+                {
+                    CpuScope revisionScope(cpuProfiler_,
+                        "cpu.shadow.caster_revision.directional");
+                    casterRevisions = renderBackend->
+                        getDirectionalShadowCasterRevisions(
+                            shadowCasters, plan);
+                }
                 const DirectionalShadowSchedule schedule =
                     directionalShadowCaches_[shadowIndex].schedule({
                         .selection = selection,
@@ -2699,12 +2721,18 @@ namespace Iridium {
             activeDirectionalShadowOwnerCount_ = 0;
             cpuProfiler_.recordCounter("shadow.directional.requested", 0);
         }
+        }
         renderFrame.directionalShadows = { shadowCasters, directionalShadows };
         frameStage_ = { .frame = &frame, .directionalShadows = directionalShadows };
 
         // Spot shadows share the same extracted light slots and caster revision
         // as clustered lighting. Stable atlas allocation is reconciled before
         // cache scheduling so compatible tiles remain sampleable across frames.
+        uint64_t localCasterRevision = 0;
+        std::vector<SpotShadowFramePacket> spotShadows;
+        std::vector<PointShadowFramePacket> pointShadows;
+        {
+        CpuScope localScope(cpuProfiler_, "cpu.shadow.local.schedule");
         const std::vector<LocalShadowRequest> localShadowRequests =
             buildLocalShadowRequests(lightingFrame, renderCameraPosition);
         const LocalShadowAllocationStats spotAllocation =
@@ -2715,8 +2743,12 @@ namespace Iridium {
             .maximumCompatibleStaleFrames = config_.shadowSettings.
                 maximumCompatibleSpotStaleFrames,
         });
-        const uint64_t localCasterRevision =
-            renderBackend->getShadowCasterRevision(shadowCasters);
+        {
+            CpuScope revisionScope(cpuProfiler_,
+                "cpu.shadow.caster_revision.local");
+            localCasterRevision =
+                renderBackend->getShadowCasterRevision(shadowCasters);
+        }
         std::vector<LocalShadowCacheInput> spotCacheInputs;
         spotCacheInputs.reserve(spotShadowAtlas_.allocations().size());
         for (const SpotShadowTile& tile : spotShadowAtlas_.allocations()) {
@@ -2752,7 +2784,6 @@ namespace Iridium {
         }
         const LocalShadowSchedule& spotSchedule =
             spotShadowCache_.schedule(spotCacheInputs);
-        std::vector<SpotShadowFramePacket> spotShadows;
         spotShadows.reserve(spotSchedule.entries.size());
         for (const LocalShadowScheduleEntry& entry : spotSchedule.entries) {
             const auto tile = std::ranges::find_if(
@@ -2845,7 +2876,6 @@ namespace Iridium {
         }
         const LocalShadowSchedule& pointSchedule =
             pointShadowCache_.schedule(pointCacheInputs);
-        std::vector<PointShadowFramePacket> pointShadows;
         pointShadows.reserve(pointSchedule.entries.size());
         for (const LocalShadowScheduleEntry& entry : pointSchedule.entries) {
             const auto slot = std::ranges::find_if(
@@ -2893,9 +2923,11 @@ namespace Iridium {
         renderFrame.pointShadows = { shadowCasters, pointShadows };
         frameStage_.pointAllocation = pointAllocation;
         frameStage_.pointSchedule = &pointSchedule;
+        }
 
         // Scene probes must never capture the isolated model or its preview sun.
         if (!assetPreviewActive) {
+        CpuScope captureScope(cpuProfiler_, "cpu.probe.capture.schedule");
         std::vector<ReflectionProbeCaptureRequest> probeCaptureRequests;
         probeCaptureRequests.reserve(extractedProbes.candidates.size());
         uint64_t environmentRevision = 1469598103934665603ull;
