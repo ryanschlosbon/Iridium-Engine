@@ -439,10 +439,10 @@ namespace Iridium {
         ReflectionProbeFramePacket& extractedProbes = extractedProbes_;
         {
             CpuScope probeScope(cpuProfiler_, "cpu.probe.extract");
-            extractedProbes = extractReflectionProbes(sceneWorld_,
+            extractReflectionProbes(sceneWorld_,
                 [&loadedEnvironments](AssetGuid environment) {
                     return loadedEnvironments.contains(environment);
-                });
+                }, extractedProbes);
             std::vector<SceneEntityUuid> runtimeCaptureOwners;
             runtimeCaptureOwners.reserve(extractedProbes.candidates.size());
             for (const ReflectionProbeCandidate& candidate :
@@ -1881,7 +1881,8 @@ namespace Iridium {
         view_ = nullptr;
         renderFrame_ = {};
         lightingFrame_ = {};
-        extractedProbes_ = {};
+        // extractedProbes_ keeps its storage: the next extraction rewrites it in
+        // place (M7R R5c.6).
         publishedProbes_ = {};
         // `vector = {}` assigns an empty initializer list and keeps the
         // capacity; swapping with an empty vector frees it, as the former

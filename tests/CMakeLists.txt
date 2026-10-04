@@ -293,6 +293,16 @@ iridium_add_test(ReflectionProbeTests
         SOURCES renderer/ReflectionProbeTests.cpp
         LIBS iridium_lighting)
 
+# M7R R5c.6: the change-driven light extractor and probe publisher against the
+# full-scan implementations they replaced (test-only reference copies), byte for
+# byte after every frame; steady frames are allocation-free.
+iridium_add_test(LightProbeReplayTests
+        SOURCES renderer/LightProbeReplayTests.cpp
+                renderer/support/ReferenceLightExtractor.cpp
+                renderer/support/ReferenceReflectionProbe.cpp
+        LIBS iridium_lighting
+        ALLOCATION_PROFILE)
+
 iridium_add_test(Stage3ArchitectureTests
         SOURCES renderer/Stage3ArchitectureTests.cpp
         LIBS iridium_vulkan

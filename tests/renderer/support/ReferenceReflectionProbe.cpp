@@ -1,4 +1,10 @@
-#include "renderer/lighting/ReflectionProbe.h"
+// Test-only reference: extractReflectionProbes and ReflectionProbePublisher as of
+// f2cc899 (the M7R R5c.6 baseline), kept verbatim apart from the names (and
+// without the probe-selection helpers it does not use) so the replay tests can
+// compare the change-driven production path against the full scan byte for
+// byte. It is never linked into a production target.
+
+#include "ReferenceReflectionProbe.h"
 
 #include "scene/components/TransformComponent.h"
 
@@ -19,13 +25,6 @@ namespace Iridium {
                 std::isfinite(value.z);
         }
 
-        [[nodiscard]] glm::vec3 localPoint(
-            const ReflectionProbeCandidate& candidate,
-            glm::vec3 worldPosition) noexcept {
-            return glm::vec3(candidate.worldToProbe *
-                glm::vec4(worldPosition, 1.0f));
-        }
-
         [[nodiscard]] float volume(
             const ReflectionProbeComponent& probe) noexcept {
             if (probe.shape == ReflectionProbeShape::Sphere) {
@@ -36,12 +35,6 @@ namespace Iridium {
             return 8.0f * probe.boxExtentsMeters.x *
                 probe.boxExtentsMeters.y * probe.boxExtentsMeters.z;
         }
-
-        struct RankedProbe {
-            uint32_t index = 0;
-            float influence = 0.0f;
-            float volume = 0.0f;
-        };
 
         [[nodiscard]] bool same(const PackedGpuReflectionProbe& lhs,
             const PackedGpuReflectionProbe& rhs) noexcept {
@@ -149,89 +142,60 @@ namespace Iridium {
 
     } // namespace
 
-    ReflectionProbeFramePacket extractReflectionProbes(
+    ReflectionProbeFramePacket referenceExtractReflectionProbes(
         const SceneWorld& world, ReflectionProbeResidencyFn residency) {
         ReflectionProbeFramePacket result;
-        extractReflectionProbes(world, residency, result);
-        return result;
-    }
-
-    void extractReflectionProbes(const SceneWorld& world,
-        const ReflectionProbeResidencyFn& residency,
-        ReflectionProbeFramePacket& result) {
-        // Entries are assigned over the packet's existing elements (reusing
-        // their string capacity) and the vectors are trimmed at the end.
-        size_t candidateCount = 0;
-        size_t diagnosticCount = 0;
-        const auto diagnose = [&](ReflectionProbeExtractionDiagnosticCode code,
-            SceneEntityUuid owner, const char* propertyPath,
-            const char* message) {
-            if (diagnosticCount == result.diagnostics.size())
-                result.diagnostics.emplace_back();
-            ReflectionProbeExtractionDiagnostic& diagnostic =
-                result.diagnostics[diagnosticCount++];
-            diagnostic.code = code;
-            diagnostic.owner = owner;
-            diagnostic.propertyPath.assign(propertyPath);
-            diagnostic.message.assign(message);
-        };
-        const auto finish = [&] {
-            result.candidates.resize(candidateCount);
-            result.diagnostics.resize(diagnosticCount);
-        };
-        result.stats = {};
         const Registry& registry = world.registry();
         const auto* probes = registry.findPool<ReflectionProbeComponent>();
-        if (!probes) {
-            finish();
-            return;
-        }
+        if (!probes) return result;
         const auto* transforms = registry.findPool<TransformComponent>();
-        for (size_t index = 0; index < probes->entities.size(); ++index) {
-            const Entity entity = probes->entities[index];
+        for (Entity entity : probes->entities) {
             ++result.stats.sceneProbeCount;
             const auto owner = world.identities().persistentId(entity);
             if (!owner) {
-                diagnose(ReflectionProbeExtractionDiagnosticCode::MissingIdentity,
-                    {}, "/identity",
-                    "Reflection probe owner has no persistent scene UUID");
+                result.diagnostics.push_back({
+                    .code = ReflectionProbeExtractionDiagnosticCode::MissingIdentity,
+                    .propertyPath = "/identity",
+                    .message = "Reflection probe owner has no persistent scene UUID",
+                });
                 ++result.stats.omittedCount;
                 continue;
             }
             if (!transforms || !transforms->has(entity)) {
-                diagnose(ReflectionProbeExtractionDiagnosticCode::MissingTransform,
-                    *owner, "/transform",
-                    "Reflection probe owner has no Transform component");
+                result.diagnostics.push_back({
+                    .code = ReflectionProbeExtractionDiagnosticCode::MissingTransform,
+                    .owner = *owner,
+                    .propertyPath = "/transform",
+                    .message = "Reflection probe owner has no Transform component",
+                });
                 ++result.stats.omittedCount;
                 continue;
             }
-            const ReflectionProbeComponent& component =
-                probes->components[index];
+            const ReflectionProbeComponent& component = probes->get(entity);
             if (!validProbe(component)) {
-                diagnose(ReflectionProbeExtractionDiagnosticCode::InvalidProbe,
-                    *owner, "/", "Reflection probe settings are invalid");
+                result.diagnostics.push_back({
+                    .code = ReflectionProbeExtractionDiagnosticCode::InvalidProbe,
+                    .owner = *owner,
+                    .propertyPath = "/",
+                    .message = "Reflection probe settings are invalid",
+                });
                 ++result.stats.omittedCount;
                 continue;
             }
-            glm::mat4 probeToWorld(1.0f);
-            glm::mat4 worldToProbe(1.0f);
-            if (!rigidProbeTransform(transforms->get(entity).worldMatrix,
-                    probeToWorld, worldToProbe)) {
-                diagnose(ReflectionProbeExtractionDiagnosticCode::InvalidTransform,
-                    *owner, "/transform",
-                    "Reflection probe world transform is invalid");
-                ++result.stats.omittedCount;
-                continue;
-            }
-            if (candidateCount == result.candidates.size())
-                result.candidates.emplace_back();
-            ReflectionProbeCandidate& candidate =
-                result.candidates[candidateCount++];
+            ReflectionProbeCandidate candidate;
             candidate.owner = *owner;
             candidate.probe = component;
-            candidate.worldToProbe = worldToProbe;
-            candidate.probeToWorld = probeToWorld;
-            candidate.runtimeEnvironmentSlot.reset();
+            if (!rigidProbeTransform(transforms->get(entity).worldMatrix,
+                    candidate.probeToWorld, candidate.worldToProbe)) {
+                result.diagnostics.push_back({
+                    .code = ReflectionProbeExtractionDiagnosticCode::InvalidTransform,
+                    .owner = *owner,
+                    .propertyPath = "/transform",
+                    .message = "Reflection probe world transform is invalid",
+                });
+                ++result.stats.omittedCount;
+                continue;
+            }
             const AssetGuid requested =
                 !component.requestedEnvironmentAssetGuid.isNil()
                 ? component.requestedEnvironmentAssetGuid
@@ -241,9 +205,8 @@ namespace Iridium {
                 ? residency(requested)
                 : component.resolvedEnvironmentAssetGuid == requested);
             result.stats.residentCount += candidate.resident ? 1u : 0u;
+            result.candidates.push_back(std::move(candidate));
         }
-        finish();
-        // The same sort over the same sequence as the by-value extraction.
         std::ranges::sort(result.candidates,
             [](const ReflectionProbeCandidate& lhs,
                const ReflectionProbeCandidate& rhs) {
@@ -251,9 +214,10 @@ namespace Iridium {
             });
         result.stats.candidateCount = static_cast<uint32_t>(
             result.candidates.size());
+        return result;
     }
 
-    ReflectionProbePublisher::ReflectionProbePublisher(
+    ReferenceReflectionProbePublisher::ReferenceReflectionProbePublisher(
         ReflectionProbePublicationConfig config)
         : config_(config) {
         if (config_.initialCapacity == 0 || config_.maximumCapacity == 0 ||
@@ -264,17 +228,15 @@ namespace Iridium {
         records_.resize(config_.initialCapacity);
         recordRevisions_.resize(config_.initialCapacity);
         selectionMetadata_.resize(config_.initialCapacity);
-        slotInputs_.resize(config_.initialCapacity);
-        slotPacked_.resize(config_.initialCapacity);
     }
 
-    void ReflectionProbePublisher::advanceRevision(uint64_t& value) noexcept {
+    void ReferenceReflectionProbePublisher::advanceRevision(uint64_t& value) noexcept {
         ++nextRevision_;
         if (nextRevision_ == 0) ++nextRevision_;
         value = nextRevision_;
     }
 
-    void ReflectionProbePublisher::reset() noexcept {
+    void ReferenceReflectionProbePublisher::reset() noexcept {
         slotsByOwner_.clear();
         std::ranges::fill(records_, PackedGpuReflectionProbe{});
         std::ranges::fill(recordRevisions_, uint64_t{ 0 });
@@ -288,14 +250,12 @@ namespace Iridium {
         publishCandidates_.clear();
         newCandidates_.clear();
         removedOwners_.clear();
-        std::ranges::fill(slotPacked_, uint8_t{ 0 });
-        membershipChanged_ = true;
         nextRevision_ = 0;
         activeListRevision_ = 0;
         stats_ = {};
     }
 
-    void ReflectionProbePublisher::ensureCapacity(uint32_t required) {
+    void ReferenceReflectionProbePublisher::ensureCapacity(uint32_t required) {
         if (required <= records_.size()) return;
         if (required > config_.maximumCapacity) {
             throw std::overflow_error(
@@ -311,11 +271,9 @@ namespace Iridium {
         records_.resize(capacity);
         recordRevisions_.resize(capacity);
         selectionMetadata_.resize(capacity);
-        slotInputs_.resize(capacity);
-        slotPacked_.resize(capacity);
     }
 
-    void ReflectionProbePublisher::writeRecord(uint32_t slot,
+    void ReferenceReflectionProbePublisher::writeRecord(uint32_t slot,
         const PackedGpuReflectionProbe& record) {
         if (slot >= records_.size()) {
             throw std::out_of_range(
@@ -327,49 +285,11 @@ namespace Iridium {
         changedSlots_.push_back(slot);
     }
 
-    void ReflectionProbePublisher::clearRecord(uint32_t slot) {
+    void ReferenceReflectionProbePublisher::clearRecord(uint32_t slot) {
         writeRecord(slot, PackedGpuReflectionProbe{});
-        slotPacked_[slot] = 0;
     }
 
-    ReflectionProbePublisher::PackInputs ReflectionProbePublisher::packInputs(
-        const PublishCandidate& candidate) noexcept {
-        const ReflectionProbeCandidate& source = *candidate.source;
-        PackInputs inputs{};
-        inputs.owner = source.owner;
-        inputs.worldToProbe = source.worldToProbe;
-        inputs.position = glm::vec3(source.probeToWorld[3]);
-        inputs.sphereRadiusMeters = source.probe.sphereRadiusMeters;
-        inputs.boxExtentsMeters = source.probe.boxExtentsMeters;
-        inputs.blendDistanceMeters = source.probe.blendDistanceMeters;
-        inputs.intensity = source.probe.intensity;
-        inputs.shape = static_cast<uint32_t>(source.probe.shape);
-        inputs.parallaxMode = static_cast<uint32_t>(source.probe.parallaxMode);
-        inputs.priority = source.probe.priority;
-        inputs.environmentSlot = candidate.environmentSlot;
-        inputs.selectionRank = candidate.selectionRank;
-        return inputs;
-    }
-
-    // Packs the slot's record and selection metadata unless they were last
-    // packed from bit-identical inputs, in which case the full path's write
-    // would have compared equal and changed nothing.
-    void ReflectionProbePublisher::packSlot(uint32_t slot,
-        const PublishCandidate& candidate) {
-        const PackInputs inputs = packInputs(candidate);
-        if (slot < slotPacked_.size() && slotPacked_[slot] != 0 &&
-            std::memcmp(&slotInputs_[slot], &inputs, sizeof(PackInputs)) == 0)
-            return;
-        selectionMetadata_[slot] = { candidate.source->owner,
-            candidate.source->probe.priority,
-            candidate.influenceVolume };
-        writeRecord(slot, packedProbe(*candidate.source,
-            candidate.environmentSlot, candidate.selectionRank));
-        slotInputs_[slot] = inputs;
-        slotPacked_[slot] = 1;
-    }
-
-    void ReflectionProbePublisher::buildChangedRanges() {
+    void ReferenceReflectionProbePublisher::buildChangedRanges() {
         changedRanges_.clear();
         if (changedSlots_.empty()) return;
         std::ranges::sort(changedSlots_);
@@ -389,7 +309,7 @@ namespace Iridium {
         changedRanges_.push_back({ first, previous - first + 1u });
     }
 
-    ReflectionProbeGpuFramePacket ReflectionProbePublisher::publish(
+    ReflectionProbeGpuFramePacket ReferenceReflectionProbePublisher::publish(
         std::span<const ReflectionProbeCandidate> candidates,
         const ReflectionProbeEnvironmentSlotFn& environmentSlot) {
         if (!environmentSlot) {
@@ -445,7 +365,6 @@ namespace Iridium {
 
         newCandidates_.clear();
         newCandidates_.reserve(publishCandidates_.size());
-        size_t matchedOwners = 0;
         for (PublishCandidate& candidate : publishCandidates_) {
             const auto existing = slotsByOwner_.find(candidate.source->owner);
             if (existing == slotsByOwner_.end()) {
@@ -453,25 +372,22 @@ namespace Iridium {
                 continue;
             }
             const uint32_t slot = existing->second;
-            if (occupiedSlots_[slot] == 0) ++matchedOwners;
             occupiedSlots_[slot] = 1;
-            packSlot(slot, candidate);
+            selectionMetadata_[slot] = { candidate.source->owner,
+                candidate.source->probe.priority,
+                candidate.influenceVolume };
+            writeRecord(slot, packedProbe(*candidate.source,
+                candidate.environmentSlot, candidate.selectionRank));
         }
 
-        // Every mapped owner whose slot no candidate claimed is removed; when
-        // all were claimed the walk would remove nothing.
-        if (matchedOwners != slotsByOwner_.size()) {
-            removedOwners_.clear();
-            for (const auto& [owner, slot] : slotsByOwner_) {
-                if (occupiedSlots_[slot] != 0) continue;
-                clearRecord(slot);
-                selectionMetadata_[slot] = {};
-                removedOwners_.push_back(owner);
-            }
-            for (SceneEntityUuid owner : removedOwners_)
-                slotsByOwner_.erase(owner);
-            if (!removedOwners_.empty()) membershipChanged_ = true;
+        removedOwners_.clear();
+        for (const auto& [owner, slot] : slotsByOwner_) {
+            if (occupiedSlots_[slot] != 0) continue;
+            clearRecord(slot);
+            selectionMetadata_[slot] = {};
+            removedOwners_.push_back(owner);
         }
+        for (SceneEntityUuid owner : removedOwners_) slotsByOwner_.erase(owner);
 
         for (PublishCandidate* candidate : newCandidates_) {
             const auto free = std::ranges::find(occupiedSlots_, uint8_t{ 0 });
@@ -483,25 +399,23 @@ namespace Iridium {
                 std::distance(occupiedSlots_.begin(), free));
             *free = 1;
             slotsByOwner_.emplace(candidate->source->owner, slot);
-            packSlot(slot, *candidate);
-            membershipChanged_ = true;
+            selectionMetadata_[slot] = { candidate->source->owner,
+                candidate->source->probe.priority,
+                candidate->influenceVolume };
+            writeRecord(slot, packedProbe(*candidate->source,
+                candidate->environmentSlot, candidate->selectionRank));
         }
 
-        // The active list is the sorted slot set of slotsByOwner_; it can only
-        // differ after an insertion, a removal or a reset.
-        if (membershipChanged_) {
-            previousActiveSlots_ = activeSlots_;
-            activeSlots_.clear();
-            activeSlots_.reserve(slotsByOwner_.size());
-            for (const auto& [owner, slot] : slotsByOwner_) {
-                (void)owner;
-                activeSlots_.push_back(slot);
-            }
-            std::ranges::sort(activeSlots_);
-            if (activeSlots_ != previousActiveSlots_)
-                advanceRevision(activeListRevision_);
-            membershipChanged_ = false;
+        previousActiveSlots_ = activeSlots_;
+        activeSlots_.clear();
+        activeSlots_.reserve(slotsByOwner_.size());
+        for (const auto& [owner, slot] : slotsByOwner_) {
+            (void)owner;
+            activeSlots_.push_back(slot);
         }
+        std::ranges::sort(activeSlots_);
+        if (activeSlots_ != previousActiveSlots_)
+            advanceRevision(activeListRevision_);
         buildChangedRanges();
         stats_.activeProbeCount = static_cast<uint32_t>(activeSlots_.size());
         stats_.changedRecordCount = static_cast<uint32_t>(
@@ -523,135 +437,11 @@ namespace Iridium {
         };
     }
 
-    std::optional<uint32_t> ReflectionProbePublisher::slotFor(
+    std::optional<uint32_t> ReferenceReflectionProbePublisher::slotFor(
         SceneEntityUuid owner) const {
         const auto found = slotsByOwner_.find(owner);
         return found == slotsByOwner_.end()
             ? std::nullopt : std::optional<uint32_t>(found->second);
-    }
-
-    float reflectionProbeInfluence(
-        const ReflectionProbeCandidate& candidate,
-        glm::vec3 worldPosition) noexcept {
-        const ReflectionProbeComponent& probe = candidate.probe;
-        if (!probe.enabled || !candidate.resident ||
-            probe.environmentAssetGuid.isNil() || !finite(worldPosition) ||
-            !std::isfinite(probe.blendDistanceMeters) ||
-            probe.blendDistanceMeters < 0.0f) return 0.0f;
-
-        const glm::vec3 local = localPoint(candidate, worldPosition);
-        if (!finite(local)) return 0.0f;
-        float boundaryDistance = 0.0f;
-        if (probe.shape == ReflectionProbeShape::Sphere) {
-            if (!std::isfinite(probe.sphereRadiusMeters) ||
-                probe.sphereRadiusMeters <= 0.0f) return 0.0f;
-            boundaryDistance = probe.sphereRadiusMeters - glm::length(local);
-        }
-        else {
-            if (!finite(probe.boxExtentsMeters) ||
-                glm::any(glm::lessThanEqual(probe.boxExtentsMeters,
-                    glm::vec3(0.0f)))) return 0.0f;
-            const glm::vec3 margin = probe.boxExtentsMeters - glm::abs(local);
-            boundaryDistance = (std::min)(margin.x,
-                (std::min)(margin.y, margin.z));
-        }
-        if (boundaryDistance < 0.0f) return 0.0f;
-        if (probe.blendDistanceMeters == 0.0f) return 1.0f;
-        return std::clamp(boundaryDistance / probe.blendDistanceMeters,
-            0.0f, 1.0f);
-    }
-
-    ReflectionProbeSelection selectReflectionProbes(
-        std::span<const ReflectionProbeCandidate> candidates,
-        glm::vec3 worldPosition) noexcept {
-        ReflectionProbeSelection result;
-        std::vector<RankedProbe> ranked;
-        ranked.reserve((std::min)(candidates.size(),
-            static_cast<size_t>(kMaximumReflectionProbeCandidates)));
-        for (uint32_t index = 0; index < candidates.size(); ++index) {
-            const float influence = reflectionProbeInfluence(
-                candidates[index], worldPosition);
-            if (influence <= 0.0f) continue;
-            ++result.influencingCandidateCount;
-            ranked.push_back({ index, influence,
-                volume(candidates[index].probe) });
-        }
-        std::ranges::sort(ranked, [&](const RankedProbe& left,
-                                     const RankedProbe& right) {
-            const ReflectionProbeCandidate& lhs = candidates[left.index];
-            const ReflectionProbeCandidate& rhs = candidates[right.index];
-            if (lhs.probe.priority != rhs.probe.priority)
-                return lhs.probe.priority > rhs.probe.priority;
-            if (left.influence != right.influence)
-                return left.influence > right.influence;
-            if (left.volume != right.volume)
-                return left.volume < right.volume;
-            return lhs.owner < rhs.owner;
-        });
-        if (ranked.size() > kMaximumReflectionProbeCandidates)
-            ranked.resize(kMaximumReflectionProbeCandidates);
-
-        result.count = static_cast<uint32_t>((std::min)(ranked.size(),
-            static_cast<size_t>(kMaximumBlendedReflectionProbes)));
-        float weightSum = 0.0f;
-        for (uint32_t index = 0; index < result.count; ++index)
-            weightSum += ranked[index].influence;
-        const float localCoverage = result.count != 0
-            ? std::clamp(ranked[0].influence, 0.0f, 1.0f) : 0.0f;
-        for (uint32_t index = 0; index < result.count; ++index) {
-            const RankedProbe& selected = ranked[index];
-            result.probes[index] = {
-                selected.index,
-                candidates[selected.index].owner,
-                selected.influence,
-                weightSum > 0.0f
-                    ? selected.influence / weightSum * localCoverage : 0.0f,
-            };
-        }
-        result.globalEnvironmentWeight = 1.0f - localCoverage;
-        result.useGlobalEnvironment = result.globalEnvironmentWeight > 0.0f;
-        return result;
-    }
-
-    glm::vec3 boxProjectedReflectionDirection(
-        const ReflectionProbeCandidate& candidate,
-        glm::vec3 worldPosition,
-        glm::vec3 worldReflectionDirection) noexcept {
-        const glm::vec3 fallback = finite(worldReflectionDirection) &&
-            glm::dot(worldReflectionDirection, worldReflectionDirection) > 0.0f
-            ? glm::normalize(worldReflectionDirection)
-            : glm::vec3(0.0f, 0.0f, 1.0f);
-        const ReflectionProbeComponent& probe = candidate.probe;
-        if (probe.shape != ReflectionProbeShape::Box ||
-            probe.parallaxMode != ReflectionProbeParallaxMode::BoxProjection ||
-            !finite(probe.boxExtentsMeters) ||
-            glm::any(glm::lessThanEqual(probe.boxExtentsMeters,
-                glm::vec3(0.0f)))) return fallback;
-
-        const glm::vec3 origin = localPoint(candidate, worldPosition);
-        const glm::vec3 direction = glm::mat3(candidate.worldToProbe) * fallback;
-        if (!finite(origin) || !finite(direction) ||
-            glm::any(glm::greaterThan(glm::abs(origin),
-                probe.boxExtentsMeters))) return fallback;
-
-        float hitDistance = std::numeric_limits<float>::infinity();
-        for (uint32_t axis = 0; axis < 3; ++axis) {
-            if (std::abs(direction[axis]) <= 1.0e-6f) continue;
-            const float boundary = direction[axis] > 0.0f
-                ? probe.boxExtentsMeters[axis]
-                : -probe.boxExtentsMeters[axis];
-            const float distance = (boundary - origin[axis]) / direction[axis];
-            if (distance >= 0.0f) hitDistance = (std::min)(hitDistance,
-                distance);
-        }
-        if (!std::isfinite(hitDistance)) return fallback;
-        const glm::vec3 hit = origin + direction * hitDistance;
-        if (!finite(hit) || glm::dot(hit, hit) <= 1.0e-12f) return fallback;
-        const glm::vec3 correctedWorld = glm::mat3(candidate.probeToWorld) *
-            glm::normalize(hit);
-        return finite(correctedWorld) &&
-            glm::dot(correctedWorld, correctedWorld) > 0.0f
-            ? glm::normalize(correctedWorld) : fallback;
     }
 
 } // namespace Iridium

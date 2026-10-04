@@ -88,11 +88,25 @@ namespace Iridium {
         const SceneWorld& world,
         ReflectionProbeResidencyFn residency = {});
 
+    // M7R R5c.6: the same extraction written over a persistent packet. The
+    // result equals extractReflectionProbes(world, residency); the packet's
+    // candidate and diagnostic storage (including their strings) is reused, so
+    // a steady frame does not allocate.
+    void extractReflectionProbes(const SceneWorld& world,
+        const ReflectionProbeResidencyFn& residency,
+        ReflectionProbeFramePacket& packet);
+
     struct ReflectionProbePublicationConfig {
         uint32_t initialCapacity = kInitialGpuReflectionProbeCapacity;
         uint32_t maximumCapacity = kMaximumGpuReflectionProbeCapacity;
     };
 
+    // M7R R5c.6: change-driven. Each slot remembers the exact inputs its record
+    // and selection metadata were packed from; an existing probe whose inputs are
+    // bit-identical is not re-packed (the full path's write would compare equal).
+    // The removal walk and active-list rebuild run only when membership can have
+    // changed. Records, revisions, the active list and its revision are exactly
+    // those of the full path (the test-only ReferenceReflectionProbePublisher).
     class ReflectionProbePublisher final {
     public:
         explicit ReflectionProbePublisher(
@@ -113,7 +127,28 @@ namespace Iridium {
             float influenceVolume = 0.0f;
             uint32_t selectionRank = 0;
         };
+        // Every value packedProbe() and the selection metadata read, laid out
+        // without padding so it compares bitwise.
+        struct PackInputs {
+            SceneEntityUuid owner;
+            glm::mat4 worldToProbe{ 1.0f };
+            glm::vec3 position{ 0.0f };
+            float sphereRadiusMeters = 0.0f;
+            glm::vec3 boxExtentsMeters{ 0.0f };
+            float blendDistanceMeters = 0.0f;
+            float intensity = 0.0f;
+            uint32_t shape = 0;
+            uint32_t parallaxMode = 0;
+            int32_t priority = 0;
+            uint32_t environmentSlot = 0;
+            uint32_t selectionRank = 0;
+        };
+        static_assert(sizeof(PackInputs) == 16 + 64 + 12 + 4 + 12 + 4 * 7,
+            "PackInputs must have no padding");
 
+        [[nodiscard]] static PackInputs packInputs(
+            const PublishCandidate& candidate) noexcept;
+        void packSlot(uint32_t slot, const PublishCandidate& candidate);
         void ensureCapacity(uint32_t required);
         void writeRecord(uint32_t slot,
             const PackedGpuReflectionProbe& record);
@@ -122,6 +157,11 @@ namespace Iridium {
         void advanceRevision(uint64_t& value) noexcept;
 
         ReflectionProbePublicationConfig config_;
+        // The inputs records_[slot] was last written from; slotPacked_[slot]
+        // is 0 after a clear, a reset or a capacity growth.
+        std::vector<PackInputs> slotInputs_;
+        std::vector<uint8_t> slotPacked_;
+        bool membershipChanged_ = true;
         uint64_t nextRevision_ = 0;
         uint64_t activeListRevision_ = 0;
         std::vector<PackedGpuReflectionProbe> records_;
