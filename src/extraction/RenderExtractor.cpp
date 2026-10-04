@@ -1285,11 +1285,12 @@ namespace Iridium {
                 }
             }
 
-            // M7.2 parity stage, reduced by M7R R5c.4b: main-opaque work is
+            // M7.2 parity stage, reduced by M7R R5c.4b/e: main-opaque work is
             // the published main-opaque list (see OpaqueSubmission); packets
-            // are still built for visible forward-opaque primitives and for
-            // the selected instance's visible primitives. Transparent and
-            // explicit fallback owners above use the M6 packet path.
+            // are still built for visible forward-opaque primitives and, from
+            // the instance selection flag, for the selected instance's visible
+            // primitives. Transparent and explicit fallback owners above use
+            // the M6 packet path.
             if (!assetPreviewActive && gpuSceneFrame_) {
                 CpuScope parityScope(cpuProfiler_, "cpu.render.extract.parity");
                 for (uint32_t primitiveIndex = 0;
@@ -1314,8 +1315,6 @@ namespace Iridium {
                         throw std::logic_error(
                             "Published visible GPU-scene transform is invalid");
                     }
-                    const bool selected = (instance.state.z &
-                        GpuSceneInstanceSelected) != 0;
                     const bool forward = (primitive.state.w &
                         GpuSceneConsumerForwardOpaque) != 0;
                     if (!forward && (primitive.state.w &
@@ -1324,17 +1323,33 @@ namespace Iridium {
                         gpuSceneDeferredCandidateTriangles +=
                             gpuSceneFrame_->geometries[primitive.binding.y].draw.y / 3u;
                     }
-                    const bool forwardVisible = forward && cpuVisible;
-                    const bool selectionVisible = selected && cpuVisible;
-                    if (!forwardVisible && !selectionVisible) continue;
+                    if (!forward || !cpuVisible) continue;
                     const DrawPacket packet = gpuSceneParityPacket(
                         primitiveIndex, cpuVisible);
-                    if (forwardVisible) {
-                        forwardOpaqueQueue.push_back(packet);
-                        ++gpuSceneForwardVisibleCount;
-                        gpuSceneForwardVisibleTriangles += packet.indexCount / 3u;
+                    forwardOpaqueQueue.push_back(packet);
+                    ++gpuSceneForwardVisibleCount;
+                    gpuSceneForwardVisibleTriangles += packet.indexCount / 3u;
+                }
+                // M7R R5c.4e: the selection outline from the instance flag:
+                // the selected instances' visible primitives, in dense order
+                // (as the parity loop appended them).
+                for (uint32_t instanceIndex = 0;
+                        instanceIndex < gpuSceneFrame_->instances.size();
+                        ++instanceIndex) {
+                    const GpuSceneInstanceRecord& instance =
+                        gpuSceneFrame_->instances[instanceIndex];
+                    if ((instance.state.z & GpuSceneInstanceSelected) == 0) continue;
+                    for (uint32_t offset = 0; offset < instance.references.w;
+                            ++offset) {
+                        const uint32_t primitiveIndex =
+                            instance.references.z + offset;
+                        if (primitiveIndex >=
+                                gpuSceneVisibility_.primitiveVisibility.size() ||
+                            gpuSceneVisibility_.primitiveVisibility[
+                                primitiveIndex] == 0u) continue;
+                        selectionQueue.push_back(
+                            gpuSceneParityPacket(primitiveIndex, true));
                     }
-                    if (selectionVisible) selectionQueue.push_back(packet);
                 }
             }
         }
