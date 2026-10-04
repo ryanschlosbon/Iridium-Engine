@@ -814,7 +814,7 @@ int main() {
     };
 
     constexpr TestCase tests[] = {
-        { "Per-flag table (91 flags)", testFlagTable },
+        { "Per-flag table (93 flags)", testFlagTable },
         { "Aliases and removed flags", testAliasesAndRemovedFlags },
         { "Usage parity", testUsageParity },
         { "Registry without qualification", testRegistryWithoutQualification },
