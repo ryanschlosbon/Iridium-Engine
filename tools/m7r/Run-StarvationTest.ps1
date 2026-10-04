@@ -43,6 +43,9 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $Only = @($Only | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
+# The R5b.3 criteria are defined on the two original timing routes (the R5c.8 lit
+# and probe timing routes are not starvation routes).
+if ($Only.Count -eq 0) { $Only = @('T-F1-all', 'T-F7-stack') }
 . (Join-Path $PSScriptRoot 'M7RFixtures.ps1')
 . (Join-Path $PSScriptRoot 'M7RSweepCommon.ps1')
 $root = Get-M7RRepoRoot

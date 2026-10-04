@@ -49,9 +49,15 @@ $M7RTolerances = @{
 }
 
 # Timing routes: F1 is GPU-representative; the dense depth stack is CPU-heavy.
+# M7R R5c.8 (owner decision 5): a lit route (the F5-hetero fixture: directional,
+# spot and point shadows with motion) and a probe route (the F6-probecap fixture:
+# live reflection-probe capture) join the timing set, so their steady-frame
+# allocations are checked with every pair.
 $M7RTimingRoutes = @(
     @{ Key = 'T-F1-all';   Id = 'm7_three_dense_all_visible_v1';     Manifest = $threeDense; Model = $alfa; Args = @() }
     @{ Key = 'T-F7-stack'; Id = 'm7_occlusion_dense_depth_stack_v1'; Manifest = 'assets/m7-occlusion-performance-manifest.v1.json'; Model = $alfa; Args = @() }
+    @{ Key = 'T-F5-hetero'; Id = 'm7_heterogeneous_shadow_warm_motion_v1'; Manifest = 'assets/m7-heterogeneous-shadow-admission-manifest.v1.json'; Model = $contact; Args = @() }
+    @{ Key = 'T-F6-probecap'; Id = 'm7_probe_lod_reflection_motion_v1'; Manifest = 'assets/m7-probe-lod-admission-manifest.v1.json'; Model = $alfa; Environment = 'belfast-env'; Args = @('--validate-reflection-probes') }
 )
 
 function Get-M7RRepoRoot { (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path }

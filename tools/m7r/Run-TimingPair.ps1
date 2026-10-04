@@ -2,9 +2,12 @@
 # timing route, runs baseline (A) and candidate (B) in A,B,B,A order as fresh
 # processes, then summarizes with Summarize-Profiles.py. Each root is a checkout with
 # its own out/build/x64-release and assets/shaders (use a git worktree for the
-# baseline commit). Manifests and cooked artifacts always come from this repository.
+# baseline commit). Manifests and cooked artifacts come from -ArtifactRoot (default:
+# this repository), which must hold out/m7r/ddc; a worktree passes the main checkout.
+# Results go to <OutRoot>/<Label> (default: out/m7r/timing of this repository).
 #
 #   powershell -File tools/m7r/Run-TimingPair.ps1 -Label r1 -BaselineRoot out/m7r/worktrees/r0
+#   ... -Label x -BaselineRoot <main> -ArtifactRoot <main> -Only T-F5-hetero,T-F6-probecap
 param(
     [Parameter(Mandatory)] [string] $Label,
     [Parameter(Mandatory)] [string] $BaselineRoot,
@@ -13,6 +16,8 @@ param(
     [int] $Frames = 10000,
     [string[]] $Only = @(),
     [string[]] $ExtraArgs = @(),
+    [string] $ArtifactRoot = '',
+    [string] $OutRoot = '',
     # 'off' (default) or a cache directory; see Get-M7RPipelineCacheArgs.
     [string] $PipelineCache = 'off'
 )
@@ -23,16 +28,19 @@ $ExtraArgs = @($ExtraArgs | ForEach-Object { $_ -split ' ' } | Where-Object { $_
 . (Join-Path $PSScriptRoot 'M7RFixtures.ps1')
 $root = Get-M7RRepoRoot
 if (-not $CandidateRoot) { $CandidateRoot = $root }
+if (-not $ArtifactRoot) { $ArtifactRoot = $root }
+$ArtifactRoot = (Resolve-Path $ArtifactRoot).Path
+if (-not $OutRoot) { $OutRoot = Join-Path $root 'out/m7r/timing' }
 $roots = @{ A = (Resolve-Path $BaselineRoot).Path; B = (Resolve-Path $CandidateRoot).Path }
-$outDir = Join-Path $root "out/m7r/timing/$Label"
+$outDir = Join-Path $OutRoot $Label
 if (Test-Path $outDir) { throw "Output directory already exists: $outDir" }
 New-Item -ItemType Directory -Force $outDir | Out-Null
 
 $runs = @()
 foreach ($route in $M7RTimingRoutes) {
     if ($Only.Count -gt 0 -and $Only -notcontains $route.Key) { continue }
-    $artifact = Join-Path $root (Get-M7RModelArtifact $root $route.Model)
-    $manifest = Join-Path $root $route.Manifest
+    $artifact = Join-Path $ArtifactRoot (Get-M7RModelArtifact $ArtifactRoot $route.Model)
+    $manifest = Join-Path $ArtifactRoot $route.Manifest
     $index = 0
     foreach ($side in @('A', 'B', 'B', 'A')) {
         $index++
@@ -48,6 +56,9 @@ foreach ($route in $M7RTimingRoutes) {
             '--cache-state', 'fresh-process-os-driver-cache-uncontrolled',
             '--warmup-frames', "$Warmup", '--frame-limit', "$Frames"
         ) + @(Get-M7RPipelineCacheArgs $exe $PipelineCache) + $route.Args + $ExtraArgs
+        if ($route.Environment) {
+            $arguments += @('--cooked-environment-artifact', (Join-Path $ArtifactRoot (Get-M7RModelArtifact $ArtifactRoot $route.Environment)))
+        }
         Push-Location $roots[$side]
         try { $exit = Invoke-M7REngine $exe $arguments $log } finally { Pop-Location }
         Write-Host ("{0,-11} run {1} side {2} exit {3}" -f $route.Key, $index, $side, $exit)
