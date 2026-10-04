@@ -3,6 +3,7 @@
 #include "assets/cooker/AssetCooker.h"
 #include "assets/cooker/CookReceipt.h"
 #include "core/EngineLog.h"
+#include "core/tasks/TaskSystem.h"
 
 #include <stdexcept>
 
@@ -42,6 +43,7 @@ namespace {
 } // namespace
 
 AssetEnvironmentPreparationService::AssetEnvironmentPreparationService(
+    Tasks::TaskSystem& tasks,
     std::filesystem::path assetRoot,
     std::shared_ptr<LocalDerivedDataCache> cache,
     CookTarget target,
@@ -53,7 +55,8 @@ AssetEnvironmentPreparationService::AssetEnvironmentPreparationService(
         throw std::invalid_argument(
             "Catalog environment preparation requires an asset root and DDC.");
     }
-    worker_ = std::jthread([this](std::stop_token token) { workerLoop(token); });
+    strand_ = std::make_unique<Tasks::FunctionStrand>(tasks,
+        Tasks::TaskPriority::Background, "asset.environment.prepare");
 }
 
 AssetEnvironmentPreparationService::~AssetEnvironmentPreparationService() {
@@ -68,13 +71,16 @@ bool AssetEnvironmentPreparationService::request(
         throw std::invalid_argument(
             "Catalog environment preparation requires one ready root environment.");
     }
-    std::lock_guard lock(mutex_);
-    if (shutdown_) throw std::logic_error("Environment preparation is shut down.");
-    if (!pending_.insert(record.guid).second) return false;
-    requests_.push_back(record);
-    if (log_) log_->info("Asset Cook",
-        "Queued HDRI environment preparation: " + record.sourcePath);
-    condition_.notify_all();
+    {
+        std::lock_guard lock(mutex_);
+        if (shutdown_) throw std::logic_error("Environment preparation is shut down.");
+        if (!pending_.insert(record.guid).second) return false;
+        requests_.push_back(record);
+        if (log_) log_->info("Asset Cook",
+            "Queued HDRI environment preparation: " + record.sourcePath);
+    }
+    // One strand item per request, posted outside the mutex.
+    (void)strand_->post([this] { runNext(); });
     return true;
 }
 
@@ -99,9 +105,9 @@ void AssetEnvironmentPreparationService::shutdown() noexcept {
         requests_.clear();
         pending_.clear();
     }
-    worker_.request_stop();
-    condition_.notify_all();
-    if (worker_.joinable()) worker_.join();
+    stop_.request_stop();
+    // Waits for the running preparation; queued items find no request.
+    strand_->waitIdle();
 }
 
 PreparedCatalogEnvironment AssetEnvironmentPreparationService::prepare(
@@ -170,24 +176,19 @@ PreparedCatalogEnvironment AssetEnvironmentPreparationService::prepare(
     return result;
 }
 
-void AssetEnvironmentPreparationService::workerLoop(
-    std::stop_token stopToken) {
-    while (!stopToken.stop_requested()) {
-        AssetCatalogRecord record;
-        {
-            std::unique_lock lock(mutex_);
-            condition_.wait(lock, stopToken,
-                [this] { return shutdown_ || !requests_.empty(); });
-            if (shutdown_ || stopToken.stop_requested()) return;
-            record = std::move(requests_.front());
-            requests_.pop_front();
-        }
-        PreparedCatalogEnvironment result = prepare(record, stopToken);
-        {
-            std::lock_guard lock(mutex_);
-            pending_.erase(record.guid);
-            if (!shutdown_) results_.push_back(std::move(result));
-        }
+void AssetEnvironmentPreparationService::runNext() {
+    AssetCatalogRecord record;
+    {
+        std::lock_guard lock(mutex_);
+        if (shutdown_ || requests_.empty()) return;
+        record = std::move(requests_.front());
+        requests_.pop_front();
+    }
+    PreparedCatalogEnvironment result = prepare(record, stop_.get_token());
+    {
+        std::lock_guard lock(mutex_);
+        pending_.erase(record.guid);
+        if (!shutdown_) results_.push_back(std::move(result));
     }
 }
 

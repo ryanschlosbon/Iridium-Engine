@@ -238,6 +238,7 @@ namespace Iridium {
                     &engineLog_);
             assetEnvironmentPreparationService_ =
                 std::make_unique<AssetEnvironmentPreparationService>(
+                    tasks_,
                     assetRoot,
                     editorModelDdc_,
                     CookTarget{
