@@ -365,11 +365,15 @@ namespace {
                   << " iterations: HIGH+LOW task sets, nested MED wait, pinned I/O): "
                   << steadyHookAllocations << " hook allocations; engine operator new "
                   << engine.allocationCount << " calls / " << engine.requestedBytes
-                  << " B\n";
+                  << " B on the main thread, " << engine.backgroundAllocationCount
+                  << " calls / " << engine.backgroundRequestedBytes
+                  << " B on the enkiTS threads\n";
         CHECK(resultsCorrect);
         CHECK(warmAllocations == initAllocations);
         CHECK(steadyHookAllocations == 0);
         CHECK(engine.allocationCount == 0);
+        // R5b.1 made the counters thread-scoped; worker threads count here.
+        CHECK(engine.backgroundAllocationCount == 0);
 
         scheduler.WaitforAllAndShutdown();
         CHECK(counters.frees.load() == counters.allocations.load());

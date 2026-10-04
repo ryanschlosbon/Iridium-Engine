@@ -41,3 +41,15 @@ if(WIN32)
     target_link_libraries(iridium_core PUBLIC Bcrypt)
 endif()
 iridium_target_pch(iridium_core ENGINE)
+
+# iridium_tasks (M7R R5b, ADR-0015): the engine task system over enkiTS, the only
+# owner of worker threads. A separate library because it depends on
+# iridium_profiling (per-worker scopes) and enkiTS; nothing in iridium_core depends
+# on it. enkiTS is PRIVATE: its headers never reach users of TaskSystem.h. No PCH:
+# enkiTS publishes ENKITS_TASK_PRIORITIES_NUM, which the shared PCH does not see.
+add_library(iridium_tasks STATIC
+        tasks/TaskSystem.cpp
+)
+target_link_libraries(iridium_tasks
+        PUBLIC iridium_core iridium_profiling
+        PRIVATE enkiTS)

@@ -88,6 +88,14 @@ iridium_add_test(EnkiTsSpikeTests
         ALLOCATION_PROFILE
         NO_PCH)
 
+# M7R R5b.1 engine task system (ADR-0015): priorities, the main-thread join rule,
+# the background admission gate, pinned I/O, shutdown, thread-scoped allocation
+# counters, per-worker profiler scopes and steady-state allocation freedom.
+iridium_add_test(TaskSystemTests
+        SOURCES core/TaskSystemTests.cpp
+        LIBS iridium_tasks
+        ALLOCATION_PROFILE)
+
 # The full engine command line includes the qualification library's flags
 # (M7R R2.9), so these exist only in IRIDIUM_QUALIFICATION=ON builds. The parity
 # test also checks the OFF-shaped (runtime/editor/renderer) registry.

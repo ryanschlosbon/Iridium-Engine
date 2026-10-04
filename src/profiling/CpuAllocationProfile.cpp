@@ -12,14 +12,28 @@
 namespace {
 
     std::atomic<bool> g_cpuAllocationFrameActive{ false };
+    // The thread that called beginCpuAllocationFrame, identified by the address
+    // of its thread-local marker (unique among live threads).
+    std::atomic<const void*> g_cpuAllocationFrameThread{ nullptr };
     std::atomic<uint64_t> g_cpuAllocationCount{ 0 };
     std::atomic<uint64_t> g_cpuAllocationBytes{ 0 };
+    std::atomic<uint64_t> g_cpuBackgroundAllocationCount{ 0 };
+    std::atomic<uint64_t> g_cpuBackgroundAllocationBytes{ 0 };
     void recordAllocation(std::size_t size) noexcept {
         if (!g_cpuAllocationFrameActive.load(std::memory_order_relaxed)) {
             return;
         }
-        g_cpuAllocationCount.fetch_add(1, std::memory_order_relaxed);
-        g_cpuAllocationBytes.fetch_add(static_cast<uint64_t>(size),
+        namespace detail = Iridium::cpu_allocation_detail;
+        if (detail::currentThreadMarker() ==
+            g_cpuAllocationFrameThread.load(std::memory_order_relaxed) ||
+            detail::frameScopeDepth != 0) {
+            g_cpuAllocationCount.fetch_add(1, std::memory_order_relaxed);
+            g_cpuAllocationBytes.fetch_add(static_cast<uint64_t>(size),
+                std::memory_order_relaxed);
+            return;
+        }
+        g_cpuBackgroundAllocationCount.fetch_add(1, std::memory_order_relaxed);
+        g_cpuBackgroundAllocationBytes.fetch_add(static_cast<uint64_t>(size),
             std::memory_order_relaxed);
     }
 
@@ -68,6 +82,10 @@ namespace Iridium {
         g_cpuAllocationFrameActive.store(false, std::memory_order_release);
         g_cpuAllocationCount.store(0, std::memory_order_relaxed);
         g_cpuAllocationBytes.store(0, std::memory_order_relaxed);
+        g_cpuBackgroundAllocationCount.store(0, std::memory_order_relaxed);
+        g_cpuBackgroundAllocationBytes.store(0, std::memory_order_relaxed);
+        g_cpuAllocationFrameThread.store(
+            cpu_allocation_detail::currentThreadMarker(), std::memory_order_relaxed);
         g_cpuAllocationFrameActive.store(true, std::memory_order_release);
     }
 
@@ -76,6 +94,8 @@ namespace Iridium {
         return {
             g_cpuAllocationCount.load(std::memory_order_relaxed),
             g_cpuAllocationBytes.load(std::memory_order_relaxed),
+            g_cpuBackgroundAllocationCount.load(std::memory_order_relaxed),
+            g_cpuBackgroundAllocationBytes.load(std::memory_order_relaxed),
         };
     }
 

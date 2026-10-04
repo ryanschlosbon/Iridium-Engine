@@ -33,6 +33,9 @@ namespace Iridium {
         uint64_t threadId = 0;
         uint64_t startNanoseconds = 0;
         uint64_t durationNanoseconds = 0;
+        // M7R R5b.1: 0 for events in the frame's shared table; for worker events
+        // the task-system thread index that owns the stream (1..N).
+        uint32_t workerIndex = 0;
     };
 
     struct FrameProfileCounter {
@@ -54,8 +57,14 @@ namespace Iridium {
         std::vector<CpuProfileEvent> events;
         std::vector<GpuProfileRange> gpuRanges;
         std::vector<FrameProfileCounter> counters;
+        // M7R R5b.1: scopes completed on task-system worker threads since the
+        // previous endFrame, merged from the per-worker streams. Empty unless
+        // prepareWorkerStreams was called. Start times are frame-relative and
+        // clamp to 0 for work that began before the frame.
+        std::vector<CpuProfileEvent> workerEvents;
         FrameMemoryProfile memory;
         uint32_t droppedEvents = 0;
+        uint32_t droppedWorkerEvents = 0;
         uint32_t droppedGpuRanges = 0;
         uint32_t droppedCounters = 0;
         uint32_t nestingErrors = 0;
@@ -85,10 +94,15 @@ namespace Iridium {
         uint64_t completedFrameCount = 0;
         std::vector<ProfileRangeRunStatistics> cpuRanges;
         std::vector<ProfileRangeRunStatistics> gpuRanges;
+        // M7R R5b.1: aggregate worker time per scope name and frame (the sum over
+        // every worker), next to the main-thread (critical path) cpuRanges.
+        std::vector<ProfileRangeRunStatistics> workerRanges;
         uint64_t cpuDetailOverflowFrameCount = 0;
         uint64_t gpuDetailOverflowFrameCount = 0;
         uint64_t unaggregatedCpuRangeValueCount = 0;
         uint64_t unaggregatedGpuRangeValueCount = 0;
+        uint64_t workerDetailOverflowFrameCount = 0;
+        uint64_t unaggregatedWorkerRangeValueCount = 0;
     };
 
     class CpuProfiler;
@@ -101,6 +115,7 @@ namespace Iridium {
         uint64_t generation = 0;
         uint64_t threadId = 0;
         uint64_t startNanoseconds = 0;
+        uint32_t workerIndex = 0; // nonzero: recorded into that worker stream
         bool active = false;
     };
 
@@ -140,6 +155,14 @@ namespace Iridium {
         static constexpr size_t RunStatisticSampleCapacity = 10'000;
         static constexpr size_t MaxCpuRunStatisticRanges = 64;
         static constexpr size_t MaxGpuRunStatisticRanges = MaxGpuRangesPerFrame;
+        // M7R R5b.1 per-worker scope streams. Stream 0 is never used (the main
+        // thread records into the shared frame table); streams 1..N belong to
+        // task-system threads. Each stream is a single-producer ring drained by
+        // endFrame; a full ring drops (and counts) further events.
+        static constexpr size_t MaxWorkerStreams = 64;
+        static constexpr size_t WorkerStreamCapacity = 256;
+        static constexpr size_t MaxWorkerEventsPerFrame = 256;
+        static constexpr size_t MaxWorkerRunStatisticRanges = 32;
 
         explicit CpuProfiler(bool enabled = false);
         ~CpuProfiler();
@@ -170,6 +193,18 @@ namespace Iridium {
             ProfileCounterStatus status = ProfileCounterStatus::Exact,
             ProfileCounterUnit unit = ProfileCounterUnit::Count) noexcept;
         void recordMemorySnapshot(const FrameMemoryProfile& memory) noexcept;
+
+        // M7R R5b.1 worker scopes. prepareWorkerStreams (main thread, outside a
+        // frame, before any worker binds) allocates streams 1..streamCount-1 and
+        // the worker run statistics; it may only grow the count. A thread bound
+        // with bindCurrentThreadToWorkerStream records its CpuScopes into its own
+        // stream: worker scopes never hold the frame open, may span frames, and
+        // are merged into CpuFrameProfile::workerEvents by endFrame. Unbound
+        // threads keep the shared-table behavior. One thread per stream.
+        void prepareWorkerStreams(uint32_t streamCount);
+        [[nodiscard]] uint32_t workerStreamCount() const noexcept;
+        [[nodiscard]] bool bindCurrentThreadToWorkerStream(uint32_t streamIndex) noexcept;
+        static void unbindCurrentThreadFromWorkerStream() noexcept;
 
         // GPU results arrive after the owning backend frame fence completes.
         // They are attached to an already-completed CPU frame by shared frame ID.
@@ -205,7 +240,13 @@ namespace Iridium {
         void recordNestingError() noexcept;
         void recordCpuRunStatistics(const CpuFrameProfile& frame) noexcept;
         void recordGpuRunStatistics(const CpuFrameProfile& frame) noexcept;
+        void recordWorkerRunStatistics(const CpuFrameProfile& frame) noexcept;
+        void drainWorkerStreams(CpuFrameProfile& destination) noexcept;
+        [[nodiscard]] CpuEventToken beginWorkerEvent(const char* name,
+            uint64_t parentEventId, uint32_t workerIndex) noexcept;
+        void endWorkerEvent(CpuEventToken& token) noexcept;
         void prepareStorage();
+        void prepareWorkerFrameStorage();
 
         static uint64_t nowNanoseconds() noexcept;
         static uint64_t currentThreadId() noexcept;
@@ -228,6 +269,10 @@ namespace Iridium {
             completedFrames_;
         struct RunStatisticsStorage;
         std::unique_ptr<RunStatisticsStorage> runStatistics_;
+        struct WorkerStorage;
+        std::unique_ptr<WorkerStorage> workers_;
+        std::atomic<uint32_t> workerStreamCount_{ 0 };
+        bool workerFrameStoragePrepared_ = false;
 
         uint64_t currentFrameId_ = 0;
         uint64_t nextFrameId_ = 1;
