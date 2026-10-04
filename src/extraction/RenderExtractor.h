@@ -427,6 +427,12 @@ namespace Iridium {
         // Per-frame light selection scratch, kept for its capacity (R5c.6).
         std::vector<DirectionalShadowSelection> directionalShadowSelections_;
         std::vector<LocalShadowRequest> localShadowRequests_;
+        // M7R R5c.8: the schedules' former per-frame locals, kept for their
+        // capacity (steady frames allocate nothing).
+        std::vector<LocalShadowCacheInput> spotCacheInputs_;
+        std::vector<LocalShadowCacheInput> pointCacheInputs_;
+        std::vector<ReflectionProbeCaptureRequest> probeCaptureRequests_;
+        std::vector<SceneEntityUuid> runtimeCaptureOwners_;
         // This frame's shadow packets (valid until releaseFrame).
         std::vector<DirectionalShadowFramePacket> directionalShadows_;
         std::vector<SpotShadowFramePacket> spotShadows_;

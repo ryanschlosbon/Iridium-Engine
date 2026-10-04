@@ -256,7 +256,10 @@ namespace Iridium {
                 [&loadedEnvironments](AssetGuid environment) {
                     return loadedEnvironments.contains(environment);
                 }, extractedProbes);
-            std::vector<SceneEntityUuid> runtimeCaptureOwners;
+            // M7R R5c.8: member scratch (keeps its capacity).
+            std::vector<SceneEntityUuid>& runtimeCaptureOwners =
+                runtimeCaptureOwners_;
+            runtimeCaptureOwners.clear();
             runtimeCaptureOwners.reserve(extractedProbes.candidates.size());
             for (const ReflectionProbeCandidate& candidate :
                     extractedProbes.candidates)
@@ -541,7 +544,8 @@ namespace Iridium {
             localCasterRevision =
                 renderBackend->getShadowCasterRevision(shadowCasters);
         }
-        std::vector<LocalShadowCacheInput> spotCacheInputs;
+        std::vector<LocalShadowCacheInput>& spotCacheInputs = spotCacheInputs_;
+        spotCacheInputs.clear();
         spotCacheInputs.reserve(spotShadowAtlas_.allocations().size());
         for (const SpotShadowTile& tile : spotShadowAtlas_.allocations()) {
             const auto request = std::ranges::find_if(localShadowRequests,
@@ -634,7 +638,8 @@ namespace Iridium {
             .maximumCompatibleStaleFrames = shadowSettings_.
                 maximumCompatiblePointStaleFrames,
         });
-        std::vector<LocalShadowCacheInput> pointCacheInputs;
+        std::vector<LocalShadowCacheInput>& pointCacheInputs = pointCacheInputs_;
+        pointCacheInputs.clear();
         pointCacheInputs.reserve(pointShadowPools_.allocations().size());
         for (const PointShadowSlot& slot : pointShadowPools_.allocations()) {
             const auto request = std::ranges::find_if(localShadowRequests,
@@ -720,7 +725,9 @@ namespace Iridium {
         // Scene probes must never capture the isolated model or its preview sun.
         if (!assetPreviewActive) {
         CpuScope captureScope(cpuProfiler_, "cpu.probe.capture.schedule");
-        std::vector<ReflectionProbeCaptureRequest> probeCaptureRequests;
+        std::vector<ReflectionProbeCaptureRequest>& probeCaptureRequests =
+            probeCaptureRequests_;
+        probeCaptureRequests.clear();
         probeCaptureRequests.reserve(extractedProbes.candidates.size());
         uint64_t environmentRevision = 1469598103934665603ull;
         for (char character : environmentCookKey) {
@@ -2246,12 +2253,16 @@ namespace Iridium {
         // extractedProbes_ keeps its storage: the next extraction rewrites it in
         // place (M7R R5c.6).
         publishedProbes_ = {};
-        // `vector = {}` assigns an empty initializer list and keeps the
-        // capacity; swapping with an empty vector frees it, as the former
-        // drawFrame locals did, so the next frame allocates them again.
-        std::vector<DirectionalShadowFramePacket>().swap(directionalShadows_);
-        std::vector<SpotShadowFramePacket>().swap(spotShadows_);
-        std::vector<PointShadowFramePacket>().swap(pointShadows_);
+        // M7R R5c.8: the frame's shadow packets are released by size only.
+        // They keep their capacity, so the next frame's schedule refills them
+        // without allocating. (Until R5c.8 they were swapped with empty
+        // vectors, which freed them as the former drawFrame locals did; R5a
+        // kept that so its allocation counters stayed identical. The packets
+        // are still empty after releaseFrame, and renderFrame_ above drops
+        // the spans that referred to them.)
+        directionalShadows_.clear();
+        spotShadows_.clear();
+        pointShadows_.clear();
     }
 
 } // namespace Iridium

@@ -19,6 +19,7 @@
 #include "renderer/lighting/LightExtractor.h"
 #include "renderer/lighting/LocalShadow.h"
 #include "renderer/lighting/ReflectionProbe.h"
+#include "renderer/rhi/ReflectionProbeCapture.h"
 #include "support/ReferenceLightExtractor.h"
 #include "support/ReferenceReflectionProbe.h"
 
@@ -991,13 +992,50 @@ namespace {
             spotCache.markScheduledRendered();
             pointCache.markScheduledRendered();
         };
+        // M7R R5c.8: the probe-capture schedule as RenderExtractor runs it
+        // (requests in caller-owned storage, schedule, faces rendered,
+        // publication). The lighting revision advances every 20 frames, so
+        // realtime captures start, progress and publish in measured frames.
+        ReflectionProbeCaptureScheduler captureScheduler;
+        std::vector<ReflectionProbeCaptureRequest> captureRequests;
+        size_t captureEntries = 0;
+        uint64_t capturesPublished = 0;
+        const auto scheduleCaptures = [&](uint64_t frameIndex) {
+            captureRequests.clear();
+            for (const ReflectionProbeCandidate& candidate : probes.candidates) {
+                captureRequests.push_back({
+                    .owner = candidate.owner,
+                    .updateMode = ReflectionProbeUpdateMode::Realtime,
+                    .position = glm::vec3(candidate.probeToWorld[3]),
+                    .resolution = 128,
+                    .priority = candidate.probe.priority,
+                    .settingsRevision = 1,
+                    .sceneRevision = 1,
+                    .lightingRevision = 1 + frameIndex / 20,
+                    .environmentRevision = 1,
+                    .pipelineRevision = 1,
+                    .frameIndex = frameIndex,
+                });
+            }
+            captureEntries = captureScheduler.schedule(captureRequests)
+                .entries.size();
+            captureScheduler.markScheduledFacesRendered();
+            for (const ReflectionProbeCapturePublication& publication :
+                    captureScheduler.publicationsReady()) {
+                captureScheduler.markPublished(publication.owner,
+                    publication.captureTicket);
+                ++capturesPublished;
+            }
+        };
         // Runtime capture slots stay fixed: a slot change is a membership
         // change, not a steady frame.
+        uint64_t frameIndex = 0;
         const auto frame = [&] {
             scheduleShadows(lights.extract(scene.world));
             extractReflectionProbes(scene.world, residency, probes);
             applyRuntimeCaptures(probes, 0);
             (void)publisher.publish(probes.candidates, environmentSlot);
+            scheduleCaptures(frameIndex++);
         };
         TransformSystem transforms;
         std::vector<Entity> changedTransforms;
@@ -1029,7 +1067,8 @@ namespace {
             worst = (std::max)(worst, endCpuAllocationFrame().allocationCount);
         }
         if (lights.diagnostics().size() < 3 || probes.diagnostics.empty() ||
-            scheduledShadows == 0) {
+            scheduledShadows == 0 || captureEntries == 0 ||
+            capturesPublished <= probes.candidates.size()) {
             std::cerr << "steady-frame fixture lost its diagnostics or shadows\n";
             return false;
         }

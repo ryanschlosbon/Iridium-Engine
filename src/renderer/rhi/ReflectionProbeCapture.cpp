@@ -127,7 +127,7 @@ void ReflectionProbeCaptureScheduler::validateRequest(
 
 void ReflectionProbeCaptureScheduler::configure(
     ReflectionProbeCaptureSchedulerConfig config) {
-    if (currentSchedule_)
+    if (scheduled_)
         throw std::logic_error(
             "Reflection-probe capture policy cannot change during a schedule");
     validateConfig(config);
@@ -189,12 +189,12 @@ uint64_t ReflectionProbeCaptureScheduler::nextTicket() {
 
 const ReflectionProbeCaptureSchedule& ReflectionProbeCaptureScheduler::schedule(
     std::span<const ReflectionProbeCaptureRequest> requests) {
-    if (currentSchedule_)
+    if (scheduled_)
         throw std::logic_error(
             "Reflection-probe capture schedule must be completed first");
 
-    std::vector<ReflectionProbeCaptureRequest> ranked(
-        requests.begin(), requests.end());
+    std::vector<ReflectionProbeCaptureRequest>& ranked = ranked_;
+    ranked.assign(requests.begin(), requests.end());
     for (const auto& request : ranked) {
         validateRequest(request);
     }
@@ -225,8 +225,10 @@ const ReflectionProbeCaptureSchedule& ReflectionProbeCaptureScheduler::schedule(
 
     std::ranges::sort(ranked, requestPrecedes);
 
-    currentSchedule_.emplace();
-    auto& result = *currentSchedule_;
+    schedule_.entries.clear();
+    schedule_.stats = {};
+    scheduled_ = true;
+    auto& result = schedule_;
     result.entries.reserve(ranked.size());
     result.stats.requests = static_cast<uint32_t>(ranked.size());
     uint64_t remainingTexels = config_.maximumRenderedTexels;
@@ -340,10 +342,10 @@ const ReflectionProbeCaptureSchedule& ReflectionProbeCaptureScheduler::schedule(
 }
 
 void ReflectionProbeCaptureScheduler::markScheduledFacesRendered() {
-    if (!currentSchedule_)
+    if (!scheduled_)
         throw std::logic_error(
             "No reflection-probe capture schedule is pending");
-    for (const auto& entry : currentSchedule_->entries) {
+    for (const auto& entry : schedule_.entries) {
         if (entry.scheduledFaceMask == 0) continue;
         CaptureState* state = findState(entry.owner);
         if (state == nullptr || !state->hasPending ||
@@ -356,12 +358,12 @@ void ReflectionProbeCaptureScheduler::markScheduledFacesRendered() {
         if (state->capturedFaceMask == kReflectionProbeCaptureCompleteMask)
             state->awaitingPublication = true;
     }
-    currentSchedule_.reset();
+    scheduled_ = false;
 }
 
 std::span<const ReflectionProbeCapturePublication>
 ReflectionProbeCaptureScheduler::publicationsReady() {
-    if (currentSchedule_)
+    if (scheduled_)
         throw std::logic_error(
             "Capture publications are unavailable during a schedule");
     readyPublications_.clear();
@@ -380,7 +382,7 @@ ReflectionProbeCaptureScheduler::publicationsReady() {
 
 void ReflectionProbeCaptureScheduler::markPublished(
     SceneEntityUuid owner, uint64_t captureTicket) {
-    if (currentSchedule_)
+    if (scheduled_)
         throw std::logic_error(
             "Capture publication cannot occur during a schedule");
     CaptureState* state = findState(owner);
@@ -402,7 +404,7 @@ void ReflectionProbeCaptureScheduler::markPublished(
 
 void ReflectionProbeCaptureScheduler::abandon(
     SceneEntityUuid owner, uint64_t captureTicket) {
-    if (currentSchedule_)
+    if (scheduled_)
         throw std::logic_error(
             "Capture abandonment cannot occur during a schedule");
     CaptureState* state = findState(owner);
@@ -419,7 +421,9 @@ void ReflectionProbeCaptureScheduler::abandon(
 
 void ReflectionProbeCaptureScheduler::reset() noexcept {
     states_.clear();
-    currentSchedule_.reset();
+    schedule_.entries.clear();
+    schedule_.stats = {};
+    scheduled_ = false;
     readyPublications_.clear();
     nextTicket_ = 0;
 }

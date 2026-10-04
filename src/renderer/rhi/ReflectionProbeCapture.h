@@ -211,7 +211,13 @@ namespace Iridium {
         ReflectionProbeCaptureSchedulerConfig config_;
         uint64_t nextTicket_ = 0;
         std::vector<CaptureState> states_;
-        std::optional<ReflectionProbeCaptureSchedule> currentSchedule_;
+        // M7R R5c.8: the schedule and the ranking storage persist across
+        // frames for their capacity; scheduled_ marks a schedule awaiting
+        // markScheduledFacesRendered (formerly an optional re-created, and a
+        // ranking vector allocated, every frame).
+        std::vector<ReflectionProbeCaptureRequest> ranked_;
+        ReflectionProbeCaptureSchedule schedule_;
+        bool scheduled_ = false;
         std::vector<ReflectionProbeCapturePublication> readyPublications_;
     };
 
