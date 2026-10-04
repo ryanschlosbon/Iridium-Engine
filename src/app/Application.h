@@ -111,17 +111,6 @@ namespace Iridium {
         SceneWorld sceneWorld_;
         // GPU-scene publication and render extraction (M7R R5a.3).
         RenderExtractor extractor_;
-        ReflectionProbeCaptureScheduler reflectionProbeCaptureScheduler_;
-        std::array<DirectionalShadowCache,
-            kDirectionalShadowLightCapacity> directionalShadowCaches_;
-        StableSpotShadowAtlas spotShadowAtlas_;
-        LocalShadowCacheScheduler spotShadowCache_;
-        StablePointShadowPools pointShadowPools_;
-        LocalShadowCacheScheduler pointShadowCache_;
-        std::optional<DirectionalShadowSelection>
-            activeDirectionalShadowSelection_;
-        uint32_t activeDirectionalShadowSampleableMask_ = 0;
-        uint32_t activeDirectionalShadowOwnerCount_ = 0;
         EditorSceneDocumentService sceneDocumentService_;
         EditorTransactionService transactionService_;
         Registry& registry;
@@ -157,20 +146,9 @@ namespace Iridium {
         AppStartupTimings startupProfile_;
         bool measurementStarted_ = false;
 
-        // M7R R3c.11: caller-side work reported at submitFrame's stage
-        // boundaries (cache bookkeeping, profile counters and the observer's
-        // submit points), in the order it ran between the former submit*
-        // calls. Valid while submitFrame runs.
-        struct FrameStageRecords {
-            AppFrameContext* frame = nullptr;
-            std::span<const DirectionalShadowFramePacket> directionalShadows{};
-            LocalShadowAllocationStats spotAllocation{};
-            const LocalShadowSchedule* spotSchedule = nullptr;
-            LocalShadowAllocationStats pointAllocation{};
-            const LocalShadowSchedule* pointSchedule = nullptr;
-            const ReflectionProbeCaptureSchedule* probeCaptureSchedule = nullptr;
-        };
-        FrameStageRecords frameStage_{};
+        // The frame whose observer submit points submitFrame's stage
+        // boundaries report (valid while submitFrame runs).
+        AppFrameContext* stageFrame_ = nullptr;
 
         // --- MOUSE STATE ---
         float lastX = 1280 / 2.0f;

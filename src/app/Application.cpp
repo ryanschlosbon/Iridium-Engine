@@ -81,47 +81,6 @@ namespace Iridium {
             }
             return userCacheDirectory("PipelineCache");
         }
-        template <typename T>
-        uint64_t shadowRevision(const T& value) noexcept {
-            uint64_t hash = 1469598103934665603ull;
-            const auto bytes = std::as_bytes(std::span{ &value, size_t{ 1 } });
-            for (const std::byte byte : bytes) {
-                hash ^= std::to_integer<uint8_t>(byte);
-                hash *= 1099511628211ull;
-            }
-            return hash == 0u ? 1u : hash;
-        }
-
-        template <typename T>
-        void appendCaptureRevision(uint64_t& hash, const T& value) noexcept {
-            const auto bytes = std::as_bytes(std::span{ &value, size_t{ 1 } });
-            for (const std::byte byte : bytes) {
-                hash ^= std::to_integer<uint8_t>(byte);
-                hash *= 1099511628211ull;
-            }
-        }
-
-        uint64_t reflectionProbeSettingsRevision(
-            const ReflectionProbeCandidate& candidate) noexcept {
-            uint64_t hash = 1469598103934665603ull;
-            appendCaptureRevision(hash, candidate.probeToWorld);
-            appendCaptureRevision(hash, candidate.probe.captureResolution);
-            appendCaptureRevision(hash, candidate.probe.captureNearMeters);
-            appendCaptureRevision(hash, candidate.probe.captureFarMeters);
-            appendCaptureRevision(hash, candidate.probe.captureSky);
-            appendCaptureRevision(hash, candidate.probe.updateMode);
-            return hash == 0u ? 1u : hash;
-        }
-
-        uint64_t reflectionProbeLightingRevision(
-            const LightingFramePacket& lights) noexcept {
-            uint64_t hash = 1469598103934665603ull;
-            for (uint64_t revision : lights.recordRevisions)
-                appendCaptureRevision(hash, revision);
-            appendCaptureRevision(hash, lights.activeListRevision);
-            return hash == 0u ? 1u : hash;
-        }
-
     }
 
     Application::Application(ApplicationConfig config,
@@ -129,35 +88,8 @@ namespace Iridium {
         : config_(std::move(config)),
           cpuProfiler_(config_.enableCpuProfiling),
           observer_(observer),
-          extractor_(cpuProfiler_, sceneWorld_),
-          reflectionProbeCaptureScheduler_({
-              .maximumRenderedTexels = config_.reflectionProbeSettings.
-                  maximumRenderedTexelsPerFrame,
-              .maximumFacesPerProbePerFrame = config_.reflectionProbeSettings.
-                  maximumFacesPerProbePerFrame,
-              .maximumCapturesInFlight = config_.reflectionProbeSettings.
-                  maximumCapturesInFlight,
-              .minimumRealtimeFramesBetweenCaptures =
-                  config_.reflectionProbeSettings.
-                      minimumRealtimeFramesBetweenCaptures }),
-          spotShadowAtlas_({
-              .atlasResolution = config_.shadowSettings.spotAtlasResolution,
-              .minimumTileResolution = 512,
-              .guardTexels = 4 }),
-          spotShadowCache_({
-              .maximumRenderedTexels = config_.shadowSettings.
-                  maximumSpotRenderedTexelsPerFrame,
-              .maximumCompatibleStaleFrames = config_.shadowSettings.
-                  maximumCompatibleSpotStaleFrames }),
-          pointShadowPools_({ .cubeCapacity = {
-              config_.shadowSettings.pointPool256Capacity,
-              config_.shadowSettings.pointPool512Capacity,
-              config_.shadowSettings.pointPool1024Capacity } }),
-          pointShadowCache_({
-              .maximumRenderedTexels = config_.shadowSettings.
-                  maximumPointRenderedTexelsPerFrame,
-              .maximumCompatibleStaleFrames = config_.shadowSettings.
-                  maximumCompatiblePointStaleFrames }),
+          extractor_(cpuProfiler_, sceneWorld_, config_.shadowSettings,
+              config_.reflectionProbeSettings),
           sceneDocumentService_(sceneWorld_),
           transactionService_(sceneDocumentService_),
           registry(sceneWorld_.registry()),
@@ -197,10 +129,12 @@ namespace Iridium {
             .renderExtent = renderExtent_,
             .mainModel = assets_.mainModel().get(),
             .environment = assets_.environmentIdentity(),
-            .directionalShadowSelection = activeDirectionalShadowSelection_,
+            .directionalShadowSelection =
+                extractor_.activeDirectionalShadowSelection(),
             .directionalShadowSampleableMask =
-                activeDirectionalShadowSampleableMask_,
-            .directionalShadowOwnerCount = activeDirectionalShadowOwnerCount_,
+                extractor_.activeDirectionalShadowSampleableMask(),
+            .directionalShadowOwnerCount =
+                extractor_.activeDirectionalShadowOwnerCount(),
             .startup = startupProfile_,
             .debugView = editorHost_.debugView(),
         };
@@ -651,116 +585,23 @@ namespace Iridium {
     void Application::onRenderFrameStage(RenderFrameStage stage) {
         switch (stage) {
         case RenderFrameStage::DirectionalShadows:
-            for (const DirectionalShadowFramePacket& shadow : frameStage_.directionalShadows)
-                directionalShadowCaches_[shadow.shadowIndex].markRendered(
-                    shadow.updateMask);
+        case RenderFrameStage::SpotShadows:
+        case RenderFrameStage::PointShadows:
+        case RenderFrameStage::ReflectionProbeCaptures:
+        case RenderFrameStage::Lighting:
+            extractor_.onRenderFrameStage(stage);
             break;
-        case RenderFrameStage::SpotShadows: {
-            // Completing the schedule retires it; its stats are read first.
-            const auto stats = frameStage_.spotSchedule->stats;
-            spotShadowCache_.markScheduledRendered();
-            const LocalShadowAllocationStats& allocation = frameStage_.spotAllocation;
-            cpuProfiler_.recordCounter("shadow.spot.requested", allocation.requested);
-            cpuProfiler_.recordCounter("shadow.spot.allocated", allocation.allocated);
-            cpuProfiler_.recordCounter("shadow.spot.omitted", allocation.omitted);
-            cpuProfiler_.recordCounter("shadow.spot.cache_hits", stats.cacheHits);
-            cpuProfiler_.recordCounter("shadow.spot.updates", stats.updates);
-            cpuProfiler_.recordCounter("shadow.spot.stale_sampled",
-                stats.staleSampled);
-            cpuProfiler_.recordCounter("shadow.spot.unshadowed", stats.unshadowed);
-            cpuProfiler_.recordCounter("shadow.spot.rendered_texels",
-                stats.renderedTexels);
-            break;
-        }
-        case RenderFrameStage::PointShadows: {
-            // Completing the schedule retires it; its stats are read first.
-            const auto stats = frameStage_.pointSchedule->stats;
-            pointShadowCache_.markScheduledRendered();
-            const LocalShadowAllocationStats& allocation = frameStage_.pointAllocation;
-            cpuProfiler_.recordCounter("shadow.point.requested", allocation.requested);
-            cpuProfiler_.recordCounter("shadow.point.allocated", allocation.allocated);
-            cpuProfiler_.recordCounter("shadow.point.omitted", allocation.omitted);
-            cpuProfiler_.recordCounter("shadow.point.cache_hits", stats.cacheHits);
-            cpuProfiler_.recordCounter("shadow.point.updates", stats.updates);
-            cpuProfiler_.recordCounter("shadow.point.stale_sampled",
-                stats.staleSampled);
-            cpuProfiler_.recordCounter("shadow.point.unshadowed", stats.unshadowed);
-            cpuProfiler_.recordCounter("shadow.point.rendered_texels",
-                stats.renderedTexels);
-            break;
-        }
-        case RenderFrameStage::ReflectionProbeCaptures: {
-            // Completing the schedule retires it; its stats are read first.
-            const auto stats = frameStage_.probeCaptureSchedule->stats;
-            reflectionProbeCaptureScheduler_.markScheduledFacesRendered();
-            const ReflectionProbeCaptureTelemetry telemetry =
-                renderBackend->frameTelemetry().probeCaptures;
-            cpuProfiler_.recordCounter("probe.capture.faces_scheduled",
-                stats.facesScheduled);
-            cpuProfiler_.recordCounter("probe.capture.budget_deferred",
-                stats.budgetDeferred);
-            cpuProfiler_.recordCounter("probe.capture.capacity_deferred",
-                stats.capacityDeferred);
-            cpuProfiler_.recordCounter("probe.capture.cadence_deferred",
-                stats.cadenceDeferred);
-            cpuProfiler_.recordCounter("probe.capture.faces_rendered",
-                telemetry.facesRendered);
-            cpuProfiler_.recordCounter("probe.capture.filtered",
-                telemetry.capturesFiltered);
-            cpuProfiler_.recordCounter("probe.capture.published",
-                telemetry.capturesPublished);
-            cpuProfiler_.recordCounter("probe.capture.staging_bytes",
-                telemetry.stagingLogicalBytes,
-                ProfileCounterStatus::Exact, ProfileCounterUnit::Bytes);
-            cpuProfiler_.recordCounter("probe.capture.published_bytes",
-                telemetry.publishedLogicalBytes,
-                ProfileCounterStatus::Exact, ProfileCounterUnit::Bytes);
-            break;
-        }
-        case RenderFrameStage::Lighting: {
-            const RenderFrameTelemetry telemetry = renderBackend->frameTelemetry();
-            const LightingUploadTelemetry& lightUpload = telemetry.lightUploads;
-            cpuProfiler_.recordCounter("light.gpu_upload_bytes", lightUpload.bytes,
-                ProfileCounterStatus::Exact, ProfileCounterUnit::Bytes);
-            cpuProfiler_.recordCounter("light.gpu_upload_ranges", lightUpload.ranges);
-            const ClusteredLightingTelemetry& clusters = telemetry.clusters;
-            const ProfileCounterStatus clusterStatus = clusters.available
-                ? ProfileCounterStatus::Exact : ProfileCounterStatus::Unavailable;
-            cpuProfiler_.recordCounter("cluster.buffer_bytes_per_frame",
-                clusters.bufferBytesPerFrame, clusterStatus, ProfileCounterUnit::Bytes);
-            cpuProfiler_.recordCounter("cluster.count", clusters.clusterCount, clusterStatus);
-            cpuProfiler_.recordCounter("cluster.lights.active", clusters.activeLights,
-                clusterStatus);
-            cpuProfiler_.recordCounter("cluster.lights.directional",
-                clusters.directionalLights, clusterStatus);
-            cpuProfiler_.recordCounter("cluster.lights.local", clusters.localLights,
-                clusterStatus);
-            cpuProfiler_.recordCounter("cluster.references.requested",
-                clusters.requestedReferences, clusterStatus);
-            cpuProfiler_.recordCounter("cluster.references.published",
-                clusters.publishedReferences, clusterStatus);
-            cpuProfiler_.recordCounter("cluster.used", clusters.clustersUsed, clusterStatus);
-            cpuProfiler_.recordCounter("cluster.occupancy.maximum",
-                clusters.maximumOccupancy, clusterStatus);
-            cpuProfiler_.recordCounter("cluster.fallback_lights",
-                clusters.fallbackLights, clusterStatus);
-            cpuProfiler_.recordCounter("cluster.dropped_lights",
-                clusters.droppedLights, clusterStatus);
-            cpuProfiler_.recordCounter("cluster.overflow_code", clusters.overflowCode,
-                clusterStatus);
-            break;
-        }
         case RenderFrameStage::SceneLinearComplete:
             // Scene-linear captures read the lit scene here.
             if (observer_)
                 observer_->onFrameSubmit(FrameSubmitPoint::SceneLinearReady,
-                    *frameStage_.frame);
+                    *stageFrame_);
             break;
         case RenderFrameStage::OutputComplete:
             // Final-output captures read the output target before the UI pass.
             if (observer_)
                 observer_->onFrameSubmit(FrameSubmitPoint::OutputReady,
-                    *frameStage_.frame);
+                    *stageFrame_);
             break;
         }
     }
@@ -797,16 +638,7 @@ namespace Iridium {
             const ProjectReflectionProbeSettings& probeSettings =
                 *requests.probes;
             config_.reflectionProbeSettings = probeSettings;
-            reflectionProbeCaptureScheduler_.configure({
-                .maximumRenderedTexels = probeSettings.
-                    maximumRenderedTexelsPerFrame,
-                .maximumFacesPerProbePerFrame = probeSettings.
-                    maximumFacesPerProbePerFrame,
-                .maximumCapturesInFlight = probeSettings.
-                    maximumCapturesInFlight,
-                .minimumRealtimeFramesBetweenCaptures = probeSettings.
-                    minimumRealtimeFramesBetweenCaptures,
-            });
+            extractor_.configureProbeCaptures(probeSettings);
             renderBackend->configureReflectionProbeCaptures(
                 probeSettings);
         }
@@ -822,8 +654,7 @@ namespace Iridium {
         CpuScope finalizeScope(cpuProfiler_, "cpu.probe.capture.finalize");
         for (const ReflectionProbeCaptureCompletion& completion :
                 renderBackend->finalizeReflectionProbeCaptures()) {
-            reflectionProbeCaptureScheduler_.markPublished(
-                completion.owner, completion.captureTicket);
+            extractor_.markCapturePublished(completion);
             assets_.publishCaptureCompletion(completion);
         }
         }
@@ -1658,414 +1489,13 @@ namespace Iridium {
 
         // --- 5. THE SUBMISSION PHASE (The Black Box) ---
 
-        std::vector<DirectionalShadowFramePacket> directionalShadows;
-        {
-        CpuScope directionalScope(cpuProfiler_, "cpu.shadow.directional.schedule");
-        const std::vector<DirectionalShadowSelection> shadowSelections =
-            selectDirectionalShadowLights(lightingFrame,
-                config_.shadowSettings.maximumDirectionalLights);
-        if (!shadowSelections.empty()) {
-            const glm::mat4 inverseView = glm::inverse(viewMatrix);
-            DirectionalShadowCamera shadowCamera{};
-            shadowCamera.position = renderCameraPosition;
-            shadowCamera.forward = glm::normalize(-glm::vec3(inverseView[2]));
-            shadowCamera.up = glm::normalize(glm::vec3(inverseView[1]));
-            shadowCamera.verticalFovRadians = glm::radians(
-                renderVerticalFovDegrees);
-            shadowCamera.aspectRatio = aspect;
-            shadowCamera.nearPlane = renderCameraNearPlane;
-            shadowCamera.farPlane = (std::min)(renderCameraFarPlane,
-                (std::max)(config_.shadowSettings.
-                    directionalMaximumDistanceMeters,
-                    renderCameraNearPlane + 0.001f));
-            DirectionalShadowConfig shadowConfig{
-                .resolution = config_.shadowSettings.directionalResolution,
-                .splitLambda = config_.shadowSettings.directionalSplitLambda,
-                .guardBandFraction =
-                    config_.shadowSettings.directionalGuardBandFraction,
-                .depthPaddingMeters =
-                    config_.shadowSettings.directionalDepthPaddingMeters,
-            };
-            directionalShadows.reserve(shadowSelections.size());
-            uint32_t dirtyCascades = 0;
-            uint32_t casterInvalidatedCascades = 0;
-            uint32_t updatedCascades = 0;
-            uint32_t cachedCascades = 0;
-            for (uint32_t shadowIndex = 0;
-                shadowIndex < shadowSelections.size(); ++shadowIndex) {
-                const DirectionalShadowSelection& selection =
-                    shadowSelections[shadowIndex];
-                const DirectionalShadowCascadePlan plan =
-                    buildDirectionalShadowCascades(shadowCamera,
-                        selection.lightForward, shadowConfig);
-                const uint64_t lightRevision = selection.lightSlot <
-                    lightingFrame.recordRevisions.size()
-                    ? lightingFrame.recordRevisions[selection.lightSlot] : 0;
-                std::array<uint64_t, kDirectionalShadowCascadeCount>
-                    casterRevisions{};
-                {
-                    CpuScope revisionScope(cpuProfiler_,
-                        "cpu.shadow.caster_revision.directional");
-                    casterRevisions = renderBackend->
-                        getDirectionalShadowCasterRevisions(
-                            shadowCasters, plan);
-                }
-                const DirectionalShadowSchedule schedule =
-                    directionalShadowCaches_[shadowIndex].schedule({
-                        .selection = selection,
-                        .plan = plan,
-                        .lightRevision = lightRevision,
-                        .casterRevisions = casterRevisions,
-                        .pipelineRevision = 1,
-                    },
-                        config_.shadowSettings.maximumCascadeUpdatesPerLight);
-                directionalShadows.push_back(DirectionalShadowFramePacket{
-                    .selection = selection,
-                    .plan = plan,
-                    .shadowIndex = shadowIndex,
-                    .updateMask = schedule.updateMask,
-                    .sampleableMask = schedule.sampleableMask,
-                    .resolution = shadowConfig.resolution,
-                    .sourceAngularDiameterDegrees = config_.shadowSettings.
-                        directionalSourceAngularDiameterDegrees,
-                    .receiverDepthBiasTexels = config_.shadowSettings.
-                        directionalReceiverDepthBiasTexels,
-                    .receiverPlaneClampTexels = config_.shadowSettings.
-                        directionalReceiverPlaneClampTexels,
-                    .normalOffsetTexels = config_.shadowSettings.
-                        directionalNormalOffsetTexels,
-                    .filterProfile = effectiveShadowFilterProfile(
-                        config_.shadowSettings, selection.quality),
-                });
-                dirtyCascades += schedule.invalidatedCount;
-                casterInvalidatedCascades +=
-                    schedule.casterInvalidatedCount;
-                updatedCascades += std::popcount(schedule.updateMask);
-                cachedCascades += schedule.cacheHitCount;
-            }
-            for (uint32_t shadowIndex = static_cast<uint32_t>(
-                    shadowSelections.size());
-                shadowIndex < directionalShadowCaches_.size(); ++shadowIndex)
-                directionalShadowCaches_[shadowIndex].reset();
-            activeDirectionalShadowSelection_ = shadowSelections.front();
-            activeDirectionalShadowSampleableMask_ =
-                directionalShadows.front().sampleableMask;
-            activeDirectionalShadowOwnerCount_ = static_cast<uint32_t>(
-                shadowSelections.size());
-            cpuProfiler_.recordCounter("shadow.directional.requested",
-                shadowSelections.size());
-            cpuProfiler_.recordCounter("shadow.directional.omitted",
-                shadowSelections.front().omittedShadowDirectionalLights);
-            cpuProfiler_.recordCounter("shadow.directional.cascades.dirty",
-                dirtyCascades);
-            cpuProfiler_.recordCounter(
-                "shadow.directional.cascades.caster_invalidated",
-                casterInvalidatedCascades);
-            cpuProfiler_.recordCounter("shadow.directional.cascades.updated",
-                updatedCascades);
-            cpuProfiler_.recordCounter("shadow.directional.cascades.cached",
-                cachedCascades);
-            const auto fixedMillionths = [](float value) {
-                return static_cast<uint64_t>(std::llround(
-                    static_cast<double>(value) * 1'000'000.0));
-            };
-            cpuProfiler_.recordCounter("shadow.directional.coverage_distance_m",
-                fixedMillionths(shadowCamera.farPlane),
-                ProfileCounterStatus::Exact, ProfileCounterUnit::Millionths);
-            cpuProfiler_.recordCounter(
-                "shadow.directional.receiver_depth_bias_texels",
-                fixedMillionths(config_.shadowSettings.
-                    directionalReceiverDepthBiasTexels),
-                ProfileCounterStatus::Exact, ProfileCounterUnit::Millionths);
-            cpuProfiler_.recordCounter(
-                "shadow.directional.receiver_plane_clamp_texels",
-                fixedMillionths(config_.shadowSettings.
-                    directionalReceiverPlaneClampTexels),
-                ProfileCounterStatus::Exact, ProfileCounterUnit::Millionths);
-            cpuProfiler_.recordCounter(
-                "shadow.directional.normal_offset_texels",
-                fixedMillionths(config_.shadowSettings.
-                    directionalNormalOffsetTexels),
-                ProfileCounterStatus::Exact, ProfileCounterUnit::Millionths);
-            constexpr std::array<const char*, 4> splitCounterNames{
-                "shadow.directional.cascade0.split_far_m",
-                "shadow.directional.cascade1.split_far_m",
-                "shadow.directional.cascade2.split_far_m",
-                "shadow.directional.cascade3.split_far_m" };
-            constexpr std::array<const char*, 4> densityCounterNames{
-                "shadow.directional.cascade0.world_units_per_texel_m",
-                "shadow.directional.cascade1.world_units_per_texel_m",
-                "shadow.directional.cascade2.world_units_per_texel_m",
-                "shadow.directional.cascade3.world_units_per_texel_m" };
-            const DirectionalShadowCascadePlan& diagnosticPlan =
-                directionalShadows.front().plan;
-            for (uint32_t cascade = 0;
-                    cascade < kDirectionalShadowCascadeCount; ++cascade) {
-                cpuProfiler_.recordCounter(splitCounterNames[cascade],
-                    fixedMillionths(diagnosticPlan.cascades[cascade].splitFar),
-                    ProfileCounterStatus::Exact,
-                    ProfileCounterUnit::Millionths);
-                cpuProfiler_.recordCounter(densityCounterNames[cascade],
-                    fixedMillionths(diagnosticPlan.cascades[cascade].
-                        worldUnitsPerTexel), ProfileCounterStatus::Exact,
-                    ProfileCounterUnit::Millionths);
-            }
-        }
-        else {
-            for (DirectionalShadowCache& cache : directionalShadowCaches_)
-                cache.reset();
-            activeDirectionalShadowSelection_.reset();
-            activeDirectionalShadowSampleableMask_ = 0;
-            activeDirectionalShadowOwnerCount_ = 0;
-            cpuProfiler_.recordCounter("shadow.directional.requested", 0);
-        }
-        }
-        renderFrame.directionalShadows = { shadowCasters, directionalShadows };
-        frameStage_ = { .frame = &frame, .directionalShadows = directionalShadows };
+        extractor_.scheduleShadowsAndCaptures(shadowCasters, probeCasters,
+            viewMatrix, renderCameraPosition, renderVerticalFovDegrees, aspect,
+            renderCameraNearPlane, renderCameraFarPlane, assetPreviewActive,
+            assets_.activeEnvironmentCookKey(), applicationFrameIndex,
+            renderFrame);
+        stageFrame_ = &frame;
 
-        // Spot shadows share the same extracted light slots and caster revision
-        // as clustered lighting. Stable atlas allocation is reconciled before
-        // cache scheduling so compatible tiles remain sampleable across frames.
-        uint64_t localCasterRevision = 0;
-        std::vector<SpotShadowFramePacket> spotShadows;
-        std::vector<PointShadowFramePacket> pointShadows;
-        {
-        CpuScope localScope(cpuProfiler_, "cpu.shadow.local.schedule");
-        const std::vector<LocalShadowRequest> localShadowRequests =
-            buildLocalShadowRequests(lightingFrame, renderCameraPosition);
-        const LocalShadowAllocationStats spotAllocation =
-            spotShadowAtlas_.reconcile(localShadowRequests);
-        spotShadowCache_.configure({
-            .maximumRenderedTexels = config_.shadowSettings.
-                maximumSpotRenderedTexelsPerFrame,
-            .maximumCompatibleStaleFrames = config_.shadowSettings.
-                maximumCompatibleSpotStaleFrames,
-        });
-        {
-            CpuScope revisionScope(cpuProfiler_,
-                "cpu.shadow.caster_revision.local");
-            localCasterRevision =
-                renderBackend->getShadowCasterRevision(shadowCasters);
-        }
-        std::vector<LocalShadowCacheInput> spotCacheInputs;
-        spotCacheInputs.reserve(spotShadowAtlas_.allocations().size());
-        for (const SpotShadowTile& tile : spotShadowAtlas_.allocations()) {
-            const auto request = std::ranges::find_if(localShadowRequests,
-                [&](const LocalShadowRequest& candidate) {
-                    return candidate.kind == LocalShadowKind::Spot &&
-                        candidate.owner == tile.owner;
-                });
-            if (request == localShadowRequests.end() ||
-                tile.lightSlot >= lightingFrame.records.size()) continue;
-            const PackedGpuLight& light = lightingFrame.records[tile.lightSlot];
-            const float farPlane = light.positionRange.w;
-            const float nearPlane = (std::max)(0.001f,
-                (std::min)(0.05f, farPlane * 0.01f));
-            if (!(farPlane > nearPlane)) continue;
-            const SpotShadowProjection projection = buildSpotShadowProjection(
-                glm::vec3(light.positionRange),
-                glm::vec3(light.directionOuterCos),
-                light.directionOuterCos.w, nearPlane, farPlane);
-            const std::array<uint32_t, 5> allocationIdentity{
-                tile.x, tile.y, tile.size, tile.guardTexels,
-                config_.shadowSettings.spotAtlasResolution };
-            spotCacheInputs.push_back({
-                .request = *request,
-                .resolution = tile.size,
-                .allocationRevision = shadowRevision(allocationIdentity),
-                .lightRevision = lightingFrame.recordRevisions[tile.lightSlot],
-                .casterRevision = localCasterRevision,
-                .projectionRevision = shadowRevision(
-                    projection.worldToShadowClip),
-                .pipelineRevision = 1,
-            });
-        }
-        const LocalShadowSchedule& spotSchedule =
-            spotShadowCache_.schedule(spotCacheInputs);
-        spotShadows.reserve(spotSchedule.entries.size());
-        for (const LocalShadowScheduleEntry& entry : spotSchedule.entries) {
-            const auto tile = std::ranges::find_if(
-                spotShadowAtlas_.allocations(),
-                [&](const SpotShadowTile& candidate) {
-                    return candidate.owner == entry.owner;
-                });
-            if (tile == spotShadowAtlas_.allocations().end() ||
-                tile->lightSlot >= lightingFrame.records.size()) continue;
-            const PackedGpuLight& light = lightingFrame.records[tile->lightSlot];
-            const float farPlane = light.positionRange.w;
-            const float nearPlane = (std::max)(0.001f,
-                (std::min)(0.05f, farPlane * 0.01f));
-            const SpotShadowProjection projection = buildSpotShadowProjection(
-                glm::vec3(light.positionRange),
-                glm::vec3(light.directionOuterCos),
-                light.directionOuterCos.w, nearPlane, farPlane);
-            const uint32_t shadowDataSlot = static_cast<uint32_t>(
-                std::distance(spotShadowAtlas_.allocations().begin(), tile));
-            if (shadowDataSlot >= kSpotShadowEntryCapacity) continue;
-            spotShadows.push_back({
-                .owner = entry.owner,
-                .worldToShadowClip = projection.worldToShadowClip,
-                .lightSlot = tile->lightSlot,
-                .shadowDataSlot = shadowDataSlot,
-                .atlasX = tile->x,
-                .atlasY = tile->y,
-                .tileSize = tile->size,
-                .guardTexels = tile->guardTexels,
-                .update = entry.update,
-                .sampleable = entry.sampleable,
-                .stale = entry.stale,
-                .staleAgeFrames = entry.staleAgeFrames,
-                .nearPlane = nearPlane,
-                .farPlane = farPlane,
-                .sourceRadiusMeters = light.shapeMetadata.x,
-                .filterProfile = effectiveShadowFilterProfile(
-                    config_.shadowSettings,
-                    (std::bit_cast<uint32_t>(light.shapeMetadata.z) &
-                        PackedGpuLightShadowQualityMask) >>
-                        PackedGpuLightShadowQualityShift),
-            });
-        }
-        renderFrame.spotShadows = { shadowCasters, spotShadows };
-        frameStage_.spotAllocation = spotAllocation;
-        frameStage_.spotSchedule = &spotSchedule;
-
-        // Point lights use stable tiered cube slots. Cache publication is
-        // all-or-nothing across the frozen six-face orientation so lighting can
-        // never sample a partially refreshed cube.
-        const LocalShadowAllocationStats pointAllocation =
-            pointShadowPools_.reconcile(localShadowRequests);
-        pointShadowCache_.configure({
-            .maximumRenderedTexels = config_.shadowSettings.
-                maximumPointRenderedTexelsPerFrame,
-            .maximumCompatibleStaleFrames = config_.shadowSettings.
-                maximumCompatiblePointStaleFrames,
-        });
-        std::vector<LocalShadowCacheInput> pointCacheInputs;
-        pointCacheInputs.reserve(pointShadowPools_.allocations().size());
-        for (const PointShadowSlot& slot : pointShadowPools_.allocations()) {
-            const auto request = std::ranges::find_if(localShadowRequests,
-                [&](const LocalShadowRequest& candidate) {
-                    return candidate.kind == LocalShadowKind::Point &&
-                        candidate.owner == slot.owner;
-                });
-            if (request == localShadowRequests.end() ||
-                slot.lightSlot >= lightingFrame.records.size()) continue;
-            const PackedGpuLight& light = lightingFrame.records[slot.lightSlot];
-            const float farPlane = light.positionRange.w;
-            const float nearPlane = (std::max)(0.001f,
-                (std::min)(0.05f, farPlane * 0.01f));
-            if (!(farPlane > nearPlane)) continue;
-            const auto faces = buildPointShadowFaces(
-                glm::vec3(light.positionRange), nearPlane, farPlane);
-            std::array<glm::mat4, 6> matrices{};
-            for (uint32_t face = 0; face < matrices.size(); ++face)
-                matrices[face] = faces[face].worldToShadowClip;
-            const std::array<uint32_t, 2> allocationIdentity{
-                slot.resolution, slot.cubeIndex };
-            pointCacheInputs.push_back({
-                .request = *request,
-                .resolution = slot.resolution,
-                .allocationRevision = shadowRevision(allocationIdentity),
-                .lightRevision = lightingFrame.recordRevisions[slot.lightSlot],
-                .casterRevision = localCasterRevision,
-                .projectionRevision = shadowRevision(matrices),
-                .pipelineRevision = 1,
-            });
-        }
-        const LocalShadowSchedule& pointSchedule =
-            pointShadowCache_.schedule(pointCacheInputs);
-        pointShadows.reserve(pointSchedule.entries.size());
-        for (const LocalShadowScheduleEntry& entry : pointSchedule.entries) {
-            const auto slot = std::ranges::find_if(
-                pointShadowPools_.allocations(),
-                [&](const PointShadowSlot& candidate) {
-                    return candidate.owner == entry.owner;
-                });
-            if (slot == pointShadowPools_.allocations().end() ||
-                slot->lightSlot >= lightingFrame.records.size()) continue;
-            const PackedGpuLight& light = lightingFrame.records[slot->lightSlot];
-            const float farPlane = light.positionRange.w;
-            const float nearPlane = (std::max)(0.001f,
-                (std::min)(0.05f, farPlane * 0.01f));
-            const auto faces = buildPointShadowFaces(
-                glm::vec3(light.positionRange), nearPlane, farPlane);
-            const uint32_t shadowDataSlot = static_cast<uint32_t>(
-                std::distance(pointShadowPools_.allocations().begin(), slot));
-            if (shadowDataSlot >= kPointShadowEntryCapacity) continue;
-            PointShadowFramePacket packet{
-                .owner = entry.owner,
-                .lightPosition = glm::vec3(light.positionRange),
-                .nearPlane = nearPlane,
-                .farPlane = farPlane,
-                .lightSlot = slot->lightSlot,
-                .shadowDataSlot = shadowDataSlot,
-                .resolution = slot->resolution,
-                .cubeIndex = slot->cubeIndex,
-                .update = entry.update,
-                .sampleable = entry.sampleable,
-                .stale = entry.stale,
-                .staleAgeFrames = entry.staleAgeFrames,
-                .sourceRadiusMeters = light.shapeMetadata.x,
-                .filterProfile = effectiveShadowFilterProfile(
-                    config_.shadowSettings,
-                    (std::bit_cast<uint32_t>(light.shapeMetadata.z) &
-                        PackedGpuLightShadowQualityMask) >>
-                        PackedGpuLightShadowQualityShift),
-            };
-            for (uint32_t face = 0; face < packet.worldToShadowClip.size();
-                ++face)
-                packet.worldToShadowClip[face] =
-                    faces[face].worldToShadowClip;
-            pointShadows.push_back(packet);
-        }
-        renderFrame.pointShadows = { shadowCasters, pointShadows };
-        frameStage_.pointAllocation = pointAllocation;
-        frameStage_.pointSchedule = &pointSchedule;
-        }
-
-        // Scene probes must never capture the isolated model or its preview sun.
-        if (!assetPreviewActive) {
-        CpuScope captureScope(cpuProfiler_, "cpu.probe.capture.schedule");
-        std::vector<ReflectionProbeCaptureRequest> probeCaptureRequests;
-        probeCaptureRequests.reserve(extractedProbes.candidates.size());
-        uint64_t environmentRevision = 1469598103934665603ull;
-        for (char character : assets_.activeEnvironmentCookKey()) {
-            environmentRevision ^= static_cast<uint8_t>(character);
-            environmentRevision *= 1099511628211ull;
-        }
-        if (environmentRevision == 0u) environmentRevision = 1u;
-        const uint64_t lightingRevision =
-            reflectionProbeLightingRevision(lightingFrame);
-        for (const ReflectionProbeCandidate& candidate :
-                extractedProbes.candidates) {
-            if (!candidate.probe.environmentAssetGuid.isNil()) continue;
-            probeCaptureRequests.push_back({
-                .owner = candidate.owner,
-                .updateMode = candidate.probe.updateMode,
-                .position = glm::vec3(candidate.probeToWorld[3]),
-                .resolution = static_cast<uint32_t>(
-                    candidate.probe.captureResolution),
-                .nearPlane = candidate.probe.captureNearMeters,
-                .farPlane = candidate.probe.captureFarMeters,
-                .priority = candidate.probe.priority,
-                .captureSky = candidate.probe.captureSky,
-                .settingsRevision = reflectionProbeSettingsRevision(candidate),
-                .explicitRequestRevision =
-                    candidate.probe.explicitCaptureRevision,
-                .sceneRevision = localCasterRevision,
-                .lightingRevision = lightingRevision,
-                .environmentRevision = environmentRevision,
-                .pipelineRevision = 1,
-                .frameIndex = applicationFrameIndex,
-            });
-        }
-        const ReflectionProbeCaptureSchedule& probeCaptureSchedule =
-            reflectionProbeCaptureScheduler_.schedule(probeCaptureRequests);
-        renderFrame.submitReflectionProbeCaptures = true;
-        renderFrame.probeCasters = probeCasters;
-        renderFrame.probeCaptureSchedule = probeCaptureSchedule.entries;
-        frameStage_.probeCaptureSchedule = &probeCaptureSchedule;
-        }
         // Keep scene-probe resources resident, but exclude their local influence
         // from the isolated preview. Tag the active-list identity across views.
         publishedProbes.activeListRevision = publishedProbes.activeListRevision * 2u + (assetPreviewActive ? 1u : 0u);
@@ -2094,7 +1524,7 @@ namespace Iridium {
         // transparency, output and UI. The observer's scene-linear and
         // output submit points are reported from the stage boundaries.
         renderBackend->submitFrame(renderFrame);
-        frameStage_ = {};
+        stageFrame_ = nullptr;
         extractor_.releaseFrame();
 
         if (renderBackend->endFrame() == FrameStatus::RecreateSwapchain) {

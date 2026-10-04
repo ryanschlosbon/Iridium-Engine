@@ -11,17 +11,26 @@
 #endif
 #include <glm/glm.hpp>
 
+#include <array>
 #include <cstdint>
 #include <map>
+#include <optional>
+#include <span>
 #include <memory>
 #include <string>
 #include <vector>
 
 #include "ecs/Entity.h"
+#include "renderer/lighting/DirectionalShadow.h"
 #include "renderer/lighting/LightExtractor.h"
+#include "renderer/lighting/LocalShadow.h"
 #include "renderer/lighting/ReflectionProbe.h"
 #include "renderer/rhi/GpuScene.h"
 #include "renderer/rhi/IRenderBackend.h"
+#include "renderer/rhi/ReflectionProbeCapture.h"
+#include "renderer/rhi/ReflectionProbeSettings.h"
+#include "renderer/rhi/RenderFrame.h"
+#include "renderer/rhi/ShadowSettings.h"
 #include "renderer/scene/GpuScenePublisher.h"
 #include "scene/SceneWorld.h"
 
@@ -35,7 +44,11 @@ namespace Iridium {
 
     class RenderExtractor final {
     public:
-        RenderExtractor(CpuProfiler& profiler, SceneWorld& scene);
+        // shadowSettings is read every frame (the project settings may change
+        // between frames); the probe settings configure the capture scheduler.
+        RenderExtractor(CpuProfiler& profiler, SceneWorld& scene,
+            const ProjectShadowSettings& shadowSettings,
+            const ProjectReflectionProbeSettings& probeSettings);
         ~RenderExtractor();
 
         RenderExtractor(const RenderExtractor&) = delete;
@@ -72,6 +85,39 @@ namespace Iridium {
         }
         [[nodiscard]] ReflectionProbeGpuFramePacket& publishedProbes() noexcept {
             return publishedProbes_;
+        }
+
+        // --- Reflection-probe captures ---
+        // Applies changed project probe settings to the capture scheduler.
+        void configureProbeCaptures(
+            const ProjectReflectionProbeSettings& settings);
+        void markCapturePublished(
+            const ReflectionProbeCaptureCompletion& completion);
+
+        // --- Shadow and probe-capture schedules (after sorting) ---
+        // Directional cascades, spot atlas tiles and point cubes against the
+        // cache schedulers, then scene probe captures; fills the frame's
+        // shadow and capture fields.
+        void scheduleShadowsAndCaptures(
+            const ShadowCasterSubmission& shadowCasters,
+            const ReflectionProbeCasterSubmission& probeCasters,
+            const glm::mat4& viewMatrix, const glm::vec3& renderCameraPosition,
+            float renderVerticalFovDegrees, float aspect,
+            float renderCameraNearPlane, float renderCameraFarPlane,
+            bool assetPreviewActive, const std::string& environmentCookKey,
+            uint64_t applicationFrameIndex, RenderFrame& renderFrame);
+        // submitFrame's stage boundaries: cache completion and counters.
+        void onRenderFrameStage(RenderFrameStage stage);
+
+        [[nodiscard]] const std::optional<DirectionalShadowSelection>&
+            activeDirectionalShadowSelection() const noexcept {
+            return activeDirectionalShadowSelection_;
+        }
+        [[nodiscard]] uint32_t activeDirectionalShadowSampleableMask() const noexcept {
+            return activeDirectionalShadowSampleableMask_;
+        }
+        [[nodiscard]] uint32_t activeDirectionalShadowOwnerCount() const noexcept {
+            return activeDirectionalShadowOwnerCount_;
         }
 
         // After submitFrame (or when the frame does not open): releases the
@@ -115,6 +161,35 @@ namespace Iridium {
         LightingFramePacket lightingFrame_;
         ReflectionProbeFramePacket extractedProbes_;
         ReflectionProbeGpuFramePacket publishedProbes_;
+
+        const ProjectShadowSettings& shadowSettings_;
+        ReflectionProbeCaptureScheduler reflectionProbeCaptureScheduler_;
+        std::array<DirectionalShadowCache,
+            kDirectionalShadowLightCapacity> directionalShadowCaches_;
+        StableSpotShadowAtlas spotShadowAtlas_;
+        LocalShadowCacheScheduler spotShadowCache_;
+        StablePointShadowPools pointShadowPools_;
+        LocalShadowCacheScheduler pointShadowCache_;
+        std::optional<DirectionalShadowSelection>
+            activeDirectionalShadowSelection_;
+        uint32_t activeDirectionalShadowSampleableMask_ = 0;
+        uint32_t activeDirectionalShadowOwnerCount_ = 0;
+        // This frame's shadow packets (valid until releaseFrame).
+        std::vector<DirectionalShadowFramePacket> directionalShadows_;
+        std::vector<SpotShadowFramePacket> spotShadows_;
+        std::vector<PointShadowFramePacket> pointShadows_;
+        // Caller-side work reported at submitFrame's stage boundaries (cache
+        // bookkeeping and profile counters), in the order it ran between the
+        // former submit* calls (M7R R3c.11). Valid while submitFrame runs.
+        struct FrameStageRecords {
+            std::span<const DirectionalShadowFramePacket> directionalShadows{};
+            LocalShadowAllocationStats spotAllocation{};
+            const LocalShadowSchedule* spotSchedule = nullptr;
+            LocalShadowAllocationStats pointAllocation{};
+            const LocalShadowSchedule* pointSchedule = nullptr;
+            const ReflectionProbeCaptureSchedule* probeCaptureSchedule = nullptr;
+        };
+        FrameStageRecords frameStage_{};
     };
 
 } // namespace Iridium
