@@ -3,11 +3,11 @@
 ## Header
 
 - **Milestone:** M7R — Architecture consolidation
-- **Status:** In Progress — plan approved by owner 2026-10-02; R0–R2 accepted 2026-10-02, R3 accepted 2026-10-03; R4 active
+- **Status:** In Progress — plan approved by owner 2026-10-02; R0–R2 accepted 2026-10-02, R3 and R4 accepted 2026-10-03; R5 active (R5.0, R5a, R5b and R5c.1–R5c.6 integrated; R5c.7–R5c.8 in progress)
 - **Lead:** M7R milestone-lead session (Claude Code); integration owner for all slices
 - **Branch / PR:** `m7r-consolidation` off `Render-Refactor-for-Modularity`; one PR
   for the milestone
-- **Last updated:** 2026-10-02
+- **Last updated:** 2026-10-04
 - **ADRs:** ADR-0002 (graph/HDR), ADR-0003, ADR-0006, ADR-0012 (transparency),
   ADR-0013 (transport switching), ADR-0014 (GPU-scene identity). Expected new:
   ADR-0015 threading/task model, ADR-0016 graph execution model (refines ADR-0002).

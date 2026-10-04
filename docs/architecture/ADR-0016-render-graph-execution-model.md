@@ -102,6 +102,19 @@ describes the execution model that replaces the imperative path.
      `historyValid`.
    - Production declares no history until M9.
 
+   *As implemented (M7R, recorded at R6 preparation 2026-10-04):* the validity
+   tracker keys pairs as described, but production does not yet supply a view.
+   The backend calls the one-argument `beginFrameExecution(frame)`, so every frame
+   uses the default `{identity 0, resetRevision 0}`, and `RenderFrame::history`
+   reaches only the Hi-Z owner. The key is also one per graph, not per view: the
+   editor's alternating scene and asset views, and any camera cut, would
+   invalidate every pair. The Hi-Z depth pyramid is an imported per-view image,
+   not graph History. No production pass declares history, so nothing is wrong
+   today. M9 must pass the view into `beginFrameExecution`, give history a
+   per-view key (or per-view pairs), and unify the two `ViewHistoryContext`
+   types (`Mesh.h`, identity 1 by default; `RenderGraph.h`, identity 0) before
+   TAA history lands. See `docs/milestones/M7R-to-M9-handoff.md`.
+
 6. **Barriers allowed inside passes:** mip chains, scan/compaction steps inside
    one logical pass, VSM-internal compute ordering, probe prefiltering, and
    qualification readbacks. Every other dependency is declared.

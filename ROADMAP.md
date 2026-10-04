@@ -941,7 +941,7 @@ fallback.
 
 Status: `In Progress` (execution plan
 `docs/milestones/M7R-architecture-consolidation.md` approved 2026-10-02; R0-R4 accepted
-(2026-10-02/03), R5 next; lead prompt `docs/milestones/M7R-task-lead-prompt.md`)
+(2026-10-02/03), R5 in progress; lead prompt `docs/milestones/M7R-task-lead-prompt.md`)
 
 Dependencies: accepted M0-M7.7 and the committed M7.8 checkpoint.
 
