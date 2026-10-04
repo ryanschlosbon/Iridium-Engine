@@ -865,6 +865,32 @@ R0 vs R4 (`timing/r4-final-2`, A = R0, B = `1edaab6`, A,B,B,A, 10,000 frames, sl
 - synchronization validation clean on the frozen set in every upload mode;
 - no timing regression beyond noise in either machine state.
 
+### R5 interim (2026-10-03, wave 1 at `f2cc899`: R5.0, R5a, R5b.0–1, R5c.1–2, lane P's R5c.3/R5c.5 library side)
+
+- **Structure:**
+  - `Application.cpp`: 4,564 → 476 lines (composition root).
+  - `FrameOrchestrator`, `AssetIntegration`, `EditorHost` and `RenderExtractor` (new library `iridium_render_extraction`, with a link guard against ImGui, the editor and GLFW).
+  - `EditorFrameRequests`.
+  - `TaskSystem` built on enkiTS, not yet constructed in production.
+  - Change-driven caster and depth-history revisions, with a qualification oracle.
+  - An incremental `GpuScenePublisher`.
+- **Integration fix (`3ffa06d`):** lane P's in-place publication skipped the membership republish on transform-only changes, so lane O's content watermarks went stale. The randomized equivalence test caught it after both lanes merged. The in-place path now refreshes the watermarks, and the replay test compares them.
+- **Verification:**
+  - frozen set `r5-main-2` with `--validation-sync`: identical or within envelopes, 0 hazards, 0 validation messages;
+  - digest identical to `r3a0`;
+  - sweep `r5-main-2-sweep` 36/36 against `r4d-sweep-final`. Only the new scope names, the manifest path, and first-frame allocation changes from the tracker and the publisher pools differ; steady-state counters are unchanged;
+  - tests 110/110 in Release and Debug;
+  - editor smoke with `--validation-sync` clean, and `imgui.ini` untouched.
+
+| Timing (`timing/r5-interim`, A = `9f2a28e` (R4 accepted), B = `f2cc899`, A,B,B,A, 10,000 frames, slower machine state) | CPU frame median A / B | Non-wait CPU A / B | GPU median A / B |
+|---|---|---|---|
+| T-F1-all | 1.116 / 1.116 ms | 0.565 / **0.458** ms (−19%) | 1.125 / 1.138 ms (+1.1%) |
+| T-F7-stack | 5.269 / **3.045** ms (−42%) | 5.100 / **2.937** ms (−42%) | 2.058 / 1.947 ms (−5.4%) |
+
+- **F7 target:** non-wait main-thread CPU is already 2.94 ms, under the ≤ 3.0 ms R5 target, even in the slower machine state.
+- **GPU:** the deltas are spread evenly over the draw-heavy passes in both directions (F1 forward/lighting about +5 µs each; F7 G-buffer −42 µs and forward −39 µs), and the command stream and images are identical. This reads as GPU clock and pacing behaviour, not workload; on F7 the GPU now idles far less between frames. The R5 final pair re-measures it.
+- Steady-frame allocations stay at 0.
+
 ## Completion report
 
 (Written at R6.)
