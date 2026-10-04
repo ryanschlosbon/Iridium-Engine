@@ -78,6 +78,37 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(json)
 
+# D2. enkiTS (zlib; M7R R5b, owner-approved 2026-10-03). The engine task system
+# (src/core/tasks, iridium_tasks) is its only production user and keeps every enkiTS
+# header inside its own .cpp files. Pinned to the v1.12 commit: GIT_TAG is the hash,
+# so this is a full clone (a shallow clone cannot check out a commit). Only the
+# static C++ library is built; the C interface, examples, install and sanitizer
+# options stay off. ENKITS_TASK_PRIORITIES_NUM is 3 (frame-critical, normal,
+# background; ADR-0015). Never vendored into git.
+message(STATUS "Downloading enkiTS...")
+set(_iridium_enkits_system)
+if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.25)
+    set(_iridium_enkits_system SYSTEM)
+endif()
+FetchContent_Declare(
+        enkits
+        GIT_REPOSITORY https://github.com/dougbinks/enkiTS.git
+        GIT_TAG 0289cf6ffce86697e1f46cb4eeca1c946bffec71 # v1.12
+        ${_iridium_enkits_system}
+)
+unset(_iridium_enkits_system)
+set(ENKITS_BUILD_C_INTERFACE OFF CACHE BOOL "" FORCE)
+set(ENKITS_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(ENKITS_BUILD_SHARED OFF CACHE BOOL "" FORCE)
+set(ENKITS_INSTALL OFF CACHE BOOL "" FORCE)
+set(ENKITS_SANITIZE OFF CACHE BOOL "" FORCE)
+set(ENKITS_TASK_PRIORITIES_NUM "3" CACHE STRING "" FORCE)
+FetchContent_MakeAvailable(enkits)
+if(MSVC)
+    # Third-party code: no warnings in engine build output (as for vendor code).
+    target_compile_options(enkiTS PRIVATE /w)
+endif()
+
 # E. M3 production texture codec. CPU-only configuration is part of the
 # deterministic cook contract; GPU compression and OpenMP are deliberately disabled.
 if(WIN32)

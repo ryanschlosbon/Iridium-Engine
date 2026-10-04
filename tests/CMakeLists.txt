@@ -79,6 +79,15 @@ endif()
 iridium_add_test(CliOptionRegistryTests
         SOURCES core/CliOptionRegistryTests.cpp)
 
+# M7R R5b.0 spike: the enkiTS v1.12 properties ADR-0015 relies on, against the
+# library itself (priorities, pinned I/O thread, waits inside tasks, no allocation
+# after Initialize). enkiTS publishes ENKITS_TASK_PRIORITIES_NUM, so no shared PCH.
+iridium_add_test(EnkiTsSpikeTests
+        SOURCES core/EnkiTsSpikeTests.cpp
+        LIBS enkiTS
+        ALLOCATION_PROFILE
+        NO_PCH)
+
 # The full engine command line includes the qualification library's flags
 # (M7R R2.9), so these exist only in IRIDIUM_QUALIFICATION=ON builds. The parity
 # test also checks the OFF-shaped (runtime/editor/renderer) registry.
