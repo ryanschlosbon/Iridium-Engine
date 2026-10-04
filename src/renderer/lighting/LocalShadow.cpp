@@ -11,15 +11,12 @@
 namespace Iridium {
 namespace {
 
-    struct RankedRequest {
-        LocalShadowRequest request;
-        uint32_t resolution = 0;
-        bool accepted = false;
-    };
+    using local_shadow_detail::RankedRequest;
 
-    std::vector<RankedRequest> validateAndRank(
-        std::span<const LocalShadowRequest> requests, LocalShadowKind kind) {
-        std::vector<RankedRequest> ranked;
+    // Writes into caller-owned storage so reconciliation reuses its capacity.
+    void validateAndRank(std::span<const LocalShadowRequest> requests,
+        LocalShadowKind kind, std::vector<RankedRequest>& ranked) {
+        ranked.clear();
         ranked.reserve(requests.size());
         for (const LocalShadowRequest& request : requests) {
             if (request.kind != kind) continue;
@@ -43,7 +40,6 @@ namespace {
             [](const RankedRequest& left, const RankedRequest& right) {
                 return localShadowRequestPrecedes(left.request, right.request);
             });
-        return ranked;
     }
 
     bool overlaps(const SpotShadowTile& left,
@@ -103,10 +99,17 @@ bool localShadowRequestPrecedes(const LocalShadowRequest& left,
 
 std::vector<LocalShadowRequest> buildLocalShadowRequests(
     const LightingFramePacket& lighting, glm::vec3 cameraPosition) {
+    std::vector<LocalShadowRequest> result;
+    buildLocalShadowRequests(lighting, cameraPosition, result);
+    return result;
+}
+
+void buildLocalShadowRequests(const LightingFramePacket& lighting,
+    glm::vec3 cameraPosition, std::vector<LocalShadowRequest>& result) {
     if (!std::isfinite(cameraPosition.x) || !std::isfinite(cameraPosition.y) ||
         !std::isfinite(cameraPosition.z))
         throw std::invalid_argument("Local shadow camera position is invalid.");
-    std::vector<LocalShadowRequest> result;
+    result.clear();
     result.reserve(lighting.activeSlots.size());
     for (uint32_t slot : lighting.activeSlots) {
         if (slot >= lighting.records.size() ||
@@ -142,7 +145,6 @@ std::vector<LocalShadowRequest> buildLocalShadowRequests(
         });
     }
     std::sort(result.begin(), result.end(), localShadowRequestPrecedes);
-    return result;
 }
 
 StableSpotShadowAtlas::StableSpotShadowAtlas(SpotShadowAtlasConfig config)
@@ -156,13 +158,14 @@ StableSpotShadowAtlas::StableSpotShadowAtlas(SpotShadowAtlasConfig config)
 
 LocalShadowAllocationStats StableSpotShadowAtlas::reconcile(
     std::span<const LocalShadowRequest> requests) {
-    const std::vector<RankedRequest> ranked = validateAndRank(
-        requests, LocalShadowKind::Spot);
+    validateAndRank(requests, LocalShadowKind::Spot, ranked_);
+    const std::vector<RankedRequest>& ranked = ranked_;
     LocalShadowAllocationStats stats;
     stats.requested = static_cast<uint32_t>(ranked.size());
 
     // First compute the capacity-selected set in a canonical fresh layout.
-    std::vector<SpotShadowTile> ideal;
+    std::vector<SpotShadowTile>& ideal = ideal_;
+    ideal.clear();
     ideal.reserve(ranked.size());
     for (const RankedRequest& candidate : ranked) {
         SpotShadowTile tile{ .owner = candidate.request.owner,
@@ -183,7 +186,8 @@ LocalShadowAllocationStats StableSpotShadowAtlas::reconcile(
         if (!accepted(old.owner)) ++stats.evicted;
 
     // Preserve compatible locations where possible, then place the rest by rank.
-    std::vector<SpotShadowTile> next;
+    std::vector<SpotShadowTile>& next = next_;
+    next.clear();
     next.reserve(ideal.size());
     for (const RankedRequest& candidate : ranked) {
         if (!accepted(candidate.request.owner)) continue;
@@ -246,7 +250,8 @@ LocalShadowAllocationStats StableSpotShadowAtlas::reconcile(
     }
     std::sort(next.begin(), next.end(), [](const SpotShadowTile& left,
         const SpotShadowTile& right) { return left.owner < right.owner; });
-    allocations_ = std::move(next);
+    // The previous allocations become next frame's scratch.
+    allocations_.swap(next);
     stats.allocated = static_cast<uint32_t>(allocations_.size());
     stats.omitted = stats.requested - stats.allocated;
     return stats;
@@ -261,8 +266,8 @@ StablePointShadowPools::StablePointShadowPools(PointShadowPoolConfig config)
 
 LocalShadowAllocationStats StablePointShadowPools::reconcile(
     std::span<const LocalShadowRequest> requests) {
-    std::vector<RankedRequest> ranked = validateAndRank(
-        requests, LocalShadowKind::Point);
+    validateAndRank(requests, LocalShadowKind::Point, ranked_);
+    std::vector<RankedRequest>& ranked = ranked_;
     LocalShadowAllocationStats stats;
     stats.requested = static_cast<uint32_t>(ranked.size());
     std::array<uint32_t, 3> acceptedPerPool{};
@@ -281,7 +286,8 @@ LocalShadowAllocationStats StablePointShadowPools::reconcile(
     for (const PointShadowSlot& old : allocations_)
         if (!accepted(old.owner)) ++stats.evicted;
 
-    std::vector<PointShadowSlot> next;
+    std::vector<PointShadowSlot>& next = next_;
+    next.clear();
     next.reserve(ranked.size());
     for (const RankedRequest& candidate : ranked) {
         if (!candidate.accepted) continue;
@@ -318,7 +324,8 @@ LocalShadowAllocationStats StablePointShadowPools::reconcile(
     }
     std::sort(next.begin(), next.end(), [](const PointShadowSlot& left,
         const PointShadowSlot& right) { return left.owner < right.owner; });
-    allocations_ = std::move(next);
+    // The previous allocations become next frame's scratch.
+    allocations_.swap(next);
     stats.allocated = static_cast<uint32_t>(allocations_.size());
     stats.omitted = stats.requested - stats.allocated;
     return stats;
@@ -389,7 +396,7 @@ LocalShadowCacheScheduler::LocalShadowCacheScheduler(
 }
 
 void LocalShadowCacheScheduler::configure(LocalShadowScheduleConfig config) {
-    if (currentSchedule_)
+    if (scheduled_)
         throw std::logic_error(
             "Local shadow cache policy cannot change during a schedule.");
     if (config.maximumRenderedTexels == 0u)
@@ -399,10 +406,11 @@ void LocalShadowCacheScheduler::configure(LocalShadowScheduleConfig config) {
 
 const LocalShadowSchedule& LocalShadowCacheScheduler::schedule(
     std::span<const LocalShadowCacheInput> inputs) {
-    if (currentSchedule_)
+    if (scheduled_)
         throw std::logic_error(
             "Local shadow schedule must be completed before rescheduling.");
-    std::vector<LocalShadowCacheInput> ranked(inputs.begin(), inputs.end());
+    std::vector<LocalShadowCacheInput>& ranked = ranked_;
+    ranked.assign(inputs.begin(), inputs.end());
     for (LocalShadowCacheInput& input : ranked) {
         if (input.request.owner.isNil() || input.request.quality > 3u ||
             input.resolution != localShadowResolution(
@@ -445,8 +453,10 @@ const LocalShadowSchedule& LocalShadowCacheScheduler::schedule(
             return localShadowRequestPrecedes(left.request, right.request);
         });
 
-    currentSchedule_.emplace();
-    LocalShadowSchedule& result = *currentSchedule_;
+    schedule_.entries.clear();
+    schedule_.stats = {};
+    scheduled_ = true;
+    LocalShadowSchedule& result = schedule_;
     result.entries.reserve(ranked.size());
     result.stats.requests = static_cast<uint32_t>(ranked.size());
     uint64_t remaining = config_.maximumRenderedTexels;
@@ -512,7 +522,7 @@ const LocalShadowSchedule& LocalShadowCacheScheduler::schedule(
 }
 
 void LocalShadowCacheScheduler::markScheduledRendered() {
-    if (!currentSchedule_)
+    if (!scheduled_)
         throw std::logic_error("No local shadow schedule is pending.");
     for (const PendingUpdate& update : pendingUpdates_) {
         auto ownerIt = std::find(stateOwners_.begin(), stateOwners_.end(),
@@ -528,14 +538,16 @@ void LocalShadowCacheScheduler::markScheduledRendered() {
         state.valid = true;
     }
     pendingUpdates_.clear();
-    currentSchedule_.reset();
+    scheduled_ = false;
 }
 
 void LocalShadowCacheScheduler::reset() noexcept {
     states_.clear();
     stateOwners_.clear();
     pendingUpdates_.clear();
-    currentSchedule_.reset();
+    schedule_.entries.clear();
+    schedule_.stats = {};
+    scheduled_ = false;
 }
 
 } // namespace Iridium

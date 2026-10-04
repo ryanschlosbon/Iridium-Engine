@@ -538,9 +538,11 @@ namespace Iridium {
             directionalShadows_;
         {
         CpuScope directionalScope(cpuProfiler_, "cpu.shadow.directional.schedule");
-        const std::vector<DirectionalShadowSelection> shadowSelections =
-            selectDirectionalShadowLights(lightingFrame,
-                shadowSettings_.maximumDirectionalLights);
+        const std::vector<DirectionalShadowSelection>& shadowSelections =
+            directionalShadowSelections_;
+        selectDirectionalShadowLights(lightingFrame,
+            shadowSettings_.maximumDirectionalLights,
+            directionalShadowSelections_);
         if (!shadowSelections.empty()) {
             const glm::mat4 inverseView = glm::inverse(viewMatrix);
             DirectionalShadowCamera shadowCamera{};
@@ -708,8 +710,10 @@ namespace Iridium {
         std::vector<PointShadowFramePacket>& pointShadows = pointShadows_;
         {
         CpuScope localScope(cpuProfiler_, "cpu.shadow.local.schedule");
-        const std::vector<LocalShadowRequest> localShadowRequests =
-            buildLocalShadowRequests(lightingFrame, renderCameraPosition);
+        const std::vector<LocalShadowRequest>& localShadowRequests =
+            localShadowRequests_;
+        buildLocalShadowRequests(lightingFrame, renderCameraPosition,
+            localShadowRequests_);
         const LocalShadowAllocationStats spotAllocation =
             spotShadowAtlas_.reconcile(localShadowRequests);
         spotShadowCache_.configure({

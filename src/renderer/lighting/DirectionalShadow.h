@@ -63,6 +63,11 @@ namespace Iridium {
     [[nodiscard]] std::vector<DirectionalShadowSelection>
         selectDirectionalShadowLights(const LightingFramePacket& lighting,
             uint32_t maximumLights = kDirectionalShadowLightCapacity);
+    // M7R R5c.6: the same selection written into caller-owned storage, so a
+    // steady frame reuses its capacity instead of allocating.
+    void selectDirectionalShadowLights(const LightingFramePacket& lighting,
+        uint32_t maximumLights,
+        std::vector<DirectionalShadowSelection>& selections);
     [[nodiscard]] DirectionalShadowCascadePlan buildDirectionalShadowCascades(
         const DirectionalShadowCamera& camera, glm::vec3 lightForward,
         DirectionalShadowConfig config = {});

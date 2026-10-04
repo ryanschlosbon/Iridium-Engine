@@ -268,6 +268,9 @@ namespace Iridium {
             activeDirectionalShadowSelection_;
         uint32_t activeDirectionalShadowSampleableMask_ = 0;
         uint32_t activeDirectionalShadowOwnerCount_ = 0;
+        // Per-frame light selection scratch, kept for its capacity (R5c.6).
+        std::vector<DirectionalShadowSelection> directionalShadowSelections_;
+        std::vector<LocalShadowRequest> localShadowRequests_;
         // This frame's shadow packets (valid until releaseFrame).
         std::vector<DirectionalShadowFramePacket> directionalShadows_;
         std::vector<SpotShadowFramePacket> spotShadows_;
