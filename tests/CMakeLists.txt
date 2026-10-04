@@ -142,7 +142,7 @@ endif()
 
 iridium_add_test(TransformSystemTests
         SOURCES ecs/TransformSystemTests.cpp
-        LIBS iridium_scene iridium_vendor_imgui)
+        LIBS iridium_scene iridium_tasks iridium_vendor_imgui)
 
 iridium_add_test(EntityIdentityTests
         SOURCES ecs/EntityIdentityTests.cpp

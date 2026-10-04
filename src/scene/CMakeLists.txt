@@ -17,6 +17,7 @@ target_link_libraries(iridium_scene PUBLIC
         iridium_ecs
         iridium_assets
         iridium_rhi
+        iridium_tasks
         iridium_core)
 iridium_target_pch(iridium_scene ENGINE)
 

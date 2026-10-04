@@ -168,7 +168,7 @@ namespace Iridium {
                 {
                     CpuScope transformScope(cpuProfiler_, "cpu.scene.transforms");
                     changedTransformsThisFrame_ = transformSystem.update(
-                        registry, &changedTransformEntities_);
+                        registry, &changedTransformEntities_, &tasks_);
                 }
 
                 // Observer scene-extent resizes happen here, between frames.
