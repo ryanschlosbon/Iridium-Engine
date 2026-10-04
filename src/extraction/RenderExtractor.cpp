@@ -2111,6 +2111,24 @@ namespace Iridium {
         if (transformTotal > UINT32_MAX)
             throw std::length_error(
                 "Instance transform stream exceeds 32-bit indices");
+        // A single extraction chunk (every small frame) hands its storage to
+        // the queues instead of being copied: its packets are their prefix
+        // at offset 0. The two buffers alternate between frames and keep
+        // their capacity.
+        const bool swapSingleChunk = extractionChunkCount == 1;
+        size_t swappedPackets = 0;
+        if (swapSingleChunk) {
+            ExtractionChunk& chunk = extractionChunks_.front();
+            for (const std::vector<DrawPacket>& queue : chunk.queues)
+                swappedPackets += queue.size();
+            swappedPackets += chunk.selection.size();
+            opaqueQueue.swap(chunk.queues[ExtractionOpaque]);
+            forwardOpaqueQueue.swap(chunk.queues[ExtractionForwardOpaque]);
+            transparentQueue.swap(chunk.queues[ExtractionTransparent]);
+            sortedSurfaceQueue.swap(chunk.queues[ExtractionSortedSurface]);
+            selectionQueue.swap(chunk.selection);
+            forwardInstanceTransforms_.swap(chunk.instanceTransforms);
+        }
         // Exact sizes. A steady frame has the previous frame's sizes, so
         // these construct nothing; every element is overwritten below.
         opaqueQueue.resize(totals[ExtractionOpaque]);
@@ -2126,7 +2144,8 @@ namespace Iridium {
         // frame copies inline (a task round trip would cost more).
         const size_t copiedPackets = totals[ExtractionOpaque] +
             totals[ExtractionForwardOpaque] + totals[ExtractionTransparent] +
-            totals[ExtractionSortedSurface] + selectionTotal;
+            totals[ExtractionSortedSurface] + selectionTotal -
+            swappedPackets;
         const uint32_t copyTasks = extractionChunkCount + parityChunkCount;
         runChunks(copiedPackets >= MergeParallelMinimumPackets ? copyTasks : 1u,
             "cpu.render.extract.merge.chunk", [&](uint32_t task) {
@@ -2138,6 +2157,7 @@ namespace Iridium {
                         forwardOpaqueQueue.data() + chunk.forwardOffset);
                     return;
                 }
+                if (swapSingleChunk) return;   // already in place
                 const ExtractionChunk& chunk = extractionChunks_[index];
                 // Instance-batch packets index the chunk's transforms; rebase them
                 // onto the frame's stream (non-batch packets hold UINT32_MAX).
