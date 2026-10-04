@@ -252,6 +252,7 @@ namespace Iridium {
                     &engineLog_);
             assetThumbnailService_ =
                 std::make_unique<AssetThumbnailService>(
+                    tasks_,
                     assetRoot,
                     editorModelDdc_,
                     CookTarget{

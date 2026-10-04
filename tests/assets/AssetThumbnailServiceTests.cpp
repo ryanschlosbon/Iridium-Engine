@@ -141,8 +141,7 @@ namespace {
                 LocalDerivedDataCache>(
                     temporary.path / "ddc");
         AssetModelPreparationService models(*testTasks, temporary.path, cache, target());
-        AssetThumbnailService service(
-            temporary.path, cache, target());
+        AssetThumbnailService service(*testTasks, temporary.path, cache, target());
         const AssetCatalogRecord root =
             rootRecord();
         CHECK(prepareModel(models, root));
@@ -245,8 +244,7 @@ namespace {
     bool cancelsNoLongerVisibleResults() {
         TemporaryDirectory temporary;
         copyFixture(temporary.path);
-        AssetThumbnailService service(
-            temporary.path,
+        AssetThumbnailService service(*testTasks, temporary.path,
             temporary.path / "ddc",
             target());
         const AssetCatalogRecord root =
@@ -272,8 +270,7 @@ namespace {
     bool pinnedDemandSurvivesBrowserPaging() {
         TemporaryDirectory temporary;
         copyFixture(temporary.path);
-        AssetThumbnailService service(
-            temporary.path,
+        AssetThumbnailService service(*testTasks, temporary.path,
             temporary.path / "ddc",
             target());
         const AssetCatalogRecord root =
@@ -295,7 +292,7 @@ namespace {
     bool viewerDemandDoesNotReplaceOtherConsumers() {
         TemporaryDirectory temporary;
         copyFixture(temporary.path);
-        AssetThumbnailService service(temporary.path, temporary.path / "ddc", target());
+        AssetThumbnailService service(*testTasks, temporary.path, temporary.path / "ddc", target());
         const auto root = rootRecord();
         auto material = root;
         material.guid = createAssetGuidV7();
@@ -326,8 +323,7 @@ namespace {
                 LocalDerivedDataCache>(
                     temporary.path / "ddc");
         AssetModelPreparationService models(*testTasks, temporary.path, cache, target());
-        AssetThumbnailService service(
-            temporary.path, cache, target());
+        AssetThumbnailService service(*testTasks, temporary.path, cache, target());
         const AssetCatalogRecord root =
             rootRecord();
         CHECK(prepareModel(models, root));
@@ -404,8 +400,7 @@ namespace {
             .status =
                 AssetCatalogStatus::Ready,
         };
-        AssetThumbnailService service(
-            temporary.path,
+        AssetThumbnailService service(*testTasks, temporary.path,
             temporary.path / "ddc",
             target());
         service.setDemand(
@@ -495,8 +490,7 @@ namespace {
                 LocalDerivedDataCache>(
                     temporary.path / "ddc");
         AssetModelPreparationService models(*testTasks, temporary.path, cache, target());
-        AssetThumbnailService thumbnails(
-            temporary.path, cache, target());
+        AssetThumbnailService thumbnails(*testTasks, temporary.path, cache, target());
         const AssetCatalogRecord root =
             rootRecord();
         thumbnails.setDemand(

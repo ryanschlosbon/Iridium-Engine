@@ -2,6 +2,7 @@
 #include "material/MaterialAuthoringPatch.h"
 #include "material/MaterialAuthoringPatch.h"
 #include "core/EngineLog.h"
+#include "core/tasks/TaskSystem.h"
 
 #include "assets/cooker/AssetCooker.h"
 #include "assets/cooker/CookReceipt.h"
@@ -78,11 +79,13 @@ namespace Iridium {
     } // namespace
 
     AssetThumbnailService::AssetThumbnailService(
+        Tasks::TaskSystem& tasks,
         std::filesystem::path assetRoot,
         std::filesystem::path ddcRoot,
         CookTarget target,
         EngineLog* log)
         : AssetThumbnailService(
+            tasks,
             std::move(assetRoot),
             std::make_shared<
                 LocalDerivedDataCache>(
@@ -91,6 +94,7 @@ namespace Iridium {
             log) {}
 
     AssetThumbnailService::AssetThumbnailService(
+        Tasks::TaskSystem& tasks,
         std::filesystem::path assetRoot,
         std::shared_ptr<LocalDerivedDataCache> cache,
         CookTarget target,
@@ -105,10 +109,8 @@ namespace Iridium {
             throw std::invalid_argument(
                 "Asset thumbnail service requires an asset root and DDC.");
         }
-        worker_ = std::jthread(
-            [this](std::stop_token stopToken) {
-                workerLoop(stopToken);
-            });
+        strand_ = std::make_unique<Tasks::FunctionStrand>(tasks,
+            Tasks::TaskPriority::Background, "asset.thumbnail.prepare");
     }
 
     AssetThumbnailService::~AssetThumbnailService() {
@@ -149,7 +151,7 @@ namespace Iridium {
             visibleRecords) {
         auto grouped =
             groupDemand(visibleRecords);
-        std::lock_guard lock(mutex_);
+        DrainLock lock(*this);
         if (shutdown_) return;
         visibleDemandByRoot_ =
             std::move(grouped);
@@ -162,7 +164,7 @@ namespace Iridium {
                 AssetCatalogRecord> records) {
         auto grouped =
             groupDemand(records);
-        std::lock_guard lock(mutex_);
+        DrainLock lock(*this);
         if (shutdown_) return;
         pinnedDemandByRoot_ =
             std::move(grouped);
@@ -171,7 +173,7 @@ namespace Iridium {
 
     void AssetThumbnailService::setViewerDemand(std::span<const AssetCatalogRecord> records) {
         auto grouped = groupDemand(records);
-        std::lock_guard lock(mutex_);
+        DrainLock lock(*this);
         if (shutdown_) return;
         viewerDemandByRoot_ = std::move(grouped);
         rebuildDemandLocked();
@@ -183,7 +185,7 @@ namespace Iridium {
                 AssetCatalogRecord> sourceRecords,
             std::optional<AssetGuid>
                 selectedAsset) {
-        std::lock_guard lock(mutex_);
+        DrainLock lock(*this);
         if (shutdown_) return;
         if (detailAsset_ == selectedAsset) {
             return;
@@ -199,7 +201,7 @@ namespace Iridium {
         detailAsset_ = selectedAsset;
         if (!selectedAsset ||
             selectedAsset->isNil()) {
-            condition_.notify_all();
+            drainRequested_ = true;
             return;
         }
         auto grouped =
@@ -236,7 +238,7 @@ namespace Iridium {
         stats_.queuedRoots =
             static_cast<uint32_t>(
                 jobs_.size());
-        condition_.notify_all();
+        drainRequested_ = true;
     }
 
     void AssetThumbnailService::
@@ -308,12 +310,12 @@ namespace Iridium {
                 demandedAssets_.size());
         stats_.active =
             activeRoot_.has_value();
-        condition_.notify_all();
+        drainRequested_ = true;
     }
 
     void AssetThumbnailService::invalidate(
         AssetGuid rootAssetGuid) {
-        std::lock_guard lock(mutex_);
+        DrainLock lock(*this);
         const auto demanded =
             demandByRoot_.find(rootAssetGuid);
         if (demanded ==
@@ -350,7 +352,7 @@ namespace Iridium {
         }
         stats_.queuedRoots =
             static_cast<uint32_t>(jobs_.size());
-        condition_.notify_all();
+        drainRequested_ = true;
     }
 
     void AssetThumbnailService::markPublished(
@@ -364,7 +366,7 @@ namespace Iridium {
 
     void AssetThumbnailService::markEvicted(
         AssetGuid assetGuid) {
-        std::lock_guard lock(mutex_);
+        DrainLock lock(*this);
         completedAssets_.erase(assetGuid);
         info_.erase(assetGuid);
         if (!demandedAssets_.contains(
@@ -390,7 +392,7 @@ namespace Iridium {
                 grouped.emplace(rootGuid, job);
                 queueMissingLocked(
                     std::move(grouped));
-                condition_.notify_all();
+                drainRequested_ = true;
                 break;
             }
         }
@@ -516,11 +518,9 @@ namespace Iridium {
             viewerDemandByRoot_.clear();
             demandedAssets_.clear();
         }
-        worker_.request_stop();
-        condition_.notify_all();
-        if (worker_.joinable()) {
-            worker_.join();
-        }
+        stop_.request_stop();
+        // Waits for the root in preparation; the drain then finds shutdown.
+        strand_->waitIdle();
     }
 
     PreparedAssetThumbnailBatch
@@ -872,27 +872,40 @@ namespace Iridium {
         }
     }
 
-    void AssetThumbnailService::workerLoop(
-        std::stop_token stopToken) {
-#if defined(_WIN32)
-        // Thumbnail rasterization is opportunistic editor work. Large selected
-        // models must not compete at normal priority with the render/UI thread.
-        (void)SetThreadPriority(
-            GetCurrentThread(),
-            THREAD_PRIORITY_BELOW_NORMAL);
-#endif
-        while (!stopToken.stop_requested()) {
+    AssetThumbnailService::DrainLock::DrainLock(
+        AssetThumbnailService& service)
+        : service_(service) {
+        service_.mutex_.lock();
+    }
+
+    AssetThumbnailService::DrainLock::~DrainLock() {
+        // Posts the drain after unlocking, so the strand never waits on (or
+        // runs inline under) the service mutex.
+        const bool post = service_.drainRequested_ &&
+            !service_.drainScheduled_ && !service_.shutdown_ &&
+            !service_.jobs_.empty();
+        if (post) {
+            service_.drainScheduled_ = true;
+        }
+        service_.drainRequested_ = false;
+        service_.mutex_.unlock();
+        if (post) {
+            (void)service_.strand_->post(
+                [service = &service_] { service->drain(); });
+        }
+    }
+
+    void AssetThumbnailService::drain() {
+        // Thumbnail rasterization is opportunistic editor work: a Background
+        // strand of the task system (M7R R5b.2; it ran on a BELOW_NORMAL
+        // thread). One drain item runs the queued roots one at a time.
+        const std::stop_token stopToken = stop_.get_token();
+        for (;;) {
             Job job;
             {
-                std::unique_lock lock(mutex_);
-                condition_.wait(
-                    lock, stopToken,
-                    [this] {
-                        return shutdown_ ||
-                            !jobs_.empty();
-                    });
-                if (shutdown_ ||
-                    stopToken.stop_requested()) {
+                std::lock_guard lock(mutex_);
+                if (shutdown_ || jobs_.empty()) {
+                    drainScheduled_ = false;
                     return;
                 }
                 job = std::move(
@@ -949,7 +962,10 @@ namespace Iridium {
             {
                 std::lock_guard lock(mutex_);
                 activeRoot_.reset();
-                if (shutdown_) return;
+                if (shutdown_) {
+                    drainScheduled_ = false;
+                    return;
+                }
                 if (!result.deferredReason.empty() &&
                     !job.detail) {
                     for (const AssetCatalogRecord&
