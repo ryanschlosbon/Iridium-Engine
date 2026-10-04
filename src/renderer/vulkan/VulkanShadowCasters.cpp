@@ -49,27 +49,6 @@ namespace Iridium {
         return hash;
     }
 
-    std::array<uint64_t, kDirectionalShadowCascadeCount>
-        directionalShadowCasterRevisions(const VulkanIndirectScene& scene,
-            const VulkanResourceRegistry& resources,
-            const ShadowCasterSubmission& casters,
-            const DirectionalShadowCascadePlan& plan) noexcept {
-        std::array<uint64_t, kDirectionalShadowCascadeCount> hashes{};
-        hashes.fill(1469598103934665603ull);
-        visitIndirectCasters(scene, casters, GpuSceneConsumerShadow,
-            [&](const VulkanResolvedCaster& caster) {
-                const uint32_t cascadeMask = directionalShadowCasterCascadeMask(
-                    plan, caster.boundsSphereCenterWorld,
-                    caster.boundsSphereRadiusWorld, 0xfu);
-                for (uint32_t cascade = 0;
-                    cascade < kDirectionalShadowCascadeCount; ++cascade) {
-                    if ((cascadeMask & (1u << cascade)) == 0u) continue;
-                    appendCaster(hashes[cascade], resources, caster);
-                }
-            });
-        return hashes;
-    }
-
     VulkanIndirectAssetResolver vulkanIndirectAssets(
         const VulkanFeatureContext& context) noexcept {
         return {

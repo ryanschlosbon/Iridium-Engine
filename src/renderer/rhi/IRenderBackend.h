@@ -150,16 +150,20 @@ namespace Iridium {
 
         // Opaque cache key over caster geometry, transforms, pipeline state,
         // and backend-owned material revisions. It carries no Vulkan identity.
-        // Valid once the frame's GPU scene is published.
+        // Valid once the frame's GPU scene is published. M7R R5c.1: a
+        // monotonic revision that advances exactly when that content changes
+        // (content returning to an earlier state gets a new value), evaluated
+        // from change triggers rather than per-frame hashing.
         [[nodiscard]] virtual uint64_t getShadowCasterRevision(
-            const ShadowCasterSubmission& shadowCasters) const noexcept = 0;
+            const ShadowCasterSubmission& shadowCasters) = 0;
         // Cache identities for the independent conservative caster membership
         // of each directional cascade. Backend material revisions are included.
+        // Call once per directional light per frame, in shadow-index order.
         [[nodiscard]] virtual std::array<uint64_t,
             kDirectionalShadowCascadeCount>
             getDirectionalShadowCasterRevisions(
                 const ShadowCasterSubmission& shadowCasters,
-                const DirectionalShadowCascadePlan& plan) const noexcept = 0;
+                const DirectionalShadowCascadePlan& plan) = 0;
 
         // Submits the command buffers to the GPU and presents to the monitor
         virtual FrameStatus endFrame() = 0;

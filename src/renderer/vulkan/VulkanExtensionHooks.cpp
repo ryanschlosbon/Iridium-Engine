@@ -25,6 +25,8 @@ namespace Iridium {
             indirectOracle_ = vulkanExtension->indirectOracle();
         if (indirectStreamObserver_ == nullptr)
             indirectStreamObserver_ = vulkanExtension->indirectStreamObserver();
+        if (casterRevisionObserver_ == nullptr)
+            casterRevisionObserver_ = vulkanExtension->casterRevisionObserver();
         if (editorUi_ == nullptr)
             editorUi_ = vulkanExtension->editorUi();
     }

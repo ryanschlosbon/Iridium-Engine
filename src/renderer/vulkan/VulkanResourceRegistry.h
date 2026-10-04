@@ -119,6 +119,12 @@ namespace Iridium {
         void updateCanonicalMaterial(MaterialHandle handle,
             const PackedGpuMaterial& material);
         void freeMaterial(MaterialHandle handle);
+        // M7R R5c.1: advances whenever a material payload is allocated,
+        // updated or freed. Consumers that derive content from material state
+        // (the caster revisions) re-read it only when this value moves.
+        [[nodiscard]] uint64_t materialRevision() const noexcept {
+            return materialRevision_;
+        }
 
         // Canonical material table (one host-visible buffer per frame slot).
         void setMaterialTableMaximumCapacity(uint32_t maximumCapacity) noexcept {
@@ -200,6 +206,7 @@ namespace Iridium {
             pendingMaterialSlots_{};
         uint32_t canonicalMaterialCapacity_ = 0;
         uint32_t canonicalMaterialMaximumCapacity_ = 0;
+        uint64_t materialRevision_ = 1;
     };
 
 } // namespace Iridium

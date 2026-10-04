@@ -9,6 +9,7 @@
 // IVulkanBackendExtension.
 
 #include "qualification/QualificationBackend.h"
+#include "qualification/vulkan/VulkanCasterRevisionOracle.h"
 #include "qualification/vulkan/VulkanIndirectOracle.h"
 #include "qualification/vulkan/VulkanIndirectStreamDigest.h"
 #include "renderer/vulkan/VulkanBackendExtension.h"
@@ -45,6 +46,14 @@ namespace Iridium {
         [[nodiscard]] const VulkanIndirectStreamDigest&
             indirectStreamDigest() const noexcept {
             return indirectStreamDigest_;
+        }
+        [[nodiscard]] IVulkanCasterRevisionObserver*
+            casterRevisionObserver() noexcept override {
+            return casterRevisionOracleEnabled_ ? &casterRevisionOracle_ : nullptr;
+        }
+        [[nodiscard]] const VulkanCasterRevisionOracle&
+            casterRevisionOracle() const noexcept {
+            return casterRevisionOracle_;
         }
         void onBeforeDeviceDestroy() override;
 
@@ -149,6 +158,8 @@ namespace Iridium {
         VulkanIndirectOracle oracle_;
         VulkanIndirectStreamDigest indirectStreamDigest_;
         bool indirectStreamDigestEnabled_ = false;
+        VulkanCasterRevisionOracle casterRevisionOracle_;
+        bool casterRevisionOracleEnabled_ = false;
         bool validateProbeCaptureTargets_ = false;
         bool aliasPoison_ = false;
         struct AliasPoisonSlot {

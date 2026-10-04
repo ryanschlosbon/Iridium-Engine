@@ -212,6 +212,9 @@ namespace Iridium {
         addSwitch(registry, owner, "--qualification-indirect-stream-digest",
             "Print a digest of every GPU-driven compaction stream per view and frame",
             [&q] { q.indirectStreamDigest = true; });
+        addSwitch(registry, owner, "--qualification-caster-revision-oracle",
+            "Recompute the retired per-frame caster hashes and compare change frames with the caster revisions",
+            [&q] { q.casterRevisionOracle = true; });
         addSwitch(registry, owner, "--qualification-alias-poison",
             "Fill render-graph alias heaps with NaN at frame start (implies aliasing on)",
             [&q, &c] {

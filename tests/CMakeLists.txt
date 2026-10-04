@@ -316,6 +316,13 @@ iridium_add_test(VulkanIndirectCullerTests
         SOURCES renderer/VulkanIndirectCullerTests.cpp
         LIBS iridium_vulkan)
 
+# M7R R5c.1/R5c.2: the change-driven caster and depth-content revisions
+# against an independent re-implementation of the retired per-frame hash, one
+# case per revision source plus a randomized run (no device).
+iridium_add_test(VulkanCasterRevisionTests
+        SOURCES renderer/VulkanCasterRevisionTests.cpp
+        LIBS iridium_vulkan)
+
 # M7R R2.7/R2.8 Vulkan qualification extension: readback analyzers, oracle
 # comparisons, hook declarations and factory attachment (no device).
 if(TARGET iridium_qualification)

@@ -41,6 +41,7 @@
 #include "VulkanLocalShadowFeature.h"
 #include "VulkanReflectionProbeFeature.h"
 #include "VulkanShadowCasters.h"
+#include "VulkanCasterRevisions.h"
 #include "VulkanExtensionHooks.h"
 #include "VulkanFeatureContext.h"
 #include "VulkanFrameTelemetry.h"
@@ -155,6 +156,9 @@ namespace Iridium {
         VkDescriptorSetLayout indirectCullerSetLayout_ = VK_NULL_HANDLE;
         // Caster scratch shared by the shadow owners and the probe capture.
         VulkanCasterScratch casterScratch_;
+        // M7R R5c.1: the shadow submission's change-driven revisions (local
+        // shadows, probe scene revision, VSM clip key, directional cascades).
+        VulkanShadowCasterRevisions casterRevisions_;
         // R3c.7: G-buffer pass and pipelines, the main-view opaque culler,
         // the G-buffer draw loops and the depth pyramid with its history.
         VulkanOpaqueFeature opaque_;
@@ -385,11 +389,11 @@ namespace Iridium {
         void submitFrame(const RenderFrame& frame) override;
         [[nodiscard]] RenderFrameTelemetry frameTelemetry() const noexcept override;
         [[nodiscard]] uint64_t getShadowCasterRevision(
-            const ShadowCasterSubmission& shadowCasters) const noexcept override;
+            const ShadowCasterSubmission& shadowCasters) override;
         [[nodiscard]] std::array<uint64_t, kDirectionalShadowCascadeCount>
             getDirectionalShadowCasterRevisions(
                 const ShadowCasterSubmission& shadowCasters,
-                const DirectionalShadowCascadePlan& plan) const noexcept override;
+                const DirectionalShadowCascadePlan& plan) override;
         FrameStatus endFrame() override;
 
         // Resource Allocation

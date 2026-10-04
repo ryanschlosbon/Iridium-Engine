@@ -111,6 +111,7 @@ namespace {
         flag("experimentalDepthOcclusionRejection", c.experimentalDepthOcclusionRejection);
         flag("depthOcclusionQualificationOracle", c.depthOcclusionQualificationOracle);
         flag("indirectStreamDigest", c.indirectStreamDigest);
+        flag("casterRevisionOracle", c.casterRevisionOracle);
         flag("renderGraphAliasing", c.renderGraphAliasing);
         field("uploadQueue", exact(enumValue(c.uploadQueue)));
         flag("aliasPoison", c.aliasPoison);
@@ -471,7 +472,7 @@ namespace {
                 "--upload-queue requires auto, graphics or legacy-blocking",
                 { { "transfer", "--upload-queue requires auto, graphics or legacy-blocking" },
                   { "", "--upload-queue requires auto, graphics or legacy-blocking" } } },
-            // --- qualification (39) ---
+            // --- qualification (40) ---
             { "--validate-texture-residency-churn", Q, {}, {}, [](C& c) {
                 c.validateTextureResidencyChurn = true; }, {}, {} },
             { "--validate-reflection-probes", Q, {}, {}, [](C& c) {
@@ -546,6 +547,9 @@ namespace {
                 c.depthOcclusionQualificationOracle = true; }, {}, {} },
             { "--qualification-indirect-stream-digest", Q, {}, {}, [](C& c) {
                 c.indirectStreamDigest = true; }, {}, {} },
+            // M7R R5c.1 (not in 6b000ad).
+            { "--qualification-caster-revision-oracle", Q, {}, {}, [](C& c) {
+                c.casterRevisionOracle = true; }, {}, {} },
             // M7R R4b.5 (not in 6b000ad): implies --render-graph-aliasing on.
             { "--qualification-alias-poison", Q, {}, {}, [](C& c) {
                 c.renderGraphAliasing = true;
@@ -606,8 +610,8 @@ namespace {
         Cli::CliOptionRegistry registry;
         registerEngineOptions(registry, scratch);
 
-        CHECK(table.size() == 89);
-        CHECK(registry.options().size() == 89);
+        CHECK(table.size() == 90);
+        CHECK(registry.options().size() == 90);
         std::set<std::string_view> names;
         std::map<std::string_view, size_t> ownerCounts;
         for (const FlagCase& row : table) {
@@ -671,7 +675,7 @@ namespace {
         CHECK(ownerCounts[R] == 14);
         CHECK(ownerCounts[E] == 4);
         CHECK(ownerCounts[G] == 32);
-        CHECK(ownerCounts[Q] == 39);
+        CHECK(ownerCounts[Q] == 40);
         std::cout << "  owners: runtime " << ownerCounts[R] << ", editor " << ownerCounts[E]
                   << ", renderer " << ownerCounts[G] << ", qualification "
                   << ownerCounts[Q] << '\n';
@@ -722,7 +726,7 @@ namespace {
     bool testUsageParity() {
         const std::string usage = engineUsage();
         CHECK(usage.starts_with("Usage: IridiumEngine [options]\n"));
-        CHECK(optionLines(usage).size() == 89);
+        CHECK(optionLines(usage).size() == 90);
         // Groups appear in owner order: runtime, editor, renderer, qualification.
         const size_t runtime = usage.find("runtime options:");
         const size_t editor = usage.find("editor options:");
@@ -797,7 +801,7 @@ int main() {
     };
 
     constexpr TestCase tests[] = {
-        { "Per-flag table (89 flags)", testFlagTable },
+        { "Per-flag table (90 flags)", testFlagTable },
         { "Aliases and removed flags", testAliasesAndRemovedFlags },
         { "Usage parity", testUsageParity },
         { "Registry without qualification", testRegistryWithoutQualification },

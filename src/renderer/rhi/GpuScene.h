@@ -282,6 +282,12 @@ namespace Iridium {
         std::vector<uint32_t> probeConsumerPrimitiveIndices;
         uint64_t shadowConsumerMembershipRevision = 0;
         uint64_t probeConsumerMembershipRevision = 0;
+        // M7R R5c.1: the largest primitive, transform or geometry record
+        // revision a member resolves through (see
+        // gpuSceneConsumerContentWatermark). Consumers use it with the
+        // membership revision as a change trigger for derived caster content.
+        uint64_t shadowConsumerContentWatermark = 0;
+        uint64_t probeConsumerContentWatermark = 0;
         uint32_t invalidSourceCount = 0;
         uint32_t capacityOmittedInstanceCount = 0;
     };
@@ -294,6 +300,16 @@ namespace Iridium {
     void collectGpuSceneConsumerPrimitiveIndices(
         const GpuScenePackedTables& scene, uint32_t consumerMask,
         std::vector<uint32_t>& destination);
+    // M7R R5c.1: the maximum, over `primitiveIndices`, of each member's
+    // primitive record revision, its instance's current-transform revision and
+    // its LOD0 geometry record revision: every record a shadow/probe caster
+    // resolves its content through. The publisher's record revisions come from
+    // one monotonic counter and advance whenever a record's packed bytes
+    // change, so any change to a member's records raises the watermark; a
+    // membership change is reported by the membership revision instead.
+    [[nodiscard]] uint64_t gpuSceneConsumerContentWatermark(
+        const GpuScenePackedTables& scene,
+        std::span<const uint32_t> primitiveIndices) noexcept;
     void publishGpuSceneConsumerMembership(GpuScenePackedTables& scene);
     [[nodiscard]] GpuScenePackedTables packGpuSceneReference(
         const GpuScenePublicationInput& input, const GpuSceneCapacity& capacity);

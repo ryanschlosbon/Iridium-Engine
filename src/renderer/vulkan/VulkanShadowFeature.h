@@ -61,9 +61,11 @@ namespace Iridium {
         // Drain points (see VulkanFeatureContext.h). submit stages the frame's
         // packets and records the clip upload, compaction and cascades;
         // recordVirtualShadowDemand records the VSM marking and readback
-        // after the opaque forward pass.
+        // after the opaque forward pass. `casterRevision` is the submission's
+        // caster revision (the VSM clip key; unused without VSM resources).
         void submit(const ShadowCasterSubmission& casters,
-            std::span<const DirectionalShadowFramePacket> shadows);
+            std::span<const DirectionalShadowFramePacket> shadows,
+            uint64_t casterRevision);
         void recordVirtualShadowDemand();
 
         // Retired slots: the VSM request readback (and its oracle verdict).
@@ -88,7 +90,8 @@ namespace Iridium {
         static void executeRequestReadback(void* owner, VulkanPassContext& context);
 
         void publishVirtualShadowClips(const ShadowCasterSubmission& casters,
-            std::span<const DirectionalShadowFramePacket> shadows, uint32_t frameIndex);
+            std::span<const DirectionalShadowFramePacket> shadows, uint32_t frameIndex,
+            uint64_t casterRevision);
 
         const VulkanFeatureContext* context_ = nullptr;
         uint32_t resolution_ = 4096;

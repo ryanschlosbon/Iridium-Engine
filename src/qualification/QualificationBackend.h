@@ -30,6 +30,9 @@ namespace Iridium {
         bool virtualShadowDepthOracle = false;
         // Print the indirect command-stream digest (R3a.0).
         bool indirectStreamDigest = false;
+        // Recompute the retired per-frame caster hashes beside the
+        // change-driven revisions and compare change frames (R5c.1/R5c.2).
+        bool casterRevisionOracle = false;
         // Fill every render-graph alias heap with a NaN pattern at each
         // frame's start (M7R R4b.5); captures must not change.
         bool aliasPoison = false;

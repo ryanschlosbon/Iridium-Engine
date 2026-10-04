@@ -82,6 +82,30 @@ namespace {
         }
     }
 
+    uint64_t gpuSceneConsumerContentWatermark(const GpuScenePackedTables& scene,
+        std::span<const uint32_t> primitiveIndices) noexcept {
+        uint64_t watermark = 0;
+        for (const uint32_t primitiveIndex : primitiveIndices) {
+            if (primitiveIndex >= scene.primitives.size()) continue;
+            if (primitiveIndex < scene.primitiveRevisions.size())
+                watermark = (std::max)(watermark,
+                    scene.primitiveRevisions[primitiveIndex]);
+            const GpuScenePrimitiveRecord& primitive =
+                scene.primitives[primitiveIndex];
+            if (primitive.binding.x < scene.instances.size()) {
+                const uint32_t transform =
+                    scene.instances[primitive.binding.x].references.x;
+                if (transform < scene.transformRevisions.size())
+                    watermark = (std::max)(watermark,
+                        scene.transformRevisions[transform]);
+            }
+            if (primitive.binding.y < scene.geometryRevisions.size())
+                watermark = (std::max)(watermark,
+                    scene.geometryRevisions[primitive.binding.y]);
+        }
+        return watermark;
+    }
+
     void publishGpuSceneConsumerMembership(GpuScenePackedTables& scene) {
         collectGpuSceneConsumerPrimitiveIndices(scene, GpuSceneConsumerShadow,
             scene.shadowConsumerPrimitiveIndices);
@@ -148,6 +172,10 @@ namespace {
             GpuSceneConsumerShadow, scene.shadowConsumerPrimitiveIndices);
         scene.probeConsumerMembershipRevision = revisionFor(
             GpuSceneConsumerProbe, scene.probeConsumerPrimitiveIndices);
+        scene.shadowConsumerContentWatermark = gpuSceneConsumerContentWatermark(
+            scene, scene.shadowConsumerPrimitiveIndices);
+        scene.probeConsumerContentWatermark = gpuSceneConsumerContentWatermark(
+            scene, scene.probeConsumerPrimitiveIndices);
     }
 
     GpuScenePackedTables packGpuSceneReference(

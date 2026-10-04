@@ -11,6 +11,8 @@
 #include "renderer/rhi/DepthPyramid.h"
 #include "renderer/rhi/GpuScene.h"
 #include "renderer/rhi/GpuSceneIndirect.h"
+#include "renderer/rhi/RenderFrame.h"
+#include "renderer/rhi/ShadowTypes.h"
 #include "renderer/rhi/VirtualShadowMap.h"
 #include "renderer/transparency/LayeredAtlas.h"
 #include "core/types/FrameCapture.h"
@@ -36,7 +38,9 @@ namespace Iridium {
     class VulkanFrameTargets;
     class VulkanReflectionProbeCaptureTargets;
     class VulkanDepthPyramid;
+    class VulkanResourceRegistry;
     struct VulkanImageResource;
+    struct VulkanIndirectScene;
 
     // Points where the backend hands an open command buffer to its extensions.
     // A hook with a graph pass is declared by VulkanGraphHooks; when declared,
@@ -401,6 +405,48 @@ namespace Iridium {
         }
     };
 
+    // ---------------------------------------------------------------------
+    // Caster-revision equivalence (M7R R5c.1/R5c.2, qualification only).
+    //
+    // The backend reports every evaluation of its change-driven caster
+    // revisions with the inputs the retired per-frame FNV-1a hashes read, so
+    // an oracle can recompute those hashes and compare change frames. The
+    // backend's revisions do not depend on whether an observer is attached.
+    // ---------------------------------------------------------------------
+    enum class VulkanCasterRevisionStream : uint8_t {
+        Shadow,             // the shadow submission's sequence revision
+        DirectionalShadow,  // one revision per cascade of one directional light
+        DepthHistory,       // the main view's depth-content revision
+    };
+
+    struct VulkanCasterRevisionSample {
+        VulkanCasterRevisionStream stream = VulkanCasterRevisionStream::Shadow;
+        // DirectionalShadow: the light's evaluation order within the frame.
+        uint32_t ordinal = 0;
+        // The render-submission serial of the frame being recorded.
+        uint64_t frameSerial = 0;
+        const VulkanIndirectScene* scene = nullptr;
+        const VulkanResourceRegistry* resources = nullptr;
+        // Shadow and DirectionalShadow.
+        const ShadowCasterSubmission* casters = nullptr;
+        // DirectionalShadow.
+        const DirectionalShadowCascadePlan* plan = nullptr;
+        // DepthHistory.
+        std::span<const DrawPacket> opaqueQueue{};
+        std::span<const DrawPacket> forwardQueue{};
+        // One value, or one per cascade.
+        std::span<const uint64_t> revisions{};
+    };
+
+    class IVulkanCasterRevisionObserver {
+    public:
+        virtual void observeCasterRevision(
+            const VulkanCasterRevisionSample& sample) = 0;
+
+    protected:
+        ~IVulkanCasterRevisionObserver() = default;
+    };
+
     class IVulkanBackendExtension : public IRenderBackendExtension {
     public:
         [[nodiscard]] RenderBackendApi api() const noexcept final {
@@ -432,6 +478,12 @@ namespace Iridium {
         // before the backend is created).
         [[nodiscard]] virtual IVulkanIndirectStreamObserver*
             indirectStreamObserver() noexcept {
+            return nullptr;
+        }
+        // Non-null only while the caster-revision oracle is requested (fixed
+        // before the backend is created).
+        [[nodiscard]] virtual IVulkanCasterRevisionObserver*
+            casterRevisionObserver() noexcept {
             return nullptr;
         }
         // The editor UI contributor (M7R R3c.10, renderer/vulkan_imgui); the

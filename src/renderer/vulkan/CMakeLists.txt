@@ -9,6 +9,7 @@ add_library(iridium_vulkan STATIC
         VkGraphicsPipeline.cpp
         VkLightingPipeline.cpp
         VkSwapchain.cpp
+        VulkanCasterRevisions.cpp
         VulkanClusterLightingFeature.cpp
         VulkanClusteredLightingPipeline.cpp
         VulkanDeferredLightingFeature.cpp

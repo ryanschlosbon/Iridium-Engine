@@ -76,17 +76,12 @@ namespace Iridium {
     }
 
     // FNV-1a over the shadow casters' content (transform, handles, index
-    // range, material revision and shadow-relevant state).
+    // range, material revision and shadow-relevant state). M7R R5c.1: only
+    // the depth-history revision still uses it; the shadow revisions are the
+    // change-driven ones in VulkanCasterRevisions.h.
     [[nodiscard]] uint64_t shadowCasterRevision(const VulkanIndirectScene& scene,
         const VulkanResourceRegistry& resources,
         const ShadowCasterSubmission& casters) noexcept;
-    // The same per directional cascade the caster's bounds touch.
-    [[nodiscard]] std::array<uint64_t, kDirectionalShadowCascadeCount>
-        directionalShadowCasterRevisions(const VulkanIndirectScene& scene,
-            const VulkanResourceRegistry& resources,
-            const ShadowCasterSubmission& casters,
-            const DirectionalShadowCascadePlan& plan) noexcept;
-
     // Geometry/material/pipeline payload lookups for the indirect cullers.
     [[nodiscard]] VulkanIndirectAssetResolver vulkanIndirectAssets(
         const VulkanFeatureContext& context) noexcept;

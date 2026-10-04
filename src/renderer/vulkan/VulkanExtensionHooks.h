@@ -31,6 +31,11 @@ namespace Iridium {
             const noexcept {
             return indirectStreamObserver_;
         }
+        // M7R R5c.1: null unless the caster-revision oracle is requested.
+        [[nodiscard]] IVulkanCasterRevisionObserver* casterRevisionObserver()
+            const noexcept {
+            return casterRevisionObserver_;
+        }
         // Null without an attached editor bridge (headless and test hosts).
         [[nodiscard]] IVulkanEditorUi* editorUi() const noexcept {
             return editorUi_;
@@ -52,6 +57,7 @@ namespace Iridium {
         std::vector<IVulkanBackendExtension*> extensions_;
         IVulkanIndirectOracle* indirectOracle_ = nullptr;
         IVulkanIndirectStreamObserver* indirectStreamObserver_ = nullptr;
+        IVulkanCasterRevisionObserver* casterRevisionObserver_ = nullptr;
         IVulkanEditorUi* editorUi_ = nullptr;
         VulkanGraphHooks graphHooks_ = VulkanGraphHooks::none();
     };

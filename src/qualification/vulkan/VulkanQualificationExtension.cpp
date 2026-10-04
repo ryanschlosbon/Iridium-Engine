@@ -106,9 +106,12 @@ namespace Iridium {
         });
         validateProbeCaptureTargets_ = config.validateProbeCaptureTargets;
         indirectStreamDigestEnabled_ = config.indirectStreamDigest;
+        casterRevisionOracleEnabled_ = config.casterRevisionOracle;
         aliasPoison_ = config.aliasPoison;
         indirectStreamDigest_.setOutput(
             indirectStreamDigestEnabled_ ? &std::cout : nullptr);
+        casterRevisionOracle_.setOutput(
+            casterRevisionOracleEnabled_ ? &std::cout : nullptr);
     }
 
     VulkanGraphHooks VulkanQualificationExtension::graphHooks() const noexcept {
@@ -164,6 +167,7 @@ namespace Iridium {
     void VulkanQualificationExtension::onBeforeDeviceDestroy() {
         // The backend has collected every slot; all streams have retired.
         if (indirectStreamDigestEnabled_) indirectStreamDigest_.finish();
+        if (casterRevisionOracleEnabled_) casterRevisionOracle_.finish();
         destroyAliasPoisonBuffers();
         if (attached()) {
             VulkanResourceAllocator& allocator = *services_.allocator;

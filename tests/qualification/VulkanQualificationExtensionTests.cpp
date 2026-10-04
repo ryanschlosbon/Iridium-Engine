@@ -1,11 +1,14 @@
 // Unit tests for the Vulkan qualification extension (M7R R2.7/R2.8): readback
 // analyzers, the indirect oracle comparisons, extension hook declarations, and
 // backend-factory attachment. No device is created.
+#include "qualification/vulkan/VulkanCasterRevisionOracle.h"
 #include "qualification/vulkan/VulkanIndirectOracle.h"
 #include "qualification/vulkan/VulkanIndirectStreamDigest.h"
 #include "qualification/vulkan/VulkanQualificationExtension.h"
 #include "qualification/vulkan/VulkanReadbackAnalysis.h"
 #include "renderer/rhi/RenderBackendFactory.h"
+#include "renderer/vulkan/VulkanIndirectCullerShared.h"
+#include "renderer/vulkan/VulkanResourceRegistry.h"
 
 #include <array>
 #include <cstddef>
@@ -649,6 +652,62 @@ namespace {
         }
     };
 
+    // M7R R5c.1/R5c.2: the caster-revision oracle's change-relation
+    // classification, its legacy hash and its configuration switch.
+    bool testCasterRevisionOracle() {
+        std::ostringstream out;
+        VulkanCasterRevisionOracle oracle(&out);
+        using Relation = VulkanCasterRevisionOracle::Relation;
+        constexpr auto Shadow = VulkanCasterRevisionStream::Shadow;
+        constexpr auto Directional = VulkanCasterRevisionStream::DirectionalShadow;
+        CHECK(oracle.compare(Shadow, 0, 0, 1, 10, 1) == Relation::Unchanged);
+        CHECK(oracle.compare(Shadow, 0, 0, 2, 10, 1) == Relation::Unchanged);
+        CHECK(oracle.compare(Shadow, 0, 0, 3, 11, 2) == Relation::BothChanged);
+        CHECK(oracle.compare(Shadow, 0, 0, 4, 10, 3) == Relation::BothChanged);
+        CHECK(oracle.compare(Shadow, 0, 0, 5, 10, 4) == Relation::RevisionOnly);
+        CHECK(oracle.passed());
+        // Directional streams are independent per ordinal and cascade.
+        CHECK(oracle.compare(Directional, 1, 2, 5, 7, 1) == Relation::Unchanged);
+        CHECK(oracle.compare(Directional, 0, 2, 5, 9, 1) == Relation::Unchanged);
+        CHECK(oracle.compare(Directional, 1, 2, 6, 8, 1) == Relation::HashOnly);
+        CHECK(!oracle.passed());
+        CHECK(oracle.totals(Shadow).samples == 4u);
+        CHECK(oracle.totals(Shadow).revisionOnly == 1u);
+        CHECK(oracle.totals(Directional).hashOnly == 1u);
+        oracle.finish();
+        const std::string text = out.str();
+        CHECK(text.find("IRIDIUM_CASTER_REVISION_DIVERGENCE {\"stream\":\"shadow\"") !=
+            std::string::npos);
+        CHECK(text.find("\"relation\":\"hash_only\"") != std::string::npos);
+        CHECK(text.find("\"passed\":false}") != std::string::npos);
+
+        // The legacy hash is the retired per-frame FNV-1a: sensitive to
+        // direct-packet content, blind to non-content fields.
+        VulkanResourceRegistry resources;
+        const VulkanIndirectScene scene{};
+        DrawPacket packet{};
+        packet.geometry = GeometryHandle::fromParts(3, 1);
+        packet.indexCount = 6;
+        const uint64_t empty = legacyShadowCasterHash(scene, resources, {});
+        CHECK(empty == 1469598103934665603ull);
+        const uint64_t one = legacyShadowCasterHash(scene, resources,
+            { .directPackets = std::span(&packet, 1) });
+        CHECK(one != empty);
+        packet.distanceToCamera = 5.0f;
+        CHECK(legacyShadowCasterHash(scene, resources,
+            { .directPackets = std::span(&packet, 1) }) == one);
+        packet.firstIndex = 3;
+        CHECK(legacyShadowCasterHash(scene, resources,
+            { .directPackets = std::span(&packet, 1) }) != one);
+
+        VulkanQualificationExtension extension;
+        extension.configureQualification({});
+        CHECK(extension.casterRevisionObserver() == nullptr);
+        extension.configureQualification({ .casterRevisionOracle = true });
+        CHECK(extension.casterRevisionObserver() != nullptr);
+        return true;
+    }
+
     bool testFactoryAttachment() {
         ForeignExtension foreign;
         IRenderBackendExtension* const foreignList[]{ &foreign };
@@ -690,6 +749,7 @@ int main() {
         { "Opaque LOD/occlusion oracle", testOpaqueOracleComparison },
         { "Extension hooks and requests", testExtensionHooksAndRequests },
         { "Indirect command-stream digest", testIndirectStreamDigest },
+        { "Caster-revision oracle", testCasterRevisionOracle },
         { "Factory attachment", testFactoryAttachment },
     };
 

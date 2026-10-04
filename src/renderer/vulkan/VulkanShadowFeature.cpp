@@ -95,7 +95,8 @@ namespace Iridium {
 
     void VulkanShadowFeature::publishVirtualShadowClips(
         const ShadowCasterSubmission& casters,
-        std::span<const DirectionalShadowFramePacket> shadows, uint32_t frameIndex) {
+        std::span<const DirectionalShadowFramePacket> shadows, uint32_t frameIndex,
+        uint64_t casterRevision) {
         CpuProfiler* const profiler = context_->profiler;
         CpuScope virtualClipScope(profiler, "cpu.render.virtual-shadow.clip-publication");
         clipPlan_.reset();
@@ -117,8 +118,7 @@ namespace Iridium {
             clipConfig.virtualResolutionTexels = clipPageSize_ * 128u;
             // No static/dynamic classification is claimed: invalidate both
             // layers conservatively with the complete caster-content key.
-            clipConfig.staticCasterRevision = shadowCasterRevision(scene,
-                context_->resources, casters);
+            clipConfig.staticCasterRevision = casterRevision;
             clipConfig.dynamicCasterRevision = clipConfig.staticCasterRevision;
             clipPlan_ = clipPublisher_.publish(clipConfig, casterBoundsScratch_);
             if (clipPlan_) {
@@ -158,13 +158,14 @@ namespace Iridium {
     }
 
     void VulkanShadowFeature::submit(const ShadowCasterSubmission& casters,
-        std::span<const DirectionalShadowFramePacket> shadows) {
+        std::span<const DirectionalShadowFramePacket> shadows,
+        uint64_t casterRevision) {
         const uint32_t frameIndex = context_->scheduler.currentFrameIndex();
         map_.updateFrame(frameIndex, shadows);
         // Publish live CPU clip packets even on conventional cache-hit frames.
         // Compute dispatch remains separately graph-gated.
         if (virtualShadows_.initialized())
-            publishVirtualShadowClips(casters, shadows, frameIndex);
+            publishVirtualShadowClips(casters, shadows, frameIndex, casterRevision);
         stagedShadows_ = shadows;
         stagedCompact_ = false;
         stagedDraw_ = false;

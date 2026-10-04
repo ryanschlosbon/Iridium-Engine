@@ -1655,6 +1655,7 @@ namespace Iridium {
     FrameStatus VulkanVertexBackend::beginFrame() {
         frameOpen_ = false;
         opaque_.beginFrame();
+        casterRevisions_.beginFrame();
         probes_.beginFrame();
         layered_.beginFrame();
         telemetry_.beginFrame();
@@ -1753,18 +1754,60 @@ namespace Iridium {
     }
 
     uint64_t VulkanVertexBackend::getShadowCasterRevision(
-        const ShadowCasterSubmission& shadowCasters) const noexcept {
-        return shadowCasterRevision(indirectScene(scheduler.currentFrameIndex()),
-            resources_, shadowCasters);
+        const ShadowCasterSubmission& shadowCasters) {
+        const VulkanIndirectScene scene =
+            indirectScene(scheduler.currentFrameIndex());
+        uint64_t revision = 0;
+        {
+            CpuScope revisionScope(cpuProfiler_, "cpu.shadow.caster_revision");
+            revision = casterRevisions_.casterRevision(scene, shadowCasters,
+                vulkanCasterMaterials(resources_));
+        }
+        if constexpr (kQualificationBuild) {
+            if (IVulkanCasterRevisionObserver* observer =
+                    extensionHooks_.casterRevisionObserver()) {
+                observer->observeCasterRevision({
+                    .stream = VulkanCasterRevisionStream::Shadow,
+                    .frameSerial = scheduler.lastSubmittedSerial() + 1u,
+                    .scene = &scene,
+                    .resources = &resources_,
+                    .casters = &shadowCasters,
+                    .revisions = { &revision, 1u },
+                });
+            }
+        }
+        return revision;
     }
 
     std::array<uint64_t, kDirectionalShadowCascadeCount>
         VulkanVertexBackend::getDirectionalShadowCasterRevisions(
             const ShadowCasterSubmission& shadowCasters,
-            const DirectionalShadowCascadePlan& plan) const noexcept {
-        return directionalShadowCasterRevisions(
-            indirectScene(scheduler.currentFrameIndex()), resources_,
-            shadowCasters, plan);
+            const DirectionalShadowCascadePlan& plan) {
+        const VulkanIndirectScene scene =
+            indirectScene(scheduler.currentFrameIndex());
+        std::array<uint64_t, kDirectionalShadowCascadeCount> revisions{};
+        {
+            CpuScope revisionScope(cpuProfiler_,
+                "cpu.shadow.directional.caster_revision");
+            revisions = casterRevisions_.directionalRevisions(scene,
+                shadowCasters, vulkanCasterMaterials(resources_), plan);
+        }
+        if constexpr (kQualificationBuild) {
+            if (IVulkanCasterRevisionObserver* observer =
+                    extensionHooks_.casterRevisionObserver()) {
+                observer->observeCasterRevision({
+                    .stream = VulkanCasterRevisionStream::DirectionalShadow,
+                    .ordinal = casterRevisions_.lastDirectionalOrdinal(),
+                    .frameSerial = scheduler.lastSubmittedSerial() + 1u,
+                    .scene = &scene,
+                    .resources = &resources_,
+                    .casters = &shadowCasters,
+                    .plan = &plan,
+                    .revisions = revisions,
+                });
+            }
+        }
+        return revisions;
     }
 
     void VulkanVertexBackend::prepareDepthPyramidHistory(
@@ -1837,8 +1880,13 @@ namespace Iridium {
         if (!frameOpen_)
             throw std::logic_error(
                 "Directional shadows require an open frame");
-        // R3c.5 drain point: clip upload, compaction and cascades.
-        shadows_.submit(shadowCasters, shadows);
+        // R3c.5 drain point: clip upload, compaction and cascades. The VSM
+        // clip key is the submission's caster revision (no classification of
+        // static and dynamic casters is claimed).
+        const uint64_t virtualShadowCasterRevision =
+            shadows_.virtualShadows().initialized()
+            ? getShadowCasterRevision(shadowCasters) : 0u;
+        shadows_.submit(shadowCasters, shadows, virtualShadowCasterRevision);
     }
 
     void VulkanVertexBackend::submitSpotShadows(
@@ -2009,6 +2057,7 @@ namespace Iridium {
         }
         gpuScene_.validatePublication(scene);
         CpuScope uploadScope(cpuProfiler_, "cpu.gpu_scene.upload");
+        casterRevisions_.publishScene(scene);
         opaque_.publishScene(scene);
         gpuScene_.publish(scene, scheduler.currentFrameIndex());
         if (cpuProfiler_ != nullptr) {

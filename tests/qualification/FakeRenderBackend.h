@@ -100,10 +100,10 @@ namespace IridiumTest {
         }
         RenderFrameTelemetry frameTelemetry() const noexcept override { return {}; }
         uint64_t getShadowCasterRevision(
-            const ShadowCasterSubmission&) const noexcept override { return 0; }
+            const ShadowCasterSubmission&) override { return 0; }
         std::array<uint64_t, kDirectionalShadowCascadeCount>
             getDirectionalShadowCasterRevisions(const ShadowCasterSubmission&,
-                const DirectionalShadowCascadePlan&) const noexcept override {
+                const DirectionalShadowCascadePlan&) override {
             return {};
         }
         FrameStatus endFrame() override { return FrameStatus::Ready; }

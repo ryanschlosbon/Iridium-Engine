@@ -458,6 +458,7 @@ namespace Iridium {
             materialVault_.free(material);
             throw;
         }
+        ++materialRevision_;
         VulkanMaterialPayload* stored =
             materialVault_.get(material);
         return { material, stored->pipeline, stored->renderQueue,
@@ -475,6 +476,7 @@ namespace Iridium {
         payload->packed = material;
         ++payload->packedRevision;
         if (payload->packedRevision == 0) payload->packedRevision = 1;
+        ++materialRevision_;
     }
 
     void VulkanResourceRegistry::freeMaterial(MaterialHandle handle) {
@@ -484,6 +486,7 @@ namespace Iridium {
         }
 
         materialVault_.free(handle);
+        ++materialRevision_;
     }
 
     void VulkanResourceRegistry::createCanonicalMaterialBuffers(
