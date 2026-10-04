@@ -5,6 +5,7 @@
 #include "assets/cooker/LocalDerivedDataCache.h"
 #include "assets/model/ModelProduct.h"
 
+#include <condition_variable>
 #include <deque>
 #include <filesystem>
 #include <memory>
@@ -60,10 +61,19 @@ namespace Iridium {
         void shutdown() noexcept;
 
     private:
-        [[nodiscard]] PreparedCatalogModel prepare(
+        struct CookState;
+        [[nodiscard]] std::shared_ptr<CookState> prepareCook(
             const AssetCatalogRecord& record,
+            std::stop_token stopToken,
+            PreparedCatalogModel& result);
+        void finishCook(const CookState& state,
+            const DdcRequestResult& cooked,
+            PreparedCatalogModel& result);
+        void publish(const AssetCatalogRecord& record,
+            PreparedCatalogModel result,
             std::stop_token stopToken);
-        // Prepares the oldest queued request (a strand item).
+        // Prepares the oldest queued request (a strand item); its cook
+        // completes it through a continuation.
         void runNext();
 
         std::filesystem::path assetRoot_;
@@ -76,6 +86,8 @@ namespace Iridium {
         std::vector<PreparedCatalogModel> results_;
         std::set<AssetGuid> pending_;
         bool shutdown_ = false;
+        uint32_t cooksInFlight_ = 0;
+        std::condition_variable cooksIdle_;
         std::stop_source stop_;
         EngineLog* log_ = nullptr;
         // Declared last: drained in shutdown() before the state above goes.

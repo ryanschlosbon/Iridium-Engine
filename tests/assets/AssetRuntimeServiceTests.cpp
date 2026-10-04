@@ -472,7 +472,7 @@ namespace {
             std::make_shared<
                 GltfModelImporter>());
         LocalDerivedDataCache cache(
-            temporary.path / "ddc");
+            temporary.path / "ddc", *testTasks);
         const CookTarget target{
             .platform = "windows-x64",
             .profile = "editor",
@@ -559,11 +559,13 @@ namespace {
                         throw std::runtime_error(
                             "Fixture source preparation failed.");
                     }
+                    // A task never blocks on a cook task (M7R R5b.2).
                     DdcRequestResult result =
-                        requestPreparedCook(
+                        resolvePreparedCook(
                             cache,
-                            preparedCook,
-                            stopToken).get();
+                            std::make_shared<PreparedAssetCook>(
+                                preparedCook),
+                            stopToken);
                     if (!result.blob) {
                         throw std::runtime_error(
                             "Fixture source cook failed.");

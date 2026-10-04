@@ -1,5 +1,6 @@
 #include "assets/AssetMetadata.h"
 #include "assets/cooker/LocalDerivedDataCache.h"
+#include "core/tasks/TaskSystem.h"
 #include "scene/authoring/CookedSceneCompiler.h"
 #include "scene/authoring/CoreSceneComponentAdapters.h"
 #include "scene/authoring/SourceSceneDocument.h"
@@ -212,6 +213,8 @@ namespace {
 } // namespace
 
 int main(int argc, char** argv) {
+    // M7R R5b.2: DDC cooks run as Background tasks on the engine task system.
+    Iridium::Tasks::TaskSystem tasks;
     const std::optional<Options> options = parseOptions(argc, argv);
     if (!options) {
         std::cerr << "Usage: IridiumCookScene --source scene.iridium.scene.json "
@@ -244,7 +247,7 @@ int main(int argc, char** argv) {
             requestIdentity);
         const std::vector<std::byte> sourceBytes = readFile(options->source);
         const std::string sourceHash = Iridium::sha256(sourceBytes);
-        Iridium::LocalDerivedDataCache cache(options->ddc);
+        Iridium::LocalDerivedDataCache cache(options->ddc, tasks);
 
         if (const std::optional<Json> value = readReceipt(receipt);
             value && value->value("schema", 0u) == 1u &&

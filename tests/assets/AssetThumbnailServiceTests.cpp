@@ -139,7 +139,7 @@ namespace {
         const auto cache =
             std::make_shared<
                 LocalDerivedDataCache>(
-                    temporary.path / "ddc");
+                    temporary.path / "ddc", *testTasks);
         AssetModelPreparationService models(*testTasks, temporary.path, cache, target());
         AssetThumbnailService service(*testTasks, temporary.path, cache, target());
         const AssetCatalogRecord root =
@@ -321,7 +321,7 @@ namespace {
         const auto cache =
             std::make_shared<
                 LocalDerivedDataCache>(
-                    temporary.path / "ddc");
+                    temporary.path / "ddc", *testTasks);
         AssetModelPreparationService models(*testTasks, temporary.path, cache, target());
         AssetThumbnailService service(*testTasks, temporary.path, cache, target());
         const AssetCatalogRecord root =
@@ -488,7 +488,7 @@ namespace {
         const auto cache =
             std::make_shared<
                 LocalDerivedDataCache>(
-                    temporary.path / "ddc");
+                    temporary.path / "ddc", *testTasks);
         AssetModelPreparationService models(*testTasks, temporary.path, cache, target());
         AssetThumbnailService thumbnails(*testTasks, temporary.path, cache, target());
         const AssetCatalogRecord root =

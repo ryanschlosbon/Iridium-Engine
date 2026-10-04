@@ -6,6 +6,7 @@
 #include "assets/thumbnail/AssetThumbnail.h"
 #include "material/SourceMaterial.h"
 
+#include <condition_variable>
 #include <deque>
 #include <map>
 #include <memory>
@@ -166,9 +167,15 @@ namespace Iridium {
             bool detail = false;
         };
 
-        [[nodiscard]] PreparedAssetThumbnailBatch prepare(
-            const Job& job,
-            std::stop_token stopToken);
+        struct ThumbnailCook;
+        [[nodiscard]] bool prepareCook(const Job& job,
+            std::stop_token stopToken, ThumbnailCook& cook);
+        [[nodiscard]] PreparedAssetThumbnailBatch finishCook(
+            const Job& job, std::stop_token stopToken,
+            ThumbnailCook& cook, const DdcRequestResult& cooked);
+        // Publishes a finished root; false when the service shut down.
+        [[nodiscard]] bool completeJob(const Job& job,
+            PreparedAssetThumbnailBatch result, std::stop_token stopToken);
         void queueMissingLocked(
             std::map<AssetGuid, Job> grouped);
         [[nodiscard]] static std::map<
@@ -224,6 +231,8 @@ namespace Iridium {
         bool shutdown_ = false;
         bool drainRequested_ = false;
         bool drainScheduled_ = false;
+        bool cookInFlight_ = false;
+        std::condition_variable cookIdle_;
         std::stop_source stop_;
         EngineLog* log_ = nullptr;
         // Declared last: drained in shutdown() before the state above goes.

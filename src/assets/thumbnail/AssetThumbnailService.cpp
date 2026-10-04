@@ -89,7 +89,7 @@ namespace Iridium {
             std::move(assetRoot),
             std::make_shared<
                 LocalDerivedDataCache>(
-                    std::move(ddcRoot)),
+                    std::move(ddcRoot), tasks),
             std::move(target),
             log) {}
 
@@ -519,18 +519,31 @@ namespace Iridium {
             demandedAssets_.clear();
         }
         stop_.request_stop();
-        // Waits for the root in preparation; the drain then finds shutdown.
+        // Waits for the root in preparation, then for a cook in flight (its
+        // continuation finishes the root), then for any drain it posted.
+        strand_->waitIdle();
+        {
+            std::unique_lock lock(mutex_);
+            cookIdle_.wait(lock, [this] { return !cookInFlight_; });
+        }
         strand_->waitIdle();
     }
 
-    PreparedAssetThumbnailBatch
-        AssetThumbnailService::prepare(
-            const Job& job,
-            std::stop_token stopToken) {
-        PreparedAssetThumbnailBatch result{
-            .rootAssetGuid =
-                job.rootAssetGuid,
-        };
+    struct AssetThumbnailService::ThumbnailCook {
+        PreparedAssetThumbnailBatch result;
+        bool usedReceipt = false;
+        std::filesystem::path sourcePath;
+        std::shared_ptr<PreparedAssetCook> prepared;
+    };
+
+    // Phase 1, on the strand: metadata, receipt and cook preparation. Returns
+    // false when cook.result is already final (failed or deferred).
+    bool AssetThumbnailService::prepareCook(
+        const Job& job,
+        std::stop_token stopToken,
+        ThumbnailCook& cook) {
+        PreparedAssetThumbnailBatch& result = cook.result;
+        result.rootAssetGuid = job.rootAssetGuid;
         try {
             const std::filesystem::path
                 sourcePath =
@@ -578,7 +591,7 @@ namespace Iridium {
                     "iridium.model") {
                 result.deferredReason =
                     "Preview will be generated after the model's first editor cook.";
-                return result;
+                return false;
             }
             PreparedAssetCook prepared =
                 usedReceipt
@@ -600,13 +613,33 @@ namespace Iridium {
                 throw std::runtime_error(
                     "Thumbnail preparation was cancelled.");
             }
-            auto sharedPrepared =
-                std::make_shared<PreparedAssetCook>(
-                    std::move(prepared));
-            DdcRequestResult cooked =
-                requestPreparedCook(
-                    *cache_, sharedPrepared,
-                    stopToken).get();
+            cook.usedReceipt = usedReceipt;
+            cook.sourcePath = sourcePath;
+            cook.prepared = std::make_shared<PreparedAssetCook>(
+                std::move(prepared));
+            return true;
+        }
+        catch (const std::exception& exception) {
+            result.diagnostic =
+                exception.what();
+        }
+        return false;
+    }
+
+    // Phase 2, the cook's continuation (M7R R5b.2: it replaced the blocking
+    // future get): artifact validation and thumbnail rasterization.
+    PreparedAssetThumbnailBatch
+        AssetThumbnailService::finishCook(
+            const Job& job,
+            std::stop_token stopToken,
+            ThumbnailCook& cook,
+            const DdcRequestResult& cooked) {
+        PreparedAssetThumbnailBatch result = std::move(cook.result);
+        const bool usedReceipt = cook.usedReceipt;
+        const std::filesystem::path& sourcePath = cook.sourcePath;
+        const std::shared_ptr<PreparedAssetCook>& sharedPrepared =
+            cook.prepared;
+        try {
             if ((cooked.status !=
                     DdcRequestStatus::Built &&
                  cooked.status !=
@@ -924,171 +957,216 @@ namespace Iridium {
                         job.rootRecord
                             .sourcePath);
             }
-            PreparedAssetThumbnailBatch result =
-                prepare(job, stopToken);
-            if (log_) {
-                const std::string source =
-                    job.rootRecord.sourcePath;
-                if (stopToken.stop_requested()) {
-                    log_->warning(
-                        "Asset Thumbnail",
-                        "Thumbnail preparation cancelled: " +
-                            source);
-                }
-                else if (!result.diagnostic.empty()) {
-                    log_->error(
-                        "Asset Thumbnail",
-                        "Thumbnail preparation failed for " +
-                            source + ": " +
-                            result.diagnostic);
-                }
-                else if (!result.deferredReason.empty()) {
-                    log_->info(
-                        "Asset Thumbnail",
-                        "Thumbnail deferred for " +
-                            source + ": " +
-                            result.deferredReason);
-                }
-                else {
-                    log_->info(
-                        "Asset Thumbnail",
-                        std::string(
-                            job.detail
-                            ? "Selected preview ready: "
-                            : "Thumbnails ready: ") +
-                            source);
-                }
-            }
-            {
-                std::lock_guard lock(mutex_);
-                activeRoot_.reset();
-                if (shutdown_) {
-                    drainScheduled_ = false;
+            auto cook = std::make_shared<ThumbnailCook>();
+            if (!prepareCook(job, stopToken, *cook)) {
+                if (!completeJob(job, std::move(cook->result), stopToken)) {
                     return;
                 }
-                if (!result.deferredReason.empty() &&
-                    !job.detail) {
-                    for (const AssetCatalogRecord&
-                        record : job.records) {
-                        if (!demandedAssets_.contains(
-                                record.guid)) {
-                            continue;
-                        }
-                        completedAssets_.insert(
-                            record.guid);
-                        info_[record.guid] = {
+                continue;
+            }
+            // The root waits for its cook without holding this strand: the
+            // cook's continuation finishes the root and resumes the drain
+            // (M7R R5b.2). The drain stays scheduled meanwhile, so roots
+            // still run one at a time.
+            {
+                std::lock_guard lock(mutex_);
+                cookInFlight_ = true;
+            }
+            const auto finished = [this, job, cook, stopToken](
+                const DdcRequestResult& cooked) {
+                PreparedAssetThumbnailBatch result =
+                    finishCook(job, stopToken, *cook, cooked);
+                if (completeJob(job, std::move(result), stopToken)) {
+                    // Posted before cookInFlight_ clears, so shutdown's
+                    // waitIdle sees it.
+                    (void)strand_->post([this] { drain(); });
+                }
+                std::lock_guard lock(mutex_);
+                cookInFlight_ = false;
+                cookIdle_.notify_all();
+            };
+            try {
+                (void)requestPreparedCook(
+                    *cache_, cook->prepared, stopToken, finished);
+            }
+            catch (const std::exception& exception) {
+                finished(DdcRequestResult{
+                    .status = DdcRequestStatus::Failed,
+                    .diagnostics = { CookDiagnostic{
+                        .code = "THUMBNAIL_COOK_REQUEST",
+                        .message = exception.what(),
+                    } },
+                });
+            }
+            return;
+        }
+    }
+
+    bool AssetThumbnailService::completeJob(const Job& job,
+        PreparedAssetThumbnailBatch result, std::stop_token stopToken) {
+        if (log_) {
+            const std::string source =
+                job.rootRecord.sourcePath;
+            if (stopToken.stop_requested()) {
+                log_->warning(
+                    "Asset Thumbnail",
+                    "Thumbnail preparation cancelled: " +
+                        source);
+            }
+            else if (!result.diagnostic.empty()) {
+                log_->error(
+                    "Asset Thumbnail",
+                    "Thumbnail preparation failed for " +
+                        source + ": " +
+                        result.diagnostic);
+            }
+            else if (!result.deferredReason.empty()) {
+                log_->info(
+                    "Asset Thumbnail",
+                    "Thumbnail deferred for " +
+                        source + ": " +
+                        result.deferredReason);
+            }
+            else {
+                log_->info(
+                    "Asset Thumbnail",
+                    std::string(
+                        job.detail
+                        ? "Selected preview ready: "
+                        : "Thumbnails ready: ") +
+                        source);
+            }
+        }
+        {
+            std::lock_guard lock(mutex_);
+            activeRoot_.reset();
+            if (shutdown_) {
+                drainScheduled_ = false;
+                return false;
+            }
+            if (!result.deferredReason.empty() &&
+                !job.detail) {
+                for (const AssetCatalogRecord&
+                    record : job.records) {
+                    if (!demandedAssets_.contains(
+                            record.guid)) {
+                        continue;
+                    }
+                    completedAssets_.insert(
+                        record.guid);
+                    info_[record.guid] = {
+                        .status =
+                            AssetThumbnailStatus::Unavailable,
+                        .diagnostic =
+                            result.deferredReason,
+                    };
+                }
+            }
+            auto thumbnail =
+                result.thumbnails.begin();
+            while (thumbnail !=
+                result.thumbnails.end()) {
+                const bool demanded =
+                    job.detail
+                    ? detailAsset_ ==
+                        std::optional(
+                            thumbnail->assetGuid)
+                    : demandedAssets_.contains(
+                        thumbnail->assetGuid);
+                if (!demanded) {
+                    thumbnail =
+                        result.thumbnails.erase(
+                            thumbnail);
+                    continue;
+                }
+                if (!job.detail) {
+                    completedAssets_.insert(
+                        thumbnail->assetGuid);
+                }
+                if (thumbnail->valid()) {
+                    ++stats_.thumbnailsProduced;
+                    if (!job.detail) {
+                        info_[thumbnail->assetGuid] = {
                             .status =
-                                AssetThumbnailStatus::Unavailable,
-                            .diagnostic =
-                                result.deferredReason,
+                                AssetThumbnailStatus::Prepared,
                         };
                     }
                 }
-                auto thumbnail =
-                    result.thumbnails.begin();
-                while (thumbnail !=
-                    result.thumbnails.end()) {
-                    const bool demanded =
-                        job.detail
-                        ? detailAsset_ ==
-                            std::optional(
-                                thumbnail->assetGuid)
-                        : demandedAssets_.contains(
-                            thumbnail->assetGuid);
-                    if (!demanded) {
-                        thumbnail =
-                            result.thumbnails.erase(
-                                thumbnail);
-                        continue;
-                    }
+                else {
+                    ++stats_.thumbnailsFailed;
                     if (!job.detail) {
-                        completedAssets_.insert(
-                            thumbnail->assetGuid);
-                    }
-                    if (thumbnail->valid()) {
-                        ++stats_.thumbnailsProduced;
-                        if (!job.detail) {
-                            info_[thumbnail->assetGuid] = {
-                                .status =
-                                    AssetThumbnailStatus::Prepared,
-                            };
-                        }
-                    }
-                    else {
-                        ++stats_.thumbnailsFailed;
-                        if (!job.detail) {
-                            info_[thumbnail->assetGuid] = {
-                                .status =
-                                    AssetThumbnailStatus::Failed,
-                                .diagnostic =
-                                    thumbnail->diagnostic,
-                            };
-                        }
-                    }
-                    ++thumbnail;
-                }
-                if (!result.diagnostic.empty() &&
-                    !job.detail) {
-                    for (const AssetCatalogRecord&
-                        record : job.records) {
-                        if (demandedAssets_.contains(
-                                record.guid)) {
-                            completedAssets_.insert(
-                                record.guid);
-                            ++stats_.thumbnailsFailed;
-                            info_[record.guid] = {
-                                .status =
-                                    AssetThumbnailStatus::Failed,
-                                .diagnostic =
-                                    result.diagnostic,
-                            };
-                        }
+                        info_[thumbnail->assetGuid] = {
+                            .status =
+                                AssetThumbnailStatus::Failed,
+                            .diagnostic =
+                                thumbnail->diagnostic,
+                        };
                     }
                 }
-                detailByRoot_[
-                    job.rootAssetGuid] = {
-                    .available =
-                        result.diagnostic.empty(),
-                    .sourceCookKey = result.sourceCookKey,
-                    .settingsJson =
-                        result.settingsJson,
-                    .materialSourceValues = result.materialSourceValues,
-                    .materialSources = result.materialSources,
-                    .dependencies =
-                        result.dependencies,
-                    .associations =
-                        result.associations,
-                    .transparencyDetails =
-                        result.transparencyDetails,
-                    .diagnostic =
-                        !result.diagnostic.empty()
-                        ? result.diagnostic
-                        : result.deferredReason,
-                };
-                if (!result.thumbnails.empty() ||
-                    !result.diagnostic.empty()) {
-                    results_.push_back(
-                        std::move(result));
-                }
-                const auto demand =
-                    demandByRoot_.find(
-                        job.rootAssetGuid);
-                if (demand !=
-                    demandByRoot_.end()) {
-                    std::map<AssetGuid, Job>
-                        grouped;
-                    grouped.emplace(
-                        demand->first,
-                        demand->second);
-                    queueMissingLocked(
-                        std::move(grouped));
-                }
-                stats_.queuedRoots =
-                    static_cast<uint32_t>(
-                        jobs_.size());
-                stats_.active = false;
+                ++thumbnail;
             }
+            if (!result.diagnostic.empty() &&
+                !job.detail) {
+                for (const AssetCatalogRecord&
+                    record : job.records) {
+                    if (demandedAssets_.contains(
+                            record.guid)) {
+                        completedAssets_.insert(
+                            record.guid);
+                        ++stats_.thumbnailsFailed;
+                        info_[record.guid] = {
+                            .status =
+                                AssetThumbnailStatus::Failed,
+                            .diagnostic =
+                                result.diagnostic,
+                        };
+                    }
+                }
+            }
+            detailByRoot_[
+                job.rootAssetGuid] = {
+                .available =
+                    result.diagnostic.empty(),
+                .sourceCookKey = result.sourceCookKey,
+                .settingsJson =
+                    result.settingsJson,
+                .materialSourceValues = result.materialSourceValues,
+                .materialSources = result.materialSources,
+                .dependencies =
+                    result.dependencies,
+                .associations =
+                    result.associations,
+                .transparencyDetails =
+                    result.transparencyDetails,
+                .diagnostic =
+                    !result.diagnostic.empty()
+                    ? result.diagnostic
+                    : result.deferredReason,
+            };
+            if (!result.thumbnails.empty() ||
+                !result.diagnostic.empty()) {
+                results_.push_back(
+                    std::move(result));
+            }
+            const auto demand =
+                demandByRoot_.find(
+                    job.rootAssetGuid);
+            if (demand !=
+                demandByRoot_.end()) {
+                std::map<AssetGuid, Job>
+                    grouped;
+                grouped.emplace(
+                    demand->first,
+                    demand->second);
+                queueMissingLocked(
+                    std::move(grouped));
+            }
+            stats_.queuedRoots =
+                static_cast<uint32_t>(
+                    jobs_.size());
+            stats_.active = false;
         }
+        return true;
     }
 
 } // namespace Iridium

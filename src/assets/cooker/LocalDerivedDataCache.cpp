@@ -1,5 +1,6 @@
 #include "assets/cooker/LocalDerivedDataCache.h"
 
+#include "core/tasks/TaskSystem.h"
 #include "core/types/AssetGuid.h"
 
 #include <algorithm>
@@ -64,22 +65,92 @@ namespace Iridium {
 
     } // namespace
 
-    LocalDerivedDataCache::LocalDerivedDataCache(std::filesystem::path root)
+    // A cook in flight (M7R R5b.2): one Background task per cook key. It runs
+    // the job, publishes the result to the shared future, then calls the
+    // continuations registered by every request of the key.
+    class LocalDerivedDataCache::CookTask final : public Tasks::TaskSet {
+    public:
+        CookTask(LocalDerivedDataCache& owner, PendingJob job)
+            : TaskSet(Tasks::TaskPriority::Background, 1, 1, "asset.ddc.cook"),
+              owner_(owner), job_(std::move(job)),
+              future_(job_.promise->get_future().share()) {}
+
+        [[nodiscard]] const std::shared_future<DdcRequestResult>& future() const noexcept {
+            return future_;
+        }
+        void addContinuation(DdcCompletion continuation) {
+            if (continuation) continuations_.push_back(std::move(continuation));
+        }
+        // The task system cancelled the task (shutdown) before it ran.
+        void completeCancelled() {
+            complete({ .status = DdcRequestStatus::Cancelled });
+        }
+
+    private:
+        void execute(Tasks::TaskRange, uint32_t) override {
+            complete(owner_.execute(job_));
+        }
+
+        void complete(DdcRequestResult result) {
+            std::vector<DdcCompletion> continuations;
+            {
+                std::lock_guard lock(owner_.m_mutex);
+                if (finished_) return;
+                finished_ = true;
+                owner_.m_inFlight.erase(job_.cookKey);
+                continuations.swap(continuations_);
+            }
+            job_.promise->set_value(std::move(result));
+            const DdcRequestResult& published = future_.get();
+            for (DdcCompletion& continuation : continuations) {
+                try {
+                    continuation(published);
+                }
+                catch (...) {
+                    // Continuations report through their own result queues.
+                }
+            }
+        }
+
+        LocalDerivedDataCache& owner_;
+        PendingJob job_;
+        std::shared_future<DdcRequestResult> future_;
+        std::vector<DdcCompletion> continuations_;
+
+    public:
+        // Guarded by the owner's mutex: the result was published (a task that
+        // was created but not yet submitted also reads as complete).
+        bool finished_ = false;
+    };
+
+    LocalDerivedDataCache::LocalDerivedDataCache(std::filesystem::path root,
+        Tasks::TaskSystem& tasks)
         : m_root(std::move(root)),
-          m_worker([this](std::stop_token stopToken) { workerLoop(stopToken); }) {
+          m_tasks_system(tasks) {
         std::error_code filesystemError;
         std::filesystem::create_directories(m_root, filesystemError);
         if (filesystemError) {
-            m_worker.request_stop();
             throw std::runtime_error("Could not create local DDC root: " +
                 filesystemError.message());
         }
     }
 
     LocalDerivedDataCache::~LocalDerivedDataCache() {
-        m_worker.request_stop();
-        m_condition.notify_all();
-        if (m_worker.joinable()) m_worker.join();
+        // Queued cooks still run (their requests' stop tokens cancel them),
+        // as the former cache thread drained its queue before joining.
+        std::vector<std::unique_ptr<CookTask>> tasks;
+        {
+            std::lock_guard lock(m_mutex);
+            tasks.swap(m_tasks);
+        }
+        for (const std::unique_ptr<CookTask>& task : tasks) {
+            if (!task->isComplete()) {
+                m_tasks_system.wait(*task);
+            }
+            if (task->wasCancelled()) {
+                task->completeCancelled();
+            }
+        }
     }
 
     bool LocalDerivedDataCache::validCookKey(
@@ -294,22 +365,58 @@ namespace Iridium {
 
     std::shared_future<DdcRequestResult> LocalDerivedDataCache::request(
         std::string cookKey, std::stop_token stopToken, DdcBuilder builder) {
-        std::lock_guard lock(m_mutex);
-        const auto existing = m_inFlight.find(cookKey);
-        if (existing != m_inFlight.end()) return existing->second;
+        return request(std::move(cookKey), stopToken, std::move(builder), {});
+    }
 
-        auto promise = std::make_shared<std::promise<DdcRequestResult>>();
-        std::shared_future<DdcRequestResult> future =
-            promise->get_future().share();
-        m_inFlight.emplace(cookKey, future);
-        m_jobs.push_back({
+    std::shared_future<DdcRequestResult> LocalDerivedDataCache::request(
+        std::string cookKey, std::stop_token stopToken, DdcBuilder builder,
+        DdcCompletion onComplete) {
+        CookTask* task = nullptr;
+        {
+            std::lock_guard lock(m_mutex);
+            const auto existing = m_inFlight.find(cookKey);
+            if (existing != m_inFlight.end()) {
+                existing->second->addContinuation(std::move(onComplete));
+                return existing->second->future();
+            }
+            // Completed cook tasks are reclaimed here and in the destructor.
+            std::erase_if(m_tasks, [](const std::unique_ptr<CookTask>& done) {
+                return done->finished_ && done->isComplete();
+            });
+            auto created = std::make_unique<CookTask>(*this, PendingJob{
+                .cookKey = cookKey,
+                .stopToken = stopToken,
+                .builder = std::move(builder),
+                .promise = std::make_shared<std::promise<DdcRequestResult>>(),
+            });
+            task = created.get();
+            task->addContinuation(std::move(onComplete));
+            m_inFlight.emplace(std::move(cookKey), task);
+            m_tasks.push_back(std::move(created));
+        }
+        std::shared_future<DdcRequestResult> future = task->future();
+        try {
+            m_tasks_system.submit(*task);
+        }
+        catch (...) {
+            task->completeCancelled();
+            throw;
+        }
+        if (task->wasCancelled()) {
+            // The task system is shutting down.
+            task->completeCancelled();
+        }
+        return future;
+    }
+
+    DdcRequestResult LocalDerivedDataCache::resolve(
+        std::string cookKey, std::stop_token stopToken, DdcBuilder builder) {
+        PendingJob job{
             .cookKey = std::move(cookKey),
             .stopToken = stopToken,
             .builder = std::move(builder),
-            .promise = std::move(promise),
-        });
-        m_condition.notify_one();
-        return future;
+        };
+        return execute(job);
     }
 
     DdcRequestResult LocalDerivedDataCache::execute(PendingJob& job) {
@@ -356,29 +463,6 @@ namespace Iridium {
                 .status = DdcRequestStatus::Failed,
                 .diagnostics = std::move(cached.diagnostics),
             };
-        }
-    }
-
-    void LocalDerivedDataCache::workerLoop(std::stop_token stopToken) {
-        while (true) {
-            PendingJob job;
-            {
-                std::unique_lock lock(m_mutex);
-                m_condition.wait(lock, stopToken,
-                    [this] { return !m_jobs.empty(); });
-                if (m_jobs.empty()) {
-                    if (stopToken.stop_requested()) return;
-                    continue;
-                }
-                job = std::move(m_jobs.front());
-                m_jobs.pop_front();
-            }
-            DdcRequestResult result = execute(job);
-            {
-                std::lock_guard lock(m_mutex);
-                m_inFlight.erase(job.cookKey);
-            }
-            job.promise->set_value(std::move(result));
         }
     }
 

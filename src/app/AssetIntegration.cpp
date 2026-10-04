@@ -221,7 +221,8 @@ namespace Iridium {
                         std::filesystem::path(
                             PROJECT_ROOT_DIR) /
                         "out" / "editor" /
-                        "model-ddc");
+                        "model-ddc",
+                        tasks_);
             assetModelPreparationService_ =
                 std::make_unique<AssetModelPreparationService>(
                     tasks_,
@@ -1386,7 +1387,8 @@ namespace Iridium {
                     std::filesystem::path(
                         PROJECT_ROOT_DIR) /
                     "out" / "m3.5" /
-                    "editor-live-ddc");
+                    "editor-live-ddc",
+                    tasks_);
             sourceContext->importers
                 .registerImporter(
                     std::make_shared<
@@ -1526,12 +1528,15 @@ namespace Iridium {
                                 engineLog_.info(
                                     "Asset Cook", std::move(message));
                             };
+                        // The cook runs on this reimport strand item
+                        // (M7R R5b.2): a task never blocks on a cook
+                        // task; this hot-reload DDC has no other requester.
                         DdcRequestResult cooked =
-                            requestPreparedCook(
+                            resolvePreparedCook(
                                 *sourceContext
                                     ->cache,
                                 prepared,
-                                stopToken).get();
+                                stopToken);
                         if ((cooked.status !=
                                 DdcRequestStatus::Built &&
                              cooked.status !=

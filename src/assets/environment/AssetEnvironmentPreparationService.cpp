@@ -106,13 +106,24 @@ void AssetEnvironmentPreparationService::shutdown() noexcept {
         pending_.clear();
     }
     stop_.request_stop();
-    // Waits for the running preparation; queued items find no request.
+    // Waits for the preparation in progress, then for the cooks in flight:
+    // their continuations finish (a cancelled cook reports cancellation).
     strand_->waitIdle();
+    std::unique_lock lock(mutex_);
+    cooksIdle_.wait(lock, [this] { return cooksInFlight_ == 0; });
 }
 
-PreparedCatalogEnvironment AssetEnvironmentPreparationService::prepare(
-    const AssetCatalogRecord& record, std::stop_token stopToken) {
-    PreparedCatalogEnvironment result{ .assetGuid = record.guid };
+struct AssetEnvironmentPreparationService::CookState {
+    AssetCatalogRecord record;
+    bool usedReceipt = false;
+    std::shared_ptr<PreparedAssetCook> prepared;
+};
+
+// Phase 1, on the strand. Returns null when `result` is already final.
+std::shared_ptr<AssetEnvironmentPreparationService::CookState>
+AssetEnvironmentPreparationService::prepareCook(
+    const AssetCatalogRecord& record, std::stop_token stopToken,
+    PreparedCatalogEnvironment& result) {
     try {
         const auto sourcePath = assetRoot_ / record.sourcePath;
         const auto metadataPath = assetRoot_ / record.metadataPath;
@@ -141,8 +152,26 @@ PreparedCatalogEnvironment AssetEnvironmentPreparationService::prepare(
         }
         auto sharedPrepared = std::make_shared<PreparedAssetCook>(
             std::move(prepared));
-        DdcRequestResult cooked = requestPreparedCook(
-            *cache_, sharedPrepared, stopToken).get();
+        auto state = std::make_shared<CookState>();
+        state->record = record;
+        state->usedReceipt = warm.has_value();
+        state->prepared = std::move(sharedPrepared);
+        return state;
+    }
+    catch (const std::exception& exception) {
+        result.diagnostic = exception.what();
+    }
+    return nullptr;
+}
+
+// Phase 2, the cook's continuation (M7R R5b.2: it replaced the blocking
+// future get).
+void AssetEnvironmentPreparationService::finishCook(const CookState& state,
+    const DdcRequestResult& cooked, PreparedCatalogEnvironment& result) {
+    const AssetCatalogRecord& record = state.record;
+    const bool warm = state.usedReceipt;
+    const std::shared_ptr<PreparedAssetCook>& sharedPrepared = state.prepared;
+    try {
         if ((cooked.status != DdcRequestStatus::Built &&
              cooked.status != DdcRequestStatus::CacheHit) || !cooked.blob) {
             throw std::runtime_error(failureMessage(
@@ -173,7 +202,6 @@ PreparedCatalogEnvironment AssetEnvironmentPreparationService::prepare(
     catch (const std::exception& exception) {
         result.diagnostic = exception.what();
     }
-    return result;
 }
 
 void AssetEnvironmentPreparationService::runNext() {
@@ -184,12 +212,46 @@ void AssetEnvironmentPreparationService::runNext() {
         record = std::move(requests_.front());
         requests_.pop_front();
     }
-    PreparedCatalogEnvironment result = prepare(record, stop_.get_token());
+    const std::stop_token stopToken = stop_.get_token();
+    PreparedCatalogEnvironment result{ .assetGuid = record.guid };
+    std::shared_ptr<CookState> state = prepareCook(record, stopToken, result);
+    if (!state) {
+        publish(record, std::move(result));
+        return;
+    }
     {
         std::lock_guard lock(mutex_);
-        pending_.erase(record.guid);
-        if (!shutdown_) results_.push_back(std::move(result));
+        ++cooksInFlight_;
     }
+    const auto finished = [this, state](const DdcRequestResult& cooked) {
+        PreparedCatalogEnvironment completed{ .assetGuid = state->record.guid };
+        finishCook(*state, cooked, completed);
+        publish(state->record, std::move(completed));
+        std::lock_guard lock(mutex_);
+        --cooksInFlight_;
+        cooksIdle_.notify_all();
+    };
+    try {
+        // The strand moves on; the cook (a DDC task) finishes this request
+        // through its continuation.
+        (void)requestPreparedCook(*cache_, state->prepared, stopToken, finished);
+    }
+    catch (const std::exception& exception) {
+        finished(DdcRequestResult{
+            .status = DdcRequestStatus::Failed,
+            .diagnostics = { CookDiagnostic{
+                .code = "ENVIRONMENT_COOK_REQUEST",
+                .message = exception.what(),
+            } },
+        });
+    }
+}
+
+void AssetEnvironmentPreparationService::publish(
+    const AssetCatalogRecord& record, PreparedCatalogEnvironment result) {
+    std::lock_guard lock(mutex_);
+    pending_.erase(record.guid);
+    if (!shutdown_) results_.push_back(std::move(result));
 }
 
 } // namespace Iridium
