@@ -209,6 +209,52 @@ namespace Iridium {
         }
     }
 
+    // M7R R5a.0 (design section 3.3): what the editor hands the frame. The
+    // editor never writes runtime configuration, the backend or extraction
+    // state; applyEditorFrameRequests performs those writes.
+    struct EditorViewState {
+        bool renderingAssetView = false;
+        // An asset document is being rendered (renderingAssetView with an
+        // active document); the preview fields are set only then.
+        bool assetPreviewActive = false;
+        std::shared_ptr<ModelAsset> previewModel;
+        uint64_t previewSessionSerial = 0;
+        uint64_t previewFramingRevision = 0;
+        std::optional<AssetGuid> previewSelectedPart;
+        bool previewSelectedPartIsMaterial = false;
+        bool previewIsolateSelectedPart = false;
+        AssetGuid previewHoveredPart;
+        bool previewHoveredPartIsMaterial = false;
+        RenderExtent previewRequestedExtent{};
+        EnvironmentLightingSettings previewEnvironmentSettings{};
+        float previewExposureEv = 0.0f;
+        // The active preview's orbit camera (projection at the frame aspect).
+        bool hasPreviewCamera = false;
+        glm::vec3 previewCameraPosition{ 0.0f };
+        glm::mat4 previewView{ 1.0f };
+        glm::mat4 previewProjection{ 1.0f };
+        float previewNearPlane = 0.0f;
+        float previewFarPlane = 0.0f;
+        float previewVerticalFovDegrees = 0.0f;
+        // Null while an asset preview is rendered.
+        Entity selectedEntity = NULL_ENTITY;
+        RenderDebugView debugView = RenderDebugView::Final;
+        // The rendered view's render mode is wireframe.
+        bool wireframe = false;
+        int layeredInterfaceOverride = 0;
+    };
+
+    struct EditorFrameRequests {
+        std::optional<EditorOutputSettings> output;
+        // Allocation fields (resolutions, pool capacities) are ignored on apply.
+        std::optional<ProjectShadowSettings> shadows;
+        // Also reconfigures the capture scheduler and the backend.
+        std::optional<ProjectReflectionProbeSettings> probes;
+        EditorViewState view;
+        // Read after endFrame (the editor-driven scene resize).
+        RenderExtent requestedSceneExtent{};
+    };
+
     Application::Application(ApplicationConfig config,
         IFrameObserver* observer)
         : config_(std::move(config)),
@@ -1514,6 +1560,95 @@ namespace Iridium {
         }
     }
 
+    EditorViewState Application::editorViewState(float aspect) {
+        EditorViewState view{};
+        view.renderingAssetView = editor.renderingAssetView;
+        const EditorAssetDocument* previewDocument = editor.renderingAssetView
+            ? editor.assetDocuments().active() : nullptr;
+        view.assetPreviewActive = previewDocument != nullptr;
+        AssetViewerPanel& viewer = editor.getAssetViewerPanel();
+        if (view.assetPreviewActive) {
+            view.previewModel = resolveEditorAssetPreview();
+            view.previewSessionSerial = previewDocument->sessionSerial;
+            view.previewFramingRevision = previewDocument->framingRevision;
+            view.previewSelectedPart = previewDocument->selectedPart;
+            view.previewSelectedPartIsMaterial =
+                previewDocument->selectedPartIsMaterial;
+            view.previewIsolateSelectedPart =
+                previewDocument->isolateSelectedPart;
+            view.previewHoveredPart = viewer.hoveredPart;
+            view.previewHoveredPartIsMaterial = viewer.hoveredPartIsMaterial;
+            view.previewRequestedExtent = viewer.requestedRenderExtent;
+            const EditorPreviewLighting lighting = viewer.activeLighting();
+            view.previewEnvironmentSettings = lighting.environmentSettings();
+            view.previewExposureEv = lighting.exposureEv;
+            if (const EditorOrbitCamera* camera = viewer.activeCamera()) {
+                view.hasPreviewCamera = true;
+                view.previewCameraPosition = camera->position();
+                view.previewView = camera->viewMatrix();
+                view.previewProjection = camera->projectionMatrix(aspect);
+                const EditorOrbitCameraState& state = camera->state();
+                view.previewNearPlane = state.nearPlane;
+                view.previewFarPlane = state.farPlane;
+                view.previewVerticalFovDegrees = state.verticalFovDegrees;
+            }
+        }
+        view.selectedEntity = view.assetPreviewActive
+            ? NULL_ENTITY : editor.getSelectedEntity();
+        view.debugView = editor.getDebugView();
+        view.wireframe = view.assetPreviewActive
+            ? viewer.debugRenderMode == 1 : editor.currentRenderMode == 1;
+        view.layeredInterfaceOverride = editor.layeredInterfaceOverride();
+        return view;
+    }
+
+    void Application::applyEditorFrameRequests(
+        const EditorFrameRequests& requests) {
+        if (requests.output) {
+            const EditorOutputSettings& outputSettings = *requests.output;
+            if (outputSettings.transport != config_.outputTransport) {
+                config_.outputTransport = outputSettings.transport;
+                pendingOutputTransport_ = outputSettings.transport;
+            }
+            config_.manualExposureEv = outputSettings.manualExposureEv;
+            config_.paperWhiteNits = outputSettings.paperWhiteNits;
+            config_.peakNits = outputSettings.peakNits;
+        }
+        if (requests.shadows) {
+            ProjectShadowSettings shadowSettings = *requests.shadows;
+            // Resolution is immutable for the active backend allocation;
+            // every remaining project policy applies on the next frame.
+            shadowSettings.directionalResolution =
+                config_.shadowSettings.directionalResolution;
+            shadowSettings.spotAtlasResolution =
+                config_.shadowSettings.spotAtlasResolution;
+            shadowSettings.pointPool256Capacity =
+                config_.shadowSettings.pointPool256Capacity;
+            shadowSettings.pointPool512Capacity =
+                config_.shadowSettings.pointPool512Capacity;
+            shadowSettings.pointPool1024Capacity =
+                config_.shadowSettings.pointPool1024Capacity;
+            config_.shadowSettings = shadowSettings;
+        }
+        if (requests.probes) {
+            const ProjectReflectionProbeSettings& probeSettings =
+                *requests.probes;
+            config_.reflectionProbeSettings = probeSettings;
+            reflectionProbeCaptureScheduler_.configure({
+                .maximumRenderedTexels = probeSettings.
+                    maximumRenderedTexelsPerFrame,
+                .maximumFacesPerProbePerFrame = probeSettings.
+                    maximumFacesPerProbePerFrame,
+                .maximumCapturesInFlight = probeSettings.
+                    maximumCapturesInFlight,
+                .minimumRealtimeFramesBetweenCaptures = probeSettings.
+                    minimumRealtimeFramesBetweenCaptures,
+            });
+            renderBackend->configureReflectionProbeCaptures(
+                probeSettings);
+        }
+    }
+
     void Application::drawFrame(AppFrameContext& frame) {
         const uint64_t applicationFrameIndex = frame.applicationFrameIndex;
         const bool dualViews = !policy_.fullscreenScenePresentation &&
@@ -1705,25 +1840,27 @@ namespace Iridium {
         probeCasterQueue_.clear();
         forwardInstanceTransforms_.clear();
 
-        const EditorAssetDocument* previewDocument = editor.renderingAssetView
-            ? editor.assetDocuments().active() : nullptr;
-        std::shared_ptr<ModelAsset> previewModel = previewDocument
-            ? resolveEditorAssetPreview() : std::shared_ptr<ModelAsset>{};
-        bool assetPreviewActive = previewDocument != nullptr;
+        const float aspect = renderExtent_.height != 0
+            ? static_cast<float>(renderExtent_.width) /
+                static_cast<float>(renderExtent_.height)
+            : 16.0f / 9.0f;
+        // The previous-frame editor state that extraction reads before the
+        // editor is built (design section 3.2, step 4).
+        const EditorViewState preBuildView = editorViewState(aspect);
+        const bool preBuildAssetPreviewActive =
+            preBuildView.assetPreviewActive;
         const std::span<const uint32_t> shadowGpuScenePrimitiveIndices =
-            !assetPreviewActive && gpuSceneFrame_
+            !preBuildAssetPreviewActive && gpuSceneFrame_
                 ? std::span<const uint32_t>(
                     gpuSceneFrame_->shadowConsumerPrimitiveIndices)
                 : std::span<const uint32_t>{};
         const std::span<const uint32_t> probeGpuScenePrimitiveIndices =
-            !assetPreviewActive && gpuSceneFrame_ &&
+            !preBuildAssetPreviewActive && gpuSceneFrame_ &&
                 !policy_.routing.forceDirectGBufferReference &&
                 !policy_.routing.forceDirectProbeCaptureReference
                 ? std::span<const uint32_t>(
                     gpuSceneFrame_->probeConsumerPrimitiveIndices)
                 : std::span<const uint32_t>{};
-        Entity selectedEntity = assetPreviewActive
-            ? NULL_ENTITY : editor.getSelectedEntity();
 
         // --- 2. GET CAMERA DATA ---
         glm::vec3 renderCameraPosition = camera_.position;
@@ -1732,30 +1869,25 @@ namespace Iridium {
         float renderVerticalFovDegrees = camera_.verticalFovDegrees;
         glm::mat4 viewMatrix = glm::lookAt(
             camera_.position, camera_.position + camera_.front, camera_.up);
-        const float aspect = renderExtent_.height != 0
-            ? static_cast<float>(renderExtent_.width) /
-                static_cast<float>(renderExtent_.height)
-            : 16.0f / 9.0f;
         glm::mat4 projMatrix = glm::perspective(
             glm::radians(camera_.verticalFovDegrees), aspect,
             camera_.nearPlane, camera_.farPlane);
         projMatrix[1][1] *= -1.0f; // Vulkan inverted Y
-        if (assetPreviewActive) {
-            if (const EditorOrbitCamera* camera =
-                    editor.getAssetViewerPanel().activeCamera()) {
-                renderCameraPosition = camera->position();
-                viewMatrix = camera->viewMatrix();
-                projMatrix = camera->projectionMatrix(aspect);
-                const EditorOrbitCameraState& state = camera->state();
-                renderCameraNearPlane = state.nearPlane;
-                renderCameraFarPlane = state.farPlane;
-                renderVerticalFovDegrees = state.verticalFovDegrees;
-            }
-        }
+        const auto usePreviewCamera = [&](const EditorViewState& view) {
+            if (!view.assetPreviewActive || !view.hasPreviewCamera) return;
+            renderCameraPosition = view.previewCameraPosition;
+            viewMatrix = view.previewView;
+            projMatrix = view.previewProjection;
+            renderCameraNearPlane = view.previewNearPlane;
+            renderCameraFarPlane = view.previewFarPlane;
+            renderVerticalFovDegrees = view.previewVerticalFovDegrees;
+        };
+        usePreviewCamera(preBuildView);
 
         // Build ImGui only after beginFrame selected currentImageIndex. The UI
         // descriptors are per swapchain image, so using them before acquisition
         // can sample a different target that has not yet been transitioned.
+        EditorFrameRequests editorRequests{};
         {
             CpuScope editorScope(cpuProfiler_, "cpu.editor.build");
             editorBridge_->beginUI();
@@ -1767,67 +1899,18 @@ namespace Iridium {
                     editorBridge_->glassDepthTextureId(),
                     aspect);
                 EditorOutputSettings outputSettings{};
-                if (editor.consumeOutputSettings(outputSettings)) {
-                    if (outputSettings.transport != config_.outputTransport) {
-                        config_.outputTransport = outputSettings.transport;
-                        pendingOutputTransport_ = outputSettings.transport;
-                    }
-                    config_.manualExposureEv = outputSettings.manualExposureEv;
-                    config_.paperWhiteNits = outputSettings.paperWhiteNits;
-                    config_.peakNits = outputSettings.peakNits;
-                }
+                if (editor.consumeOutputSettings(outputSettings))
+                    editorRequests.output = std::move(outputSettings);
                 ProjectShadowSettings shadowSettings{};
-                if (editor.consumeShadowSettings(shadowSettings)) {
-                    // Resolution is immutable for the active backend allocation;
-                    // every remaining project policy applies on the next frame.
-                    shadowSettings.directionalResolution =
-                        config_.shadowSettings.directionalResolution;
-                    shadowSettings.spotAtlasResolution =
-                        config_.shadowSettings.spotAtlasResolution;
-                    shadowSettings.pointPool256Capacity =
-                        config_.shadowSettings.pointPool256Capacity;
-                    shadowSettings.pointPool512Capacity =
-                        config_.shadowSettings.pointPool512Capacity;
-                    shadowSettings.pointPool1024Capacity =
-                        config_.shadowSettings.pointPool1024Capacity;
-                    config_.shadowSettings = shadowSettings;
-                }
+                if (editor.consumeShadowSettings(shadowSettings))
+                    editorRequests.shadows = shadowSettings;
                 ProjectReflectionProbeSettings probeSettings{};
-                if (editor.consumeReflectionProbeSettings(probeSettings)) {
-                    config_.reflectionProbeSettings = probeSettings;
-                    reflectionProbeCaptureScheduler_.configure({
-                        .maximumRenderedTexels = probeSettings.
-                            maximumRenderedTexelsPerFrame,
-                        .maximumFacesPerProbePerFrame = probeSettings.
-                            maximumFacesPerProbePerFrame,
-                        .maximumCapturesInFlight = probeSettings.
-                            maximumCapturesInFlight,
-                        .minimumRealtimeFramesBetweenCaptures = probeSettings.
-                            minimumRealtimeFramesBetweenCaptures,
-                    });
-                    renderBackend->configureReflectionProbeCaptures(
-                        probeSettings);
-                }
-                previewDocument = editor.renderingAssetView ? editor.assetDocuments().active() : nullptr;
-                assetPreviewActive = previewDocument != nullptr;
-                selectedEntity = assetPreviewActive
-                    ? NULL_ENTITY : editor.getSelectedEntity();
-                if (assetPreviewActive) {
-                    previewModel = resolveEditorAssetPreview();
-                    if (const EditorOrbitCamera* camera =
-                            editor.getAssetViewerPanel().activeCamera()) {
-                        renderCameraPosition = camera->position();
-                        viewMatrix = camera->viewMatrix();
-                        projMatrix = camera->projectionMatrix(aspect);
-                        const EditorOrbitCameraState& state = camera->state();
-                        renderCameraNearPlane = state.nearPlane;
-                        renderCameraFarPlane = state.farPlane;
-                        renderVerticalFovDegrees = state.verticalFovDegrees;
-                    }
-                }
-                else {
-                    previewModel.reset();
-                }
+                if (editor.consumeReflectionProbeSettings(probeSettings))
+                    editorRequests.probes = probeSettings;
+                editorRequests.requestedSceneExtent =
+                    editor.requestedRenderExtent();
+                applyEditorFrameRequests(editorRequests);
+                editorRequests.view = editorViewState(aspect);
             }
             else {
                 const ImGuiViewport* viewport = ImGui::GetMainViewport();
@@ -1845,11 +1928,19 @@ namespace Iridium {
                 if (policy_.colorValidationOverlay) {
                     editor.drawColorValidationOverlay();
                 }
+                // No asset preview without dual views: nothing is resolved.
+                editorRequests.view = editorViewState(aspect);
             }
         }
+        // The editor state after this frame's build: what extraction reads.
+        const EditorViewState& view = editorRequests.view;
+        usePreviewCamera(view);
+        const bool assetPreviewActive = view.assetPreviewActive;
+        const std::shared_ptr<ModelAsset>& previewModel = view.previewModel;
+        const Entity selectedEntity = view.selectedEntity;
 
         if (assetPreviewActive) {
-            const auto extent = editor.getAssetViewerPanel().requestedRenderExtent;
+            const auto extent = view.previewRequestedExtent;
             const auto fit = previewImageFit(aspect, extent.height ? static_cast<float>(extent.width) / extent.height : aspect);
             projMatrix[0][0] *= fit.projectionScale;
             projMatrix[1][1] *= fit.projectionScale;
@@ -1858,18 +1949,17 @@ namespace Iridium {
             viewMatrix, projMatrix, renderCameraPosition,
             renderCameraNearPlane, renderCameraFarPlane,
             { renderExtent_.width, renderExtent_.height });
-        const RenderDebugView debugView = editor.getDebugView();
-        const auto previewLighting = editor.getAssetViewerPanel().activeLighting();
+        const RenderDebugView debugView = view.debugView;
         renderBackend->setEnvironmentLightingSettings(assetPreviewActive
-            ? previewLighting.environmentSettings() : sceneEnvironmentSettings_);
-        const float viewExposure = assetPreviewActive ? previewLighting.exposureEv : config_.manualExposureEv;
+            ? view.previewEnvironmentSettings : sceneEnvironmentSettings_);
+        const float viewExposure = assetPreviewActive ? view.previewExposureEv : config_.manualExposureEv;
         // M7R R3c.11: the frame is assembled from spans over this frame's
         // queues and packets and submitted once, after extraction.
         RenderFrame renderFrame{
             .view = viewTransport,
             .history = {
-                .identity = assetPreviewActive ? previewDocument->sessionSerial + 2u : 1u,
-                .resetRevision = assetPreviewActive ? previewDocument->framingRevision :
+                .identity = assetPreviewActive ? view.previewSessionSerial + 2u : 1u,
+                .resetRevision = assetPreviewActive ? view.previewFramingRevision :
                     frameRequests_.viewHistoryResetRevision.value_or(0u),
             },
             .debugView = debugView,
@@ -1980,12 +2070,12 @@ namespace Iridium {
                 for (size_t subMeshIndex = 0u;
                     subMeshIndex < model.subMeshes.size(); ++subMeshIndex) {
                     const SubMesh& subMesh = model.subMeshes[subMeshIndex];
-                    const bool previewPartSelected = assetPreviewActive && previewDocument &&
-                        previewDocument->selectedPart &&
-                        *previewDocument->selectedPart == (previewDocument->selectedPartIsMaterial
+                    const bool previewPartSelected = assetPreviewActive &&
+                        view.previewSelectedPart &&
+                        *view.previewSelectedPart == (view.previewSelectedPartIsMaterial
                             ? subMesh.materialGuid : subMesh.sourcePrimitiveGuid);
-                    if (assetPreviewActive && previewDocument &&
-                        previewDocument->isolateSelectedPart && !previewPartSelected) continue;
+                    if (assetPreviewActive &&
+                        view.previewIsolateSelectedPart && !previewPartSelected) continue;
                     requestedSubmeshes += instanceCount;
                     requestedSourceTriangles +=
                         (static_cast<uint64_t>(subMesh.indexCount) / 3u) *
@@ -2060,7 +2150,7 @@ namespace Iridium {
                     packet.materialGuid = effectiveMaterialGuid;
                     packet.transparency = policy_.deterministicContent ? effectiveTransparency :
                         withLayeredInterfaceBudget(effectiveTransparency,
-                            static_cast<unsigned>(editor.layeredInterfaceOverride()));
+                            static_cast<unsigned>(view.layeredInterfaceOverride));
                     packet.transparencyExecutionMode =
                         effectiveExecutionMode;
                     packet.coverage = subMesh.coverage;
@@ -2134,12 +2224,11 @@ namespace Iridium {
                         }
                         opaqueQueue.push_back(packet);
                     }
-                    const auto& previewPanel = editor.getAssetViewerPanel();
-                    const bool previewHovered = assetPreviewActive && previewDocument &&
-                        !previewDocument->isolateSelectedPart && !previewPanel.hoveredPart.isNil() &&
-                        previewPanel.hoveredPart == (previewPanel.hoveredPartIsMaterial
+                    const bool previewHovered = assetPreviewActive &&
+                        !view.previewIsolateSelectedPart && !view.previewHoveredPart.isNil() &&
+                        view.previewHoveredPart == (view.previewHoveredPartIsMaterial
                             ? subMesh.materialGuid : subMesh.sourcePrimitiveGuid);
-                    if (selected || previewHovered || (previewPartSelected && !previewDocument->isolateSelectedPart)) {
+                    if (selected || previewHovered || (previewPartSelected && !view.previewIsolateSelectedPart)) {
                         packet.selectionFeedback = static_cast<uint8_t>(
                             ((selected || previewPartSelected) ? 1u : 0u) |
                             (previewHovered ? 2u : 0u));
@@ -2976,8 +3065,7 @@ namespace Iridium {
             publishedProbes.stats.activeProbeCount = 0;
         }
         // Pass 1: Opaque G-Buffer
-        bool isWireframe = config_.forceWireframe ||
-            (assetPreviewActive ? editor.getAssetViewerPanel().debugRenderMode == 1 : editor.currentRenderMode == 1);
+        bool isWireframe = config_.forceWireframe || view.wireframe;
         const std::span<const DrawPacket> activeSelectionQueue =
             debugView == RenderDebugView::Final
             ? std::span<const DrawPacket>(selectionQueue.data(), selectionQueue.size())
@@ -3019,7 +3107,7 @@ namespace Iridium {
         }
         if (!policy_.fullscreenScenePresentation && config_.windowVisible) {
             const RenderExtent requested =
-                editor.requestedRenderExtent();
+                editorRequests.requestedSceneExtent;
             if (requested.width == 0 || requested.height == 0 ||
                 (requested.width == renderExtent_.width &&
                     requested.height == renderExtent_.height)) {

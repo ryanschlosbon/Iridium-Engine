@@ -47,6 +47,9 @@
 
 namespace Iridium {
 
+    struct EditorViewState;
+    struct EditorFrameRequests;
+
     class Application final : private IAppControl,
         private IRenderFrameStageObserver {
     public:
@@ -241,6 +244,10 @@ namespace Iridium {
         void cleanup(bool completed);
 
         void drawFrame(AppFrameContext& frame);
+        // The editor state extraction reads; resolves the active asset preview.
+        [[nodiscard]] EditorViewState editorViewState(float aspect);
+        // The only runtime-configuration writes the editor causes.
+        void applyEditorFrameRequests(const EditorFrameRequests& requests);
         void prepareGpuScenePublication(Entity selectedEntity);
 
         void processInput(GLFWwindow* window);
