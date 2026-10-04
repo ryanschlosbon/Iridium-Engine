@@ -1,4 +1,5 @@
 #include "assets/thumbnail/AssetThumbnailService.h"
+#include "core/tasks/TaskSystem.h"
 #include "assets/thumbnail/AssetThumbnailUploadQueue.h"
 #include "assets/model/AssetModelPreparationService.h"
 #include "assets/texture/TextureImporter.h"
@@ -14,6 +15,9 @@
 namespace {
 
     using namespace Iridium;
+
+    // M7R R5b.2: the services run on the engine task system (created in main).
+    Tasks::TaskSystem* testTasks = nullptr;
 
     #define CHECK(condition) \
         do { \
@@ -136,8 +140,7 @@ namespace {
             std::make_shared<
                 LocalDerivedDataCache>(
                     temporary.path / "ddc");
-        AssetModelPreparationService models(
-            temporary.path, cache, target());
+        AssetModelPreparationService models(*testTasks, temporary.path, cache, target());
         AssetThumbnailService service(
             temporary.path, cache, target());
         const AssetCatalogRecord root =
@@ -322,8 +325,7 @@ namespace {
             std::make_shared<
                 LocalDerivedDataCache>(
                     temporary.path / "ddc");
-        AssetModelPreparationService models(
-            temporary.path, cache, target());
+        AssetModelPreparationService models(*testTasks, temporary.path, cache, target());
         AssetThumbnailService service(
             temporary.path, cache, target());
         const AssetCatalogRecord root =
@@ -492,8 +494,7 @@ namespace {
             std::make_shared<
                 LocalDerivedDataCache>(
                     temporary.path / "ddc");
-        AssetModelPreparationService models(
-            temporary.path, cache, target());
+        AssetModelPreparationService models(*testTasks, temporary.path, cache, target());
         AssetThumbnailService thumbnails(
             temporary.path, cache, target());
         const AssetCatalogRecord root =
@@ -556,6 +557,9 @@ namespace {
 } // namespace
 
 int main() {
+    Iridium::Tasks::TaskSystem tasks(Iridium::Tasks::TaskSystemConfig{
+        .workerThreadCount = 4 });
+    testTasks = &tasks;
     struct Test {
         const char* name;
         bool (*function)();

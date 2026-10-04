@@ -224,6 +224,7 @@ namespace Iridium {
                         "model-ddc");
             assetModelPreparationService_ =
                 std::make_unique<AssetModelPreparationService>(
+                    tasks_,
                     assetRoot,
                     editorModelDdc_,
                     CookTarget{

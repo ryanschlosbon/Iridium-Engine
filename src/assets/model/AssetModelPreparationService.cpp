@@ -3,6 +3,7 @@
 #include "assets/cooker/AssetCooker.h"
 #include "assets/cooker/CookReceipt.h"
 #include "core/EngineLog.h"
+#include "core/tasks/TaskSystem.h"
 #include "renderer/rhi/Mesh.h"
 
 #include <chrono>
@@ -76,11 +77,13 @@ namespace Iridium {
     } // namespace
 
     AssetModelPreparationService::AssetModelPreparationService(
+        Tasks::TaskSystem& tasks,
         std::filesystem::path assetRoot,
         std::filesystem::path ddcRoot,
         CookTarget target,
         EngineLog* log)
         : AssetModelPreparationService(
+            tasks,
             std::move(assetRoot),
             std::make_shared<
                 LocalDerivedDataCache>(
@@ -89,6 +92,7 @@ namespace Iridium {
             log) {}
 
     AssetModelPreparationService::AssetModelPreparationService(
+        Tasks::TaskSystem& tasks,
         std::filesystem::path assetRoot,
         std::shared_ptr<LocalDerivedDataCache> cache,
         CookTarget target,
@@ -102,10 +106,8 @@ namespace Iridium {
             throw std::invalid_argument(
                 "Catalog model preparation requires an asset root and DDC.");
         }
-        worker_ = std::jthread(
-            [this](std::stop_token stopToken) {
-                workerLoop(stopToken);
-            });
+        strand_ = std::make_unique<Tasks::FunctionStrand>(tasks,
+            Tasks::TaskPriority::Background, "asset.model.prepare");
     }
 
     AssetModelPreparationService::~AssetModelPreparationService() {
@@ -120,20 +122,23 @@ namespace Iridium {
             throw std::invalid_argument(
                 "Catalog model preparation requires one ready root model.");
         }
-        std::lock_guard lock(mutex_);
-        if (shutdown_) {
-            throw std::logic_error(
-                "Cannot prepare a model after shutdown.");
+        {
+            std::lock_guard lock(mutex_);
+            if (shutdown_) {
+                throw std::logic_error(
+                    "Cannot prepare a model after shutdown.");
+            }
+            if (!pending_.insert(record.guid).second) return false;
+            requests_.push_back(record);
+            if (log_) {
+                log_->info(
+                    "Asset Cook",
+                    "Queued model preparation: " +
+                        record.sourcePath);
+            }
         }
-        if (!pending_.insert(record.guid).second) return false;
-        requests_.push_back(record);
-        if (log_) {
-            log_->info(
-                "Asset Cook",
-                "Queued model preparation: " +
-                    record.sourcePath);
-        }
-        condition_.notify_all();
+        // One strand item per request, posted outside the mutex.
+        (void)strand_->post([this] { runNext(); });
         return true;
     }
 
@@ -159,9 +164,9 @@ namespace Iridium {
             requests_.clear();
             pending_.clear();
         }
-        worker_.request_stop();
-        condition_.notify_all();
-        if (worker_.joinable()) worker_.join();
+        stop_.request_stop();
+        // Waits for the running preparation; queued items find no request.
+        strand_->waitIdle();
     }
 
     PreparedCatalogModel AssetModelPreparationService::prepare(
@@ -383,54 +388,49 @@ namespace Iridium {
         return result;
     }
 
-    void AssetModelPreparationService::workerLoop(
-        std::stop_token stopToken) {
-        while (!stopToken.stop_requested()) {
-            AssetCatalogRecord record;
-            {
-                std::unique_lock lock(mutex_);
-                condition_.wait(lock, stopToken, [this] {
-                    return shutdown_ || !requests_.empty();
-                });
-                if (shutdown_ || stopToken.stop_requested()) return;
-                record = std::move(requests_.front());
-                requests_.pop_front();
-            }
-            if (log_) {
-                log_->info(
+    void AssetModelPreparationService::runNext() {
+        AssetCatalogRecord record;
+        {
+            std::lock_guard lock(mutex_);
+            if (shutdown_ || requests_.empty()) return;
+            record = std::move(requests_.front());
+            requests_.pop_front();
+        }
+        const std::stop_token stopToken = stop_.get_token();
+        if (log_) {
+            log_->info(
+                "Asset Cook",
+                "Preparing model: " +
+                    record.sourcePath);
+        }
+        PreparedCatalogModel result =
+            prepare(record, stopToken);
+        if (log_) {
+            if (stopToken.stop_requested()) {
+                log_->warning(
                     "Asset Cook",
-                    "Preparing model: " +
+                    "Model preparation cancelled: " +
                         record.sourcePath);
             }
-            PreparedCatalogModel result =
-                prepare(record, stopToken);
-            if (log_) {
-                if (stopToken.stop_requested()) {
-                    log_->warning(
-                        "Asset Cook",
-                        "Model preparation cancelled: " +
-                            record.sourcePath);
-                }
-                else if (!result.succeeded) {
-                    log_->error(
-                        "Asset Cook",
-                        "Model preparation failed for " +
-                            record.sourcePath +
-                            ": " +
-                            result.diagnostic);
-                }
-                else {
-                    log_->info(
-                        "Asset Cook",
-                        "Model preparation completed: " +
-                            record.sourcePath);
-                }
+            else if (!result.succeeded) {
+                log_->error(
+                    "Asset Cook",
+                    "Model preparation failed for " +
+                        record.sourcePath +
+                        ": " +
+                        result.diagnostic);
             }
-            {
-                std::lock_guard lock(mutex_);
-                pending_.erase(record.guid);
-                results_.push_back(std::move(result));
+            else {
+                log_->info(
+                    "Asset Cook",
+                    "Model preparation completed: " +
+                        record.sourcePath);
             }
+        }
+        {
+            std::lock_guard lock(mutex_);
+            pending_.erase(record.guid);
+            results_.push_back(std::move(result));
         }
     }
 
