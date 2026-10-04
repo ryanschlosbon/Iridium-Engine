@@ -142,6 +142,10 @@ namespace Iridium {
         [[nodiscard]] uint64_t overrideSignature(
             const MeshComponent& mesh) const;
         [[nodiscard]] bool modelsUnchanged() const;
+        // Appends a default slot reusing the spare storage; truncation keeps
+        // the first removed slot's storage as the spare (M7R R5c.8).
+        void appendSlot();
+        void truncateSlots(size_t count);
 
         SceneWorld& scene_;
         Mode mode_;
@@ -165,6 +169,9 @@ namespace Iridium {
         std::vector<uint32_t> volatileRuns_;        // runs re-run every frame
         std::vector<uint32_t> overrideEntities_;    // dense indices
         std::vector<ModelRecord> models_;
+        // Storage of the last truncated slot (strings and vectors only).
+        GpuSceneObservedInstance spareObservation_;
+        Metadata spareMetadata_;
         // Per-frame scratch.
         std::vector<uint32_t> runStamp_;
         uint32_t stamp_ = 0;

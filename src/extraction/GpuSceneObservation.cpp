@@ -136,10 +136,7 @@ namespace Iridium {
             return Kind::OwnerFallback;
         }
         const ModelAsset& model = *mesh.model;
-        if (observationCount == observations_.size()) {
-            observations_.emplace_back();
-            metadata_.emplace_back();
-        }
+        if (observationCount == observations_.size()) appendSlot();
         GpuSceneObservedInstance& observation = observations_[observationCount];
         Metadata& metadata = metadata_[observationCount];
         const glm::mat4 previousWorld = observation.worldTransform;
@@ -395,8 +392,35 @@ namespace Iridium {
             runFirst_.push_back(static_cast<uint32_t>(entities.size()));
         }
         models_.resize(modelCount);
-        observations_.resize(observationCount);
-        metadata_.resize(observationCount);
+        truncateSlots(observationCount);
+    }
+
+    void GpuSceneObservation::appendSlot() {
+        // M7R R5c.8: a new slot equals a default-constructed one; it takes
+        // the (emptied) strings and vectors of the last truncated slot, so a
+        // tail run that appends a scratch slot every frame (an entity with
+        // invalid metadata after the last accepted one) does not allocate.
+        GpuSceneObservedInstance& observation = observations_.emplace_back();
+        observation.identity.artifactCookKey =
+            std::move(spareObservation_.identity.artifactCookKey);
+        observation.identity.artifactCookKey.clear();
+        observation.primitives = std::move(spareObservation_.primitives);
+        observation.primitives.clear();
+        Metadata& metadata = metadata_.emplace_back();
+        metadata.cookKey = std::move(spareMetadata_.cookKey);
+        metadata.cookKey.clear();
+    }
+
+    void GpuSceneObservation::truncateSlots(size_t count) {
+        if (observations_.size() > count) {
+            spareObservation_.identity.artifactCookKey =
+                std::move(observations_[count].identity.artifactCookKey);
+            spareObservation_.primitives =
+                std::move(observations_[count].primitives);
+            spareMetadata_.cookKey = std::move(metadata_[count].cookKey);
+        }
+        observations_.resize(count);
+        metadata_.resize(count);
     }
 
     bool GpuSceneObservation::runKindsUnchanged(const Pools& pools,
@@ -519,8 +543,7 @@ namespace Iridium {
             directFallbackCount_ = fallbackBefore;
         }
         // A tail run may have appended a scratch slot, as the full walk does.
-        observations_.resize(slots);
-        metadata_.resize(slots);
+        truncateSlots(slots);
         return true;
     }
 
