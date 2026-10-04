@@ -209,6 +209,7 @@ namespace Iridium {
             }
             assetCatalogService_ =
                 std::make_unique<AssetCatalogService>(
+                    tasks_,
                     assetCatalog_.get(),
                     std::vector<AssetRoot>{
                         AssetRoot{ "project", assetRoot },

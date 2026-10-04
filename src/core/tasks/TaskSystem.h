@@ -224,6 +224,28 @@ namespace Iridium::Tasks {
         void submitPinnedIo(PinnedTask& task);
         void wait(PinnedTask& task);
 
+        // M7R R5b.2: runs `fn()` on the pinned I/O thread and waits for it
+        // (blocking, without running other work). Returns false when it was
+        // cancelled by shutdown before it ran. Exceptions from fn are caught
+        // by the task system; callers that need them capture them in fn.
+        template <class Fn>
+        bool runOnPinnedIo(Fn&& fn, const char* scopeName = nullptr) {
+            using Callable = std::remove_reference_t<Fn>;
+            class Task final : public PinnedTask {
+            public:
+                Task(Callable& callable, const char* name)
+                    : PinnedTask(name), callable_(callable) {}
+
+            private:
+                void execute() override { callable_(); }
+                Callable& callable_;
+            };
+            Task task(fn, scopeName);
+            submitPinnedIo(task);
+            wait(task);
+            return !task.wasCancelled();
+        }
+
         // Stops admission, cancels pending background tasks, finishes everything
         // already started (the main thread helps) and joins every thread.
         // Long-running tasks should poll isShutdownRequested(). Idempotent.

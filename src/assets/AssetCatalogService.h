@@ -5,18 +5,22 @@
 #include "assets/AssetDiscovery.h"
 #include "assets/AssetImport.h"
 
-#include <condition_variable>
 #include <cstdint>
 #include <deque>
 #include <filesystem>
+#include <memory>
 #include <mutex>
 #include <optional>
-#include <thread>
+#include <stop_token>
 #include <vector>
 
 namespace Iridium {
 
     class EngineLog;
+    namespace Tasks {
+        class FunctionStrand;
+        class TaskSystem;
+    }
 
     enum class AssetCatalogJobKind : uint8_t {
         Import,
@@ -44,11 +48,15 @@ namespace Iridium {
 
     class AssetCatalogService {
     public:
+        // Jobs run in order on a Background strand of the task system; the
+        // SQLite catalog rebuild runs on its pinned I/O thread (M7R R5b.2).
         AssetCatalogService(
+            Tasks::TaskSystem& tasks,
             AssetCatalog* catalog,
             std::vector<AssetRoot> roots,
             EngineLog* log = nullptr);
         AssetCatalogService(
+            Tasks::TaskSystem& tasks,
             AssetCatalog* catalog,
             std::vector<AssetRoot> roots,
             ImporterRegistry importers,
@@ -115,21 +123,25 @@ namespace Iridium {
         [[nodiscard]] AssetCatalogJobResult execute(
             const Job& job,
             std::stop_token stopToken);
-        void workerLoop(std::stop_token stopToken);
+        // Runs the oldest queued job (a strand item).
+        void runNextJob();
+        void schedule();
 
+        Tasks::TaskSystem& tasks_;
         AssetCatalog* catalog_ = nullptr;
         std::vector<AssetRoot> roots_;
         AssetContentOperations contentOperations_;
         ImporterRegistry importers_;
         mutable std::mutex mutex_;
-        std::condition_variable_any condition_;
         std::deque<Job> jobs_;
         std::vector<AssetCatalogJobResult> results_;
         uint64_t serial_ = 0;
         bool active_ = false;
         bool shutdown_ = false;
-        std::jthread worker_;
+        std::stop_source stop_;
         EngineLog* log_ = nullptr;
+        // Declared last: drained in shutdown() before the state above goes.
+        std::unique_ptr<Tasks::FunctionStrand> strand_;
     };
 
 } // namespace Iridium
