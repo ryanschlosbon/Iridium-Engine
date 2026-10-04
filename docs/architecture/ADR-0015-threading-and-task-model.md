@@ -1,8 +1,10 @@
 # ADR-0015: Threading and Task Model
 
 - Status: Accepted 2026-10-03 (M7R R5b.1). The task system, its tests and the
-  thread-scoped allocation counters are in place. No production code uses the task
-  system yet; service migration is R5b.2 and the starvation test is R5b.3.
+  thread-scoped allocation counters are in place. R5b.2 moved every service thread,
+  the importer fork-join, the menu-bar `std::async` and the convolution's
+  `std::execution::par` onto it; R5b.3 added the starvation test (its timing run is
+  pending). As-built notes are in the M7R plan's decision log (2026-10-03, lane B).
 - Date: 2026-10-03
 - Owners: Core, Profiling, Assets (service migration)
 - Library: enkiTS v1.12 (zlib, commit `0289cf6`), approved by the owner 2026-10-03.
