@@ -11,4 +11,5 @@ target_sources(iridium_qualification PRIVATE
         HarnessDetail.cpp
         ScriptedChanges.cpp
         ScriptedChangeEvents.cpp
+        StarvationLoad.cpp
 )

@@ -226,6 +226,14 @@ namespace Iridium {
             "--qualification-scripted-changes requires a path",
             [&q](std::string_view value) { q.scriptedChanges = std::string(value); },
             true);
+        addValueOption(registry, owner, "--qualification-background-cook", "PATH",
+            "Starvation test: re-cook this asset (DDC bypassed) in a loop of Background tasks for the whole run",
+            "--qualification-background-cook requires a path",
+            [&q](std::string_view value) { q.backgroundCookSource = std::string(value); },
+            true);
+        addSwitch(registry, owner, "--qualification-frame-task-probe",
+            "Starvation test: join a fixed frame-critical parallelFor every frame and report its worker start and join times",
+            [&q] { q.frameTaskProbe = true; });
         addSwitch(registry, owner, "--validate-depth-pyramid-capture",
             "Read back live depth and verify every pyramid mip",
             [&q, &c] {

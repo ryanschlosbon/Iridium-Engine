@@ -36,6 +36,13 @@ namespace Iridium {
     struct ScriptedChangeRunDeleter {
         void operator()(ScriptedChangeRun* run) const noexcept;
     };
+    // M7R R5b.3 starvation test load and probe (StarvationLoad.h).
+    class BackgroundCookLoad;
+    class FrameTaskProbe;
+    struct StarvationLoadDeleter {
+        void operator()(BackgroundCookLoad* load) const noexcept;
+        void operator()(FrameTaskProbe* probe) const noexcept;
+    };
 
     // The run policy the harness requests: a --benchmark run is deterministic,
     // fullscreen and owns its startup content; reference routes, the OIT order
@@ -127,6 +134,9 @@ namespace Iridium {
 
         // Scripted mid-run changes (ScriptedChangeEvents.cpp). Every entry
         // point is a no-op without --qualification-scripted-changes.
+        void startStarvationLoad(AppStartupContext& context);
+        void finishStarvationLoad();
+
         void loadScriptedChanges(AppStartupContext& context);
         void prepareScriptedChanges(AppStartupContext& context);
         void updateScriptedChanges(AppFrameContext& context);
@@ -149,6 +159,8 @@ namespace Iridium {
 
         const QualificationOptions options_;
         AppRunPolicy policy_{};
+        std::unique_ptr<BackgroundCookLoad, StarvationLoadDeleter> backgroundCook_;
+        std::unique_ptr<FrameTaskProbe, StarvationLoadDeleter> frameTaskProbe_;
         std::unique_ptr<IQualificationBackend> backend_;
         std::array<IRenderBackendExtension*, 1> extensions_{};
 

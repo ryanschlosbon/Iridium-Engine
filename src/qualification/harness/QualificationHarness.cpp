@@ -8,7 +8,9 @@
 
 #include "assets/AssetManager.h"
 #include "platform/SystemProfile.h"
+#include "profiling/CpuProfiler.h"
 #include "qualification/harness/HarnessDetail.h"
+#include "qualification/harness/StarvationLoad.h"
 #include "qualification/vulkan/VulkanQualificationExtension.h"
 #include "renderer/rhi/Mesh.h"
 #include "renderer/rhi/TransparencyQualityOverride.h"
@@ -104,7 +106,54 @@ namespace Iridium {
         case StartupPhase::Ready:
             allocateResidencyChurnProbe(context);
             prepareScriptedChanges(context);
+            startStarvationLoad(context);
             return;
+        }
+    }
+
+    void StarvationLoadDeleter::operator()(BackgroundCookLoad* load) const noexcept {
+        delete load;
+    }
+
+    void StarvationLoadDeleter::operator()(FrameTaskProbe* probe) const noexcept {
+        delete probe;
+    }
+
+    void QualificationHarness::startStarvationLoad(AppStartupContext& context) {
+        if (options_.backgroundCookSource.empty() && !options_.frameTaskProbe) {
+            return;
+        }
+        // The engine's task system; the harness runs on its main thread.
+        Tasks::TaskSystem* const tasks = Tasks::TaskSystem::forCurrentThread();
+        if (tasks == nullptr) {
+            throw std::runtime_error(
+                "The starvation test needs the engine task system");
+        }
+        if (options_.frameTaskProbe) {
+            const uint64_t frames = context.config.frameLimit != 0
+                ? context.config.frameLimit : 100'000u;
+            frameTaskProbe_.reset(new FrameTaskProbe(*tasks,
+                static_cast<size_t>(frames)));
+        }
+        if (!options_.backgroundCookSource.empty()) {
+            backgroundCook_.reset(new BackgroundCookLoad(*tasks,
+                std::filesystem::path(PROJECT_ROOT_DIR) / "assets",
+                options_.backgroundCookSource));
+            backgroundCook_->start();
+        }
+    }
+
+    void QualificationHarness::finishStarvationLoad() {
+        if (backgroundCook_) {
+            backgroundCook_->stop();
+            std::cout << "IRIDIUM_BACKGROUND_COOK "
+                << backgroundCook_->reportJson() << '\n';
+            backgroundCook_.reset();
+        }
+        if (frameTaskProbe_) {
+            std::cout << "IRIDIUM_FRAME_TASK_PROBE "
+                << frameTaskProbe_->reportJson() << '\n';
+            frameTaskProbe_.reset();
         }
     }
 
@@ -398,6 +447,10 @@ namespace Iridium {
         case FrameBeginPhase::PostSceneUpdate: {
             const bool isMeasuredFrame = context.measuredFrameIndex.has_value();
             const uint64_t measured = context.measuredFrameIndex.value_or(0u);
+            if (frameTaskProbe_) {
+                CpuScope probeScope(context.profiler, "cpu.task.probe");
+                frameTaskProbe_->runFrame(isMeasuredFrame);
+            }
             if (isMeasuredFrame && options_.validateOrdinary2Resize) {
                 updateOrdinary2ResizeValidation(context, measured);
             }
@@ -463,11 +516,16 @@ namespace Iridium {
         AppShutdownContext& context) {
         switch (phase) {
         case ShutdownPhase::RunComplete:
+            finishStarvationLoad();
             finishScriptedChanges(context);
             reportRunMetrics(context);
             collectEndOfRunValidations(context);
             return;
         case ShutdownPhase::ReleaseResources:
+            // A failed run skips RunComplete; the load stops before the
+            // task system does.
+            backgroundCook_.reset();
+            frameTaskProbe_.reset();
             releaseScriptedChangeResources(context);
             releaseProbeResources(context);
             return;

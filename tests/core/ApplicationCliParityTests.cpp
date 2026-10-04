@@ -193,6 +193,8 @@ namespace {
         field("captureDirectory", c.captureDirectory.generic_string());
         field("cacheState", c.cacheState);
         field("scriptedChanges", c.scriptedChanges.generic_string());
+        field("backgroundCookSource", c.backgroundCookSource.generic_string());
+        flag("frameTaskProbe", c.frameTaskProbe);
         return s.str();
     }
 
@@ -561,6 +563,13 @@ namespace {
                 c.cpuProfileOutput = "p.jsonl"; },
                 "--qualification-scripted-changes requires a path",
                 { { "", "--qualification-scripted-changes requires a path" } } },
+            // M7R R5b.3 starvation test (not in 6b000ad).
+            { "--qualification-background-cook", Q, "models/source.gltf", {}, [](C& c) {
+                c.backgroundCookSource = "models/source.gltf"; },
+                "--qualification-background-cook requires a path",
+                { { "", "--qualification-background-cook requires a path" } } },
+            { "--qualification-frame-task-probe", Q, {}, {}, [](C& c) {
+                c.frameTaskProbe = true; }, {}, {} },
             { "--validate-depth-pyramid-capture", Q, {}, {}, [](C& c) {
                 c.experimentalDepthPyramid = true; c.validateDepthPyramidCapture = true; },
                 {}, {} },
@@ -610,8 +619,8 @@ namespace {
         Cli::CliOptionRegistry registry;
         registerEngineOptions(registry, scratch);
 
-        CHECK(table.size() == 90);
-        CHECK(registry.options().size() == 90);
+        CHECK(table.size() == 92);
+        CHECK(registry.options().size() == 92);
         std::set<std::string_view> names;
         std::map<std::string_view, size_t> ownerCounts;
         for (const FlagCase& row : table) {
@@ -675,7 +684,7 @@ namespace {
         CHECK(ownerCounts[R] == 14);
         CHECK(ownerCounts[E] == 4);
         CHECK(ownerCounts[G] == 32);
-        CHECK(ownerCounts[Q] == 40);
+        CHECK(ownerCounts[Q] == 42);
         std::cout << "  owners: runtime " << ownerCounts[R] << ", editor " << ownerCounts[E]
                   << ", renderer " << ownerCounts[G] << ", qualification "
                   << ownerCounts[Q] << '\n';
@@ -726,7 +735,7 @@ namespace {
     bool testUsageParity() {
         const std::string usage = engineUsage();
         CHECK(usage.starts_with("Usage: IridiumEngine [options]\n"));
-        CHECK(optionLines(usage).size() == 90);
+        CHECK(optionLines(usage).size() == 92);
         // Groups appear in owner order: runtime, editor, renderer, qualification.
         const size_t runtime = usage.find("runtime options:");
         const size_t editor = usage.find("editor options:");
