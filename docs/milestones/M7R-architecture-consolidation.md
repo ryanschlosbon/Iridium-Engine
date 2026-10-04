@@ -3,7 +3,7 @@
 ## Header
 
 - **Milestone:** M7R — Architecture consolidation
-- **Status:** In Progress — plan approved by owner 2026-10-02; R0–R2 accepted 2026-10-02, R3 and R4 accepted 2026-10-03; R5 active (R5.0, R5a, R5b and R5c.1–R5c.6 integrated; R5c.7–R5c.8 in progress)
+- **Status:** In Progress — plan approved by owner 2026-10-02; R0–R2 accepted 2026-10-02, R3 and R4 accepted 2026-10-03; R5 accepted 2026-10-04; R6 active
 - **Lead:** M7R milestone-lead session (Claude Code); integration owner for all slices
 - **Branch / PR:** `m7r-consolidation` off `Render-Refactor-for-Modularity`; one PR
   for the milestone
@@ -391,7 +391,7 @@ planner, deletion queue, pipeline cache, hitch harness, transfer queue and seque
 - VRAM deltas;
 - synchronization validation clean.
 
-### R5 — CPU frame and application decomposition (`Proposed`)
+### R5 — CPU frame and application decomposition (`Accepted` 2026-10-04)
 
 **R5a — Application decomposition.**
 - Split `Application` into FrameOrchestrator, RenderExtractor, EditorHost and AssetIntegration. Qualification is already gone after R2.
@@ -943,6 +943,59 @@ F7 is now GPU-bound, and the F7 serial main thread runs at 1.74 ms against the �
 - The analyzer's cook criterion was corrected:
   - A T-F1 run (18 s) is shorter than one cook, so it now passes when a cook is in flight for the whole run with no failures.
   - A new criterion bounds the first in-render cook at 110% of the isolated time.
+
+### R5 result (2026-10-04, `e98261b`)
+
+**Structure**
+- **Application:** composition root (`Application.cpp` 4,564 → 476 lines) plus `FrameOrchestrator`, `AssetIntegration`, `EditorHost` (ImGui-free header) and the `iridium_render_extraction` library (`RenderExtractor`, `GpuSceneObservation`, `ParallelDrawSort`).
+  - `EditorFrameRequests` carries the editor's writes to runtime config.
+  - A configure-time guard keeps ImGui, the editor and GLFW out of extraction.
+- **Threading (ADR-0015):**
+  - one enkiTS v1.12 `TaskSystem` with 30 workers and a pinned I/O thread;
+  - every service thread, the importer fork-join, the menu-bar `std::async` and the convolution's `std::execution::par` are migrated;
+  - background ranges run below normal OS priority;
+  - allocation counters are thread-scoped.
+- **Change-driven extraction:**
+  - Caster, depth-history and membership revisions are monotonic and exact. A qualification oracle compares them against the old hashes.
+  - `GpuScenePublisher` is incremental, and only changed entities are observed (verified by `--qualification-extraction-verifier`).
+  - Light and probe extraction are change-driven.
+  - The main-opaque parity packets are replaced by `OpaqueSubmission` plus record-based culler plans, with mixed bins and an indirect wireframe.
+  - The compact (key, index) sorts are permutation-identical.
+- **Parallel extraction:** classification, extraction, merge, transparent sorts and intervals run as frame-critical task sets. Outputs are per index; the parallel sort falls back to the serial sort on any tie.
+- **Allocations:** zero steady-frame allocations on every non-qualification route. `--qualification-allocation-trace` captures a stack for any regression.
+
+**Verification** (each integration; final at `e98261b`)
+- Frozen set: identical or within envelopes, with 0 hazards and 0 validation messages.
+- Digests identical to `r3a0` and `r3a0-ext`.
+- Verifier and oracle: 48/48 passed.
+- Sweep: 36/36, with every delta explained (lane evidence `r5c78b*`; main differs only by docs).
+- Tests: 113/113 in Release and Debug. Shipping smoke clean.
+
+**Final timing** (`timing/r5-final`, A = `9f2a28e` (R4 accepted), B = `e98261b`, A,B,B,A, 10,000 frames, quiet machine)
+
+| Route | CPU frame median A / B | Non-wait CPU A / B | GPU median A / B | Steady allocations A / B |
+|---|---|---|---|---|
+| T-F1-all | 1.127 / 1.117 ms | 0.363 / **0.282** ms (−22%) | 1.131 / 1.132 ms | 0 / 0 |
+| T-F7-stack | 3.531 / **1.917** ms | 3.434 / **1.373** ms (−60%) | 1.944 / 1.939 ms | 0 / 0 |
+| T-F5-hetero | 2.991 / 2.983 ms | 0.654 / **0.557** ms (−15%) | 3.000 / 3.006 ms | 16 / **0** |
+| T-F6-probecap | 3.642 / 3.639 ms | 0.699 / **0.366** ms (−48%) | 3.652 / 3.658 ms | 8 / **0** |
+
+**Final hitch** (`hitch/r5-final-hitch`, same A/B; no `scripted_slow_frame` records on either side)
+
+| Route | Median ms A / B | p99 ms A / B | Max ms A / B |
+|---|---|---|---|
+| H-stress | 39.71 / **6.64** | 40.38 / **7.57** | 186.4 / **39.5** |
+| H-probe | 3.71 / 3.70 | 7.03 / 7.03 | 10.5 / 10.4 |
+| H-upload | 1.13 / 1.12 | 1.30 / 1.28 | 6.7 / 7.8 |
+
+**Acceptance.** All completion criteria are met:
+- F7 serial main-thread time is 1.37 ms, against the ≤ 3.0 ms target.
+- Critical path and aggregate worker time are reported per stage (`FRAME_BUDGET.md`, "M7R CPU frame baseline").
+- Steady-frame allocations are 0 on T-F1, T-F7, T-F5-hetero and T-F6-probecap, and on every non-qualification sweep route.
+- `FRAME_BUDGET.md` is updated.
+- No GPU regression: −0.3% to +0.2%.
+
+**Deferred:** the R5c.4e classification restriction (decision log), parallel command recording (the largest remaining H-stress CPU cost, 3.1 ms of G-buffer recording), and an order-independent interval count (about 0.15 ms on F7).
 
 ## Completion report
 
