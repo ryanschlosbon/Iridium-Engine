@@ -8,6 +8,19 @@
 
 namespace Iridium {
 
+    namespace {
+
+        Tasks::TaskSystem& requireTasks(
+            const AssetRuntimeServiceConfig& config) {
+            if (config.tasks == nullptr) {
+                throw std::invalid_argument(
+                    "The asset runtime service needs the task system.");
+            }
+            return *config.tasks;
+        }
+
+    } // namespace
+
     AssetRuntimeService::AssetRuntimeService(
         AssetRuntimeServiceConfig config,
         AssetSourceMonitor::ContentHasher hasher)
@@ -17,7 +30,8 @@ namespace Iridium {
               config.scanInterval,
               std::move(hasher),
               config.startSourceWorkers,
-              config.tasks) {}
+              config.tasks),
+          reimport_(requireTasks(config)) {}
 
     AssetRuntimeService::~AssetRuntimeService() {
         shutdown();
