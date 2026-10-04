@@ -237,6 +237,13 @@ iridium_add_test(GpuSceneTests
         SOURCES renderer/GpuSceneTests.cpp
         LIBS iridium_rhi iridium_assets)
 
+# M7R R5c.5: the incremental publisher against the full-scan publisher it
+# replaced (test-only reference copy), byte for byte after every publication.
+iridium_add_test(GpuScenePublisherReplayTests
+        SOURCES renderer/GpuScenePublisherReplayTests.cpp
+                renderer/support/ReferenceGpuScenePublisher.cpp
+        LIBS iridium_rhi)
+
 iridium_add_test(GpuSceneVisibilityTests
         SOURCES renderer/GpuSceneVisibilityTests.cpp
         LIBS iridium_rhi)
