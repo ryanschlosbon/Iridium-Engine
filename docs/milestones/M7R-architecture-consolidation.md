@@ -355,7 +355,7 @@ migration order and ordered sub-steps R3.0–R3c.12, is in `docs/milestones/M7R-
 - synchronization validation is clean;
 - byte-identical output.
 
-### R4 — Vulkan modernization (`In Progress`)
+### R4 — Vulkan modernization (`Accepted` 2026-10-03)
 
 The implementation design, covering the inventory, per-pass dynamic-rendering mapping, VMA and aliasing
 planner, deletion queue, pipeline cache, hitch harness, transfer queue and sequencing, is in
@@ -753,7 +753,7 @@ Rerun (`timing/r1-rerun`, A,B,B,A; the machine was still in use):
   - The likely cause is memory placement from the changed resource-creation order, not extra GPU work.
 - **Accepted as a watch item:** R4b re-places all memory (VMA), and R4b and R6 re-measure. If the delta persists after R4b, bisect by pass ownership.
 
-### R4 result (2026-10-03, R4a–R4c through `c10c182`; R4d pending)
+### R4 result (2026-10-03, R4a–R4c through `c10c182`, R4d through `1edaab6`)
 
 **Structure**
 - **Dynamic rendering (R4a):** 0 `vkCreateRenderPass`/`vkCreateFramebuffer` calls outside `src/vendor`. Pipelines use `VkPipelineRenderingCreateInfo`. The swapchain and shadow maps are `ExecutorOwned` imports (ADR-0016 item 4 note).
@@ -796,7 +796,7 @@ A warm cache saves time only when the driver's own cache is cold, for example on
 | T-F1-all | 1.540 / 1.347 ms (−12.5%) | 0.418 / 0.348 ms (−16.8%) | 1.126 / **1.003** ms (−11.0%) |
 | T-F7-stack | 6.968 / 5.382 ms (−22.8%) | 4.957 / 3.495 ms (−29.5%) | 2.034 / **1.918** ms (−5.7%) |
 
-The R3 GPU watch item (+0.28% on F1, +0.57% on F7) is closed: GPU time is now below R0 on both routes. Aliasing alone accounts for −6.4% (F1) and −3.2% (F7) in its on/off pair (`timing/r4b6-onoff-short`).
+This pair's GPU gain is not stable across machine states (see "Final R4 timing" below). Aliasing alone accounts for −6.4% (F1) and −3.2% (F7) in its on/off pair (`timing/r4b6-onoff-short`), and most of that is one pass, `gpu.transparency.refraction-pyramids` (0.197 → 0.130 ms).
 
 **Hitch scenario** (`hitch/r4-accept-hitch`, A = `c666d32` (R4b.3, before R4c.1), B = `c10c182`, A,B,B,A, quiet machine)
 
@@ -813,6 +813,53 @@ The R3 GPU watch item (+0.28% on F1, +0.57% on F7) is closed: GPU time is now be
   - It occurs with aliasing on and off. It was not seen in 2 runs of the pre-R4c baseline, so the evidence is too thin to bisect.
   - The profiler's detailed window (512 frames) did not cover those frames. The harness now records scope detail for any frame of 250 ms or more (`b360e3a`, `scripted_slow_frame`), and 4 further runs did not reproduce it.
   - R4d and R6 hitch runs will attribute it if it recurs.
+
+**R4d** (transfer queue, timeline semaphores, staging ring, `vkQueueSubmit2`; details in the decision log)
+- **Upload path:** the RTX 4090 uses queue family 1, a dedicated transfer queue. `beginFrame` no longer waits on uploads. Upload-wait frames are 0 on every hitch route.
+- **Fence serialization fixed:** the per-image fence map had made every frame wait for the previous frame's GPU work, so CPU and GPU never overlapped. Per-image timeline serials took the T-F7 image-owner wait from 1.97 ms to 0.003 ms.
+- **Texture-table growth bug fixed:** growing the table destroyed a descriptor pool still in use. It was pre-existing, exposed by the new `add_textures` H-upload route.
+- **Verification (main at `1edaab6`):**
+  - frozen set `r4d-main` with `--validation-sync`: identical or within envelopes, 0 hazards, 0 validation messages (the lane also ran `graphics` and `legacy-blocking` modes);
+  - digest identical to `r3a0`;
+  - sweep 36/36 (lane);
+  - tests 105/105 in Release and Debug.
+
+| Hitch (`hitch/r4d-hitch`, A = `b360e3a`, B = R4d) | Median ms A / B | p99 ms A / B | Upload-wait frames A / B |
+|---|---|---|---|
+| H-stress | 46.05 / 39.58 | 47.49 / 41.05 | 1 / 0 |
+| H-probe | 4.10 / 3.70 | 7.30 / 7.00 | 0 / 0 |
+| H-upload (`legacy-blocking` / `auto`) | 1.13 / 1.13 | 1.30 / 1.29 | 5 / 0 |
+
+**Final R4 timing**
+- The two late full pairs against R0 (`timing/r4-final`, `r4-final-2`) ran in a slower machine state:
+  - R0's own F7 non-wait CPU was 5.77 ms against 4.96 ms in the quiet pair, and its UI pass rose from 0.060 to 0.071 ms.
+  - Desktop applications were open (game launchers, an overlay, Discord, Settings).
+  - `r4-final` is discarded: its R0 runs varied up to 9.2 ms. `r4-final-2` is internally consistent and serves as the matched pair for that state.
+- In this state, the refraction-pyramid pass of aliased builds runs at 0.205 ms instead of 0.130, the same as R0, with an identical graph and alias plan. The cause is environmental (memory placement or clock state) and was not identified.
+- A same-state control (`timing/r4d-vs-pre`, A = `c10c182` rebuilt, B = `1edaab6`, 2,000 frames) shows R4d itself regresses nothing:
+
+| Route | CPU frame A / B | Non-wait CPU A / B | GPU A / B |
+|---|---|---|---|
+| T-F1-all | 1.677 / 1.125 ms | 0.557 / 0.590 ms | 1.144 / 1.135 ms |
+| T-F7-stack | 7.366 / 5.265 ms | 5.336 / 5.153 ms | 2.052 / 2.041 ms |
+
+R0 vs R4 (`timing/r4-final-2`, A = R0, B = `1edaab6`, A,B,B,A, 10,000 frames, slower state; steady-frame allocations 0):
+
+| Route | CPU frame median A / B | Non-wait CPU A / B | GPU median A / B |
+|---|---|---|---|
+| T-F1-all | 1.648 / **1.138** ms (−31%) | 0.533 / 0.516 ms | 1.141 / 1.147 ms (+0.5%; one B run at 1.157, the other 1.136) |
+| T-F7-stack | 7.902 / **5.260** ms (−33%) | 5.772 / 5.111 ms (−11%) | 2.057 / 2.060 ms (+0.1%) |
+
+**R3 GPU watch item:**
+- In the quiet state R4 is 5.7–11% faster on GPU than R0.
+- In the slower state it is within +0.1–0.5% of R0, inside or at the R0 noise band (±0.3%).
+- The watch item therefore stays open, with the refraction-pyramid placement sensitivity named as its main component. R6 re-measures on a verified-quiet machine and records the machine state with the run.
+
+**Acceptance.** The R4 completion criteria are met:
+- hitch and p99 improve on the scripted-change runs: drains 8→0 and 272→0, upload waits →0, H-probe p99 8.4→7.0 ms, H-stress median −14% through R4d;
+- VRAM: −341.6 MB of graph memory at 4K, +64 MiB staging ring;
+- synchronization validation clean on the frozen set in every upload mode;
+- no timing regression beyond noise in either machine state.
 
 ## Completion report
 
