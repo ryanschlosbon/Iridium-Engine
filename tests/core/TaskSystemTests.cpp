@@ -21,6 +21,10 @@
 
 #if defined(_WIN32)
 #include <malloc.h>
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <Windows.h>
 #endif
 
 namespace {
@@ -834,6 +838,42 @@ namespace {
         return true;
     }
 
+    // M7R R5b.3: background ranges run below normal OS priority and frame work
+    // at normal priority, also when a background waiter helps with it.
+    bool testBackgroundOsPriority() {
+#if defined(_WIN32)
+        TaskSystem system(TaskSystemConfig{ .workerThreadCount = 4,
+            .reservedFrameWorkers = 1, .pinnedIoThread = false });
+        std::atomic<int> backgroundPriority{ 99 };
+        std::atomic<int> nestedPriority{ 99 };
+        std::atomic<int> afterNestedPriority{ 99 };
+        system.parallelFor(TaskPriority::Background, 1, 1,
+            [&](TaskRange, uint32_t) {
+                backgroundPriority = GetThreadPriority(GetCurrentThread());
+                // A Background waiter may run this frame work itself.
+                FunctionTaskSet frame(TaskPriority::FrameCritical, 1, 1,
+                    [&](TaskRange, uint32_t) {
+                        nestedPriority = GetThreadPriority(GetCurrentThread());
+                    });
+                system.submit(frame);
+                system.wait(frame);
+                afterNestedPriority = GetThreadPriority(GetCurrentThread());
+            });
+        CHECK(backgroundPriority.load() == THREAD_PRIORITY_BELOW_NORMAL);
+        CHECK(nestedPriority.load() == THREAD_PRIORITY_NORMAL);
+        CHECK(afterNestedPriority.load() == THREAD_PRIORITY_BELOW_NORMAL);
+        std::atomic<int> framePriority{ 99 };
+        system.parallelFor(TaskPriority::FrameCritical, 64, 1,
+            [&](TaskRange, uint32_t threadIndex) {
+                if (threadIndex != 0) framePriority = GetThreadPriority(GetCurrentThread());
+            });
+        CHECK(framePriority.load() == 99 ||
+            framePriority.load() == THREAD_PRIORITY_NORMAL);
+        CHECK(GetThreadPriority(GetCurrentThread()) == THREAD_PRIORITY_NORMAL);
+#endif
+        return true;
+    }
+
 } // namespace
 
 int main() {
@@ -854,6 +894,7 @@ int main() {
         { "no steady allocations", testNoSteadyAllocations },
         { "periodic work on the frame tick", testPeriodic },
         { "function strand", testFunctionStrand },
+        { "background OS priority", testBackgroundOsPriority },
     };
     for (const auto& test : tests) {
         std::cout << test.name << std::endl;

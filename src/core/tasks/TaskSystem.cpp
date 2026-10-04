@@ -138,6 +138,54 @@ namespace Iridium::Tasks {
 #endif
         }
 
+        // The OS priority this worker currently runs at (Windows; 0 = normal).
+        thread_local int tlsOsPriority = 0;
+
+        // M7R R5b.3: runs one task range at the OS priority of its task class
+        // (Background below normal, everything else normal) and restores the
+        // previous one, so nested ranges (a background waiter helping with frame
+        // work) keep the right priority. The main thread is never retuned.
+        class OsPriorityScope final {
+        public:
+            OsPriorityScope(bool enabled, TaskPriority priority,
+                uint32_t threadNum) noexcept {
+#if defined(_WIN32)
+                if (!enabled || threadNum == 0) {
+                    return;
+                }
+                const int wanted = priority == TaskPriority::Background
+                    ? THREAD_PRIORITY_BELOW_NORMAL
+                    : THREAD_PRIORITY_NORMAL;
+                previous_ = tlsOsPriority;
+                if (wanted != previous_ &&
+                    SetThreadPriority(GetCurrentThread(), wanted) != 0) {
+                    tlsOsPriority = wanted;
+                    changed_ = true;
+                }
+#else
+                (void)enabled;
+                (void)priority;
+                (void)threadNum;
+#endif
+            }
+
+            ~OsPriorityScope() {
+#if defined(_WIN32)
+                if (changed_ &&
+                    SetThreadPriority(GetCurrentThread(), previous_) != 0) {
+                    tlsOsPriority = previous_;
+                }
+#endif
+            }
+
+            OsPriorityScope(const OsPriorityScope&) = delete;
+            OsPriorityScope& operator=(const OsPriorityScope&) = delete;
+
+        private:
+            int previous_ = 0;
+            bool changed_ = false;
+        };
+
     } // namespace
 
     namespace detail {
@@ -176,6 +224,7 @@ namespace Iridium::Tasks {
         uint32_t threadCount = 0;
         uint32_t ioThread = NoThreadIndex;
         uint32_t backgroundLimit = 1;
+        bool lowerBackgroundOsPriority = true;
         detail::IoLoopTask ioLoop;
         std::atomic<uint32_t> ioLoopRunning{ 0 };
 
@@ -370,6 +419,12 @@ namespace Iridium::Tasks {
 
                 const int previousPriority = tlsCurrentPriority;
                 tlsCurrentPriority = static_cast<int>(task.priority_);
+                // M7R R5b.3: background chunks run below normal OS priority, so a
+                // worker running frame work, the main thread and the driver's
+                // threads always preempt cooking (the admission gate bounds how
+                // many workers cook; this bounds how they compete for cores).
+                const OsPriorityScope osPriority(impl.lowerBackgroundOsPriority,
+                    task.priority_, threadNum);
                 // Frame-critical work counts as frame allocations wherever it runs.
                 const bool frameWork = task.priority_ == TaskPriority::FrameCritical;
                 if (frameWork) {
@@ -695,6 +750,7 @@ namespace Iridium::Tasks {
             : 1;
         impl.backgroundLimit = std::clamp<uint32_t>(impl.backgroundLimit, 1,
             MaxBackgroundSlots);
+        impl.lowerBackgroundOsPriority = config.lowerBackgroundOsPriority;
 
         enki::TaskSchedulerConfig schedulerConfig;
         schedulerConfig.numTaskThreadsToCreate =

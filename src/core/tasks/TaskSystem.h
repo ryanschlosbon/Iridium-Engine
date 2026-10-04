@@ -160,6 +160,10 @@ namespace Iridium::Tasks {
         // slot limit is workerThreadCount - R, at least 1.
         uint32_t reservedFrameWorkers = 8;
         bool pinnedIoThread = true;
+        // M7R R5b.3: workers run background chunks below normal OS priority
+        // (Windows), so frame work, the main thread and driver threads preempt
+        // cooking. The starvation test measures with it on.
+        bool lowerBackgroundOsPriority = true;
         // Optional: per-worker CpuScope streams. Must outlive the TaskSystem and
         // must not be inside a frame when the TaskSystem is constructed.
         CpuProfiler* profiler = nullptr;
