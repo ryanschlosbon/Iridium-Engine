@@ -12,4 +12,9 @@ target_sources(iridium_qualification PRIVATE
         ScriptedChanges.cpp
         ScriptedChangeEvents.cpp
         StarvationLoad.cpp
+        AllocationTrace.cpp
 )
+# AllocationTrace resolves call stacks with DbgHelp.
+if(WIN32)
+    target_link_libraries(iridium_qualification PRIVATE dbghelp)
+endif()

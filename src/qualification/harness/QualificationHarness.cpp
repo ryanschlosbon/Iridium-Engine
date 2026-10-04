@@ -108,6 +108,11 @@ namespace Iridium {
             allocateResidencyChurnProbe(context);
             prepareScriptedChanges(context);
             startStarvationLoad(context);
+            if (options_.allocationTrace) {
+                // The measured frames from frame-limit / 2 on.
+                allocationTrace_ = std::make_unique<AllocationTrace>(
+                    context.config.frameLimit / 2u);
+            }
             return;
         }
     }
@@ -442,6 +447,11 @@ namespace Iridium {
         AppFrameContext& context) {
         switch (phase) {
         case FrameBeginPhase::PreSceneUpdate:
+            if (allocationTrace_) {
+                allocationTrace_->onFrameBegin(
+                    context.measuredFrameIndex.has_value(),
+                    context.measuredFrameIndex.value_or(0u));
+            }
             updateScriptedChanges(context);
             updateBenchmarkState(context);
             return;
@@ -517,6 +527,11 @@ namespace Iridium {
         AppShutdownContext& context) {
         switch (phase) {
         case ShutdownPhase::RunComplete:
+            if (allocationTrace_) {
+                std::cout << "IRIDIUM_ALLOCATION_TRACE "
+                    << allocationTrace_->finishJson() << '\n';
+                allocationTrace_.reset();
+            }
             finishStarvationLoad();
             finishScriptedChanges(context);
             reportRunMetrics(context);
@@ -527,6 +542,7 @@ namespace Iridium {
             // task system does.
             backgroundCook_.reset();
             frameTaskProbe_.reset();
+            allocationTrace_.reset();
             releaseScriptedChangeResources(context);
             releaseProbeResources(context);
             return;

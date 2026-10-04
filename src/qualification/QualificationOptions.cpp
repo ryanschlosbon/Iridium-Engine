@@ -237,6 +237,12 @@ namespace Iridium {
         addSwitch(registry, owner, "--qualification-frame-task-probe",
             "Starvation test: join a fixed frame-critical parallelFor every frame and report its worker start and join times",
             [&q] { q.frameTaskProbe = true; });
+        addSwitch(registry, owner, "--qualification-allocation-trace",
+            "Record a call stack for every steady-frame allocation (allocation.cpp.*) and report them grouped by stack (implies CPU profiling)",
+            [&q, &c] {
+                q.allocationTrace = true;
+                c.enableCpuProfiling = true;
+            });
         addSwitch(registry, owner, "--validate-depth-pyramid-capture",
             "Read back live depth and verify every pyramid mip",
             [&q, &c] {

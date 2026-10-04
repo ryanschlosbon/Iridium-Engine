@@ -96,9 +96,13 @@ namespace Iridium {
         // a fixed frame-critical parallelFor every frame.
         std::filesystem::path backgroundCookSource;
         bool frameTaskProbe = false;
+
+        // M7R R5c.8: record a call stack for every steady-frame allocation
+        // (qualification/harness/AllocationTrace.h).
+        bool allocationTrace = false;
     };
 
-    // Registers the 40 qualification flags and their post-parse checks
+    // Registers the 44 qualification flags and their post-parse checks
     // (owner "qualification"). Flags that imply runtime or renderer behavior
     // also write `config`: --profile-cpu-output enables CPU profiling, the
     // VSM depth oracle enables the VSM resources and the depth-pyramid

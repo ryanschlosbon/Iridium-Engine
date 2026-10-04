@@ -1,5 +1,7 @@
 #pragma once
 
+#include <atomic>
+#include <cstddef>
 #include <cstdint>
 
 namespace Iridium {
@@ -37,7 +39,27 @@ namespace Iridium {
         [[nodiscard]] inline const void* currentThreadMarker() noexcept {
             return &threadMarker;
         }
+
+        // M7R R5c.8: diagnostics only (the qualification harness's
+        // --qualification-allocation-trace). Called on the allocating thread
+        // for every allocation counted as a frame allocation, after it is
+        // counted. It must not allocate. Header-inline, like the state above,
+        // so the harness links without the operator new replacement.
+        using FrameAllocationObserver = void (*)(std::size_t bytes) noexcept;
+        inline std::atomic<FrameAllocationObserver> frameAllocationObserver{
+            nullptr };
+        // Advanced by every beginCpuAllocationFrame, so an observer can tell
+        // which allocation frame an allocation belongs to.
+        inline std::atomic<uint64_t> allocationFrameSerial{ 0 };
     } // namespace cpu_allocation_detail
+
+    // Installs (or, with null, removes) the frame-allocation observer above.
+    // Production code never installs one; the counters are unchanged by it.
+    inline void setCpuFrameAllocationObserver(
+        cpu_allocation_detail::FrameAllocationObserver observer) noexcept {
+        cpu_allocation_detail::frameAllocationObserver.store(observer,
+            std::memory_order_release);
+    }
 
     // Attributes this thread's allocations to the frame counters while alive. The
     // task system opens one around every frame-critical task it runs on a worker,

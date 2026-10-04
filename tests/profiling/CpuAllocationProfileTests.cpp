@@ -91,6 +91,44 @@ int main() {
         resetBackground.backgroundRequestedBytes == 0,
         "begin resets the background counters");
 
+    // M7R R5c.8: the frame-allocation observer (the qualification allocation
+    // trace) sees exactly the frame allocations, after they are counted, and
+    // the frame serial advances once per begin.
+    static std::atomic<uint64_t> observedCalls{ 0 };
+    static std::atomic<uint64_t> observedBytes{ 0 };
+    setCpuFrameAllocationObserver([](std::size_t bytes) noexcept {
+        observedCalls.fetch_add(1);
+        observedBytes.fetch_add(bytes);
+    });
+    const uint64_t serialBefore =
+        cpu_allocation_detail::allocationFrameSerial.load();
+    ::operator delete(::operator new(12)); // outside a frame: not observed
+    std::atomic<int> observedPhase{ 0 };
+    std::thread background([&observedPhase]() {
+        while (observedPhase.load() != 1) std::this_thread::yield();
+        ::operator delete(::operator new(40)); // background: not observed
+        {
+            CpuAllocationFrameScope frameWork;
+            ::operator delete(::operator new(24)); // frame: observed
+        }
+        observedPhase.store(2);
+    });
+    beginCpuAllocationFrame();
+    ::operator delete(::operator new(16)); // frame thread: observed
+    observedPhase.store(1);
+    while (observedPhase.load() != 2) std::this_thread::yield();
+    const CpuAllocationFrameSample observedSample = endCpuAllocationFrame();
+    background.join();
+    setCpuFrameAllocationObserver(nullptr);
+    beginCpuAllocationFrame();
+    ::operator delete(::operator new(8)); // observer removed
+    (void)endCpuAllocationFrame();
+    require(observedCalls.load() == observedSample.allocationCount &&
+        observedCalls.load() == 2, "the observer sees each frame allocation once");
+    require(observedBytes.load() == 40, "the observer receives the requested bytes");
+    require(cpu_allocation_detail::allocationFrameSerial.load() == serialBefore + 2,
+        "each begin advances the allocation frame serial");
+
     if (failures == 0) {
         std::cout << "CpuAllocationProfileTests passed\n";
     }

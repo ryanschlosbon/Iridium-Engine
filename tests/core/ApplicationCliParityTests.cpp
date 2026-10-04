@@ -196,6 +196,7 @@ namespace {
         field("scriptedChanges", c.scriptedChanges.generic_string());
         field("backgroundCookSource", c.backgroundCookSource.generic_string());
         flag("frameTaskProbe", c.frameTaskProbe);
+        flag("allocationTrace", c.allocationTrace);
         return s.str();
     }
 
@@ -574,6 +575,9 @@ namespace {
                 { { "", "--qualification-background-cook requires a path" } } },
             { "--qualification-frame-task-probe", Q, {}, {}, [](C& c) {
                 c.frameTaskProbe = true; }, {}, {} },
+            // M7R R5c.8 allocation trace (not in 6b000ad).
+            { "--qualification-allocation-trace", Q, {}, {}, [](C& c) {
+                c.allocationTrace = true; c.enableCpuProfiling = true; }, {}, {} },
             { "--validate-depth-pyramid-capture", Q, {}, {}, [](C& c) {
                 c.experimentalDepthPyramid = true; c.validateDepthPyramidCapture = true; },
                 {}, {} },
@@ -623,8 +627,8 @@ namespace {
         Cli::CliOptionRegistry registry;
         registerEngineOptions(registry, scratch);
 
-        CHECK(table.size() == 93);
-        CHECK(registry.options().size() == 93);
+        CHECK(table.size() == 94);
+        CHECK(registry.options().size() == 94);
         std::set<std::string_view> names;
         std::map<std::string_view, size_t> ownerCounts;
         for (const FlagCase& row : table) {
@@ -688,7 +692,7 @@ namespace {
         CHECK(ownerCounts[R] == 14);
         CHECK(ownerCounts[E] == 4);
         CHECK(ownerCounts[G] == 32);
-        CHECK(ownerCounts[Q] == 43);
+        CHECK(ownerCounts[Q] == 44);
         std::cout << "  owners: runtime " << ownerCounts[R] << ", editor " << ownerCounts[E]
                   << ", renderer " << ownerCounts[G] << ", qualification "
                   << ownerCounts[Q] << '\n';
@@ -739,7 +743,7 @@ namespace {
     bool testUsageParity() {
         const std::string usage = engineUsage();
         CHECK(usage.starts_with("Usage: IridiumEngine [options]\n"));
-        CHECK(optionLines(usage).size() == 93);
+        CHECK(optionLines(usage).size() == 94);
         // Groups appear in owner order: runtime, editor, renderer, qualification.
         const size_t runtime = usage.find("runtime options:");
         const size_t editor = usage.find("editor options:");
@@ -814,7 +818,7 @@ int main() {
     };
 
     constexpr TestCase tests[] = {
-        { "Per-flag table (93 flags)", testFlagTable },
+        { "Per-flag table (94 flags)", testFlagTable },
         { "Aliases and removed flags", testAliasesAndRemovedFlags },
         { "Usage parity", testUsageParity },
         { "Registry without qualification", testRegistryWithoutQualification },

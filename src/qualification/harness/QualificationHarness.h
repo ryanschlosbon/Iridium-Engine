@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "benchmarks/BenchmarkManifest.h"
+#include "qualification/harness/AllocationTrace.h"
 #include "core/types/FrameCapture.h"
 #include "capture/CaptureArtifact.h"
 #include "core/types/RenderHandles.h"
@@ -161,6 +162,8 @@ namespace Iridium {
         AppRunPolicy policy_{};
         std::unique_ptr<BackgroundCookLoad, StarvationLoadDeleter> backgroundCook_;
         std::unique_ptr<FrameTaskProbe, StarvationLoadDeleter> frameTaskProbe_;
+        // M7R R5c.8 --qualification-allocation-trace.
+        std::unique_ptr<AllocationTrace> allocationTrace_;
         std::unique_ptr<IQualificationBackend> backend_;
         std::array<IRenderBackendExtension*, 1> extensions_{};
 

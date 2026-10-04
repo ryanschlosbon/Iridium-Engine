@@ -30,6 +30,10 @@ namespace {
             g_cpuAllocationCount.fetch_add(1, std::memory_order_relaxed);
             g_cpuAllocationBytes.fetch_add(static_cast<uint64_t>(size),
                 std::memory_order_relaxed);
+            // M7R R5c.8: the qualification allocation trace, when installed.
+            if (const detail::FrameAllocationObserver observer =
+                    detail::frameAllocationObserver.load(std::memory_order_acquire))
+                observer(size);
             return;
         }
         g_cpuBackgroundAllocationCount.fetch_add(1, std::memory_order_relaxed);
@@ -86,6 +90,8 @@ namespace Iridium {
         g_cpuBackgroundAllocationBytes.store(0, std::memory_order_relaxed);
         g_cpuAllocationFrameThread.store(
             cpu_allocation_detail::currentThreadMarker(), std::memory_order_relaxed);
+        cpu_allocation_detail::allocationFrameSerial.fetch_add(1,
+            std::memory_order_relaxed);
         g_cpuAllocationFrameActive.store(true, std::memory_order_release);
     }
 
