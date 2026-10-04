@@ -274,8 +274,20 @@ namespace Iridium {
         uint32_t frame) {
         const OpaqueSubmission& submission = *inputs.submission;
         gpuOrder_.clear();
-        for (const uint32_t entry : submission.order)
-            if (!OpaqueSubmission::isDirect(entry)) gpuOrder_.push_back(entry);
+        gpuOrderPosition_.clear();
+        gpuOrderBreak_.clear();
+        bool directSincePrevious = false;
+        for (uint32_t position = 0; position < submission.order.size(); ++position) {
+            const uint32_t entry = submission.order[position];
+            if (OpaqueSubmission::isDirect(entry)) {
+                directSincePrevious = true;
+                continue;
+            }
+            gpuOrder_.push_back(entry);
+            gpuOrderPosition_.push_back(position);
+            gpuOrderBreak_.push_back(directSincePrevious ? 1u : 0u);
+            directSincePrevious = false;
+        }
         const GpuSceneIndirectPolicy policy{
             .multiDrawIndirect = services_.capabilities.multiDrawIndirect,
             .drawIndirectFirstInstance =
@@ -297,12 +309,15 @@ namespace Iridium {
         const auto instanceRecords = inputs.scene.instances.first(published.instances);
         const auto transformRecords = inputs.scene.transforms.first(published.transforms);
         // Direct packets only: the packet plan, as before (it falls back).
+        // M7R R5c.4c: with GPU-scene work, direct packets are drawn in the
+        // same pass between the bins and no longer fail the plan; the
+        // workload thresholds count the GPU-scene commands.
         if (gpuOrder_.empty())
             buildGpuSceneIndirectPlan(submission.directPackets, policy,
                 indirectPlan_, primitiveRecords, geometryRecords);
         else
-            buildGpuSceneIndirectPlan(gpuOrder_, submission.directPackets.size(),
-                policy, indirectPlan_, primitiveRecords, geometryRecords);
+            buildGpuSceneIndirectPlan(gpuOrder_, 0u, policy, indirectPlan_,
+                primitiveRecords, geometryRecords);
         bins_.clear();
         candidates_.clear();
         bool valid = indirectPlan_.usesIndirect();
@@ -341,7 +356,7 @@ namespace Iridium {
                 break;
             }
 
-            bool startsBin = bins_.empty();
+            bool startsBin = bins_.empty() || gpuOrderBreak_[index] != 0u;
             if (!startsBin) {
                 const Bin& previous = bins_.back();
                 VulkanIndirectGeometry previousGeometry{};
@@ -357,6 +372,7 @@ namespace Iridium {
             if (startsBin) {
                 bins_.push_back({
                     .packetBegin = index,
+                    .orderBegin = gpuOrderPosition_[index],
                     .commandBegin = index,
                     .commandCount = 1u,
                     .pipeline = pipelineHandle,

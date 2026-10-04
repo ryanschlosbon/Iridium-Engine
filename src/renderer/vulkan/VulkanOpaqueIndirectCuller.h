@@ -84,6 +84,9 @@ namespace Iridium {
         struct Bin {
             // Index of the bin's first command in gpuOrder().
             uint32_t packetBegin = 0;
+            // Position of the bin's first entry in the submission's order
+            // (M7R R5c.4c: direct packets between bins are drawn there).
+            uint32_t orderBegin = 0;
             uint32_t commandBegin = 0;
             uint32_t commandCount = 0;
             PipelineHandle pipeline;
@@ -193,6 +196,10 @@ namespace Iridium {
         GpuSceneIndirectPlan indirectPlan_;
         std::vector<Bin> bins_;
         std::vector<uint32_t> gpuOrder_;
+        // Per gpuOrder_ entry: its position in the submission's order, and
+        // whether a direct packet precedes it since the previous entry.
+        std::vector<uint32_t> gpuOrderPosition_;
+        std::vector<uint8_t> gpuOrderBreak_;
         std::vector<GpuSceneIndirectCandidate> candidates_;
         std::vector<uint8_t> seenHistory_;
         std::vector<DepthPyramidDeviceQuery> occlusionQueries_;

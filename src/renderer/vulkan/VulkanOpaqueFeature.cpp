@@ -399,6 +399,53 @@ namespace Iridium {
         }
         else {
             VkPipelineLayout activeLayout = VK_NULL_HANDLE;
+            // One direct draw (a direct packet, or a GPU-scene entry on the
+            // direct fallback) with the material's G-buffer pipeline.
+            const auto drawDirect = [&](const OpaqueDirectDraw& packet) {
+                auto* geometry = resources.geometries().get(packet.geometry);
+                auto* material = resources.materials().get(packet.material);
+                const VulkanPipelineRecord* record = pipelineLibrary.get(packet.pipeline);
+                if (!geometry || !material) return;
+
+                // Invalid/stale handles and non-G-buffer records are not drawable here.
+                if (!record || record->pipeline == VK_NULL_HANDLE ||
+                    record->pipelineLayout == VK_NULL_HANDLE ||
+                    record->renderPass != RenderPassClass::GBuffer) {
+                    return;
+                }
+
+                if (packet.pipeline != lastBoundPipeline) {
+                    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, record->pipeline);
+                    telemetry.recordPipelineBind(packet.pipeline.id);
+                    activeLayout = record->pipelineLayout;
+                    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, activeLayout,
+                        0, 1, &globalSet, 0, nullptr);
+                    lastBoundPipeline = packet.pipeline;
+                    lastBoundMaterial = MaterialHandle{};
+                }
+                if (packet.material != lastBoundMaterial) {
+                    resources.bindMaterialDescriptors(cmd, frame, activeLayout);
+                    telemetry.recordMaterialBind(packet.material);
+                    lastBoundMaterial = packet.material;
+                }
+                if (packet.geometry != lastBoundGeometry) {
+                    VkDeviceSize offset = geometry->vertexOffset;
+                    vkCmdBindVertexBuffers(cmd, 0, 1, &geometry->vertexBuffer.buffer, &offset);
+                    vkCmdBindIndexBuffer(cmd, geometry->indexBuffer.buffer, 0,
+                        toVkIndexType(geometry->indexFormat));
+                    lastBoundGeometry = packet.geometry;
+                }
+
+                CanonicalMeshPushConstants push{};
+                push.renderMatrix = packet.worldTransform;
+                push.materialIndex = packet.material.getIndex();
+                push.padding[0] = debugView;
+                vkCmdPushConstants(cmd, activeLayout,
+                    VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                    0, sizeof(push), &push);
+                vkCmdDrawIndexed(cmd, packet.indexCount, 1, packet.firstIndex, 0, 0);
+                telemetry.recordDraw(telemetry.counters().drawOpaque, packet.indexCount / 3);
+            };
             if (stagedIndirectValid_) {
                 IVulkanIndirectStreamObserver* observer = nullptr;
                 if constexpr (kQualificationBuild)
@@ -408,9 +455,38 @@ namespace Iridium {
                 const VkDescriptorSet gpuSceneSet =
                     context_->gpuScene.descriptorSets()[frame];
                 uint64_t oracleVisibleCommands = 0;
-                for (uint32_t binIndex = 0;
-                        binIndex < culler_.bins().size(); ++binIndex) {
+                uint64_t directPackets = 0;
+                bool directBound = false;
+                uint32_t binIndex = 0;
+                for (size_t position = 0; position < opaque.order.size();) {
+                    const uint32_t entry = opaque.order[position];
+                    if (OpaqueSubmission::isDirect(entry)) {
+                        // M7R R5c.4c: a direct packet between bins. Bind state
+                        // is not shared between the two pipeline families.
+                        if (!directBound) {
+                            lastBoundPipeline = PipelineHandle{};
+                            lastBoundMaterial = MaterialHandle{};
+                            lastBoundGeometry = GeometryHandle{};
+                            directBound = true;
+                        }
+                        OpaqueDirectDraw packet{};
+                        if (resolveOpaqueDraw(scene, opaque, entry, packet))
+                            drawDirect(packet);
+                        ++directPackets;
+                        ++position;
+                        continue;
+                    }
+                    if (directBound) {
+                        lastBoundPipeline = PipelineHandle{};
+                        lastBoundMaterial = MaterialHandle{};
+                        directBound = false;
+                    }
+                    if (binIndex >= culler_.bins().size() ||
+                        culler_.bins()[binIndex].orderBegin != position)
+                        throw std::logic_error(
+                            "opaque indirect bins do not follow the draw order");
                     const VulkanOpaqueIndirectCuller::Bin& bin = culler_.bins()[binIndex];
+                    position += bin.commandCount;
                     auto* geometry = resources.geometries().get(bin.geometry);
                     const VulkanPipelineRecord* record =
                         pipelineLibrary.get(bin.pipeline);
@@ -481,9 +557,12 @@ namespace Iridium {
                             ++oracleVisibleCommands;
                         }
                     }
+                    ++binIndex;
                 }
                 telemetry.counters().opaqueIndirectCommands = oracleVisibleCommands;
                 telemetry.counters().opaqueIndirectBins = culler_.bins().size();
+                if (directPackets != 0u)
+                    telemetry.counters().opaqueIndirectFallbackPackets += directPackets;
             }
             else for (const uint32_t entry : opaque.order) {
                 if (!settings_.forceDirectGBufferReference &&
@@ -491,50 +570,7 @@ namespace Iridium {
                     continue;
                 }
                 OpaqueDirectDraw packet{};
-                if (!resolveOpaqueDraw(scene, opaque, entry, packet)) continue;
-                auto* geometry = resources.geometries().get(packet.geometry);
-                auto* material = resources.materials().get(packet.material);
-                const VulkanPipelineRecord* record = pipelineLibrary.get(packet.pipeline);
-                if (!geometry || !material) continue;
-
-                // Invalid/stale handles and non-G-buffer records are not drawable here.
-                if (!record || record->pipeline == VK_NULL_HANDLE ||
-                    record->pipelineLayout == VK_NULL_HANDLE ||
-                    record->renderPass != RenderPassClass::GBuffer) {
-                    continue;
-                }
-
-                if (packet.pipeline != lastBoundPipeline) {
-                    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, record->pipeline);
-                    telemetry.recordPipelineBind(packet.pipeline.id);
-                    activeLayout = record->pipelineLayout;
-                    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, activeLayout,
-                        0, 1, &globalSet, 0, nullptr);
-                    lastBoundPipeline = packet.pipeline;
-                    lastBoundMaterial = MaterialHandle{};
-                }
-                if (packet.material != lastBoundMaterial) {
-                    resources.bindMaterialDescriptors(cmd, frame, activeLayout);
-                    telemetry.recordMaterialBind(packet.material);
-                    lastBoundMaterial = packet.material;
-                }
-                if (packet.geometry != lastBoundGeometry) {
-                    VkDeviceSize offset = geometry->vertexOffset;
-                    vkCmdBindVertexBuffers(cmd, 0, 1, &geometry->vertexBuffer.buffer, &offset);
-                    vkCmdBindIndexBuffer(cmd, geometry->indexBuffer.buffer, 0,
-                        toVkIndexType(geometry->indexFormat));
-                    lastBoundGeometry = packet.geometry;
-                }
-
-                CanonicalMeshPushConstants push{};
-                push.renderMatrix = packet.worldTransform;
-                push.materialIndex = packet.material.getIndex();
-                push.padding[0] = debugView;
-                vkCmdPushConstants(cmd, activeLayout,
-                    VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                    0, sizeof(push), &push);
-                vkCmdDrawIndexed(cmd, packet.indexCount, 1, packet.firstIndex, 0, 0);
-                telemetry.recordDraw(telemetry.counters().drawOpaque, packet.indexCount / 3);
+                if (resolveOpaqueDraw(scene, opaque, entry, packet)) drawDirect(packet);
             }
             if (!stagedIndirectValid_) {
                 telemetry.counters().opaqueIndirectFallbackPackets = 0u;

@@ -886,6 +886,27 @@ namespace {
             .sceneBuffersMapped = false, .assets = fakeAssets(), .view = &view }, 0u));
         CHECK(culler.indirectPlan().fallbackReason ==
             GpuSceneIndirectFallbackReason::InvalidPacket);
+
+        // M7R R5c.4c mixed bins: direct packets in the draw order no longer
+        // fail the plan; a direct entry ends the bin before it, and every bin
+        // records where it starts in the draw order. p0 and p1 would share a
+        // bin, but a direct packet separates them.
+        context.scene.primitives[3].binding.w = 1u;
+        const std::vector<DrawPacket> directs(2u);
+        const std::vector<uint32_t> mixedOrder{ OpaqueSubmissionDirectBit | 0u,
+            0, OpaqueSubmissionDirectBit | 1u, 1, 2, 3, 4, 5, 6, 7 };
+        const OpaqueSubmission mixed{ .order = mixedOrder, .directPackets = directs,
+            .gpuScenePrimitiveCount = 8u, .cpuVisibility = visibility };
+        CHECK(culler.plan({ .submission = &mixed, .scene = context.scene.view(),
+            .sceneBuffersMapped = true, .assets = fakeAssets(), .view = &view }, 0u));
+        CHECK(culler.indirectPlan().fallbackReason ==
+            GpuSceneIndirectFallbackReason::None);
+        CHECK(culler.bins().size() == 8u);
+        CHECK(culler.bins()[0].orderBegin == 1u && culler.bins()[0].commandCount == 1u);
+        CHECK(culler.bins()[1].orderBegin == 3u && culler.bins()[1].packetBegin == 1u);
+        CHECK(culler.bins()[2].orderBegin == 4u);
+        CHECK(culler.gpuOrder().size() == 8u && culler.gpuOrder()[1] == 1u);
+        culler.collect(0u);
         culler.destroy(VK_NULL_HANDLE);
         return true;
     }
