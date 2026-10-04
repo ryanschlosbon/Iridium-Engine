@@ -34,7 +34,6 @@
 #include "renderer/rhi/Mesh.h"
 #include "renderer/lighting/ShadowCasterCulling.h"
 #include "renderer/transparency/WeightedOit.h"
-#include "imgui.h"
 #include "utils/Sha256.h"
 #include "renderer/color/AcesOutputLut.h"
 #include "assets/AssetDiscovery.h"
@@ -48,6 +47,7 @@
 #include "assets/model/GltfModelImporter.h"
 #include "assets/texture/TextureImporter.h"
 #include "assets/environment/EnvironmentConvolution.h"
+#include "editor/EditorAssetDocumentService.h"
 #include "editor/EditorPreviewImageFit.h"
 #include "assets/environment/EnvironmentProduct.h"
 #include "editor/EditorSceneActions.h"
@@ -124,52 +124,6 @@ namespace Iridium {
 
     }
 
-    // M7R R5a.0 (design section 3.3): what the editor hands the frame. The
-    // editor never writes runtime configuration, the backend or extraction
-    // state; applyEditorFrameRequests performs those writes.
-    struct EditorViewState {
-        bool renderingAssetView = false;
-        // An asset document is being rendered (renderingAssetView with an
-        // active document); the preview fields are set only then.
-        bool assetPreviewActive = false;
-        std::shared_ptr<ModelAsset> previewModel;
-        uint64_t previewSessionSerial = 0;
-        uint64_t previewFramingRevision = 0;
-        std::optional<AssetGuid> previewSelectedPart;
-        bool previewSelectedPartIsMaterial = false;
-        bool previewIsolateSelectedPart = false;
-        AssetGuid previewHoveredPart;
-        bool previewHoveredPartIsMaterial = false;
-        RenderExtent previewRequestedExtent{};
-        EnvironmentLightingSettings previewEnvironmentSettings{};
-        float previewExposureEv = 0.0f;
-        // The active preview's orbit camera (projection at the frame aspect).
-        bool hasPreviewCamera = false;
-        glm::vec3 previewCameraPosition{ 0.0f };
-        glm::mat4 previewView{ 1.0f };
-        glm::mat4 previewProjection{ 1.0f };
-        float previewNearPlane = 0.0f;
-        float previewFarPlane = 0.0f;
-        float previewVerticalFovDegrees = 0.0f;
-        // Null while an asset preview is rendered.
-        Entity selectedEntity = NULL_ENTITY;
-        RenderDebugView debugView = RenderDebugView::Final;
-        // The rendered view's render mode is wireframe.
-        bool wireframe = false;
-        int layeredInterfaceOverride = 0;
-    };
-
-    struct EditorFrameRequests {
-        std::optional<EditorOutputSettings> output;
-        // Allocation fields (resolutions, pool capacities) are ignored on apply.
-        std::optional<ProjectShadowSettings> shadows;
-        // Also reconfigures the capture scheduler and the backend.
-        std::optional<ProjectReflectionProbeSettings> probes;
-        EditorViewState view;
-        // Read after endFrame (the editor-driven scene resize).
-        RenderExtent requestedSceneExtent{};
-    };
-
     Application::Application(ApplicationConfig config,
         IFrameObserver* observer)
         : config_(std::move(config)),
@@ -207,7 +161,8 @@ namespace Iridium {
           transactionService_(sceneDocumentService_),
           registry(sceneWorld_.registry()),
           assets_(config_, cpuProfiler_, engineLog_, sceneWorld_,
-              sceneDocumentService_) {}
+              sceneDocumentService_),
+          editorHost_(cpuProfiler_) {}
 
     void Application::run() {
         policy_ = observer_ ? observer_->runPolicy() : AppRunPolicy{};
@@ -246,7 +201,7 @@ namespace Iridium {
                 activeDirectionalShadowSampleableMask_,
             .directionalShadowOwnerCount = activeDirectionalShadowOwnerCount_,
             .startup = startupProfile_,
-            .debugView = editor.getDebugView(),
+            .debugView = editorHost_.debugView(),
         };
     }
 
@@ -397,56 +352,46 @@ namespace Iridium {
         assets_.startServices(policy_.deterministicContent);
 
         const auto editorStart = std::chrono::steady_clock::now();
-        editor.init(window, &cpuProfiler_, config_.showProfiler,
-            config_.showMaterialDiagnostics,
-            config_.outputTransport, static_cast<float>(config_.manualExposureEv),
-            static_cast<float>(config_.paperWhiteNits),
-            static_cast<float>(config_.peakNits), config_.shadowSettings,
-            config_.reflectionProbeSettings,
-            assets_.catalog(),
-            assets_.catalogService(),
-            assets_.modelPreparation(),
-            assets_.thumbnails(),
-            assets_.runtime(),
-            &engineLog_, &sceneDocumentService_, &transactionService_);
+        editorHost_.init({
+            .window = window,
+            .bridge = editorBridge_.get(),
+            .showProfiler = config_.showProfiler,
+            .showMaterialDiagnostics = config_.showMaterialDiagnostics,
+            .outputTransport = config_.outputTransport,
+            .manualExposureEv = static_cast<float>(config_.manualExposureEv),
+            .paperWhiteNits = static_cast<float>(config_.paperWhiteNits),
+            .peakNits = static_cast<float>(config_.peakNits),
+            .shadowSettings = &config_.shadowSettings,
+            .reflectionProbeSettings = &config_.reflectionProbeSettings,
+            .assets = {
+                .manager = assets_.assetManager(),
+                .catalog = assets_.catalog(),
+                .catalogService = assets_.catalogService(),
+                .modelPreparation = assets_.modelPreparation(),
+                .environmentPreparation = assets_.environmentPreparation(),
+                .thumbnails = assets_.thumbnails(),
+                .runtime = assets_.runtime(),
+                .mainModel = &assets_.mainModel(),
+                .loadedEnvironments = &assets_.loadedEnvironments(),
+            },
+            .log = &engineLog_,
+            .sceneDocuments = &sceneDocumentService_,
+            .transactions = &transactionService_,
+        });
         renderRuntimeInfo_ = renderBackend->getRuntimeInfo();
         publishOutputTransportStatus();
         // The backend starts from the configured output settings; each
         // frame's RenderFrame::output carries later changes (M7R R3c.11).
-        editor.setDebugView(config_.debugView);
+        editorHost_.setDebugView(config_.debugView);
         if (config_.editorAssetViewerGuid) {
-            const std::vector<AssetCatalogRecord> records =
-                assets_.catalog()->recordsForGuid(
-                    *config_.editorAssetViewerGuid);
-            const auto record = std::ranges::find_if(
-                records,
-                [](const AssetCatalogRecord& candidate) {
-                    return candidate.status == AssetCatalogStatus::Ready &&
-                        (candidate.assetType == "iridium.model" ||
-                            candidate.assetType == "iridium.material");
-                });
-            if (record == records.end()) {
-                throw std::runtime_error(
-                    "--open-asset-viewer GUID is not a ready model or material asset");
-            }
-            const EditorAssetOpenResult opened =
-                editor.assetDocuments().open({
-                    .assetGuid = record->guid,
-                    .parentAssetGuid = record->parentGuid,
-                    .assetType = record->assetType,
-                    .displayName = record->displayName,
-                });
-            if (!opened) {
-                throw std::runtime_error(
-                    "Could not open configured asset viewer: " +
-                    opened.diagnostic);
-            }
+            editorHost_.openConfiguredAssetViewer(
+                *config_.editorAssetViewerGuid);
         }
         AssetGuid startupModelGuid;
         // Deterministic runs and hidden-window (automation) runs must not read or
         // overwrite the user's editor layout in imgui.ini.
         if (policy_.deterministicContent || !config_.windowVisible) {
-            ImGui::GetIO().IniFilename = nullptr;
+            editorHost_.disableLayoutPersistence();
         }
         startupProfile_.editorNanoseconds = static_cast<uint64_t>(
             std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -514,12 +459,12 @@ namespace Iridium {
                 meshComp.requestedAssetGuid = startupModelGuid;
             }
             meshComp.enabled = true;
-            editor.setSelectedEntity(entity);
+            editorHost_.setSelectedEntity(entity);
             startup.firstEntity = entity;
         }
         notifyStartup(StartupPhase::SceneConstruction, startup);
         if (startup.initialSelection) {
-            editor.setSelectedEntity(*startup.initialSelection);
+            editorHost_.setSelectedEntity(*startup.initialSelection);
         }
         if (!policy_.ownsStartupContent) {
             (void)createEditorEntityPreset(
@@ -551,12 +496,13 @@ namespace Iridium {
             constexpr auto ViewerReadyTimeout = std::chrono::seconds(30);
             const auto deadline = std::chrono::steady_clock::now() +
                 ViewerReadyTimeout;
-            while (!resolveEditorAssetPreview()) {
+            while (!editorHost_.resolveAssetPreview(renderExtent_,
+                    measuredFrameCount_)) {
                 assets_.processMeshSwaps();
                 if (AssetRuntimeService* runtime = assets_.runtime()) {
                     (void)runtime->tick();
                     const EditorAssetDocument* document =
-                        editor.assetDocuments().active();
+                        editorHost_.assetDocuments().active();
                     const auto snapshot = document
                         ? runtime->snapshot(
                             document->presentationAssetGuid)
@@ -1114,48 +1060,6 @@ namespace Iridium {
         }
     }
 
-    EditorViewState Application::editorViewState(float aspect) {
-        EditorViewState view{};
-        view.renderingAssetView = editor.renderingAssetView;
-        const EditorAssetDocument* previewDocument = editor.renderingAssetView
-            ? editor.assetDocuments().active() : nullptr;
-        view.assetPreviewActive = previewDocument != nullptr;
-        AssetViewerPanel& viewer = editor.getAssetViewerPanel();
-        if (view.assetPreviewActive) {
-            view.previewModel = resolveEditorAssetPreview();
-            view.previewSessionSerial = previewDocument->sessionSerial;
-            view.previewFramingRevision = previewDocument->framingRevision;
-            view.previewSelectedPart = previewDocument->selectedPart;
-            view.previewSelectedPartIsMaterial =
-                previewDocument->selectedPartIsMaterial;
-            view.previewIsolateSelectedPart =
-                previewDocument->isolateSelectedPart;
-            view.previewHoveredPart = viewer.hoveredPart;
-            view.previewHoveredPartIsMaterial = viewer.hoveredPartIsMaterial;
-            view.previewRequestedExtent = viewer.requestedRenderExtent;
-            const EditorPreviewLighting lighting = viewer.activeLighting();
-            view.previewEnvironmentSettings = lighting.environmentSettings();
-            view.previewExposureEv = lighting.exposureEv;
-            if (const EditorOrbitCamera* camera = viewer.activeCamera()) {
-                view.hasPreviewCamera = true;
-                view.previewCameraPosition = camera->position();
-                view.previewView = camera->viewMatrix();
-                view.previewProjection = camera->projectionMatrix(aspect);
-                const EditorOrbitCameraState& state = camera->state();
-                view.previewNearPlane = state.nearPlane;
-                view.previewFarPlane = state.farPlane;
-                view.previewVerticalFovDegrees = state.verticalFovDegrees;
-            }
-        }
-        view.selectedEntity = view.assetPreviewActive
-            ? NULL_ENTITY : editor.getSelectedEntity();
-        view.debugView = editor.getDebugView();
-        view.wireframe = view.assetPreviewActive
-            ? viewer.debugRenderMode == 1 : editor.currentRenderMode == 1;
-        view.layeredInterfaceOverride = editor.layeredInterfaceOverride();
-        return view;
-    }
-
     void Application::applyEditorFrameRequests(
         const EditorFrameRequests& requests) {
         if (requests.output) {
@@ -1205,17 +1109,10 @@ namespace Iridium {
 
     void Application::drawFrame(AppFrameContext& frame) {
         const uint64_t applicationFrameIndex = frame.applicationFrameIndex;
-        const bool dualViews = !policy_.fullscreenScenePresentation &&
-            editor.assetDocuments().active();
-        const auto cadenceNow = EditorViewCadence::Clock::now();
-        uint32_t renderView = 0;
-        if (dualViews) {
-            const bool sceneFocused = editor.getViewportPanel().isFocused;
-            renderView = editorViewScheduler_.choose(cadenceNow, sceneFocused ? 0u : 1u,
-                editor.getViewportPanel().isVisible, editor.getAssetViewerPanel().isVisible,
-                editor.getAssetViewerPanel().backgroundFramesPerSecond);
-        } else editorViewScheduler_.reset();
-        editor.renderingAssetView = renderView == 1;
+        const EditorViewSelection viewSelection =
+            editorHost_.chooseView(policy_.fullscreenScenePresentation);
+        const bool dualViews = viewSelection.dualViews;
+        const uint32_t renderView = viewSelection.renderView;
         {
         CpuScope finalizeScope(cpuProfiler_, "cpu.probe.capture.finalize");
         for (const ReflectionProbeCaptureCompletion& completion :
@@ -1230,21 +1127,9 @@ namespace Iridium {
         LightingFramePacket lightingFrame;
         {
             CpuScope lightScope(cpuProfiler_, "cpu.light.extract");
-            if (editor.renderingAssetView) {
-                auto& previewRegistry = previewLightingWorld_.registry();
-                if (previewSun_ == NULL_ENTITY) {
-                    previewSun_ = previewLightingWorld_.createEntity();
-                    previewRegistry.addComponent<TransformComponent>(previewSun_);
-                    previewRegistry.addComponent<LightComponent>(previewSun_);
-                }
-                const auto settings = editor.getAssetViewerPanel().activeLighting();
-                auto& transform = previewRegistry.getComponent<TransformComponent>(previewSun_);
-                transform.rotation = {settings.sunPitchDegrees, settings.sunYawDegrees, 0};
-                auto& light = previewRegistry.getComponent<LightComponent>(previewSun_);
-                light.colorLinearRec709 = settings.sunColor;
-                light.illuminanceLux = settings.sunEnabled ? 1000.0f * std::exp2(settings.sunEv) : 0.0f;
-                lightingFrame = lightExtractor_.extract(previewLightingWorld_);
-            } else lightingFrame = lightExtractor_.extract(sceneWorld_);
+            if (SceneWorld* previewWorld = editorHost_.previewLightingWorld())
+                lightingFrame = lightExtractor_.extract(*previewWorld);
+            else lightingFrame = lightExtractor_.extract(sceneWorld_);
         }
         {
             CpuScope lightScope(cpuProfiler_, "cpu.light.prepare");
@@ -1316,49 +1201,16 @@ namespace Iridium {
             publishedProbes.stats.capacityOmittedCount);
         cpuProfiler_.recordCounter("probe.publish.changed_bytes",
             publishedProbes.stats.changedRecordBytes);
-        assets_.processMaterialPreviews(editor.assetDocuments());
-        prepareGpuScenePublication(editor.getSelectedEntity());
+        assets_.processMaterialPreviews(editorHost_.assetDocuments());
+        prepareGpuScenePublication(editorHost_.selectedEntity());
         // Descriptor publication waits for old users and must precede acquisition.
         // Keep the authored scene environment identity separate from this binding.
-        auto desiredEnvironment = assets_.environmentLighting();
-        AssetRuntimeService* const assetRuntimeService_ = assets_.runtime();
-        AssetCatalog* const assetCatalog_ = assets_.catalog();
-        AssetEnvironmentPreparationService* const
-            assetEnvironmentPreparationService_ =
-                assets_.environmentPreparation();
-        auto& viewer = editor.getAssetViewerPanel();
-        viewer.environmentDiagnostic.clear();
-        if (editor.renderingAssetView) {
-            const AssetGuid requested = viewer.activeLighting().environmentAsset;
-            if (!requested.isNil()) {
-                if (const auto loaded = loadedEnvironments.find(requested); loaded != loadedEnvironments.end()) {
-                    desiredEnvironment = loaded->second.lighting;
-                    if (assetRuntimeService_) assetRuntimeService_->touch(requested, applicationFrameIndex);
-                } else {
-                    viewer.environmentDiagnostic = "Preparing HDRI; showing the scene environment until ready.";
-                    const auto state = assetRuntimeService_ ? assetRuntimeService_->snapshot(requested) : std::nullopt;
-                    if (state && (state->state == RuntimeAssetState::Failed || state->state == RuntimeAssetState::ReadyWithError))
-                        viewer.environmentDiagnostic = state->diagnostic;
-                    else if (assetCatalog_ && assetEnvironmentPreparationService_ && !assetEnvironmentPreparationService_->pending(requested)) {
-                        const auto records = assetCatalog_->recordsForGuid(requested);
-                        const auto record = std::ranges::find_if(records, [](const AssetCatalogRecord& item) {
-                            return !item.parentGuid && item.assetType == "iridium.environment" &&
-                                item.assetRoot == "project" && item.status == AssetCatalogStatus::Ready;
-                        });
-                        if (record == records.end()) viewer.environmentDiagnostic = "The selected HDRI is no longer available in this project.";
-                        else if (!state || state->state != RuntimeAssetState::Queued) {
-                            try { (void)assetEnvironmentPreparationService_->request(*record); }
-                            catch (const std::exception& error) { viewer.environmentDiagnostic = error.what(); }
-                        }
-                    }
-                }
-            }
-        }
+        const EnvironmentLightingHandles desiredEnvironment =
+            editorHost_.selectViewEnvironment(assets_.environmentLighting(),
+                applicationFrameIndex);
         if (desiredEnvironment.isValid() && desiredEnvironment != renderBackend->getEnvironmentLighting())
             renderBackend->setEnvironmentLighting(desiredEnvironment);
-        editorBridge_->prepareRetainedViews(dualViews, renderView);
-        editor.retainedSceneTexture = dualViews ? editorBridge_->retainedViewTextureId(0) : nullptr;
-        editor.retainedAssetTexture = dualViews ? editorBridge_->retainedViewTextureId(1) : nullptr;
+        editorHost_.prepareRetainedViews(dualViews, renderView);
         // If the window was resized, OR acquire requests a swapchain rebuild:
         if (framebufferResized || renderBackend->beginFrame() == FrameStatus::RecreateSwapchain) {
             framebufferResized = false;
@@ -1392,7 +1244,8 @@ namespace Iridium {
             : 16.0f / 9.0f;
         // The previous-frame editor state that extraction reads before the
         // editor is built (design section 3.2, step 4).
-        const EditorViewState preBuildView = editorViewState(aspect);
+        const EditorViewState preBuildView =
+            editorHost_.viewState(aspect, renderExtent_, measuredFrameCount_);
         const bool preBuildAssetPreviewActive =
             preBuildView.assetPreviewActive;
         const std::span<const uint32_t> shadowGpuScenePrimitiveIndices =
@@ -1430,54 +1283,21 @@ namespace Iridium {
         };
         usePreviewCamera(preBuildView);
 
-        // Build ImGui only after beginFrame selected currentImageIndex. The UI
-        // descriptors are per swapchain image, so using them before acquisition
-        // can sample a different target that has not yet been transitioned.
-        EditorFrameRequests editorRequests{};
-        {
-            CpuScope editorScope(cpuProfiler_, "cpu.editor.build");
-            editorBridge_->beginUI();
-            if (!policy_.fullscreenScenePresentation) {
-                glm::mat4 sceneProjection = glm::perspective(glm::radians(camera_.verticalFovDegrees), aspect, camera_.nearPlane, camera_.farPlane);
-                sceneProjection[1][1] *= -1.0f;
-                editor.update(registry, assets_.assetManager(), glm::lookAt(camera_.position, camera_.position + camera_.front, camera_.up), sceneProjection,
-                    editorBridge_->sceneTextureId(),
-                    editorBridge_->glassDepthTextureId(),
-                    aspect);
-                EditorOutputSettings outputSettings{};
-                if (editor.consumeOutputSettings(outputSettings))
-                    editorRequests.output = std::move(outputSettings);
-                ProjectShadowSettings shadowSettings{};
-                if (editor.consumeShadowSettings(shadowSettings))
-                    editorRequests.shadows = shadowSettings;
-                ProjectReflectionProbeSettings probeSettings{};
-                if (editor.consumeReflectionProbeSettings(probeSettings))
-                    editorRequests.probes = probeSettings;
-                editorRequests.requestedSceneExtent =
-                    editor.requestedRenderExtent();
-                applyEditorFrameRequests(editorRequests);
-                editorRequests.view = editorViewState(aspect);
-            }
-            else {
-                const ImGuiViewport* viewport = ImGui::GetMainViewport();
-                ImGui::SetNextWindowPos(viewport->Pos);
-                ImGui::SetNextWindowSize(viewport->Size);
-                ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
-                constexpr ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration |
-                    ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
-                    ImGuiWindowFlags_NoBringToFrontOnFocus;
-                ImGui::Begin("Benchmark Output", nullptr, flags);
-                ImGui::Image(reinterpret_cast<ImTextureID>(
-                    editorBridge_->sceneTextureId()), ImGui::GetContentRegionAvail());
-                ImGui::End();
-                ImGui::PopStyleVar();
-                if (policy_.colorValidationOverlay) {
-                    editor.drawColorValidationOverlay();
-                }
-                // No asset preview without dual views: nothing is resolved.
-                editorRequests.view = editorViewState(aspect);
-            }
-        }
+        EditorFrameRequests editorRequests = editorHost_.build({
+            .registry = &registry,
+            .cameraPosition = camera_.position,
+            .cameraFront = camera_.front,
+            .cameraUp = camera_.up,
+            .verticalFovDegrees = camera_.verticalFovDegrees,
+            .nearPlane = camera_.nearPlane,
+            .farPlane = camera_.farPlane,
+            .aspect = aspect,
+            .renderExtent = renderExtent_,
+            .measuredFrameCount = measuredFrameCount_,
+            .fullscreenScenePresentation = policy_.fullscreenScenePresentation,
+            .colorValidationOverlay = policy_.colorValidationOverlay,
+        });
+        applyEditorFrameRequests(editorRequests);
         // The editor state after this frame's build: what extraction reads.
         const EditorViewState& view = editorRequests.view;
         usePreviewCamera(view);
@@ -1513,7 +1333,7 @@ namespace Iridium {
                 static_cast<float>(config_.peakNits) },
         };
         if (!frameRequests_.suppressGridOverlay && !assetPreviewActive) {
-            renderFrame.gridOverlay = editor.viewportGridOverlay(viewMatrix, projMatrix);
+            renderFrame.gridOverlay = editorHost_.viewportGridOverlay(viewMatrix, projMatrix);
         }
 
         // --- 3. THE EXTRACTION PHASE (Data-Oriented Design) ---
@@ -2638,7 +2458,7 @@ namespace Iridium {
             recreateSwapchain();
             return;
         }
-        if (dualViews) editorViewScheduler_.rendered(renderView, EditorViewCadence::Clock::now());
+        if (dualViews) editorHost_.viewRendered(renderView);
         if (observer_) {
             const uint64_t switchesBefore = outputTransportSwitchCount_;
             frame.outputTransportPending = pendingOutputTransport_.has_value();
@@ -2705,7 +2525,7 @@ namespace Iridium {
 
     void Application::cleanup(bool completed) {
         notifyShutdown(ShutdownPhase::ReleaseResources, completed);
-        editor.cleanup();
+        editorHost_.cleanup();
         assets_.shutdown();
 
         if (renderBackend && outputTransformLut.isValid()) {
@@ -2756,8 +2576,8 @@ namespace Iridium {
 
         // Asset documents own their orbit controls through ImGui and never move
         // the active scene camera while being inspected.
-        if (!app->editor.getAssetViewerPanel().isFocused &&
-            (app->editor.getViewportPanel().isHovered || glfwGetInputMode(window, GLFW_CURSOR) == GLFW_CURSOR_DISABLED) &&
+        if (!app->editorHost_.assetViewerFocused() &&
+            (app->editorHost_.sceneViewportHovered() || glfwGetInputMode(window, GLFW_CURSOR) == GLFW_CURSOR_DISABLED) &&
             glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS) {
             xoffset *= app->mouseSensitivity;
             yoffset *= app->mouseSensitivity;
@@ -2781,7 +2601,7 @@ namespace Iridium {
     void Application::scroll_callback(GLFWwindow* window, double xoffset, double yoffset) {
         auto app = reinterpret_cast<Application*>(glfwGetWindowUserPointer(window));
         if (!app) return;
-        if (app->editor.getAssetViewerPanel().isFocused || !app->editor.getViewportPanel().isHovered) return;
+        if (app->editorHost_.assetViewerFocused() || !app->editorHost_.sceneViewportHovered()) return;
 
         // Use scroll wheel to change camera fly speed
         app->cameraSpeed += static_cast<float>(yoffset) * 0.5f;
@@ -2795,7 +2615,7 @@ namespace Iridium {
 
         // Only activate camera look on Right Click
         if (button == GLFW_MOUSE_BUTTON_RIGHT &&
-            ((!app->editor.getAssetViewerPanel().isFocused && app->editor.getViewportPanel().isHovered) || action == GLFW_RELEASE)) {
+            ((!app->editorHost_.assetViewerFocused() && app->editorHost_.sceneViewportHovered()) || action == GLFW_RELEASE)) {
             if (action == GLFW_PRESS) {
                 app->firstMouse = true; // Prevent violent camera snapping
                 glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED); // Hide cursor
@@ -2811,9 +2631,9 @@ namespace Iridium {
             glfwSetWindowShouldClose(window, true);
 
         // Only move camera if Right Mouse Button is held down (standard editor behavior)
-        if (editor.getAssetViewerPanel().isFocused && glfwGetInputMode(window, GLFW_CURSOR) == GLFW_CURSOR_DISABLED)
+        if (editorHost_.assetViewerFocused() && glfwGetInputMode(window, GLFW_CURSOR) == GLFW_CURSOR_DISABLED)
             glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
-        if (!editor.getAssetViewerPanel().isFocused && glfwGetInputMode(window, GLFW_CURSOR) == GLFW_CURSOR_DISABLED &&
+        if (!editorHost_.assetViewerFocused() && glfwGetInputMode(window, GLFW_CURSOR) == GLFW_CURSOR_DISABLED &&
             glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS) {
             float velocity = cameraSpeed * deltaTime;
             if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS)
@@ -2825,101 +2645,6 @@ namespace Iridium {
             if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS)
                 camera_.position += glm::normalize(glm::cross(camera_.front, camera_.up)) * velocity;
         }
-    }
-
-    std::shared_ptr<ModelAsset> Application::resolveEditorAssetPreview() {
-        AssetManager* const assetManager = assets_.assetManager();
-        const std::shared_ptr<ModelAsset>& mainModel = assets_.mainModel();
-        AssetRuntimeService* const assetRuntimeService_ = assets_.runtime();
-        AssetModelPreparationService* const assetModelPreparationService_ =
-            assets_.modelPreparation();
-        AssetCatalog* const assetCatalog_ = assets_.catalog();
-        const EditorAssetDocument* document =
-            editor.assetDocuments().active();
-        if (!document || !assetManager) {
-            framedPreviewDocumentGuid_ = {};
-            framedPreviewCookKey_.clear();
-            return {};
-        }
-
-        const AssetGuid presentationGuid = document->presentationAssetGuid;
-        std::shared_ptr<ModelAsset> model =
-            assetManager->findMaterialPreview(document->assetGuid);
-        if (!model) model = assetManager->findCookedModel(presentationGuid);
-        if (!model && mainModel && mainModel->assetGuid == presentationGuid) {
-            model = mainModel;
-        }
-        if (model) {
-            if (assetRuntimeService_) {
-                assetRuntimeService_->touch(
-                    presentationGuid, measuredFrameCount_ + 1);
-            }
-            if (framedPreviewDocumentGuid_ != document->assetGuid ||
-                framedPreviewSession_ != document->sessionSerial ||
-                framedPreviewCookKey_ != model->artifactCookKey ||
-                framedPreviewRevision_ != document->framingRevision) {
-                glm::vec3 minimum(
-                    (std::numeric_limits<float>::max)());
-                glm::vec3 maximum(
-                    (std::numeric_limits<float>::lowest)());
-                bool hasBounds = false;
-                for (const SubMesh& subMesh : model->subMeshes) {
-                    if (document->isolateSelectedPart && document->selectedPart &&
-                        *document->selectedPart != (document->selectedPartIsMaterial
-                            ? subMesh.materialGuid : subMesh.sourcePrimitiveGuid)) continue;
-                    minimum = glm::min(minimum, subMesh.boundsMin);
-                    maximum = glm::max(maximum, subMesh.boundsMax);
-                    hasBounds = true;
-                }
-                if (!hasBounds) {
-                    minimum = glm::vec3(-1.0f);
-                    maximum = glm::vec3(1.0f);
-                }
-                const float aspect = renderExtent_.height != 0
-                    ? static_cast<float>(renderExtent_.width) /
-                        static_cast<float>(renderExtent_.height)
-                    : 1.0f;
-                editor.getAssetViewerPanel().frameActiveBounds(
-                    minimum, maximum, aspect);
-                framedPreviewDocumentGuid_ = document->assetGuid;
-                framedPreviewCookKey_ = model->artifactCookKey;
-                framedPreviewRevision_ = document->framingRevision;
-                framedPreviewSession_ = document->sessionSerial;
-            }
-            return model;
-        }
-
-        if (!assetModelPreparationService_ || !assetCatalog_) return {};
-        if (assetModelPreparationService_->pending(presentationGuid)) return {};
-        if (assetRuntimeService_) {
-            const auto snapshot = assetRuntimeService_->snapshot(presentationGuid);
-            if (snapshot &&
-                (snapshot->state == RuntimeAssetState::Queued ||
-                 snapshot->state == RuntimeAssetState::Failed)) {
-                return {};
-            }
-        }
-        const std::vector<AssetCatalogRecord> records =
-            assetCatalog_->recordsForGuid(presentationGuid);
-        const auto record = std::ranges::find_if(records,
-            [](const AssetCatalogRecord& candidate) {
-                return !candidate.parentGuid &&
-                    candidate.assetType == "iridium.model" &&
-                    candidate.assetRoot == "project" &&
-                    candidate.status == AssetCatalogStatus::Ready;
-            });
-        if (record != records.end()) {
-            try {
-                (void)assetModelPreparationService_->request(*record);
-            }
-            catch (const std::exception& exception) {
-                if (assetRuntimeService_) {
-                    assetRuntimeService_->reportFailure(
-                        presentationGuid, exception.what());
-                }
-            }
-        }
-        return {};
     }
 
     void Application::recreateSwapchain() {
@@ -2982,7 +2707,7 @@ namespace Iridium {
     }
 
     void Application::publishOutputTransportStatus() {
-        editor.setOutputTransportStatus(
+        editorHost_.setOutputTransportStatus(
             renderRuntimeInfo_.requestedOutputTransportMode,
             renderRuntimeInfo_.effectiveOutputTransportMode,
             renderRuntimeInfo_.supportedOutputTransportModes,

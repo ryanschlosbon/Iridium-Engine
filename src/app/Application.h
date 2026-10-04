@@ -28,7 +28,7 @@
 #include "scene/SceneWorld.h"
 #include "editor/EditorSceneDocumentService.h"
 #include "editor/EditorTransactionService.h"
-#include "editor/EditorSystem.h"
+#include "editor/EditorHost.h"
 #include "editor/ViewportRenderExtent.h"
 #include "scene/systems/TransformSystem.h"
 
@@ -38,7 +38,6 @@
 #include "renderer/rhi/DrawPacket.h"
 #include "renderer/rhi/RenderBackendRuntimeInfo.h"
 #include "renderer/lighting/LightExtractor.h"
-#include "editor/EditorViewCadence.h"
 #include "renderer/lighting/ReflectionProbe.h"
 #include "renderer/rhi/ReflectionProbeCapture.h"
 #include "renderer/lighting/DirectionalShadow.h"
@@ -47,9 +46,6 @@
 #include "renderer/rhi/GpuSceneVisibility.h"
 
 namespace Iridium {
-
-    struct EditorViewState;
-    struct EditorFrameRequests;
 
     class Application final : private IAppControl,
         private IRenderFrameStageObserver {
@@ -130,9 +126,6 @@ namespace Iridium {
 
         // --- SUBSYSTEMS ---
         SceneWorld sceneWorld_;
-        SceneWorld previewLightingWorld_;
-        Entity previewSun_ = NULL_ENTITY;
-        EditorViewScheduler editorViewScheduler_;
         LightExtractor lightExtractor_;
         ReflectionProbePublisher reflectionProbePublisher_;
         ReflectionProbeCaptureScheduler reflectionProbeCaptureScheduler_;
@@ -155,7 +148,8 @@ namespace Iridium {
         // (M7R R5a.1).
         AssetIntegration assets_;
         TransformSystem transformSystem;
-        EditorSystem editor;
+        // The editor UI, its views and the asset preview (M7R R5a.2).
+        EditorHost editorHost_;
 
         // --- OUTPUT ---
         TextureHandle outputTransformLut; // Pinned application-owned ACES 2 LUT.
@@ -181,10 +175,6 @@ namespace Iridium {
         RenderBackendRuntimeInfo renderRuntimeInfo_{};
         AppStartupTimings startupProfile_;
         bool measurementStarted_ = false;
-        AssetGuid framedPreviewDocumentGuid_;
-        std::string framedPreviewCookKey_;
-        uint64_t framedPreviewRevision_ = 0;
-        uint64_t framedPreviewSession_ = 0;
 
         // M7R R3c.11: caller-side work reported at submitFrame's stage
         // boundaries (cache bookkeeping, profile counters and the observer's
@@ -215,15 +205,11 @@ namespace Iridium {
         void cleanup(bool completed);
 
         void drawFrame(AppFrameContext& frame);
-        // The editor state extraction reads; resolves the active asset preview.
-        [[nodiscard]] EditorViewState editorViewState(float aspect);
         // The only runtime-configuration writes the editor causes.
         void applyEditorFrameRequests(const EditorFrameRequests& requests);
         void prepareGpuScenePublication(Entity selectedEntity);
 
         void processInput(GLFWwindow* window);
-        [[nodiscard]] std::shared_ptr<ModelAsset>
-            resolveEditorAssetPreview();
         void recreateSwapchain();
         void replaceOutputTransformLut(Color::OutputTransport effectiveTransport);
         void publishOutputTransportStatus();

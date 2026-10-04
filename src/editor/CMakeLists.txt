@@ -6,6 +6,7 @@ add_library(iridium_editor STATIC
         EditorAssetSettingsTransactionService.cpp
         EditorComponentDrawerRegistry.cpp
         EditorComponentRegistry.cpp
+        EditorHost.cpp
         EditorMeshTransaction.cpp
         EditorOrbitCamera.cpp
         EditorPropertyDrawer.cpp
@@ -47,4 +48,8 @@ iridium_target_pch(iridium_editor ENGINE)
 # include; a PCH containing GLM would silently switch this file to [-1, 1] clip
 # depth.
 set_source_files_properties(panels/core/ViewPortPanel.cpp PROPERTIES
+        SKIP_PRECOMPILE_HEADERS ON)
+# EditorHost.cpp builds the scene projection the editor draws against (M7R
+# R5a.2) and defines GLM_FORCE_DEPTH_ZERO_TO_ONE the same way.
+set_source_files_properties(EditorHost.cpp PROPERTIES
         SKIP_PRECOMPILE_HEADERS ON)
