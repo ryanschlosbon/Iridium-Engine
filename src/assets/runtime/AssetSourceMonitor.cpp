@@ -1,5 +1,6 @@
 #include "assets/runtime/AssetSourceMonitor.h"
 
+#include "core/tasks/TaskSystem.h"
 #include "utils/Sha256.h"
 
 #include <stdexcept>
@@ -44,10 +45,15 @@ namespace Iridium {
                 };
         }
         if (automatic_) {
-            worker_ = std::jthread(
-                [this](std::stop_token stopToken) {
-                    workerLoop(stopToken);
-                });
+            // M7R R5b.2 (ADR-0015): a Background Periodic replaces the 10 ms
+            // sleep-poll thread. The watcher constructor already required the
+            // task system.
+            constexpr auto serviceInterval =
+                std::chrono::milliseconds(10);
+            periodic_ = std::make_unique<Tasks::Periodic>(*tasks,
+                serviceInterval, Tasks::Periodic::Target::Background,
+                [this] { processPendingEvents(monotonicNanoseconds()); },
+                "asset.source.monitor");
         }
     }
 
@@ -140,9 +146,9 @@ namespace Iridium {
             if (shutdown_) return;
             shutdown_ = true;
         }
-        worker_.request_stop();
-        if (worker_.joinable()) {
-            worker_.join();
+        if (periodic_) {
+            // Unregisters from the frame tick and waits for a pass in flight.
+            periodic_->stop();
         }
     }
 
@@ -150,36 +156,30 @@ namespace Iridium {
         uint64_t nowNanoseconds) {
         const std::vector<SourceFileChangeEvent>
             events = watcher_.drainEvents();
+        std::vector<SourceChangeTracker::DueSourceChange> due;
+        {
+            std::lock_guard lock(mutex_);
+            if (shutdown_) return;
+            for (const SourceFileChangeEvent& event :
+                events) {
+                tracker_.notify(
+                    event.assetGuid,
+                    event.sourcePath,
+                    event.eventNanoseconds);
+            }
+            due = tracker_.takeDue(nowNanoseconds);
+        }
+        // SHA-256 of the changed sources runs without the monitor's mutex, so
+        // tracking, stats and draining never wait for file reads.
+        SourceChangeTracker::hashDueSources(due, hasher_);
         std::lock_guard lock(mutex_);
         if (shutdown_) return;
-        for (const SourceFileChangeEvent& event :
-            events) {
-            tracker_.notify(
-                event.assetGuid,
-                event.sourcePath,
-                event.eventNanoseconds);
-        }
         SourceChangeBatch batch =
-            tracker_.poll(
-                nowNanoseconds,
-                dependencies_,
-                hasher_);
+            tracker_.completePoll(due, dependencies_);
         if (hasBatchOutput(batch)) {
             batches_.push_back(
                 std::move(batch));
             ++emittedBatches_;
-        }
-    }
-
-    void AssetSourceMonitor::workerLoop(
-        std::stop_token stopToken) {
-        constexpr auto serviceInterval =
-            std::chrono::milliseconds(10);
-        while (!stopToken.stop_requested()) {
-            processPendingEvents(
-                monotonicNanoseconds());
-            std::this_thread::sleep_for(
-                serviceInterval);
         }
     }
 
