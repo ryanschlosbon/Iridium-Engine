@@ -18,6 +18,7 @@
 #include <span>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "ecs/Entity.h"
@@ -183,6 +184,29 @@ namespace Iridium {
         void releaseFrame();
 
     private:
+        // M7R R5c.7: the submeshes of one model that a GPU-scene owner without
+        // material overrides can draw (valid material index, valid material
+        // and pipeline, transparent queue), in ascending order. Extraction
+        // visits only these for such owners; the opaque ones go through the
+        // GPU scene. The list is a function of the per-submesh material
+        // indices and the per-material "draws transparent" bits, which are
+        // compared exactly with the model on its first use in every frame.
+        struct TransparentSubmeshList {
+            const ModelAsset* model = nullptr;
+            std::vector<int32_t> materialIndices;
+            std::vector<uint32_t> indexCounts;
+            std::vector<uint8_t> materialDrawsTransparent;
+            std::vector<uint32_t> submeshes;
+            // Sum over every submesh of indexCount / 3 (submesh.requested and
+            // geometry.triangle.source_requested count all submeshes).
+            uint64_t sourceTriangles = 0;
+            uint64_t usedFrame = 0;
+        };
+        // The model's list, revalidated once per frame (null without a model).
+        [[nodiscard]] const TransparentSubmeshList* transparentSubmeshes(
+            const ModelAsset& model);
+        void evictTransparentSubmeshLists();
+
         void usePreviewCamera(const EditorViewState& view);
         // The M7.2 parity packet of a published primitive (forward-opaque,
         // selection and the direct probe-capture reference still use packets).
@@ -238,6 +262,13 @@ namespace Iridium {
         // instance ranges. Existing single-instance packets leave this empty.
         std::vector<glm::mat4> forwardInstanceTransforms_;
         GpuSceneVisibilityResult gpuSceneVisibility_;
+        // M7R R5c.7: per-model transparent submesh lists (dense) and their
+        // index by model address; the frame counter that ages them out.
+        std::vector<TransparentSubmeshList> transparentSubmeshLists_;
+        std::unordered_map<const ModelAsset*, uint32_t>
+            transparentSubmeshListIndex_;
+        const TransparentSubmeshList* lastTransparentSubmeshList_ = nullptr;
+        uint64_t extractionFrame_ = 0;
 
         // This frame's view (beginView to extract).
         float aspect_ = 16.0f / 9.0f;

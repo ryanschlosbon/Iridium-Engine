@@ -972,6 +972,8 @@ namespace Iridium {
         const LightingFramePacket& lightingFrame = lightingFrame_;
         ReflectionProbeGpuFramePacket& publishedProbes = publishedProbes_;
         RenderFrame& renderFrame = renderFrame_;
+        ++extractionFrame_;
+        lastTransparentSubmeshList_ = nullptr;
 
         // --- 3. THE EXTRACTION PHASE (Data-Oriented Design) ---
         uint64_t requestedModelRecords = 0;
@@ -1010,7 +1012,8 @@ namespace Iridium {
                     const RenderInstanceBatchComponent* instanceBatch,
                     const CookedMaterialRuntimeBinding* forcedMaterial,
                     bool selected, SceneEntityUuid owner,
-                    bool persistentOpaque) {
+                    bool persistentOpaque,
+                    const TransparentSubmeshList* transparentList) {
                 if (!model.geometry.isValid()) return;
                 if (instanceBatch &&
                     instanceBatch->localTransforms.size() >
@@ -1070,70 +1073,22 @@ namespace Iridium {
                 requestedInstances += instanceCount;
                 const float distanceToCamera = glm::distance(
                     renderCameraPosition, glm::vec3(worldTransform[3]));
-                for (size_t subMeshIndex = 0u;
-                    subMeshIndex < model.subMeshes.size(); ++subMeshIndex) {
+                // One submesh with its effective binding, after the
+                // material-index check and the override lookup.
+                const auto emitSubmesh = [&](size_t subMeshIndex,
+                        const MaterialBinding* binding,
+                        AssetGuid effectiveMaterialGuid,
+                        CompiledTransparencyPolicy effectiveTransparency,
+                        TransparencyExecutionMode effectiveExecutionMode,
+                        bool previewPartSelected) {
                     const SubMesh& subMesh = model.subMeshes[subMeshIndex];
-                    const bool previewPartSelected = assetPreviewActive &&
-                        view.previewSelectedPart &&
-                        *view.previewSelectedPart == (view.previewSelectedPartIsMaterial
-                            ? subMesh.materialGuid : subMesh.sourcePrimitiveGuid);
-                    if (assetPreviewActive &&
-                        view.previewIsolateSelectedPart && !previewPartSelected) continue;
-                    requestedSubmeshes += instanceCount;
-                    requestedSourceTriangles +=
-                        (static_cast<uint64_t>(subMesh.indexCount) / 3u) *
-                        instanceCount;
-                    const int materialIndex = subMesh.materialIndex;
-                    if (materialIndex < 0 ||
-                        static_cast<size_t>(materialIndex) >= model.materials.size()) {
-                        continue;
-                    }
-                    const MaterialBinding* binding = forcedMaterial
-                        ? &forcedMaterial->binding
-                        : &model.materials[materialIndex];
-                    std::optional<CookedMaterialRuntimeBinding>
-                        overrideBinding;
-                    AssetGuid effectiveMaterialGuid = subMesh.materialGuid;
-                    CompiledTransparencyPolicy effectiveTransparency =
-                        subMesh.transparency;
-                    TransparencyExecutionMode effectiveExecutionMode =
-                        model.transparencyExecutionMode;
-                    if (forcedMaterial) {
-                        effectiveMaterialGuid = forcedMaterial->materialGuid;
-                        effectiveTransparency = forcedMaterial->transparency;
-                        effectiveExecutionMode =
-                            forcedMaterial->transparencyExecutionMode;
-                    }
-                    if (!forcedMaterial && meshComponent) {
-                        const auto materialOverride = std::ranges::find_if(
-                            meshComponent->materialOverrides,
-                            [&subMesh](const MeshComponent::MaterialOverride& candidate) {
-                                return candidate.sourceMaterialGuid ==
-                                    subMesh.materialGuid;
-                            });
-                        if (materialOverride !=
-                            meshComponent->materialOverrides.end()) {
-                            overrideBinding =
-                                assetManager_->findCookedMaterialRuntime(
-                                    materialOverride->materialGuid);
-                            if (overrideBinding) {
-                                effectiveMaterialGuid =
-                                    materialOverride->materialGuid;
-                                binding = &overrideBinding->binding;
-                                effectiveTransparency =
-                                    overrideBinding->transparency;
-                                effectiveExecutionMode = overrideBinding
-                                    ->transparencyExecutionMode;
-                            }
-                        }
-                    }
                     if (!binding->material.isValid() ||
                         !binding->pipeline.isValid()) {
-                        continue;
+                        return;
                     }
                     if (persistentOpaque &&
                         binding->renderQueue != RenderQueue::Transparent) {
-                        continue;
+                        return;
                     }
                     DrawPacket packet{};
                     packet.geometry = subMesh.geometry.isValid()
@@ -1200,7 +1155,7 @@ namespace Iridium {
                         if (!visible && effectiveExecutionMode ==
                                 TransparencyExecutionMode::Classified) {
                             ++transparentCulled;
-                            continue;
+                            return;
                         }
                         if (effectiveExecutionMode ==
                                 TransparencyExecutionMode::Classified &&
@@ -1237,6 +1192,91 @@ namespace Iridium {
                             (previewHovered ? 2u : 0u));
                         selectionQueue.push_back(packet);
                     }
+                };
+                // M7R R5c.7: a GPU-scene owner without material overrides
+                // draws only its model's transparent submeshes here; the
+                // others reach only the two counters below and the
+                // queue check in emitSubmesh. Visiting the cached list gives
+                // the full visit's packets in the same order.
+                if (transparentList && persistentOpaque && !forcedMaterial &&
+                    !assetPreviewActive && meshComponent &&
+                    meshComponent->materialOverrides.empty()) {
+                    requestedSubmeshes +=
+                        static_cast<uint64_t>(model.subMeshes.size()) *
+                        instanceCount;
+                    requestedSourceTriangles +=
+                        transparentList->sourceTriangles * instanceCount;
+                    for (const uint32_t subMeshIndex :
+                            transparentList->submeshes) {
+                        const SubMesh& subMesh = model.subMeshes[subMeshIndex];
+                        emitSubmesh(subMeshIndex,
+                            &model.materials[static_cast<size_t>(
+                                subMesh.materialIndex)],
+                            subMesh.materialGuid, subMesh.transparency,
+                            model.transparencyExecutionMode, false);
+                    }
+                    return;
+                }
+                for (size_t subMeshIndex = 0u;
+                    subMeshIndex < model.subMeshes.size(); ++subMeshIndex) {
+                    const SubMesh& subMesh = model.subMeshes[subMeshIndex];
+                    const bool previewPartSelected = assetPreviewActive &&
+                        view.previewSelectedPart &&
+                        *view.previewSelectedPart == (view.previewSelectedPartIsMaterial
+                            ? subMesh.materialGuid : subMesh.sourcePrimitiveGuid);
+                    if (assetPreviewActive &&
+                        view.previewIsolateSelectedPart && !previewPartSelected) continue;
+                    requestedSubmeshes += instanceCount;
+                    requestedSourceTriangles +=
+                        (static_cast<uint64_t>(subMesh.indexCount) / 3u) *
+                        instanceCount;
+                    const int materialIndex = subMesh.materialIndex;
+                    if (materialIndex < 0 ||
+                        static_cast<size_t>(materialIndex) >= model.materials.size()) {
+                        continue;
+                    }
+                    const MaterialBinding* binding = forcedMaterial
+                        ? &forcedMaterial->binding
+                        : &model.materials[materialIndex];
+                    std::optional<CookedMaterialRuntimeBinding>
+                        overrideBinding;
+                    AssetGuid effectiveMaterialGuid = subMesh.materialGuid;
+                    CompiledTransparencyPolicy effectiveTransparency =
+                        subMesh.transparency;
+                    TransparencyExecutionMode effectiveExecutionMode =
+                        model.transparencyExecutionMode;
+                    if (forcedMaterial) {
+                        effectiveMaterialGuid = forcedMaterial->materialGuid;
+                        effectiveTransparency = forcedMaterial->transparency;
+                        effectiveExecutionMode =
+                            forcedMaterial->transparencyExecutionMode;
+                    }
+                    if (!forcedMaterial && meshComponent) {
+                        const auto materialOverride = std::ranges::find_if(
+                            meshComponent->materialOverrides,
+                            [&subMesh](const MeshComponent::MaterialOverride& candidate) {
+                                return candidate.sourceMaterialGuid ==
+                                    subMesh.materialGuid;
+                            });
+                        if (materialOverride !=
+                            meshComponent->materialOverrides.end()) {
+                            overrideBinding =
+                                assetManager_->findCookedMaterialRuntime(
+                                    materialOverride->materialGuid);
+                            if (overrideBinding) {
+                                effectiveMaterialGuid =
+                                    materialOverride->materialGuid;
+                                binding = &overrideBinding->binding;
+                                effectiveTransparency =
+                                    overrideBinding->transparency;
+                                effectiveExecutionMode = overrideBinding
+                                    ->transparencyExecutionMode;
+                            }
+                        }
+                    }
+                    emitSubmesh(subMeshIndex, binding, effectiveMaterialGuid,
+                        effectiveTransparency, effectiveExecutionMode,
+                        previewPartSelected);
                 }
             };
 
@@ -1245,7 +1285,7 @@ namespace Iridium {
                     appendModel(*previewModel, glm::mat4(1.0f), nullptr,
                         nullptr,
                         nullptr, false,
-                        {}, false);
+                        {}, false, nullptr);
                 }
             }
             else {
@@ -1280,9 +1320,13 @@ namespace Iridium {
                                 ? &instanceBatchPool->get(entity) : nullptr,
                             nullptr,
                             entity == selectedEntity, owner,
-                            persistentOpaque);
+                            persistentOpaque,
+                            persistentOpaque
+                                ? transparentSubmeshes(*meshComponent.model)
+                                : nullptr);
                     }
                 }
+                evictTransparentSubmeshLists();
             }
 
             // M7.2 parity stage, reduced by M7R R5c.4b/e: main-opaque work is
@@ -1800,6 +1844,95 @@ namespace Iridium {
             else opaqueOrder_.push_back(key.packet);
         }
         opaqueQueue.swap(opaqueDirectScratch_);
+    }
+
+    const RenderExtractor::TransparentSubmeshList*
+        RenderExtractor::transparentSubmeshes(const ModelAsset& model) {
+        if (lastTransparentSubmeshList_ &&
+            lastTransparentSubmeshList_->model == &model &&
+            lastTransparentSubmeshList_->usedFrame == extractionFrame_)
+            return lastTransparentSubmeshList_;
+        TransparentSubmeshList* list = nullptr;
+        const auto found = transparentSubmeshListIndex_.find(&model);
+        if (found != transparentSubmeshListIndex_.end()) {
+            list = &transparentSubmeshLists_[found->second];
+        }
+        else {
+            transparentSubmeshListIndex_.emplace(&model,
+                static_cast<uint32_t>(transparentSubmeshLists_.size()));
+            list = &transparentSubmeshLists_.emplace_back();
+            list->model = &model;
+        }
+        if (list->usedFrame != extractionFrame_) {
+            // Exact check of every input the list is a function of; a model
+            // reallocated at the same address is caught the same way.
+            const auto drawsTransparent = [](const MaterialBinding& binding) {
+                return binding.material.isValid() &&
+                    binding.pipeline.isValid() &&
+                    binding.renderQueue == RenderQueue::Transparent;
+            };
+            bool unchanged = list->usedFrame != 0 &&
+                list->materialIndices.size() == model.subMeshes.size() &&
+                list->materialDrawsTransparent.size() == model.materials.size();
+            for (size_t index = 0; unchanged && index < model.materials.size();
+                    ++index) {
+                unchanged = list->materialDrawsTransparent[index] ==
+                    (drawsTransparent(model.materials[index]) ? 1u : 0u);
+            }
+            for (size_t index = 0; unchanged && index < model.subMeshes.size();
+                    ++index) {
+                unchanged = list->materialIndices[index] ==
+                        model.subMeshes[index].materialIndex &&
+                    list->indexCounts[index] == model.subMeshes[index].indexCount;
+            }
+            if (!unchanged) {
+                list->materialDrawsTransparent.resize(model.materials.size());
+                for (size_t index = 0; index < model.materials.size(); ++index)
+                    list->materialDrawsTransparent[index] =
+                        drawsTransparent(model.materials[index]) ? 1u : 0u;
+                list->materialIndices.resize(model.subMeshes.size());
+                list->indexCounts.resize(model.subMeshes.size());
+                list->submeshes.clear();
+                list->sourceTriangles = 0;
+                for (size_t index = 0; index < model.subMeshes.size(); ++index) {
+                    const SubMesh& subMesh = model.subMeshes[index];
+                    list->materialIndices[index] = subMesh.materialIndex;
+                    list->indexCounts[index] = subMesh.indexCount;
+                    list->sourceTriangles +=
+                        static_cast<uint64_t>(subMesh.indexCount) / 3u;
+                    if (subMesh.materialIndex >= 0 &&
+                        static_cast<size_t>(subMesh.materialIndex) <
+                            model.materials.size() &&
+                        list->materialDrawsTransparent[static_cast<size_t>(
+                            subMesh.materialIndex)] != 0u)
+                        list->submeshes.push_back(static_cast<uint32_t>(index));
+                }
+            }
+            list->usedFrame = extractionFrame_;
+        }
+        lastTransparentSubmeshList_ = list;
+        return list;
+    }
+
+    void RenderExtractor::evictTransparentSubmeshLists() {
+        // Lists unused for a while are dropped (models that left the scene);
+        // a short absence keeps the list and its storage.
+        constexpr uint64_t RetainedFrames = 256;
+        lastTransparentSubmeshList_ = nullptr;
+        for (size_t index = 0; index < transparentSubmeshLists_.size();) {
+            TransparentSubmeshList& list = transparentSubmeshLists_[index];
+            if (list.usedFrame + RetainedFrames >= extractionFrame_) {
+                ++index;
+                continue;
+            }
+            transparentSubmeshListIndex_.erase(list.model);
+            if (index + 1 != transparentSubmeshLists_.size()) {
+                list = std::move(transparentSubmeshLists_.back());
+                transparentSubmeshListIndex_[list.model] =
+                    static_cast<uint32_t>(index);
+            }
+            transparentSubmeshLists_.pop_back();
+        }
     }
 
     void RenderExtractor::releaseFrame() {
