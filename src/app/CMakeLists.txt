@@ -5,6 +5,7 @@
 add_library(iridium_app STATIC
         Application.cpp
         ApplicationConfig.cpp
+        AssetIntegration.cpp
         cli/CliValueParsers.cpp
         cli/RuntimeOptions.cpp
         cli/EditorOptions.cpp

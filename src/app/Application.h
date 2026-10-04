@@ -13,6 +13,7 @@
 
 // --- ENGINE SUBSYSTEMS ---
 #include "app/ApplicationConfig.h"
+#include "app/AssetIntegration.h"
 #include "app/FrameObserver.h"
 #include "core/EngineLog.h"
 #include "profiling/CpuProfiler.h"
@@ -70,10 +71,6 @@ namespace Iridium {
         void resetWindowResizedFlag() { framebufferResized = false; }
 
     private:
-        [[nodiscard]] std::string persistBakedReflectionProbe(
-            SceneEntityUuid owner,
-            const ReflectionProbeCaptureCompletion::Product& product);
-
         // --- CORE ENGINE STATE ---
         ApplicationConfig config_;
         EngineLog engineLog_;
@@ -132,23 +129,6 @@ namespace Iridium {
         uint32_t gpuSceneDirectFallbackCount_ = 0;
 
         // --- SUBSYSTEMS ---
-        std::unique_ptr<AssetManager> assetManager;
-        std::unique_ptr<AssetCatalog> assetCatalog_;
-        std::unique_ptr<AssetCatalogService> assetCatalogService_;
-        std::shared_ptr<LocalDerivedDataCache>
-            editorModelDdc_;
-        std::unique_ptr<AssetModelPreparationService>
-            assetModelPreparationService_;
-        std::unique_ptr<AssetEnvironmentPreparationService>
-            assetEnvironmentPreparationService_;
-        std::unique_ptr<AssetThumbnailService>
-            assetThumbnailService_;
-        std::unique_ptr<AssetRuntimeService>
-            assetRuntimeService_;
-        AssetThumbnailUploadQueue
-            pendingThumbnailUploads_;
-        uint64_t thumbnailUploadsTotal_ = 0;
-        uint64_t thumbnailUploadBytesTotal_ = 0;
         SceneWorld sceneWorld_;
         SceneWorld previewLightingWorld_;
         Entity previewSun_ = NULL_ENTITY;
@@ -171,22 +151,13 @@ namespace Iridium {
         EditorSceneDocumentService sceneDocumentService_;
         EditorTransactionService transactionService_;
         Registry& registry;
+        // Asset manager, asset services, startup content and environments
+        // (M7R R5a.1).
+        AssetIntegration assets_;
         TransformSystem transformSystem;
         EditorSystem editor;
 
-        // --- SCENE DATA ---
-        std::shared_ptr<ModelAsset> mainModel;
-        std::filesystem::path
-            activeCookedModelArtifact_;
-        std::filesystem::path activeCookedEnvironmentArtifact_;
-        AssetGuid activeEnvironmentAssetGuid_;
-        AssetGuid activeEnvironmentSourceGuid_;
-        std::string activeEnvironmentCookKey_;
-        std::string activeEnvironmentSourcePrimaries_;
-        float activeEnvironmentRadianceScale_ = 0.0f;
-        EnvironmentLightingHandles environmentLighting_;
-        EnvironmentLightingSettings sceneEnvironmentSettings_;
-        std::map<AssetGuid, LoadedEnvironmentAsset> loadedEnvironments_;
+        // --- OUTPUT ---
         TextureHandle outputTransformLut; // Pinned application-owned ACES 2 LUT.
         Color::OutputTransport outputTransformLutTransport_ =
             Color::OutputTransport::SdrSrgb;
@@ -251,12 +222,8 @@ namespace Iridium {
         void prepareGpuScenePublication(Entity selectedEntity);
 
         void processInput(GLFWwindow* window);
-        // Failed requests are reported once and cleared; callers must explicitly retry.
-        void ProcessMeshSwaps();
         [[nodiscard]] std::shared_ptr<ModelAsset>
             resolveEditorAssetPreview();
-        void configureCookedModelHotReload();
-        void configureCookedEnvironmentHotReload();
         void recreateSwapchain();
         void replaceOutputTransformLut(Color::OutputTransport effectiveTransport);
         void publishOutputTransportStatus();
