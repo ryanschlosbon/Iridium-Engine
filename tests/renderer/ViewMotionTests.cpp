@@ -99,7 +99,12 @@ namespace {
 namespace {
     // M9 G5b: the Halton(2,3) jitter sequence and its projection.
     void jitterSequence() {
+        constexpr uint32_t TemporalJitterSequenceLength = DefaultTemporalJitterSequenceLength;
         CHECK(TemporalJitterSequenceLength == 8);
+        // A longer sequence (supersampled references) keeps distinct phases.
+        CHECK(temporalJitterPixels(8, 16) != temporalJitterPixels(0, 16));
+        CHECK(temporalJitterPixels(16, 16) == temporalJitterPixels(0, 16));
+        CHECK(temporalJitterPixels(5, 0) == temporalJitterPixels(0, 1));   // clamped
         glm::vec2 sum(0.0f);
         for (uint32_t index = 0; index < TemporalJitterSequenceLength; ++index) {
             const glm::vec2 pixels = temporalJitterPixels(index);

@@ -93,6 +93,7 @@ namespace Iridium {
         std::optional<uint64_t> viewHistoryResetRevision;
         // M9 G5b: apply the per-view sub-pixel jitter sequence.
         bool temporalJitter = false;
+        uint32_t temporalJitterSequenceLength = 8;
     };
 
     struct RenderExtractionInputs {

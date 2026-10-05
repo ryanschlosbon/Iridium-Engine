@@ -115,6 +115,7 @@ namespace {
         flag("extractionVerifier", c.extractionVerifier);
         flag("renderGraphAliasing", c.renderGraphAliasing);
         flag("temporalJitter", c.temporalJitter);
+        field("temporalJitterSequenceLength", std::to_string(c.temporalJitterSequenceLength));
         field("uploadQueue", exact(enumValue(c.uploadQueue)));
         flag("aliasPoison", c.aliasPoison);
         flag("validateDepthPyramidCapture", c.validateDepthPyramidCapture);
@@ -477,6 +478,13 @@ namespace {
                 "--temporal-jitter requires on or off",
                 { { "yes", "--temporal-jitter requires on or off" },
                   { "", "--temporal-jitter requires on or off" } } },
+            // M9 G6c; 8 by default.
+            { "--temporal-jitter-sequence", G, "64", {}, [](C& c) {
+                c.temporalJitterSequenceLength = 64; },
+                "--temporal-jitter-sequence requires a phase count from 1 to 4096",
+                { { "0", "--temporal-jitter-sequence requires a phase count from 1 to 4096" },
+                  { "4097", "--temporal-jitter-sequence requires a phase count from 1 to 4096" },
+                  { "", "--temporal-jitter-sequence requires a phase count from 1 to 4096" } } },
             // M7R R4d.1 (not in the 6b000ad parser); auto by default.
             { "--upload-queue", G, "graphics", {}, [](C& c) {
                 c.uploadQueue = UploadQueueMode::Graphics; },
@@ -634,8 +642,8 @@ namespace {
         Cli::CliOptionRegistry registry;
         registerEngineOptions(registry, scratch);
 
-        CHECK(table.size() == 95);
-        CHECK(registry.options().size() == 95);
+        CHECK(table.size() == 96);
+        CHECK(registry.options().size() == 96);
         std::set<std::string_view> names;
         std::map<std::string_view, size_t> ownerCounts;
         for (const FlagCase& row : table) {
@@ -698,7 +706,7 @@ namespace {
         }
         CHECK(ownerCounts[R] == 14);
         CHECK(ownerCounts[E] == 4);
-        CHECK(ownerCounts[G] == 33);
+        CHECK(ownerCounts[G] == 34);
         CHECK(ownerCounts[Q] == 44);
         std::cout << "  owners: runtime " << ownerCounts[R] << ", editor " << ownerCounts[E]
                   << ", renderer " << ownerCounts[G] << ", qualification "
@@ -750,7 +758,7 @@ namespace {
     bool testUsageParity() {
         const std::string usage = engineUsage();
         CHECK(usage.starts_with("Usage: IridiumEngine [options]\n"));
-        CHECK(optionLines(usage).size() == 95);
+        CHECK(optionLines(usage).size() == 96);
         // Groups appear in owner order: runtime, editor, renderer, qualification.
         const size_t runtime = usage.find("runtime options:");
         const size_t editor = usage.find("editor options:");
@@ -769,7 +777,7 @@ namespace {
         AppCli::registerRuntimeOptions(registry, config);
         AppCli::registerEditorOptions(registry, config);
         AppCli::registerRendererOptions(registry, config);
-        CHECK(registry.options().size() == 51);
+        CHECK(registry.options().size() == 52);
         try {
             registry.parse(Args{ "--benchmark", "material_lab_v1" });
             CHECK(false);

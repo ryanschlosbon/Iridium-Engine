@@ -35,16 +35,19 @@ namespace Iridium {
         }
     }
 
-    glm::vec2 temporalJitterPixels(uint32_t sequenceIndex) noexcept {
+    glm::vec2 temporalJitterPixels(uint32_t sequenceIndex, uint32_t sequenceLength) noexcept {
         // Halton index 1-based (index 0 would be the pixel corner); centred
         // on the pixel, so offsets lie in (-0.5, 0.5).
-        const uint32_t index = sequenceIndex % TemporalJitterSequenceLength + 1u;
+        const uint32_t length = std::clamp(sequenceLength, 1u,
+            MaximumTemporalJitterSequenceLength);
+        const uint32_t index = sequenceIndex % length + 1u;
         return { radicalInverse(index, 2) - 0.5f, radicalInverse(index, 3) - 0.5f };
     }
 
-    glm::vec2 temporalJitterNdc(uint32_t sequenceIndex, glm::uvec2 extent) noexcept {
+    glm::vec2 temporalJitterNdc(uint32_t sequenceIndex, glm::uvec2 extent,
+        uint32_t sequenceLength) noexcept {
         if (extent.x == 0 || extent.y == 0) return glm::vec2(0.0f);
-        const glm::vec2 pixels = temporalJitterPixels(sequenceIndex);
+        const glm::vec2 pixels = temporalJitterPixels(sequenceIndex, sequenceLength);
         return { 2.0f * pixels.x / static_cast<float>(extent.x),
             2.0f * pixels.y / static_cast<float>(extent.y) };
     }
@@ -91,10 +94,13 @@ namespace Iridium {
         const glm::mat4 viewProjection = input.projection * input.view;
         const bool continuous = cut == ViewCutReason::None;
         const glm::mat4 previousViewProjection = continuous ? state.viewProjection : viewProjection;
+        const uint32_t sequenceLength = std::clamp(input.jitterSequenceLength, 1u,
+            MaximumTemporalJitterSequenceLength);
         const uint32_t jitterIndex = static_cast<uint32_t>(
-            state.turnsSinceCut % TemporalJitterSequenceLength);
+            state.turnsSinceCut % sequenceLength);
         const glm::vec2 jitterNdc = input.jitter
-            ? temporalJitterNdc(jitterIndex, input.extent) : glm::vec2(0.0f);
+            ? temporalJitterNdc(jitterIndex, input.extent, sequenceLength)
+            : glm::vec2(0.0f);
         const glm::vec2 previousJitterNdc = continuous ? state.jitterNdc : jitterNdc;
         state.viewProjection = viewProjection;
         state.jitterNdc = jitterNdc;

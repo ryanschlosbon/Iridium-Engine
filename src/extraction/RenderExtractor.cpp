@@ -958,6 +958,7 @@ namespace Iridium {
             .extent = { inputs.renderExtent.width, inputs.renderExtent.height },
             .metresPerWorldUnit = viewTransport.worldUnits.x,
             .jitter = inputs.temporalJitter,
+            .jitterSequenceLength = inputs.temporalJitterSequenceLength,
         });
         // M9 G5b: temporal fields. Without jitter the jittered pair stays the
         // unjittered pair (makeViewTransportRecord), bit for bit.

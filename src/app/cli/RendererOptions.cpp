@@ -329,6 +329,20 @@ namespace Iridium::AppCli {
                 else throw std::invalid_argument("--temporal-jitter requires on or off");
             });
 
+        addValueOption(registry, owner, "--temporal-jitter-sequence", "N",
+            "Jitter phases before the sequence repeats, 1-4096 (default 8)",
+            "--temporal-jitter-sequence requires a phase count from 1 to 4096",
+            [&c](std::string_view value) {
+                uint32_t parsed = 0;
+                const auto [end, error] = std::from_chars(value.data(),
+                    value.data() + value.size(), parsed);
+                if (error != std::errc{} || end != value.data() + value.size() ||
+                    parsed == 0 || parsed > 4096)
+                    throw std::invalid_argument(
+                        "--temporal-jitter-sequence requires a phase count from 1 to 4096");
+                c.temporalJitterSequenceLength = parsed;
+            });
+
         addValueOption(registry, owner, "--upload-queue", "auto|graphics|legacy-blocking",
             "Upload queue: transfer queue + timelines, graphics only, or pre-R4d blocking",
             "--upload-queue requires auto, graphics or legacy-blocking",

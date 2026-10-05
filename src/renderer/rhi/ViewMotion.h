@@ -19,6 +19,10 @@ namespace Iridium {
     //   the thresholds (a safety net for teleports nobody declared).
     // A field-of-view change is not a cut: it is reprojectable motion.
     // Deterministic: a pure function of the inputs (never wall time).
+    // M9 G5b/G6c: jitter sequence lengths (phases before it repeats).
+    inline constexpr uint32_t DefaultTemporalJitterSequenceLength = 8;
+    inline constexpr uint32_t MaximumTemporalJitterSequenceLength = 4096;
+
     struct ViewMotionInput {
         uint32_t historySet = 0;
         uint64_t identity = 0;
@@ -31,14 +35,18 @@ namespace Iridium {
         float metresPerWorldUnit = 1.0f;
         // M9 G5b: produce this turn's sub-pixel jitter.
         bool jitter = false;
+        // Phases before the sequence repeats (M9 G6c: long sequences build
+        // supersampled references; TAA compares 8 and 16).
+        uint32_t jitterSequenceLength = DefaultTemporalJitterSequenceLength;
     };
 
     // M9 G5b: the jitter sequence. Halton(2,3) phases, indexed by the view's
     // turns since its last cut (never wall time), as an NDC offset.
-    inline constexpr uint32_t TemporalJitterSequenceLength = 8;
-    [[nodiscard]] glm::vec2 temporalJitterPixels(uint32_t sequenceIndex) noexcept;
+    [[nodiscard]] glm::vec2 temporalJitterPixels(uint32_t sequenceIndex,
+        uint32_t sequenceLength = DefaultTemporalJitterSequenceLength) noexcept;
     [[nodiscard]] glm::vec2 temporalJitterNdc(uint32_t sequenceIndex,
-        glm::uvec2 extent) noexcept;
+        glm::uvec2 extent,
+        uint32_t sequenceLength = DefaultTemporalJitterSequenceLength) noexcept;
     // The projection with an NDC translation `jitterNdc` applied after it:
     // clip.xy += jitterNdc * clip.w. Returns `projection` itself for zero jitter.
     [[nodiscard]] glm::mat4 jitterProjection(const glm::mat4& projection,
