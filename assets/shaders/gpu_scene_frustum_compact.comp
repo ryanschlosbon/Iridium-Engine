@@ -255,18 +255,33 @@ uint selectedGeometry(uint baseIndex, Transform transform, uint maximumLod, uint
     return selected;
 }
 
+bool evaluateCandidate(uint candidateIndex, Candidate candidate);
+
+// M9 G8: every candidate writes its own command slot (candidate index ==
+// command slot, bins are contiguous): the visible command, or an empty one
+// (instanceCount 0) when culled. gpu_scene_compact_bins.comp then compacts
+// each bin in candidate order, so the draw order no longer depends on
+// thread scheduling (no order-deciding atomics).
+void writeCulled(uint candidateIndex, uint primitiveIndex) {
+    commands.values[candidateIndex] = IndexedCommand(0u, 0u, 0u, 0, primitiveIndex);
+}
+
 void main() {
     uint candidateIndex = gl_GlobalInvocationID.x;
     if (candidateIndex >= parameters.candidateCount) return;
     Candidate candidate = candidates.values[candidateIndex];
+    if (!evaluateCandidate(candidateIndex, candidate)) writeCulled(candidateIndex, candidate.primitiveIndex);
+}
+
+bool evaluateCandidate(uint candidateIndex, Candidate candidate) {
     // Host packet validation owns malformed-reference fail-visible fallback;
     // the device path must never dereference an invalid table record.
-    if (candidate.primitiveIndex >= parameters.primitiveCount) return;
+    if (candidate.primitiveIndex >= parameters.primitiveCount) return false;
     Primitive candidatePrimitive = primitives.values[candidate.primitiveIndex];
     if (candidatePrimitive.binding.x >= parameters.instanceCount ||
-        candidatePrimitive.binding.y >= parameters.geometryCount) return;
+        candidatePrimitive.binding.y >= parameters.geometryCount) return false;
     Instance candidateInstance = instances.values[candidatePrimitive.binding.x];
-    if (candidateInstance.references.x >= parameters.transformCount) return;
+    if (candidateInstance.references.x >= parameters.transformCount) return false;
 #if IRIDIUM_GPU_SCENE_OCCLUSION
     if (parameters.occlusionEnabled != 0u) {
         // The shared query already transforms the eight bounds corners and
@@ -279,7 +294,7 @@ void main() {
             0u, DepthPyramidAbiVersion);
         if (parameters.occlusionResultEnabled != 0u)
             occlusionResults.values[candidateIndex] = result;
-        if (result.reserved.x == IridiumDepthRejectionOutsideView) return;
+        if (result.reserved.x == IridiumDepthRejectionOutsideView) return false;
         // Any malformed or fail-visible result retains the candidate. The CPU
         // qualification oracle independently checks every consumed rejection.
         bool valid = result.metadata.x == DepthPyramidAbiVersion &&
@@ -290,14 +305,12 @@ void main() {
             finiteValue(result.farthestOccluderDepth) &&
             result.farthestOccluderDepth >= 0.0 &&
             result.farthestOccluderDepth <= 1.0;
-        if (valid && result.occluded != 0u) return;
+        if (valid && result.occluded != 0u) return false;
     }
-    else if (!visible(candidate.primitiveIndex)) return;
+    else if (!visible(candidate.primitiveIndex)) return false;
 #else
-    if (!visible(candidate.primitiveIndex)) return;
+    if (!visible(candidate.primitiveIndex)) return false;
 #endif
-    uint commandIndex = atomicAdd(counts.values[candidate.binIndex], 1u);
-    if (commandIndex >= candidate.commandCapacity) return;
     Primitive primitive = primitives.values[candidate.primitiveIndex];
     uint previousLod = 0xffffffffu;
     bool validSlot = candidate.historySlot < parameters.historyCapacity && parameters.lodErrorPixels > 0.0;
@@ -312,7 +325,8 @@ void main() {
     if (validSlot) lodHistory.values[candidate.historySlot] = uvec4(
         candidate.historyTokenLow, candidate.historyTokenHigh,
         selected == primitive.binding.y ? 0u : uint(geometry.localBoundsMax.w), parameters.viewFrame);
-    commands.values[candidate.commandBase + commandIndex] = IndexedCommand(
+    commands.values[candidateIndex] = IndexedCommand(
         geometry.draw.y, 1u, geometry.draw.x,
         int(geometry.draw.z), candidate.primitiveIndex);
+    return true;
 }
