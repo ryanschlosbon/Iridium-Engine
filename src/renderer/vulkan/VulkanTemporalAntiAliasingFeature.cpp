@@ -169,12 +169,17 @@ void VulkanTemporalAntiAliasingFeature::executeResolve(void* owner, VulkanPassCo
     TaaPushConstants push{};
     push.extent = { static_cast<float>(extent.width), static_cast<float>(extent.height),
         1.0f / static_cast<float>(extent.width), 1.0f / static_cast<float>(extent.height) };
-    push.exposure = { self.staged_.exposure, self.staged_.historyExposure,
-        historyValid ? 1.0f : 0.0f, 0.0f };
-    const VulkanTemporalAntiAliasingSettings& settings = self.settings_;
+    const TemporalUpscaleInputs& request = self.staged_.request;
+    // A reset (cut, teleport) also discards history the graph still holds
+    // as valid for this view set (the key invalidates on the next turn).
+    const bool useHistory = historyValid && !request.resetHistory;
+    push.exposure = { request.exposure, request.previousExposure,
+        useHistory ? 1.0f : 0.0f, 0.0f };
+    const TemporalAntiAliasingTuning& settings = request.nativeTaa;
     push.feedback = { settings.minimumHistoryWeight, settings.maximumHistoryWeight,
         settings.motionPixelsForMinimum, settings.varianceGamma };
-    push.tuning = { settings.reconstructionSharpness, settings.staticVarianceGamma, 0.0f, 0.0f };
+    push.tuning = { settings.reconstructionSharpness, settings.staticVarianceGamma,
+        settings.stillHistoryWeight, 0.0f };
 
     const VkCommandBuffer cmd = context.commandBuffer;
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, self.pipeline_);

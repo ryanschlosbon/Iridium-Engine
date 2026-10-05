@@ -976,7 +976,7 @@ namespace Iridium {
         }
         viewTransport.temporalInfo = glm::uvec4(lastViewMotion_.jitterIndex,
             static_cast<uint32_t>(std::min<uint64_t>(lastViewMotion_.turnsSinceCut, UINT32_MAX)),
-            temporalFlags, 0u);
+            temporalFlags, inputs.temporalJitterSequenceLength);
         // M7R R3c.11: the frame is assembled from spans over this frame's
         // queues and packets and submitted once, after extraction.
         renderFrame_ = RenderFrame{

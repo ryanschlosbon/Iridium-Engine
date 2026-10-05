@@ -121,7 +121,8 @@ namespace {
             std::to_string(c.taaTuning->motionPixelsForMinimum) + "/" +
             std::to_string(c.taaTuning->varianceGamma) + "/" +
             std::to_string(c.taaTuning->reconstructionSharpness) + "/" +
-            std::to_string(c.taaTuning->staticVarianceGamma) : std::string("default"));
+            std::to_string(c.taaTuning->staticVarianceGamma) + "/" +
+            std::to_string(c.taaTuning->stillHistoryWeight) : std::string("default"));
         field("temporalJitterSequenceLength", std::to_string(c.temporalJitterSequenceLength));
         field("uploadQueue", exact(enumValue(c.uploadQueue)));
         flag("aliasPoison", c.aliasPoison);
@@ -497,12 +498,12 @@ namespace {
                 "--anti-aliasing requires none or taa",
                 { { "fxaa", "--anti-aliasing requires none or taa" },
                   { "", "--anti-aliasing requires none or taa" } } },
-            { "--taa-settings", G, "0.8,0.95,16,1.25,2,1.5", {}, [](C& c) {
-                c.taaTuning = TemporalAntiAliasingTuning{ 0.8f, 0.95f, 16.0f, 1.25f, 2.0f, 1.5f }; },
-                "--taa-settings requires six comma-separated numbers",
-                { { "1,2", "--taa-settings requires six comma-separated numbers" },
-                  { "0.8,0.95,16,1.25,2,1.5,7", "--taa-settings requires six comma-separated numbers" },
-                  { "", "--taa-settings requires six comma-separated numbers" } } },
+            { "--taa-settings", G, "0.8,0.95,16,1.25,2,1.5,0.97", {}, [](C& c) {
+                c.taaTuning = TemporalAntiAliasingTuning{ 0.8f, 0.95f, 16.0f, 1.25f, 2.0f, 1.5f, 0.97f }; },
+                "--taa-settings requires seven comma-separated numbers",
+                { { "1,2", "--taa-settings requires seven comma-separated numbers" },
+                  { "0.8,0.95,16,1.25,2,1.5,0.97,7", "--taa-settings requires seven comma-separated numbers" },
+                  { "", "--taa-settings requires seven comma-separated numbers" } } },
             { "--temporal-jitter", G, "on", {}, [](C& c) {
                 c.temporalJitter = true; },
                 "--temporal-jitter requires on or off",

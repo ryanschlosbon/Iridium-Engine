@@ -14,6 +14,8 @@
 #include "VulkanFeatureContext.h"
 #include "VulkanRenderGraphExecutor.h"
 
+#include "renderer/rhi/TemporalUpscaleInputs.h"
+
 #include <vulkan/vulkan.h>
 
 #include <array>
@@ -21,28 +23,13 @@
 
 namespace Iridium {
 
-    struct VulkanTemporalAntiAliasingSettings {
-        // History weight range (the current sample gets 1 - weight).
-        float minimumHistoryWeight = 0.88f;
-        float maximumHistoryWeight = 0.97f;
-        // Motion (pixels per frame) at which the minimum weight applies.
-        float motionPixelsForMinimum = 32.0f;
-        // Neighbourhood variance clip half-width, in standard deviations.
-        float varianceGamma = 1.0f;
-        // Gaussian approximation of Blackman-Harris: exp(-sharpness * d^2).
-        float reconstructionSharpness = 2.29f;
-        // Clip half-width for still pixels; blends to varianceGamma as the
-        // reprojected motion reaches one pixel.
-        float staticVarianceGamma = 1.0f;
-    };
-
     class VulkanTemporalAntiAliasingFeature final : public IVulkanFeature {
     public:
+        // The frame's resolve request: the vendor-neutral contract every
+        // temporal provider consumes (renderer/rhi/TemporalUpscaleInputs.h),
+        // plus this backend's view uniforms.
         struct FrameInputs {
-            // Pre-exposure of the current frame and of the history (the
-            // previous frame's), so luma weighting runs in display-like range.
-            float exposure = 1.0f;
-            float historyExposure = 1.0f;
+            TemporalUpscaleInputs request{};
             VkDescriptorSet globalSet = VK_NULL_HANDLE;
         };
 
@@ -57,12 +44,6 @@ namespace Iridium {
         void onGraphReleased() override;
         void destroy() noexcept override;
 
-        void setSettings(const VulkanTemporalAntiAliasingSettings& settings) noexcept {
-            settings_ = settings;
-        }
-        [[nodiscard]] const VulkanTemporalAntiAliasingSettings& settings() const noexcept {
-            return settings_;
-        }
         // Before the frame's first drain that reaches the resolve.
         void stage(const FrameInputs& inputs) noexcept { staged_ = inputs; }
         [[nodiscard]] bool active() const noexcept { return resolvePass_.isValid(); }
@@ -87,7 +68,6 @@ namespace Iridium {
         RenderGraph::GraphResourceId sceneColor_{};
         RenderGraph::GraphResourceId depth_{};
         RenderGraph::GraphResourceId velocity_{};
-        VulkanTemporalAntiAliasingSettings settings_{};
         FrameInputs staged_{};
         bool lastHistoryValid_ = false;
     };

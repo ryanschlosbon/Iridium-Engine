@@ -330,11 +330,11 @@ namespace Iridium::AppCli {
                 else throw std::invalid_argument("--anti-aliasing requires none or taa");
             });
 
-        addValueOption(registry, owner, "--taa-settings", "MIN,MAX,MOTIONPX,GAMMA,SHARP,STATICGAMMA",
+        addValueOption(registry, owner, "--taa-settings", "MIN,MAX,MOTIONPX,GAMMA,SHARP,STATICGAMMA,STILLWEIGHT",
             "TAA tuning for evidence runs: history weights, motion, clip, reconstruction",
-            "--taa-settings requires six comma-separated numbers",
+            "--taa-settings requires seven comma-separated numbers",
             [&c](std::string_view value) {
-                std::array<float, 6> v{};
+                std::array<float, 7> v{};
                 size_t index = 0;
                 while (index < v.size()) {
                     const size_t comma = value.find(',');
@@ -344,17 +344,17 @@ namespace Iridium::AppCli {
                     if (error != std::errc{} || end != part.data() + part.size() ||
                         !std::isfinite(v[index]))
                         throw std::invalid_argument(
-                            "--taa-settings requires six comma-separated numbers");
+                            "--taa-settings requires seven comma-separated numbers");
                     ++index;
                     if (comma == std::string_view::npos) { value = {}; break; }
                     value.remove_prefix(comma + 1);
                 }
-                // Exactly six numbers: nothing may follow the sixth.
+                // Exactly seven numbers: nothing may follow the seventh.
                 if (index != v.size() || !value.empty() ||
                     v[0] < 0.0f || v[1] > 1.0f || v[0] > v[1])
                     throw std::invalid_argument(
-                        "--taa-settings requires six comma-separated numbers");
-                c.taaTuning = TemporalAntiAliasingTuning{ v[0], v[1], v[2], v[3], v[4], v[5] };
+                        "--taa-settings requires seven comma-separated numbers");
+                c.taaTuning = TemporalAntiAliasingTuning{ v[0], v[1], v[2], v[3], v[4], v[5], v[6] };
             });
 
         addValueOption(registry, owner, "--temporal-jitter", "on|off",

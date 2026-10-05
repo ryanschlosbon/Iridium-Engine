@@ -200,6 +200,7 @@ namespace Iridium {
         // M7R R4b.4: compile the production graph with transient aliasing.
         bool renderGraphAliasing_ = true;
         AntiAliasingMode antiAliasing_ = AntiAliasingMode::None;   // M9.2
+        TemporalAntiAliasingTuning taaTuning_{};
         // M7R R4d: --upload-queue.
         UploadQueueMode uploadQueueMode_ = UploadQueueMode::Auto;
         float experimentalShadowLodErrorTexels_ = 0.0f;

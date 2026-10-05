@@ -52,7 +52,8 @@ namespace Iridium {
         alignas(16) glm::mat4 previousViewProjection{ 1.0f };
         // xy = current jitter in NDC, zw = previous turn's jitter in NDC.
         alignas(16) glm::vec4 jitter{ 0.0f };
-        // x = jitter sequence index, y = turns since cut, z = ViewTemporal* flags.
+        // x = jitter sequence index, y = turns since cut, z = ViewTemporal*
+        // flags, w = jitter sequence length.
         alignas(16) glm::uvec4 temporalInfo{ 0u };
     };
 

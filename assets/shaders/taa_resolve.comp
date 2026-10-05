@@ -32,7 +32,7 @@ layout(push_constant) uniform TaaPushConstants {
     vec4 extent;       // xy size, zw 1 / size
     vec4 exposure;     // x current pre-exposure, y history pre-exposure, z history valid, w flags
     vec4 feedback;     // x minimum history weight, y maximum, z motion pixels for minimum, w variance gamma
-    vec4 tuning;       // x reconstruction sharpness (Blackman-Harris scale), y still-pixel gamma
+    vec4 tuning;       // x reconstruction sharpness, y still-pixel gamma, z still-pixel history weight
 } push;
 
 const vec3 Ap1Luma = vec3(0.2722287, 0.6740818, 0.0536895);
@@ -196,13 +196,21 @@ void main() {
     if (historyAvailable) {
         vec3 history = toYCoCg(compress(sampleHistory(previousUv), push.exposure.y));
         history = clipToBox(history, clipMin, clipMax);
-        // Anti-flicker: similar lumas keep more history (Lottes).
+        // Moving content: similar lumas keep more history (Lottes), so a
+        // changed surface refreshes quickly.
         float lumaCurrent = filtered.x;
         float lumaHistory = history.x;
         float difference = abs(lumaCurrent - lumaHistory) /
             max(max(lumaCurrent, lumaHistory), 0.2);
         float similarity = (1.0 - difference) * (1.0 - difference);
         float historyWeight = mix(push.feedback.x, push.feedback.y, similarity);
+        // Still pixels: the jittered samples of sub-pixel detail differ every
+        // frame by design, so luma difference is not a reason to refresh;
+        // a fixed high weight integrates them instead of letting them flicker
+        // (the clip box still rejects real changes).
+        if (push.tuning.z > 0.0)
+            historyWeight = mix(historyWeight, push.tuning.z,
+                1.0 - clamp(movedPixels, 0.0, 1.0));
         // Motion: fresh samples matter more for moving content.
         historyWeight = mix(historyWeight, push.feedback.x,
             clamp(movedPixels / max(push.feedback.z, 1.0e-3), 0.0, 1.0));

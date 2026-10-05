@@ -154,10 +154,7 @@ namespace Iridium {
         forceDirectShadowReference_ = config.forceDirectShadowReference;
         renderGraphAliasing_ = config.renderGraphAliasing;
         antiAliasing_ = config.antiAliasing;
-        taa_.setSettings({ config.taaTuning.minimumHistoryWeight,
-            config.taaTuning.maximumHistoryWeight, config.taaTuning.motionPixelsForMinimum,
-            config.taaTuning.varianceGamma, config.taaTuning.reconstructionSharpness,
-            config.taaTuning.staticVarianceGamma });
+        taaTuning_ = config.taaTuning;
         uploadQueueMode_ = config.uploadQueue;
         experimentalShadowLodErrorTexels_ =
             config.experimentalShadowLodErrorTexels;
@@ -1885,11 +1882,27 @@ namespace Iridium {
         stageComplete(RenderFrameStage::Lighting);
         // M9.2: TAA pre-exposes with the output's manual EV (auto-exposure
         // replaces it in M9.5); its pass drains with the output transform.
-        taa_.stage({
-            .exposure = std::exp2(frame.output.manualExposureEv),
-            .historyExposure = std::exp2(frame.output.manualExposureEv),
-            .globalSet = view_.globalSet(scheduler.currentFrameIndex()),
-        });
+        if (taa_.active()) {
+            const glm::vec2 extent(static_cast<float>(sceneExtent_.width),
+                static_cast<float>(sceneExtent_.height));
+            const float exposure = std::exp2(frame.output.manualExposureEv);
+            taa_.stage({
+                .request = {
+                    .provider = TemporalResolveProvider::NativeTaa,
+                    .extents = { { sceneExtent_.width, sceneExtent_.height },
+                        { sceneExtent_.width, sceneExtent_.height } },
+                    .jitterPixels = glm::vec2(frame.view.jitter) * extent * 0.5f,
+                    .jitterSequenceLength = frame.view.temporalInfo.w,
+                    .exposure = exposure,
+                    .previousExposure = exposure,
+                    .resetHistory = (frame.view.temporalInfo.z & ViewTemporalHistoryReset) != 0u,
+                    .camera = { frame.view.depthRange.x, frame.view.depthRange.y,
+                        2.0f * std::atan(1.0f / frame.view.projection[1][1]), 0.0f },
+                    .nativeTaa = taaTuning_,
+                },
+                .globalSet = view_.globalSet(scheduler.currentFrameIndex()),
+            });
+        }
         submitForwardQueues(frame.forwardOpaqueQueue,
             frame.forwardOpaquePreviousTransforms, frame.sortedSurfaceQueue,
             frame.compatibilityTransparentQueue, frame.instanceTransforms);
