@@ -10,6 +10,8 @@
 #include <string_view>
 #include <vector>
 
+#include "renderer/graph/ViewHistory.h"
+
 namespace Iridium::RenderGraph {
 
     inline constexpr uint32_t InvalidIndex = UINT32_MAX;
@@ -523,17 +525,6 @@ namespace Iridium::RenderGraph {
         std::array<std::optional<CompiledGraph>, Capacity> m_entries{};
         size_t m_size = 0;
         size_t m_nextReplacement = 0;
-    };
-
-    // The view a frame's History belongs to. `identity` is a stable view id
-    // (camera/viewport); bumping `resetRevision` discards history (cuts,
-    // teleports, settings changes).
-    struct ViewHistoryContext {
-        uint64_t identity = 0;
-        uint64_t resetRevision = 0;
-
-        friend constexpr bool operator==(const ViewHistoryContext&,
-            const ViewHistoryContext&) = default;
     };
 
     // A pair's previous contents are valid only under the key they were

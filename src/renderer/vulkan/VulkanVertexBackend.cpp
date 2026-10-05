@@ -1833,6 +1833,8 @@ namespace Iridium {
         // view), as the separate setters were called before extraction.
         applyOutputSettings(frame.output);
         debugView_ = frame.debugView;
+        // M9 G1: History is keyed by this frame's view before any pass runs.
+        renderGraph_.beginViewExecution(frame.history);
         updateCamera(frame.view, frame.history);
         output_.setGridOverlay(frame.gridOverlay);
 

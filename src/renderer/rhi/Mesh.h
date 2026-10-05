@@ -7,6 +7,7 @@
 #include <glm/glm.hpp>
 #include "core/types/AssetGuid.h"
 #include "PipelineTypes.h"
+#include "renderer/graph/ViewHistory.h"
 
 namespace Iridium {
 
@@ -17,11 +18,9 @@ namespace Iridium {
 
     // CPU-side temporal ownership, deliberately separate from the shader UBO.
     // Callers change identity when switching views, and resetRevision on cuts.
-    struct ViewHistoryContext {
-        uint64_t identity = 1;
-        uint64_t resetRevision = 0;
-        auto operator<=>(const ViewHistoryContext&) const = default;
-    };
+    // One type with the render graph (M9 G1): identity 0 is "no view", so
+    // producers always set an explicit identity.
+    using ViewHistoryContext = RenderGraph::ViewHistoryContext;
 
     inline constexpr uint32_t ViewTransportRefractionPyramidsAvailable =
         1u << 0u;

@@ -419,6 +419,9 @@ namespace Iridium {
         // identity, reset revision, extent, format, topology) invalidates.
         void beginFrameExecution(uint32_t frameIndex,
             const RenderGraph::ViewHistoryContext& view);
+        // M9 G1: re-keys History validity for the frame's view once the view
+        // is known (after extraction). Must precede the frame's first pass.
+        void beginViewExecution(const RenderGraph::ViewHistoryContext& view);
         // Whether `id`'s History pair holds valid previous contents this frame.
         // An invalid `previous` is transitioned from UNDEFINED on first use.
         [[nodiscard]] bool historyValid(RenderGraph::GraphResourceId id) const;

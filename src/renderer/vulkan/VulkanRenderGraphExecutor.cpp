@@ -1086,6 +1086,16 @@ void VulkanRenderGraphExecutor::beginFrameExecution(uint32_t frameIndex,
     }
 }
 
+void VulkanRenderGraphExecutor::beginViewExecution(
+    const RenderGraph::ViewHistoryContext& view) {
+    if (executingFrame_ == RenderGraph::InvalidIndex || nextPass_ != 0) {
+        throw std::logic_error(
+            "Render-graph view execution must begin before the frame's first pass");
+    }
+    lastView_ = view;
+    historyValidity_.beginFrame(view);
+}
+
 bool VulkanRenderGraphExecutor::historyValid(RenderGraph::GraphResourceId id) const {
     const RenderGraph::CompiledGraph& graph = boundGraph();
     if (id.logical >= graph.resources().size() ||

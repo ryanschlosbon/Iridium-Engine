@@ -1435,6 +1435,42 @@ namespace {
         return true;
     }
 
+    // M9 G1: production begins the frame before extraction, then supplies the
+    // view before the first pass. Validity follows the supplied view.
+    bool testHistoryViewSuppliedBeforeFirstPass() {
+        HistoryFixture fixture;
+        auto& executor = fixture.executor;
+        const auto frameWithLateView = [&](uint32_t frame,
+            RenderGraph::ViewHistoryContext view) {
+            const uint32_t slot = frame % 2;
+            executor.onFrameFenceCompleted(slot);
+            executor.beginFrameExecution(slot);
+            executor.beginViewExecution(view);
+            const bool valid = executor.historyValid(fixture.previous);
+            for (const char* pass : { "scene", "resolve", "post" })
+                executor.beginPass(FakeCommandBuffer, executor.passId(pass));
+            executor.finishFrameExecution();
+            return valid;
+        };
+        CHECK(!frameWithLateView(0, { 1, 0 }));
+        CHECK(frameWithLateView(1, { 1, 0 }));
+        CHECK(!frameWithLateView(2, { 3, 0 }));       // the late view re-keys
+        CHECK(frameWithLateView(3, { 3, 0 }));
+        CHECK(!frameWithLateView(4, { 3, 1 }));       // cut
+        // After the first pass the view can no longer change.
+        executor.onFrameFenceCompleted(1);
+        executor.beginFrameExecution(1);
+        executor.beginPass(FakeCommandBuffer, executor.passId("scene"));
+        CHECK(throws([&] { executor.beginViewExecution({ 3, 1 }); }));
+        for (const char* pass : { "resolve", "post" })
+            executor.beginPass(FakeCommandBuffer, executor.passId(pass));
+        executor.finishFrameExecution();
+        // Outside a frame it is rejected too.
+        CHECK(throws([&] { executor.beginViewExecution({ 3, 1 }); }));
+        executor.cleanupAfterDeviceIdle();
+        return true;
+    }
+
     bool testHistoryRetirement() {
         HistoryFixture fixture;
         auto& executor = fixture.executor;
@@ -2041,6 +2077,7 @@ int main() {
         { "callback context and reentry", testCallbackContextAndReentry },
         { "History pair lifetime", testHistoryPairLifetime },
         { "History validity", testHistoryValidity },
+        { "History view supplied before first pass", testHistoryViewSuppliedBeforeFirstPass },
         { "History retirement", testHistoryRetirement },
         { "production declares no History", testProductionDeclaresNoHistory },
         { "external image policies", testExternalImagePolicies },
