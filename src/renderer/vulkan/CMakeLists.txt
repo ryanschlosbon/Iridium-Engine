@@ -37,6 +37,7 @@ add_library(iridium_vulkan STATIC
         VulkanMemoryAllocatorImpl.cpp
         VulkanMeshLayouts.cpp
         VulkanOutputFeature.cpp
+        VulkanTemporalAntiAliasingFeature.cpp
         VulkanOutputPass.cpp
         VulkanOutputTransport.cpp
         VulkanPipelineCache.cpp

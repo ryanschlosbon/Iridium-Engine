@@ -187,6 +187,8 @@ namespace Iridium {
                 config_.experimentalDepthOcclusionRejection,
             .renderGraphAliasing = config_.renderGraphAliasing,
             .uploadQueue = config_.uploadQueue,
+            .antiAliasing = config_.antiAliasing,
+            .taaTuning = config_.taaTuning.value_or(TemporalAntiAliasingTuning{}),
             .cpuProfiler = &cpuProfiler_,
             .enableGpuProfiling = config_.enableGpuProfiling,
             .enableTransparentPipelineStatistics =

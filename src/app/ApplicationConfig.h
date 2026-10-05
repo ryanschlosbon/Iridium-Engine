@@ -48,8 +48,14 @@ namespace Iridium {
         // M7R R4b: --render-graph-aliasing on|off (on since R4b.6; the switch
         // is kept until R6).
         bool renderGraphAliasing = true;
-        // M9 G5b: sub-pixel raster jitter (off until TAA consumes it).
-        bool temporalJitter = false;
+        // M9.2: anti-aliasing (--anti-aliasing none|taa).
+        AntiAliasingMode antiAliasing = AntiAliasingMode::None;
+        // M9 G5b: sub-pixel raster jitter; unset follows anti-aliasing (on
+        // with TAA).
+        std::optional<bool> temporalJitter;
+        // M9.2: TAA tuning for evidence runs (--taa-settings); unset fields
+        // keep the defaults.
+        std::optional<TemporalAntiAliasingTuning> taaTuning;
         uint32_t temporalJitterSequenceLength = 8;
         // M7R R4d: --upload-queue auto|graphics|legacy-blocking.
         UploadQueueMode uploadQueue = UploadQueueMode::Auto;

@@ -153,6 +153,11 @@ namespace Iridium {
         forceDirectGBufferReference_ = config.forceDirectGBufferReference;
         forceDirectShadowReference_ = config.forceDirectShadowReference;
         renderGraphAliasing_ = config.renderGraphAliasing;
+        antiAliasing_ = config.antiAliasing;
+        taa_.setSettings({ config.taaTuning.minimumHistoryWeight,
+            config.taaTuning.maximumHistoryWeight, config.taaTuning.motionPixelsForMinimum,
+            config.taaTuning.varianceGamma, config.taaTuning.reconstructionSharpness,
+            config.taaTuning.staticVarianceGamma });
         uploadQueueMode_ = config.uploadQueue;
         experimentalShadowLodErrorTexels_ =
             config.experimentalShadowLodErrorTexels;
@@ -366,6 +371,7 @@ namespace Iridium {
         // R3c.9: the forward owner (render passes, refraction pyramids).
         forward_.configure(layered_);
         forward_.create(*featureContext_);
+        taa_.create(*featureContext_);   // M9.2
         output_.create(*featureContext_);
         output_.createPipelines(outputTargetFormat_,
             outputTransport_ == Color::OutputTransport::Hdr10Pq,
@@ -642,6 +648,7 @@ namespace Iridium {
 
         ui_.destroy();
         output_.destroy();
+        taa_.destroy();
 
         forward_.destroy();
         layered_.destroy();
@@ -726,6 +733,7 @@ namespace Iridium {
             .hooks = extensionHooks_.graphHooks(),
             .pointShadowPoolCapacities = pointShadowCapacities_,
             .transientAliasing = renderGraphAliasing_,
+            .temporalAntiAliasing = antiAliasing_ == AntiAliasingMode::Taa,
         };
     }
 
@@ -1875,6 +1883,13 @@ namespace Iridium {
             frame.view.projection, frame.view.jitteredProjection, frame.view.depthRange.x,
             frame.view.depthRange.y, *frame.lights, *frame.reflectionProbes);
         stageComplete(RenderFrameStage::Lighting);
+        // M9.2: TAA pre-exposes with the output's manual EV (auto-exposure
+        // replaces it in M9.5); its pass drains with the output transform.
+        taa_.stage({
+            .exposure = std::exp2(frame.output.manualExposureEv),
+            .historyExposure = std::exp2(frame.output.manualExposureEv),
+            .globalSet = view_.globalSet(scheduler.currentFrameIndex()),
+        });
         submitForwardQueues(frame.forwardOpaqueQueue,
             frame.forwardOpaquePreviousTransforms, frame.sortedSurfaceQueue,
             frame.compatibilityTransparentQueue, frame.instanceTransforms);
@@ -2301,9 +2316,14 @@ namespace Iridium {
         });
         // R3c.4 drain point: final-output captures and the retained views.
         const IVulkanEditorUi* editor = editorUi();
-        hooks_.runFinalCapture(currentCmd,
+        VulkanCaptureHookPayload finalSource =
             captureSource(outputTransport_ == Color::OutputTransport::SdrSrgb
-                ? FrameCapturePoint::FinalSdr : FrameCapturePoint::FinalOutput),
+                ? FrameCapturePoint::FinalSdr : FrameCapturePoint::FinalOutput);
+        // M9.2: the post chain's scene colour (TAA history slot or scene.color).
+        finalSource.sceneResolved = &renderGraph_.image(scheduler.currentFrameIndex(),
+            graphIds_.resolvedSceneColor);
+        finalSource.sceneResolvedFormat = frameTargets.format();
+        hooks_.runFinalCapture(currentCmd, finalSource,
             editor != nullptr && editor->retainedViewsEnabled());
     }
 

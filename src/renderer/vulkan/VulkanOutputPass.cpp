@@ -258,6 +258,22 @@ namespace Iridium {
         descriptorSets_.clear();
     }
 
+    void VulkanOutputPass::setSceneView(uint32_t frameIndex, VkImageView view,
+        VkSampler sampler) const {
+        if (frameIndex >= descriptorSets_.size()) {
+            throw std::out_of_range("Output descriptor frame index is out of range.");
+        }
+        const VkDescriptorImageInfo image{ sampler, view,
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+        VkWriteDescriptorSet write{ VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
+        write.dstSet = descriptorSets_[frameIndex];
+        write.dstBinding = 0;
+        write.descriptorCount = 1;
+        write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        write.pImageInfo = &image;
+        vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
+    }
+
     void VulkanOutputPass::record(VkCommandBuffer commandBuffer, uint32_t frameIndex,
         VkExtent2D extent,
         float manualExposureEv, uint32_t outputOperator,

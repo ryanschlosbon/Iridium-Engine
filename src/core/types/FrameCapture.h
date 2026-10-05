@@ -26,7 +26,15 @@ namespace Iridium {
         SceneLinear,
         FinalSdr,
         FinalOutput,
+        // M9.2: the scene-linear colour the post chain reads (after temporal
+        // resolve; equal to SceneLinear without TAA).
+        SceneResolved,
     };
+
+    [[nodiscard]] constexpr bool isSceneLinearCapturePoint(FrameCapturePoint point) noexcept {
+        return point == FrameCapturePoint::SceneLinear ||
+            point == FrameCapturePoint::SceneResolved;
+    }
 
     struct FrameCapture {
         uint64_t captureId = 0;
@@ -72,6 +80,7 @@ namespace Iridium {
         case FrameCapturePoint::SceneLinear: return "scene";
         case FrameCapturePoint::FinalSdr: return "final-sdr";
         case FrameCapturePoint::FinalOutput: return "final-output";
+        case FrameCapturePoint::SceneResolved: return "scene-resolved";
         }
         return "unknown";
     }

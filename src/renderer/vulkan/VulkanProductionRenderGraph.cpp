@@ -923,12 +923,28 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
         graph.read(sceneCapture, litScene, Access::TransferSource);
     }
 
+    // M9.2: the post chain reads the resolved scene colour: the TAA history's
+    // current slot with TAA, otherwise scene.color (the M7R topology). The
+    // scene-linear capture above stays the single-frame (pre-TAA) domain.
+    RenderGraph::ResourceHandle resolved = litScene;
+    if (features.temporalAntiAliasing) {
+        const auto taaHistory = graph.createHistory("taa.history",
+            imageDesc(RenderGraph::Format::Rgba16Float, sceneExtent));
+        const RenderGraph::PassHandle taa = graph.addPass(
+            "temporal.taa.resolve", RenderGraph::QueueClass::Compute);
+        graph.read(taa, litScene, Access::SampledRead);
+        graph.read(taa, depth, Access::SampledRead);
+        graph.read(taa, velocity, Access::SampledRead);
+        graph.read(taa, taaHistory.previous, Access::SampledRead);
+        resolved = graph.write(taa, taaHistory.current, Access::StorageWrite);
+    }
+
     const RenderGraph::PassHandle bloomHook = graph.addPass("bloom-hook");
-    graph.read(bloomHook, litScene, Access::SampledRead);
+    graph.read(bloomHook, resolved, Access::SampledRead);
 
     const RenderGraph::PassHandle outputTransform =
         graph.addPass("output-transform");
-    graph.read(outputTransform, litScene, Access::SampledRead);
+    graph.read(outputTransform, resolved, Access::SampledRead);
     graph.read(outputTransform, emissive, Access::SampledRead);
     graph.read(outputTransform, depth, Access::SampledRead);
     // M9.1: the motion-vector debug view.
@@ -939,6 +955,9 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
     const RenderGraph::PassHandle finalCaptureHook =
         graph.addPass("final-capture-hook");
     graph.read(finalCaptureHook, litScene, Access::TransferSource);
+    // M9.2: the resolved scene colour (scene-resolved captures).
+    if (features.temporalAntiAliasing)
+        graph.read(finalCaptureHook, resolved, Access::TransferSource);
     graph.read(finalCaptureHook, output, Access::TransferSource);
 
     const RenderGraph::PassHandle ui = graph.addPass(
@@ -1068,6 +1087,11 @@ VulkanProductionGraphIds resolveVulkanProductionGraphIds(
     ids.oitResolve = pass("transparent.oit.resolve");
     ids.sceneColorCaptureHook = pass("scene-color-capture-hook");
     ids.bloomHook = pass("bloom-hook");
+    ids.taaResolve = pass("temporal.taa.resolve");
+    ids.taaHistoryPrevious = resource("taa.history.previous");
+    ids.taaHistoryCurrent = resource("taa.history.current");
+    ids.resolvedSceneColor = ids.taaHistoryCurrent.isValid()
+        ? ids.taaHistoryCurrent : resource("scene.color");
     ids.outputTransform = pass("output-transform");
     ids.finalCaptureHook = pass("final-capture-hook");
     ids.ui = pass("ui-compose");

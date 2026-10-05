@@ -88,6 +88,8 @@ namespace Iridium {
         VulkanHdrEncodePass hdrEncodePass_;
         RenderGraph::PassId bloomHookPass_{};
         RenderGraph::PassId outputTransformPass_{};
+        RenderGraph::GraphResourceId resolvedScene_{};   // M9.2
+        bool taaActive_ = false;
         RenderGraph::PassId hdr10EncodePass_{};
         float manualExposureEv_ = 0.0f;
         OutputTransformOperator outputOperator_ = OutputTransformOperator::Aces2;

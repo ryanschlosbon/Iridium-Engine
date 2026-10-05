@@ -381,7 +381,8 @@ namespace Iridium {
             .paperWhiteNits = config_.paperWhiteNits,
             .peakNits = config_.peakNits,
             .viewHistoryResetRevision = frameRequests_.viewHistoryResetRevision,
-            .temporalJitter = config_.temporalJitter,
+            .temporalJitter = config_.temporalJitter.value_or(
+                config_.antiAliasing == AntiAliasingMode::Taa),
             .temporalJitterSequenceLength = config_.temporalJitterSequenceLength,
         });
         if (!frameRequests_.suppressGridOverlay && !view.assetPreviewActive) {

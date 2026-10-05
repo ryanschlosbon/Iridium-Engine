@@ -82,6 +82,10 @@ namespace Iridium {
         const VulkanImageResource* source = nullptr;
         VkExtent2D extent{};
         VkFormat format = VK_FORMAT_UNDEFINED;
+        // M9.2 (final-capture hook): the resolved scene colour, in its
+        // TransferSource state, for FrameCapturePoint::SceneResolved.
+        const VulkanImageResource* sceneResolved = nullptr;
+        VkFormat sceneResolvedFormat = VK_FORMAT_UNDEFINED;
     };
     struct VulkanOrdinary2HookPayload {
         VkExtent2D atlasExtent{};

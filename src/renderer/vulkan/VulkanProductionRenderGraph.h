@@ -148,6 +148,9 @@ namespace Iridium {
         // CompileOptions::transientAliasing, so the executor places the
         // aliasing-eligible transient images in shared alias heaps.
         bool transientAliasing = false;
+        // M9.2: native TAA. Declares temporal.taa.resolve and the taa.history
+        // pair; the post chain (bloom, output) then reads the resolved colour.
+        bool temporalAntiAliasing = false;
     };
 
     [[nodiscard]] RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(

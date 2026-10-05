@@ -3,6 +3,7 @@
 #include "app/ApplicationConfig.h"
 #include "app/cli/CliValueParsers.h"
 
+#include <array>
 #include <charconv>
 #include <cmath>
 #include <stdexcept>
@@ -320,8 +321,44 @@ namespace Iridium::AppCli {
                 else throw std::invalid_argument("--render-graph-aliasing requires on or off");
             });
 
+        addValueOption(registry, owner, "--anti-aliasing", "none|taa",
+            "Main-view anti-aliasing: none or native temporal AA (default none)",
+            "--anti-aliasing requires none or taa",
+            [&c](std::string_view value) {
+                if (value == "none") c.antiAliasing = AntiAliasingMode::None;
+                else if (value == "taa") c.antiAliasing = AntiAliasingMode::Taa;
+                else throw std::invalid_argument("--anti-aliasing requires none or taa");
+            });
+
+        addValueOption(registry, owner, "--taa-settings", "MIN,MAX,MOTIONPX,GAMMA,SHARP,STATICGAMMA",
+            "TAA tuning for evidence runs: history weights, motion, clip, reconstruction",
+            "--taa-settings requires six comma-separated numbers",
+            [&c](std::string_view value) {
+                std::array<float, 6> v{};
+                size_t index = 0;
+                while (index < v.size()) {
+                    const size_t comma = value.find(',');
+                    const std::string_view part = value.substr(0, comma);
+                    const auto [end, error] = std::from_chars(part.data(),
+                        part.data() + part.size(), v[index]);
+                    if (error != std::errc{} || end != part.data() + part.size() ||
+                        !std::isfinite(v[index]))
+                        throw std::invalid_argument(
+                            "--taa-settings requires six comma-separated numbers");
+                    ++index;
+                    if (comma == std::string_view::npos) { value = {}; break; }
+                    value.remove_prefix(comma + 1);
+                }
+                // Exactly six numbers: nothing may follow the sixth.
+                if (index != v.size() || !value.empty() ||
+                    v[0] < 0.0f || v[1] > 1.0f || v[0] > v[1])
+                    throw std::invalid_argument(
+                        "--taa-settings requires six comma-separated numbers");
+                c.taaTuning = TemporalAntiAliasingTuning{ v[0], v[1], v[2], v[3], v[4], v[5] };
+            });
+
         addValueOption(registry, owner, "--temporal-jitter", "on|off",
-            "Sub-pixel raster jitter for temporal resolve (default off)",
+            "Sub-pixel raster jitter (default: on with TAA, off otherwise)",
             "--temporal-jitter requires on or off",
             [&c](std::string_view value) {
                 if (value == "on") c.temporalJitter = true;

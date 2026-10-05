@@ -258,6 +258,12 @@ namespace Iridium {
             armedFrameCapture_.reset();
             VulkanCaptureHookPayload source = payload;
             source.point = armed.point;
+            if (armed.point == FrameCapturePoint::SceneResolved) {
+                if (payload.sceneResolved == nullptr)
+                    throw std::logic_error("Scene-resolved capture has no resolved source.");
+                source.source = payload.sceneResolved;
+                source.format = payload.sceneResolvedFormat;
+            }
             recordFrameCapture(armed.captureId, context.cmd, context.slot, source);
             return;
         }

@@ -1,0 +1,95 @@
+#pragma once
+
+// M9.2 native temporal anti-aliasing (1:1, DLAA-class): the feature owner of
+// the "temporal.taa.resolve" compute pass and its "taa.history" History pair.
+// The resolve reads this frame's jittered scene colour, depth and velocity
+// plus the pair's previous slot, and writes the resolved scene-linear colour
+// into the pair's current slot, which the post chain (bloom, exposure,
+// output transform) reads as the frame's scene colour.
+//
+// History images change per frame (parity) and per retained view (set), so
+// the per-frame-slot descriptor set is rewritten inside the execute callback,
+// after the frame's view selected its history set and before the dispatch.
+
+#include "VulkanFeatureContext.h"
+#include "VulkanRenderGraphExecutor.h"
+
+#include <vulkan/vulkan.h>
+
+#include <array>
+#include <cstdint>
+
+namespace Iridium {
+
+    struct VulkanTemporalAntiAliasingSettings {
+        // History weight range (the current sample gets 1 - weight).
+        float minimumHistoryWeight = 0.88f;
+        float maximumHistoryWeight = 0.97f;
+        // Motion (pixels per frame) at which the minimum weight applies.
+        float motionPixelsForMinimum = 32.0f;
+        // Neighbourhood variance clip half-width, in standard deviations.
+        float varianceGamma = 1.0f;
+        // Gaussian approximation of Blackman-Harris: exp(-sharpness * d^2).
+        float reconstructionSharpness = 2.29f;
+        // Clip half-width for still pixels; blends to varianceGamma as the
+        // reprojected motion reaches one pixel.
+        float staticVarianceGamma = 1.0f;
+    };
+
+    class VulkanTemporalAntiAliasingFeature final : public IVulkanFeature {
+    public:
+        struct FrameInputs {
+            // Pre-exposure of the current frame and of the history (the
+            // previous frame's), so luma weighting runs in display-like range.
+            float exposure = 1.0f;
+            float historyExposure = 1.0f;
+            VkDescriptorSet globalSet = VK_NULL_HANDLE;
+        };
+
+        VulkanTemporalAntiAliasingFeature() = default;
+        VulkanTemporalAntiAliasingFeature(const VulkanTemporalAntiAliasingFeature&) = delete;
+        VulkanTemporalAntiAliasingFeature& operator=(
+            const VulkanTemporalAntiAliasingFeature&) = delete;
+
+        void create(const VulkanFeatureContext& context) override;
+        void onGraphRebuilt(const VulkanProductionGraphIds& ids) override;
+        void registerPasses(VulkanRenderGraphExecutor& graph) override;
+        void onGraphReleased() override;
+        void destroy() noexcept override;
+
+        void setSettings(const VulkanTemporalAntiAliasingSettings& settings) noexcept {
+            settings_ = settings;
+        }
+        [[nodiscard]] const VulkanTemporalAntiAliasingSettings& settings() const noexcept {
+            return settings_;
+        }
+        // Before the frame's first drain that reaches the resolve.
+        void stage(const FrameInputs& inputs) noexcept { staged_ = inputs; }
+        [[nodiscard]] bool active() const noexcept { return resolvePass_.isValid(); }
+        // Whether this frame's resolve found valid history (after it ran).
+        [[nodiscard]] bool historyWasValid() const noexcept { return lastHistoryValid_; }
+
+    private:
+        static void executeResolve(void* owner, VulkanPassContext& context);
+        void writeDescriptors(uint32_t frameIndex, VkImageView previous,
+            VkImageView current) const;
+
+        const VulkanFeatureContext* context_ = nullptr;
+        VkDescriptorSetLayout descriptorLayout_ = VK_NULL_HANDLE;
+        VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;
+        VkPipeline pipeline_ = VK_NULL_HANDLE;
+        VkSampler linearSampler_ = VK_NULL_HANDLE;
+        VkSampler pointSampler_ = VK_NULL_HANDLE;
+        std::array<VkDescriptorSet, VulkanFrameScheduler::FramesInFlight> sets_{};
+        RenderGraph::PassId resolvePass_{};
+        RenderGraph::GraphResourceId historyPrevious_{};
+        RenderGraph::GraphResourceId historyCurrent_{};
+        RenderGraph::GraphResourceId sceneColor_{};
+        RenderGraph::GraphResourceId depth_{};
+        RenderGraph::GraphResourceId velocity_{};
+        VulkanTemporalAntiAliasingSettings settings_{};
+        FrameInputs staged_{};
+        bool lastHistoryValid_ = false;
+    };
+
+} // namespace Iridium

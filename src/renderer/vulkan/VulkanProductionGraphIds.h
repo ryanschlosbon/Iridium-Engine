@@ -92,6 +92,12 @@ namespace Iridium {
         RenderGraph::PassId oitResolve;
         RenderGraph::PassId sceneColorCaptureHook;
         RenderGraph::PassId bloomHook;
+        // M9.2 (invalid without TAA).
+        RenderGraph::PassId taaResolve;
+        RenderGraph::GraphResourceId taaHistoryPrevious;
+        RenderGraph::GraphResourceId taaHistoryCurrent;
+        // The scene colour the post chain reads (TAA current or scene.color).
+        RenderGraph::GraphResourceId resolvedSceneColor;
         RenderGraph::PassId outputTransform;
         RenderGraph::PassId finalCaptureHook;
         // "ui-compose" (HDR10 composition) or "ui-present".

@@ -27,6 +27,28 @@ namespace Iridium {
         LegacyBlocking,
     };
 
+    // M9.2 anti-aliasing of the main view. None keeps the M7R single-frame
+    // image (the frozen-set route); Taa resolves native temporal AA (1:1).
+    enum class AntiAliasingMode : uint8_t {
+        None,
+        Taa,
+    };
+
+    // M9.2 native TAA parameters (see VulkanTemporalAntiAliasingSettings).
+    struct TemporalAntiAliasingTuning {
+        float minimumHistoryWeight = 0.88f;
+        float maximumHistoryWeight = 0.97f;
+        float motionPixelsForMinimum = 32.0f;
+        float varianceGamma = 1.0f;
+        float reconstructionSharpness = 2.29f;
+        // Clip half-width for still pixels (blended toward varianceGamma
+        // as motion grows to one pixel).
+        float staticVarianceGamma = 1.0f;
+
+        friend bool operator==(const TemporalAntiAliasingTuning&,
+            const TemporalAntiAliasingTuning&) = default;
+    };
+
     struct RenderBackendConfig {
         bool enableValidation = false;
         // Adds Khronos synchronization validation when enableValidation is set.
@@ -48,6 +70,8 @@ namespace Iridium {
         // switch is kept until R6).
         bool renderGraphAliasing = true;
         UploadQueueMode uploadQueue = UploadQueueMode::Auto;
+        AntiAliasingMode antiAliasing = AntiAliasingMode::None;
+        TemporalAntiAliasingTuning taaTuning{};
         CpuProfiler* cpuProfiler = nullptr;
         bool enableGpuProfiling = false;
         bool enableTransparentPipelineStatistics = false;

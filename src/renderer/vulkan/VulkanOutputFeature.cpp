@@ -32,6 +32,8 @@ namespace Iridium {
     void VulkanOutputFeature::onGraphRebuilt(const VulkanProductionGraphIds& ids) {
         bloomHookPass_ = ids.bloomHook;
         outputTransformPass_ = ids.outputTransform;
+        resolvedScene_ = ids.resolvedSceneColor;
+        taaActive_ = ids.taaResolve.isValid();
         hdr10EncodePass_ = ids.hdr10EncodePresent;
     }
 
@@ -120,6 +122,11 @@ namespace Iridium {
         const uint32_t frameIndex = context.frame.frameIndex;
         VulkanGpuScope outputGpuScope(shared.scheduler, "gpu.output.transform");
         const VkExtent2D extent = shared.frameTargets.extent();
+        // M9.2: this frame's resolved scene colour (TAA history parity/view set).
+        if (self.taaActive_)
+            self.outputPass_.setSceneView(frameIndex,
+                context.graph.image(frameIndex, self.resolvedScene_).view,
+                shared.frameTargets.sampler());
         VulkanRenderingOverrides rendering{};
         rendering.renderArea = { { 0, 0 }, extent };
         context.beginRendering(rendering);

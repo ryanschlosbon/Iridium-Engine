@@ -34,6 +34,9 @@ namespace Iridium {
             uint32_t outputTransport, float paperWhiteNits,
             float peakNits, bool selectionActive,
             const ViewportGridOverlay& gridOverlay, bool motionVectorView = false) const;
+        // M9.2: points binding 0 at this frame's resolved scene colour (the
+        // TAA history slot changes per frame). The slot's set is not in flight.
+        void setSceneView(uint32_t frameIndex, VkImageView view, VkSampler sampler) const;
         void cleanup();
 
     private:

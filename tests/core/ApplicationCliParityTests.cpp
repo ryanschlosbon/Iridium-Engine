@@ -114,7 +114,14 @@ namespace {
         flag("casterRevisionOracle", c.casterRevisionOracle);
         flag("extractionVerifier", c.extractionVerifier);
         flag("renderGraphAliasing", c.renderGraphAliasing);
-        flag("temporalJitter", c.temporalJitter);
+        field("temporalJitter", c.temporalJitter ? (*c.temporalJitter ? "on" : "off") : "auto");
+        field("antiAliasing", exact(enumValue(c.antiAliasing)));
+        field("taaTuning", c.taaTuning ? std::to_string(c.taaTuning->minimumHistoryWeight) + "/" +
+            std::to_string(c.taaTuning->maximumHistoryWeight) + "/" +
+            std::to_string(c.taaTuning->motionPixelsForMinimum) + "/" +
+            std::to_string(c.taaTuning->varianceGamma) + "/" +
+            std::to_string(c.taaTuning->reconstructionSharpness) + "/" +
+            std::to_string(c.taaTuning->staticVarianceGamma) : std::string("default"));
         field("temporalJitterSequenceLength", std::to_string(c.temporalJitterSequenceLength));
         field("uploadQueue", exact(enumValue(c.uploadQueue)));
         flag("aliasPoison", c.aliasPoison);
@@ -484,6 +491,18 @@ namespace {
                 { { "yes", "--render-graph-aliasing requires on or off" },
                   { "", "--render-graph-aliasing requires on or off" } } },
             // M9 G5b; off by default.
+            // M9.2; none by default.
+            { "--anti-aliasing", G, "taa", {}, [](C& c) {
+                c.antiAliasing = AntiAliasingMode::Taa; },
+                "--anti-aliasing requires none or taa",
+                { { "fxaa", "--anti-aliasing requires none or taa" },
+                  { "", "--anti-aliasing requires none or taa" } } },
+            { "--taa-settings", G, "0.8,0.95,16,1.25,2,1.5", {}, [](C& c) {
+                c.taaTuning = TemporalAntiAliasingTuning{ 0.8f, 0.95f, 16.0f, 1.25f, 2.0f, 1.5f }; },
+                "--taa-settings requires six comma-separated numbers",
+                { { "1,2", "--taa-settings requires six comma-separated numbers" },
+                  { "0.8,0.95,16,1.25,2,1.5,7", "--taa-settings requires six comma-separated numbers" },
+                  { "", "--taa-settings requires six comma-separated numbers" } } },
             { "--temporal-jitter", G, "on", {}, [](C& c) {
                 c.temporalJitter = true; },
                 "--temporal-jitter requires on or off",
@@ -636,8 +655,8 @@ namespace {
                 { { "", "--capture-directory requires a path" } } },
             { "--capture-point", Q, "final-output", {}, [](C& c) {
                 c.capturePoint = FrameCapturePoint::FinalOutput; },
-                "--capture-point requires scene, final-sdr, or final-output",
-                { { "swapchain", "--capture-point requires scene, final-sdr, or final-output" } } },
+                "--capture-point requires scene, scene-resolved, final-sdr, or final-output",
+                { { "swapchain", "--capture-point requires scene, scene-resolved, final-sdr, or final-output" } } },
             { "--require-capture-signal", Q, {}, captureContext, [withCapture](C& c) {
                 withCapture(c); c.requireCaptureSignal = true; }, {}, {} },
             { "--profile-cpu-output", Q, "profiles/run.jsonl", {}, [](C& c) {
@@ -666,8 +685,8 @@ namespace {
         Cli::CliOptionRegistry registry;
         registerEngineOptions(registry, scratch);
 
-        CHECK(table.size() == 98);
-        CHECK(registry.options().size() == 98);
+        CHECK(table.size() == 100);
+        CHECK(registry.options().size() == 100);
         std::set<std::string_view> names;
         std::map<std::string_view, size_t> ownerCounts;
         for (const FlagCase& row : table) {
@@ -751,7 +770,7 @@ namespace {
         }
         CHECK(ownerCounts[R] == 14);
         CHECK(ownerCounts[E] == 4);
-        CHECK(ownerCounts[G] == 34);
+        CHECK(ownerCounts[G] == 36);
         CHECK(ownerCounts[Q] == 46);
         std::cout << "  owners: runtime " << ownerCounts[R] << ", editor " << ownerCounts[E]
                   << ", renderer " << ownerCounts[G] << ", qualification "
@@ -803,7 +822,7 @@ namespace {
     bool testUsageParity() {
         const std::string usage = engineUsage();
         CHECK(usage.starts_with("Usage: IridiumEngine [options]\n"));
-        CHECK(optionLines(usage).size() == 98);
+        CHECK(optionLines(usage).size() == 100);
         // Groups appear in owner order: runtime, editor, renderer, qualification.
         const size_t runtime = usage.find("runtime options:");
         const size_t editor = usage.find("editor options:");
@@ -822,7 +841,7 @@ namespace {
         AppCli::registerRuntimeOptions(registry, config);
         AppCli::registerEditorOptions(registry, config);
         AppCli::registerRendererOptions(registry, config);
-        CHECK(registry.options().size() == 52);
+        CHECK(registry.options().size() == 54);
         try {
             registry.parse(Args{ "--benchmark", "material_lab_v1" });
             CHECK(false);

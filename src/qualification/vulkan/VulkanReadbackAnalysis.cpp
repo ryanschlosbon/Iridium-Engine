@@ -66,7 +66,7 @@ namespace Iridium {
         std::span<const std::byte> bytes) {
         const size_t pixelCount = static_cast<size_t>(info.width) *
             static_cast<size_t>(info.height);
-        const bool sceneLinear = info.point == FrameCapturePoint::SceneLinear;
+        const bool sceneLinear = isSceneLinearCapturePoint(info.point);
         const size_t outputBytesPerPixel = info.halfFloatSource ? 16 : 4;
         const size_t byteCount = pixelCount * outputBytesPerPixel;
         requireBytes(bytes, pixelCount * (info.halfFloatSource ? 8 : 4),

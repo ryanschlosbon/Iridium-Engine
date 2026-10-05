@@ -214,8 +214,8 @@ namespace Iridium {
             [&q](std::string_view value) { q.captureDirectory = std::string(value); },
             true);
         addValueOption(registry, owner, "--capture-point", "NAME",
-            "Capture scene (default), final-sdr, or final-output",
-            "--capture-point requires scene, final-sdr, or final-output",
+            "Capture scene (default; before temporal resolve), scene-resolved (after it), final-sdr, or final-output",
+            "--capture-point requires scene, scene-resolved, final-sdr, or final-output",
             [&q](std::string_view value) {
                 if (value == "scene") {
                     q.capturePoint = FrameCapturePoint::SceneLinear;
@@ -226,9 +226,12 @@ namespace Iridium {
                 else if (value == "final-output") {
                     q.capturePoint = FrameCapturePoint::FinalOutput;
                 }
+                else if (value == "scene-resolved") {
+                    q.capturePoint = FrameCapturePoint::SceneResolved;
+                }
                 else {
                     throw std::invalid_argument(
-                        "--capture-point requires scene, final-sdr, or final-output");
+                        "--capture-point requires scene, scene-resolved, final-sdr, or final-output");
                 }
             });
         addSwitch(registry, owner, "--require-capture-signal",
