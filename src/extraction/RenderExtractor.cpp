@@ -233,6 +233,8 @@ namespace Iridium {
             stats.changedGeometries);
         cpuProfiler_.recordCounter("gpu_scene.publication.unchanged_fast_path",
             stats.unchangedFastPath);
+        cpuProfiler_.recordCounter("gpu_scene.transform.settled",
+            stats.settledTransforms);
         cpuProfiler_.recordCounter("gpu_scene.direct_fallback",
             gpuSceneDirectFallbackCount_ + stats.capacityFallbackInstances);
     }
@@ -1876,9 +1878,16 @@ namespace Iridium {
             debugView == RenderDebugView::Final
             ? std::span<const DrawPacket>(selectionQueue.data(), selectionQueue.size())
             : std::span<const DrawPacket>{};
+        // M9 G4: last frame's transform for every opaque direct and
+        // forward-opaque packet.
+        previousTransforms_.beginFrame();
+        resolvePreviousTransforms(opaqueQueue, opaqueDirectPrevious_);
+        resolvePreviousTransforms(forwardOpaqueQueue, forwardOpaquePrevious_);
+        previousTransforms_.endFrame();
         renderFrame.opaque = {
             .order = opaqueOrder_,
             .directPackets = opaqueQueue,
+            .directPreviousTransforms = opaqueDirectPrevious_,
             .gpuScenePrimitiveCount =
                 static_cast<uint32_t>(gpuSceneOpaquePrimitives.size()),
             .membershipRevision = !gpuSceneOpaquePrimitives.empty()
@@ -1890,6 +1899,7 @@ namespace Iridium {
         renderFrame.selectionQueue = activeSelectionQueue;
         renderFrame.wireframe = isWireframe;
         renderFrame.forwardOpaqueQueue = forwardOpaqueQueue;
+        renderFrame.forwardOpaquePreviousTransforms = forwardOpaquePrevious_;
         renderFrame.sortedSurfaceQueue = sortedSurfaceQueue;
         renderFrame.compatibilityTransparentQueue = transparentQueue;
         renderFrame.instanceTransforms = forwardInstanceTransforms_;
@@ -1897,6 +1907,31 @@ namespace Iridium {
         renderFrame.reflectionProbes = &publishedProbes;
         renderFrame.stageObserver = inputs.stageObserver;
         return renderFrame_;
+    }
+
+    glm::mat4 RenderExtractor::previousWorldFor(const DrawPacket& packet) {
+        // A GPU-scene primitive's previous transform is its instance's slot
+        // 2d + 1 (settled the frame after it stops, M9 G3).
+        if (hasGpuScenePrimitive(packet) && gpuSceneFrame_ != nullptr &&
+            packet.firstInstanceTransform < gpuSceneFrame_->primitives.size()) {
+            const GpuScenePackedTables& frame = *gpuSceneFrame_;
+            const GpuScenePrimitiveRecord& primitive =
+                frame.primitives[packet.firstInstanceTransform];
+            if (primitive.binding.x < frame.instances.size()) {
+                const uint32_t previous = frame.instances[primitive.binding.x].references.y;
+                if (previous < frame.transforms.size())
+                    return unpackGpuSceneAffine(frame.transforms[previous]);
+            }
+        }
+        return previousTransforms_.resolve({ packet.owner, packet.primitiveGuid },
+            packet.worldTransform);
+    }
+
+    void RenderExtractor::resolvePreviousTransforms(
+        std::span<const DrawPacket> packets, std::vector<glm::mat4>& previous) {
+        previous.resize(packets.size());
+        for (size_t index = 0; index < packets.size(); ++index)
+            previous[index] = previousWorldFor(packets[index]);
     }
 
     DrawPacket RenderExtractor::gpuSceneParityPacket(uint32_t primitiveIndex,

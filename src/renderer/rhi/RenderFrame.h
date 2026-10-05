@@ -84,6 +84,9 @@ namespace Iridium {
         std::span<const uint32_t> order;
         // In draw order (their entries in `order` count up from 0).
         std::span<const DrawPacket> directPackets;
+        // M9 G4: last frame's world transform of each direct packet (parallel
+        // to directPackets). GPU-scene entries read theirs from the tables.
+        std::span<const glm::mat4> directPreviousTransforms;
         uint32_t gpuScenePrimitiveCount = 0;
         uint64_t membershipRevision = 0;
         // Per dense primitive: the CPU frustum classification of this view
@@ -178,6 +181,10 @@ namespace Iridium {
         std::span<const DrawPacket> selectionQueue{};
         bool wireframe = false;
         std::span<const DrawPacket> forwardOpaqueQueue{};
+        // M9 G4: last frame's world transform per forward-opaque packet
+        // (parallel to forwardOpaqueQueue). Transparent queues carry none:
+        // transparency writes no velocity (it feeds the reactive mask).
+        std::span<const glm::mat4> forwardOpaquePreviousTransforms{};
         std::span<const DrawPacket> sortedSurfaceQueue{};
         std::span<const DrawPacket> compatibilityTransparentQueue{};
         // Frame-local transforms referenced by DrawPacket instance ranges.

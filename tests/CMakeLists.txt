@@ -249,6 +249,11 @@ iridium_add_test(GpuSceneObservationTests
         SOURCES renderer/GpuSceneObservationTests.cpp
         LIBS iridium_render_extraction)
 
+# M9 G4: previous transforms of packets without a GPU-scene record.
+iridium_add_test(PreviousTransformCacheTests
+        SOURCES renderer/PreviousTransformCacheTests.cpp
+        LIBS iridium_render_extraction)
+
 # M7R R5c.3: compact (key, index) queue sorts keep the packet sorts' permutation.
 iridium_add_test(CompactDrawSortTests
         SOURCES renderer/CompactDrawSortTests.cpp

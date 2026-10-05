@@ -25,6 +25,7 @@
 #include "ecs/Entity.h"
 #include "extraction/EditorViewState.h"
 #include "extraction/ParallelDrawSort.h"
+#include "extraction/PreviousTransformCache.h"
 #include "extraction/GpuSceneObservation.h"
 #include "renderer/lighting/DirectionalShadow.h"
 #include "renderer/lighting/LightExtractor.h"
@@ -396,6 +397,14 @@ namespace Iridium {
         glm::mat4 projMatrix_{ 1.0f };
         const EditorViewState* view_ = nullptr;
         RenderFrame renderFrame_{};
+        // M9 G4: previous world transforms for direct and forward-opaque
+        // packets (parallel to their queues).
+        [[nodiscard]] glm::mat4 previousWorldFor(const DrawPacket& packet);
+        void resolvePreviousTransforms(std::span<const DrawPacket> packets,
+            std::vector<glm::mat4>& previous);
+        PreviousTransformCache previousTransforms_;
+        std::vector<glm::mat4> opaqueDirectPrevious_;
+        std::vector<glm::mat4> forwardOpaquePrevious_;
         // M9 G2: per-retained-view cut detection and History context.
         ViewMotionTracker viewMotion_{};
         ViewMotionResult lastViewMotion_{};

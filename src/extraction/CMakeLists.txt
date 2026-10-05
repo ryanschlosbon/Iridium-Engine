@@ -7,6 +7,7 @@
 add_library(iridium_render_extraction STATIC
         GpuSceneObservation.cpp
         ParallelDrawSort.cpp
+        PreviousTransformCache.cpp
         RenderExtractor.cpp
 )
 target_link_libraries(iridium_render_extraction PUBLIC
