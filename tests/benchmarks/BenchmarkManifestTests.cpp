@@ -1687,7 +1687,7 @@ namespace {
             "m9_tf_thin_v1", "m9_tf_foliage_v1", "m9_tf_disocclude_v1",
             "m9_tf_pan_v1", "m9_tf_emissive_v1", "m9_tf_glass_v1",
             "m9_tf_specular_v1", "m9_tf_static_v1", "m9_tf_hdr_v1",
-            "m9_tf_teleport_v1" };
+            "m9_tf_teleport_v1", "m9_tf_reactive_v1" };
         CHECK(manifest.fixtures.size() == ids.size());
         std::set<std::filesystem::path> sources;
         for (const char* id : ids) {
@@ -1896,6 +1896,43 @@ namespace {
         }
         CHECK(teleports == std::vector<uint64_t>(
             { 61u, 121u, 240u, 301u, 361u, 480u, 541u }));
+
+        // M9.3: a still camera; tinted thin glass (active volume), an Auto
+        // (SortedSurface) card and an explicit WeightedOIT card, all moving.
+        const BenchmarkFixture& reactive = findBenchmarkFixture(manifest,
+            "m9_tf_reactive_v1");
+        CHECK(!reactive.sceneFactory.cameraPathEnabled);
+        CHECK(reactive.sceneFactory.compositionEntities.size() == 5);
+        for (size_t index = 2; index < 5; ++index)
+            CHECK(reactive.sceneFactory.compositionEntities[index].motion.kind ==
+                BenchmarkEntityMotionKind::Keyframes);
+        const nlohmann::json reactiveGltf = loadJson(reactive.sourceAsset);
+        const nlohmann::json reactiveMeta = loadJson(reactive.contentFiles[1].path);
+        std::map<std::string, std::string> reactiveClasses;
+        for (size_t index = 0; index < reactiveGltf.at("materials").size(); ++index) {
+            const nlohmann::json& material = reactiveGltf.at("materials").at(index);
+            if (material.value("alphaMode", "") != "BLEND") continue;
+            std::string materialClass = "auto";
+            for (const nlohmann::json& subasset : reactiveMeta.at("subassets")) {
+                if (subasset.at("sourceKey") != "materials/" + std::to_string(index)) continue;
+                const nlohmann::json& policies = reactiveMeta.at("settings").at("values")
+                    .at("transparency_policies");
+                if (policies.contains(subasset.at("guid").get<std::string>()))
+                    materialClass = policies.at(subasset.at("guid").get<std::string>())
+                        .at("class").get<std::string>();
+            }
+            reactiveClasses[material.at("name").get<std::string>()] = materialClass;
+            if (materialClass == "thin_glass")
+                CHECK(material.at("extensions").at("KHR_materials_volume")
+                    .at("thicknessFactor").get<double>() > 0.0);
+        }
+        CHECK(reactiveClasses.size() == 3);
+        CHECK(std::ranges::count_if(reactiveClasses, [](const auto& entry) {
+            return entry.second == "thin_glass"; }) == 1);
+        CHECK(std::ranges::count_if(reactiveClasses, [](const auto& entry) {
+            return entry.second == "auto"; }) == 1);
+        CHECK(std::ranges::count_if(reactiveClasses, [](const auto& entry) {
+            return entry.second == "weighted_oit"; }) == 1);
         return true;
     }
 

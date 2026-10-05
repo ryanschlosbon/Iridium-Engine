@@ -20,6 +20,7 @@ $M9Models = [ordered]@{
     'tf-static'     = @{ Source = 'benchmarks/m9/temporal_static.gltf' }
     'tf-hdr'        = @{ Source = 'benchmarks/m9/temporal_hdr.gltf' }
     'tf-teleport'   = @{ Source = 'benchmarks/m9/temporal_teleport.gltf' }
+    'tf-reactive'   = @{ Source = 'benchmarks/m9/temporal_reactive.gltf' }
 }
 $m9Temporal = 'assets/benchmarks/m9/temporal-manifest.v1.json'
 
@@ -34,6 +35,7 @@ $M9TemporalSet = @(
     @{ Key = 'TF-static';     Id = 'm9_tf_static_v1';     Manifest = $m9Temporal; Model = 'tf-static';     Args = @() }
     @{ Key = 'TF-hdr';        Id = 'm9_tf_hdr_v1';        Manifest = $m9Temporal; Model = 'tf-hdr';        Args = @() }
     @{ Key = 'TF-teleport';   Id = 'm9_tf_teleport_v1';   Manifest = $m9Temporal; Model = 'tf-teleport';   Args = @() }
+    @{ Key = 'TF-reactive';   Id = 'm9_tf_reactive_v1';   Manifest = $m9Temporal; Model = 'tf-reactive';   Args = @() }
 )
 
 function Get-M9RepoRoot { (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path }

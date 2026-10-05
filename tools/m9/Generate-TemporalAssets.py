@@ -165,11 +165,32 @@ def texture_leaf():
     return encode_png(size, size, 4, px), "leaf"
 
 
+def texture_particle():
+    """64x64 RGBA particle card (M9.3): a soft-edged disc whose alpha plateaus at 1 to
+    r = 0.55 and falls linearly to 0 at r = 1, with concentric light/dark colour rings
+    (5 per radius) so the card's interior visibly moves with it. Integer arithmetic
+    plus correctly rounded sqrt only."""
+    size = 64
+    px = bytearray()
+    for y in range(size):
+        for x in range(size):
+            dx, dy = 2 * x + 1 - size, 2 * y + 1 - size
+            r = math.sqrt(dx * dx + dy * dy) / size
+            if r >= 1.0:
+                px += bytes((0, 0, 0, 0))
+                continue
+            alpha = 255 if r <= 0.55 else int(255 * (1.0 - r) / 0.45)
+            value = 255 if int(r * 10.0) % 2 == 0 else 110
+            px += bytes((value, value, value, alpha))
+    return encode_png(size, size, 4, px), "particle"
+
+
 TEXTURES = {
     "checker_hf": texture_checker_hf,
     "tile": texture_tile,
     "backdrop": texture_backdrop,
     "leaf": texture_leaf,
+    "particle": texture_particle,
 }
 
 
@@ -230,10 +251,38 @@ MATERIALS = {
                                               "attenuationColor": [0.6, 0.85, 1.0]},
                  }),
     "glass_frame": pbr("Anodised glass frame", (0.2, 0.21, 0.23, 1), 1.0, 0.3),
+    # M9.3 TF-reactive: a strongly tinted, slightly rough frameless thin-glass sheet
+    # (the 2 cm sheet's path equals the attenuation distance, so the transmitted
+    # scene is scaled by about the attenuation colour at normal incidence).
+    "reactive_glass": pbr("Strongly tinted thin glass sheet", (1.0, 1.0, 1.0, 1.0), 0.0, 0.15,
+                          alphaMode="BLEND", doubleSided=True,
+                          extensions={
+                              "KHR_materials_ior": {"ior": 1.5},
+                              "KHR_materials_transmission": {"transmissionFactor": 1.0},
+                              "KHR_materials_volume": {"thicknessFactor": 0.02,
+                                                       "attenuationDistance": 0.02,
+                                                       "attenuationColor": [0.45, 0.7, 1.0]},
+                          }),
+    # M9.3 TF-reactive particle cards: alpha-blended (no transmission), ringed
+    # texture with a 0.55-0.6 alpha plateau, emissive. The sorted card resolves to
+    # SortedSurface (Auto); the second card carries an explicit WeightedOIT policy.
+    "particle_sorted": pbr("Sorted emissive particle card", (1.0, 0.55, 0.15, 0.6), 0.0, 0.6,
+                           texture="particle", alphaMode="BLEND", doubleSided=True,
+                           emissiveFactor=[1.0, 0.5, 0.12],
+                           extensions={"KHR_materials_emissive_strength": {"emissiveStrength": 2.0}}),
+    "particle_oit": pbr("WeightedOIT emissive particle card", (0.15, 0.6, 1.0, 0.55), 0.0, 0.6,
+                        texture="particle", alphaMode="BLEND", doubleSided=True,
+                        emissiveFactor=[0.15, 0.6, 1.0],
+                        extensions={"KHR_materials_emissive_strength": {"emissiveStrength": 2.0}}),
 }
 
 GLASS_POLICY = {"schema_version": 1, "class": "thin_glass", "quality": "ordinary2",
                 "priority": 0, "thin_sheet_thickness_m": 0.02}
+OIT_POLICY = {"schema_version": 1, "class": "weighted_oit", "quality": "ordinary2",
+              "priority": 0, "thin_sheet_thickness_m": 0.0}
+# Material key -> sidecar transparency policy (other materials use Auto).
+MATERIAL_POLICIES = {"glass": GLASS_POLICY, "reactive_glass": GLASS_POLICY,
+                     "particle_oit": OIT_POLICY}
 
 
 # --- Geometry ----------------------------------------------------------------------
@@ -518,6 +567,27 @@ def node_glass_panel():
     return {"glass": glass, "glass_frame": frame}
 
 
+def node_reactive_glass():
+    """M9.3: a frameless 1.6 m x 1.0 m thin-glass sheet (z = 0); pivot at its centre."""
+    p = Prim()
+    p.quad((-0.8, -0.5, 0.0), (0.8, -0.5, 0.0), (0.8, 0.5, 0.0), (-0.8, 0.5, 0.0), (0, 0, 1))
+    return {"reactive_glass": p}
+
+
+def node_particle_sorted():
+    """M9.3: a 1.0 m particle card (z = 0); pivot at its centre."""
+    p = Prim()
+    p.quad((-0.5, -0.5, 0.0), (0.5, -0.5, 0.0), (0.5, 0.5, 0.0), (-0.5, 0.5, 0.0), (0, 0, 1))
+    return {"particle_sorted": p}
+
+
+def node_particle_oit():
+    """M9.3: a 0.8 m WeightedOIT particle card (z = 0); pivot at its centre."""
+    p = Prim()
+    p.quad((-0.4, -0.4, 0.0), (0.4, -0.4, 0.0), (0.4, 0.4, 0.0), (-0.4, 0.4, 0.0), (0, 0, 1))
+    return {"particle_oit": p}
+
+
 def node_highlights():
     """13 x 5 tiny emissive spheres; rows shrink from 10 mm to 0.75 mm radius (from
     ~6 px to well under a pixel at 4.5 m) while strength rises to 4096."""
@@ -551,6 +621,8 @@ NODES = {
     "emissive_bar": node_emissive_bar, "emissive_spinner": node_emissive_spinner,
     "glass_panel": node_glass_panel, "highlights": node_highlights,
     "hdr_plate": node_hdr_plate, "teleport_cube": node_teleport_cube,
+    "reactive_glass": node_reactive_glass, "particle_sorted": node_particle_sorted,
+    "particle_oit": node_particle_oit,
 }
 
 
@@ -666,8 +738,8 @@ def build_sidecar(file_ordinal, file_name, material_keys, primitive_keys, image_
         source_key = f"materials/{index}"
         material_guid = guid(file_ordinal, ordinal, file_name, source_key)
         subassets.append({"guid": material_guid, "assetType": "iridium.material", "sourceKey": source_key})
-        if key == "glass":
-            policies[material_guid] = GLASS_POLICY
+        if key in MATERIAL_POLICIES:
+            policies[material_guid] = MATERIAL_POLICIES[key]
         ordinal += 1
     for index in range(image_count):
         source_key = f"images/{index}"
@@ -926,6 +998,29 @@ FIXTURES = [
         "expected": [
             "A colour-band cube moves, then teleports 2.4 m at frame 61, again at frame 121 and at every period wrap (240); the evaluated pose flags each teleport.",
             "Neither the cube's old position nor its old appearance ghosts after a teleport; per-instance history resets on the flagged frames.",
+        ],
+    },
+    {
+        # M9.3: transparency over a static, high-contrast backdrop under a static camera.
+        # Transparent surfaces write no velocity or depth, so every pixel they cover
+        # reprojects as still background: the reactive (history suppression) case.
+        "key": "TF-reactive", "id": "m9_tf_reactive_v1", "file": "temporal_reactive.gltf",
+        "nodes": ["ground_checker", "backdrop_wall", "reactive_glass", "particle_sorted", "particle_oit"],
+        "environment": [0.06, 0.07, 0.09], "lights": [sun(80000.0)],
+        "camera": camera("m9_tf_reactive_camera_v1", [0.0, 1.4, 6.0], [0.0, 1.2, 0.0]),
+        "entities": [
+            entity("ground", 0), entity("wall", 1, [0.0, 0.0, -2.5]),
+            entity("glass", 2, [-2.0, 2.2, 1.0],
+                   motion=back_and_forth([-2.0, 2.2, 1.0], [2.0, 2.2, 1.0], 320)),
+            entity("particle", 3, [2.2, 1.15, 1.2],
+                   motion=back_and_forth([2.2, 1.15, 1.2], [-2.2, 1.15, 1.2], 720)),
+            entity("particle_oit", 4, [-2.4, 0.4, 1.6],
+                   motion=back_and_forth([-2.4, 0.4, 1.6], [2.4, 0.4, 1.6], 960)),
+        ],
+        "expected": [
+            "Static camera over a colour-band wall and a high-frequency floor. A frameless, strongly tinted thin-glass sheet (attenuation colour 0.45/0.7/1.0, roughness 0.15) slides 4 m every 160 frames (about 15 px per frame); a ringed emissive alpha-blended card (SortedSurface, alpha 0.6) slides 4.4 m every 360 frames (about 7 px per frame); a ringed emissive WeightedOIT card (alpha 0.55) slides 4.8 m every 480 frames (about 7 px per frame).",
+            "No transparent surface leaves a trail or a ghosted copy of itself or of its old tint over the backdrop, and the backdrop seen through each stays sharp.",
+            "Transparency writes no velocity or depth: TAA sees the still background under every transparent pixel.",
         ],
     },
 ]

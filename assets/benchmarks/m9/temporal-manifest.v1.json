@@ -2053,6 +2053,228 @@
         "Neither the cube's old position nor its old appearance ghosts after a teleport; per-instance history resets on the flagged frames."
       ],
       "unavailable_capabilities": []
+    },
+    {
+      "id": "m9_tf_reactive_v1",
+      "revision": 1,
+      "required": true,
+      "source_asset": "temporal_reactive.gltf",
+      "environment": {
+        "kind": "procedural_constant",
+        "constant_linear_rgb": [
+          0.06,
+          0.07,
+          0.09
+        ]
+      },
+      "camera": {
+        "id": "m9_tf_reactive_camera_v1",
+        "position": [
+          0.0,
+          1.4,
+          6.0
+        ],
+        "target": [
+          0.0,
+          1.2,
+          0.0
+        ],
+        "up": [
+          0.0,
+          1.0,
+          0.0
+        ],
+        "vertical_fov_degrees": 40.0,
+        "near": 0.05,
+        "far": 120.0
+      },
+      "scene_factory": {
+        "kind": "composition",
+        "entities": [
+          {
+            "id": "ground",
+            "node": 0
+          },
+          {
+            "id": "wall",
+            "node": 1,
+            "transform": {
+              "translation": [
+                0.0,
+                0.0,
+                -2.5
+              ]
+            }
+          },
+          {
+            "id": "glass",
+            "node": 2,
+            "transform": {
+              "translation": [
+                -2.0,
+                2.2,
+                1.0
+              ]
+            },
+            "motion": {
+              "kind": "keyframes",
+              "period_frames": 320,
+              "keyframes": [
+                {
+                  "frame": 0,
+                  "translation": [
+                    -2.0,
+                    2.2,
+                    1.0
+                  ]
+                },
+                {
+                  "frame": 160,
+                  "translation": [
+                    2.0,
+                    2.2,
+                    1.0
+                  ]
+                },
+                {
+                  "frame": 320,
+                  "translation": [
+                    -2.0,
+                    2.2,
+                    1.0
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "id": "particle",
+            "node": 3,
+            "transform": {
+              "translation": [
+                2.2,
+                1.15,
+                1.2
+              ]
+            },
+            "motion": {
+              "kind": "keyframes",
+              "period_frames": 720,
+              "keyframes": [
+                {
+                  "frame": 0,
+                  "translation": [
+                    2.2,
+                    1.15,
+                    1.2
+                  ]
+                },
+                {
+                  "frame": 360,
+                  "translation": [
+                    -2.2,
+                    1.15,
+                    1.2
+                  ]
+                },
+                {
+                  "frame": 720,
+                  "translation": [
+                    2.2,
+                    1.15,
+                    1.2
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "id": "particle_oit",
+            "node": 4,
+            "transform": {
+              "translation": [
+                -2.4,
+                0.4,
+                1.6
+              ]
+            },
+            "motion": {
+              "kind": "keyframes",
+              "period_frames": 960,
+              "keyframes": [
+                {
+                  "frame": 0,
+                  "translation": [
+                    -2.4,
+                    0.4,
+                    1.6
+                  ]
+                },
+                {
+                  "frame": 480,
+                  "translation": [
+                    2.4,
+                    0.4,
+                    1.6
+                  ]
+                },
+                {
+                  "frame": 960,
+                  "translation": [
+                    -2.4,
+                    0.4,
+                    1.6
+                  ]
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "lights": [
+        {
+          "type": "directional",
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation_degrees": [
+            50.0,
+            160.0,
+            0.0
+          ],
+          "color_linear_rec709": [
+            1.0,
+            0.96,
+            0.9
+          ],
+          "illuminance_lux": 80000.0,
+          "range_meters": 1.0,
+          "casts_shadows": true,
+          "shadow_quality": "ultra",
+          "priority": 1
+        }
+      ],
+      "output_label": "m9_tf_reactive_v1",
+      "warmup_frames": 120,
+      "measured_frames": 600,
+      "content_files": [
+        {
+          "path": "temporal_reactive.gltf",
+          "sha256": "a1a5d6fff984615f9365078f24e066eb4b13c3c3aca54a4812c08259979d7c09"
+        },
+        {
+          "path": "temporal_reactive.gltf.iridium.meta",
+          "sha256": "4f0cbf65f520dafbbec5a218c2f9e64bce303b6055b1f97a9ff27efc17a7286e"
+        }
+      ],
+      "expected_behavior": [
+        "Static camera over a colour-band wall and a high-frequency floor. A frameless, strongly tinted thin-glass sheet (attenuation colour 0.45/0.7/1.0, roughness 0.15) slides 4 m every 160 frames (about 15 px per frame); a ringed emissive alpha-blended card (SortedSurface, alpha 0.6) slides 4.4 m every 360 frames (about 7 px per frame); a ringed emissive WeightedOIT card (alpha 0.55) slides 4.8 m every 480 frames (about 7 px per frame).",
+        "No transparent surface leaves a trail or a ghosted copy of itself or of its old tint over the backdrop, and the backdrop seen through each stays sharp.",
+        "Transparency writes no velocity or depth: TAA sees the still background under every transparent pixel."
+      ],
+      "unavailable_capabilities": []
     }
   ]
 }

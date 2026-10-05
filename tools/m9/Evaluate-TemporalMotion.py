@@ -70,10 +70,26 @@ def groups(label):
     return out
 
 
+def main_checkout_motion():
+    """out/m9/motion of the main checkout when this is a git worktree (shared references)."""
+    try:
+        common = subprocess.run(['git', '-C', ROOT, 'rev-parse', '--path-format=absolute',
+                                 '--git-common-dir'], capture_output=True, text=True).stdout.strip()
+    except OSError:
+        return None
+    return os.path.join(os.path.dirname(os.path.normpath(common)), 'out', 'm9', 'motion') if common else None
+
+
+MAIN_MOTION = main_checkout_motion()
+
+
 def reference(fixture, measured, samples):
-    hits = glob.glob(os.path.join(MOTION, f'ref{samples}', f'{fixture}-h{WARMUP + measured}',
-                                  fixture, 'reference', f'*__ref{samples}.pfm'))
-    return hits[0] if hits else None
+    for motion in [MOTION] + ([MAIN_MOTION] if MAIN_MOTION and MAIN_MOTION != MOTION else []):
+        hits = glob.glob(os.path.join(motion, f'ref{samples}', f'{fixture}-h{WARMUP + measured}',
+                                      fixture, 'reference', f'*__ref{samples}.pfm'))
+        if hits:
+            return hits[0]
+    return None
 
 
 def score(fixture, frames, samples):

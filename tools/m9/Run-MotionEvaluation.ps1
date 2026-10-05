@@ -46,6 +46,8 @@ $plan = [ordered]@{
     'TF-emissive'   = @('79:80')
     'TF-specular'   = @('79:80')
     'TF-hdr'        = @('79:80')
+    # M9.3: tinted glass and two particle cards (sorted, WeightedOIT) over a still backdrop.
+    'TF-reactive'   = @('79:82', '139:140')
 }
 
 function Invoke-Capture([string[]] $arguments) {
@@ -59,6 +61,10 @@ function Invoke-Capture([string[]] $arguments) {
 }
 
 $refRoot = Join-Path $root "out/m9/motion/ref$Samples"
+# A git worktree also reuses the main checkout's references (new ones are written here).
+$common = @(git -C $root rev-parse --path-format=absolute --git-common-dir 2>$null)[0]
+$mainRefRoot = if ($common -and (Test-Path $common)) {
+    Join-Path (Resolve-Path (Join-Path $common '..')).Path "out/m9/motion/ref$Samples" } else { $refRoot }
 $candidateRoot = Join-Path $root "out/m9/motion/$Label"
 foreach ($key in $plan.Keys) {
     if ($Only.Count -gt 0 -and $Only -notcontains $key) { continue }
@@ -68,7 +74,7 @@ foreach ($key in $plan.Keys) {
         for ($m = $first; $m -le $last; ++$m) {
             $hold = $warmup + $m
             $refLabel = "$key-h$hold"
-            if (Test-Path (Join-Path $refRoot $refLabel)) { continue }
+            if ((Test-Path (Join-Path $refRoot $refLabel)) -or (Test-Path (Join-Path $mainRefRoot $refLabel))) { continue }
             Invoke-Capture @('-Label', $refLabel, '-OutRoot', $refRoot, '-Only', $key, '-Reference',
                 '-HoldFrame', "$hold", '-Samples', "$Samples")
         }
