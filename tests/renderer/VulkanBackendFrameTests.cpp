@@ -261,6 +261,18 @@ namespace {
             for (uint32_t frame = 0; frame < 4; ++frame)
                 (void)renderFrame(*backend, bridge.get(), window.get(), frame >= 2u, 0);
             CHECK(bridge->sceneTextureId() != nullptr);
+            // M9.2c: a live anti-aliasing switch rebuilds the graph and the
+            // editor targets, both ways; the same mode is a no-op.
+            CHECK(backend->setAntiAliasing(AntiAliasingMode::Taa, diagnostic));
+            CHECK(diagnostic.empty());
+            CHECK(bridge->sceneTextureId() != nullptr);
+            for (uint32_t frame = 0; frame < 4; ++frame)
+                (void)renderFrame(*backend, bridge.get(), window.get(), frame >= 2u, 0);
+            CHECK(backend->setAntiAliasing(AntiAliasingMode::Taa, diagnostic));
+            CHECK(backend->setAntiAliasing(AntiAliasingMode::None, diagnostic));
+            for (uint32_t frame = 0; frame < 2; ++frame)
+                (void)renderFrame(*backend, bridge.get(), window.get(), false, 0);
+            CHECK(bridge->sceneTextureId() != nullptr);
             // Live output settings reach the bridge's display colour.
             (void)renderFrame(*backend, bridge.get(), window.get(), false, 0, nullptr,
                 { .manualExposureEv = 0.5f, .paperWhiteNits = 240.0f, .peakNits = 1000.0f });

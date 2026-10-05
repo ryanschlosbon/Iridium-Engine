@@ -53,14 +53,15 @@ void ProjectSettingsPanel::OnImGuiRender(Registry& registry, Iridium::AssetManag
     if (ImGui::Begin("Project Settings", isOpen)) {
         search_.Draw("Search settings", -1.0f);
         constexpr const char* categories[]{"Display and HDR", "Lighting and shadows",
-            "Reflection probes", "Transparency"};
+            "Reflection probes", "Transparency", "Anti-aliasing"};
         constexpr const char* searchTerms[]{
             "Display HDR transport SDR scRGB exposure EV paper white nits peak brightness",
             "Lighting shadows directional resolution spot atlas point pool PCF PCSS filter quality penumbra cascade split guard depth padding budget stale",
             "Reflection probes capture budget faces flight realtime interval GGX prefilter samples",
-            "Transparency glass layers interfaces quality Ordinary2 Hero4 Cinematic8 bulbs headlight override"};
+            "Transparency glass layers interfaces quality Ordinary2 Hero4 Cinematic8 bulbs headlight override",
+            "Anti-aliasing AA TAA temporal jitter"};
         ImGui::BeginChild("Settings categories", ImVec2(190, 0), ImGuiChildFlags_Borders);
-        for (int index = 0; index < 4; ++index) {
+        for (int index = 0; index < 5; ++index) {
             if (search_.IsActive() && !search_.PassFilter(searchTerms[index])) continue;
             if (ImGui::Selectable(categories[index], selectedCategory_ == index)) {
                 selectedCategory_ = index;
@@ -74,7 +75,7 @@ void ProjectSettingsPanel::OnImGuiRender(Registry& registry, Iridium::AssetManag
             return search_.IsActive() ? search_.PassFilter(searchTerms[category]) : selectedCategory_ == category;
         };
         if (search_.IsActive()) ImGui::TextDisabled("Showing matching setting groups. Select a category to clear search.");
-        if (!show(0) && !show(1) && !show(2) && !show(3)) ImGui::TextWrapped("No matching settings.");
+        if (!show(0) && !show(1) && !show(2) && !show(3) && !show(4)) ImGui::TextWrapped("No matching settings.");
         constexpr uint64_t texelsPerMebiTexel = 1024ull * 1024ull;
         if (show(0)) {
 
@@ -368,6 +369,21 @@ void ProjectSettingsPanel::OnImGuiRender(Registry& registry, Iridium::AssetManag
             }
             ImGui::TextWrapped("Missing headlight bulbs are not proof of a layer-budget problem. "
                 "Check the resolved transparency class and isolate the bulb geometry before changing its material.");
+        }
+        if (show(4)) {
+            ImGui::SeparatorText("Anti-aliasing");
+            constexpr const char* modes[]{"Off", "Temporal (TAA)"};
+            int choice = outputSettings->antiAliasing == Iridium::AntiAliasingMode::Taa ? 1 : 0;
+            if (ImGui::Combo("Anti-aliasing", &choice, modes, 2)) {
+                outputSettings->antiAliasing = choice == 1
+                    ? Iridium::AntiAliasingMode::Taa : Iridium::AntiAliasingMode::None;
+                outputSettings->changed = true;
+            }
+            ImGui::TextWrapped("Temporal anti-aliasing jitters the camera by a sub-pixel amount each frame "
+                "and accumulates the result. Changing the mode rebuilds the frame graph at the next frame "
+                "boundary; accumulated history starts over.");
+            if (!outputSettings->antiAliasingDiagnostic.empty())
+                ImGui::TextColored(ImVec4(1, .4f, .3f, 1), "%s", outputSettings->antiAliasingDiagnostic.c_str());
         }
         ImGui::EndChild();
     }

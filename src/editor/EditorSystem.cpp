@@ -170,6 +170,12 @@ void EditorSystem::setOutputTransportStatus(
     uiState.outputSettings.transportDiagnostic = std::move(diagnostic);
 }
 
+void EditorSystem::setAntiAliasingStatus(Iridium::AntiAliasingMode active,
+    std::string diagnostic) {
+    uiState.outputSettings.antiAliasing = active;
+    uiState.outputSettings.antiAliasingDiagnostic = std::move(diagnostic);
+}
+
 bool EditorSystem::consumeShadowSettings(
     Iridium::ProjectShadowSettings& settings) {
     if (!uiState.shadowSettingsChanged) return false;

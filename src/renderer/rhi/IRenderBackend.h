@@ -93,6 +93,11 @@ namespace Iridium {
         // the swapchain. On failure the previous extent must remain active.
         [[nodiscard]] virtual bool resizeSceneRenderExtent(
             RenderExtent extent, std::string& diagnostic) = 0;
+        // Between frames: switches the anti-aliasing mode (a graph topology
+        // change; temporal history starts over). On failure the previous mode
+        // remains active.
+        [[nodiscard]] virtual bool setAntiAliasing(
+            AntiAliasingMode mode, std::string& diagnostic) = 0;
         [[nodiscard]] virtual RenderBackendCapabilities getCapabilities() const = 0;
         [[nodiscard]] virtual RenderBackendRuntimeInfo getRuntimeInfo() const = 0;
         // May only be called between frames. Startup callers use this to move

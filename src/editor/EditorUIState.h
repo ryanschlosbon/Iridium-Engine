@@ -1,6 +1,7 @@
 #pragma once
 
 #include "renderer/color/OutputTransformConfig.h"
+#include "renderer/rhi/RenderBackendConfig.h"
 #include "renderer/rhi/ShadowTypes.h"
 #include "renderer/rhi/ReflectionProbeSettings.h"
 #include "assets/AssetBrowserModel.h"
@@ -19,6 +20,9 @@ struct EditorOutputSettings {
     float manualExposureEv = 0.0f;
     float paperWhiteNits = 203.0f;
     float peakNits = 1000.0f;
+    // M9.2c: the active mode, and why the last switch failed (if it did).
+    Iridium::AntiAliasingMode antiAliasing = Iridium::AntiAliasingMode::None;
+    std::string antiAliasingDiagnostic;
     bool changed = false;
 };
 

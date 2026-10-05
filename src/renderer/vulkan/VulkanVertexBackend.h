@@ -365,6 +365,8 @@ namespace Iridium {
         [[nodiscard]] RenderExtent getRenderExtent() const override;
         [[nodiscard]] bool resizeSceneRenderExtent(
             RenderExtent extent, std::string& diagnostic) override;
+        [[nodiscard]] bool setAntiAliasing(
+            AntiAliasingMode mode, std::string& diagnostic) override;
         [[nodiscard]] RenderBackendCapabilities getCapabilities() const override;
         [[nodiscard]] RenderBackendRuntimeInfo getRuntimeInfo() const override;
         [[nodiscard]] FrameTopologyPreparation prepareFrameTopology(

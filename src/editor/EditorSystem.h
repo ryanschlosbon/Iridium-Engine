@@ -105,6 +105,7 @@ public:
         Iridium::Color::OutputTransport effective,
         const std::array<bool, 3>& supported,
         std::string diagnostic);
+    void setAntiAliasingStatus(Iridium::AntiAliasingMode active, std::string diagnostic);
     [[nodiscard]] bool consumeShadowSettings(
         Iridium::ProjectShadowSettings& settings);
     [[nodiscard]] bool consumeReflectionProbeSettings(

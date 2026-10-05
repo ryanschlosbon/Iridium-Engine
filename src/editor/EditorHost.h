@@ -123,6 +123,7 @@ namespace Iridium {
         void setOutputTransportStatus(Color::OutputTransport requested,
             Color::OutputTransport effective,
             const std::array<bool, 3>& supported, std::string diagnostic);
+        void setAntiAliasingStatus(AntiAliasingMode active, std::string diagnostic);
         void setDebugView(RenderDebugView view);
         // --open-asset-viewer: opens the ready model or material asset; throws
         // when it is not one.

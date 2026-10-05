@@ -60,6 +60,7 @@ namespace Iridium {
     void FrameOrchestrator::refreshOutputTransportStatus() {
         renderRuntimeInfo_ = renderBackend->getRuntimeInfo();
         publishOutputTransportStatus();
+        editorHost_.setAntiAliasingStatus(config_.antiAliasing, {});
     }
 
     void FrameOrchestrator::initializeOutputTransformLut() {
@@ -252,6 +253,8 @@ namespace Iridium {
                 config_.outputTransport = outputSettings.transport;
                 pendingOutputTransport_ = outputSettings.transport;
             }
+            if (outputSettings.antiAliasing != config_.antiAliasing)
+                pendingAntiAliasing_ = outputSettings.antiAliasing;
             config_.manualExposureEv = outputSettings.manualExposureEv;
             config_.paperWhiteNits = outputSettings.paperWhiteNits;
             config_.peakNits = outputSettings.peakNits;
@@ -426,6 +429,11 @@ namespace Iridium {
             const Color::OutputTransport requested = *pendingOutputTransport_;
             pendingOutputTransport_.reset();
             (void)switchOutputTransport(requested);
+            return;
+        }
+        if (pendingAntiAliasing_) {
+            switchAntiAliasing(*pendingAntiAliasing_);
+            pendingAntiAliasing_.reset();
             return;
         }
         if (!policy_.fullscreenScenePresentation && config_.windowVisible) {
@@ -670,6 +678,16 @@ namespace Iridium {
             .diagnostic = renderRuntimeInfo_.outputTransportDiagnostic,
             .durationNanoseconds = switchNanoseconds,
         };
+    }
+
+    void FrameOrchestrator::switchAntiAliasing(AntiAliasingMode requested) {
+        // Jitter follows the mode unless --temporal-jitter pinned it.
+        std::string diagnostic;
+        if (renderBackend->setAntiAliasing(requested, diagnostic))
+            config_.antiAliasing = requested;
+        else
+            std::cerr << "Anti-aliasing switch failed: " << diagnostic << '\n';
+        editorHost_.setAntiAliasingStatus(config_.antiAliasing, std::move(diagnostic));
     }
 
     bool FrameOrchestrator::resizeSceneExtent(RenderExtent requested,

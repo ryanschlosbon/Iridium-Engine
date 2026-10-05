@@ -1277,6 +1277,37 @@ namespace Iridium {
         }
     }
 
+    bool VulkanVertexBackend::setAntiAliasing(AntiAliasingMode mode,
+        std::string& diagnostic) {
+        diagnostic.clear();
+        if (!initialized_ || frameOpen_) {
+            diagnostic = "Anti-aliasing can only change between frames of an initialized backend";
+            return false;
+        }
+        if (mode == antiAliasing_) return true;
+        // Like a resize: retire every slot, then rebuild the graph and the
+        // targets (TAA history starts from the current frame).
+        const AntiAliasingMode previous = antiAliasing_;
+        const auto rebuild = [&] {
+            createFrameTargets();
+            registerEditorTargetTextures();
+        };
+        scheduler.waitForAllFrames();
+        releaseFrameTargets();
+        antiAliasing_ = mode;
+        try {
+            rebuild();
+            return true;
+        }
+        catch (const std::exception& exception) {
+            diagnostic = std::string("Anti-aliasing switch failed: ") + exception.what();
+            releaseFrameTargets();
+            antiAliasing_ = previous;
+            rebuild();
+            return false;
+        }
+    }
+
     RenderBackendCapabilities VulkanVertexBackend::getCapabilities() const {
         if (!vkContext) {
             return {};

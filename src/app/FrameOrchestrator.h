@@ -115,6 +115,8 @@ namespace Iridium {
         void recreateSwapchain();
         void replaceOutputTransformLut(Color::OutputTransport effectiveTransport);
         void publishOutputTransportStatus();
+        // M9.2c: between frames, from an editor request.
+        void switchAntiAliasing(AntiAliasingMode requested);
 
         // IRenderFrameStageObserver
         void onRenderFrameStage(RenderFrameStage stage) override;
@@ -147,6 +149,7 @@ namespace Iridium {
         Color::OutputTransport outputTransformLutTransport_ =
             Color::OutputTransport::SdrSrgb;
         std::optional<Color::OutputTransport> pendingOutputTransport_;
+        std::optional<AntiAliasingMode> pendingAntiAliasing_;
         uint64_t outputTransportSwitchCount_ = 0;
         RenderBackendRuntimeInfo renderRuntimeInfo_{};
         RenderExtent renderExtent_{};
