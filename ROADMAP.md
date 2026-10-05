@@ -1006,7 +1006,7 @@ Acceptance gate: mesh shaders produce matching images and visibility identities 
 ### M9 - Temporal rendering and reconstruction
 
 Status: `Ready` (lead prompt `docs/milestones/M9-task-lead-prompt.md`; execution plan
-to be written by the lead as `docs/milestones/M9-temporal-and-post.md`)
+`docs/milestones/M9-temporal-and-post.md`, draft awaiting owner approval 2026-10-05)
 
 Director decisions (2026-10-04):
 
