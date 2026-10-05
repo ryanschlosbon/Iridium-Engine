@@ -9,14 +9,19 @@
 #include <condition_variable>
 #include <deque>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <set>
-#include <thread>
+#include <stop_token>
 #include <vector>
 
 namespace Iridium {
 
     class EngineLog;
+    namespace Tasks {
+        class FunctionStrand;
+        class TaskSystem;
+    }
 
     struct AssetThumbnailAssociation {
         AssetGuid parentGuid;
@@ -92,12 +97,16 @@ namespace Iridium {
 
     class AssetThumbnailService {
     public:
+        // Roots prepare one at a time on a Background strand of the task
+        // system (M7R R5b.2).
         AssetThumbnailService(
+            Tasks::TaskSystem& tasks,
             std::filesystem::path assetRoot,
             std::filesystem::path ddcRoot,
             CookTarget target,
             EngineLog* log = nullptr);
         AssetThumbnailService(
+            Tasks::TaskSystem& tasks,
             std::filesystem::path assetRoot,
             std::shared_ptr<LocalDerivedDataCache> cache,
             CookTarget target,
@@ -158,9 +167,15 @@ namespace Iridium {
             bool detail = false;
         };
 
-        [[nodiscard]] PreparedAssetThumbnailBatch prepare(
-            const Job& job,
-            std::stop_token stopToken);
+        struct ThumbnailCook;
+        [[nodiscard]] bool prepareCook(const Job& job,
+            std::stop_token stopToken, ThumbnailCook& cook);
+        [[nodiscard]] PreparedAssetThumbnailBatch finishCook(
+            const Job& job, std::stop_token stopToken,
+            ThumbnailCook& cook, const DdcRequestResult& cooked);
+        // Publishes a finished root; false when the service shut down.
+        [[nodiscard]] bool completeJob(const Job& job,
+            PreparedAssetThumbnailBatch result, std::stop_token stopToken);
         void queueMissingLocked(
             std::map<AssetGuid, Job> grouped);
         [[nodiscard]] static std::map<
@@ -168,7 +183,21 @@ namespace Iridium {
                 std::span<const
                     AssetCatalogRecord> records);
         void rebuildDemandLocked();
-        void workerLoop(std::stop_token stopToken);
+        // Runs queued roots until the queue is empty (a strand item).
+        void drain();
+
+        // Locks mutex_; on unlock, posts a drain when work was queued under
+        // it (drainRequested_) and none is scheduled.
+        class DrainLock final {
+        public:
+            explicit DrainLock(AssetThumbnailService& service);
+            ~DrainLock();
+            DrainLock(const DrainLock&) = delete;
+            DrainLock& operator=(const DrainLock&) = delete;
+
+        private:
+            AssetThumbnailService& service_;
+        };
 
         std::filesystem::path assetRoot_;
         std::shared_ptr<LocalDerivedDataCache>
@@ -176,7 +205,6 @@ namespace Iridium {
         CookTarget target_;
         ImporterRegistry importers_;
         mutable std::mutex mutex_;
-        std::condition_variable_any condition_;
         std::deque<Job> jobs_;
         std::vector<PreparedAssetThumbnailBatch>
             results_;
@@ -201,8 +229,14 @@ namespace Iridium {
         std::optional<AssetGuid> activeRoot_;
         AssetThumbnailServiceStats stats_;
         bool shutdown_ = false;
-        std::jthread worker_;
+        bool drainRequested_ = false;
+        bool drainScheduled_ = false;
+        bool cookInFlight_ = false;
+        std::condition_variable cookIdle_;
+        std::stop_source stop_;
         EngineLog* log_ = nullptr;
+        // Declared last: drained in shutdown() before the state above goes.
+        std::unique_ptr<Tasks::FunctionStrand> strand_;
     };
 
 } // namespace Iridium

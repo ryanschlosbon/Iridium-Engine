@@ -8,14 +8,19 @@
 #include <deque>
 #include <functional>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <stop_token>
 #include <string>
-#include <thread>
 #include <vector>
 
 namespace Iridium {
+
+    namespace Tasks {
+        class FunctionStrand;
+        class TaskSystem;
+    }
 
     struct PreparedRuntimeAsset {
         std::string cookKey;
@@ -64,7 +69,9 @@ namespace Iridium {
 
     class AssetReimportScheduler {
     public:
-        AssetReimportScheduler();
+        // Requests prepare one at a time on a Background strand of the task
+        // system (M7R R5b.2); each keeps its own stop_source.
+        explicit AssetReimportScheduler(Tasks::TaskSystem& tasks);
         ~AssetReimportScheduler();
 
         AssetReimportScheduler(
@@ -94,9 +101,12 @@ namespace Iridium {
             uint64_t serial = 0;
         };
 
-        void workerLoop(std::stop_token stopToken);
+        // Prepares the oldest queued request (a strand item).
+        void runNext();
+        void schedule();
 
         mutable std::mutex mutex_;
+        // Signals completions to waitForCompletion (no worker waits on it).
         std::condition_variable_any condition_;
         std::deque<WorkItem> queued_;
         std::vector<AssetReimportCompletion> completed_;
@@ -107,7 +117,8 @@ namespace Iridium {
         uint64_t serialCounter_ = 0;
         AssetReimportSchedulerStats stats_;
         bool shutdown_ = false;
-        std::jthread worker_;
+        // Declared last: drained in shutdown() before the state above goes.
+        std::unique_ptr<Tasks::FunctionStrand> strand_;
     };
 
 } // namespace Iridium

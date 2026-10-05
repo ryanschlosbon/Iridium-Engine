@@ -1,4 +1,5 @@
 #include "assets/AssetMetadata.h"
+#include "core/tasks/TaskSystem.h"
 #include "assets/cooker/AssetCooker.h"
 #include "assets/cooker/CanonicalSettings.h"
 #include "assets/cooker/DependencyGraph.h"
@@ -31,6 +32,10 @@
 namespace {
 
     using namespace Iridium;
+
+    // M7R R5b.2: the DDC and the services run on the engine task system
+    // (created in main).
+    Iridium::Tasks::TaskSystem* testTasks = nullptr;
     using namespace std::chrono_literals;
 
     #define CHECK(condition) \
@@ -434,7 +439,7 @@ namespace {
 
     bool testDdcCoalescingCorruptionAndCancellation() {
         TemporaryDirectory temporary;
-        LocalDerivedDataCache cache(temporary.path / "ddc");
+        LocalDerivedDataCache cache(temporary.path / "ddc", *testTasks);
         const std::string key = sha256(bytes("coalesced-key"));
         const CookedArtifactBlob artifact = deterministicArtifact(key);
         std::atomic<uint32_t> buildCount{ 0 };
@@ -515,8 +520,8 @@ namespace {
         TemporaryDirectory secondDirectory;
         const std::string key = sha256(bytes("clean-cache-key"));
         const CookedArtifactBlob artifact = deterministicArtifact(key);
-        LocalDerivedDataCache first(firstDirectory.path / "ddc");
-        LocalDerivedDataCache second(secondDirectory.path / "ddc");
+        LocalDerivedDataCache first(firstDirectory.path / "ddc", *testTasks);
+        LocalDerivedDataCache second(secondDirectory.path / "ddc", *testTasks);
         const auto firstResult = first.request(key, {},
             [&artifact](std::stop_token) { return artifact; }).get();
         const auto secondResult = second.request(key, {},
@@ -573,7 +578,7 @@ namespace {
         CHECK(decoded.artifact->sections[1].id ==
             kCookedTexturePayloadSection);
 
-        LocalDerivedDataCache cache(temporary.path / "ddc");
+        LocalDerivedDataCache cache(temporary.path / "ddc", *testTasks);
         const DdcRequestResult built =
             requestPreparedCook(cache, prepared).get();
         CHECK(built.status == DdcRequestStatus::Built);
@@ -643,6 +648,9 @@ namespace {
 } // namespace
 
 int main(int argc, char** argv) {
+    Iridium::Tasks::TaskSystem tasks(Iridium::Tasks::TaskSystemConfig{
+        .workerThreadCount = 4 });
+    testTasks = &tasks;
     if (argc == 3 && std::string_view(argv[1]) == "--emit-artifact") {
         return emitArtifact(argv[2]) ? 0 : 2;
     }

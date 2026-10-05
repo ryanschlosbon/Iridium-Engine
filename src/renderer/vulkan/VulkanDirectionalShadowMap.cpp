@@ -21,7 +21,7 @@ namespace {
 
 } // namespace
 
-void VulkanDirectionalShadowMap::init(VkDevice device,
+void VulkanDirectionalShadowMap::init(VkDevice device, VkPipelineCache pipelineCache,
     VulkanResourceAllocator& allocator, VulkanUploadContext& uploads,
     ::DescriptorAllocator& descriptors, VkDescriptorSetLayout materialLayout,
     VkDescriptorSetLayout samplerLayout, VkDescriptorSetLayout gpuSceneLayout,
@@ -31,6 +31,7 @@ void VulkanDirectionalShadowMap::init(VkDevice device,
         gpuSceneLayout == VK_NULL_HANDLE)
         throw std::invalid_argument("Invalid directional shadow initialization");
     device_ = device;
+    pipelineCache_ = pipelineCache;
     allocator_ = &allocator;
     descriptors_ = &descriptors;
     resolution_ = resolution;
@@ -68,59 +69,6 @@ void VulkanDirectionalShadowMap::init(VkDevice device,
         sampler.maxLod = 0.0f;
         requireSuccess(vkCreateSampler(device_, &sampler, nullptr, &sampler_),
             "vkCreateSampler(directional shadow)");
-
-        VkAttachmentDescription attachment{};
-        attachment.format = VK_FORMAT_D32_SFLOAT;
-        attachment.samples = VK_SAMPLE_COUNT_1_BIT;
-        attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-        attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-        attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-        attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-        attachment.initialLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
-        attachment.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
-        const VkAttachmentReference depthReference{
-            0, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL };
-        VkSubpassDescription subpass{};
-        subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-        subpass.pDepthStencilAttachment = &depthReference;
-        std::array<VkSubpassDependency, 2> dependencies{};
-        dependencies[0].srcSubpass = VK_SUBPASS_EXTERNAL;
-        dependencies[0].dstSubpass = 0;
-        dependencies[0].srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-        dependencies[0].dstStageMask = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
-            VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
-        dependencies[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        dependencies[0].dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-        dependencies[0].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
-        dependencies[1].srcSubpass = 0;
-        dependencies[1].dstSubpass = VK_SUBPASS_EXTERNAL;
-        dependencies[1].srcStageMask = VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
-        dependencies[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-        dependencies[1].srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-        dependencies[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        dependencies[1].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
-        VkRenderPassCreateInfo renderPass{ VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO };
-        renderPass.attachmentCount = 1;
-        renderPass.pAttachments = &attachment;
-        renderPass.subpassCount = 1;
-        renderPass.pSubpasses = &subpass;
-        renderPass.dependencyCount = static_cast<uint32_t>(dependencies.size());
-        renderPass.pDependencies = dependencies.data();
-        requireSuccess(vkCreateRenderPass(device_, &renderPass, nullptr,
-            &renderPass_), "vkCreateRenderPass(directional shadow)");
-
-        for (uint32_t index = 0; index < kDirectionalShadowLayerCount; ++index) {
-            VkFramebufferCreateInfo framebuffer{
-                VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO };
-            framebuffer.renderPass = renderPass_;
-            framebuffer.attachmentCount = 1;
-            framebuffer.pAttachments = &layerViews_[index];
-            framebuffer.width = resolution;
-            framebuffer.height = resolution;
-            framebuffer.layers = 1;
-            requireSuccess(vkCreateFramebuffer(device_, &framebuffer, nullptr,
-                &framebuffers_[index]), "vkCreateFramebuffer(directional shadow)");
-        }
 
         VkDescriptorSetLayoutBinding shadowBinding{};
         shadowBinding.binding = 0;
@@ -195,13 +143,6 @@ void VulkanDirectionalShadowMap::cleanup() noexcept {
     renderSets_ = {};
     if (renderSetLayout_ != VK_NULL_HANDLE)
         vkDestroyDescriptorSetLayout(device_, renderSetLayout_, nullptr);
-    for (VkFramebuffer& framebuffer : framebuffers_) {
-        if (framebuffer != VK_NULL_HANDLE)
-            vkDestroyFramebuffer(device_, framebuffer, nullptr);
-        framebuffer = VK_NULL_HANDLE;
-    }
-    if (renderPass_ != VK_NULL_HANDLE)
-        vkDestroyRenderPass(device_, renderPass_, nullptr);
     if (sampler_ != VK_NULL_HANDLE) vkDestroySampler(device_, sampler_, nullptr);
     for (VkImageView& view : layerViews_) {
         if (view != VK_NULL_HANDLE) vkDestroyImageView(device_, view, nullptr);
@@ -213,7 +154,6 @@ void VulkanDirectionalShadowMap::cleanup() noexcept {
     }
     pipelineLayout_ = VK_NULL_HANDLE;
     renderSetLayout_ = VK_NULL_HANDLE;
-    renderPass_ = VK_NULL_HANDLE;
     sampler_ = VK_NULL_HANDLE;
     descriptors_ = nullptr;
     allocator_ = nullptr;
@@ -271,21 +211,15 @@ void VulkanDirectionalShadowMap::updateFrame(uint32_t frameIndex,
         std::as_bytes(std::span{ &data, size_t{ 1 } }));
 }
 
-void VulkanDirectionalShadowMap::beginCascade(VkCommandBuffer commandBuffer,
-    uint32_t shadowIndex, uint32_t cascadeIndex) const {
+VkImageView VulkanDirectionalShadowMap::cascadeView(uint32_t shadowIndex,
+    uint32_t cascadeIndex) const {
     if (shadowIndex >= kDirectionalShadowLightCapacity ||
         cascadeIndex >= kDirectionalShadowCascadeCount)
         throw std::out_of_range("Directional shadow cascade index is invalid");
-    const uint32_t layer = shadowIndex * kDirectionalShadowCascadeCount +
-        cascadeIndex;
-    const VkClearValue clear{ .depthStencil = { 1.0f, 0 } };
-    VkRenderPassBeginInfo begin{ VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
-    begin.renderPass = renderPass_;
-    begin.framebuffer = framebuffers_[layer];
-    begin.renderArea.extent = { resolution_, resolution_ };
-    begin.clearValueCount = 1;
-    begin.pClearValues = &clear;
-    vkCmdBeginRenderPass(commandBuffer, &begin, VK_SUBPASS_CONTENTS_INLINE);
+    return layerViews_[shadowIndex * kDirectionalShadowCascadeCount + cascadeIndex];
+}
+
+void VulkanDirectionalShadowMap::setCascadeState(VkCommandBuffer commandBuffer) const {
     const VkViewport viewport{ 0.0f, 0.0f,
         static_cast<float>(resolution_), static_cast<float>(resolution_),
         0.0f, 1.0f };
@@ -293,10 +227,6 @@ void VulkanDirectionalShadowMap::beginCascade(VkCommandBuffer commandBuffer,
     vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
     vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
     vkCmdSetDepthBias(commandBuffer, 0.5f, 0.0f, 1.0f);
-}
-
-void VulkanDirectionalShadowMap::endCascade(VkCommandBuffer commandBuffer) const {
-    vkCmdEndRenderPass(commandBuffer);
 }
 
 VkPipeline VulkanDirectionalShadowMap::pipeline(bool alphaMasked,
@@ -421,9 +351,14 @@ VkPipeline VulkanDirectionalShadowMap::createPipeline(bool alphaMasked,
         create.pColorBlendState = &blend;
         create.pDynamicState = &dynamic;
         create.layout = pipelineLayout_;
-        create.renderPass = renderPass_;
+        // M7R R4a: dynamic rendering, depth only.
+        VkPipelineRenderingCreateInfo rendering{
+            VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO };
+        rendering.depthAttachmentFormat = VK_FORMAT_D32_SFLOAT;
+        create.pNext = &rendering;
+        create.renderPass = VK_NULL_HANDLE;
         VkPipeline result = VK_NULL_HANDLE;
-        requireSuccess(vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1,
+        requireSuccess(vkCreateGraphicsPipelines(device_, pipelineCache_, 1,
             &create, nullptr, &result),
             "vkCreateGraphicsPipelines(directional shadow)");
         if (fragment != VK_NULL_HANDLE)

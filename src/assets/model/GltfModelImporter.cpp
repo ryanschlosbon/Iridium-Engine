@@ -3,6 +3,7 @@
 #include "assets/AssetSourceValidation.h"
 #include "assets/cooker/CookKey.h"
 #include "assets/cooker/LocalDerivedDataCache.h"
+#include "core/tasks/TaskSystem.h"
 #include "assets/model/ModelProduct.h"
 #include "assets/model/ModelLodGenerator.h"
 #include "assets/texture/TextureImporter.h"
@@ -1248,55 +1249,67 @@ namespace Iridium {
                     "No embedded texture views required");
                 return;
             }
-            const size_t hardware = (std::max)(
-                1u, std::thread::hardware_concurrency());
-            const size_t workerCount = (std::min)(
-                jobs.size(), (std::min)(size_t{ 16 },
-                    (std::max)(size_t{ 1 }, hardware / 2)));
+            // M7R R5b.2 (ADR-0015): a Background parallelFor on the engine
+            // task system replaces the fork-join of up to 16 threads. A cook
+            // task waiting here admits it under its own admission slot;
+            // without a task system on this thread the views cook serially.
+            // Results are merged in job order below, so bytes do not depend
+            // on the schedule.
+            Tasks::TaskSystem* const tasks =
+                Tasks::TaskSystem::forCurrentThread();
+            const size_t workerCount = tasks
+                ? (std::min)(jobs.size(),
+                    static_cast<size_t>(tasks->backgroundSlotLimit()))
+                : size_t{ 1 };
             reportCookProgress(context, "textures", 0, jobs.size(),
                 "Cooking unique embedded texture views on " +
                     std::to_string(workerCount) + " workers");
 
             std::vector<EmbeddedTextureViewResult> results(jobs.size());
-            std::atomic_size_t nextJob{ 0 };
             std::atomic_uint64_t completed{ 0 };
             std::atomic_uint64_t cacheHits{ 0 };
             std::atomic_uint64_t built{ 0 };
-            {
-                std::vector<std::jthread> workers;
-                workers.reserve(workerCount);
-                for (size_t worker = 0; worker < workerCount; ++worker) {
-                    workers.emplace_back([&](std::stop_token) {
-                        while (!stopToken.stop_requested()) {
-                            const size_t jobIndex =
-                                nextJob.fetch_add(1,
-                                    std::memory_order_relaxed);
-                            if (jobIndex >= jobs.size()) break;
-                            results[jobIndex] = cookEmbeddedTextureView(
-                                jobs[jobIndex], target,
-                                context.derivedDataCache,
-                                stopToken);
-                            const bool hit = results[jobIndex].cacheHit;
-                            if (hit) {
-                                cacheHits.fetch_add(1,
-                                    std::memory_order_relaxed);
-                            }
-                            else if (results[jobIndex].view) {
-                                built.fetch_add(1,
-                                    std::memory_order_relaxed);
-                            }
-                            const uint64_t count = completed.fetch_add(
-                                1, std::memory_order_relaxed) + 1;
-                            const char* outcome = hit
-                                ? "cache hit: "
-                                : results[jobIndex].view
-                                    ? "cooked: " : "failed: ";
-                            reportCookProgress(context, "textures",
-                                count, jobs.size(),
-                                std::string(outcome) +
-                                    jobs[jobIndex].imageKey);
+            const auto cookJob = [&](size_t jobIndex) {
+                results[jobIndex] = cookEmbeddedTextureView(
+                    jobs[jobIndex], target,
+                    context.derivedDataCache,
+                    stopToken);
+                const bool hit = results[jobIndex].cacheHit;
+                if (hit) {
+                    cacheHits.fetch_add(1,
+                        std::memory_order_relaxed);
+                }
+                else if (results[jobIndex].view) {
+                    built.fetch_add(1,
+                        std::memory_order_relaxed);
+                }
+                const uint64_t count = completed.fetch_add(
+                    1, std::memory_order_relaxed) + 1;
+                const char* outcome = hit
+                    ? "cache hit: "
+                    : results[jobIndex].view
+                        ? "cooked: " : "failed: ";
+                reportCookProgress(context, "textures",
+                    count, jobs.size(),
+                    std::string(outcome) +
+                        jobs[jobIndex].imageKey);
+            };
+            if (tasks != nullptr) {
+                tasks->parallelFor(Tasks::TaskPriority::Background,
+                    static_cast<uint32_t>(jobs.size()), 1,
+                    [&](Tasks::TaskRange range, uint32_t) {
+                        for (uint32_t jobIndex = range.begin;
+                            jobIndex < range.end &&
+                                !stopToken.stop_requested();
+                            ++jobIndex) {
+                            cookJob(jobIndex);
                         }
-                    });
+                    }, "asset.gltf.texture_views");
+            }
+            else {
+                for (size_t jobIndex = 0; jobIndex < jobs.size() &&
+                    !stopToken.stop_requested(); ++jobIndex) {
+                    cookJob(jobIndex);
                 }
             }
 

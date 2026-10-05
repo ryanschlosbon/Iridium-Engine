@@ -8,10 +8,9 @@
 #include <deque>
 #include <filesystem>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <span>
-#include <stop_token>
-#include <thread>
 #include <vector>
 
 namespace Iridium {
@@ -33,11 +32,14 @@ namespace Iridium {
         using ContentHasher =
             SourceChangeTracker::ContentHasher;
 
+        // startWorkers processes sources automatically on the task system
+        // (M7R R5b.2), which `tasks` must then provide.
         AssetSourceMonitor(
             uint64_t debounceNanoseconds,
             std::chrono::milliseconds scanInterval,
             ContentHasher hasher = {},
-            bool startWorkers = true);
+            bool startWorkers = true,
+            Tasks::TaskSystem* tasks = nullptr);
         ~AssetSourceMonitor();
 
         AssetSourceMonitor(
@@ -57,15 +59,16 @@ namespace Iridium {
             drainBatches();
         [[nodiscard]] AssetSourceMonitorStats stats() const;
 
-        // Deterministic tool/test entry point. Production uses the background
-        // watcher and monitor workers so stat/hash work never enters a frame.
+        // Deterministic tool/test entry point. Production uses the periodic
+        // watcher scan (pinned I/O thread) and monitor pass (Background task),
+        // so stat/hash work never enters a frame (M7R R5b.2).
         void processOnce(uint64_t nowNanoseconds);
         void shutdown() noexcept;
 
     private:
+        // Hashes the debounced sources outside mutex_ (M7R R5b.2).
         void processPendingEvents(
             uint64_t nowNanoseconds);
-        void workerLoop(std::stop_token stopToken);
 
         SourceFileWatcher watcher_;
         SourceChangeTracker tracker_;
@@ -76,7 +79,9 @@ namespace Iridium {
         uint64_t emittedBatches_ = 0;
         bool shutdown_ = false;
         bool automatic_ = false;
-        std::jthread worker_;
+        // The 10 ms monitor pass, started by the frame tick. Declared last:
+        // stopped in shutdown() before the state above goes.
+        std::unique_ptr<Tasks::Periodic> periodic_;
     };
 
 } // namespace Iridium

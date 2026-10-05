@@ -1,4 +1,5 @@
 #include "assets/thumbnail/AssetThumbnailService.h"
+#include "core/tasks/TaskSystem.h"
 #include "assets/thumbnail/AssetThumbnailUploadQueue.h"
 #include "assets/model/AssetModelPreparationService.h"
 #include "assets/texture/TextureImporter.h"
@@ -14,6 +15,9 @@
 namespace {
 
     using namespace Iridium;
+
+    // M7R R5b.2: the services run on the engine task system (created in main).
+    Tasks::TaskSystem* testTasks = nullptr;
 
     #define CHECK(condition) \
         do { \
@@ -135,11 +139,9 @@ namespace {
         const auto cache =
             std::make_shared<
                 LocalDerivedDataCache>(
-                    temporary.path / "ddc");
-        AssetModelPreparationService models(
-            temporary.path, cache, target());
-        AssetThumbnailService service(
-            temporary.path, cache, target());
+                    temporary.path / "ddc", *testTasks);
+        AssetModelPreparationService models(*testTasks, temporary.path, cache, target());
+        AssetThumbnailService service(*testTasks, temporary.path, cache, target());
         const AssetCatalogRecord root =
             rootRecord();
         CHECK(prepareModel(models, root));
@@ -242,8 +244,7 @@ namespace {
     bool cancelsNoLongerVisibleResults() {
         TemporaryDirectory temporary;
         copyFixture(temporary.path);
-        AssetThumbnailService service(
-            temporary.path,
+        AssetThumbnailService service(*testTasks, temporary.path,
             temporary.path / "ddc",
             target());
         const AssetCatalogRecord root =
@@ -269,8 +270,7 @@ namespace {
     bool pinnedDemandSurvivesBrowserPaging() {
         TemporaryDirectory temporary;
         copyFixture(temporary.path);
-        AssetThumbnailService service(
-            temporary.path,
+        AssetThumbnailService service(*testTasks, temporary.path,
             temporary.path / "ddc",
             target());
         const AssetCatalogRecord root =
@@ -292,7 +292,7 @@ namespace {
     bool viewerDemandDoesNotReplaceOtherConsumers() {
         TemporaryDirectory temporary;
         copyFixture(temporary.path);
-        AssetThumbnailService service(temporary.path, temporary.path / "ddc", target());
+        AssetThumbnailService service(*testTasks, temporary.path, temporary.path / "ddc", target());
         const auto root = rootRecord();
         auto material = root;
         material.guid = createAssetGuidV7();
@@ -321,11 +321,9 @@ namespace {
         const auto cache =
             std::make_shared<
                 LocalDerivedDataCache>(
-                    temporary.path / "ddc");
-        AssetModelPreparationService models(
-            temporary.path, cache, target());
-        AssetThumbnailService service(
-            temporary.path, cache, target());
+                    temporary.path / "ddc", *testTasks);
+        AssetModelPreparationService models(*testTasks, temporary.path, cache, target());
+        AssetThumbnailService service(*testTasks, temporary.path, cache, target());
         const AssetCatalogRecord root =
             rootRecord();
         CHECK(prepareModel(models, root));
@@ -402,8 +400,7 @@ namespace {
             .status =
                 AssetCatalogStatus::Ready,
         };
-        AssetThumbnailService service(
-            temporary.path,
+        AssetThumbnailService service(*testTasks, temporary.path,
             temporary.path / "ddc",
             target());
         service.setDemand(
@@ -491,11 +488,9 @@ namespace {
         const auto cache =
             std::make_shared<
                 LocalDerivedDataCache>(
-                    temporary.path / "ddc");
-        AssetModelPreparationService models(
-            temporary.path, cache, target());
-        AssetThumbnailService thumbnails(
-            temporary.path, cache, target());
+                    temporary.path / "ddc", *testTasks);
+        AssetModelPreparationService models(*testTasks, temporary.path, cache, target());
+        AssetThumbnailService thumbnails(*testTasks, temporary.path, cache, target());
         const AssetCatalogRecord root =
             rootRecord();
         thumbnails.setDemand(
@@ -556,6 +551,9 @@ namespace {
 } // namespace
 
 int main() {
+    Iridium::Tasks::TaskSystem tasks(Iridium::Tasks::TaskSystemConfig{
+        .workerThreadCount = 4 });
+    testTasks = &tasks;
     struct Test {
         const char* name;
         bool (*function)();

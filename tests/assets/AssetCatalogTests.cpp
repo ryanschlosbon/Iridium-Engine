@@ -1,5 +1,5 @@
 #include "assets/AssetDiscovery.h"
-#include "assets/AssetGuid.h"
+#include "core/types/AssetGuid.h"
 #include "assets/AssetMetadata.h"
 #include "assets/SqliteAssetCatalog.h"
 

@@ -1,19 +1,18 @@
 #pragma once
 #include "DrawPacket.h"
 #include "PipelineTypes.h"
-#include "TextureTypes.h"
+#include "core/types/TextureTypes.h"
 #include "RhiResourceTypes.h"
 #include "RenderBackendConfig.h"
 #include "RenderDebugView.h"
-#include "FrameCapture.h"
-#include "Ordinary2CaptureValidation.h"
 #include "LightingTypes.h"
 #include "Mesh.h"
 #include "ReflectionProbeTypes.h"
 #include "ReflectionProbeSettings.h"
-#include "renderer/lighting/ReflectionProbeCapture.h"
+#include "renderer/rhi/ReflectionProbeCapture.h"
 #include "ShadowTypes.h"
 #include "RenderBackendRuntimeInfo.h"
+#include "RenderFrame.h"
 #include "ViewportGridOverlay.h"
 #include "GpuScene.h"
 #include "GeometryArena.h"
@@ -31,39 +30,6 @@
 struct GLFWwindow;
 
 namespace Iridium {
-
-    // Shadow consumers address persistent scene geometry through the same
-    // frame-local dense primitive indices used by GPU-scene indirect work.
-    // Packets remain only as an explicit compatibility path for producers
-    // that could not enter the persistent publication.
-    struct ShadowCasterSubmission {
-        std::span<const uint32_t> gpuScenePrimitiveIndices;
-        std::span<const DrawPacket> directPackets;
-        uint64_t membershipRevision = 0;
-
-        [[nodiscard]] constexpr size_t size() const noexcept {
-            return gpuScenePrimitiveIndices.size() + directPackets.size();
-        }
-        [[nodiscard]] constexpr bool empty() const noexcept {
-            return size() == 0u;
-        }
-    };
-
-    // Reflection captures are an independent visibility consumer. Dense
-    // references come from GpuSceneConsumerProbe rather than either main-view
-    // queue; packets remain only for publication fallback.
-    struct ReflectionProbeCasterSubmission {
-        std::span<const uint32_t> gpuScenePrimitiveIndices;
-        std::span<const DrawPacket> directPackets;
-        uint64_t membershipRevision = 0;
-
-        [[nodiscard]] constexpr size_t size() const noexcept {
-            return gpuScenePrimitiveIndices.size() + directPackets.size();
-        }
-        [[nodiscard]] constexpr bool empty() const noexcept {
-            return size() == 0u;
-        }
-    };
 
     struct EnvironmentLightingHandles {
         TextureHandle radiance;
@@ -146,17 +112,17 @@ namespace Iridium {
         // in the acquired context.
         virtual void prepareGpuScene(
             const GpuSceneCapacityRequirements& requirements) = 0;
+        // After beginFrame, before the frame is extracted and submitted.
         virtual void publishGpuScene(const GpuScenePackedTables& scene) = 0;
         [[nodiscard]] virtual GpuSceneFrameSerials
             getGpuSceneFrameSerials() const noexcept = 0;
-        [[nodiscard]] virtual GpuSceneUploadTelemetry
-            getGpuSceneUploadTelemetry() const noexcept = 0;
         // Grows fence-owned probe records/cluster products and publishes the
         // abstract local-environment table before beginFrame acquires a slot.
         virtual void prepareReflectionProbes(uint32_t requiredCapacity,
             std::span<const EnvironmentLightingHandles> environments) = 0;
         // Completes fence-safe runtime capture publication before a frame opens.
-        [[nodiscard]] virtual std::vector<ReflectionProbeCaptureCompletion>
+        // The completions are valid until the next call (backend storage).
+        [[nodiscard]] virtual std::span<const ReflectionProbeCaptureCompletion>
             finalizeReflectionProbeCaptures() = 0;
         [[nodiscard]] virtual std::optional<uint32_t>
             capturedReflectionProbeEnvironmentSlot(
@@ -169,110 +135,36 @@ namespace Iridium {
         // Prepares swapchains, acquires the next image, and resets command buffers
         virtual FrameStatus beginFrame() = 0;
 
-        virtual void updateCamera(const ViewTransportRecord& view,
-            ViewHistoryContext history = {}) = 0;
-        virtual void setDebugView(RenderDebugView view) = 0;
-        virtual void setOutputSettings(float manualExposureEv,
-            float paperWhiteNits, float peakNits) = 0;
-        virtual void setViewportGridOverlay(
-            const ViewportGridOverlay& overlay) = 0;
+        // Records the whole frame (M7R R3c.11): view and output state, the
+        // three shadow kinds, probe captures, the G-buffer, deferred lighting,
+        // forward and transparency, the output transform and the UI pass, in
+        // that order, reporting stage boundaries to frame.stageObserver.
+        // Requires an open frame; the frame's spans need only outlive the call.
+        // Frame captures and capture-validation readbacks are not part of this
+        // interface: the qualification harness attaches a backend extension
+        // for them (M7R R2.9); the editor UI is an IEditorRenderBridge
+        // extension (M7R R3c.10).
+        virtual void submitFrame(const RenderFrame& frame) = 0;
+        // Upload, probe-capture and clustered-lighting telemetry of the frame
+        // being recorded (see RenderFrameTelemetry for when each is current).
+        [[nodiscard]] virtual RenderFrameTelemetry frameTelemetry() const noexcept = 0;
 
-        // Persistent cached directional shadow storage is updated before any
-        // opaque/forward consumer reads it. An empty packet disables sampling.
-        virtual void submitDirectionalShadows(
-            const ShadowCasterSubmission& shadowCasters,
-            std::span<const DirectionalShadowFramePacket> shadows) = 0;
-        virtual void submitSpotShadows(
-            const ShadowCasterSubmission& shadowCasters,
-            std::span<const SpotShadowFramePacket> shadows) = 0;
-        virtual void submitPointShadows(
-            const ShadowCasterSubmission& shadowCasters,
-            std::span<const PointShadowFramePacket> shadows) = 0;
-        virtual void submitReflectionProbeCaptures(
-            const ReflectionProbeCasterSubmission& probeCasters,
-            std::span<const ReflectionProbeCaptureScheduleEntry> captures,
-            const LightingFramePacket& lights) = 0;
-        [[nodiscard]] virtual ReflectionProbeCaptureTelemetry
-            getReflectionProbeCaptureTelemetry() const noexcept = 0;
         // Opaque cache key over caster geometry, transforms, pipeline state,
         // and backend-owned material revisions. It carries no Vulkan identity.
+        // Valid once the frame's GPU scene is published. M7R R5c.1: a
+        // monotonic revision that advances exactly when that content changes
+        // (content returning to an earlier state gets a new value), evaluated
+        // from change triggers rather than per-frame hashing.
         [[nodiscard]] virtual uint64_t getShadowCasterRevision(
-            const ShadowCasterSubmission& shadowCasters) const noexcept = 0;
+            const ShadowCasterSubmission& shadowCasters) = 0;
         // Cache identities for the independent conservative caster membership
         // of each directional cascade. Backend material revisions are included.
+        // Call once per directional light per frame, in shadow-index order.
         [[nodiscard]] virtual std::array<uint64_t,
             kDirectionalShadowCascadeCount>
             getDirectionalShadowCasterRevisions(
                 const ShadowCasterSubmission& shadowCasters,
-                const DirectionalShadowCascadePlan& plan) const noexcept = 0;
-
-        // Freezes the complete depth-writing content identity before main-view
-        // compaction. Both queues contribute to the depth pyramid even though
-        // complex-forward raster is submitted later.
-        virtual void prepareDepthPyramidHistory(
-            std::span<const DrawPacket> opaqueQueue,
-            std::span<const DrawPacket> opaqueForwardQueue) {}
-
-        // Pass 1: Draws opaque meshes to the G-Buffer (Normal, Albedo, Depth)
-        virtual void submitOpaqueQueue(std::span<const DrawPacket> opaqueQueue,
-            std::span<const DrawPacket> selectionQueue, bool isWireframe) = 0;
-        
-        // Pass 2: Evaluates the G-Buffer using the HDRI and outputs the lit scene
-        virtual void submitLightingPass(const glm::vec3& cameraPos,
-            const glm::mat4& view, const glm::mat4& proj,
-            float nearPlane, float farPlane,
-            const LightingFramePacket& lights,
-            const ReflectionProbeGpuFramePacket& reflectionProbes) = 0;
-        [[nodiscard]] virtual LightingUploadTelemetry
-            getLightingUploadTelemetry() const noexcept = 0;
-        [[nodiscard]] virtual ClusteredLightingTelemetry
-            getClusteredLightingTelemetry() const noexcept = 0;
-
-        // Pass 3: Draws opaque complex closures with depth writes, classified
-        // sorted surfaces with read-only depth and premultiplied blending, then
-        // retained compatibility transparency through the bounded glass path.
-        virtual void submitForwardQueues(
-            std::span<const DrawPacket> opaqueForwardQueue,
-            std::span<const DrawPacket> sortedSurfaceQueue,
-            std::span<const DrawPacket> compatibilityTransparentQueue,
-            std::span<const glm::mat4> instanceTransforms = {}) = 0;
-
-        // Records an asynchronous readback of the post-transparency scene image.
-        // The call itself does not wait for GPU completion. Completed captures may
-        // be drained without waiting, or the explicit end-of-run drain may wait.
-        virtual void captureCurrentFrame(uint64_t captureId,
-            FrameCapturePoint point) = 0;
-        [[nodiscard]] virtual std::vector<FrameCapture> collectFrameCaptures(
-            bool waitForPending) = 0;
-
-        // Explicit diagnostic only. The request is consumed by the next live
-        // Ordinary2 capture/local composition with at least one prepared draw;
-        // normal frames do not allocate a readback buffer or record transfers.
-        virtual void requestOrdinary2CaptureValidation(
-            uint64_t validationId) = 0;
-        [[nodiscard]] virtual std::vector<Ordinary2CaptureValidationResult>
-            collectOrdinary2CaptureValidations(bool waitForPending) = 0;
-        virtual void requestDeepLayeredCaptureValidation(
-            uint64_t validationId, TransparencyQuality quality) = 0;
-        [[nodiscard]] virtual std::vector<DeepLayeredCaptureValidationResult>
-            collectDeepLayeredCaptureValidations(bool waitForPending) = 0;
-        virtual void requestDepthPyramidCaptureValidation(
-            uint64_t validationId) = 0;
-        [[nodiscard]] virtual std::vector<DepthPyramidCaptureValidationResult>
-            collectDepthPyramidCaptureValidations(bool waitForPending) = 0;
-
-        // Pass 4: Maps scene-linear color into the selected display output.
-        virtual void submitOutputPass() = 0;
-
-        // Pass 5: Draws the ImGui editor and final UI elements to the swapchain.
-        virtual void submitUIPass() = 0;
-
-        virtual void beginUI() = 0;
-
-        // ImGui uses 'void*' for its abstract texture IDs
-        virtual void* getLitSceneTextureID() = 0;
-        virtual void* getGlassDepthTextureID() = 0;
-        virtual void* getEditorTextureID(TextureHandle texture) = 0;
+                const DirectionalShadowCascadePlan& plan) = 0;
 
         // Submits the command buffers to the GPU and presents to the monitor
         virtual FrameStatus endFrame() = 0;
@@ -314,10 +206,6 @@ namespace Iridium {
         virtual void setEnvironmentLighting(
             const EnvironmentLightingHandles& environment) = 0;
         [[nodiscard]] virtual EnvironmentLightingHandles getEnvironmentLighting() const { return {}; }
-        // Serially rendered views share transient work, retaining independent outputs.
-        // Preparation is a between-frames operation; view indices are 0 and 1.
-        virtual void prepareRetainedViews(bool enabled, uint32_t renderView) {}
-        [[nodiscard]] virtual void* getRetainedViewTextureID(uint32_t view) { return nullptr; }
         virtual void setEnvironmentLightingSettings(
             const EnvironmentLightingSettings&) {}
         virtual void setOutputTransformLut(TextureHandle lutHandle) = 0;

@@ -186,6 +186,31 @@ and submission per frame, with additional work parallelized across worker thread
 every steady per-frame stage reports its critical-path and aggregate worker time.
 Presentation/acquire waits are reported separately and never counted as CPU work.
 
+### M7R CPU frame baseline (2026-10-04, `e98261b`)
+
+M7R R5 measured the CPU target on the reference system (native 4K, Release,
+A,B,B,A, 500 + 10,000 frames, quiet machine; `out/m7r/timing/r5-final`;
+A = R4 accepted `9f2a28e`, B = R5 complete).
+
+| Route | Serial main-thread non-wait CPU, A / B | CPU frame median, B | GPU median, B | Steady allocations, A / B |
+|---|---|---|---|---|
+| T-F1-all | 0.363 / **0.282** ms | 1.117 ms (GPU-bound) | 1.132 ms | 0 / 0 |
+| T-F7-stack (7,232 opaque casters, Hi-Z + LOD) | 3.434 / **1.373** ms | 1.917 ms (GPU-bound) | 1.939 ms | 0 / 0 |
+| T-F5-hetero (lit, local shadows) | 0.654 / **0.557** ms | 2.983 ms (GPU-bound) | 3.006 ms | 16 / **0** |
+| T-F6-probecap (realtime probe capture) | 0.699 / **0.366** ms | 3.639 ms (GPU-bound) | 3.658 ms | 8 / **0** |
+
+- Every route is GPU-bound, and the serial main thread is well under the 3.0 ms
+  target. GPU medians are within noise of A (−0.3% to +0.2%).
+- Extraction stages run as frame-critical task sets on the ADR-0015 task system.
+- On T-F7, the stage critical paths (main thread) are 77 µs classify, 149 µs
+  extract, 214 µs transparent sort and 184 µs intervals. Aggregate worker time is
+  187, 528, 318 and 251 µs (`timing/r5c78-short2`, 2,000 frames).
+- Steady-frame allocations are zero on every non-qualification route of the M7R
+  sweep. `--qualification-allocation-trace` captures a stack for any regression.
+- Before M7R, the T-F7 frame was 7.0 ms against the R0 worktree (CPU and GPU never
+  overlapped, because of a fence-reuse bug fixed in M7R R4d). See the M7R plan's
+  evidence sections.
+
 ## Evidence tiers (owner decision, 2026-10-02)
 
 | Change type | Required evidence |

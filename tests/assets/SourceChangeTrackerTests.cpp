@@ -134,6 +134,48 @@ namespace {
         return true;
     }
 
+    // M7R R5b.2: the split poll (takeDue / hashDueSources / completePoll)
+    // matches poll(), and an asset removed while its sources were hashed is
+    // skipped instead of resurrected.
+    bool splitPollSkipsAssetsRemovedDuringHashing() {
+        const AssetGuid kept = guid(
+            "019f9bce-85b8-7330-8203-040506070809");
+        const AssetGuid removed = guid(
+            "019f9bce-85b8-7331-8203-040506070809");
+        AssetDependencyGraph graph;
+        graph.setDependencies(kept, {});
+        graph.setDependencies(removed, {});
+        SourceChangeTracker tracker(10);
+        tracker.seedContentHash(kept, "kept.bin", std::string(64, 'a'));
+        tracker.seedContentHash(removed, "removed.bin", std::string(64, 'b'));
+        tracker.notify(kept, "kept.bin", 10);
+        tracker.notify(removed, "removed.bin", 10);
+        auto due = tracker.takeDue(20);
+        CHECK(due.size() == 2);
+        CHECK(tracker.stats().pending == 0);
+        SourceChangeTracker::hashDueSources(due,
+            [](const std::filesystem::path&) {
+                return std::string(64, 'c');
+            });
+        tracker.removeAsset(removed);
+        const SourceChangeBatch batch =
+            tracker.completePoll(due, graph);
+        CHECK(batch.changedAssets == std::vector{ kept });
+        CHECK(batch.changedSources.size() == 1);
+        CHECK(batch.changedSources[0].previousHash ==
+            std::string(64, 'a'));
+        // A later removal does not affect the next poll.
+        tracker.notify(kept, "kept.bin", 30);
+        const SourceChangeBatch same =
+            tracker.poll(40, graph,
+                [](const std::filesystem::path&) {
+                    return std::string(64, 'c');
+                });
+        CHECK(same.changedAssets.empty());
+        CHECK(same.sameContentEvents == 1);
+        return true;
+    }
+
     bool hashFailuresCanRetry() {
         const AssetGuid asset = guid(
             "019f9bce-85b8-7320-8203-040506070809");
@@ -293,6 +335,8 @@ int main() {
             coalescesDebouncesAndIgnoresTimestamps },
         { "cycle blocks scheduling",
             dependencyCyclesBlockScheduling },
+        { "split poll skips removed assets",
+            splitPollSkipsAssetsRemovedDuringHashing },
         { "hash failure retry",
             hashFailuresCanRetry },
         { "multiple source paths per owner",

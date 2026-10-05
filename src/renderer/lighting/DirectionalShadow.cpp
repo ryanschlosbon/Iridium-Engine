@@ -49,6 +49,13 @@ std::optional<DirectionalShadowSelection> selectDirectionalShadowLight(
 std::vector<DirectionalShadowSelection> selectDirectionalShadowLights(
     const LightingFramePacket& lighting, uint32_t maximumLights) {
     std::vector<DirectionalShadowSelection> candidates;
+    selectDirectionalShadowLights(lighting, maximumLights, candidates);
+    return candidates;
+}
+
+void selectDirectionalShadowLights(const LightingFramePacket& lighting,
+    uint32_t maximumLights, std::vector<DirectionalShadowSelection>& candidates) {
+    candidates.clear();
     for (uint32_t slot : lighting.activeSlots) {
         if (slot >= lighting.records.size() ||
             slot >= lighting.selectionMetadata.size())
@@ -87,7 +94,6 @@ std::vector<DirectionalShadowSelection> selectDirectionalShadowLights(
     candidates.resize(selectedCount);
     for (DirectionalShadowSelection& selection : candidates)
         selection.omittedShadowDirectionalLights = omitted;
-    return candidates;
 }
 
 DirectionalShadowCascadePlan buildDirectionalShadowCascades(

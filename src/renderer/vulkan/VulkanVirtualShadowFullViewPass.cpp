@@ -14,12 +14,13 @@ void require(VkResult result) {
 struct Push { glm::mat4 inverse; std::array<uint32_t, 4> source, policy; };
 static_assert(sizeof(Push) == 96);
 }
-void VulkanVirtualShadowFullViewPass::init(VkDevice device,
+void VulkanVirtualShadowFullViewPass::init(VkDevice device, VkPipelineCache pipelineCache,
     std::span<const VkBuffer> buffers, const VirtualShadowGpuWorkingSetLayout& working,
     const std::filesystem::path& shaderDirectory) {
     if (!device || device_ || buffers.empty() || buffers.size() > 8 || !working.scratchCapacity)
         throw std::invalid_argument("Invalid full-view marker initialization");
     device_ = device; capacity_ = working.scratchCapacity;
+    pipelineCache_ = pipelineCache;
     try {
         const uint32_t count = static_cast<uint32_t>(buffers.size());
         const std::array sizes{VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, count * 2u},
@@ -53,7 +54,7 @@ void VulkanVirtualShadowFullViewPass::init(VkDevice device,
         compute.layout = layout_;
         compute.stage = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0,
             VK_SHADER_STAGE_COMPUTE_BIT, shader, "main", nullptr};
-        const auto result = vkCreateComputePipelines(device_, VK_NULL_HANDLE, 1, &compute, nullptr, &pipeline_);
+        const auto result = vkCreateComputePipelines(device_, pipelineCache_, 1, &compute, nullptr, &pipeline_);
         vkDestroyShaderModule(device_, shader, nullptr); require(result);
         sets_.resize(count); extents_.resize(count);
         std::vector<VkDescriptorSetLayout> layouts(count, setLayout_);

@@ -12,12 +12,13 @@ namespace Iridium {
         cleanup();
     }
 
-    void VulkanReflectionProbePipeline::init(VkDevice device,
+    void VulkanReflectionProbePipeline::init(VkDevice device, VkPipelineCache pipelineCache,
         ::DescriptorAllocator& allocator) {
         if (device == VK_NULL_HANDLE || device_ != VK_NULL_HANDLE)
             throw std::logic_error(
                 "Reflection-probe pipeline initialized in an invalid state");
         device_ = device;
+        pipelineCache_ = pipelineCache;
         allocator_ = &allocator;
         try {
             std::array<VkDescriptorSetLayoutBinding, 5> bindings{};
@@ -68,7 +69,7 @@ namespace Iridium {
             pipelineInfo.stage.module = module;
             pipelineInfo.stage.pName = "main";
             const VkResult result = vkCreateComputePipelines(device_,
-                VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &pipeline_);
+                pipelineCache_, 1, &pipelineInfo, nullptr, &pipeline_);
             vkDestroyShaderModule(device_, module, nullptr);
             if (result != VK_SUCCESS)
                 throw std::runtime_error(
@@ -125,6 +126,30 @@ namespace Iridium {
         }
     }
 
+    void VulkanReflectionProbePipeline::rewriteDescriptors(uint32_t frameIndex,
+        const VkDescriptorBufferInfo& records,
+        const VkDescriptorBufferInfo& activeSlots,
+        const VkDescriptorBufferInfo& parameters,
+        const VkDescriptorBufferInfo& headers,
+        const VkDescriptorBufferInfo& indices) {
+        if (frameIndex >= descriptorSets_.size()) return;
+        const std::array<VkDescriptorBufferInfo, 5> buffers{
+            records, activeSlots, parameters, headers, indices };
+        std::array<VkWriteDescriptorSet, 5> writes{};
+        for (uint32_t binding = 0; binding < writes.size(); ++binding) {
+            writes[binding].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[binding].dstSet = descriptorSets_[frameIndex];
+            writes[binding].dstBinding = binding;
+            writes[binding].descriptorType = binding == 2
+                ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER
+                : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            writes[binding].descriptorCount = 1;
+            writes[binding].pBufferInfo = &buffers[binding];
+        }
+        vkUpdateDescriptorSets(device_, static_cast<uint32_t>(writes.size()),
+            writes.data(), 0, nullptr);
+    }
+
     void VulkanReflectionProbePipeline::clearDescriptors() {
         if (allocator_ != nullptr && !descriptorSets_.empty())
             allocator_->free(std::span<const VkDescriptorSet>(descriptorSets_));
@@ -144,13 +169,10 @@ namespace Iridium {
         vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
             pipelineLayout_, 0, 1, &descriptorSets_[frameIndex], 0, nullptr);
         vkCmdDispatch(commandBuffer, (clusterCount + 63u) / 64u, 1, 1);
-        VkMemoryBarrier barrier{ VK_STRUCTURE_TYPE_MEMORY_BARRIER };
-        barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        vkCmdPipelineBarrier(commandBuffer,
-            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
-            1, &barrier, 0, nullptr, 0, nullptr);
+        // M7R R3b.7: the compute -> fragment dependency on the cluster
+        // header/index buffers is the graph executor's barrier at the first
+        // lit consumer ("lighting.probe-cluster" writes, readClusterProduct
+        // readers read).
         return 1;
     }
 

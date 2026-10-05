@@ -1,0 +1,35 @@
+#version 450
+// Parity kernel: evaluates the production direct-light model
+// (assets/shaders/include/direct_lighting.glsl) on extractor-packed lights for
+// CPU comparison with src/renderer/lighting/LightingReference.h.
+#include "include/direct_lighting.glsl"
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, set = 0, binding = 0) readonly buffer Lights {
+    PackedGpuLight values[];
+} lights;
+// Per sample: xyz world position, w light index (uint bits); then the normal.
+layout(std430, set = 0, binding = 1) readonly buffer Samples {
+    vec4 values[];
+} samples;
+// Per sample: direction, then radiance.
+layout(std430, set = 0, binding = 2) writeonly buffer Results {
+    vec4 values[];
+} results;
+
+layout(push_constant) uniform Parameters {
+    uint count;
+} parameters;
+
+void main() {
+    uint index = gl_GlobalInvocationID.x;
+    if (index >= parameters.count) return;
+    vec4 position = samples.values[2u * index];
+    vec3 normal = samples.values[2u * index + 1u].xyz;
+    PackedGpuLight light = lights.values[floatBitsToUint(position.w)];
+    IridiumDirectLightSample lit = iridiumEvaluateDirectLight(light,
+        position.xyz, normal);
+    results.values[2u * index] = vec4(lit.direction, 0.0);
+    results.values[2u * index + 1u] = vec4(lit.radiance, 0.0);
+}

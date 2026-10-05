@@ -5,17 +5,41 @@
 #include "assets/cooker/LocalDerivedDataCache.h"
 #include "assets/model/GltfModelImporter.h"
 #include "assets/model/ModelProduct.h"
+#include "core/tasks/TaskSystem.h"
 #include "utils/Sha256.h"
 
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <thread>
 
 namespace {
 
     using namespace Iridium;
+
+    // M7R R5b.2: the service runs on the engine task system (created in main).
+    Tasks::TaskSystem* testTasks = nullptr;
+
+    // Waits for background work by deadline, not by iteration count: the
+    // former 100- and 10,000-yield loops (and a 2 s sleep loop) gave up early
+    // when the machine was loaded, which made these tests flaky (M7R R5b.2).
+    template <class Predicate>
+    bool eventually(Predicate predicate,
+        std::chrono::seconds timeout = std::chrono::seconds(60)) {
+        const auto deadline =
+            std::chrono::steady_clock::now() + timeout;
+        while (!predicate()) {
+            if (std::chrono::steady_clock::now() > deadline) {
+                return false;
+            }
+            std::this_thread::sleep_for(
+                std::chrono::milliseconds(1));
+        }
+        return true;
+    }
 
     #define CHECK(condition) \
         do { \
@@ -118,6 +142,7 @@ namespace {
                 std::chrono::seconds(1),
             .uploadBudgetBytes = 24,
             .startSourceWorkers = false,
+            .tasks = testTasks,
         });
         const auto tracked =
             [&](AssetGuid asset,
@@ -162,13 +187,10 @@ namespace {
         CHECK(tick.changeBatches == 1);
         CHECK(tick.rebuildsRequested == 3);
 
-        for (int attempt = 0;
-            attempt < 10'000 &&
-                publishes.size() != 3;
-            ++attempt) {
-            std::this_thread::yield();
+        (void)eventually([&] {
             tick = service.tick();
-        }
+            return publishes.size() == 3;
+        });
         CHECK(prepares ==
             (std::vector{
                 texture, material, model }));
@@ -196,6 +218,7 @@ namespace {
                 std::chrono::seconds(1),
             .uploadBudgetBytes = 7,
             .startSourceWorkers = false,
+            .tasks = testTasks,
         });
         service.track({
             .assetGuid = asset,
@@ -221,15 +244,12 @@ namespace {
         write(path, "larger");
         service.processSourcesOnce(UINT64_MAX);
         (void)service.tick();
-        for (int attempt = 0;
-            attempt < 100 &&
-                service.stats().reimport
-                    .completed == 0 &&
-                service.stats().publisher
-                    .queued == 0;
-            ++attempt) {
-            std::this_thread::yield();
-        }
+        CHECK(eventually([&] {
+            const AssetRuntimeServiceStats stats =
+                service.stats();
+            return stats.reimport.completed != 0 ||
+                stats.publisher.queued != 0;
+        }));
         const AssetRuntimeServiceTick tick =
             service.tick();
         CHECK(tick.publication.published == 0);
@@ -251,6 +271,7 @@ namespace {
             .debounceNanoseconds = 0,
             .uploadBudgetBytes = 64,
             .startSourceWorkers = false,
+            .tasks = testTasks,
         });
         service.track({
             .assetGuid = asset,
@@ -272,11 +293,10 @@ namespace {
         CHECK(service.requestReimport(asset));
         CHECK(!service.requestReimport(guid(
             "019f9bce-85b8-7721-8203-040506070809")));
-        for (int attempt = 0; attempt < 10'000 &&
-            publishes.empty(); ++attempt) {
-            std::this_thread::yield();
+        (void)eventually([&] {
             (void)service.tick();
-        }
+            return !publishes.empty();
+        });
         CHECK(preparations == 1);
         CHECK(publishes == std::vector<AssetGuid>{ asset });
         CHECK(service.snapshot(asset)->state ==
@@ -291,6 +311,7 @@ namespace {
         AssetRuntimeService service({
             .uploadBudgetBytes = 64,
             .startSourceWorkers = false,
+            .tasks = testTasks,
         });
         CHECK(service.enqueuePrepared(
             asset,
@@ -348,6 +369,7 @@ namespace {
             .scanInterval =
                 std::chrono::seconds(1),
             .startSourceWorkers = false,
+            .tasks = testTasks,
         });
         const auto noOp =
             [](const AssetReimportCause&,
@@ -450,7 +472,7 @@ namespace {
             std::make_shared<
                 GltfModelImporter>());
         LocalDerivedDataCache cache(
-            temporary.path / "ddc");
+            temporary.path / "ddc", *testTasks);
         const CookTarget target{
             .platform = "windows-x64",
             .profile = "editor",
@@ -493,6 +515,7 @@ namespace {
             .uploadBudgetBytes =
                 4ull * 1024ull * 1024ull,
             .startSourceWorkers = false,
+            .tasks = testTasks,
         });
         const AssetGuid assetGuid =
             metadata.metadata->assetGuid;
@@ -536,11 +559,13 @@ namespace {
                         throw std::runtime_error(
                             "Fixture source preparation failed.");
                     }
+                    // A task never blocks on a cook task (M7R R5b.2).
                     DdcRequestResult result =
-                        requestPreparedCook(
+                        resolvePreparedCook(
                             cache,
-                            preparedCook,
-                            stopToken).get();
+                            std::make_shared<PreparedAssetCook>(
+                                preparedCook),
+                            stopToken);
                     if (!result.blob) {
                         throw std::runtime_error(
                             "Fixture source cook failed.");
@@ -591,14 +616,10 @@ namespace {
         AssetRuntimeServiceTick tick =
             service.tick();
         CHECK(tick.rebuildsRequested == 1);
-        for (int attempt = 0;
-            attempt < 2'000 &&
-                publications == 0;
-            ++attempt) {
-            std::this_thread::sleep_for(
-                std::chrono::milliseconds(1));
+        (void)eventually([&] {
             (void)service.tick();
-        }
+            return publications != 0;
+        });
         CHECK(publications == 1);
         CHECK(publishedCookKey !=
             baseline.cookKey);
@@ -612,6 +633,9 @@ namespace {
 } // namespace
 
 int main() {
+    Iridium::Tasks::TaskSystem tasks(Iridium::Tasks::TaskSystemConfig{
+        .workerThreadCount = 4 });
+    testTasks = &tasks;
     struct TestCase {
         const char* name;
         bool (*run)();

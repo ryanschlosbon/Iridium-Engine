@@ -63,7 +63,8 @@ void EditorSystem::init(GLFWwindow* window, Iridium::CpuProfiler* cpuProfiler,
     Iridium::AssetRuntimeService* assetRuntimeService,
     Iridium::EngineLog* engineLog,
     Iridium::EditorSceneDocumentService* sceneDocumentService,
-    Iridium::EditorTransactionService* transactionService) {
+    Iridium::EditorTransactionService* transactionService,
+    Iridium::Tasks::TaskSystem* tasks) {
     // 1. INIT: All Vulkan Descriptor Pool and ImGui_ImplVulkan logic is gone!
     // The backend's init() function handles the heavy lifting now. We just create the panels.
 
@@ -100,7 +101,7 @@ void EditorSystem::init(GLFWwindow* window, Iridium::CpuProfiler* cpuProfiler,
         &transformSettings_));
     panels.push_back(std::make_unique<MenuBarPanel>(
         &selection_.primary, &uiState, sceneDocumentService,
-        transactionService, sceneCommands_.get()));
+        transactionService, sceneCommands_.get(), tasks));
     panels.push_back(std::make_unique<ProfilerPanel>(&uiState.showProfiler, cpuProfiler));
     panels.push_back(std::make_unique<MaterialDiagnosticsPanel>(
         &uiState.showMaterialDiagnostics, &selection_.primary));
@@ -200,7 +201,7 @@ void EditorSystem::update(Registry& registry, Iridium::AssetManager* assetManage
     float sceneAspect) {
 
     // NOTE: ImGui_ImplVulkan_NewFrame(), ImGui_ImplGlfw_NewFrame(), and ImGui::NewFrame()
-    // are now handled by renderBackend->beginUI() in Application.cpp BEFORE calling this function!
+    // are now handled by the editor bridge's beginUI() in Application.cpp BEFORE calling this function!
 
     selection_.reconcile(registry);
     const ImGuiViewport* mainViewport =

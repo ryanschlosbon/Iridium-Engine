@@ -90,6 +90,11 @@ namespace Iridium {
         uint64_t renderGraphCommittedBytes = 0;
         uint64_t renderGraphRebuildCount = 0;
         uint64_t renderGraphCacheMissCount = 0;
+        bool renderGraphTransientAliasing = false;
+        uint32_t renderGraphAliasHeapCount = 0;
+        uint32_t renderGraphAliasedResourceCount = 0;
+        uint64_t renderGraphAliasedRequestedBytes = 0;
+        uint64_t renderGraphAliasHeapCommittedBytes = 0;
         bool ordinary2AtlasResident = false;
         uint32_t ordinary2AtlasWidth = 0;
         uint32_t ordinary2AtlasHeight = 0;
@@ -117,6 +122,17 @@ namespace Iridium {
         uint64_t frameTopologyPrewarmNanoseconds = 0;
         bool frameTopologyPrewarmRequested = false;
         bool frameTopologyPrewarmChanged = false;
+        // M7R R4c.4 persisted pipeline cache at backend init.
+        std::string pipelineCacheState = "off";
+        uint64_t pipelineCacheLoadedBytes = 0;
+        // M7R R4d upload queue (RenderBackendRuntimeInfo).
+        std::string uploadQueueMode = "legacy-blocking";
+        std::string uploadQueueKind = "graphics";
+        uint32_t uploadQueueFamily = 0;
+        uint64_t uploadStagingRingBytes = 0;
+        uint64_t uploadStagingRingWaits = 0;
+        uint64_t uploadDedicatedStagingUploads = 0;
+        uint64_t uploadAsyncSubmits = 0;
         bool refractionPyramidsResident = false;
         std::string modelLoadMode;
         std::string modelLocation;

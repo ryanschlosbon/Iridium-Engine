@@ -4,6 +4,7 @@
 
 #include <array>
 #include <cstdint>
+#include <span>
 #include <vector>
 
 namespace Iridium {
@@ -46,6 +47,31 @@ namespace Iridium {
     // conservative world AABB. Invalid references or bounds fail visible.
     void classifyGpuSceneFrustum(const GpuScenePackedTables& scene,
         const GpuSceneFrustum& frustum, uint32_t consumerMask,
+        GpuSceneVisibilityResult& result);
+
+    // M7R R5c.7: one instance range of classifyGpuSceneFrustum, for parallel
+    // callers. Appends the range's visible instance and primitive indices to
+    // `part`, adds its statistics, and sets the visibility bytes of the
+    // primitives the range accepts (primitiveVisibility must hold the scene's
+    // primitive count, zeroed). Classifying [0, instances) in consecutive
+    // ranges and then appending each part's lists and adding its statistics
+    // in range order (mergeGpuSceneVisibility) gives exactly the result of
+    // classifyGpuSceneFrustum.
+    struct GpuSceneVisibilityPart {
+        std::vector<uint32_t> visibleInstanceIndices;
+        std::vector<uint32_t> visiblePrimitiveIndices;
+        GpuSceneVisibilityStats stats;
+    };
+    void classifyGpuSceneFrustumRange(const GpuScenePackedTables& scene,
+        const GpuSceneFrustum& frustum, uint32_t consumerMask,
+        uint32_t instanceBegin, uint32_t instanceEnd,
+        std::span<uint8_t> primitiveVisibility, GpuSceneVisibilityPart& part);
+    // Starts a result for range classification: clears the lists and the
+    // statistics and zeroes primitiveVisibility at the scene's primitive count.
+    void beginGpuSceneVisibility(const GpuScenePackedTables& scene,
+        GpuSceneVisibilityResult& result);
+    // Appends one part (in range order) to a result begun above.
+    void mergeGpuSceneVisibility(const GpuSceneVisibilityPart& part,
         GpuSceneVisibilityResult& result);
 
 } // namespace Iridium

@@ -42,7 +42,8 @@ namespace Iridium {
 
     class VulkanDirectionalShadowMap final {
     public:
-        void init(VkDevice device, VulkanResourceAllocator& allocator,
+        void init(VkDevice device, VkPipelineCache pipelineCache,
+            VulkanResourceAllocator& allocator,
             VulkanUploadContext& uploads, ::DescriptorAllocator& descriptors,
             VkDescriptorSetLayout materialLayout,
             VkDescriptorSetLayout samplerLayout,
@@ -51,9 +52,11 @@ namespace Iridium {
 
         void updateFrame(uint32_t frameIndex,
             std::span<const DirectionalShadowFramePacket> packets);
-        void beginCascade(VkCommandBuffer commandBuffer,
-            uint32_t shadowIndex, uint32_t cascadeIndex) const;
-        void endCascade(VkCommandBuffer commandBuffer) const;
+        // M7R R4a: the shadow owner begins dynamic rendering on a cascade's
+        // layer view (CLEAR 1.0 from the graph plan), then sets its state.
+        [[nodiscard]] VkImageView cascadeView(uint32_t shadowIndex,
+            uint32_t cascadeIndex) const;
+        void setCascadeState(VkCommandBuffer commandBuffer) const;
 
         [[nodiscard]] VkPipeline pipeline(bool alphaMasked,
             bool doubleSided, bool gpuSceneIndirect = false) const noexcept;
@@ -68,6 +71,8 @@ namespace Iridium {
         [[nodiscard]] VkDescriptorBufferInfo sampleBuffer(
             uint32_t frameIndex) const noexcept;
         [[nodiscard]] uint32_t resolution() const noexcept { return resolution_; }
+        // The cascade array (graph import "shadow.directional").
+        [[nodiscard]] const VulkanImageResource& image() const noexcept { return image_; }
 
     private:
         VkPipeline createPipeline(bool alphaMasked, bool doubleSided,
@@ -75,12 +80,11 @@ namespace Iridium {
         VkShaderModule createShaderModule(const char* relativePath) const;
 
         VkDevice device_ = VK_NULL_HANDLE;
+        VkPipelineCache pipelineCache_ = VK_NULL_HANDLE;
         VulkanResourceAllocator* allocator_ = nullptr;
         VulkanImageResource image_;
         std::array<VkImageView, kDirectionalShadowLayerCount> layerViews_{};
         VkSampler sampler_ = VK_NULL_HANDLE;
-        VkRenderPass renderPass_ = VK_NULL_HANDLE;
-        std::array<VkFramebuffer, kDirectionalShadowLayerCount> framebuffers_{};
         VkDescriptorSetLayout renderSetLayout_ = VK_NULL_HANDLE;
         VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;
         std::array<VkPipeline, 8> pipelines_{};

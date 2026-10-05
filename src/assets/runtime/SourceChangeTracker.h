@@ -7,6 +7,8 @@
 #include <functional>
 #include <map>
 #include <optional>
+#include <set>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -74,6 +76,26 @@ namespace Iridium {
             const AssetDependencyGraph& dependencies,
             const ContentHasher& hasher);
 
+        // M7R R5b.2: poll() in three steps, so a caller can hash without
+        // holding the lock that guards this tracker. takeDue removes the
+        // debounced sources from the pending set; hashDueSources (no tracker
+        // state, any thread) hashes them; completePoll compares and builds the
+        // batch. An asset removed between takeDue and completePoll is skipped.
+        struct DueSourceChange {
+            AssetGuid assetGuid;
+            std::filesystem::path sourcePath;
+            std::string contentHash;
+            std::string hashError;
+        };
+        [[nodiscard]] std::vector<DueSourceChange> takeDue(
+            uint64_t nowNanoseconds);
+        static void hashDueSources(
+            std::span<DueSourceChange> due,
+            const ContentHasher& hasher);
+        [[nodiscard]] SourceChangeBatch completePoll(
+            std::span<const DueSourceChange> due,
+            const AssetDependencyGraph& dependencies);
+
         [[nodiscard]] const SourceChangeTrackerStats&
             stats() const noexcept;
 
@@ -94,6 +116,8 @@ namespace Iridium {
         std::map<SourceKey, std::string> contentHashes_;
         std::map<SourceKey, PendingChange> pending_;
         SourceChangeTrackerStats stats_;
+        std::set<AssetGuid> removedDuringPoll_;
+        bool pollInFlight_ = false;
     };
 
 } // namespace Iridium

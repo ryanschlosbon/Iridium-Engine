@@ -16,7 +16,7 @@ public:
     ~VulkanVirtualShadowMarkingPass() { cleanup(); }
     VulkanVirtualShadowMarkingPass(const VulkanVirtualShadowMarkingPass&) = delete;
     VulkanVirtualShadowMarkingPass& operator=(const VulkanVirtualShadowMarkingPass&) = delete;
-    void init(VkDevice device, std::span<const VkBuffer> workingSets,
+    void init(VkDevice device, VkPipelineCache pipelineCache, std::span<const VkBuffer> workingSets,
         const VirtualShadowGpuWorkingSetLayout& layout,
         const VirtualShadowResourceConfig& config,
         const std::filesystem::path& shaderDirectory);
@@ -36,6 +36,7 @@ private:
         std::vector<VkDescriptorSet> sets;
     };
     VkDevice device_ = VK_NULL_HANDLE;
+    VkPipelineCache pipelineCache_ = VK_NULL_HANDLE;
     VkDescriptorPool pool_ = VK_NULL_HANDLE;
     Pipeline marker_, compactor_;
     VirtualShadowResourceConfig config_{};

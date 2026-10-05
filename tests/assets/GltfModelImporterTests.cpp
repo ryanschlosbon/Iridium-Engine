@@ -8,6 +8,7 @@
 #include "assets/model/ModelRuntimeProduct.h"
 #include "assets/model/MaterialPreviewCompileQueue.h"
 #include "assets/model/MaterialPreviewPolicy.h"
+#include "core/tasks/TaskSystem.h"
 #include "material/MaterialAuthoringPatch.h"
 
 #include <algorithm>
@@ -30,6 +31,10 @@
 namespace {
 
     using namespace Iridium;
+
+    // M7R R5b.2: the DDC and the preview compiler run on the engine task
+    // system (created in main; one exists at a time).
+    Iridium::Tasks::TaskSystem* testTasks = nullptr;
 
     #define CHECK(condition)                                                        \
         do {                                                                        \
@@ -145,7 +150,9 @@ namespace {
     }
 
     bool testBoundedAsyncMaterialPreviewCompiler() {
+        // M7R R5b.2: the compile is a Normal task on the engine task system.
         MaterialPreviewCompileQueue queue;
+        queue.setTaskSystem(testTasks);
         std::promise<void> release;
         const auto gate = release.get_future().share();
         const auto caller = std::this_thread::get_id();
@@ -581,7 +588,7 @@ namespace {
             };
 
         TemporaryDirectory temporary;
-        LocalDerivedDataCache cache(temporary.path / "ddc");
+        LocalDerivedDataCache cache(temporary.path / "ddc", *testTasks);
         const DdcRequestResult firstResult =
             requestPreparedCook(cache, first).get();
         CHECK(firstResult.status == DdcRequestStatus::Built);
@@ -1176,7 +1183,7 @@ namespace {
             ("iridium-m3-4-receipt-" +
                 createAssetGuidV7().toString());
         {
-            LocalDerivedDataCache cache(cacheRoot);
+            LocalDerivedDataCache cache(cacheRoot, *testTasks);
             CHECK(storePreparedCookReceipt(cache,
                 "gltf_model_cooker_fixture.gltf", *prepared).empty());
             CHECK(cache.storeAtomic(prepared->cookKey, blob).empty());
@@ -1836,6 +1843,9 @@ namespace {
 } // namespace
 
 int main() {
+    Iridium::Tasks::TaskSystem tasks(Iridium::Tasks::TaskSystemConfig{
+        .workerThreadCount = 4 });
+    testTasks = &tasks;
     struct TestCase {
         const char* name;
         bool (*function)();

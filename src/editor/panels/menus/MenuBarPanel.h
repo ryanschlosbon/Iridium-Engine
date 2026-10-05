@@ -2,10 +2,10 @@
 #include "../EditorPanel.h"
 #include "ecs/Entity.h"
 #include "editor/EditorUIState.h" // Include the new state struct
+#include "core/tasks/TaskSystem.h"
 #include "scene/authoring/AtomicSourceSceneFile.h"
 #include <array>
 #include <filesystem>
-#include <future>
 #include <string>
 #include <vector>
 
@@ -21,7 +21,10 @@ public:
     MenuBarPanel(Entity* selectedEntityPtr, EditorUIState* uiStatePtr,
         Iridium::EditorSceneDocumentService* sceneDocumentService,
         Iridium::EditorTransactionService* transactionService,
-        Iridium::EditorSceneCommandService* sceneCommands);
+        Iridium::EditorSceneCommandService* sceneCommands,
+        Iridium::Tasks::TaskSystem* tasks = nullptr);
+    // Waits for an orphan scan in flight (one directory listing).
+    ~MenuBarPanel() override;
 
     void OnImGuiRender(Registry& registry, Iridium::AssetManager* assetManager) override;
 
@@ -52,7 +55,21 @@ private:
     bool sceneDialogPending_ = false;
     std::array<char, 1024> scenePath_{};
     std::vector<std::filesystem::path> sceneFiles_;
-    std::future<std::vector<Iridium::OrphanedSceneTemporary>> orphanScan_;
+    // The orphaned scene-temporary scan (M7R R5b.2): a Normal task on the
+    // engine task system, polled through its completion state every frame.
+    class OrphanScan final : public Iridium::Tasks::TaskSet {
+    public:
+        OrphanScan();
+        void runInline() { execute({ 0, 1 }, 0); }
+        std::filesystem::path requested;
+        std::vector<Iridium::OrphanedSceneTemporary> found;
+
+    private:
+        void execute(Iridium::Tasks::TaskRange range, uint32_t threadIndex) override;
+    };
+    Iridium::Tasks::TaskSystem* tasks_ = nullptr;
+    OrphanScan orphanScan_;
+    bool orphanScanInFlight_ = false;
     std::filesystem::path orphanScanPath_;
     std::vector<Iridium::OrphanedSceneTemporary> orphanedTemporaries_;
     bool orphanScanPending_ = false;

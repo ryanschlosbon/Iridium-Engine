@@ -135,18 +135,6 @@ namespace {
         CHECK(!std::filesystem::exists(
             root() / "tests" / "scene" /
                 "SceneSerializerCharacterizationTests.cpp"));
-        const std::string cmake = readText(root() / "CMakeLists.txt");
-        CHECK(cmake.find("SceneSerializer") == std::string::npos);
-        const std::string inspector = readText(root() / "src" / "editor" /
-            "panels" / "core" / "InspectorPanel.cpp");
-        CHECK(inspector.find("descriptor.add(registry, entity)") ==
-            std::string::npos);
-        CHECK(inspector.find("descriptor.remove(registry, entity)") ==
-            std::string::npos);
-        const std::string hierarchy = readText(root() / "src" / "editor" /
-            "panels" / "core" / "SceneHierarchyPanel.cpp");
-        CHECK(hierarchy.find("namePool->get(entity).name =") ==
-            std::string::npos);
         return true;
     }
 

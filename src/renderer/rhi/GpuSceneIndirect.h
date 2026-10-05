@@ -83,6 +83,18 @@ namespace Iridium {
         std::span<const GpuScenePrimitiveRecord> primitives = {},
         std::span<const GpuSceneGeometryRecord> geometries = {});
 
+    // M7R R5c.4b: the same plan for published primitives in draw order (the
+    // main-opaque submission), read from their records: index count, first
+    // index and signed vertex offset from the LOD0 geometry record, first
+    // instance = the dense primitive index. `directPacketCount` direct
+    // packets drawn in the same pass count toward the workload thresholds and
+    // make the plan fall back as InvalidPacket, as a mixed packet queue did.
+    void buildGpuSceneIndirectPlan(std::span<const uint32_t> primitiveIndices,
+        size_t directPacketCount, const GpuSceneIndirectPolicy& policy,
+        GpuSceneIndirectPlan& result,
+        std::span<const GpuScenePrimitiveRecord> primitives,
+        std::span<const GpuSceneGeometryRecord> geometries);
+
     static_assert(sizeof(GpuSceneIndexedIndirectCommand) == 20);
     static_assert(sizeof(GpuSceneIndirectCandidate) == 32);
     static_assert(sizeof(GpuSceneShadowIndirectCandidate) == 16);

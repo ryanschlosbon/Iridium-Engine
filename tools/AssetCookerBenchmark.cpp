@@ -1,4 +1,5 @@
 #include "assets/cooker/LocalDerivedDataCache.h"
+#include "core/tasks/TaskSystem.h"
 #include "utils/Sha256.h"
 
 #include <algorithm>
@@ -66,8 +67,10 @@ namespace {
 } // namespace
 
 int main() {
+    // M7R R5b.2: DDC cooks run as Background tasks on the engine task system.
+    Iridium::Tasks::TaskSystem tasks;
     TemporaryDirectory temporary;
-    LocalDerivedDataCache cache(temporary.path);
+    LocalDerivedDataCache cache(temporary.path, tasks);
     const std::string hitKey = sha256(bytes("resident-ddc-hit"));
     const CookedArtifactBlob hitArtifact = artifact(hitKey);
     const auto publish = cache.storeAtomic(hitKey, hitArtifact);

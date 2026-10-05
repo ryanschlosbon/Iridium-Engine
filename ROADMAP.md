@@ -939,9 +939,9 @@ fallback.
 
 ### M7R - Architecture consolidation
 
-Status: `Ready` (owner-approved 2026-10-02; lead prompt
-`docs/milestones/M7R-task-lead-prompt.md`; execution plan to be written by the lead
-as `docs/milestones/M7R-architecture-consolidation.md`)
+Status: `Accepted` 2026-10-04 (execution plan
+`docs/milestones/M7R-architecture-consolidation.md`; completion report there; R0-R6
+accepted 2026-10-02/04; M9 hand-off `docs/milestones/M7R-to-M9-handoff.md`; lead prompt `docs/milestones/M7R-task-lead-prompt.md`)
 
 Dependencies: accepted M0-M7.7 and the committed M7.8 checkpoint.
 
@@ -1005,10 +1005,39 @@ Acceptance gate: mesh shaders produce matching images and visibility identities 
 
 ### M9 - Temporal rendering and reconstruction
 
-Status: `Proposed`
+Status: `Ready` (lead prompt `docs/milestones/M9-task-lead-prompt.md`; execution plan
+to be written by the lead as `docs/milestones/M9-temporal-and-post.md`)
+
+Director decisions (2026-10-04):
+
+- **Branching:** PR #7 (M7R) merges into `Render-Refactor-for-Modularity`; M9 branches
+  from there.
+- **F6 +1.8% GPU (VMA placement):** carried as a watch item, not a pre-slice. The
+  delta (~0.06 ms on a non-gating probe route) is smaller than the observed
+  environmental swing, and M9's new alias-eligible images will reshuffle placement
+  anyway. M9 bisects any regression by pass GPU ranges, and re-measures F6 at
+  acceptance; a placement policy (dedicated/aligned allocations for the refraction
+  pyramids and cluster buffers) is applied only if a placement-attributed regression
+  above 1% remains.
+- **Capture point under TAA:** the scene-linear (`scene`) capture stays **before**
+  TAA as the single-frame radiance domain. A TAA-off, jitter-off route is mandatory
+  and must reproduce the M7R frozen set byte-for-byte (refactor tier). TAA-on adds a
+  new post-TAA scene-linear capture domain (before bloom/exposure) plus the final
+  output; its fixtures use deterministic per-view jitter sequences and measured
+  envelopes (feature tier).
+- **Scope split:** M9 delivers native-resolution motion vectors, jitter, TAA,
+  reactive handling, bloom, and auto-exposure, plus the vendor-neutral
+  super-resolution input contract. DLSS/FSR/XeSS integration and dynamic resolution
+  move to **M9b**, scheduled before M11 (the RT tier is their consumer). Generic
+  reprojection/history utilities land in M9; their stochastic-shadow/GTAO consumers
+  land in M10.
 
 Dependencies: M1, M2, M7R, and the current/previous transform data already provided
-by the accepted M7.1/M7.2 GPU scene. Scheduled immediately after M7R (2026-10-02).
+by the accepted M7.1/M7.2 GPU scene. Scheduled immediately after M7R (2026-10-02). M7R is accepted (2026-10-04). Its hand-off
+(`docs/milestones/M7R-to-M9-handoff.md`) notes that the GPU scene's previous transform
+changes only when the transform changes (a stopped object keeps stale motion), that
+direct-packet draws carry no previous matrix, and that graph History is not yet keyed
+per view. M9 closes these first.
 As the raster target is native 4K, M9's first production deliverable is native-
 resolution temporal AA plus motion vectors; sub-native reconstruction serves the RT
 tier.

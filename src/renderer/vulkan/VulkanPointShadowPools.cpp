@@ -30,7 +30,7 @@ uint32_t VulkanPointShadowPools::poolIndex(uint32_t resolution) {
     throw std::invalid_argument("Point shadow resolution has no pool");
 }
 
-void VulkanPointShadowPools::init(VkDevice device,
+void VulkanPointShadowPools::init(VkDevice device, VkPipelineCache pipelineCache,
     VulkanResourceAllocator& allocator, VulkanUploadContext& uploads,
     ::DescriptorAllocator& descriptors, VkDescriptorSetLayout materialLayout,
     VkDescriptorSetLayout samplerLayout,
@@ -43,58 +43,11 @@ void VulkanPointShadowPools::init(VkDevice device,
             [](uint32_t value) { return value == 0u; }))
         throw std::invalid_argument("Invalid point shadow pool initialization");
     device_ = device;
+    pipelineCache_ = pipelineCache;
     allocator_ = &allocator;
     descriptors_ = &descriptors;
     capacities_ = capacities;
     try {
-        VkAttachmentDescription attachment{};
-        attachment.format = VK_FORMAT_D32_SFLOAT;
-        attachment.samples = VK_SAMPLE_COUNT_1_BIT;
-        attachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
-        attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-        attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-        attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-        attachment.initialLayout =
-            VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
-        attachment.finalLayout =
-            VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
-        const VkAttachmentReference depthReference{
-            0, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL };
-        VkSubpassDescription subpass{};
-        subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-        subpass.pDepthStencilAttachment = &depthReference;
-        std::array<VkSubpassDependency, 2> dependencies{};
-        dependencies[0].srcSubpass = VK_SUBPASS_EXTERNAL;
-        dependencies[0].dstSubpass = 0;
-        dependencies[0].srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-        dependencies[0].dstStageMask =
-            VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
-            VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
-        dependencies[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        dependencies[0].dstAccessMask =
-            VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-        dependencies[0].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
-        dependencies[1].srcSubpass = 0;
-        dependencies[1].dstSubpass = VK_SUBPASS_EXTERNAL;
-        dependencies[1].srcStageMask =
-            VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
-        dependencies[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-        dependencies[1].srcAccessMask =
-            VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-        dependencies[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        dependencies[1].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
-        VkRenderPassCreateInfo renderPass{
-            VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO };
-        renderPass.attachmentCount = 1;
-        renderPass.pAttachments = &attachment;
-        renderPass.subpassCount = 1;
-        renderPass.pSubpasses = &subpass;
-        renderPass.dependencyCount =
-            static_cast<uint32_t>(dependencies.size());
-        renderPass.pDependencies = dependencies.data();
-        requireSuccess(vkCreateRenderPass(device_, &renderPass, nullptr,
-            &renderPass_), "vkCreateRenderPass(point shadow)");
-
         for (uint32_t tier = 0; tier < pools_.size(); ++tier) {
             Pool& pool = pools_[tier];
             pool.resolution = Resolutions[tier];
@@ -109,7 +62,6 @@ void VulkanPointShadowPools::init(VkDevice device,
                 VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT,
                 VK_IMAGE_VIEW_TYPE_CUBE_ARRAY);
             pool.layerViews.resize(layers);
-            pool.framebuffers.resize(layers);
             for (uint32_t layer = 0; layer < layers; ++layer) {
                 VkImageViewCreateInfo view{
                     VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
@@ -121,17 +73,6 @@ void VulkanPointShadowPools::init(VkDevice device,
                 requireSuccess(vkCreateImageView(device_, &view, nullptr,
                     &pool.layerViews[layer]),
                     "vkCreateImageView(point shadow face)");
-                VkFramebufferCreateInfo framebuffer{
-                    VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO };
-                framebuffer.renderPass = renderPass_;
-                framebuffer.attachmentCount = 1;
-                framebuffer.pAttachments = &pool.layerViews[layer];
-                framebuffer.width = pool.resolution;
-                framebuffer.height = pool.resolution;
-                framebuffer.layers = 1;
-                requireSuccess(vkCreateFramebuffer(device_, &framebuffer,
-                    nullptr, &pool.framebuffers[layer]),
-                    "vkCreateFramebuffer(point shadow face)");
             }
         }
 
@@ -221,16 +162,11 @@ void VulkanPointShadowPools::cleanup() noexcept {
     if (renderSetLayout_ != VK_NULL_HANDLE)
         vkDestroyDescriptorSetLayout(device_, renderSetLayout_, nullptr);
     for (Pool& pool : pools_) {
-        for (VkFramebuffer framebuffer : pool.framebuffers)
-            if (framebuffer != VK_NULL_HANDLE)
-                vkDestroyFramebuffer(device_, framebuffer, nullptr);
         for (VkImageView view : pool.layerViews)
             if (view != VK_NULL_HANDLE)
                 vkDestroyImageView(device_, view, nullptr);
         if (allocator_ != nullptr) allocator_->destroy(pool.image);
     }
-    if (renderPass_ != VK_NULL_HANDLE)
-        vkDestroyRenderPass(device_, renderPass_, nullptr);
     if (sampler_ != VK_NULL_HANDLE)
         vkDestroySampler(device_, sampler_, nullptr);
     if (allocator_ != nullptr)
@@ -241,7 +177,6 @@ void VulkanPointShadowPools::cleanup() noexcept {
     frameBuffers_ = {};
     renderSets_ = {};
     sampler_ = VK_NULL_HANDLE;
-    renderPass_ = VK_NULL_HANDLE;
     renderSetLayout_ = VK_NULL_HANDLE;
     pipelineLayout_ = VK_NULL_HANDLE;
     descriptors_ = nullptr;
@@ -294,37 +229,37 @@ void VulkanPointShadowPools::updateFrame(uint32_t frameIndex,
         std::as_bytes(std::span{ &data, size_t{ 1 } }));
 }
 
-void VulkanPointShadowPools::beginFace(VkCommandBuffer commandBuffer,
+VulkanPointShadowPools::FaceTarget VulkanPointShadowPools::faceTarget(
     const PointShadowFramePacket& packet, uint32_t face) const {
     if (face >= 6u) throw std::out_of_range("Point shadow face is invalid");
     const uint32_t tier = poolIndex(packet.resolution);
     const Pool& pool = pools_[tier];
     const uint32_t layer = packet.cubeIndex * 6u + face;
-    VkRenderPassBeginInfo begin{ VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
-    begin.renderPass = renderPass_;
-    begin.framebuffer = pool.framebuffers[layer];
-    begin.renderArea.extent = { pool.resolution, pool.resolution };
-    vkCmdBeginRenderPass(commandBuffer, &begin, VK_SUBPASS_CONTENTS_INLINE);
+    if (layer >= pool.layerViews.size())
+        throw std::out_of_range("Point shadow cube index is invalid");
+    return { tier, pool.layerViews[layer] };
+}
+
+void VulkanPointShadowPools::beginFace(VkCommandBuffer commandBuffer,
+    const PointShadowFramePacket& packet) const {
+    // Inside the face's rendering instance (LOAD): clear the whole face.
+    const uint32_t resolution = pools_[poolIndex(packet.resolution)].resolution;
     const VkClearAttachment attachment{ VK_IMAGE_ASPECT_DEPTH_BIT, 0,
         { .depthStencil = { 1.0f, 0u } } };
     const VkClearRect clear{ { { 0, 0 },
-        { pool.resolution, pool.resolution } }, 0, 1 };
+        { resolution, resolution } }, 0, 1 };
     vkCmdClearAttachments(commandBuffer, 1, &attachment, 1, &clear);
     const VkViewport viewport{ 0.0f, 0.0f,
-        static_cast<float>(pool.resolution),
-        static_cast<float>(pool.resolution), 0.0f, 1.0f };
+        static_cast<float>(resolution),
+        static_cast<float>(resolution), 0.0f, 1.0f };
     const VkRect2D scissor{ { 0, 0 },
-        { pool.resolution, pool.resolution } };
+        { resolution, resolution } };
     vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
     vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
     // Perspective cube faces become arbitrarily steep at their edges. A
     // directional-style slope bias can therefore erase nearby occluders; point
     // shadows use the receiver-side normal/depth bias in point_shadow.glsl.
     vkCmdSetDepthBias(commandBuffer, 0.0f, 0.0f, 0.0f);
-}
-
-void VulkanPointShadowPools::endFace(VkCommandBuffer commandBuffer) const {
-    vkCmdEndRenderPass(commandBuffer);
 }
 
 VkPipeline VulkanPointShadowPools::pipeline(bool alphaMasked,
@@ -452,9 +387,14 @@ VkPipeline VulkanPointShadowPools::createPipeline(bool alphaMasked,
         create.pColorBlendState = &blend;
         create.pDynamicState = &dynamic;
         create.layout = pipelineLayout_;
-        create.renderPass = renderPass_;
+        // M7R R4a: dynamic rendering, depth only.
+        VkPipelineRenderingCreateInfo rendering{
+            VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO };
+        rendering.depthAttachmentFormat = VK_FORMAT_D32_SFLOAT;
+        create.pNext = &rendering;
+        create.renderPass = VK_NULL_HANDLE;
         VkPipeline result = VK_NULL_HANDLE;
-        requireSuccess(vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1,
+        requireSuccess(vkCreateGraphicsPipelines(device_, pipelineCache_, 1,
             &create, nullptr, &result),
             "vkCreateGraphicsPipelines(point shadow)");
         if (fragment != VK_NULL_HANDLE)

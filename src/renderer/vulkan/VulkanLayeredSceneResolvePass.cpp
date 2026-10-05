@@ -21,15 +21,15 @@ namespace {
 
 } // namespace
 
-void VulkanLayeredSceneResolvePass::init(VkDevice device,
-    ::DescriptorAllocator& descriptors, VkDescriptorSetLayout globalLayout,
-    VkRenderPass sceneRenderPass) {
+void VulkanLayeredSceneResolvePass::init(VkDevice device, VkPipelineCache pipelineCache,
+    ::DescriptorAllocator& descriptors, VkDescriptorSetLayout globalLayout) {
     if (device_ != VK_NULL_HANDLE || device == VK_NULL_HANDLE ||
-        globalLayout == VK_NULL_HANDLE || sceneRenderPass == VK_NULL_HANDLE) {
+        globalLayout == VK_NULL_HANDLE) {
         throw std::invalid_argument(
             "Invalid layered scene-resolve initialization");
     }
     device_ = device;
+    pipelineCache_ = pipelineCache;
     descriptors_ = &descriptors;
     try {
         const std::array<VkDescriptorSetLayoutBinding, 2> bindings{{
@@ -62,7 +62,7 @@ void VulkanLayeredSceneResolvePass::init(VkDevice device,
         requireSuccess(vkCreatePipelineLayout(device_, &pipelineLayoutInfo,
             nullptr, &pipelineLayout_),
             "vkCreatePipelineLayout(layered scene resolve)");
-        pipeline_ = createPipeline(sceneRenderPass);
+        pipeline_ = createPipeline();
     }
     catch (...) {
         cleanup();
@@ -70,8 +70,7 @@ void VulkanLayeredSceneResolvePass::init(VkDevice device,
     }
 }
 
-VkPipeline VulkanLayeredSceneResolvePass::createPipeline(
-    VkRenderPass sceneRenderPass) const {
+VkPipeline VulkanLayeredSceneResolvePass::createPipeline() const {
     VkShaderModule vertex = VK_NULL_HANDLE;
     VkShaderModule fragment = VK_NULL_HANDLE;
     try {
@@ -149,9 +148,16 @@ VkPipeline VulkanLayeredSceneResolvePass::createPipeline(
         pipelineInfo.pColorBlendState = &colorBlend;
         pipelineInfo.pDynamicState = &dynamicState;
         pipelineInfo.layout = pipelineLayout_;
-        pipelineInfo.renderPass = sceneRenderPass;
+        const VkFormat colorFormat = VulkanSceneColorFormat;
+        VkPipelineRenderingCreateInfo rendering{
+            VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO };
+        rendering.colorAttachmentCount = 1u;
+        rendering.pColorAttachmentFormats = &colorFormat;
+        rendering.depthAttachmentFormat = VK_FORMAT_D32_SFLOAT;
+        pipelineInfo.pNext = &rendering;
+        pipelineInfo.renderPass = VK_NULL_HANDLE;
         VkPipeline pipeline = VK_NULL_HANDLE;
-        requireSuccess(vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1u,
+        requireSuccess(vkCreateGraphicsPipelines(device_, pipelineCache_, 1u,
             &pipelineInfo, nullptr, &pipeline),
             "vkCreateGraphicsPipelines(layered scene resolve)");
         vkDestroyShaderModule(device_, fragment, nullptr);

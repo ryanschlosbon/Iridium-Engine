@@ -20,7 +20,8 @@ namespace Iridium {
     // sets 0-3 layout-compatible with the production complex-forward path.
     class VulkanLayeredLocalCompositionPass final {
     public:
-        void init(VkDevice device, ::DescriptorAllocator& descriptors,
+        void init(VkDevice device, VkPipelineCache pipelineCache,
+            ::DescriptorAllocator& descriptors,
             VkDescriptorSetLayout globalLayout,
             VkDescriptorSetLayout materialLayout,
             VkDescriptorSetLayout samplerLayout,
@@ -29,9 +30,6 @@ namespace Iridium {
         void clearDescriptors() noexcept;
         void cleanup() noexcept;
 
-        [[nodiscard]] VkRenderPass renderPass() const noexcept {
-            return renderPass_;
-        }
         [[nodiscard]] VkPipelineLayout pipelineLayout() const noexcept {
             return pipelineLayout_;
         }
@@ -64,8 +62,8 @@ namespace Iridium {
             VkPipelineLayout layout, bool premultipliedBlend) const;
 
         VkDevice device_ = VK_NULL_HANDLE;
+        VkPipelineCache pipelineCache_ = VK_NULL_HANDLE;
         ::DescriptorAllocator* descriptors_ = nullptr;
-        VkRenderPass renderPass_ = VK_NULL_HANDLE;
         VkDescriptorSetLayout interfaceLayout_ = VK_NULL_HANDLE;
         VkDescriptorSetLayout deepInterfaceLayout_ = VK_NULL_HANDLE;
         VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;

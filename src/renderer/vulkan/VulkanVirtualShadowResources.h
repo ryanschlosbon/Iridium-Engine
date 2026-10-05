@@ -32,7 +32,8 @@ namespace Iridium {
     // Frame dispatch requires a qualified receiver producer; sampling is gated.
     class VulkanVirtualShadowResources final {
     public:
-        void init(VkDevice device, VulkanResourceAllocator& allocator,
+        void init(VkDevice device, VkPipelineCache pipelineCache,
+            VulkanResourceAllocator& allocator,
             const VkPhysicalDeviceLimits& limits,
             const VirtualShadowResourceConfig& config,
             uint32_t workingSetCount);

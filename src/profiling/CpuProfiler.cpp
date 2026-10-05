@@ -25,6 +25,17 @@ namespace Iridium {
 
         thread_local ThreadScopeStack threadScopeStack;
 
+        // M7R R5b.1: the worker stream this thread records into, if any.
+        struct ThreadWorkerBinding {
+            CpuProfiler* profiler = nullptr;
+            uint32_t stream = 0;
+        };
+
+        thread_local ThreadWorkerBinding threadWorkerBinding;
+
+        // Scope-stack generation of worker scopes: they are not tied to a frame.
+        constexpr uint64_t WorkerScopeGeneration = std::numeric_limits<uint64_t>::max();
+
         size_t nearestRankIndex(size_t sampleCount, double percentile) {
             const size_t rank = static_cast<size_t>(
                 std::ceil(percentile * static_cast<double>(sampleCount)));
@@ -140,6 +151,25 @@ namespace Iridium {
 
     } // namespace
 
+    // One single-producer ring per worker thread. The worker publishes with head
+    // (release); endFrame consumes up to head and publishes tail. Event start
+    // times are absolute until the merge makes them frame-relative.
+    struct WorkerStreamRing {
+        alignas(64) std::atomic<uint64_t> head{ 0 };
+        uint64_t nextSequence = 0; // producer only
+        alignas(64) std::atomic<uint64_t> tail{ 0 };
+        std::atomic<uint32_t> dropped{ 0 };
+        std::array<CpuProfileEvent, CpuProfiler::WorkerStreamCapacity> events{};
+    };
+
+    struct CpuProfiler::WorkerStorage {
+        std::array<std::unique_ptr<WorkerStreamRing>, MaxWorkerStreams> streams{};
+        std::array<RunRangeAccumulator, MaxWorkerRunStatisticRanges> ranges{};
+        size_t rangeCount = 0;
+        uint64_t detailOverflowFrameCount = 0;
+        uint64_t unaggregatedValueCount = 0;
+    };
+
     struct CpuProfiler::RunStatisticsStorage {
         std::array<RunRangeAccumulator, MaxCpuRunStatisticRanges> cpuRanges{};
         std::array<RunRangeAccumulator, MaxGpuRunStatisticRanges> gpuRanges{};
@@ -164,17 +194,25 @@ namespace Iridium {
             return;
         }
 
+        const uint32_t workerStream = threadWorkerBinding.profiler == profiler
+            ? threadWorkerBinding.stream
+            : 0;
         uint64_t parentEventId = 0;
         if (threadScopeStack.depth > 0) {
             const ThreadScopeEntry& parent =
                 threadScopeStack.entries[threadScopeStack.depth - 1];
+            const uint64_t expectedGeneration = workerStream != 0
+                ? WorkerScopeGeneration
+                : profiler->currentGeneration();
             if (parent.profiler == profiler &&
-                parent.generation == profiler->currentGeneration()) {
+                parent.generation == expectedGeneration) {
                 parentEventId = parent.eventId;
             }
         }
 
-        token_ = profiler->beginEvent(name, parentEventId);
+        token_ = workerStream != 0
+            ? profiler->beginWorkerEvent(name, parentEventId, workerStream)
+            : profiler->beginEvent(name, parentEventId);
         if (!token_.active) {
             return;
         }
@@ -203,7 +241,12 @@ namespace Iridium {
             }
         }
 
-        token_.profiler->endEvent(token_);
+        if (token_.workerIndex != 0) {
+            token_.profiler->endWorkerEvent(token_);
+        }
+        else {
+            token_.profiler->endEvent(token_);
+        }
     }
 
     CpuProfiler::CpuProfiler(bool enabled) {
@@ -225,6 +268,59 @@ namespace Iridium {
             frame.counters.reserve(MaxCountersPerFrame);
         }
         storagePrepared_ = true;
+        prepareWorkerFrameStorage();
+    }
+
+    void CpuProfiler::prepareWorkerFrameStorage() {
+        // Worker events are retained only once a task system prepared streams,
+        // so profiles of runs without one keep their previous memory footprint.
+        if (!storagePrepared_ || workers_ == nullptr || workerFrameStoragePrepared_) {
+            return;
+        }
+        for (CpuFrameProfile& frame : *completedFrames_) {
+            frame.workerEvents.reserve(MaxWorkerEventsPerFrame);
+        }
+        workerFrameStoragePrepared_ = true;
+    }
+
+    void CpuProfiler::prepareWorkerStreams(uint32_t streamCount) {
+        if (frameOpen_.load(std::memory_order_acquire) ||
+            activeWriters_.load(std::memory_order_acquire) != 0) {
+            throw std::logic_error(
+                "CpuProfiler worker streams cannot be prepared during an active frame");
+        }
+        if (streamCount > MaxWorkerStreams) {
+            throw std::invalid_argument("CpuProfiler worker stream count exceeds capacity");
+        }
+        const uint32_t current = workerStreamCount_.load(std::memory_order_acquire);
+        if (streamCount <= current) {
+            return;
+        }
+        if (workers_ == nullptr) {
+            workers_ = std::make_unique<WorkerStorage>();
+        }
+        for (uint32_t index = std::max<uint32_t>(current, 1); index < streamCount; ++index) {
+            workers_->streams[index] = std::make_unique<WorkerStreamRing>();
+        }
+        prepareWorkerFrameStorage();
+        workerStreamCount_.store(streamCount, std::memory_order_release);
+    }
+
+    uint32_t CpuProfiler::workerStreamCount() const noexcept {
+        return workerStreamCount_.load(std::memory_order_acquire);
+    }
+
+    bool CpuProfiler::bindCurrentThreadToWorkerStream(uint32_t streamIndex) noexcept {
+        if (streamIndex == 0 ||
+            streamIndex >= workerStreamCount_.load(std::memory_order_acquire)) {
+            return false;
+        }
+        threadWorkerBinding = { this, streamIndex };
+        return true;
+    }
+
+    void CpuProfiler::unbindCurrentThreadFromWorkerStream() noexcept {
+        threadWorkerBinding = {};
     }
 
     void CpuProfiler::setEnabled(bool enabled) {
@@ -310,6 +406,8 @@ namespace Iridium {
             activeCounters_.begin(), activeCounters_.begin() + counterCount);
         destination.memory = activeMemoryRecorded_ ? activeMemory_ : FrameMemoryProfile{};
 
+        drainWorkerStreams(destination);
+
         destination.droppedEvents = activeDroppedEvents_.load(std::memory_order_acquire);
         destination.droppedGpuRanges = 0;
         destination.droppedCounters = activeDroppedCounters_.load(std::memory_order_acquire);
@@ -317,6 +415,7 @@ namespace Iridium {
         destination.gpuRangesAttached = false;
 
         recordCpuRunStatistics(destination);
+        recordWorkerRunStatistics(destination);
 
         nextCompletedSlot_ = (nextCompletedSlot_ + 1) % CompletedFrameCapacity;
         completedCount_ = std::min(completedCount_ + 1, CompletedFrameCapacity);
@@ -379,6 +478,86 @@ namespace Iridium {
 
         token.active = false;
         activeWriters_.fetch_sub(1, std::memory_order_release);
+    }
+
+    CpuEventToken CpuProfiler::beginWorkerEvent(const char* name,
+        uint64_t parentEventId, uint32_t workerIndex) noexcept {
+        CpuEventToken token{};
+        if (name == nullptr || !isEnabled() || workers_ == nullptr ||
+            workerIndex >= workerStreamCount_.load(std::memory_order_acquire)) {
+            return token;
+        }
+        WorkerStreamRing& stream = *workers_->streams[workerIndex];
+        token.profiler = this;
+        token.name = name;
+        // Worker ids never collide with the per-frame shared ids (which restart
+        // at 1 every frame) or with another stream's ids.
+        token.eventId = (static_cast<uint64_t>(workerIndex) << 48) |
+            (++stream.nextSequence & ((uint64_t{ 1 } << 48) - 1));
+        token.parentEventId = parentEventId;
+        token.generation = WorkerScopeGeneration;
+        token.threadId = currentThreadId();
+        token.startNanoseconds = nowNanoseconds();
+        token.workerIndex = workerIndex;
+        token.active = true;
+        return token;
+    }
+
+    void CpuProfiler::endWorkerEvent(CpuEventToken& token) noexcept {
+        if (!token.active || token.profiler != this || workers_ == nullptr) {
+            return;
+        }
+        const uint64_t endNanoseconds = nowNanoseconds();
+        WorkerStreamRing& stream = *workers_->streams[token.workerIndex];
+        const uint64_t head = stream.head.load(std::memory_order_relaxed);
+        const uint64_t tail = stream.tail.load(std::memory_order_acquire);
+        if (head - tail >= WorkerStreamCapacity) {
+            stream.dropped.fetch_add(1, std::memory_order_relaxed);
+        }
+        else {
+            CpuProfileEvent& event = stream.events[head % WorkerStreamCapacity];
+            event.name = token.name;
+            event.eventId = token.eventId;
+            event.parentEventId = token.parentEventId;
+            event.threadId = token.threadId;
+            event.startNanoseconds = token.startNanoseconds;
+            event.durationNanoseconds = endNanoseconds >= token.startNanoseconds
+                ? endNanoseconds - token.startNanoseconds
+                : 0;
+            event.workerIndex = token.workerIndex;
+            stream.head.store(head + 1, std::memory_order_release);
+        }
+        token.active = false;
+    }
+
+    void CpuProfiler::drainWorkerStreams(CpuFrameProfile& destination) noexcept {
+        destination.workerEvents.clear();
+        destination.droppedWorkerEvents = 0;
+        if (workers_ == nullptr) {
+            return;
+        }
+        const uint32_t streamCount = workerStreamCount_.load(std::memory_order_acquire);
+        uint64_t dropped = 0;
+        for (uint32_t index = 1; index < streamCount; ++index) {
+            WorkerStreamRing& stream = *workers_->streams[index];
+            const uint64_t head = stream.head.load(std::memory_order_acquire);
+            uint64_t tail = stream.tail.load(std::memory_order_relaxed);
+            for (; tail != head; ++tail) {
+                if (destination.workerEvents.size() >= MaxWorkerEventsPerFrame) {
+                    ++dropped;
+                    continue;
+                }
+                CpuProfileEvent event = stream.events[tail % WorkerStreamCapacity];
+                event.startNanoseconds = event.startNanoseconds >= frameStartNanoseconds_
+                    ? event.startNanoseconds - frameStartNanoseconds_
+                    : 0;
+                destination.workerEvents.push_back(event);
+            }
+            stream.tail.store(head, std::memory_order_release);
+            dropped += stream.dropped.exchange(0, std::memory_order_relaxed);
+        }
+        destination.droppedWorkerEvents = static_cast<uint32_t>(std::min<uint64_t>(
+            dropped, std::numeric_limits<uint32_t>::max()));
     }
 
     void CpuProfiler::recordCounter(const char* name, uint64_t value,
@@ -525,6 +704,40 @@ namespace Iridium {
         }
     }
 
+    void CpuProfiler::recordWorkerRunStatistics(
+        const CpuFrameProfile& frame) noexcept {
+        if (workers_ == nullptr) {
+            return;
+        }
+        if (frame.droppedWorkerEvents != 0) {
+            ++workers_->detailOverflowFrameCount;
+            return;
+        }
+
+        std::array<FrameRangeDuration, MaxWorkerEventsPerFrame> frameRanges{};
+        size_t frameRangeCount = 0;
+        for (const CpuProfileEvent& event : frame.workerEvents) {
+            FrameRangeDuration* range = findOrCreateFrameRange(
+                frameRanges, frameRangeCount, event.name);
+            if (range == nullptr) {
+                ++workers_->unaggregatedValueCount;
+                continue;
+            }
+            addFrameRangeDuration(*range, event.durationNanoseconds);
+        }
+
+        for (size_t index = 0; index < frameRangeCount; ++index) {
+            const FrameRangeDuration& range = frameRanges[index];
+            RunRangeAccumulator* accumulator = findOrCreateRunAccumulator(
+                workers_->ranges, workers_->rangeCount, range.name);
+            if (accumulator == nullptr) {
+                ++workers_->unaggregatedValueCount;
+                continue;
+            }
+            appendRunSample(*accumulator, range, frame.frameId);
+        }
+    }
+
     void CpuProfiler::recordGpuRunStatistics(
         const CpuFrameProfile& frame) noexcept {
         const uint32_t unavailableRangeCount = static_cast<uint32_t>(
@@ -625,6 +838,12 @@ namespace Iridium {
             runStatistics_->unaggregatedCpuRangeValueCount;
         result.unaggregatedGpuRangeValueCount =
             runStatistics_->unaggregatedGpuRangeValueCount;
+        if (workers_ != nullptr) {
+            appendStatistics(workers_->ranges, workers_->rangeCount,
+                result.workerRanges);
+            result.workerDetailOverflowFrameCount = workers_->detailOverflowFrameCount;
+            result.unaggregatedWorkerRangeValueCount = workers_->unaggregatedValueCount;
+        }
         return result;
     }
 

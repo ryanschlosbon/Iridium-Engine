@@ -11,12 +11,16 @@
 #include <memory>
 #include <mutex>
 #include <set>
-#include <thread>
+#include <stop_token>
 #include <vector>
 
 namespace Iridium {
 
     class EngineLog;
+    namespace Tasks {
+        class FunctionStrand;
+        class TaskSystem;
+    }
 
     struct PreparedCatalogModel {
         AssetGuid assetGuid;
@@ -30,12 +34,16 @@ namespace Iridium {
 
     class AssetModelPreparationService {
     public:
+        // Requests prepare one at a time on a Background strand of the task
+        // system (M7R R5b.2).
         AssetModelPreparationService(
+            Tasks::TaskSystem& tasks,
             std::filesystem::path assetRoot,
             std::filesystem::path ddcRoot,
             CookTarget target,
             EngineLog* log = nullptr);
         AssetModelPreparationService(
+            Tasks::TaskSystem& tasks,
             std::filesystem::path assetRoot,
             std::shared_ptr<LocalDerivedDataCache> cache,
             CookTarget target,
@@ -53,10 +61,20 @@ namespace Iridium {
         void shutdown() noexcept;
 
     private:
-        [[nodiscard]] PreparedCatalogModel prepare(
+        struct CookState;
+        [[nodiscard]] std::shared_ptr<CookState> prepareCook(
             const AssetCatalogRecord& record,
+            std::stop_token stopToken,
+            PreparedCatalogModel& result);
+        void finishCook(const CookState& state,
+            const DdcRequestResult& cooked,
+            PreparedCatalogModel& result);
+        void publish(const AssetCatalogRecord& record,
+            PreparedCatalogModel result,
             std::stop_token stopToken);
-        void workerLoop(std::stop_token stopToken);
+        // Prepares the oldest queued request (a strand item); its cook
+        // completes it through a continuation.
+        void runNext();
 
         std::filesystem::path assetRoot_;
         std::shared_ptr<LocalDerivedDataCache>
@@ -64,13 +82,16 @@ namespace Iridium {
         CookTarget target_;
         ImporterRegistry importers_;
         mutable std::mutex mutex_;
-        std::condition_variable_any condition_;
         std::deque<AssetCatalogRecord> requests_;
         std::vector<PreparedCatalogModel> results_;
         std::set<AssetGuid> pending_;
         bool shutdown_ = false;
-        std::jthread worker_;
+        uint32_t cooksInFlight_ = 0;
+        std::condition_variable cooksIdle_;
+        std::stop_source stop_;
         EngineLog* log_ = nullptr;
+        // Declared last: drained in shutdown() before the state above goes.
+        std::unique_ptr<Tasks::FunctionStrand> strand_;
     };
 
 } // namespace Iridium

@@ -1,5 +1,6 @@
 #include "assets/AssetCatalogService.h"
 #include "core/EngineLog.h"
+#include "core/tasks/TaskSystem.h"
 
 #include <algorithm>
 #include <iterator>
@@ -48,20 +49,23 @@ namespace Iridium {
     } // namespace
 
     AssetCatalogService::AssetCatalogService(
+        Tasks::TaskSystem& tasks,
         AssetCatalog* catalog,
         std::vector<AssetRoot> roots,
         EngineLog* log)
         : AssetCatalogService(
-            catalog, std::move(roots),
+            tasks, catalog, std::move(roots),
             createStandardAssetImporterRegistry(),
             log) {}
 
     AssetCatalogService::AssetCatalogService(
+        Tasks::TaskSystem& tasks,
         AssetCatalog* catalog,
         std::vector<AssetRoot> roots,
         ImporterRegistry importers,
         EngineLog* log)
-        : catalog_(catalog),
+        : tasks_(tasks),
+          catalog_(catalog),
           roots_(std::move(roots)),
           contentOperations_(roots_),
           importers_(std::move(importers)),
@@ -70,10 +74,8 @@ namespace Iridium {
             throw std::invalid_argument(
                 "Asset catalog service requires a catalog and asset roots.");
         }
-        worker_ = std::jthread(
-            [this](std::stop_token stopToken) {
-                workerLoop(stopToken);
-            });
+        strand_ = std::make_unique<Tasks::FunctionStrand>(tasks_,
+            Tasks::TaskPriority::Background, "asset.catalog.job");
     }
 
     AssetCatalogService::~AssetCatalogService() {
@@ -85,7 +87,7 @@ namespace Iridium {
         std::string rootId,
         std::filesystem::path
             destinationDirectory) {
-        std::lock_guard lock(mutex_);
+        std::unique_lock lock(mutex_);
         if (shutdown_) {
             throw std::logic_error(
                 "Cannot import after asset catalog service shutdown.");
@@ -114,12 +116,13 @@ namespace Iridium {
                         .sourcePath
                         .generic_string());
         }
-        condition_.notify_all();
+        lock.unlock();
+        schedule();
         return serial;
     }
 
     uint64_t AssetCatalogService::requestRefresh() {
-        std::lock_guard lock(mutex_);
+        std::unique_lock lock(mutex_);
         if (shutdown_) {
             throw std::logic_error(
                 "Cannot refresh after asset catalog service shutdown.");
@@ -138,7 +141,8 @@ namespace Iridium {
             .serial = serial,
             .kind = AssetCatalogJobKind::Refresh,
         });
-        condition_.notify_all();
+        lock.unlock();
+        schedule();
         return serial;
     }
 
@@ -148,7 +152,7 @@ namespace Iridium {
             throw std::invalid_argument(
                 "Settings update requires a root GUID and settings object.");
         }
-        std::lock_guard lock(mutex_);
+        std::unique_lock lock(mutex_);
         if (shutdown_) {
             throw std::logic_error(
                 "Cannot update settings after asset catalog service shutdown.");
@@ -164,13 +168,14 @@ namespace Iridium {
             .assetGuid = assetGuid,
             .settings = std::move(settings),
         });
-        condition_.notify_all();
+        lock.unlock();
+        schedule();
         return serial;
     }
 
     uint64_t AssetCatalogService::enqueue(
         Job job) {
-        std::lock_guard lock(mutex_);
+        std::unique_lock lock(mutex_);
         if (shutdown_) {
             throw std::logic_error(
                 "Cannot mutate project content after asset catalog service shutdown.");
@@ -180,9 +185,11 @@ namespace Iridium {
                 "Asset catalog job serial is exhausted.");
         }
         job.serial = ++serial_;
+        const uint64_t serial = job.serial;
         jobs_.push_back(std::move(job));
-        condition_.notify_all();
-        return serial_;
+        lock.unlock();
+        schedule();
+        return serial;
     }
 
     uint64_t AssetCatalogService::requestCreateFolder(
@@ -286,8 +293,7 @@ namespace Iridium {
                     jobs_.end()));
             jobs_.clear();
         }
-        worker_.request_stop();
-        condition_.notify_all();
+        stop_.request_stop();
         if (log_) {
             for (const Job& job :
                 cancelled) {
@@ -299,7 +305,8 @@ namespace Iridium {
                         " cancelled during editor shutdown.");
             }
         }
-        if (worker_.joinable()) worker_.join();
+        // Waits for the running job; queued strand items find no job.
+        strand_->waitIdle();
     }
 
     bool AssetCatalogService::sourceBelongsToRoot(
@@ -532,9 +539,28 @@ namespace Iridium {
             }
             const AssetDiscoveryResult discovery =
                 discoverAssetRoots(roots_);
-            catalog_->rebuild(
-                discovery.records,
-                discovery.sourceDirectories);
+            // The SQLite transaction runs on the pinned I/O thread (M7R
+            // R5b.2, ADR-0015); this job waits for it without running work.
+            std::exception_ptr rebuildFailure;
+            bool rebuilt = false;
+            const bool ran = tasks_.runOnPinnedIo([&] {
+                try {
+                    catalog_->rebuild(
+                        discovery.records,
+                        discovery.sourceDirectories);
+                    rebuilt = true;
+                }
+                catch (...) {
+                    rebuildFailure = std::current_exception();
+                }
+            }, "asset.catalog.rebuild");
+            if (rebuildFailure) {
+                std::rethrow_exception(rebuildFailure);
+            }
+            if (!ran || !rebuilt) {
+                throw std::runtime_error(
+                    "Catalog rebuild was cancelled by shutdown.");
+            }
             result.recordCount = discovery.records.size();
             if (discovery.hasErrors()) {
                 result.diagnostic =
@@ -556,85 +582,84 @@ namespace Iridium {
         return result;
     }
 
-    void AssetCatalogService::workerLoop(
-        std::stop_token stopToken) {
-        while (!stopToken.stop_requested()) {
-            Job job;
-            {
-                std::unique_lock lock(mutex_);
-                condition_.wait(lock, [this, &stopToken] {
-                    return shutdown_ ||
-                        stopToken.stop_requested() ||
-                        !jobs_.empty();
-                });
-                if (shutdown_ || stopToken.stop_requested()) return;
-                job = std::move(jobs_.front());
-                jobs_.pop_front();
-                active_ = true;
+    void AssetCatalogService::runNextJob() {
+        Job job;
+        {
+            std::lock_guard lock(mutex_);
+            if (shutdown_ || jobs_.empty()) return;
+            job = std::move(jobs_.front());
+            jobs_.pop_front();
+            active_ = true;
+        }
+        const std::stop_token stopToken = stop_.get_token();
+        if (log_) {
+            log_->info(
+                job.kind ==
+                        AssetCatalogJobKind::Import
+                    ? "Asset Import"
+                    : "Asset Catalog",
+                jobLabel(
+                    job.serial,
+                    job.kind) +
+                    " started.");
+        }
+        AssetCatalogJobResult result =
+            execute(job, stopToken);
+        if (log_) {
+            const std::string category =
+                job.kind ==
+                        AssetCatalogJobKind::Import
+                    ? "Asset Import"
+                    : "Asset Catalog";
+            std::string message =
+                jobLabel(
+                    job.serial,
+                    job.kind);
+            if (result.cancelled) {
+                log_->warning(
+                    category,
+                    message +
+                        " cancelled.");
             }
-            if (log_) {
-                log_->info(
-                    job.kind ==
-                            AssetCatalogJobKind::Import
-                        ? "Asset Import"
-                        : "Asset Catalog",
-                    jobLabel(
-                        job.serial,
-                        job.kind) +
-                        " started.");
+            else if (!result.succeeded) {
+                log_->error(
+                    category,
+                    message +
+                        " failed: " +
+                        result.diagnostic);
             }
-            AssetCatalogJobResult result =
-                execute(job, stopToken);
-            if (log_) {
-                const std::string category =
-                    job.kind ==
-                            AssetCatalogJobKind::Import
-                        ? "Asset Import"
-                        : "Asset Catalog";
-                std::string message =
-                    jobLabel(
-                        job.serial,
-                        job.kind);
-                if (result.cancelled) {
-                    log_->warning(
-                        category,
-                        message +
-                            " cancelled.");
+            else {
+                message +=
+                    " completed";
+                if (!result.sourcePath
+                        .empty()) {
+                    message += ": " +
+                        result.sourcePath
+                            .generic_string();
                 }
-                else if (!result.succeeded) {
-                    log_->error(
-                        category,
-                        message +
-                            " failed: " +
-                            result.diagnostic);
-                }
-                else {
+                if (!result.diagnostic
+                        .empty()) {
                     message +=
-                        " completed";
-                    if (!result.sourcePath
-                            .empty()) {
-                        message += ": " +
-                            result.sourcePath
-                                .generic_string();
-                    }
-                    if (!result.diagnostic
-                            .empty()) {
-                        message +=
-                            " (" +
-                            result.diagnostic +
-                            ')';
-                    }
-                    log_->info(
-                        category,
-                        std::move(message));
+                        " (" +
+                        result.diagnostic +
+                        ')';
                 }
-            }
-            {
-                std::lock_guard lock(mutex_);
-                active_ = false;
-                results_.push_back(std::move(result));
+                log_->info(
+                    category,
+                    std::move(message));
             }
         }
+        {
+            std::lock_guard lock(mutex_);
+            active_ = false;
+            results_.push_back(std::move(result));
+        }
+    }
+
+    void AssetCatalogService::schedule() {
+        // One strand item per queued job; each runs the oldest job, so jobs
+        // keep their FIFO order (M7R R5b.2). Posted outside mutex_.
+        (void)strand_->post([this] { runNextJob(); });
     }
 
 } // namespace Iridium

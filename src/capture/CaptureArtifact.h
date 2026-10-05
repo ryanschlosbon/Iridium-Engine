@@ -1,6 +1,6 @@
 #pragma once
 
-#include "renderer/rhi/FrameCapture.h"
+#include "core/types/FrameCapture.h"
 
 #include <cstdint>
 #include <filesystem>

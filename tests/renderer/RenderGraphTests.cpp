@@ -3,6 +3,7 @@
 #include <exception>
 #include <iostream>
 #include <iterator>
+#include <limits>
 #include <string_view>
 
 namespace {
@@ -135,6 +136,131 @@ namespace {
         CHECK(validity.isValid(0));
         validity.invalidateAll();
         CHECK(!validity.isValid(0));
+        return true;
+    }
+
+    // M7R R3b.10: createHistory declares a linked previous/current pair on two
+    // non-reusable slots outside the per-frame pool.
+    bool testHistoryPairDeclaration() {
+        RenderGraphBuilder builder;
+        const auto history = builder.createHistory("taa", imageDesc());
+        CHECK(history.pair == 0);
+        ResourceHandle scene = builder.createResource("scene", imageDesc());
+        const PassHandle draw = builder.addPass("draw");
+        const PassHandle resolve = builder.addPass("resolve");
+        const PassHandle post = builder.addPass("post");
+        scene = builder.write(draw, scene, Access::ColorAttachment, LoadOp::Clear);
+        builder.read(resolve, scene, Access::SampledRead);
+        builder.read(resolve, history.previous, Access::SampledRead);
+        const ResourceHandle current = builder.write(resolve, history.current,
+            Access::ColorAttachment, LoadOp::Clear);
+        builder.read(post, current, Access::SampledRead);
+        // `previous` is read-only.
+        CHECK(throwsBuildError([&] {
+            (void)builder.write(post, history.previous, Access::StorageWrite); }));
+
+        const CompileResult result = builder.compile();
+        CHECK(result.succeeded());
+        const CompiledGraph& graph = *result.graph;
+        CHECK(graph.historyPairs().size() == 1);
+        const CompiledHistoryPair& pair = graph.historyPairs()[0];
+        CHECK(pair.name == "taa");
+        CHECK(graph.resources()[pair.previousLogical].name == "taa.previous");
+        CHECK(graph.resources()[pair.currentLogical].name == "taa.current");
+        CHECK(graph.resources()[pair.previousLogical].historyRole == HistoryRole::Previous);
+        CHECK(graph.resources()[pair.currentLogical].historyPair == 0);
+        CHECK(graph.resources()[pair.previousLogical].desc.lifetime ==
+            ResourceLifetime::History);
+        // Two history slots, never in the per-frame pool, never shared.
+        CHECK(graph.historySlots().size() == 2);
+        CHECK(pair.slots[0] == 0 && pair.slots[1] == 1);
+        CHECK(graph.resources()[pair.previousLogical].physicalSlot == InvalidIndex);
+        CHECK(graph.resources()[pair.currentLogical].physicalSlot == InvalidIndex);
+        for (const PhysicalResourceSlot& slot : graph.physicalSlots()) {
+            for (const uint32_t logical : slot.logicalResources) {
+                CHECK(graph.resources()[logical].historyPair == InvalidIndex);
+            }
+        }
+        for (const PhysicalResourceSlot& slot : graph.historySlots()) {
+            CHECK(!slot.transientReusable);
+            CHECK((slot.usages & usageBit(Access::ColorAttachment)) != 0);
+            CHECK((slot.usages & usageBit(Access::SampledRead)) != 0);
+            CHECK(slot.image == imageDesc().image);
+        }
+        CHECK(graph.historyResources().size() == 2);
+
+        // `current` holds nothing until this frame's writer has run.
+        RenderGraphBuilder early;
+        const auto earlyHistory = early.createHistory("taa", imageDesc());
+        early.read(early.addPass("too-early"), earlyHistory.current, Access::SampledRead);
+        CHECK(hasDiagnostic(early.compile(), DiagnosticCode::ReadBeforeWrite));
+
+        // History cannot be imported.
+        ResourceDesc imported = imageDesc(Format::Rgba16Float, ResourceLifetime::External);
+        imported.imported = true;
+        imported.initialAccess = Access::SampledRead;
+        CHECK(throwsBuildError([&] { (void)builder.createHistory("bad", imported); }));
+
+        // Pair data is hashed; graphs without pairs keep their former hashes
+        // (only pair members hash pair fields).
+        RenderGraphBuilder single;
+        const ResourceHandle lone = single.createResource("taa.previous",
+            imageDesc(Format::Rgba16Float, ResourceLifetime::History));
+        single.read(single.addPass("resolve"), lone, Access::SampledRead);
+        CHECK(single.compile().graph->topologyHash() != graph.topologyHash());
+        return true;
+    }
+
+    bool testHistoryValidityKeys() {
+        const auto build = [](uint32_t width) {
+            RenderGraphBuilder builder;
+            ResourceDesc desc = imageDesc();
+            desc.image.extent.width = width;
+            const auto history = builder.createHistory("taa", desc);
+            const PassHandle resolve = builder.addPass("resolve");
+            builder.read(resolve, history.previous, Access::SampledRead);
+            (void)builder.write(resolve, history.current, Access::ColorAttachment,
+                LoadOp::Clear);
+            return *builder.compile().graph;
+        };
+        const CompiledGraph graph = build(1920);
+        HistoryValidityTracker tracker;
+        tracker.resetForGraph(graph);
+        CHECK(tracker.pairCount() == 1);
+        const uint32_t previous = graph.historyPairs()[0].previousLogical;
+        const auto frame = [&](ViewHistoryContext view, bool written) {
+            tracker.beginFrame(view);
+            const bool valid = tracker.pairValid(0);
+            if (written) tracker.markWritten(0);
+            tracker.endFrame();
+            return valid;
+        };
+        CHECK(!frame({ 7, 0 }, true));        // first frame
+        CHECK(tracker.pairKey(0).extent.width == 1920);
+        CHECK(tracker.pairKey(0).format == Format::Rgba16Float);
+        CHECK(tracker.pairKey(0).topologyHash == graph.topologyHash());
+        CHECK(frame({ 7, 0 }, true));         // written last frame, same key
+        CHECK(tracker.isValid(previous));     // pair members report pair validity
+        CHECK(!frame({ 7, 1 }, true));        // reset revision
+        CHECK(frame({ 7, 1 }, false));        // writer skipped this frame...
+        CHECK(!frame({ 7, 1 }, true));        // ...so the next frame is invalid
+        CHECK(frame({ 7, 1 }, true));
+        CHECK(!frame({ 8, 1 }, true));        // view identity
+        CHECK(frame({ 8, 1 }, true));
+        tracker.invalidateAll();
+        CHECK(!frame({ 8, 1 }, true));
+        CHECK(frame({ 8, 1 }, true));
+        tracker.setValid(previous, false);
+        CHECK(!tracker.pairValid(0));
+        tracker.resetForGraph(graph);         // rebuild
+        CHECK(!frame({ 8, 1 }, true));
+        const CompiledGraph resized = build(1280);
+        CHECK(resized.topologyHash() != graph.topologyHash());
+        tracker.resetForGraph(resized);       // resize
+        CHECK(!frame({ 8, 1 }, true));
+        CHECK(tracker.pairKey(0).extent.width == 1280);
+        CHECK(frame({ 8, 1 }, true));
+        CHECK(throwsBuildError([&] { tracker.markWritten(1); }));
         return true;
     }
 
@@ -338,6 +464,121 @@ namespace {
         return true;
     }
 
+    // ---- M7R R4a: clear values and store operations ---------------------------
+
+    bool testClearValueBits() {
+        constexpr ClearValue black = ClearValue::color(0.0f, 0.0f, 0.0f, 1.0f);
+        static_assert(black.colorBits[3] == 0x3F80'0000u);
+        static_assert(ClearValue::color(1.0f, 0.0f, 0.0f, 0.0f).colorBits[0] == 0x3F80'0000u);
+        static_assert(ClearValue::colorUint(7u).colorBits[0] == 7u);
+        static_assert(ClearValue{}.depth == 1.0f && ClearValue{}.stencil == 0u);
+        static_assert(ClearValue::depthStencil(0.5f, 3u).depth == 0.5f);
+        // Equality is bit-exact: signed zeros differ, a NaN equals itself.
+        CHECK(ClearValue::color(0.0f, 0.0f, 0.0f, 0.0f) == ClearValue::colorUint(0u));
+        CHECK(!(ClearValue::color(-0.0f, 0.0f, 0.0f, 0.0f) == ClearValue::colorUint(0u)));
+        CHECK(!(ClearValue::depthStencil(-0.0f) == ClearValue::depthStencil(0.0f)));
+        const ClearValue nan = ClearValue::depthStencil(
+            std::numeric_limits<float>::quiet_NaN());
+        CHECK(nan == nan);
+        return true;
+    }
+
+    // One pass clearing colour and depth with `color`/`depth`, then a reader.
+    CompileResult clearGraph(LoadOp load, const ClearValue& color, const ClearValue& depth,
+        bool explicitOverload = true) {
+        RenderGraphBuilder builder;
+        ResourceHandle scene = builder.createResource("scene", imageDesc());
+        ResourceHandle sceneDepth = builder.createResource("depth", imageDesc(Format::D32Float));
+        const PassHandle draw = builder.addPass("draw");
+        const PassHandle sample = builder.addPass("sample");
+        if (explicitOverload) {
+            scene = builder.write(draw, scene, Access::ColorAttachment, load,
+                StoreOp::Store, color);
+            sceneDepth = builder.write(draw, sceneDepth, Access::DepthAttachmentWrite, load,
+                StoreOp::Store, depth);
+        }
+        else {
+            scene = builder.write(draw, scene, Access::ColorAttachment, load);
+            sceneDepth = builder.write(draw, sceneDepth, Access::DepthAttachmentWrite, load);
+        }
+        builder.read(sample, scene, Access::SampledRead);
+        builder.read(sample, sceneDepth, Access::DepthAttachmentRead);
+        return builder.compile();
+    }
+
+    bool testClearValuesCompileAndHash() {
+        const ClearValue grey = ClearValue::color(0.5f, 0.5f, 0.5f, 1.0f);
+        const ClearValue nearDepth = ClearValue::depthStencil(0.0f);
+        const CompileResult clear = clearGraph(LoadOp::Clear, grey, nearDepth);
+        CHECK(clear.succeeded());
+        const auto& usages = clear.graph->usages();
+        CHECK(usages[0].loadOp == LoadOp::Clear && usages[0].clearValue == grey);
+        CHECK(usages[1].loadOp == LoadOp::Clear && usages[1].clearValue == nearDepth);
+        CHECK(usages[0].storeOp == StoreOp::Store && usages[1].storeOp == StoreOp::Store);
+
+        // Clear values are topology only when the usage clears.
+        CHECK(clearGraph(LoadOp::Clear, grey, nearDepth).graph->topologyHash() ==
+            clear.graph->topologyHash());
+        CHECK(clearGraph(LoadOp::Clear, ClearValue::color(0.5f, 0.5f, 0.5f, 0.0f), nearDepth)
+            .graph->topologyHash() != clear.graph->topologyHash());
+        CHECK(clearGraph(LoadOp::Clear, grey, ClearValue::depthStencil(1.0f))
+            .graph->topologyHash() != clear.graph->topologyHash());
+        CHECK(clearGraph(LoadOp::Clear, grey, ClearValue::depthStencil(0.0f, 1u))
+            .graph->topologyHash() != clear.graph->topologyHash());
+        // The default value equals the overload without one.
+        CHECK(clearGraph(LoadOp::Clear, ClearValue{}, ClearValue{}).graph->topologyHash() ==
+            clearGraph(LoadOp::Clear, {}, {}, false).graph->topologyHash());
+        // A non-clearing usage drops its value: identical usage and hash.
+        const CompileResult dontCare = clearGraph(LoadOp::DontCare, grey, nearDepth);
+        CHECK(dontCare.succeeded());
+        CHECK(dontCare.graph->usages()[0].clearValue == ClearValue{});
+        CHECK(dontCare.graph->topologyHash() ==
+            clearGraph(LoadOp::DontCare, ClearValue{}, ClearValue{}).graph->topologyHash());
+        CHECK(dontCare.graph->topologyHash() != clear.graph->topologyHash());
+        return true;
+    }
+
+    bool testStoreOperations() {
+        // DepthAttachmentRead implies LOAD + NONE; other reads are unchanged.
+        const CompileResult clear = clearGraph(LoadOp::Clear, {}, {});
+        CHECK(clear.succeeded());
+        const CompiledPass& sample = clear.graph->passes()[1];
+        const CompiledUsage& sampled = clear.graph->usages()[sample.firstUsage];
+        const CompiledUsage& depthRead = clear.graph->usages()[sample.firstUsage + 1];
+        CHECK(sampled.access == Access::SampledRead && sampled.loadOp == LoadOp::DontCare &&
+            sampled.storeOp == StoreOp::Store);
+        CHECK(depthRead.access == Access::DepthAttachmentRead && !depthRead.write);
+        CHECK(depthRead.loadOp == LoadOp::Load && depthRead.storeOp == StoreOp::None);
+
+        // A write that stores NONE leaves nothing to read.
+        {
+            RenderGraphBuilder builder;
+            ResourceHandle scene = builder.createResource("scene", imageDesc());
+            const PassHandle draw = builder.addPass("draw");
+            const PassHandle sampleScene = builder.addPass("sample");
+            scene = builder.write(draw, scene, Access::ColorAttachment, LoadOp::Clear,
+                StoreOp::None, ClearValue{});
+            builder.read(sampleScene, scene, Access::SampledRead);
+            const CompileResult result = builder.compile();
+            CHECK(!result.succeeded());
+            CHECK(hasDiagnostic(result, DiagnosticCode::InvalidUsage));
+        }
+        // NONE and clear values are attachment-only.
+        RenderGraphBuilder builder;
+        ResourceDesc buffer{};
+        buffer.type = ResourceType::Buffer;
+        buffer.buffer.size = 64;
+        const ResourceHandle data = builder.createResource("data", buffer);
+        const PassHandle compute = builder.addPass("compute", QueueClass::Compute);
+        CHECK(throwsBuildError([&] {
+            (void)builder.write(compute, data, Access::StorageWrite, LoadOp::DontCare,
+                StoreOp::None, ClearValue{}); }));
+        CHECK(throwsBuildError([&] {
+            (void)builder.write(compute, data, Access::StorageWrite, LoadOp::Clear,
+                StoreOp::Store, ClearValue::colorUint(1u)); }));
+        return true;
+    }
+
 } // namespace
 
 int main() {
@@ -352,6 +593,8 @@ int main() {
         { "Read-before-write diagnostic", testReadBeforeWriteDiagnostic },
         { "Imported/exported states", testImportedAndExportedStates },
         { "History invalidation", testInvalidHistoryIsExplicit },
+        { "History pair declaration", testHistoryPairDeclaration },
+        { "History validity keys", testHistoryValidityKeys },
         { "Discarded content and stale export", testDiscardedContentsAndStaleExportAreRejected },
         { "Nonoverlap reuse", testNonoverlappingResourcesReuseSlot },
         { "Overlap and incompatibility", testOverlappingAndIncompatibleResourcesDoNotReuse },
@@ -359,6 +602,9 @@ int main() {
         { "Stale handles and capacity", testStaleHandlesAndFixedCapacity },
         { "Repeated compile and cache", testRepeatedCompileHashAndCache },
         { "Layered mip image contract", testLayeredMipImageContract },
+        { "Clear value bits", testClearValueBits },
+        { "Clear values compile and hash", testClearValuesCompileAndHash },
+        { "Store operations", testStoreOperations },
     };
 
     size_t failures = 0;

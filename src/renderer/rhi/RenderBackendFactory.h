@@ -1,17 +1,23 @@
 #pragma once
 
 #include "IRenderBackend.h"
+#include "RenderBackendExtension.h"
 
-#include <cstdint>
 #include <memory>
+#include <span>
 
 namespace Iridium {
 
-    enum class RenderBackendApi : uint8_t {
-        Vulkan,
-        DirectX12,
+    struct RenderBackendCreateInfo {
+        RenderBackendApi api = RenderBackendApi::Vulkan;
+        // Attached before init(), in order. Non-owning: each extension must
+        // outlive the backend. An extension for another API is rejected.
+        // Production runs attach none; the qualification harness supplies its
+        // extension through IFrameObserver::backendExtensions().
+        std::span<IRenderBackendExtension* const> extensions{};
     };
 
-    [[nodiscard]] std::unique_ptr<IRenderBackend> createRenderBackend(RenderBackendApi api);
+    [[nodiscard]] std::unique_ptr<IRenderBackend> createRenderBackend(
+        const RenderBackendCreateInfo& createInfo);
 
 } // namespace Iridium

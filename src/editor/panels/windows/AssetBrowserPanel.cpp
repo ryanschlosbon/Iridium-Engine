@@ -1994,7 +1994,7 @@ void AssetBrowserPanel::drawSettingsEditor(
         if (settingsDraft_.value("transparency_execution_mode",
                 std::string("classified")) == "legacy_two_bucket") {
             ImGui::TextColored(ImVec4(1.0f, 0.72f, 0.25f, 1.0f),
-                "Historical legacy metadata is ignored by production runtime. Use --developer-legacy-transparency for an explicit developer A/B run.");
+                "Historical legacy metadata is ignored by production runtime.");
         }
         bool required = true;
         ImGui::BeginDisabled();

@@ -1,5 +1,6 @@
 #include "assets/cooker/CookedArtifact.h"
 #include "assets/cooker/LocalDerivedDataCache.h"
+#include "core/tasks/TaskSystem.h"
 #include "ecs/Registry.h"
 #include "profiling/CpuAllocationProfile.h"
 #include "scene/authoring/CookedSceneCompiler.h"
@@ -387,6 +388,8 @@ namespace {
 } // namespace
 
 int main(int argc, char** argv) {
+    // M7R R5b.2: DDC cooks run as Background tasks on the engine task system.
+    Iridium::Tasks::TaskSystem tasks;
     try {
         const Options command = options(argc, argv);
         Registries registries = createRegistries();
@@ -404,7 +407,7 @@ int main(int argc, char** argv) {
             (".m4-cooked-ddc-" + std::to_string(command.entities));
         std::error_code filesystemError;
         std::filesystem::remove_all(ddcRoot, filesystemError);
-        Iridium::LocalDerivedDataCache cache(ddcRoot);
+        Iridium::LocalDerivedDataCache cache(ddcRoot, tasks);
         const auto storeDiagnostics = cache.storeAtomic(
             baselineCompile.artifact->cookKey, *baselineBlob);
         if (Iridium::hasCookErrors(storeDiagnostics)) {

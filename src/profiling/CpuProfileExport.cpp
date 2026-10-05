@@ -68,6 +68,7 @@ namespace Iridium {
         const CpuProfiler& profiler, const CpuProfileRunMetadata& metadata) {
         const std::vector<CpuFrameProfile> frames = profiler.snapshotCompletedFrames();
         const ProfileRunStatistics runStatistics = profiler.snapshotRunStatistics();
+        const bool workerStreamsPrepared = profiler.workerStreamCount() > 0;
 
         nlohmann::ordered_json benchmark = {
             { "fixture_id", metadata.benchmarkFixtureId.empty()
@@ -223,6 +224,15 @@ namespace Iridium {
                     { "committed_bytes", metadata.renderGraphCommittedBytes },
                     { "rebuild_count", metadata.renderGraphRebuildCount },
                     { "cache_miss_count", metadata.renderGraphCacheMissCount },
+                    // M7R R4b.4: heaps per frame slot; bytes over all slots.
+                    { "transient_aliasing", metadata.renderGraphTransientAliasing },
+                    { "alias_heap_count", metadata.renderGraphAliasHeapCount },
+                    { "aliased_resource_count",
+                        metadata.renderGraphAliasedResourceCount },
+                    { "aliased_requested_bytes",
+                        metadata.renderGraphAliasedRequestedBytes },
+                    { "alias_heap_committed_bytes",
+                        metadata.renderGraphAliasHeapCommittedBytes },
                     { "ordinary2_atlas_resident",
                         metadata.ordinary2AtlasResident },
                     { "ordinary2_atlas_extent", {
@@ -253,6 +263,20 @@ namespace Iridium {
                     metadata.frameTopologyPrewarmRequested },
                 { "frame_topology_prewarm_changed",
                     metadata.frameTopologyPrewarmChanged },
+                { "pipeline_cache", {
+                    { "state", metadata.pipelineCacheState },
+                    { "loaded_bytes", metadata.pipelineCacheLoadedBytes },
+                } },
+                { "upload_queue", {
+                    { "mode", metadata.uploadQueueMode },
+                    { "kind", metadata.uploadQueueKind },
+                    { "family", metadata.uploadQueueFamily },
+                    { "staging_ring_bytes", metadata.uploadStagingRingBytes },
+                    { "staging_ring_waits", metadata.uploadStagingRingWaits },
+                    { "dedicated_staging_uploads",
+                        metadata.uploadDedicatedStagingUploads },
+                    { "async_submits", metadata.uploadAsyncSubmits },
+                } },
                 { "refraction_pyramids_resident",
                     metadata.refractionPyramidsResident },
                 { "model_load_mode", metadata.modelLoadMode },
@@ -431,6 +455,24 @@ namespace Iridium {
                 } },
                 { "gpu_ranges_available", !frame.gpuRanges.empty() },
             };
+            // M7R R5b.1: worker scopes exist only once a task system prepared
+            // worker streams; profiles of runs without one are unchanged.
+            if (workerStreamsPrepared) {
+                nlohmann::ordered_json workerEventJson = nlohmann::ordered_json::array();
+                for (const CpuProfileEvent& event : frame.workerEvents) {
+                    workerEventJson.push_back({
+                        { "name", event.name != nullptr ? event.name : "unavailable" },
+                        { "event_id", event.eventId },
+                        { "parent_event_id", event.parentEventId },
+                        { "worker_index", event.workerIndex },
+                        { "thread_id", event.threadId },
+                        { "start_ns", event.startNanoseconds },
+                        { "duration_ns", event.durationNanoseconds },
+                    });
+                }
+                frameJson["worker_events"] = std::move(workerEventJson);
+                frameJson["overflow"]["dropped_worker_events"] = frame.droppedWorkerEvents;
+            }
             output << frameJson.dump() << '\n';
             if (frame.memory.engineAllocationTotalsAvailable) {
                 previousMemory = frame.memory;
@@ -476,6 +518,21 @@ namespace Iridium {
             { "cpu_ranges", std::move(rangeSummary) },
             { "gpu_ranges", std::move(gpuRangeSummary) },
         };
+        if (workerStreamsPrepared) {
+            nlohmann::ordered_json workerRangeSummary = nlohmann::ordered_json::object();
+            for (const ProfileRangeRunStatistics& range : runStatistics.workerRanges) {
+                workerRangeSummary[range.name != nullptr ? range.name : "unavailable"] =
+                    statisticsJson(range);
+            }
+            summary["aggregate_storage"]["worker_range_capacity"] =
+                CpuProfiler::MaxWorkerRunStatisticRanges;
+            summary["aggregate_storage"]["worker_detail_overflow_frame_count"] =
+                runStatistics.workerDetailOverflowFrameCount;
+            summary["aggregate_storage"]["unaggregated_worker_range_value_count"] =
+                runStatistics.unaggregatedWorkerRangeValueCount;
+            // Aggregate worker time per scope and frame (sum over workers).
+            summary["worker_ranges"] = std::move(workerRangeSummary);
+        }
         if (!frames.empty()) {
             const FrameMemoryProfile& memory = frames.back().memory;
             summary["memory_latest"] = {

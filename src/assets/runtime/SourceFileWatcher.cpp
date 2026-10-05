@@ -1,7 +1,10 @@
 #include "assets/runtime/SourceFileWatcher.h"
 
+#include "core/tasks/TaskSystem.h"
+
 #include <stdexcept>
 #include <system_error>
+#include <utility>
 
 namespace Iridium {
 
@@ -20,17 +23,23 @@ namespace Iridium {
 
     SourceFileWatcher::SourceFileWatcher(
         std::chrono::milliseconds scanInterval,
-        bool startWorker)
+        bool startWorker,
+        Tasks::TaskSystem* tasks)
         : scanInterval_(scanInterval) {
         if (scanInterval_.count() <= 0) {
             throw std::invalid_argument(
                 "Source watcher interval must be positive.");
         }
         if (startWorker) {
-            worker_ = std::jthread(
-                [this](std::stop_token stopToken) {
-                    workerLoop(stopToken);
-                });
+            if (tasks == nullptr) {
+                throw std::invalid_argument(
+                    "Automatic source watching needs the task system.");
+            }
+            // M7R R5b.2 (ADR-0015): the scan is blocking file I/O, so it runs
+            // on the pinned I/O thread, started by the frame tick.
+            periodic_ = std::make_unique<Tasks::Periodic>(*tasks,
+                scanInterval_, Tasks::Periodic::Target::PinnedIo,
+                [this] { scanNow(); }, "asset.source.watch_scan");
         }
     }
 
@@ -47,6 +56,10 @@ namespace Iridium {
         }
         const std::filesystem::path normalized =
             normalizePath(sourcePath);
+        // The registration stamp is read before the lock (M7R R5b.2: no file
+        // system call under the watcher's mutex).
+        uint64_t statFailures = 0;
+        const FileStamp stamp = readStamp(normalized, statFailures);
         std::lock_guard lock(mutex_);
         if (shutdown_) {
             throw std::logic_error(
@@ -55,14 +68,14 @@ namespace Iridium {
         auto [found, inserted] = watched_.try_emplace(
             normalized);
         if (inserted) {
-            found->second.stamp =
-                readStamp(normalized);
+            found->second.stamp = stamp;
+            found->second.generation = ++nextGeneration_;
+            stats_.statFailures += statFailures;
         }
         const bool ownerInserted =
             found->second.owners.insert(owner).second;
         stats_.watchedFiles =
             static_cast<uint32_t>(watched_.size());
-        condition_.notify_all();
         return inserted || ownerInserted;
     }
 
@@ -91,14 +104,42 @@ namespace Iridium {
     }
 
     void SourceFileWatcher::scanNow() {
-        std::lock_guard lock(mutex_);
-        if (shutdown_) return;
-        ++stats_.scans;
+        // M7R R5b.2: the scan copies the watched paths, stats them without the
+        // mutex, then applies the results to entries that were not re-watched
+        // in between (same generation).
+        struct ScanEntry {
+            std::filesystem::path path;
+            uint64_t generation = 0;
+            FileStamp stamp;
+        };
+        std::vector<ScanEntry> scanned;
+        {
+            std::lock_guard lock(mutex_);
+            if (shutdown_) return;
+            ++stats_.scans;
+            scanned.reserve(watched_.size());
+            for (const auto& [path, watched] : watched_) {
+                scanned.push_back({ path, watched.generation, {} });
+            }
+        }
         const uint64_t eventTime =
             monotonicNanoseconds();
-        for (auto& [path, watched] : watched_) {
-            const FileStamp current =
-                readStamp(path);
+        uint64_t statFailures = 0;
+        for (ScanEntry& entry : scanned) {
+            entry.stamp = readStamp(entry.path, statFailures);
+        }
+        std::lock_guard lock(mutex_);
+        if (shutdown_) return;
+        stats_.statFailures += statFailures;
+        for (const ScanEntry& entry : scanned) {
+            const auto found = watched_.find(entry.path);
+            if (found == watched_.end() ||
+                found->second.generation != entry.generation) {
+                continue;
+            }
+            const std::filesystem::path& path = found->first;
+            WatchedFile& watched = found->second;
+            const FileStamp& current = entry.stamp;
             if (current == watched.stamp) {
                 continue;
             }
@@ -142,10 +183,9 @@ namespace Iridium {
             if (shutdown_) return;
             shutdown_ = true;
         }
-        worker_.request_stop();
-        condition_.notify_all();
-        if (worker_.joinable()) {
-            worker_.join();
+        if (periodic_) {
+            // Unregisters from the frame tick and waits for a scan in flight.
+            periodic_->stop();
         }
     }
 
@@ -165,27 +205,28 @@ namespace Iridium {
 
     SourceFileWatcher::FileStamp
         SourceFileWatcher::readStamp(
-            const std::filesystem::path& path) {
+            const std::filesystem::path& path,
+            uint64_t& statFailures) {
         std::error_code error;
         const bool exists =
             std::filesystem::is_regular_file(
                 path, error);
         if (error) {
-            ++stats_.statFailures;
+            ++statFailures;
             return {};
         }
         if (!exists) return {};
         const uint64_t size =
             std::filesystem::file_size(path, error);
         if (error) {
-            ++stats_.statFailures;
+            ++statFailures;
             return {};
         }
         const auto lastWrite =
             std::filesystem::last_write_time(
                 path, error);
         if (error) {
-            ++stats_.statFailures;
+            ++statFailures;
             return {};
         }
         return {
@@ -193,24 +234,6 @@ namespace Iridium {
             .size = size,
             .lastWrite = lastWrite,
         };
-    }
-
-    void SourceFileWatcher::workerLoop(
-        std::stop_token stopToken) {
-        std::unique_lock lock(mutex_);
-        while (!shutdown_ &&
-            !stopToken.stop_requested()) {
-            condition_.wait_for(
-                lock, stopToken, scanInterval_,
-                [this] { return shutdown_; });
-            if (shutdown_ ||
-                stopToken.stop_requested()) {
-                return;
-            }
-            lock.unlock();
-            scanNow();
-            lock.lock();
-        }
     }
 
 } // namespace Iridium

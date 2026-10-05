@@ -12,6 +12,7 @@ void DescriptorAllocator::cleanup() {
     }
     activePools.clear();
     setOwners.clear();
+    spareOwnerNodes.clear();
     currentPool = VK_NULL_HANDLE;
 }
 
@@ -69,7 +70,16 @@ VkDescriptorSet DescriptorAllocator::allocate(VkDescriptorSetLayout layout) {
         throw std::runtime_error("Failed to allocate descriptor set!");
     }
 
-    setOwners.emplace(set, allocInfo.descriptorPool);
+    if (!spareOwnerNodes.empty()) {
+        auto node = std::move(spareOwnerNodes.back());
+        spareOwnerNodes.pop_back();
+        node.key() = set;
+        node.mapped() = allocInfo.descriptorPool;
+        setOwners.insert(std::move(node));
+    }
+    else {
+        setOwners.emplace(set, allocInfo.descriptorPool);
+    }
     return set;
 }
 
@@ -88,7 +98,7 @@ void DescriptorAllocator::free(VkDescriptorSet set) {
         throw std::runtime_error("Failed to free descriptor set!");
     }
 
-    setOwners.erase(owner);
+    spareOwnerNodes.push_back(setOwners.extract(owner));
 }
 
 void DescriptorAllocator::free(std::span<const VkDescriptorSet> sets) {
