@@ -5,7 +5,7 @@
 | Item | Value |
 |---|---|
 | Milestone | M9 — native motion vectors, jitter, native TAA (DLAA-class at 1:1), reactive handling, bloom, auto-exposure, generic reprojection/history utilities, vendor-neutral super-resolution input contract |
-| Status | **Draft — awaiting owner approval** (2026-10-05). No implementation slice has started. |
+| Status | **Approved** by the owner 2026-10-05. G1 `In Progress`. |
 | Lead | M9 lead session (Claude Code), from `docs/milestones/M9-task-lead-prompt.md` |
 | Branch / PR | `m9-temporal` from `Render-Refactor-for-Modularity` at `da8e4e8` (PR #7 merged). One PR into `Render-Refactor-for-Modularity`. |
 | ADRs | ADR-0002 (scene-linear HDR, single output transform, auto-exposure deferred to M9), ADR-0006 (velocity not GBuffer-only), ADR-0012, ADR-0013 (transport switch rebuilds the graph), ADR-0014 (identity; current/previous records), ADR-0015 (task rules), ADR-0016 (graph execution; History item 5) |
@@ -472,7 +472,7 @@ time on the integration branch; parallel lanes run in their own worktrees.
 
 | Slice | Tier | Summary |
 |---|---|---|
-| M9.0 | — | This plan and the audit (`Draft`; needs owner approval) |
+| M9.0 | — | This plan and the audit (`Accepted` 2026-10-05) |
 | G1 | refactor | View supplied before the first pass; one `ViewHistoryContext` type |
 | G2 | refactor | Per-view History sets, per-pair reset policy, `ViewMotionTracker` cut detection, ADR-0016 note |
 | G5a | refactor | Shared `view_uniforms.glsl`; offset asserts; ABI tests for every declarer |
@@ -724,11 +724,11 @@ unless the route names a transport.
 | Executor file size | History view sets live in a new `VulkanHistoryResources` helper, not inline in the executor |
 | Product regression | `--anti-aliasing none`, exposure `Manual` and bloom off stay supported; defaults change only after admission |
 
-## Owner decisions requested before G1
+## Owner decisions (2026-10-05)
 
-1. Approve this plan.
-2. **Auto-exposure default** after admission. The lead recommends `Auto` for the editor and runtime, with manual EV becoming compensation. Fixtures and benchmarks pin `Manual`.
-3. **Bloom default** after admission. The lead recommends on, at a physically small intensity, with no threshold.
+1. The plan is approved as written.
+2. **Auto-exposure default after admission: `Auto`** for the editor and runtime. Manual EV becomes exposure compensation, and `Manual` stays selectable. Benchmark and qualification fixtures pin `Manual`.
+3. **Bloom default after admission: on**, energy-conserving, at a physically small intensity (about 4% scatter), with no threshold. Intensity and an optional threshold or knee are adjustable.
 
 ## Decision log
 
@@ -737,6 +737,7 @@ unless the route names a transport.
 | 2026-10-05 | PR #7 is merged (`da8e4e8`); `m9-temporal` branched from `Render-Refactor-for-Modularity`. | `gh pr list`; `git log` |
 | 2026-10-05 | Audit corrections C1–C14 recorded. They change the design of G2 (per-view-turn validity), G5 (shared include first), M9.1 (fixed pipelines, ForwardOpaque class), G3 (publisher-side settle) and G6 (composition factory, sequences). | Four read-only audits against `da8e4e8` |
 | 2026-10-05 | Jitter lives in new UBO fields; `proj`/`inverseProjection` stay unjittered. Splitting the fields keeps every culling, Hi-Z, cluster and CPU consumer unchanged. | Jitter audit consumer table |
+| 2026-10-05 | Owner approved the plan as written. Defaults after admission: auto-exposure `Auto` (manual EV becomes compensation; fixtures pin `Manual`), and bloom on, subtle, no threshold. | Owner, in the lead session |
 | 2026-10-05 | Metrics tooling is a C++ tool, not Python with numpy (not installed; no new library). | `python -c "import numpy"` fails |
 
 ## Completion report
