@@ -333,7 +333,7 @@ namespace Iridium {
         void submitOpaqueQueue(const OpaqueSubmission& opaque,
             std::span<const DrawPacket> selectionQueue, bool isWireframe);
         void submitLightingPass(const glm::vec3& cameraPos,
-            const glm::mat4& view, const glm::mat4& proj,
+            const glm::mat4& view, const glm::mat4& proj, const glm::mat4& rasterProj,
             float nearPlane, float farPlane,
             const LightingFramePacket& lights,
             const ReflectionProbeGpuFramePacket& reflectionProbes);

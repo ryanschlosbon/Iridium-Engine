@@ -25,10 +25,24 @@ namespace Iridium {
         uint64_t requestedResetRevision = 0;
         bool explicitCut = false;
         glm::mat4 view{ 1.0f };
+        glm::mat4 projection{ 1.0f };   // unjittered
         uint32_t projectionKind = 0;
         glm::uvec2 extent{ 0u };
         float metresPerWorldUnit = 1.0f;
+        // M9 G5b: produce this turn's sub-pixel jitter.
+        bool jitter = false;
     };
+
+    // M9 G5b: the jitter sequence. Halton(2,3) phases, indexed by the view's
+    // turns since its last cut (never wall time), as an NDC offset.
+    inline constexpr uint32_t TemporalJitterSequenceLength = 8;
+    [[nodiscard]] glm::vec2 temporalJitterPixels(uint32_t sequenceIndex) noexcept;
+    [[nodiscard]] glm::vec2 temporalJitterNdc(uint32_t sequenceIndex,
+        glm::uvec2 extent) noexcept;
+    // The projection with an NDC translation `jitterNdc` applied after it:
+    // clip.xy += jitterNdc * clip.w. Returns `projection` itself for zero jitter.
+    [[nodiscard]] glm::mat4 jitterProjection(const glm::mat4& projection,
+        glm::vec2 jitterNdc) noexcept;
 
     struct ViewMotionThresholds {
         float maxTranslationMetres = 10.0f;
@@ -50,6 +64,11 @@ namespace Iridium {
         ViewCutReason cut = ViewCutReason::None;
         // Turns this view has rendered since its last cut (0 on a cut turn).
         uint64_t turnsSinceCut = 0;
+        // The previous turn's unjittered view-projection (this turn's on a cut).
+        glm::mat4 previousViewProjection{ 1.0f };
+        uint32_t jitterIndex = 0;
+        glm::vec2 jitterNdc{ 0.0f };
+        glm::vec2 previousJitterNdc{ 0.0f };
     };
 
     class ViewMotionTracker {
@@ -66,10 +85,12 @@ namespace Iridium {
             uint64_t identity = 0;
             uint64_t requestedResetRevision = 0;
             glm::mat4 view{ 1.0f };
+            glm::mat4 viewProjection{ 1.0f };
             uint32_t projectionKind = 0;
             glm::uvec2 extent{ 0u };
             uint64_t resetRevision = 0;
             uint64_t turnsSinceCut = 0;
+            glm::vec2 jitterNdc{ 0.0f };
         };
 
         ViewMotionThresholds thresholds_{};

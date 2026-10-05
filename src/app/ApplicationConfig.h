@@ -48,6 +48,8 @@ namespace Iridium {
         // M7R R4b: --render-graph-aliasing on|off (on since R4b.6; the switch
         // is kept until R6).
         bool renderGraphAliasing = true;
+        // M9 G5b: sub-pixel raster jitter (off until TAA consumes it).
+        bool temporalJitter = false;
         // M7R R4d: --upload-queue auto|graphics|legacy-blocking.
         UploadQueueMode uploadQueue = UploadQueueMode::Auto;
         bool forceWireframe = false;

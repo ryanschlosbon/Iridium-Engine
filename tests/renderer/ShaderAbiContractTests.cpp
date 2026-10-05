@@ -104,6 +104,7 @@ namespace {
     // include/view_uniforms.glsl.
     constexpr std::array ViewUniformShaders{
         "canonical_material_vert.spv",
+        "canonical_material_unjittered_vert.spv",
         "gpu_scene_material_vert.spv",
         "weighted_oit_instanced_vert.spv",
         "gpu_scene_frustum_compact_comp.spv",
@@ -396,7 +397,12 @@ namespace {
                 IRIDIUM_MEMBER(UniformBufferObject, cameraPosition),
                 IRIDIUM_MEMBER(UniformBufferObject, depthRange),
                 IRIDIUM_MEMBER(UniformBufferObject, renderInfo),
-                IRIDIUM_MEMBER(UniformBufferObject, worldUnits) },
+                IRIDIUM_MEMBER(UniformBufferObject, worldUnits),
+                IRIDIUM_MEMBER(UniformBufferObject, jitteredProjection),
+                IRIDIUM_MEMBER(UniformBufferObject, jitteredInverseProjection),
+                IRIDIUM_MEMBER(UniformBufferObject, previousViewProjection),
+                IRIDIUM_MEMBER(UniformBufferObject, jitter),
+                IRIDIUM_MEMBER(UniformBufferObject, temporalInfo) },
                 sizeof(UniformBufferObject)));
         }
 

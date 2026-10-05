@@ -32,7 +32,7 @@ void main() {
     mat4 renderMatrix = mat4(inInstanceMatrix0, inInstanceMatrix1,
         inInstanceMatrix2, inInstanceMatrix3);
     vec4 worldPos = renderMatrix * vec4(inPosition, 1.0);
-    gl_Position = ubo.proj * ubo.view * worldPos;
+    gl_Position = ubo.jitteredProjection * ubo.view * worldPos;
     fragColor = inColor;
     fragTexCoord0 = inTexCoord0;
     fragTexCoord1 = inTexCoord1;

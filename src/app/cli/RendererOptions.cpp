@@ -320,6 +320,15 @@ namespace Iridium::AppCli {
                 else throw std::invalid_argument("--render-graph-aliasing requires on or off");
             });
 
+        addValueOption(registry, owner, "--temporal-jitter", "on|off",
+            "Sub-pixel raster jitter for temporal resolve (default off)",
+            "--temporal-jitter requires on or off",
+            [&c](std::string_view value) {
+                if (value == "on") c.temporalJitter = true;
+                else if (value == "off") c.temporalJitter = false;
+                else throw std::invalid_argument("--temporal-jitter requires on or off");
+            });
+
         addValueOption(registry, owner, "--upload-queue", "auto|graphics|legacy-blocking",
             "Upload queue: transfer queue + timelines, graphics only, or pre-R4d blocking",
             "--upload-queue requires auto, graphics or legacy-blocking",

@@ -30,7 +30,7 @@ void main() {
         vec2 uv = (vec2(outputPixel) + 0.5) /
             vec2(push.outputWidth, push.outputHeight);
         vec3 viewPosition = iridiumReconstructViewPosition(
-            uv, deviceDepth, ubo.inverseProjection);
+            uv, deviceDepth, ubo.jitteredInverseProjection);
         float metricDepth = abs(viewPosition.z) * max(ubo.worldUnits.x, 1.0e-7);
         imageStore(outputColor, outputPixel, color);
         imageStore(outputDepth, outputPixel, vec4(metricDepth));

@@ -14,6 +14,13 @@ layout(set = 0, binding = 0) uniform UniformBufferObject {
     vec4 depthRange;
     uvec4 renderInfo;
     vec4 worldUnits;
+    // M9 G5b: raster stages and depth reconstruction use the jittered pair;
+    // proj/inverseProjection stay unjittered (culling, Hi-Z, clusters).
+    mat4 jitteredProjection;
+    mat4 jitteredInverseProjection;
+    mat4 previousViewProjection;   // previous turn, unjittered
+    vec4 jitter;                   // xy current NDC jitter, zw previous
+    uvec4 temporalInfo;            // x sequence index, y turns since cut, z flags
 } ubo;
 
 #endif

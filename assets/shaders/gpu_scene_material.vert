@@ -61,7 +61,7 @@ mat4 renderMatrixForPrimitive(uint primitiveIndex) {
 void main() {
     mat4 renderMatrix = renderMatrixForPrimitive(gl_InstanceIndex);
     vec4 worldPos = renderMatrix * vec4(inPosition, 1.0);
-    gl_Position = ubo.proj * ubo.view * worldPos;
+    gl_Position = ubo.jitteredProjection * ubo.view * worldPos;
     fragColor = inColor;
     fragTexCoord0 = inTexCoord0;
     fragTexCoord1 = inTexCoord1;

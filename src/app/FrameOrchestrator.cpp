@@ -381,6 +381,7 @@ namespace Iridium {
             .paperWhiteNits = config_.paperWhiteNits,
             .peakNits = config_.peakNits,
             .viewHistoryResetRevision = frameRequests_.viewHistoryResetRevision,
+            .temporalJitter = config_.temporalJitter,
         });
         if (!frameRequests_.suppressGridOverlay && !view.assetPreviewActive) {
             extractor_.setGridOverlay(editorHost_.viewportGridOverlay(

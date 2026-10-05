@@ -275,9 +275,9 @@ float iridiumLayeredOrdinary2PathMeters(float authoredMaximumMeters) {
     float exitDepth = texelFetch(layeredExitDepth, atlasPixel, 0).r;
     vec2 sceneUv = (vec2(scenePixel) + vec2(0.5)) / vec2(sceneExtent);
     vec3 entryView = iridiumReconstructViewPosition(sceneUv,
-        entryDepth, ubo.inverseProjection);
+        entryDepth, ubo.jitteredInverseProjection);
     vec3 exitView = iridiumReconstructViewPosition(sceneUv,
-        exitDepth, ubo.inverseProjection);
+        exitDepth, ubo.jitteredInverseProjection);
     float measuredChordMeters = length(exitView - entryView) *
         max(iridiumTransparencyFiniteOr(ubo.worldUnits.x, 1.0), 0.0);
     authoredMaximumMeters = max(iridiumTransparencyFiniteOr(
@@ -434,9 +434,9 @@ float iridiumLayeredDeepPathMeters(float authoredMaximumMeters) {
         return 0.0;
     vec2 sceneUv = (vec2(scenePixel) + vec2(0.5)) / vec2(sceneExtent);
     vec3 entryView = iridiumReconstructViewPosition(sceneUv,
-        entryDepth, ubo.inverseProjection);
+        entryDepth, ubo.jitteredInverseProjection);
     vec3 exitView = iridiumReconstructViewPosition(sceneUv,
-        exitDepth, ubo.inverseProjection);
+        exitDepth, ubo.jitteredInverseProjection);
     float measuredChordMeters = length(exitView - entryView) *
         max(iridiumTransparencyFiniteOr(ubo.worldUnits.x, 1.0), 0.0);
     authoredMaximumMeters = max(iridiumTransparencyFiniteOr(
@@ -1068,7 +1068,7 @@ void main() {
                         transmittedDirection, opticalPathMeters,
                         ubo.worldUnits.x, roughness, 1.0 /
                         max(transmissionIor, IRIDIUM_TRANSPARENCY_MIN_IOR),
-                        ubo.view, ubo.proj, refractionExtent, pyramidLevels);
+                        ubo.view, ubo.jitteredProjection, refractionExtent, pyramidLevels);
                 transparencyDebugPyramidState = 1u;
                 if (refraction.onScreen) {
                     float selectedLod = refraction.lod;

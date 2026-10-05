@@ -1,6 +1,7 @@
 // M9 G2: per-retained-view cut detection (ViewMotionTracker).
 #include "renderer/rhi/ViewMotion.h"
 
+#include <cmath>
 #include <iostream>
 
 #include <glm/gtc/matrix_transform.hpp>
@@ -95,10 +96,84 @@ namespace {
     }
 }
 
+namespace {
+    // M9 G5b: the Halton(2,3) jitter sequence and its projection.
+    void jitterSequence() {
+        CHECK(TemporalJitterSequenceLength == 8);
+        glm::vec2 sum(0.0f);
+        for (uint32_t index = 0; index < TemporalJitterSequenceLength; ++index) {
+            const glm::vec2 pixels = temporalJitterPixels(index);
+            CHECK(pixels.x > -0.5f && pixels.x < 0.5f);
+            CHECK(pixels.y > -0.5f && pixels.y < 0.5f);
+            // Distinct phases.
+            for (uint32_t other = 0; other < index; ++other)
+                CHECK(temporalJitterPixels(other) != pixels);
+            sum += pixels;
+            // The sequence repeats.
+            CHECK(temporalJitterPixels(index + TemporalJitterSequenceLength) == pixels);
+        }
+        // Halton(2,3) phase 1: (1/2, 1/3) - 0.5.
+        CHECK(temporalJitterPixels(0) == glm::vec2(0.0f, 1.0f / 3.0f - 0.5f));
+        // Well spread: the mean offset stays near the pixel centre.
+        CHECK(std::abs(sum.x) / TemporalJitterSequenceLength < 0.07f);
+        CHECK(std::abs(sum.y) / TemporalJitterSequenceLength < 0.07f);
+        // NDC conversion and zero extent.
+        const glm::vec2 ndc = temporalJitterNdc(0, { 3840, 2160 });
+        CHECK(std::abs(ndc.x - 2.0f * temporalJitterPixels(0).x / 3840.0f) < 1e-9f);
+        CHECK(temporalJitterNdc(3, { 0, 2160 }) == glm::vec2(0.0f));
+
+        // The jittered projection shifts clip xy by jitter * w and nothing else.
+        const glm::mat4 projection = glm::perspective(glm::radians(60.0f), 16.0f / 9.0f, 0.1f, 100.0f);
+        CHECK(jitterProjection(projection, glm::vec2(0.0f)) == projection);
+        const glm::vec2 jitter{ 1e-3f, -2e-3f };
+        const glm::mat4 jittered = jitterProjection(projection, jitter);
+        const glm::vec4 point{ 0.3f, -0.2f, -5.0f, 1.0f };
+        const glm::vec4 a = projection * point;
+        const glm::vec4 b = jittered * point;
+        CHECK(std::abs(b.x - (a.x + jitter.x * a.w)) < 1e-6f);
+        CHECK(std::abs(b.y - (a.y + jitter.y * a.w)) < 1e-6f);
+        CHECK(b.z == a.z && b.w == a.w);
+    }
+
+    // M9 G5b: the tracker reports the previous turn's view-projection and the
+    // jitter phase per view; a cut restarts both.
+    void previousViewProjectionAndJitter() {
+        ViewMotionTracker tracker;
+        const glm::mat4 projection = glm::perspective(glm::radians(60.0f), 16.0f / 9.0f, 0.1f, 100.0f);
+        ViewMotionInput input = sceneInput(lookFrom({ 0, 1, 5 }, { 0, 0, 0 }));
+        input.projection = projection;
+        input.jitter = true;
+        ViewMotionResult first = tracker.update(input);
+        CHECK(first.previousViewProjection == projection * input.view);   // first turn
+        CHECK(first.jitterIndex == 0);
+        CHECK(first.jitterNdc == temporalJitterNdc(0, input.extent));
+        CHECK(first.previousJitterNdc == first.jitterNdc);
+        const glm::mat4 firstViewProjection = projection * input.view;
+        input.view = lookFrom({ 0.05f, 1, 5 }, { 0, 0, 0 });
+        ViewMotionResult second = tracker.update(input);
+        CHECK(second.previousViewProjection == firstViewProjection);
+        CHECK(second.jitterIndex == 1);
+        CHECK(second.previousJitterNdc == first.jitterNdc);
+        // Without jitter the offsets are exactly zero.
+        input.jitter = false;
+        const ViewMotionResult off = tracker.update(input);
+        CHECK(off.jitterNdc == glm::vec2(0.0f));
+        // A cut restarts the sequence and drops the previous matrix.
+        input.jitter = true;
+        input.explicitCut = true;
+        const ViewMotionResult cut = tracker.update(input);
+        CHECK(cut.jitterIndex == 0);
+        CHECK(cut.previousViewProjection == projection * input.view);
+        CHECK(cut.previousJitterNdc == cut.jitterNdc);
+    }
+}
+
 int main() {
     continuousMotionKeepsHistory();
     discontinuitiesCut();
     viewsAreIndependent();
+    jitterSequence();
+    previousViewProjectionAndJitter();
     if (failures == 0) std::cout << "ViewMotionTests passed\n";
     return failures == 0 ? 0 : 1;
 }

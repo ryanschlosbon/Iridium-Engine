@@ -53,9 +53,10 @@ VkPipeline VkGraphicsPipeline::createPipeline(VkSwapchain* swapchain,
     auto fragCode = readFile(std::string(PROJECT_ROOT_DIR) + canonicalGBufferShader);
 
     if (isOutline) {
-        // This MUST be your standard 3D mesh vertex shader, not the select shader
+        // The standard mesh vertex shader, unjittered (M9 G5b): output reads
+        // the selection mask after temporal resolve.
         vertCode = readFile(std::string(PROJECT_ROOT_DIR) +
-            "assets/shaders/canonical_material_vert.spv");
+            "assets/shaders/canonical_material_unjittered_vert.spv");
         fragCode = readFile(std::string(PROJECT_ROOT_DIR) +
             "assets/shaders/canonical_mask_frag.spv");
     }

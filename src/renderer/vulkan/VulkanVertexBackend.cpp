@@ -1859,7 +1859,7 @@ namespace Iridium {
         // The camera position, matrices and planes are the view record's
         // (bit-identical to the former submitLightingPass arguments).
         submitLightingPass(glm::vec3(frame.view.cameraPosition), frame.view.view,
-            frame.view.projection, frame.view.depthRange.x,
+            frame.view.projection, frame.view.jitteredProjection, frame.view.depthRange.x,
             frame.view.depthRange.y, *frame.lights, *frame.reflectionProbes);
         stageComplete(RenderFrameStage::Lighting);
         submitForwardQueues(frame.forwardOpaqueQueue, frame.sortedSurfaceQueue,
@@ -2095,7 +2095,7 @@ namespace Iridium {
     }
 
     void VulkanVertexBackend::submitLightingPass(const glm::vec3& cameraPos,
-        const glm::mat4& view, const glm::mat4& proj,
+        const glm::mat4& view, const glm::mat4& proj, const glm::mat4& rasterProj,
         float nearPlane, float farPlane,
         const LightingFramePacket& lights,
         const ReflectionProbeGpuFramePacket& reflectionProbes) {
@@ -2124,7 +2124,9 @@ namespace Iridium {
         lighting_.record({
             .cameraPosition = cameraPos,
             .view = view,
-            .projection = proj,
+            // M9 G5b: reconstruction from (jittered) depth uses the raster
+            // projection; equal to `proj` when jitter is off.
+            .projection = rasterProj,
             .debugView = debugView_,
         });
     }

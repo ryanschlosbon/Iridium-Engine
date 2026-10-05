@@ -380,7 +380,7 @@ namespace Iridium {
             self.virtualShadows_.info().requestCapacity;
         const auto cells = self.virtualShadows_.fullViewPass().record(
             context.commandBuffer, slot, markConfig, packet->levels(),
-            view.inverseView * view.inverseProjection);
+            view.inverseView * view.jitteredInverseProjection);
         self.virtualShadows_.markingPass().recordCompaction(context.commandBuffer,
             slot, cells, packet->levelCount);
     }
@@ -402,7 +402,7 @@ namespace Iridium {
                     .cmd = cmd, .slot = slot,
                     .payload = VulkanVirtualShadowDepthPayload{ &targets.depth,
                         context.frame.sceneExtent,
-                        view.inverseView * view.inverseProjection } });
+                        view.inverseView * view.jitteredInverseProjection } });
             }
         }
         const auto& layout = self.virtualShadows_.info().workingSetLayout;

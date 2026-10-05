@@ -26,7 +26,12 @@ layout(push_constant) uniform CanonicalPushConstants {
 
 void main() {
     vec4 worldPos = push.renderMatrix * vec4(inPosition, 1.0);
+#if defined(IRIDIUM_UNJITTERED_RASTER)
+    // The selection mask is read after temporal resolve: never jittered.
     gl_Position = ubo.proj * ubo.view * worldPos;
+#else
+    gl_Position = ubo.jitteredProjection * ubo.view * worldPos;
+#endif
     fragColor = inColor;
     fragTexCoord0 = inTexCoord0;
     fragTexCoord1 = inTexCoord1;

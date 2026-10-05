@@ -935,7 +935,7 @@ namespace Iridium {
             projMatrix_[0][0] *= view.previewProjectionScale;
             projMatrix_[1][1] *= view.previewProjectionScale;
         }
-        const ViewTransportRecord viewTransport = makeViewTransportRecord(
+        ViewTransportRecord viewTransport = makeViewTransportRecord(
             viewMatrix_, projMatrix_, renderCameraPosition_,
             renderCameraNearPlane_, renderCameraFarPlane_,
             { inputs.renderExtent.width, inputs.renderExtent.height });
@@ -951,10 +951,29 @@ namespace Iridium {
             .requestedResetRevision = assetPreviewActive ? view.previewFramingRevision :
                 inputs.viewHistoryResetRevision.value_or(0u),
             .view = viewMatrix_,
+            .projection = projMatrix_,
             .projectionKind = viewTransport.renderInfo.z,
             .extent = { inputs.renderExtent.width, inputs.renderExtent.height },
             .metresPerWorldUnit = viewTransport.worldUnits.x,
+            .jitter = inputs.temporalJitter,
         });
+        // M9 G5b: temporal fields. Without jitter the jittered pair stays the
+        // unjittered pair (makeViewTransportRecord), bit for bit.
+        viewTransport.previousViewProjection = lastViewMotion_.previousViewProjection;
+        viewTransport.jitter = glm::vec4(lastViewMotion_.jitterNdc,
+            lastViewMotion_.previousJitterNdc);
+        uint32_t temporalFlags = 0;
+        if (lastViewMotion_.cut != ViewCutReason::None) temporalFlags |= ViewTemporalHistoryReset;
+        if (lastViewMotion_.jitterNdc != glm::vec2(0.0f)) {
+            temporalFlags |= ViewTemporalJitterActive;
+            viewTransport.jitteredProjection =
+                jitterProjection(viewTransport.projection, lastViewMotion_.jitterNdc);
+            viewTransport.jitteredInverseProjection =
+                glm::inverse(viewTransport.jitteredProjection);
+        }
+        viewTransport.temporalInfo = glm::uvec4(lastViewMotion_.jitterIndex,
+            static_cast<uint32_t>(std::min<uint64_t>(lastViewMotion_.turnsSinceCut, UINT32_MAX)),
+            temporalFlags, 0u);
         // M7R R3c.11: the frame is assembled from spans over this frame's
         // queues and packets and submitted once, after extraction.
         renderFrame_ = RenderFrame{

@@ -88,5 +88,11 @@ iridium_compile_shader("${IRIDIUM_SHADER_SOURCE_DIR}/gpu_scene_frustum_compact.c
         "${IRIDIUM_SHADER_SOURCE_DIR}/gpu_scene_frustum_occlusion_compact_comp.spv"
         -DIRIDIUM_GPU_SCENE_OCCLUSION=1)
 
+# M9 G5b: the selection mask's vertex stage stays unjittered (output reads
+# the mask after temporal resolve).
+iridium_compile_shader("${IRIDIUM_SHADER_SOURCE_DIR}/canonical_material.vert"
+        "${IRIDIUM_SHADER_SOURCE_DIR}/canonical_material_unjittered_vert.spv"
+        -DIRIDIUM_UNJITTERED_RASTER=1)
+
 get_property(IRIDIUM_SHADER_SPV_FILES GLOBAL PROPERTY IRIDIUM_SHADER_SPV_FILES)
 add_custom_target(iridium_shaders ALL DEPENDS ${IRIDIUM_SHADER_SPV_FILES})

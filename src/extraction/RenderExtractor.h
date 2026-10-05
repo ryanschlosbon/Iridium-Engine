@@ -90,6 +90,8 @@ namespace Iridium {
         double peakNits = 1000.0;
         // Camera history reset revision for the scene view (observer request).
         std::optional<uint64_t> viewHistoryResetRevision;
+        // M9 G5b: apply the per-view sub-pixel jitter sequence.
+        bool temporalJitter = false;
     };
 
     struct RenderExtractionInputs {
