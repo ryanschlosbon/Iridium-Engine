@@ -191,6 +191,13 @@ namespace {
             ? c.editorAssetViewerGuid->toString() : std::string("none"));
         field("captureFrameIndex", c.captureFrameIndex
             ? exact(*c.captureFrameIndex) : std::string("none"));
+        field("captureFrameRange", c.captureFrameRange
+            ? exact(c.captureFrameRange->first) + ":" +
+                exact(c.captureFrameRange->last) + ":" +
+                exact(c.captureFrameRange->step)
+            : std::string("none"));
+        field("benchmarkHoldFrame", c.benchmarkHoldFrame
+            ? exact(*c.benchmarkHoldFrame) : std::string("none"));
         flag("requireCaptureSignal", c.requireCaptureSignal);
         field("capturePoint", exact(enumValue(c.capturePoint)));
         field("captureDirectory", c.captureDirectory.generic_string());
@@ -274,6 +281,10 @@ namespace {
         std::string_view missingMessage;  // empty for a switch
         std::vector<InvalidValue> invalid;
     };
+
+    constexpr std::string_view kCaptureFramesMessage =
+        "--capture-frames requires FIRST:LAST[:STEP] measured-frame indices "
+        "with FIRST <= LAST and STEP >= 1";
 
     constexpr std::string_view R = "runtime";
     constexpr std::string_view E = "editor";
@@ -491,7 +502,7 @@ namespace {
                 "--upload-queue requires auto, graphics or legacy-blocking",
                 { { "transfer", "--upload-queue requires auto, graphics or legacy-blocking" },
                   { "", "--upload-queue requires auto, graphics or legacy-blocking" } } },
-            // --- qualification (43) ---
+            // --- qualification (46) ---
             { "--validate-texture-residency-churn", Q, {}, {}, [](C& c) {
                 c.validateTextureResidencyChurn = true; }, {}, {} },
             { "--validate-reflection-probes", Q, {}, {}, [](C& c) {
@@ -607,6 +618,19 @@ namespace {
                 c.captureFrameIndex = 7; c.captureDirectory = "out/cap"; },
                 "--capture-frame requires a measured-frame index",
                 { { "x", "--capture-frame requires an unsigned integer" } } },
+            // M9 G6c capture sequences and benchmark time hold.
+            { "--capture-frames", Q, "4:9:2", { "--capture-directory", "out/cap" }, [](C& c) {
+                c.captureFrameRange = CaptureFrameRange{ 4, 9, 2 };
+                c.captureDirectory = "out/cap"; },
+                "--capture-frames requires a measured-frame range",
+                { { "9:4", kCaptureFramesMessage }, { "4", kCaptureFramesMessage },
+                  { "4:9:0", kCaptureFramesMessage }, { "a:9", kCaptureFramesMessage },
+                  { "4:9:2:1", kCaptureFramesMessage }, { "-1:9", kCaptureFramesMessage },
+                  { "", kCaptureFramesMessage } } },
+            { "--benchmark-hold-frame", Q, "130", { "--benchmark", "m9_tf_pan_v1" }, [](C& c) {
+                c.benchmarkHoldFrame = 130; c.benchmarkId = "m9_tf_pan_v1"; },
+                "--benchmark-hold-frame requires a benchmark frame index",
+                { { "x", "--benchmark-hold-frame requires an unsigned integer" } } },
             { "--capture-directory", Q, "out/cap", { "--capture-frame", "0" }, withCapture,
                 "--capture-directory requires a path",
                 { { "", "--capture-directory requires a path" } } },
@@ -642,8 +666,8 @@ namespace {
         Cli::CliOptionRegistry registry;
         registerEngineOptions(registry, scratch);
 
-        CHECK(table.size() == 96);
-        CHECK(registry.options().size() == 96);
+        CHECK(table.size() == 98);
+        CHECK(registry.options().size() == 98);
         std::set<std::string_view> names;
         std::map<std::string_view, size_t> ownerCounts;
         for (const FlagCase& row : table) {
@@ -685,6 +709,27 @@ namespace {
         }
         CHECK(newOutcome({ "--qualification-scripted-changes", "hitch.json" }) ==
             error("--qualification-scripted-changes requires --profile-cpu-output"));
+        // M9 G6c: one capture mode at a time, each paired with a directory;
+        // the hold frame needs a benchmark.
+        CHECK(newOutcome({ "--capture-frame", "1", "--capture-frames", "1:2",
+                  "--capture-directory", "out/cap" }) ==
+            error("--capture-frame and --capture-frames are mutually exclusive"));
+        CHECK(newOutcome({ "--capture-frames", "1:2" }) ==
+            error("--capture-frames and --capture-directory must be specified together"));
+        CHECK(newOutcome({ "--capture-directory", "out/cap" }) ==
+            error("--capture-frame and --capture-directory must be specified together"));
+        {
+            CombinedConfig sequence{};
+            sequence.captureFrameRange = CaptureFrameRange{ 0, 3, 1 };
+            sequence.captureDirectory = "out/cap";
+            sequence.requireCaptureSignal = true;
+            CHECK(newOutcome({ "--capture-frames", "0:3", "--capture-directory", "out/cap",
+                      "--require-capture-signal" }) == "OK:" + describe(sequence));
+        }
+        CHECK(newOutcome({ "--require-capture-signal" }) ==
+            error("--require-capture-signal requires a capture request"));
+        CHECK(newOutcome({ "--benchmark-hold-frame", "5" }) ==
+            error("--benchmark-hold-frame requires --benchmark"));
         {
             // --upload-queue: every value, the last one wins.
             CombinedConfig legacy{};
@@ -707,7 +752,7 @@ namespace {
         CHECK(ownerCounts[R] == 14);
         CHECK(ownerCounts[E] == 4);
         CHECK(ownerCounts[G] == 34);
-        CHECK(ownerCounts[Q] == 44);
+        CHECK(ownerCounts[Q] == 46);
         std::cout << "  owners: runtime " << ownerCounts[R] << ", editor " << ownerCounts[E]
                   << ", renderer " << ownerCounts[G] << ", qualification "
                   << ownerCounts[Q] << '\n';
@@ -758,7 +803,7 @@ namespace {
     bool testUsageParity() {
         const std::string usage = engineUsage();
         CHECK(usage.starts_with("Usage: IridiumEngine [options]\n"));
-        CHECK(optionLines(usage).size() == 96);
+        CHECK(optionLines(usage).size() == 98);
         // Groups appear in owner order: runtime, editor, renderer, qualification.
         const size_t runtime = usage.find("runtime options:");
         const size_t editor = usage.find("editor options:");

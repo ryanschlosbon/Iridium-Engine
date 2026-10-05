@@ -6,8 +6,12 @@
 #include "FakeRenderBackend.h"
 
 #include "profiling/CpuProfiler.h"
+#include "renderer/rhi/Mesh.h"
+#include "renderer/rhi/RenderFrame.h"
 #include "scene/SceneWorld.h"
 #include "scene/components/LightComponent.h"
+
+#include <nlohmann/json.hpp>
 
 #include <exception>
 #include <filesystem>
@@ -43,6 +47,8 @@ namespace {
         AppStartupTimings timings;
         AppFrameRequests requests;
         std::shared_ptr<ModelAsset> mainModel;
+        // The frame handed to onFrameSubmit (its view carries the jitter).
+        RenderFrame renderFrame{};
         std::unique_ptr<QualificationHarness> harness;
 
         void start() {
@@ -91,10 +97,12 @@ namespace {
             if (!opened) return;
             backend.marker = "opened";
             harness->onFrameBegin(FrameBeginPhase::BackendFrameOpened, frame);
+            frame.renderFrame = &renderFrame;
             backend.marker = "scene-linear";
             harness->onFrameSubmit(FrameSubmitPoint::SceneLinearReady, frame);
             backend.marker = "output";
             harness->onFrameSubmit(FrameSubmitPoint::OutputReady, frame);
+            frame.renderFrame = nullptr;
             backend.marker = "end";
             frame.outputTransportPending = transportPending;
             harness->onFrameEnd(frame);
@@ -406,6 +414,259 @@ namespace {
         return true;
     }
 
+    // M9 G6c --capture-frames parsing and the selection/hold helpers.
+    bool testCaptureFrameRangeAndHoldHelpers() {
+        const CaptureFrameRange range = parseCaptureFrameRange("3:11:4");
+        CHECK(range.first == 3u && range.last == 11u && range.step == 4u);
+        CHECK(range.count() == 3u);
+        CHECK(range.frame(0) == 3u && range.frame(1) == 7u && range.frame(2) == 11u);
+        CHECK(range.contains(7u) && !range.contains(8u) && !range.contains(2u) &&
+            !range.contains(15u));
+        const CaptureFrameRange single = parseCaptureFrameRange("5:5");
+        CHECK(single.step == 1u && single.count() == 1u && single.contains(5u));
+        // The last frame need not be on the step.
+        CHECK(parseCaptureFrameRange("0:10:3").count() == 4u);
+        for (const char* bad : { "", "5", ":5", "5:", "5:4", "1:2:0", "1:2:3:4",
+                 "+1:2", "1 :2", "x:y", "1:2:", "99999999999999999999:1" }) {
+            bool rejected = false;
+            try {
+                (void)parseCaptureFrameRange(bad);
+            }
+            catch (const std::invalid_argument&) {
+                rejected = true;
+            }
+            CHECK(rejected);
+        }
+
+        QualificationOptions options{};
+        CHECK(!capturesFrames(options) && !captureSelectsFrame(options, 0u));
+        options.captureFrameRange = CaptureFrameRange{ 2, 6, 2 };
+        CHECK(capturesFrames(options));
+        CHECK(captureSelectsFrame(options, 4u) && !captureSelectsFrame(options, 5u) &&
+            !captureSelectsFrame(options, 8u));
+        options.captureFrameRange.reset();
+        options.captureFrameIndex = 3u;
+        CHECK(captureSelectsFrame(options, 3u) && !captureSelectsFrame(options, 4u));
+
+        CHECK(benchmarkStateFrameIndex(options, 500u) == 500u);
+        options.benchmarkHoldFrame = 10u;
+        CHECK(benchmarkStateFrameIndex(options, 3u) == 3u);
+        CHECK(benchmarkStateFrameIndex(options, 10u) == 10u);
+        CHECK(benchmarkStateFrameIndex(options, 500u) == 10u);
+        return true;
+    }
+
+    size_t countFiles(const std::filesystem::path& directory, std::string_view suffix) {
+        size_t total = 0;
+        if (!std::filesystem::exists(directory)) return total;
+        for (const auto& entry : std::filesystem::directory_iterator(directory)) {
+            if (entry.path().filename().string().ends_with(suffix)) ++total;
+        }
+        return total;
+    }
+
+    // M9 G6c: a sequence arms one capture per selected measured frame,
+    // writes each image as soon as its readback completes (never holding
+    // more than the frames in flight), and commits one sidecar per frame,
+    // in order, with that frame's own jitter.
+    bool testCaptureSequenceStreamsArtifacts() {
+        const std::filesystem::path directory =
+            std::filesystem::temp_directory_path() / "iridium-capture-sequence-test";
+        std::filesystem::remove_all(directory);
+        HarnessRig rig;
+        rig.options.captureFrameRange = CaptureFrameRange{ 1, 5, 2 };
+        rig.options.captureDirectory = directory;
+        rig.start();
+        rig.qualification->produceCaptures = true;
+        rig.qualification->captureLatency = 3u;
+        // Warmup 1: measured m is application frame m + 1; captures at
+        // application frames 2, 4 and 6. Exactly representable jitter:
+        // NDC k/2048 over a 1024-wide view is k/4 pixels.
+        for (uint64_t frame = 0; frame < 7u; ++frame) {
+            ViewTransportRecord& view = rig.renderFrame.view;
+            view.renderInfo = glm::uvec4(1024u, 512u, 0u, 0u);
+            view.jitter = glm::vec4(static_cast<float>(frame) / 2048.0f,
+                -1.0f / 1024.0f, 0.0f, 0.0f);
+            view.temporalInfo = glm::uvec4(static_cast<uint32_t>(frame % 8u),
+                static_cast<uint32_t>(frame),
+                ViewTemporalJitterActive |
+                    (frame == 4u ? ViewTemporalHistoryReset : 0u), 0u);
+            rig.runFrame(frame, frame >= 1u
+                ? std::optional<uint64_t>(frame - 1u) : std::nullopt);
+            // Measured frame 1 (armed at frame 2) completes at the third
+            // collection, frame 5's PreSceneUpdate: written, uncommitted.
+            if (frame == 4u) CHECK(countFiles(directory, ".pfm.tmp") == 0u);
+            if (frame == 5u) {
+                CHECK(countFiles(directory, ".pfm.tmp") == 1u);
+                CHECK(countFiles(directory, ".json") == 0u);
+            }
+        }
+        CHECK(rig.backend.count(Kind::ArmFrameCapture) == 3u);
+        for (const BackendCall& call : rig.backend.calls) {
+            CHECK(call.kind == Kind::ArmFrameCapture && call.marker == "opened");
+        }
+        CHECK(rig.qualification->maximumHeldCaptures == 2u);
+
+        const AppRunSnapshot run{};
+        AppShutdownContext shutdown{
+            .config = rig.config,
+            .profiler = rig.profiler,
+            .backend = &rig.backend,
+            .completed = true,
+            .run = run,
+        };
+        // The waiting drain returns the last two in slot (reverse) order.
+        rig.harness->onShutdown(ShutdownPhase::RunComplete, shutdown);
+        CHECK(countFiles(directory, ".pfm.tmp") == 3u);
+        CHECK(countFiles(directory, ".json") == 0u);
+        rig.harness->onShutdown(ShutdownPhase::ReleaseResources, shutdown);
+        shutdown.backend = nullptr;
+        rig.harness->onShutdown(ShutdownPhase::Finalize, shutdown);
+        CHECK(countFiles(directory, ".tmp") == 0u);
+        CHECK(countFiles(directory, ".pfm") == 3u);
+        CHECK(countFiles(directory, ".json") == 3u);
+
+        for (const uint64_t measured : { 1u, 3u, 5u }) {
+            const uint64_t application = measured + 1u;
+            const std::filesystem::path sidecar = directory /
+                ("interactive__r0__interactive_camera__final__2x2__mf" +
+                    std::to_string(measured) + ".json");
+            std::ifstream file(sidecar, std::ios::binary);
+            CHECK(file.good());
+            const nlohmann::json document = nlohmann::json::parse(file);
+            CHECK(document.at("capture").at("capture_id") == measured);
+            const nlohmann::json& runInfo = document.at("run");
+            CHECK(runInfo.at("measured_frame_index") == measured);
+            CHECK(runInfo.at("application_frame_index") == application);
+            CHECK(runInfo.at("benchmark_state_frame_index") == application);
+            const nlohmann::json& jitter =
+                document.at("render_configuration").at("temporal_jitter");
+            CHECK(jitter.at("enabled") == true);
+            CHECK(jitter.at("sequence_length") == 8u);
+            CHECK(jitter.at("sequence_index") == application % 8u);
+            CHECK(jitter.at("turns_since_cut") == application);
+            CHECK(jitter.at("history_reset") == (application == 4u));
+            CHECK(jitter.at("offset_ndc")[0].get<double>() ==
+                static_cast<double>(application) / 2048.0);
+            CHECK(jitter.at("offset_ndc")[1].get<double>() == -1.0 / 1024.0);
+            CHECK(jitter.at("offset_pixels")[0].get<double>() ==
+                static_cast<double>(application) / 4.0);
+            CHECK(jitter.at("offset_pixels")[1].get<double>() == -0.25);
+        }
+        std::filesystem::remove_all(directory);
+        return true;
+    }
+
+    // A failed run commits no sidecar and leaves no streamed image behind.
+    bool testCaptureSequenceDiscardedOnFailure() {
+        const std::filesystem::path directory =
+            std::filesystem::temp_directory_path() / "iridium-capture-sequence-failure";
+        std::filesystem::remove_all(directory);
+        HarnessRig rig;
+        rig.options.captureFrameRange = CaptureFrameRange{ 0, 9 };
+        rig.options.captureDirectory = directory;
+        rig.start();
+        rig.qualification->produceCaptures = true;
+        rig.qualification->captureLatency = 1u;
+        rig.runMeasured(0u, 4u);
+        CHECK(countFiles(directory, ".pfm.tmp") == 3u);
+        const AppRunSnapshot run{};
+        AppShutdownContext shutdown{
+            .config = rig.config,
+            .profiler = rig.profiler,
+            .backend = &rig.backend,
+            .completed = false,
+            .run = run,
+        };
+        rig.harness->onShutdown(ShutdownPhase::ReleaseResources, shutdown);
+        CHECK(std::filesystem::is_empty(directory));
+        std::filesystem::remove_all(directory);
+        return true;
+    }
+
+    // An incomplete sequence fails the end-of-run report.
+    bool testCaptureSequenceRequiresEveryFrame() {
+        const std::filesystem::path directory =
+            std::filesystem::temp_directory_path() / "iridium-capture-sequence-short";
+        std::filesystem::remove_all(directory);
+        HarnessRig rig;
+        rig.options.captureFrameRange = CaptureFrameRange{ 0, 5 };
+        rig.options.captureDirectory = directory;
+        rig.start();
+        rig.qualification->produceCaptures = true;
+        rig.runMeasured(0u, 3u);   // measured frames 3..5 never ran
+        const AppRunSnapshot run{};
+        AppShutdownContext shutdown{
+            .config = rig.config,
+            .profiler = rig.profiler,
+            .backend = &rig.backend,
+            .completed = true,
+            .run = run,
+        };
+        bool rejected = false;
+        try {
+            rig.harness->onShutdown(ShutdownPhase::RunComplete, shutdown);
+        }
+        catch (const std::runtime_error&) {
+            rejected = true;
+        }
+        CHECK(rejected);
+        shutdown.completed = false;
+        rig.harness->onShutdown(ShutdownPhase::ReleaseResources, shutdown);
+        CHECK(std::filesystem::is_empty(directory));
+        std::filesystem::remove_all(directory);
+        return true;
+    }
+
+    // M9 G6c --benchmark-hold-frame on a real fixture (TF-pan: a camera
+    // path with cuts at 90 and 180): camera pose and history-reset revision
+    // are frame F's from F on; without the hold they keep changing.
+    bool testBenchmarkHoldFrame() {
+        struct Sample {
+            glm::vec3 position{ 0.0f };
+            glm::vec3 front{ 0.0f };
+            uint64_t revision = 0;
+        };
+        const auto run = [](std::optional<uint64_t> hold, std::vector<Sample>& samples) {
+            HarnessRig rig;
+            rig.options.benchmarkId = "m9_tf_pan_v1";
+            rig.options.benchmarkManifest = std::filesystem::path(PROJECT_ROOT_DIR) /
+                "assets" / "benchmarks" / "m9" / "temporal-manifest.v1.json";
+            rig.options.benchmarkHoldFrame = hold;
+            // Startup content goes through the fake control.
+            rig.config.cookedModelArtifact = "unused.irartifact";
+            rig.config.cookedEnvironmentArtifact = "unused.irartifact";
+            rig.start();
+            AppStartupContext startup = rig.startupContext();
+            rig.harness->onStartup(StartupPhase::ContentLoad, startup);
+            for (uint64_t frame = 0; frame < 200u; ++frame) {
+                rig.runFrame(frame, std::nullopt);
+                samples.push_back({ rig.camera.position, rig.camera.front,
+                    rig.requests.viewHistoryResetRevision.value_or(0u) });
+            }
+        };
+        std::vector<Sample> free;
+        std::vector<Sample> held;
+        run(std::nullopt, free);
+        run(95u, held);
+        CHECK(free.size() == 200u && held.size() == 200u);
+        const auto same = [](const Sample& a, const Sample& b) {
+            return a.position == b.position && a.front == b.front &&
+                a.revision == b.revision;
+        };
+        for (uint64_t frame = 0; frame <= 95u; ++frame) {
+            CHECK(same(free[frame], held[frame]));
+        }
+        for (uint64_t frame = 96u; frame < 200u; ++frame) {
+            CHECK(same(held[frame], held[95]));
+        }
+        // Unheld, the camera moves after 95 and the cut at 180 advances the
+        // revision.
+        CHECK(!same(free[120], free[95]));
+        CHECK(free[185].revision != free[95].revision);
+        return true;
+    }
+
     bool testInertWithoutQualificationFlags() {
         HarnessRig rig;
         rig.start();
@@ -446,6 +707,11 @@ int main() {
             testScriptedChangesApplyAtTheirMeasuredFrame },
         { "Scripted changes reject unmet prerequisites",
             testScriptedChangesRejectUnmetPrerequisites },
+        { "Capture frame range and hold helpers", testCaptureFrameRangeAndHoldHelpers },
+        { "Capture sequence streams artifacts", testCaptureSequenceStreamsArtifacts },
+        { "Capture sequence discarded on failure", testCaptureSequenceDiscardedOnFailure },
+        { "Capture sequence requires every frame", testCaptureSequenceRequiresEveryFrame },
+        { "Benchmark hold frame", testBenchmarkHoldFrame },
         { "Inert without qualification flags", testInertWithoutQualificationFlags },
     };
 

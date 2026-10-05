@@ -30,7 +30,45 @@ namespace Iridium {
             return static_cast<uint32_t>(count);
         }
 
+        constexpr const char* kCaptureFramesMessage =
+            "--capture-frames requires FIRST:LAST[:STEP] measured-frame indices "
+            "with FIRST <= LAST and STEP >= 1";
+
+        // One unsigned decimal field of a frame range (no sign, no spaces).
+        uint64_t parseRangeField(std::string_view text) {
+            if (text.empty() || text.size() > 19u) {
+                throw std::invalid_argument(kCaptureFramesMessage);
+            }
+            uint64_t value = 0;
+            for (const char character : text) {
+                if (character < '0' || character > '9') {
+                    throw std::invalid_argument(kCaptureFramesMessage);
+                }
+                value = value * 10u + static_cast<uint64_t>(character - '0');
+            }
+            return value;
+        }
+
     } // namespace
+
+    CaptureFrameRange parseCaptureFrameRange(std::string_view text) {
+        const size_t firstColon = text.find(':');
+        if (firstColon == std::string_view::npos) {
+            throw std::invalid_argument(kCaptureFramesMessage);
+        }
+        const std::string_view rest = text.substr(firstColon + 1u);
+        const size_t secondColon = rest.find(':');
+        CaptureFrameRange range{};
+        range.first = parseRangeField(text.substr(0, firstColon));
+        range.last = parseRangeField(rest.substr(0, secondColon));
+        if (secondColon != std::string_view::npos) {
+            range.step = parseRangeField(rest.substr(secondColon + 1u));
+        }
+        if (range.first > range.last || range.step == 0u) {
+            throw std::invalid_argument(kCaptureFramesMessage);
+        }
+        return range;
+    }
 
     void registerQualificationOptions(Cli::CliOptionRegistry& registry,
         QualificationOptions& options, ApplicationConfig& config) {
@@ -156,6 +194,20 @@ namespace Iridium {
             [&q](std::string_view value) {
                 q.captureFrameIndex = parseUnsigned(value, "--capture-frame");
             });
+        addValueOption(registry, owner, "--capture-frames", "FIRST:LAST[:STEP]",
+            "Capture measured frames FIRST..LAST (inclusive, every STEP); one "
+            "artifact per frame, written as it completes",
+            "--capture-frames requires a measured-frame range",
+            [&q](std::string_view value) {
+                q.captureFrameRange = parseCaptureFrameRange(value);
+            });
+        addValueOption(registry, owner, "--benchmark-hold-frame", "F",
+            "Freeze benchmark camera, motion, cuts and visibility at benchmark "
+            "frame F (application frames: warmup counts, measured m = warmup + m)",
+            "--benchmark-hold-frame requires a benchmark frame index",
+            [&q](std::string_view value) {
+                q.benchmarkHoldFrame = parseUnsigned(value, "--benchmark-hold-frame");
+            });
         addValueOption(registry, owner, "--capture-directory", "PATH",
             "Write a stable .tga/.json capture pair under PATH",
             "--capture-directory requires a path",
@@ -269,13 +321,21 @@ namespace Iridium {
 
         const std::string ownerName(owner);
         registry.addValidator(ownerName, [&q] {
-            if (q.captureFrameIndex.has_value() != !q.captureDirectory.empty()) {
+            if (q.captureFrameIndex && q.captureFrameRange) {
+                throw std::invalid_argument(
+                    "--capture-frame and --capture-frames are mutually exclusive");
+            }
+            if (q.captureFrameRange && q.captureDirectory.empty()) {
+                throw std::invalid_argument(
+                    "--capture-frames and --capture-directory must be specified together");
+            }
+            if (capturesFrames(q) != !q.captureDirectory.empty()) {
                 throw std::invalid_argument(
                     "--capture-frame and --capture-directory must be specified together");
             }
         }, AppCli::kValidateCapturePairing);
         registry.addValidator(ownerName, [&q] {
-            if (q.requireCaptureSignal && !q.captureFrameIndex.has_value()) {
+            if (q.requireCaptureSignal && !capturesFrames(q)) {
                 throw std::invalid_argument(
                     "--require-capture-signal requires a capture request");
             }
@@ -301,6 +361,12 @@ namespace Iridium {
                     "--qualification-scripted-changes requires --profile-cpu-output");
             }
         }, AppCli::kValidateLightGenerators + 10);
+        registry.addValidator(ownerName, [&q] {
+            if (q.benchmarkHoldFrame && q.benchmarkId.empty()) {
+                throw std::invalid_argument(
+                    "--benchmark-hold-frame requires --benchmark");
+            }
+        }, AppCli::kValidateLightGenerators + 20);
     }
 
 } // namespace Iridium

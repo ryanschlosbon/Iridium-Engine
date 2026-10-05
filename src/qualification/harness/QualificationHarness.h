@@ -70,6 +70,8 @@ namespace Iridium {
         void onStartup(StartupPhase phase, AppStartupContext& context) override;
         void onFrameBegin(FrameBeginPhase phase,
             AppFrameContext& context) override;
+        void onFrameSubmit(FrameSubmitPoint point,
+            AppFrameContext& context) override;
         void onFrameEnd(AppFrameContext& context) override;
         void onShutdown(ShutdownPhase phase,
             AppShutdownContext& context) override;
@@ -104,6 +106,13 @@ namespace Iridium {
             // (BenchmarkEntityPose::teleported). Recorded for the M9
             // per-instance history reset; nothing consumes it yet.
             bool teleportedThisFrame = false;
+        };
+        // One armed frame capture: its frames and, once its frame was
+        // submitted, that frame's jitter (M9 G6c).
+        struct CaptureFrameRecord {
+            uint64_t captureId = 0;
+            uint64_t applicationFrameIndex = 0;
+            std::optional<CaptureTemporalJitter> jitter;
         };
         // Requests decided at PostSceneUpdate and issued inside the open frame. A
         // frame lost to a swapchain recreate in beginFrame loses them, as before.
@@ -156,12 +165,30 @@ namespace Iridium {
         void reportRunMetrics(const AppShutdownContext& context) const;
         void collectEndOfRunValidations(AppShutdownContext& context);
         void releaseProbeResources(AppShutdownContext& context);
-        [[nodiscard]] std::optional<CaptureArtifactPaths> exportCaptureArtifact(
+        // Every artifact of the run, in capture order: the --capture-frame
+        // capture, or the committed --capture-frames sequence.
+        [[nodiscard]] std::vector<CaptureArtifactPaths> exportCaptureArtifacts(
+            const AppShutdownContext& context,
+            const SystemProfile& systemProfile);
+        [[nodiscard]] CaptureArtifactMetadata runCaptureMetadata(
             const AppShutdownContext& context,
             const SystemProfile& systemProfile) const;
+        // The naming fields of the artifact stem (shared by the streamed
+        // images and their sidecars).
+        void setCaptureNaming(CaptureArtifactMetadata& metadata,
+            const ApplicationConfig& config, uint64_t measuredFrameIndex) const;
+        void setCaptureFrame(CaptureArtifactMetadata& metadata,
+            uint64_t captureId) const;
         void exportCpuProfile(const AppShutdownContext& context,
             const SystemProfile& systemProfile,
-            const std::optional<CaptureArtifactPaths>& captureArtifact) const;
+            const std::vector<CaptureArtifactPaths>& captureArtifacts) const;
+
+        // Capture sequences (M9 G6c): write every completed readback's image
+        // now (pixels are not retained); sidecars are committed at Finalize.
+        void streamCompletedCaptures(const ApplicationConfig& config,
+            bool waitForPending);
+        void verifyCaptureSequence() const;
+        void discardStreamedCaptures() noexcept;
 
         const QualificationOptions options_;
         AppRunPolicy policy_{};
@@ -209,7 +236,9 @@ namespace Iridium {
         // Captures.
         FrameRequests frame_{};
         std::optional<FrameCapture> completedCapture_;
-        std::optional<uint64_t> capturedApplicationFrameIndex_;
+        std::vector<CaptureFrameRecord> captureFrames_;
+        // --capture-frames: images written, sidecars pending, capture order.
+        std::vector<PendingCaptureImage> streamedCaptures_;
     };
 
 } // namespace Iridium

@@ -656,7 +656,11 @@ namespace Iridium {
 
     void QualificationHarness::updateBenchmarkState(AppFrameContext& context) {
         if (!benchmark_) return;
-        const uint64_t frameIndex = context.applicationFrameIndex;
+        // Benchmark frames are application frames (warmup included). With
+        // --benchmark-hold-frame F every state below is F's from frame F on.
+        const uint64_t frameIndex = benchmarkStateFrameIndex(options_,
+            context.applicationFrameIndex);
+        const bool held = frameIndex != context.applicationFrameIndex;
         Registry& registry = context.scene.registry();
         const BenchmarkSceneFactory& factory = benchmark_->sceneFactory;
         if (factory.kind == BenchmarkSceneFactoryKind::Composition) {
@@ -673,7 +677,8 @@ namespace Iridium {
                 const BenchmarkEntityPose pose =
                     evaluateBenchmarkCompositionEntity(entities[index],
                         frameIndex);
-                instance.teleportedThisFrame = pose.teleported;
+                // A held pose does not move, so it is never a teleport again.
+                instance.teleportedThisFrame = pose.teleported && !held;
                 applyCompositionPose(transforms->get(instance.entity), pose);
             }
         }

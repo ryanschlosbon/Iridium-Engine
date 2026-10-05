@@ -77,3 +77,59 @@ Standard library only. Per-run parsing is imported from
   whose retained-frame medians differ between the sides.
 
 It also accepts a `Run-TimingPair.ps1` directory (a list-form `runs.json`).
+
+## Temporal captures (G6c)
+
+`Run-TemporalCaptures.ps1` captures sequences of frames from the M9 temporal fixtures
+(`M9Fixtures.ps1`; `-IncludeFrozen` adds the M7R frozen set) at native 4K, hidden,
+SDR transport, one process per fixture and capture point. Cook the fixture models
+first (`Cook-TemporalModels.ps1`, into `out/m9/ddc` of this checkout or of the main
+checkout).
+
+```powershell
+# Six jittered scene-linear frames across TF-pan's cut at benchmark frame 180
+powershell -ExecutionPolicy Bypass -File tools/m9/Run-TemporalCaptures.ps1 -Label pan-jitter `
+    -Only TF-pan -Frames 57:62 -Points scene -ExtraArgs '--temporal-jitter on'
+
+# A 64-sample accumulation reference of TF-static held at benchmark frame 130
+powershell -ExecutionPolicy Bypass -File tools/m9/Run-TemporalCaptures.ps1 -Label ref64 `
+    -Reference -Only TF-static -HoldFrame 130 -Samples 64
+```
+
+| Parameter | Meaning |
+|---|---|
+| `-Label` | Output directory `out/m9/captures/<Label>/<fixture>/<point>/` (`-OutRoot` overrides the parent). An existing label is never overwritten. |
+| `-Only` | Fixture keys (`TF-pan`, ...; frozen keys such as `F1-all` with `-IncludeFrozen`). |
+| `-Frames` | `FIRST:LAST[:STEP]` measured frames, inclusive (engine `--capture-frames`). The frame limit is `LAST + 1`. |
+| `-Points` | `scene`, `final-sdr` and/or `final-output`. |
+| `-Warmup` | Warmup frames; by default each fixture's manifest `warmup_frames`. Measured frame m is benchmark frame warmup + m. |
+| `-ExtraArgs` | Extra engine flags, e.g. `--temporal-jitter on`. |
+| `-Reference`, `-HoldFrame`, `-Samples`, `-Settle` | Accumulation reference (below). |
+| `-MetricsExe` | The G6d metrics tool, `out/build/x64-release/bin/IridiumTemporalMetrics.exe` by default. |
+| `-RepoDataRoot`, `-M9DataRoot` | Where the frozen-set data (`out/m7r/ddc`, local-only assets) and the M9 cooked models come from. Default: the main checkout, and this checkout for M9 when it has `out/m9/ddc`. |
+
+Each frame is one `iridium.frame_capture` artifact (`..__mf<N>.pfm|.tga` plus `.json`),
+written as its readback completes, so a long 4K sequence never sits in memory. The
+sidecar's `render_configuration.temporal_jitter` records that frame's jitter
+(`enabled`, `sequence_length`, `sequence_index`, `offset_pixels`, `offset_ndc`,
+`turns_since_cut`, `history_reset`), and `run.benchmark_state_frame_index` the
+benchmark frame its state came from. `runs.json` lists each process's arguments, exit
+code, wall time, peak working set and peak private bytes, and every frame's image hash
+and jitter; `machine.json` holds the commit, executable hash and GPU state.
+
+**Reference mode.** `-Reference -HoldFrame F -Samples N` runs
+`--benchmark-hold-frame F --temporal-jitter on --temporal-jitter-sequence N` and captures
+N consecutive scene-linear frames from the first measured frame at or after `F + Settle`.
+The scene is frozen at benchmark frame F, so the N frames differ only by the N Halton
+phases. `IridiumTemporalMetrics accumulate` averages them into
+`<fixture>/reference/<stem>__hold<F>__ref<N>.pfm`; the per-frame PFMs are then deleted,
+and `frames.json` plus the per-frame sidecars are kept. The metrics tool is the G6d
+lane's target: when it is not built, the script keeps the frames and says how to
+accumulate them later.
+
+Engine flags (qualification builds): `--capture-frames FIRST:LAST[:STEP]` (exclusive with
+`--capture-frame`; same `--capture-directory`, `--capture-point` and
+`--require-capture-signal` rules; the run fails unless exactly the requested frames were
+captured, in order) and `--benchmark-hold-frame F` (benchmark camera, motion,
+history-reset cuts and visibility steps evaluated at `min(frame, F)`; frames are
+application frames, warmup included).

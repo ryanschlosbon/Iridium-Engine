@@ -398,12 +398,14 @@ namespace Iridium {
             .stageObserver = this,
         });
         stageFrame_ = &frame;
+        frame.renderFrame = &renderFrame;
 
 
         // Shadows, probe captures, G-buffer, lighting, forward and
         // transparency, output and UI. The observer's scene-linear and
         // output submit points are reported from the stage boundaries.
         renderBackend->submitFrame(renderFrame);
+        frame.renderFrame = nullptr;
         stageFrame_ = nullptr;
         extractor_.releaseFrame();
 

@@ -49,6 +49,12 @@ namespace Iridium {
             }
             completedCapture_ = std::move(captures.front());
         }
+        if (options_.captureFrameRange) {
+            // M9 G6c: the remaining sequence readbacks, then exactly the
+            // requested frames, in order.
+            streamCompletedCaptures(context.config, true);
+            verifyCaptureSequence();
+        }
         if (options_.validateDepthPyramidCapture) {
             const auto validations =
                 backend_->collectDepthPyramidCaptureValidations(true);

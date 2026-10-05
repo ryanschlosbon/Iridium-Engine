@@ -5,6 +5,7 @@
 
 #include "qualification/harness/QualificationHarness.h"
 
+#include <algorithm>
 #include <chrono>
 #include <iostream>
 #include <string>
@@ -18,11 +19,75 @@
 
 namespace Iridium {
 
-    std::optional<CaptureArtifactPaths>
-    QualificationHarness::exportCaptureArtifact(
+    void QualificationHarness::setCaptureNaming(CaptureArtifactMetadata& metadata,
+        const ApplicationConfig& config, uint64_t measuredFrameIndex) const {
+        metadata.measuredFrameIndex = measuredFrameIndex;
+        metadata.debugView = config.forceWireframe
+            ? "wireframe"
+            : std::string(renderDebugViewName(config.debugView));
+        if (benchmark_) {
+            metadata.fixtureId = benchmark_->id;
+            metadata.fixtureRevision = benchmark_->revision;
+            metadata.cameraId = benchmark_->camera.id;
+        }
+    }
+
+    void QualificationHarness::setCaptureFrame(CaptureArtifactMetadata& metadata,
+        uint64_t captureId) const {
+        const auto record = std::ranges::find(captureFrames_, captureId,
+            &CaptureFrameRecord::captureId);
+        metadata.measuredFrameIndex = captureId;
+        metadata.applicationFrameIndex =
+            record != captureFrames_.end() ? record->applicationFrameIndex : 0u;
+        metadata.benchmarkStateFrameIndex =
+            benchmarkStateFrameIndex(options_, metadata.applicationFrameIndex);
+        metadata.temporalJitter = record != captureFrames_.end()
+            ? record->jitter : std::nullopt;
+    }
+
+    std::vector<CaptureArtifactPaths>
+    QualificationHarness::exportCaptureArtifacts(
+        const AppShutdownContext& context,
+        const SystemProfile& systemProfile) {
+        std::vector<CaptureArtifactPaths> artifacts;
+        if (!completedCapture_ && streamedCaptures_.empty()) return artifacts;
+        const CaptureArtifactMetadata runMetadata =
+            runCaptureMetadata(context, systemProfile);
+        const auto report = [](const CaptureArtifactPaths& captureArtifact) {
+            std::cout << "IRIDIUM_CAPTURE {\"image\":\""
+                << captureArtifact.image.generic_string() << "\",\"metadata\":\""
+                << captureArtifact.metadata.generic_string() << "\",\"sha256\":\""
+                << captureArtifact.imageSha256 << "\"}\n";
+        };
+        if (completedCapture_) {
+            CaptureArtifactMetadata captureMetadata = runMetadata;
+            setCaptureFrame(captureMetadata, *options_.captureFrameIndex);
+            artifacts.push_back(writeCaptureArtifact(
+                options_.captureDirectory, *completedCapture_, captureMetadata));
+            report(artifacts.back());
+        }
+        // Sequence sidecars, committed in capture order; a failure discards
+        // every image not yet committed.
+        try {
+            while (!streamedCaptures_.empty()) {
+                const PendingCaptureImage& image = streamedCaptures_.front();
+                CaptureArtifactMetadata captureMetadata = runMetadata;
+                setCaptureFrame(captureMetadata, image.captureId);
+                artifacts.push_back(commitCaptureArtifact(image, captureMetadata));
+                streamedCaptures_.erase(streamedCaptures_.begin());
+                report(artifacts.back());
+            }
+        }
+        catch (...) {
+            discardStreamedCaptures();
+            throw;
+        }
+        return artifacts;
+    }
+
+    CaptureArtifactMetadata QualificationHarness::runCaptureMetadata(
         const AppShutdownContext& context,
         const SystemProfile& systemProfile) const {
-        if (!completedCapture_) return std::nullopt;
         const ApplicationConfig& config = context.config;
         const AppRunSnapshot& run = context.run;
         CaptureArtifactMetadata captureMetadata{};
@@ -131,22 +196,12 @@ namespace Iridium {
         captureMetadata.acesPackageVersion = "v2.0.0+2025.04.04";
         captureMetadata.acesTransformId = transformId(config.outputOperator,
             effectiveOutputTransport);
-        captureMetadata.measuredFrameIndex = *options_.captureFrameIndex;
-        captureMetadata.applicationFrameIndex =
-            capturedApplicationFrameIndex_.value_or(0);
-        captureMetadata.benchmarkStateFrameIndex =
-            captureMetadata.applicationFrameIndex;
         captureMetadata.warmupFrameCount = config.warmupFrameCount;
-        captureMetadata.debugView = config.forceWireframe
-            ? "wireframe"
-            : std::string(renderDebugViewName(config.debugView));
+        setCaptureNaming(captureMetadata, config, 0u);
         captureMetadata.debugViewSemantics = config.forceWireframe
             ? "editor opaque geometry in wireframe with normal forward composition"
             : std::string(renderDebugViewDescription(config.debugView));
         if (benchmark_) {
-            captureMetadata.fixtureId = benchmark_->id;
-            captureMetadata.fixtureRevision = benchmark_->revision;
-            captureMetadata.cameraId = benchmark_->camera.id;
             captureMetadata.manifestPath = benchmarkManifestPath_;
             captureMetadata.manifestSha256 = benchmarkManifestSha256_;
             for (const BenchmarkContentFile& file :
@@ -235,19 +290,13 @@ namespace Iridium {
         captureMetadata.directionalShadowFilterSamples =
             captureShadowFilter.filterSamples;
         captureMetadata.unavailableFields = {};
-        CaptureArtifactPaths captureArtifact = writeCaptureArtifact(
-            options_.captureDirectory, *completedCapture_, captureMetadata);
-        std::cout << "IRIDIUM_CAPTURE {\"image\":\""
-            << captureArtifact.image.generic_string() << "\",\"metadata\":\""
-            << captureArtifact.metadata.generic_string() << "\",\"sha256\":\""
-            << captureArtifact.imageSha256 << "\"}\n";
-        return captureArtifact;
+        return captureMetadata;
     }
 
     void QualificationHarness::exportCpuProfile(
         const AppShutdownContext& context,
         const SystemProfile& systemProfile,
-        const std::optional<CaptureArtifactPaths>& captureArtifact) const {
+        const std::vector<CaptureArtifactPaths>& captureArtifacts) const {
         const ApplicationConfig& config = context.config;
         if (options_.cpuProfileOutput.empty()) return;
         const AppRunSnapshot& run = context.run;
@@ -540,12 +589,12 @@ namespace Iridium {
         metadata.unavailableFields = {
             "gpu_clocks_power_behavior"
         };
-        if (captureArtifact) {
+        for (const CaptureArtifactPaths& captureArtifact : captureArtifacts) {
             metadata.captureOutputs.emplace_back(
-                captureArtifact->image.generic_string(),
-                captureArtifact->imageSha256);
+                captureArtifact.image.generic_string(),
+                captureArtifact.imageSha256);
         }
-        else {
+        if (captureArtifacts.empty()) {
             metadata.unavailableFields.push_back("capture_outputs");
         }
         if (!benchmark_) {
