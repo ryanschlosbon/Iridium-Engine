@@ -31,6 +31,7 @@ namespace Iridium {
         TransparencyPyramidMip = 21,
         TransparencyLayers = 22,
         TransparencyOverflow = 23,
+        MotionVectors = 24,   // M9.1
     };
 
     [[nodiscard]] constexpr std::string_view renderDebugViewName(RenderDebugView view) noexcept {
@@ -59,6 +60,7 @@ namespace Iridium {
         case RenderDebugView::TransparencyPyramidMip: return "transparency-pyramid-mip";
         case RenderDebugView::TransparencyLayers: return "transparency-layers";
         case RenderDebugView::TransparencyOverflow: return "transparency-overflow";
+        case RenderDebugView::MotionVectors: return "motion-vectors";
         }
         return "unknown";
     }
@@ -101,6 +103,8 @@ namespace Iridium {
             return RenderDebugView::TransparencyLayers;
         if (name == "transparency-overflow")
             return RenderDebugView::TransparencyOverflow;
+        if (name == "motion-vectors" || name == "velocity")
+            return RenderDebugView::MotionVectors;
         return std::nullopt;
     }
 
@@ -155,6 +159,8 @@ namespace Iridium {
             return "retained transparency capacity: gray single surface, cyan Ordinary2, orange Hero4, pink Cinematic8, and purple weighted OIT";
         case RenderDebugView::TransparencyOverflow:
             return "pixel-local bounded-layer state: dark green accepted, amber saturated retained prefix, and magenta residual-tail composition";
+        case RenderDebugView::MotionVectors:
+            return "per-pixel motion of opaque surfaces (current minus previous unjittered position): hue is direction, brightness is log2 pixels moved (white at 64 px), black is no motion, magenta is no previous position";
         }
         return "unknown debug-view semantics";
     }

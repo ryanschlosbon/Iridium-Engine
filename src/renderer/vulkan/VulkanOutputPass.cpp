@@ -56,7 +56,8 @@ namespace Iridium {
         allocator_ = &allocator;
 
         try {
-            std::array<VkDescriptorSetLayoutBinding, 4> bindings{};
+            // 0 scene, 1 ACES2 LUT, 2 selection mask, 3 depth, 4 velocity (M9.1).
+            std::array<VkDescriptorSetLayoutBinding, 5> bindings{};
             for (uint32_t index = 0; index < bindings.size(); ++index) {
                 bindings[index].binding = index;
                 bindings[index].descriptorType =
@@ -197,7 +198,11 @@ namespace Iridium {
                     frameTargets.sampler(),
                     frameTargets.get(index).depth.view,
                     VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL };
-                std::array<VkWriteDescriptorSet, 4> writes{};
+                const VkDescriptorImageInfo velocity{
+                    frameTargets.sampler(),
+                    frameTargets.get(index).velocity.view,
+                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+                std::array<VkWriteDescriptorSet, 5> writes{};
                 writes[0] = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
                 writes[0].dstSet = set;
                 writes[0].dstBinding = 0;
@@ -219,16 +224,23 @@ namespace Iridium {
                 writes[2].descriptorType =
                     VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
                 writes[2].pImageInfo = &opaqueDepth;
-                uint32_t writeCount = 3;
+                writes[3] = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
+                writes[3].dstSet = set;
+                writes[3].dstBinding = 4;
+                writes[3].descriptorCount = 1;
+                writes[3].descriptorType =
+                    VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                writes[3].pImageInfo = &velocity;
+                uint32_t writeCount = 4;
                 if (lutView != VK_NULL_HANDLE && lutSampler != VK_NULL_HANDLE) {
-                    writes[3] = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
-                    writes[3].dstSet = set;
-                    writes[3].dstBinding = 1;
-                    writes[3].descriptorCount = 1;
-                    writes[3].descriptorType =
+                    writes[4] = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
+                    writes[4].dstSet = set;
+                    writes[4].dstBinding = 1;
+                    writes[4].descriptorCount = 1;
+                    writes[4].descriptorType =
                         VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                    writes[3].pImageInfo = &lut;
-                    writeCount = 4;
+                    writes[4].pImageInfo = &lut;
+                    writeCount = 5;
                 }
                 vkUpdateDescriptorSets(device_, writeCount, writes.data(), 0, nullptr);
             }
@@ -251,7 +263,7 @@ namespace Iridium {
         float manualExposureEv, uint32_t outputOperator,
         uint32_t outputTransport, float paperWhiteNits,
         float peakNits, bool selectionActive,
-        const ViewportGridOverlay& gridOverlay) const {
+        const ViewportGridOverlay& gridOverlay, bool motionVectorView) const {
         if (frameIndex >= descriptorSets_.size()) {
             throw std::out_of_range("Output descriptor frame index is out of range.");
         }
@@ -288,7 +300,8 @@ namespace Iridium {
         push.packedModes = (outputOperator & 0x3u) |
             ((outputTransport & 0x3u) << 2u) |
             (selectionActive ? 1u << 4u : 0u) |
-            (gridOverlay.visible ? 1u << 5u : 0u);
+            (gridOverlay.visible ? 1u << 5u : 0u) |
+            (motionVectorView ? 1u << 6u : 0u);
         vkCmdPushConstants(commandBuffer, pipelineLayout_,
             VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), &push);
         const VkViewport viewport{ 0.0f, 0.0f, static_cast<float>(extent.width),

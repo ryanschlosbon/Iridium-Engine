@@ -32,6 +32,7 @@ namespace Iridium {
             float paperWhiteNits = 203.0f;
             float peakNits = 1000.0f;
             bool selectionOutline = false;
+            bool motionVectorView = false;   // M9.1 debug view
         };
 
         VulkanOutputFeature() = default;

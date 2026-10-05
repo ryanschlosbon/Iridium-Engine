@@ -8,6 +8,8 @@ layout(set = 0, binding = 0) uniform sampler2D sceneColor;
 layout(set = 0, binding = 1) uniform sampler2D aces2Lut;
 layout(set = 0, binding = 2) uniform sampler2D selectionMask;
 layout(set = 0, binding = 3) uniform sampler2D opaqueDepth;
+// M9.1: per-pixel motion (current minus previous UV), for its debug view.
+layout(set = 0, binding = 4) uniform sampler2D motionVectors;
 layout(push_constant) uniform OutputPushConstants {
     mat4 inverseViewProjection;
     vec4 gridPlane;
@@ -23,6 +25,21 @@ uint outputOperator() { return push.packedModes & 0x3u; }
 uint outputTransport() { return (push.packedModes >> 2u) & 0x3u; }
 bool selectionActive() { return (push.packedModes & (1u << 4u)) != 0u; }
 bool gridActive() { return (push.packedModes & (1u << 5u)) != 0u; }
+bool motionVectorView() { return (push.packedModes & (1u << 6u)) != 0u; }
+
+// Hue is the screen-space direction, brightness log2 of the pixels moved
+// (white at 64 px); black is no motion and magenta no previous position.
+vec3 motionVectorColor(vec2 motion) {
+    if (any(greaterThanEqual(abs(motion), vec2(3.5)))) return vec3(1.0, 0.0, 1.0);
+    vec2 pixels = motion * vec2(textureSize(motionVectors, 0));
+    float magnitude = length(pixels);
+    if (magnitude < 1.0e-4) return vec3(0.0);
+    float hue = atan(pixels.y, pixels.x) / 6.2831853 + 0.5;
+    vec3 rgb = clamp(abs(fract(hue + vec3(0.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0) - 1.0,
+        0.0, 1.0);
+    float brightness = clamp(log2(1.0 + magnitude) / log2(65.0), 0.0, 1.0);
+    return rgb * brightness;
+}
 
 const int LUT_SIZE = 128;
 const float LUT_MIN_LOG2 = -10.0;
@@ -308,6 +325,11 @@ vec3 applyEditorOverlays(vec3 outputValue) {
 }
 
 void main() {
+    if (motionVectorView()) {
+        outColor = vec4(motionVectorColor(texelFetch(motionVectors,
+            ivec2(gl_FragCoord.xy), 0).xy), 1.0);
+        return;
+    }
     vec3 sceneAcesCg = texture(sceneColor, fragTexCoord).rgb *
         exp2(push.manualExposureEv);
     if (outputOperator() == 0u) {

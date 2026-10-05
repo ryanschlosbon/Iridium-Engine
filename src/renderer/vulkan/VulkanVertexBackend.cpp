@@ -2297,6 +2297,7 @@ namespace Iridium {
             .paperWhiteNits = paperWhiteNits_,
             .peakNits = peakNits_,
             .selectionOutline = selectionOutlineActive_,
+            .motionVectorView = debugView_ == RenderDebugView::MotionVectors,
         });
         // R3c.4 drain point: final-output captures and the retained views.
         const IVulkanEditorUi* editor = editorUi();

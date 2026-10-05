@@ -128,7 +128,8 @@ namespace Iridium {
             static_cast<uint32_t>(self.outputOperator_),
             static_cast<uint32_t>(self.staged_.transport),
             self.staged_.paperWhiteNits, self.staged_.peakNits,
-            self.staged_.selectionOutline, self.gridOverlay_);
+            self.staged_.selectionOutline, self.gridOverlay_,
+            self.staged_.motionVectorView);
         context.endRendering();
         if (shared.telemetry.collecting()) {
             shared.telemetry.recordPipelineBind(pipelineIdentity(

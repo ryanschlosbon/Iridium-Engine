@@ -33,7 +33,7 @@ namespace Iridium {
             float manualExposureEv, uint32_t outputOperator,
             uint32_t outputTransport, float paperWhiteNits,
             float peakNits, bool selectionActive,
-            const ViewportGridOverlay& gridOverlay) const;
+            const ViewportGridOverlay& gridOverlay, bool motionVectorView = false) const;
         void cleanup();
 
     private:

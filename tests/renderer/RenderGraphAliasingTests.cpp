@@ -657,19 +657,19 @@ namespace {
         uint64_t digest;
     };
     // M9.1 (2026-10-05): regenerated; every topology gains the gbuffer.velocity
-    // slot (alias-eligible, cleared in gbuffer).
+    // slot (alias-eligible, cleared in gbuffer, read by output-transform).
     constexpr GoldenSlots R4b3Golden[] = {
-        { "base SDR", 20, 0xac2a8afcad1d14bdull },
-        { "base SDR, no pyramids, no telemetry", 18, 0x351533873b1536c9ull },
-        { "HDR10", 19, 0xa5f07f5e92d25dd3ull },
-        { "VSM", 20, 0x66cb89f3756d73feull },
-        { "Hi-Z", 20, 0xb747db08b83bb866ull },
-        { "Ordinary2", 25, 0xf9e18c038648a198ull },
-        { "Hero4", 30, 0x613dce06fda54a6eull },
-        { "Cinematic8", 40, 0xd0d342acf26603abull },
-        { "OIT", 21, 0x32ae0caadc1b32full },
-        { "all features", 55, 0xa2f0fbc48cb49779ull },
-        { "all features, no hooks", 54, 0x1bc25fe0be718e54ull },
+        { "base SDR", 20, 0x984eb71199662283ull },
+        { "base SDR, no pyramids, no telemetry", 18, 0x497c7f89c8c198eull },
+        { "HDR10", 19, 0x3174a76a3b1591bdull },
+        { "VSM", 20, 0x759b149059f4e446ull },
+        { "Hi-Z", 20, 0x9123b733e20d4aeeull },
+        { "Ordinary2", 25, 0xab7907fc8494e17dull },
+        { "Hero4", 30, 0x21510e075d4d31e4ull },
+        { "Cinematic8", 40, 0x28d0cdc4ec669a47ull },
+        { "OIT", 21, 0xcf8577d59eee8467ull },
+        { "all features", 55, 0xfb72304900703127ull },
+        { "all features, no hooks", 54, 0xc03d8175267e9299ull },
     };
 
     // Rebuilds a compiled graph through the builder in compiled order. The

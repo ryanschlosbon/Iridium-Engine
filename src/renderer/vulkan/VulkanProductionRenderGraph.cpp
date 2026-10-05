@@ -931,6 +931,8 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
     graph.read(outputTransform, litScene, Access::SampledRead);
     graph.read(outputTransform, emissive, Access::SampledRead);
     graph.read(outputTransform, depth, Access::SampledRead);
+    // M9.1: the motion-vector debug view.
+    graph.read(outputTransform, velocity, Access::SampledRead);
     output = graph.write(outputTransform, output,
         Access::ColorAttachment, LoadOp::Clear, StoreOp::Store, opaqueBlack);
 
