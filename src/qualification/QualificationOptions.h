@@ -137,6 +137,8 @@ namespace Iridium {
         // M7R R5c.8: record a call stack for every steady-frame allocation
         // (qualification/harness/AllocationTrace.h).
         bool allocationTrace = false;
+        // M9 G7: deterministic probe-capture publication.
+        bool probeFinalizeDrain = false;
     };
 
     // Whether this run captures at all (--capture-frame or --capture-frames).

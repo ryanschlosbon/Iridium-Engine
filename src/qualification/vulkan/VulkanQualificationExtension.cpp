@@ -865,6 +865,15 @@ namespace Iridium {
             });
     }
 
+    bool VulkanQualificationExtension::drainReflectionProbeCaptures() {
+        // Keyed on scheduler state (an unpromoted capture), not GPU timing.
+        if (services_.probeCaptureTargets == nullptr || services_.scheduler == nullptr ||
+            services_.probeCaptureTargets->capturesInFlight() == 0u)
+            return false;
+        services_.scheduler->waitForAllFrames();
+        return true;
+    }
+
     std::vector<DepthPyramidCaptureValidationResult>
     VulkanQualificationExtension::collectDepthPyramidCaptureValidations(
         bool waitForPending) {

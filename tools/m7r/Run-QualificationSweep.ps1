@@ -27,7 +27,9 @@ param(
     [int] $TimeoutSeconds = 600,
     [switch] $AllowImplicitLayers,
     # 'off' (default) or a cache directory; see Get-M7RPipelineCacheArgs.
-    [string] $PipelineCache = 'off'
+    [string] $PipelineCache = 'off',
+    # M9 G7: arguments appended to every entry (e.g. --qualification-probe-finalize-drain).
+    [string[]] $ExtraArgs = @()
 )
 $ErrorActionPreference = 'Stop'
 $Only = @($Only | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
@@ -57,7 +59,7 @@ try {
     foreach ($entry in $selected) {
         $entryDir = Join-Path $outDir $entry.Key
         New-Item -ItemType Directory -Force $entryDir | Out-Null
-        $arguments = @(Get-M7RSweepArguments $entry $inputs $entryDir) + $cacheArgs
+        $arguments = @(Get-M7RSweepArguments $entry $inputs $entryDir) + $cacheArgs + @($ExtraArgs | ForEach-Object { $_ -split ' ' } | Where-Object { $_ })
         $log = Join-Path $entryDir 'engine.log'
         $commandLine = Format-M7RCommandLine $exePath $arguments
         Set-Content -Encoding utf8 (Join-Path $entryDir 'command.txt') $commandLine

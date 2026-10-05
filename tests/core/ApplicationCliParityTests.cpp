@@ -214,6 +214,7 @@ namespace {
         field("backgroundCookSource", c.backgroundCookSource.generic_string());
         flag("frameTaskProbe", c.frameTaskProbe);
         flag("allocationTrace", c.allocationTrace);
+        flag("probeFinalizeDrain", c.probeFinalizeDrain);
         return s.str();
     }
 
@@ -624,6 +625,9 @@ namespace {
             // M7R R5c.8 allocation trace (not in 6b000ad).
             { "--qualification-allocation-trace", Q, {}, {}, [](C& c) {
                 c.allocationTrace = true; c.enableCpuProfiling = true; }, {}, {} },
+            // M9 G7.
+            { "--qualification-probe-finalize-drain", Q, {}, {}, [](C& c) {
+                c.probeFinalizeDrain = true; }, {}, {} },
             { "--validate-depth-pyramid-capture", Q, {}, {}, [](C& c) {
                 c.experimentalDepthPyramid = true; c.validateDepthPyramidCapture = true; },
                 {}, {} },
@@ -686,8 +690,8 @@ namespace {
         Cli::CliOptionRegistry registry;
         registerEngineOptions(registry, scratch);
 
-        CHECK(table.size() == 100);
-        CHECK(registry.options().size() == 100);
+        CHECK(table.size() == 101);
+        CHECK(registry.options().size() == 101);
         std::set<std::string_view> names;
         std::map<std::string_view, size_t> ownerCounts;
         for (const FlagCase& row : table) {
@@ -772,7 +776,7 @@ namespace {
         CHECK(ownerCounts[R] == 14);
         CHECK(ownerCounts[E] == 4);
         CHECK(ownerCounts[G] == 36);
-        CHECK(ownerCounts[Q] == 46);
+        CHECK(ownerCounts[Q] == 47);
         std::cout << "  owners: runtime " << ownerCounts[R] << ", editor " << ownerCounts[E]
                   << ", renderer " << ownerCounts[G] << ", qualification "
                   << ownerCounts[Q] << '\n';
@@ -823,7 +827,7 @@ namespace {
     bool testUsageParity() {
         const std::string usage = engineUsage();
         CHECK(usage.starts_with("Usage: IridiumEngine [options]\n"));
-        CHECK(optionLines(usage).size() == 100);
+        CHECK(optionLines(usage).size() == 101);
         // Groups appear in owner order: runtime, editor, renderer, qualification.
         const size_t runtime = usage.find("runtime options:");
         const size_t editor = usage.find("editor options:");

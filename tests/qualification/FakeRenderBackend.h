@@ -243,6 +243,8 @@ namespace IridiumTest {
             collectDeepLayeredCaptureValidations(bool) override { return {}; }
         std::vector<DepthPyramidCaptureValidationResult>
             collectDepthPyramidCaptureValidations(bool) override { return {}; }
+        uint32_t probeDrains = 0;
+        bool drainReflectionProbeCaptures() override { ++probeDrains; return false; }
 
     private:
         class Extension final : public IRenderBackendExtension {

@@ -82,6 +82,7 @@ namespace Iridium {
             collectDeepLayeredCaptureValidations(bool waitForPending) override;
         [[nodiscard]] std::vector<DepthPyramidCaptureValidationResult>
             collectDepthPyramidCaptureValidations(bool waitForPending) override;
+        bool drainReflectionProbeCaptures() override;
 
     private:
         struct PendingFrameCapture {

@@ -476,6 +476,11 @@ namespace Iridium {
         case FrameBeginPhase::PostSceneUpdate: {
             const bool isMeasuredFrame = context.measuredFrameIndex.has_value();
             const uint64_t measured = context.measuredFrameIndex.value_or(0u);
+            // M9 G7: before this frame's probe-capture finalize.
+            if (options_.probeFinalizeDrain) {
+                CpuScope drainScope(context.profiler, "cpu.qualification.probe_drain");
+                (void)backend_->drainReflectionProbeCaptures();
+            }
             if (frameTaskProbe_) {
                 CpuScope probeScope(context.profiler, "cpu.task.probe");
                 frameTaskProbe_->runFrame(isMeasuredFrame);

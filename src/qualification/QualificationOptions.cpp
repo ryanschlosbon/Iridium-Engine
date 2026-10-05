@@ -298,6 +298,9 @@ namespace Iridium {
                 q.allocationTrace = true;
                 c.enableCpuProfiling = true;
             });
+        addSwitch(registry, owner, "--qualification-probe-finalize-drain",
+            "Publish each reflection-probe capture at the frame after it is recorded (waits for the GPU when one is pending)",
+            [&q] { q.probeFinalizeDrain = true; });
         addSwitch(registry, owner, "--validate-depth-pyramid-capture",
             "Read back live depth and verify every pyramid mip",
             [&q, &c] {
