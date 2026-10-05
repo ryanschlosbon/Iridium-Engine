@@ -155,6 +155,7 @@ namespace Iridium {
         renderGraphAliasing_ = config.renderGraphAliasing;
         antiAliasing_ = config.antiAliasing;
         taaTuning_ = config.taaTuning;
+        exposure_.configure(config.exposureMode, config.autoExposure);   // M9.5
         uploadQueueMode_ = config.uploadQueue;
         experimentalShadowLodErrorTexels_ =
             config.experimentalShadowLodErrorTexels;
@@ -368,8 +369,10 @@ namespace Iridium {
         // R3c.9: the forward owner (render passes, refraction pyramids).
         forward_.configure(layered_);
         forward_.create(*featureContext_);
+        exposure_.create(*featureContext_);   // M9.5 (before its consumers)
         taa_.create(*featureContext_);   // M9.2
         output_.create(*featureContext_);
+        output_.setExposureFallback(exposure_.fallbackState());
         output_.createPipelines(outputTargetFormat_,
             outputTransport_ == Color::OutputTransport::Hdr10Pq,
             vkSwapchain->getImageFormat());
@@ -646,6 +649,7 @@ namespace Iridium {
         ui_.destroy();
         output_.destroy();
         taa_.destroy();
+        exposure_.destroy();
 
         forward_.destroy();
         layered_.destroy();
@@ -731,6 +735,7 @@ namespace Iridium {
             .pointShadowPoolCapacities = pointShadowCapacities_,
             .transientAliasing = renderGraphAliasing_,
             .temporalAntiAliasing = antiAliasing_ == AntiAliasingMode::Taa,
+            .autoExposure = exposure_.mode() == ExposureMode::Auto,
         };
     }
 
@@ -1911,9 +1916,14 @@ namespace Iridium {
             frame.view.projection, frame.view.jitteredProjection, frame.view.depthRange.x,
             frame.view.depthRange.y, *frame.lights, *frame.reflectionProbes);
         stageComplete(RenderFrameStage::Lighting);
-        // M9.2: TAA pre-exposes with the output's manual EV (auto-exposure
-        // replaces it in M9.5); its pass drains with the output transform.
+        // M9.5: auto-exposure adapts over the view's time, with the manual EV
+        // as compensation; its passes drain with the output transform.
+        exposure_.stage({ frame.viewDeltaSeconds, output_.manualExposure() });
+        // M9.2: TAA pre-exposes with the output's manual EV, or (M9.5) with
+        // last frame's adapted exposure; its pass drains with the output.
         if (taa_.active()) {
+            const VulkanExposureFeature::PreviousState exposureState =
+                exposure_.previousState(scheduler.currentFrameIndex());
             const glm::vec2 extent(static_cast<float>(sceneExtent_.width),
                 static_cast<float>(sceneExtent_.height));
             const float exposure = std::exp2(frame.output.manualExposureEv);
@@ -1928,10 +1938,13 @@ namespace Iridium {
                     .previousExposure = exposure,
                     .resetHistory = (frame.view.temporalInfo.z & ViewTemporalHistoryReset) != 0u,
                     .camera = { frame.view.depthRange.x, frame.view.depthRange.y,
-                        2.0f * std::atan(1.0f / frame.view.projection[1][1]), 0.0f },
+                        2.0f * std::atan(1.0f / frame.view.projection[1][1]),
+                        frame.viewDeltaSeconds },
                     .nativeTaa = taaTuning_,
                 },
                 .globalSet = view_.globalSet(scheduler.currentFrameIndex()),
+                .exposureState = exposureState.buffer,
+                .exposureFromState = exposureState.valid,
             });
         }
         submitForwardQueues(frame.forwardOpaqueQueue,

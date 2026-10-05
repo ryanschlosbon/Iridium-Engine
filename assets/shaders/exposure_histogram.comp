@@ -1,0 +1,64 @@
+#version 450
+
+// M9.5 auto-exposure metering ("post.exposure.histogram").
+//
+// Input: the resolved scene colour (scene-linear ACEScg/AP1, before exposure).
+// Each workgroup meters one 128x128 tile into 128 log2-luminance bins with
+// shared-memory atomics on integer counts, then writes the tile's bins as its
+// own row of `rows`. Integer sums are order-independent, so the histogram is
+// deterministic, and every row is written every frame, so nothing needs a
+// clear. post.exposure.adapt reduces the rows.
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform sampler2D sceneColor;   // point, texelFetch
+layout(set = 0, binding = 1, std430) writeonly buffer HistogramRows {
+    uint rows[];
+};
+
+layout(push_constant) uniform ExposureHistogramPush {
+    vec4 extent;   // xy size, zw 1 / size
+    vec4 range;    // x histogram min log2 luminance, y bins per log2 unit, z centre weight
+} push;
+
+const uint BinCount = 128u;
+const int PixelsPerThread = 8;   // per axis: 16 threads x 8 = 128-pixel tiles
+const vec3 Ap1Luma = vec3(0.2722287, 0.6740818, 0.0536895);
+
+shared uint bins[BinCount];
+
+uint binOf(vec3 color) {
+    float luminance = dot(max(color, vec3(0.0)), Ap1Luma);
+    // Zero, negative and NaN luminance land in the lowest bin, +Inf in the top.
+    if (!(luminance > 0.0)) return 0u;
+    float position = (log2(luminance) - push.range.x) * push.range.y;
+    return uint(clamp(position, 0.0, float(BinCount - 1u)));
+}
+
+// 1 everywhere without centre weighting; up to 16 at the centre with it.
+uint weightOf(ivec2 pixel) {
+    if (push.range.z <= 0.0) return 1u;
+    vec2 offset = (vec2(pixel) + 0.5) * push.extent.zw - 0.5;
+    float centre = exp(-4.0 * dot(offset, offset));
+    return 1u + uint(round(15.0 * push.range.z * centre));
+}
+
+void main() {
+    uint local = gl_LocalInvocationIndex;
+    if (local < BinCount) bins[local] = 0u;
+    barrier();
+
+    ivec2 size = ivec2(push.extent.xy);
+    ivec2 origin = ivec2(gl_WorkGroupID.xy) * 128 + ivec2(gl_LocalInvocationID.xy);
+    for (int y = 0; y < PixelsPerThread; ++y) {
+        for (int x = 0; x < PixelsPerThread; ++x) {
+            ivec2 pixel = origin + ivec2(x, y) * 16;
+            if (pixel.x >= size.x || pixel.y >= size.y) continue;
+            atomicAdd(bins[binOf(texelFetch(sceneColor, pixel, 0).rgb)], weightOf(pixel));
+        }
+    }
+    barrier();
+
+    uint row = gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x;
+    if (local < BinCount) rows[row * BinCount + local] = bins[local];
+}

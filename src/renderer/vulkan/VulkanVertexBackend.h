@@ -35,6 +35,7 @@
 #include "VulkanEditorUi.h"
 #include "VulkanClusterLightingFeature.h"
 #include "VulkanOutputFeature.h"
+#include "VulkanExposureFeature.h"
 #include "VulkanTemporalAntiAliasingFeature.h"
 #include "VulkanWeightedOitFeature.h"
 #include "VulkanHookPasses.h"
@@ -138,6 +139,7 @@ namespace Iridium {
         // R3c.2: output transform, HDR10 encode, LUT, exposure, grid overlay.
         VulkanOutputFeature output_;
         VulkanTemporalAntiAliasingFeature taa_;   // M9.2
+        VulkanExposureFeature exposure_;   // M9.5
 
         // R3c.10: the UI pass (clear, the editor bridge's contribution,
         // present). The editor bridge (renderer/vulkan_imgui) is an attached
@@ -240,9 +242,9 @@ namespace Iridium {
         void collectIndirectViewValidations(uint32_t frameIndex);
 
         // Feature owners in registration (and graph) order.
-        [[nodiscard]] std::array<IVulkanFeature*, 13> features() noexcept {
+        [[nodiscard]] std::array<IVulkanFeature*, 14> features() noexcept {
             return { &shadows_, &localShadows_, &probes_, &opaque_,
-                &clusterLighting_, &lighting_, &forward_, &layered_, &taa_,
+                &clusterLighting_, &lighting_, &forward_, &layered_, &taa_, &exposure_,
                 &output_, &oit_, &hooks_, &ui_ };
         }
         // Between frames, after every slot retired (resize, transport and

@@ -189,6 +189,8 @@ namespace Iridium {
             .uploadQueue = config_.uploadQueue,
             .antiAliasing = config_.antiAliasing,
             .taaTuning = config_.taaTuning.value_or(TemporalAntiAliasingTuning{}),
+            .exposureMode = config_.exposureMode,
+            .autoExposure = config_.autoExposureSettings.value_or(AutoExposureSettings{}),
             .cpuProfiler = &cpuProfiler_,
             .enableGpuProfiling = config_.enableGpuProfiling,
             .enableTransparentPipelineStatistics =

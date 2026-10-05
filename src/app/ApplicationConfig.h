@@ -56,6 +56,10 @@ namespace Iridium {
         // M9.2: TAA tuning for evidence runs (--taa-settings); unset fields
         // keep the defaults.
         std::optional<TemporalAntiAliasingTuning> taaTuning;
+        // M9.5: exposure (--exposure manual|auto; Manual until admission)
+        // and its evidence-run tuning (--auto-exposure-settings).
+        ExposureMode exposureMode = ExposureMode::Manual;
+        std::optional<AutoExposureSettings> autoExposureSettings;
         uint32_t temporalJitterSequenceLength = 8;
         // M7R R4d: --upload-queue auto|graphics|legacy-blocking.
         UploadQueueMode uploadQueue = UploadQueueMode::Auto;

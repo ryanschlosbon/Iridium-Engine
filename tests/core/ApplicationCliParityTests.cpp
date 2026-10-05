@@ -124,6 +124,18 @@ namespace {
             std::to_string(c.taaTuning->staticVarianceGamma) + "/" +
             std::to_string(c.taaTuning->stillHistoryWeight) : std::string("default"));
         field("temporalJitterSequenceLength", std::to_string(c.temporalJitterSequenceLength));
+        field("exposureMode", exact(enumValue(c.exposureMode)));
+        field("autoExposureSettings", c.autoExposureSettings
+            ? std::to_string(c.autoExposureSettings->histogramMinEv100) + "/" +
+                std::to_string(c.autoExposureSettings->histogramMaxEv100) + "/" +
+                std::to_string(c.autoExposureSettings->lowPercentile) + "/" +
+                std::to_string(c.autoExposureSettings->highPercentile) + "/" +
+                std::to_string(c.autoExposureSettings->minimumEv100) + "/" +
+                std::to_string(c.autoExposureSettings->maximumEv100) + "/" +
+                std::to_string(c.autoExposureSettings->speedUpEvPerSecond) + "/" +
+                std::to_string(c.autoExposureSettings->speedDownEvPerSecond) + "/" +
+                std::to_string(c.autoExposureSettings->centreWeight)
+            : std::string("default"));
         field("uploadQueue", exact(enumValue(c.uploadQueue)));
         flag("aliasPoison", c.aliasPoison);
         flag("validateDepthPyramidCapture", c.validateDepthPyramidCapture);
@@ -505,6 +517,27 @@ namespace {
                 { { "1,2", "--taa-settings requires seven comma-separated numbers" },
                   { "0.8,0.95,16,1.25,2,1.5,0.97,7", "--taa-settings requires seven comma-separated numbers" },
                   { "", "--taa-settings requires seven comma-separated numbers" } } },
+            // M9.5; manual by default (auto becomes the default at M9.7).
+            { "--exposure", G, "auto", {}, [](C& c) {
+                c.exposureMode = ExposureMode::Auto; },
+                "--exposure requires manual or auto",
+                { { "automatic", "--exposure requires manual or auto" },
+                  { "", "--exposure requires manual or auto" } } },
+            { "--auto-exposure-settings", G, "-8,16,0.05,0.95,-2,18,2.5,1.5,0.5", {}, [](C& c) {
+                c.autoExposureSettings = AutoExposureSettings{ -8.0f, 16.0f, 0.05f, 0.95f,
+                    -2.0f, 18.0f, 2.5f, 1.5f, 0.5f }; },
+                "--auto-exposure-settings requires nine comma-separated numbers",
+                { { "1,2", "--auto-exposure-settings requires nine comma-separated numbers" },
+                  { "-8,16,0.05,0.95,-2,18,2.5,1.5,0.5,1",
+                    "--auto-exposure-settings requires nine comma-separated numbers" },
+                  { "-8,16,0.05,0.95,-2,18,2.5,1.5,", "--auto-exposure-settings requires nine comma-separated numbers" },
+                  { "16,-8,0.05,0.95,-2,18,2.5,1.5,0.5",
+                    "--auto-exposure-settings requires nine comma-separated numbers" },
+                  { "-8,16,0.9,0.1,-2,18,2.5,1.5,0.5",
+                    "--auto-exposure-settings requires nine comma-separated numbers" },
+                  { "-8,16,0.05,0.95,-2,18,2.5,1.5,2",
+                    "--auto-exposure-settings requires nine comma-separated numbers" },
+                  { "", "--auto-exposure-settings requires nine comma-separated numbers" } } },
             { "--temporal-jitter", G, "on", {}, [](C& c) {
                 c.temporalJitter = true; },
                 "--temporal-jitter requires on or off",
@@ -690,8 +723,8 @@ namespace {
         Cli::CliOptionRegistry registry;
         registerEngineOptions(registry, scratch);
 
-        CHECK(table.size() == 101);
-        CHECK(registry.options().size() == 101);
+        CHECK(table.size() == 103);
+        CHECK(registry.options().size() == 103);
         std::set<std::string_view> names;
         std::map<std::string_view, size_t> ownerCounts;
         for (const FlagCase& row : table) {
@@ -775,7 +808,7 @@ namespace {
         }
         CHECK(ownerCounts[R] == 14);
         CHECK(ownerCounts[E] == 4);
-        CHECK(ownerCounts[G] == 36);
+        CHECK(ownerCounts[G] == 38);
         CHECK(ownerCounts[Q] == 47);
         std::cout << "  owners: runtime " << ownerCounts[R] << ", editor " << ownerCounts[E]
                   << ", renderer " << ownerCounts[G] << ", qualification "
@@ -827,7 +860,7 @@ namespace {
     bool testUsageParity() {
         const std::string usage = engineUsage();
         CHECK(usage.starts_with("Usage: IridiumEngine [options]\n"));
-        CHECK(optionLines(usage).size() == 101);
+        CHECK(optionLines(usage).size() == 103);
         // Groups appear in owner order: runtime, editor, renderer, qualification.
         const size_t runtime = usage.find("runtime options:");
         const size_t editor = usage.find("editor options:");
@@ -846,7 +879,7 @@ namespace {
         AppCli::registerRuntimeOptions(registry, config);
         AppCli::registerEditorOptions(registry, config);
         AppCli::registerRendererOptions(registry, config);
-        CHECK(registry.options().size() == 54);
+        CHECK(registry.options().size() == 56);
         try {
             registry.parse(Args{ "--benchmark", "material_lab_v1" });
             CHECK(false);

@@ -171,6 +171,35 @@ namespace {
         CHECK(cut.previousViewProjection == projection * input.view);
         CHECK(cut.previousJitterNdc == cut.jitterNdc);
     }
+
+    // M9.5: per-view clock deltas. A view's delta spans its own previous
+    // turn (the other view's turns in between count), survives cuts, and is
+    // 0 on a first turn, a new identity or a clock that went backwards.
+    void viewDeltaSeconds() {
+        ViewMotionTracker tracker;
+        ViewMotionInput scene = sceneInput(lookFrom({ 0, 1, 5 }, { 0, 0, 0 }));
+        ViewMotionInput preview = scene;
+        preview.historySet = 1;
+        preview.identity = 7;
+        scene.timeSeconds = 1.0;
+        CHECK(tracker.update(scene).deltaSeconds == 0.0f);
+        scene.timeSeconds = 1.25;
+        CHECK(tracker.update(scene).deltaSeconds == 0.25f);
+        preview.timeSeconds = 1.5;
+        CHECK(tracker.update(preview).deltaSeconds == 0.0f);   // its first turn
+        scene.timeSeconds = 2.0;
+        CHECK(tracker.update(scene).deltaSeconds == 0.75f);    // across the preview turn
+        scene.explicitCut = true;
+        scene.timeSeconds = 2.5;
+        const ViewMotionResult cut = tracker.update(scene);
+        CHECK(cut.cut == ViewCutReason::Explicit && cut.deltaSeconds == 0.5f);
+        scene.explicitCut = false;
+        scene.timeSeconds = 2.0;
+        CHECK(tracker.update(scene).deltaSeconds == 0.0f);     // backwards
+        preview.identity = 8;
+        preview.timeSeconds = 3.0;
+        CHECK(tracker.update(preview).deltaSeconds == 0.0f);   // new session
+    }
 }
 
 int main() {
@@ -179,6 +208,7 @@ int main() {
     viewsAreIndependent();
     jitterSequence();
     previousViewProjectionAndJitter();
+    viewDeltaSeconds();
     if (failures == 0) std::cout << "ViewMotionTests passed\n";
     return failures == 0 ? 0 : 1;
 }

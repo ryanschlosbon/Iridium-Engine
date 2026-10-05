@@ -94,6 +94,9 @@ namespace Iridium {
         // M9 G5b: apply the per-view sub-pixel jitter sequence.
         bool temporalJitter = false;
         uint32_t temporalJitterSequenceLength = 8;
+        // M9.5: the frame clock (seconds) the per-view time delta derives
+        // from (simulated time under deterministic content).
+        double timeSeconds = 0.0;
     };
 
     struct RenderExtractionInputs {

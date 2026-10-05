@@ -959,6 +959,7 @@ namespace Iridium {
             .metresPerWorldUnit = viewTransport.worldUnits.x,
             .jitter = inputs.temporalJitter,
             .jitterSequenceLength = inputs.temporalJitterSequenceLength,
+            .timeSeconds = inputs.timeSeconds,
         });
         // M9 G5b: temporal fields. Without jitter the jittered pair stays the
         // unjittered pair (makeViewTransportRecord), bit for bit.
@@ -982,6 +983,7 @@ namespace Iridium {
         renderFrame_ = RenderFrame{
             .view = viewTransport,
             .history = lastViewMotion_.history,
+            .viewDeltaSeconds = lastViewMotion_.deltaSeconds,
             .debugView = debugView,
             .output = { viewExposure, static_cast<float>(inputs.paperWhiteNits),
                 static_cast<float>(inputs.peakNits) },

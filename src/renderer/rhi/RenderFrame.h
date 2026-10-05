@@ -159,6 +159,9 @@ namespace Iridium {
         // cameraPosition and depthRange).
         ViewTransportRecord view{};
         ViewHistoryContext history{};
+        // M9.5: seconds since this retained view's previous turn (0 on its
+        // first turn); auto-exposure adapts over it.
+        float viewDeltaSeconds = 0.0f;
         RenderDebugView debugView = RenderDebugView::Final;
         RenderFrameOutputSettings output{};
         // Not visible unless the editor supplies one.

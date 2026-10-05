@@ -38,6 +38,9 @@ namespace Iridium {
         // Phases before the sequence repeats (M9 G6c: long sequences build
         // supersampled references; TAA compares 8 and 16).
         uint32_t jitterSequenceLength = DefaultTemporalJitterSequenceLength;
+        // M9.5: the frame's clock (seconds, monotonic; the caller decides
+        // whether it is wall or simulated time). Only differences are used.
+        double timeSeconds = 0.0;
     };
 
     // M9 G5b: the jitter sequence. Halton(2,3) phases, indexed by the view's
@@ -77,6 +80,9 @@ namespace Iridium {
         uint32_t jitterIndex = 0;
         glm::vec2 jitterNdc{ 0.0f };
         glm::vec2 previousJitterNdc{ 0.0f };
+        // M9.5: clock time since this view's previous turn, also across cuts
+        // (adapted exposure survives them); 0 on a first turn.
+        float deltaSeconds = 0.0f;
     };
 
     class ViewMotionTracker {
@@ -99,6 +105,7 @@ namespace Iridium {
             uint64_t resetRevision = 0;
             uint64_t turnsSinceCut = 0;
             glm::vec2 jitterNdc{ 0.0f };
+            double timeSeconds = 0.0;
         };
 
         ViewMotionThresholds thresholds_{};

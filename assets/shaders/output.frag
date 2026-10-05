@@ -10,6 +10,11 @@ layout(set = 0, binding = 2) uniform sampler2D selectionMask;
 layout(set = 0, binding = 3) uniform sampler2D opaqueDepth;
 // M9.1: per-pixel motion (current minus previous UV), for its debug view.
 layout(set = 0, binding = 4) uniform sampler2D motionVectors;
+// M9.5: this frame's adapted exposure (y: the multiplier, compensation
+// included). Read only in auto-exposure mode; manual mode uses the push EV.
+layout(set = 0, binding = 5, std430) readonly buffer ExposureState {
+    vec4 exposureState;
+};
 layout(push_constant) uniform OutputPushConstants {
     mat4 inverseViewProjection;
     vec4 gridPlane;
@@ -26,6 +31,7 @@ uint outputTransport() { return (push.packedModes >> 2u) & 0x3u; }
 bool selectionActive() { return (push.packedModes & (1u << 4u)) != 0u; }
 bool gridActive() { return (push.packedModes & (1u << 5u)) != 0u; }
 bool motionVectorView() { return (push.packedModes & (1u << 6u)) != 0u; }
+bool autoExposure() { return (push.packedModes & (1u << 7u)) != 0u; }
 
 // Hue is the screen-space direction, brightness log2 of the pixels moved
 // (white at 64 px); black is no motion and magenta no previous position.
@@ -331,7 +337,7 @@ void main() {
         return;
     }
     vec3 sceneAcesCg = texture(sceneColor, fragTexCoord).rgb *
-        exp2(push.manualExposureEv);
+        (autoExposure() ? exposureState.y : exp2(push.manualExposureEv));
     if (outputOperator() == 0u) {
         vec3 encoded = sampleAces2Encoded(sceneAcesCg);
         if (outputTransport() == 0u) {

@@ -34,6 +34,7 @@ namespace Iridium {
         outputTransformPass_ = ids.outputTransform;
         resolvedScene_ = ids.resolvedSceneColor;
         taaActive_ = ids.taaResolve.isValid();
+        exposureState_ = ids.exposureCurrent;
         hdr10EncodePass_ = ids.hdr10EncodePresent;
     }
 
@@ -127,6 +128,11 @@ namespace Iridium {
             self.outputPass_.setSceneView(frameIndex,
                 context.graph.image(frameIndex, self.resolvedScene_).view,
                 shared.frameTargets.sampler());
+        // M9.5: this frame's adapted exposure (History parity/view set).
+        const bool autoExposure = self.exposureState_.isValid();
+        if (autoExposure)
+            self.outputPass_.setExposureBuffer(frameIndex,
+                context.graph.buffer(frameIndex, self.exposureState_).buffer);
         VulkanRenderingOverrides rendering{};
         rendering.renderArea = { { 0, 0 }, extent };
         context.beginRendering(rendering);
@@ -136,7 +142,7 @@ namespace Iridium {
             static_cast<uint32_t>(self.staged_.transport),
             self.staged_.paperWhiteNits, self.staged_.peakNits,
             self.staged_.selectionOutline, self.gridOverlay_,
-            self.staged_.motionVectorView);
+            self.staged_.motionVectorView, autoExposure);
         context.endRendering();
         if (shared.telemetry.collecting()) {
             shared.telemetry.recordPipelineBind(pipelineIdentity(

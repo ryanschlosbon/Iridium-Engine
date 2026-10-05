@@ -389,6 +389,11 @@ namespace Iridium {
             .temporalJitter = config_.temporalJitter.value_or(
                 config_.antiAliasing == AntiAliasingMode::Taa),
             .temporalJitterSequenceLength = config_.temporalJitterSequenceLength,
+            // M9.5: auto-exposure adapts over view time; deterministic content
+            // (benchmarks, captures) advances a simulated 60 Hz clock instead
+            // of wall time, so captures are reproducible.
+            .timeSeconds = policy_.deterministicContent
+                ? static_cast<double>(applicationFrameIndex) / 60.0 : glfwGetTime(),
         });
         if (!frameRequests_.suppressGridOverlay && !view.assetPreviewActive) {
             extractor_.setGridOverlay(editorHost_.viewportGridOverlay(

@@ -1,6 +1,7 @@
 #include "renderer/vulkan/VulkanProductionRenderGraph.h"
 
 #include "renderer/vulkan/VulkanRenderGraphExecutor.h"
+#include "renderer/vulkan/VulkanExposureFeature.h"
 #include "renderer/vulkan/VulkanGBufferLayout.h"
 #include "renderer/lighting/ClusteredLighting.h"
 #include "renderer/rhi/ShadowTypes.h"
@@ -927,6 +928,12 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
     // current slot with TAA, otherwise scene.color (the M7R topology). The
     // scene-linear capture above stays the single-frame (pre-TAA) domain.
     RenderGraph::ResourceHandle resolved = litScene;
+    // M9.5: the adapted exposure state, a History buffer pair that survives
+    // view cuts. TAA pre-exposes with its previous half.
+    RenderGraph::RenderGraphBuilder::HistoryHandles exposure{};
+    if (features.autoExposure)
+        exposure = graph.createHistory("exposure", bufferDesc(ExposureStateBytes, 16),
+            RenderGraph::HistoryReset::SurviveCut);
     if (features.temporalAntiAliasing) {
         const auto taaHistory = graph.createHistory("taa.history",
             imageDesc(RenderGraph::Format::Rgba16Float, sceneExtent));
@@ -936,7 +943,31 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
         graph.read(taa, depth, Access::SampledRead);
         graph.read(taa, velocity, Access::SampledRead);
         graph.read(taa, taaHistory.previous, Access::SampledRead);
+        if (features.autoExposure)
+            graph.read(taa, exposure.previous, Access::StorageRead);
         resolved = graph.write(taa, taaHistory.current, Access::StorageWrite);
+    }
+
+    // M9.5: meter the resolved colour (one histogram row per 128x128 tile,
+    // every row written each frame) and adapt (one workgroup).
+    RenderGraph::ResourceHandle exposureState{};
+    RenderGraph::ResourceHandle exposureMetering{};
+    if (features.autoExposure) {
+        RenderGraph::ResourceHandle rows = graph.createResource("exposure.histogram-rows",
+            bufferDesc(checkedBufferBytes(exposureHistogramRowCount(sceneExtent.width,
+                sceneExtent.height), uint64_t{ ExposureHistogramBins } * 4u)));
+        exposureMetering = graph.createResource("exposure.metering",
+            bufferDesc(ExposureMeteringBytes, 16));
+        const RenderGraph::PassHandle histogram = graph.addPass(
+            "post.exposure.histogram", RenderGraph::QueueClass::Compute);
+        graph.read(histogram, resolved, Access::SampledRead);
+        rows = graph.write(histogram, rows, Access::StorageWrite);
+        const RenderGraph::PassHandle adapt = graph.addPass(
+            "post.exposure.adapt", RenderGraph::QueueClass::Compute);
+        graph.read(adapt, rows, Access::StorageRead);
+        graph.read(adapt, exposure.previous, Access::StorageRead);
+        exposureState = graph.write(adapt, exposure.current, Access::StorageWrite);
+        exposureMetering = graph.write(adapt, exposureMetering, Access::StorageWrite);
     }
 
     const RenderGraph::PassHandle bloomHook = graph.addPass("bloom-hook");
@@ -949,6 +980,9 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
     graph.read(outputTransform, depth, Access::SampledRead);
     // M9.1: the motion-vector debug view.
     graph.read(outputTransform, velocity, Access::SampledRead);
+    // M9.5: this frame's adapted exposure.
+    if (features.autoExposure)
+        graph.read(outputTransform, exposureState, Access::StorageRead);
     output = graph.write(outputTransform, output,
         Access::ColorAttachment, LoadOp::Clear, StoreOp::Store, opaqueBlack);
 
@@ -958,6 +992,11 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
     // M9.2: the resolved scene colour (scene-resolved captures).
     if (features.temporalAntiAliasing)
         graph.read(finalCaptureHook, resolved, Access::TransferSource);
+    // M9.5: the exposure state and metering (qualification readback).
+    if (features.autoExposure) {
+        graph.read(finalCaptureHook, exposureState, Access::TransferSource);
+        graph.read(finalCaptureHook, exposureMetering, Access::TransferSource);
+    }
     graph.read(finalCaptureHook, output, Access::TransferSource);
 
     const RenderGraph::PassHandle ui = graph.addPass(
@@ -1092,6 +1131,12 @@ VulkanProductionGraphIds resolveVulkanProductionGraphIds(
     ids.taaHistoryCurrent = resource("taa.history.current");
     ids.resolvedSceneColor = ids.taaHistoryCurrent.isValid()
         ? ids.taaHistoryCurrent : resource("scene.color");
+    ids.exposureHistogram = pass("post.exposure.histogram");
+    ids.exposureAdapt = pass("post.exposure.adapt");
+    ids.exposureHistogramRows = resource("exposure.histogram-rows");
+    ids.exposureMetering = resource("exposure.metering");
+    ids.exposurePrevious = resource("exposure.previous");
+    ids.exposureCurrent = resource("exposure.current");
     ids.outputTransform = pass("output-transform");
     ids.finalCaptureHook = pass("final-capture-hook");
     ids.ui = pass("ui-compose");

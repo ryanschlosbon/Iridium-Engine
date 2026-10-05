@@ -98,6 +98,13 @@ namespace Iridium {
         RenderGraph::GraphResourceId taaHistoryCurrent;
         // The scene colour the post chain reads (TAA current or scene.color).
         RenderGraph::GraphResourceId resolvedSceneColor;
+        // M9.5 auto-exposure (invalid with ExposureMode::Manual).
+        RenderGraph::PassId exposureHistogram;
+        RenderGraph::PassId exposureAdapt;
+        RenderGraph::GraphResourceId exposureHistogramRows;
+        RenderGraph::GraphResourceId exposureMetering;
+        RenderGraph::GraphResourceId exposurePrevious;
+        RenderGraph::GraphResourceId exposureCurrent;
         RenderGraph::PassId outputTransform;
         RenderGraph::PassId finalCaptureHook;
         // "ui-compose" (HDR10 composition) or "ui-present".

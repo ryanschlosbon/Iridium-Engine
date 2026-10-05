@@ -606,6 +606,97 @@ namespace {
         return true;
     }
 
+    // M9.5: auto-exposure is declared only in Auto mode. Manual keeps the
+    // graph exactly (no exposure pass, resource or History pair); Auto meters
+    // the resolved colour after TAA and before bloom and the output, writes a
+    // SurviveCut History buffer pair, and its state reaches TAA (previous)
+    // and the output transform (current) as declared storage reads.
+    bool testAutoExposureDeclaration() {
+        for (const bool taa : { false, true }) {
+            VulkanProductionGraphFeatures manualFeatures{};
+            manualFeatures.temporalAntiAliasing = taa;
+            const RenderGraph::CompiledGraph manual = layeredGraph({}, manualFeatures);
+            const GraphQuery manualGraph(manual);
+            IRIDIUM_CHECK(!manualGraph.hasPass("post.exposure.histogram"));
+            IRIDIUM_CHECK(!manualGraph.hasPass("post.exposure.adapt"));
+            for (const auto& resource : manual.resources())
+                IRIDIUM_CHECK_MSG(resource.name.rfind("exposure", 0) != 0, resource.name);
+            IRIDIUM_CHECK(manual.historyPairs().size() == (taa ? 1u : 0u));
+            IRIDIUM_CHECK(manual.topologyHash() == layeredGraph({}, manualFeatures).topologyHash());
+
+            VulkanProductionGraphFeatures autoFeatures = manualFeatures;
+            autoFeatures.autoExposure = true;
+            const RenderGraph::CompiledGraph compiled = layeredGraph({}, autoFeatures);
+            const GraphQuery graph(compiled);
+            IRIDIUM_CHECK(compiled.topologyHash() != manual.topologyHash());
+            const std::string_view resolved = taa ? "taa.history.current" : "scene.color";
+            IRIDIUM_CHECK(graph.pass("post.exposure.histogram")->queue ==
+                RenderGraph::QueueClass::Compute);
+            IRIDIUM_CHECK(graph.reads("post.exposure.histogram", resolved, Access::SampledRead));
+            IRIDIUM_CHECK(graph.writes("post.exposure.histogram", "exposure.histogram-rows",
+                Access::StorageWrite));
+            IRIDIUM_CHECK(graph.reads("post.exposure.adapt", "exposure.histogram-rows",
+                Access::StorageRead));
+            IRIDIUM_CHECK(graph.reads("post.exposure.adapt", "exposure.previous",
+                Access::StorageRead));
+            IRIDIUM_CHECK(graph.writes("post.exposure.adapt", "exposure.current",
+                Access::StorageWrite));
+            IRIDIUM_CHECK(graph.writers("exposure.current").size() == 1u);
+            IRIDIUM_CHECK(graph.reads("output-transform", "exposure.current", Access::StorageRead));
+            IRIDIUM_CHECK(graph.reads("final-capture-hook", "exposure.current",
+                Access::TransferSource));
+            IRIDIUM_CHECK(graph.reads("final-capture-hook", "exposure.metering",
+                Access::TransferSource));
+            IRIDIUM_CHECK(graph.ordered({ "scene-color-capture-hook", "post.exposure.histogram",
+                "post.exposure.adapt", "bloom-hook", "output-transform", "final-capture-hook" }));
+            if (taa) {
+                IRIDIUM_CHECK(graph.ordered({ "temporal.taa.resolve", "post.exposure.histogram" }));
+                IRIDIUM_CHECK(graph.reads("temporal.taa.resolve", "exposure.previous",
+                    Access::StorageRead));
+            }
+            // A 1920x1080 view meters 15x9 tiles of 128 bins.
+            const auto* rows = graph.resource("exposure.histogram-rows");
+            IRIDIUM_CHECK(rows != nullptr && rows->desc.buffer.size == 15u * 9u * 128u * 4u &&
+                rows->desc.lifetime == RenderGraph::ResourceLifetime::Transient);
+            const auto* previous = graph.resource("exposure.previous");
+            IRIDIUM_CHECK(previous != nullptr &&
+                previous->desc.type == RenderGraph::ResourceType::Buffer &&
+                previous->desc.buffer.size == 16u &&
+                previous->historyRole == RenderGraph::HistoryRole::Previous);
+            IRIDIUM_CHECK(compiled.historyPairs().size() == (taa ? 2u : 1u));
+            const uint32_t exposurePair = previous->historyPair;
+            IRIDIUM_CHECK(compiled.historyPairs()[exposurePair].name == "exposure" &&
+                compiled.historyPairs()[exposurePair].reset == RenderGraph::HistoryReset::SurviveCut);
+
+            // The adapted state survives a view cut; TAA history does not.
+            RenderGraph::HistoryValidityTracker tracker;
+            tracker.resetForGraph(compiled);
+            const uint32_t taaPair = taa
+                ? graph.resource("taa.history.previous")->historyPair : RenderGraph::InvalidIndex;
+            struct Validity { bool exposure; bool taa; };
+            // One rendered turn of view `identity`: validity at its start,
+            // then every writer runs.
+            const auto turn = [&](uint64_t identity, uint64_t resetRevision) {
+                tracker.beginFrame({ identity, resetRevision, 0 });
+                const Validity validity{ tracker.pairValid(exposurePair),
+                    taa && tracker.pairValid(taaPair) };
+                for (uint32_t pair = 0; pair < tracker.pairCount(); ++pair)
+                    tracker.markWritten(pair);
+                tracker.endFrame();
+                return validity;
+            };
+            Validity validity = turn(1, 0);
+            IRIDIUM_CHECK(!validity.exposure && !validity.taa);   // first turn
+            validity = turn(1, 0);
+            IRIDIUM_CHECK(validity.exposure && validity.taa == taa);
+            validity = turn(1, 1);   // a cut
+            IRIDIUM_CHECK(validity.exposure && !validity.taa);
+            validity = turn(2, 1);   // another view identity
+            IRIDIUM_CHECK(!validity.exposure && !validity.taa);
+        }
+        return true;
+    }
+
 } // namespace
 
 int main() {
@@ -621,6 +712,7 @@ int main() {
             testNullExtensionGraphDiffersOnlyByHooks },
         { "declared work keeps the R3b.6 order and slots",
             testDeclaredWorkKeepsOrderAndSlots },
+        { "auto-exposure declaration (M9.5)", testAutoExposureDeclaration },
     };
     return Iridium::Test::runTests(tests);
 }

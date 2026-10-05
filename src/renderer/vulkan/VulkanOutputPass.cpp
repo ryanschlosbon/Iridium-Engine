@@ -56,12 +56,14 @@ namespace Iridium {
         allocator_ = &allocator;
 
         try {
-            // 0 scene, 1 ACES2 LUT, 2 selection mask, 3 depth, 4 velocity (M9.1).
-            std::array<VkDescriptorSetLayoutBinding, 5> bindings{};
+            // 0 scene, 1 ACES2 LUT, 2 selection mask, 3 depth, 4 velocity (M9.1),
+            // 5 exposure state (M9.5, storage buffer).
+            std::array<VkDescriptorSetLayoutBinding, 6> bindings{};
             for (uint32_t index = 0; index < bindings.size(); ++index) {
                 bindings[index].binding = index;
-                bindings[index].descriptorType =
-                    VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                bindings[index].descriptorType = index == 5
+                    ? VK_DESCRIPTOR_TYPE_STORAGE_BUFFER
+                    : VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
                 bindings[index].descriptorCount = 1;
                 bindings[index].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
             }
@@ -243,6 +245,9 @@ namespace Iridium {
                     writeCount = 5;
                 }
                 vkUpdateDescriptorSets(device_, writeCount, writes.data(), 0, nullptr);
+                // M9.5: the fallback until a frame binds its adapted state.
+                if (exposureFallback_ != VK_NULL_HANDLE)
+                    setExposureBuffer(static_cast<uint32_t>(index), exposureFallback_);
             }
         }
         catch (...) {
@@ -274,12 +279,27 @@ namespace Iridium {
         vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
     }
 
+    void VulkanOutputPass::setExposureBuffer(uint32_t frameIndex, VkBuffer buffer) const {
+        if (frameIndex >= descriptorSets_.size()) {
+            throw std::out_of_range("Output descriptor frame index is out of range.");
+        }
+        const VkDescriptorBufferInfo state{ buffer, 0, VK_WHOLE_SIZE };
+        VkWriteDescriptorSet write{ VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
+        write.dstSet = descriptorSets_[frameIndex];
+        write.dstBinding = 5;
+        write.descriptorCount = 1;
+        write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        write.pBufferInfo = &state;
+        vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
+    }
+
     void VulkanOutputPass::record(VkCommandBuffer commandBuffer, uint32_t frameIndex,
         VkExtent2D extent,
         float manualExposureEv, uint32_t outputOperator,
         uint32_t outputTransport, float paperWhiteNits,
         float peakNits, bool selectionActive,
-        const ViewportGridOverlay& gridOverlay, bool motionVectorView) const {
+        const ViewportGridOverlay& gridOverlay, bool motionVectorView,
+        bool autoExposure) const {
         if (frameIndex >= descriptorSets_.size()) {
             throw std::out_of_range("Output descriptor frame index is out of range.");
         }
@@ -317,7 +337,8 @@ namespace Iridium {
             ((outputTransport & 0x3u) << 2u) |
             (selectionActive ? 1u << 4u : 0u) |
             (gridOverlay.visible ? 1u << 5u : 0u) |
-            (motionVectorView ? 1u << 6u : 0u);
+            (motionVectorView ? 1u << 6u : 0u) |
+            (autoExposure ? 1u << 7u : 0u);
         vkCmdPushConstants(commandBuffer, pipelineLayout_,
             VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), &push);
         const VkViewport viewport{ 0.0f, 0.0f, static_cast<float>(extent.width),

@@ -1944,6 +1944,83 @@ namespace {
         return true;
     }
 
+    // M9.5: a SurviveCut History *buffer* pair, wired like auto-exposure:
+    // "taa" reads the previous state, "adapt" reads it and writes the current
+    // one, "output" reads the current one. The halves swap every turn, keep
+    // validity across a cut (not across an identity change), get buffer
+    // barriers, and steady frames allocate nothing.
+    bool testHistoryBufferPairSurvivesCut() {
+        RenderGraph::RenderGraphBuilder builder;
+        const auto state = builder.createHistory("exposure", bufferDesc(16),
+            RenderGraph::HistoryReset::SurviveCut);
+        auto scene = builder.createResource("scene", imageDesc());
+        const auto scenePass = builder.addPass("scene");
+        const auto taa = builder.addPass("taa", RenderGraph::QueueClass::Compute);
+        const auto adapt = builder.addPass("adapt", RenderGraph::QueueClass::Compute);
+        const auto output = builder.addPass("output");
+        scene = builder.write(scenePass, scene, Access::ColorAttachment, RenderGraph::LoadOp::Clear);
+        builder.read(taa, scene, Access::SampledRead);
+        builder.read(taa, state.previous, Access::StorageRead);
+        builder.read(adapt, state.previous, Access::StorageRead);
+        const auto current = builder.write(adapt, state.current, Access::StorageWrite);
+        builder.read(output, current, Access::StorageRead);
+        const auto compiled = builder.compile();
+        CHECK(compiled.succeeded());
+
+        FakeResourceFactory factory;
+        RecordingBarrierSink sink;
+        VulkanRenderGraphExecutor executor;
+        executor.setBarrierSink(&sink);
+        executor.init(factory, 2);
+        executor.setBarrierApi(VulkanBarrierApi::Synchronization2);
+        executor.rebuild(*compiled.graph);
+        const auto previousId = executor.resourceId("exposure.previous");
+        const auto currentId = executor.resourceId("exposure.current");
+        struct Turn { VkBuffer previous; VkBuffer current; bool valid; bool written; };
+        uint32_t unstableHalves = 0;
+        const auto turn = [&](uint32_t frame, RenderGraph::ViewHistoryContext view) {
+            const uint32_t slot = frame % 2;
+            executor.onFrameFenceCompleted(slot);
+            executor.beginFrameExecution(slot, view);
+            Turn result{ executor.buffer(slot, previousId).buffer,
+                executor.buffer(slot, currentId).buffer, executor.historyValid(previousId), false };
+            executor.beginPass(FakeCommandBuffer, executor.passId("scene"));
+            executor.beginPass(FakeCommandBuffer, executor.passId("taa"));
+            sink.clear();
+            executor.beginPass(FakeCommandBuffer, executor.passId("adapt"));
+            for (const RecordedBarrier& barrier : sink.recorded())
+                result.written |= !barrier.image &&
+                    barrier.handle == reinterpret_cast<uint64_t>(result.current) &&
+                    (barrier.dstAccess & VK_ACCESS_2_SHADER_WRITE_BIT) != 0;
+            // The writer's parity flip keeps this frame's halves stable.
+            if (executor.buffer(slot, previousId).buffer != result.previous ||
+                executor.buffer(slot, currentId).buffer != result.current)
+                ++unstableHalves;
+            executor.beginPass(FakeCommandBuffer, executor.passId("output"));
+            executor.finishFrameExecution();
+            return result;
+        };
+        const Turn first = turn(0, { 1, 0, 0 });
+        CHECK(!first.valid && first.written && first.previous != first.current);
+        const Turn second = turn(1, { 1, 0, 0 });
+        CHECK(second.valid && second.previous == first.current &&
+            second.current == first.previous);
+        const Turn cut = turn(2, { 1, 1, 0 });   // a cut: the state survives
+        CHECK(cut.valid && cut.previous == second.current);
+        const Turn other = turn(3, { 2, 1, 0 });   // another identity: it does not
+        CHECK(!other.valid);
+        for (uint32_t frame = 4; frame < 8; ++frame) (void)turn(frame, { 2, 1, 0 });
+        beginCpuAllocationFrame();
+        for (uint32_t frame = 8; frame < 40; ++frame)
+            (void)turn(frame, { 2, frame / 8u, 0 });   // cuts every 8 turns
+        const CpuAllocationFrameSample sample = endCpuAllocationFrame();
+        CHECK(sample.allocationCount == 0);
+        CHECK(sink.overflow == 0);
+        CHECK(unstableHalves == 0);
+        executor.cleanupAfterDeviceIdle();
+        return true;
+    }
+
     // ---- M7R R4b.4 transient aliasing ----------------------------------------
 
     // first (clear) -> readFirst -> second (clear, reuses first's memory) ->
@@ -2134,6 +2211,7 @@ int main() {
         { "production imported-image policies", testProductionImportedImagePolicies },
         { "variable-size imported buffer", testVariableSizeImportedBuffer },
         { "steady frames allocate nothing", testSteadyFramesAllocateNothing },
+        { "History buffer pair survives a cut (M9.5)", testHistoryBufferPairSurvivesCut },
         { "aliased first-use barriers and skip guard", testAliasedFirstUseBarriers },
         { "aliased steady frames allocate nothing", testAliasedSteadyFramesAllocateNothing },
     };

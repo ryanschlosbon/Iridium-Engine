@@ -102,6 +102,11 @@ namespace Iridium {
             ? temporalJitterNdc(jitterIndex, input.extent, sequenceLength)
             : glm::vec2(0.0f);
         const glm::vec2 previousJitterNdc = continuous ? state.jitterNdc : jitterNdc;
+        const double elapsed = cut == ViewCutReason::FirstTurn
+            ? 0.0 : input.timeSeconds - state.timeSeconds;
+        const float deltaSeconds = std::isfinite(elapsed) && elapsed > 0.0
+            ? static_cast<float>(elapsed) : 0.0f;
+        state.timeSeconds = input.timeSeconds;
         state.viewProjection = viewProjection;
         state.jitterNdc = jitterNdc;
         state.valid = true;
@@ -119,6 +124,7 @@ namespace Iridium {
             .jitterIndex = jitterIndex,
             .jitterNdc = jitterNdc,
             .previousJitterNdc = previousJitterNdc,
+            .deltaSeconds = deltaSeconds,
         };
     }
 

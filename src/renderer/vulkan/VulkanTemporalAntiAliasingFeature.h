@@ -31,6 +31,10 @@ namespace Iridium {
         struct FrameInputs {
             TemporalUpscaleInputs request{};
             VkDescriptorSet globalSet = VK_NULL_HANDLE;
+            // M9.5: last frame's adapted exposure state (binding 5, always a
+            // valid buffer); the resolve pre-exposes with it when set.
+            VkBuffer exposureState = VK_NULL_HANDLE;
+            bool exposureFromState = false;
         };
 
         VulkanTemporalAntiAliasingFeature() = default;

@@ -56,6 +56,11 @@ namespace Iridium {
         }
         // The caller has validated the LUT and drained the frames in flight.
         void setLut(TextureHandle lut);
+        // M9.5: the state buffer bound when no adapted exposure exists
+        // (before rebuildDescriptors; VulkanExposureFeature owns it).
+        void setExposureFallback(VkBuffer buffer) noexcept {
+            outputPass_.setExposureFallback(buffer);
+        }
 
         // IVulkanFeature
         void create(const VulkanFeatureContext& context) override;
@@ -90,6 +95,7 @@ namespace Iridium {
         RenderGraph::PassId outputTransformPass_{};
         RenderGraph::GraphResourceId resolvedScene_{};   // M9.2
         bool taaActive_ = false;
+        RenderGraph::GraphResourceId exposureState_{};   // M9.5 (auto only)
         RenderGraph::PassId hdr10EncodePass_{};
         float manualExposureEv_ = 0.0f;
         OutputTransformOperator outputOperator_ = OutputTransformOperator::Aces2;

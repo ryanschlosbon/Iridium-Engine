@@ -27,10 +27,14 @@ layout(set = 1, binding = 1) uniform sampler2D sceneDepth;     // point
 layout(set = 1, binding = 2) uniform sampler2D motionVectors;  // point
 layout(set = 1, binding = 3) uniform sampler2D historyColor;   // linear, clamp
 layout(set = 1, binding = 4, rgba16f) uniform writeonly image2D resolvedColor;
+// M9.5: the previous frame's adapted exposure (y: the output multiplier).
+layout(set = 1, binding = 5, std430) readonly buffer ExposureState {
+    vec4 exposureState;
+};
 
 layout(push_constant) uniform TaaPushConstants {
     vec4 extent;       // xy size, zw 1 / size
-    vec4 exposure;     // x current pre-exposure, y history pre-exposure, z history valid, w flags
+    vec4 exposure;     // x current pre-exposure, y history pre-exposure, z history valid, w flags (bit 0: pre-expose with exposureState)
     vec4 feedback;     // x minimum history weight, y maximum, z motion pixels for minimum, w variance gamma
     vec4 tuning;       // x reconstruction sharpness, y still-pixel gamma, z still-pixel history weight
 } push;
@@ -109,7 +113,9 @@ vec3 clipToBox(vec3 history, vec3 boxMin, vec3 boxMax) {
 void main() {
     ivec2 group = ivec2(gl_WorkGroupID.xy) * 8;
     ivec2 local = ivec2(gl_LocalInvocationID.xy);
-    float exposure = push.exposure.x;
+    bool exposureFromState = (uint(push.exposure.w) & 1u) != 0u;
+    float exposure = exposureFromState ? exposureState.y : push.exposure.x;
+    float historyExposure = exposureFromState ? exposureState.y : push.exposure.y;
 
     // Load the 10x10 tile (8x8 plus a one-pixel border).
     for (int index = int(gl_LocalInvocationIndex); index < 100; index += 64) {
@@ -194,7 +200,7 @@ void main() {
 
     vec3 resolved = filtered;
     if (historyAvailable) {
-        vec3 history = toYCoCg(compress(sampleHistory(previousUv), push.exposure.y));
+        vec3 history = toYCoCg(compress(sampleHistory(previousUv), historyExposure));
         history = clipToBox(history, clipMin, clipMax);
         // Moving content: similar lumas keep more history (Lottes), so a
         // changed surface refreshes quickly.

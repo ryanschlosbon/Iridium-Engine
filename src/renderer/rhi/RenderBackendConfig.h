@@ -52,6 +52,39 @@ namespace Iridium {
             const TemporalAntiAliasingTuning&) = default;
     };
 
+    // M9.5 exposure of the main view. Manual keeps today's output (the
+    // manual EV; the frozen-set and fixture route); Auto meters the resolved
+    // scene colour on the GPU and adapts, with the manual EV as compensation.
+    enum class ExposureMode : uint8_t {
+        Manual,
+        Auto,
+    };
+
+    // M9.5 auto-exposure parameters (exposure_histogram.comp,
+    // exposure_adapt.comp). EV100 is scene luminance in photometric units
+    // (scene-linear / PhotometricToSceneScale) at ISO 100, K = 12.5.
+    struct AutoExposureSettings {
+        // The 128 log2-luminance histogram bins span this range.
+        float histogramMinEv100 = -10.0f;
+        float histogramMaxEv100 = 20.0f;
+        // The metered luminance is the mean of the bins between these
+        // fractions of the (weighted) pixel count.
+        float lowPercentile = 0.10f;
+        float highPercentile = 0.90f;
+        // The adapted EV100 never leaves [minimumEv100, maximumEv100].
+        float minimumEv100 = -10.0f;
+        float maximumEv100 = 20.0f;
+        // Toward a brighter scene (up) and a darker one (down), EV per second
+        // of the view's own time.
+        float speedUpEvPerSecond = 3.0f;
+        float speedDownEvPerSecond = 1.0f;
+        // 0 meters every pixel equally; 1 weights the centre up to 16x.
+        float centreWeight = 0.0f;
+
+        friend bool operator==(const AutoExposureSettings&,
+            const AutoExposureSettings&) = default;
+    };
+
     struct RenderBackendConfig {
         bool enableValidation = false;
         // Adds Khronos synchronization validation when enableValidation is set.
@@ -75,6 +108,9 @@ namespace Iridium {
         UploadQueueMode uploadQueue = UploadQueueMode::Auto;
         AntiAliasingMode antiAliasing = AntiAliasingMode::None;
         TemporalAntiAliasingTuning taaTuning{};
+        // M9.5: Manual until admission (M9.7); Auto adds the exposure passes.
+        ExposureMode exposureMode = ExposureMode::Manual;
+        AutoExposureSettings autoExposure{};
         CpuProfiler* cpuProfiler = nullptr;
         bool enableGpuProfiling = false;
         bool enableTransparentPipelineStatistics = false;

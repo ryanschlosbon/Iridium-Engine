@@ -17,7 +17,7 @@ namespace {
 
     struct TaaPushConstants {
         glm::vec4 extent{ 0.0f };     // xy size, zw 1 / size
-        glm::vec4 exposure{ 0.0f };   // x current, y history, z history valid, w flags
+        glm::vec4 exposure{ 0.0f };   // x current, y history, z history valid, w flags (1: state)
         glm::vec4 feedback{ 0.0f };   // x min history weight, y max, z motion px, w gamma
         glm::vec4 tuning{ 0.0f };     // x reconstruction sharpness
     };
@@ -62,6 +62,9 @@ void VulkanTemporalAntiAliasingFeature::create(const VulkanFeatureContext& conte
             VkDescriptorSetLayoutBinding{ 3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
                 VK_SHADER_STAGE_COMPUTE_BIT, nullptr },
             VkDescriptorSetLayoutBinding{ 4, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1,
+                VK_SHADER_STAGE_COMPUTE_BIT, nullptr },
+            // M9.5: the previous adapted exposure state.
+            VkDescriptorSetLayoutBinding{ 5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1,
                 VK_SHADER_STAGE_COMPUTE_BIT, nullptr },
         };
         VkDescriptorSetLayoutCreateInfo setInfo{ VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
@@ -142,8 +145,11 @@ void VulkanTemporalAntiAliasingFeature::writeDescriptors(uint32_t frameIndex,
         { linearSampler_, previous, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
         { VK_NULL_HANDLE, current, VK_IMAGE_LAYOUT_GENERAL },
     };
-    std::array<VkWriteDescriptorSet, 5> writes{};
-    for (uint32_t binding = 0; binding < writes.size(); ++binding) {
+    const VkDescriptorBufferInfo exposureState{ staged_.exposureState, 0, VK_WHOLE_SIZE };
+    std::array<VkWriteDescriptorSet, 6> writes{};
+    writes[5] = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, sets_[frameIndex], 5, 0, 1,
+        VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &exposureState, nullptr };
+    for (uint32_t binding = 0; binding < 5; ++binding) {
         writes[binding] = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr,
             sets_[frameIndex], binding, 0, 1,
             binding < 4 ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER
@@ -174,7 +180,7 @@ void VulkanTemporalAntiAliasingFeature::executeResolve(void* owner, VulkanPassCo
     // as valid for this view set (the key invalidates on the next turn).
     const bool useHistory = historyValid && !request.resetHistory;
     push.exposure = { request.exposure, request.previousExposure,
-        useHistory ? 1.0f : 0.0f, 0.0f };
+        useHistory ? 1.0f : 0.0f, self.staged_.exposureFromState ? 1.0f : 0.0f };
     const TemporalAntiAliasingTuning& settings = request.nativeTaa;
     push.feedback = { settings.minimumHistoryWeight, settings.maximumHistoryWeight,
         settings.motionPixelsForMinimum, settings.varianceGamma };

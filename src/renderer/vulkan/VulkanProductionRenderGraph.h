@@ -151,6 +151,10 @@ namespace Iridium {
         // M9.2: native TAA. Declares temporal.taa.resolve and the taa.history
         // pair; the post chain (bloom, output) then reads the resolved colour.
         bool temporalAntiAliasing = false;
+        // M9.5: auto-exposure. Declares the "exposure" History buffer pair
+        // (SurviveCut) and post.exposure.{histogram,adapt} after the resolve;
+        // TAA and the output transform read the adapted state.
+        bool autoExposure = false;
     };
 
     [[nodiscard]] RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
