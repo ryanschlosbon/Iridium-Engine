@@ -100,6 +100,23 @@ namespace {
         "layered_deep_residual_material_indexed_frag.spv",
         "weighted_oit_material_indexed_frag.spv",
     };
+    // M9 G5a: every shader that declares the set-0 view block through
+    // include/view_uniforms.glsl.
+    constexpr std::array ViewUniformShaders{
+        "canonical_material_vert.spv",
+        "gpu_scene_material_vert.spv",
+        "weighted_oit_instanced_vert.spv",
+        "gpu_scene_frustum_compact_comp.spv",
+        "gpu_scene_frustum_occlusion_compact_comp.spv",
+        "depth_pyramid_gpu_scene_query_comp.spv",
+        "transparency_pyramid_comp.spv",
+        "complex_material_indexed_frag.spv",
+        "complex_opaque_material_indexed_frag.spv",
+        "layered_ordinary2_material_indexed_frag.spv",
+        "layered_deep_material_indexed_frag.spv",
+        "layered_deep_residual_material_indexed_frag.spv",
+        "weighted_oit_material_indexed_frag.spv",
+    };
     constexpr std::array DeferredLightingShaders{
         "canonical_reference_lighting_frag.spv",
         "canonical_packed_lighting_frag.spv",
@@ -366,18 +383,22 @@ namespace {
                 std::string(spv) + " LightingPushConstants"));
         }
 
-        const SpirvModule vertex = load("canonical_material_vert.spv");
-        IRIDIUM_CHECK(membersMatch(vertex, "UniformBufferObject", {
-            IRIDIUM_MEMBER(UniformBufferObject, model),
-            IRIDIUM_MEMBER(UniformBufferObject, view),
-            IRIDIUM_MEMBER(UniformBufferObject, proj),
-            IRIDIUM_MEMBER(UniformBufferObject, inverseView),
-            IRIDIUM_MEMBER(UniformBufferObject, inverseProjection),
-            IRIDIUM_MEMBER(UniformBufferObject, cameraPosition),
-            IRIDIUM_MEMBER(UniformBufferObject, depthRange),
-            IRIDIUM_MEMBER(UniformBufferObject, renderInfo),
-            IRIDIUM_MEMBER(UniformBufferObject, worldUnits) },
-            sizeof(UniformBufferObject)));
+        // M9 G5a: every shader using the shared set-0 view block
+        // (include/view_uniforms.glsl) matches the C++ layout.
+        for (const char* spv : ViewUniformShaders) {
+            const SpirvModule module = load(spv);
+            IRIDIUM_CHECK(membersMatch(module, "UniformBufferObject", {
+                IRIDIUM_MEMBER(UniformBufferObject, model),
+                IRIDIUM_MEMBER(UniformBufferObject, view),
+                IRIDIUM_MEMBER(UniformBufferObject, proj),
+                IRIDIUM_MEMBER(UniformBufferObject, inverseView),
+                IRIDIUM_MEMBER(UniformBufferObject, inverseProjection),
+                IRIDIUM_MEMBER(UniformBufferObject, cameraPosition),
+                IRIDIUM_MEMBER(UniformBufferObject, depthRange),
+                IRIDIUM_MEMBER(UniformBufferObject, renderInfo),
+                IRIDIUM_MEMBER(UniformBufferObject, worldUnits) },
+                sizeof(UniformBufferObject)));
+        }
 
         for (const char* spv : ForwardMaterialShaders) {
             const SpirvModule module = load(spv);

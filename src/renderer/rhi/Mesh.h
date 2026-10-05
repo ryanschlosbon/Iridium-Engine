@@ -43,6 +43,14 @@ namespace Iridium {
     };
 
     static_assert(sizeof(ViewTransportRecord) == 320);
+    static_assert(offsetof(ViewTransportRecord, view) == 0);
+    static_assert(offsetof(ViewTransportRecord, projection) == 64);
+    static_assert(offsetof(ViewTransportRecord, inverseView) == 128);
+    static_assert(offsetof(ViewTransportRecord, inverseProjection) == 192);
+    static_assert(offsetof(ViewTransportRecord, cameraPosition) == 256);
+    static_assert(offsetof(ViewTransportRecord, depthRange) == 272);
+    static_assert(offsetof(ViewTransportRecord, renderInfo) == 288);
+    static_assert(offsetof(ViewTransportRecord, worldUnits) == 304);
 
     [[nodiscard]] inline ViewTransportRecord makeViewTransportRecord(
         const glm::mat4& view, const glm::mat4& projection,
@@ -145,8 +153,16 @@ namespace Iridium {
         alignas(16) glm::vec4 worldUnits;
     };
 
+    // M9 G5a: every field is pinned; include/view_uniforms.glsl mirrors it.
     static_assert(sizeof(UniformBufferObject) == 384);
+    static_assert(offsetof(UniformBufferObject, model) == 0);
+    static_assert(offsetof(UniformBufferObject, view) == 64);
+    static_assert(offsetof(UniformBufferObject, proj) == 128);
+    static_assert(offsetof(UniformBufferObject, inverseView) == 192);
     static_assert(offsetof(UniformBufferObject, inverseProjection) == 256);
+    static_assert(offsetof(UniformBufferObject, cameraPosition) == 320);
+    static_assert(offsetof(UniformBufferObject, depthRange) == 336);
+    static_assert(offsetof(UniformBufferObject, renderInfo) == 352);
     static_assert(offsetof(UniformBufferObject, worldUnits) == 368);
 
     enum class AlphaMode {

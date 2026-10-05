@@ -6,11 +6,7 @@
 
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
-layout(set = 0, binding = 0) uniform UniformBufferObject {
-    mat4 model; mat4 view; mat4 proj; mat4 inverseView;
-    mat4 inverseProjection; vec4 cameraPosition; vec4 depthRange;
-    uvec4 renderInfo; vec4 worldUnits;
-} ubo;
+#include "include/view_uniforms.glsl"
 
 struct Transform { vec4 row0; vec4 row1; vec4 row2; };
 struct Instance {

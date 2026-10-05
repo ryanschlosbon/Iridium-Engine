@@ -11,17 +11,7 @@ layout(location = 3) in vec3 fragWorldPos;
 layout(location = 4) in vec4 fragTangent;
 layout(location = 5) in vec2 fragTexCoord1;
 
-layout(set = 0, binding = 0) uniform GlobalUBO {
-    mat4 model;
-    mat4 view;
-    mat4 proj;
-    mat4 inverseView;
-    mat4 inverseProjection;
-    vec4 cameraPosition;
-    vec4 depthRange;
-    uvec4 renderInfo;
-    vec4 worldUnits;
-} ubo;
+#include "include/view_uniforms.glsl"
 
 #if defined(IRIDIUM_INDEXED_MATERIAL_TEXTURES)
 #extension GL_EXT_nonuniform_qualifier : require
