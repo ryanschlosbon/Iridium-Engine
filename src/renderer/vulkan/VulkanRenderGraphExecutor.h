@@ -588,11 +588,17 @@ namespace Iridium {
         // History lifetime (R3b.10). Slots are global (not per frame slot);
         // their access state persists across frame slots.
         VulkanGraphResourceFactory* factory_ = nullptr;
+        // M9 G2: HistoryViewSetCount sets, set-major. Set 0 is created with
+        // the plan; later sets are created the first time a view selects them
+        // (ensureHistorySet) and retired with the plan.
         std::vector<VulkanGraphPhysicalResource> historyResources_;
-        std::vector<RenderGraph::Access> historyAccess_;
-        std::vector<uint8_t> historyParity_;        // slot most recently written
-        std::vector<uint8_t> historyWriterBegun_;   // this frame
-        std::vector<uint8_t> historyDiscarded_;     // invalid previous already UNDEFINED
+        std::vector<RenderGraph::Access> historyAccess_;   // per set and slot
+        std::vector<uint8_t> historyParity_;        // per set and pair: slot most recently written
+        std::vector<uint8_t> historyWriterBegun_;   // this frame, per pair
+        std::vector<uint8_t> historyDiscarded_;     // invalid previous already UNDEFINED, per pair
+        uint32_t historySlotsPerSet_ = 0;
+        uint32_t historyPairsPerSet_ = 0;
+        uint32_t activeHistorySet_ = 0;
         std::vector<uint32_t> passHistoryWrites_;   // pairs written, flat by pass
         std::vector<uint32_t> passHistoryWriteFirst_;   // passCount + 1 offsets
         struct RetiredHistory {
@@ -644,6 +650,8 @@ namespace Iridium {
         void drainRegisteredAtCursor();
         void runRegisteredPass(uint32_t passOrder);
         [[nodiscard]] uint32_t historySlot(const RenderGraph::CompiledResource& resource) const noexcept;
+        void selectHistoryView(const RenderGraph::ViewHistoryContext& view);
+        void ensureHistorySet(uint32_t set);
         void queueHistoryUsage(const RenderGraph::CompiledResource& resource,
             RenderGraph::Access access, bool attachmentRebarrier = false);
         void queueExternalImageUsage(ExternalImageBinding& binding,

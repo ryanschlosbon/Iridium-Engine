@@ -314,6 +314,7 @@ namespace Iridium::RenderGraph {
         uint32_t previousLogical = InvalidIndex;
         uint32_t currentLogical = InvalidIndex;
         std::array<uint32_t, 2> slots{ InvalidIndex, InvalidIndex };
+        HistoryReset reset = HistoryReset::OnCut;
     };
 
     struct CompiledTransition {
@@ -415,14 +416,15 @@ namespace Iridium::RenderGraph {
             const ResourceDesc& desc);
         // R3b.10 History lifetime: "<name>.previous" (read-only, last frame's
         // contents) and "<name>.current" (must be written before it is read).
-        // `desc` must not be imported; its lifetime becomes History.
+        // `desc` must not be imported; its lifetime becomes History. `reset`
+        // is the pair's cut policy (M9 G2).
         struct HistoryHandles {
             ResourceHandle previous;
             ResourceHandle current;
             uint32_t pair = InvalidIndex;
         };
         [[nodiscard]] HistoryHandles createHistory(std::string name,
-            const ResourceDesc& desc);
+            const ResourceDesc& desc, HistoryReset reset = HistoryReset::OnCut);
         [[nodiscard]] PassHandle addPass(std::string name,
             QueueClass queue = QueueClass::Graphics);
 
@@ -467,6 +469,7 @@ namespace Iridium::RenderGraph {
             ResourceDesc desc{};
             uint32_t historyPair = InvalidIndex;
             HistoryRole historyRole = HistoryRole::None;
+            HistoryReset historyReset = HistoryReset::OnCut;
             bool aliasingExcluded = false;
         };
 
@@ -550,32 +553,47 @@ namespace Iridium::RenderGraph {
         [[nodiscard]] bool isValid(uint32_t logicalResourceIndex) const noexcept;
         [[nodiscard]] uint64_t topologyHash() const noexcept { return m_topologyHash; }
 
-        // Pair lifetime (R3b.10). A pair's previous contents are valid in a
-        // frame iff its writer ran in the immediately preceding frame under an
-        // identical key; beginFrame invalidates on any key change.
+        // Pair lifetime (R3b.10; per view set since M9 G2). beginFrame selects
+        // the view's history set. A pair's previous contents in that set are
+        // valid iff its writer ran on the set's previous turn (the last frame
+        // that rendered this view, not necessarily the last frame) under an
+        // identical key; a key change invalidates. OnCut pairs key on the
+        // view's resetRevision, SurviveCut pairs do not. Other sets are left
+        // untouched, so alternating views keep their history.
         void beginFrame(const ViewHistoryContext& view);
         void markWritten(uint32_t pair);
         void endFrame() noexcept;
         [[nodiscard]] bool pairValid(uint32_t pair) const noexcept;
-        [[nodiscard]] size_t pairCount() const noexcept { return m_pairs.size(); }
+        [[nodiscard]] size_t pairCount() const noexcept { return m_pairCount; }
+        [[nodiscard]] uint32_t activeSet() const noexcept { return m_activeSet; }
         [[nodiscard]] const HistoryValidityKey& pairKey(uint32_t pair) const;
 
     private:
         struct PairState {
             Extent3D extent{};
             Format format = Format::Undefined;
+            HistoryReset reset = HistoryReset::OnCut;
             HistoryValidityKey key{};
             bool keyed = false;
             bool valid = false;
             bool written = false;
-            bool writtenLastFrame = false;
+            bool writtenLastTurn = false;
         };
+        [[nodiscard]] PairState& active(uint32_t pair) noexcept {
+            return m_pairs[static_cast<size_t>(m_activeSet) * m_pairCount + pair];
+        }
+        [[nodiscard]] const PairState& active(uint32_t pair) const noexcept {
+            return m_pairs[static_cast<size_t>(m_activeSet) * m_pairCount + pair];
+        }
 
         uint64_t m_topologyHash = 0;
         std::vector<uint8_t> m_validity;
         std::vector<uint8_t> m_isHistory;
         std::vector<uint32_t> m_pairOfLogical;
+        // HistoryViewSetCount sets of m_pairCount states, set-major.
         std::vector<PairState> m_pairs;
+        uint32_t m_pairCount = 0;
+        uint32_t m_activeSet = 0;
     };
 
 } // namespace Iridium::RenderGraph

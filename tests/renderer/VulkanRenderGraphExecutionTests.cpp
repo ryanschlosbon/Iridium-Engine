@@ -1471,6 +1471,52 @@ namespace {
         return true;
     }
 
+    // M9 G2: a second retained view gets its own lazily created history set,
+    // and alternating views keep each set valid on its next turn.
+    bool testHistoryViewSets() {
+        HistoryFixture fixture;
+        auto& executor = fixture.executor;
+        CHECK(executor.stats().historySlotCount == 2);   // set 1 not created yet
+        const RenderGraph::ViewHistoryContext scene{ 1, 0, 0 };
+        const RenderGraph::ViewHistoryContext preview{ 7, 0, 1 };
+        uint32_t frame = 0;
+        const auto next = [&](RenderGraph::ViewHistoryContext view) {
+            return runHistoryFrame(fixture, frame++, view);
+        };
+        const HistoryFrame s0 = next(scene);
+        const HistoryFrame s1 = next(scene);
+        CHECK(!s0.valid && s1.valid);
+        const HistoryFrame p0 = next(preview);
+        CHECK(!p0.valid);
+        CHECK(executor.stats().historySlotCount == 4);   // created on first selection
+        // The preview's images are distinct from the scene set's.
+        CHECK(p0.previous != s1.previous && p0.previous != s1.current);
+        CHECK(p0.current != s1.previous && p0.current != s1.current);
+        CHECK(p0.previousBarriered && p0.previousBarrier.oldLayout == VK_IMAGE_LAYOUT_UNDEFINED);
+        const HistoryFrame s2 = next(scene);
+        CHECK(s2.valid);
+        CHECK(s2.previous == s1.current);                // the scene set kept its parity
+        const HistoryFrame p1 = next(preview);
+        CHECK(p1.valid);
+        CHECK(p1.previous == p0.current);
+        // A cut on the scene view leaves the preview's history alone.
+        CHECK(!next({ 1, 1, 0 }).valid);
+        CHECK(next(preview).valid);
+        CHECK(throws([&] {
+            executor.onFrameFenceCompleted(frame % 2);
+            executor.beginFrameExecution(frame % 2,
+                { 1, 1, RenderGraph::HistoryViewSetCount });
+        }));
+        // A rebuild retires every set; set 1 is created again on demand.
+        fixture.rebuild(64);
+        CHECK(executor.stats().historySlotCount == 2);
+        CHECK(!runHistoryFrame(fixture, 0, preview).valid);
+        CHECK(executor.stats().historySlotCount == 4);
+        executor.cleanupAfterDeviceIdle();
+        CHECK(fixture.factory.destroyCount == fixture.factory.createCount);
+        return true;
+    }
+
     bool testHistoryRetirement() {
         HistoryFixture fixture;
         auto& executor = fixture.executor;
@@ -1870,7 +1916,10 @@ namespace {
             sink.clear();
             ranges.count = 0;
             executor.onFrameFenceCompleted(slot);
-            executor.beginFrameExecution(slot, { 3, 0 });
+            // M9 G2: two retained views alternate; each keeps its own set.
+            executor.beginFrameExecution(slot, index % 4 < 2
+                ? RenderGraph::ViewHistoryContext{ 3, 0, 0 }
+                : RenderGraph::ViewHistoryContext{ 9, 0, 1 });
             (void)executor.historyValid(previousId);
             (void)executor.image(slot, previousId);
             executor.beginPass(FakeCommandBuffer, scenePassId);
@@ -2078,6 +2127,7 @@ int main() {
         { "History pair lifetime", testHistoryPairLifetime },
         { "History validity", testHistoryValidity },
         { "History view supplied before first pass", testHistoryViewSuppliedBeforeFirstPass },
+        { "History view sets", testHistoryViewSets },
         { "History retirement", testHistoryRetirement },
         { "production declares no History", testProductionDeclaresNoHistory },
         { "external image policies", testExternalImagePolicies },

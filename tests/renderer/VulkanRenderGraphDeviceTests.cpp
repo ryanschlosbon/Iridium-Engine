@@ -220,7 +220,9 @@ namespace {
             executor.init(allocator, 2);
             executor.rebuild(std::move(*compiled.graph));
             const RenderGraph::ViewHistoryContext views[] = {
-                { 1, 0 }, { 1, 0 }, { 1, 1 }, { 1, 1 }, { 1, 1 }, { 1, 1 }, { 2, 1 }, { 2, 1 } };
+                { 1, 0 }, { 1, 0 }, { 1, 1 }, { 1, 1 }, { 1, 1 }, { 1, 1 }, { 2, 1 }, { 2, 1 },
+                // M9 G2: a second retained view alternates with its own set.
+                { 7, 0, 1 }, { 2, 1, 0 }, { 7, 0, 1 }, { 2, 1, 0 }, { 7, 0, 1 } };
             for (uint32_t frame = 0; frame < std::size(views); ++frame) {
                 const uint32_t slot = frame % 2;
                 executor.onFrameFenceCompleted(slot);

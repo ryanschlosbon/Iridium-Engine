@@ -264,6 +264,85 @@ namespace {
         return true;
     }
 
+    // M9 G2: per-view history sets and per-pair reset policy.
+    bool testHistoryViewSetsAndResetPolicy() {
+        RenderGraphBuilder builder;
+        const auto taa = builder.createHistory("taa", imageDesc());
+        ResourceDesc exposureDesc{};
+        exposureDesc.type = ResourceType::Buffer;
+        exposureDesc.buffer.size = 16;
+        const auto exposure = builder.createHistory("exposure", exposureDesc,
+            HistoryReset::SurviveCut);
+        const PassHandle resolve = builder.addPass("resolve");
+        builder.read(resolve, taa.previous, Access::SampledRead);
+        (void)builder.write(resolve, taa.current, Access::ColorAttachment, LoadOp::Clear);
+        builder.read(resolve, exposure.previous, Access::StorageRead);
+        (void)builder.write(resolve, exposure.current, Access::StorageWrite);
+        const CompiledGraph graph = *builder.compile().graph;
+        CHECK(graph.historyPairs()[taa.pair].reset == HistoryReset::OnCut);
+        CHECK(graph.historyPairs()[exposure.pair].reset == HistoryReset::SurviveCut);
+
+        // The policy is topology: a graph differing only in policy rehashes.
+        RenderGraphBuilder other;
+        const auto taaOther = other.createHistory("taa", imageDesc());
+        const auto exposureOther = other.createHistory("exposure", exposureDesc);
+        const PassHandle resolveOther = other.addPass("resolve");
+        other.read(resolveOther, taaOther.previous, Access::SampledRead);
+        (void)other.write(resolveOther, taaOther.current, Access::ColorAttachment, LoadOp::Clear);
+        other.read(resolveOther, exposureOther.previous, Access::StorageRead);
+        (void)other.write(resolveOther, exposureOther.current, Access::StorageWrite);
+        CHECK(other.compile().graph->topologyHash() != graph.topologyHash());
+
+        HistoryValidityTracker tracker;
+        tracker.resetForGraph(graph);
+        struct Validity { bool taa; bool exposure; };
+        const auto frame = [&](ViewHistoryContext view) {
+            tracker.beginFrame(view);
+            const Validity valid{ tracker.pairValid(taa.pair), tracker.pairValid(exposure.pair) };
+            tracker.markWritten(taa.pair);
+            tracker.markWritten(exposure.pair);
+            tracker.endFrame();
+            return valid;
+        };
+        const ViewHistoryContext scene{ 1, 0, 0 };
+        const ViewHistoryContext preview{ 5, 1, 1 };
+        Validity v = frame(scene);
+        CHECK(!v.taa && !v.exposure);
+        v = frame(scene);
+        CHECK(v.taa && v.exposure);
+        // Alternating views: each set is valid on its own next turn.
+        v = frame(preview);
+        CHECK(!v.taa && !v.exposure);              // the preview's first turn
+        CHECK(tracker.activeSet() == 1);
+        v = frame(scene);
+        CHECK(v.taa && v.exposure);                // the scene set survived the preview
+        v = frame(preview);
+        CHECK(v.taa && v.exposure);
+        v = frame(scene);
+        CHECK(v.taa && v.exposure);
+        // A cut invalidates OnCut pairs only.
+        v = frame({ 1, 1, 0 });
+        CHECK(!v.taa && v.exposure);
+        v = frame({ 1, 1, 0 });
+        CHECK(v.taa && v.exposure);
+        // A new preview session (identity) invalidates set 1 only.
+        v = frame({ 6, 1, 1 });
+        CHECK(!v.taa && !v.exposure);
+        v = frame({ 1, 1, 0 });
+        CHECK(v.taa && v.exposure);
+        // A writer skipped on a view's turn invalidates that view's next turn.
+        tracker.beginFrame({ 6, 1, 1 });
+        tracker.endFrame();
+        v = frame({ 6, 1, 1 });
+        CHECK(!v.taa && !v.exposure);
+        // Identity 0 is "no view": never valid.
+        frame({ 0, 0, 0 });
+        v = frame({ 0, 0, 0 });
+        CHECK(!v.taa && !v.exposure);
+        CHECK(throwsBuildError([&] { tracker.beginFrame({ 1, 0, HistoryViewSetCount }); }));
+        return true;
+    }
+
     bool testDiscardedContentsAndStaleExportAreRejected() {
         {
             RenderGraphBuilder builder;
@@ -595,6 +674,7 @@ int main() {
         { "History invalidation", testInvalidHistoryIsExplicit },
         { "History pair declaration", testHistoryPairDeclaration },
         { "History validity keys", testHistoryValidityKeys },
+        { "History view sets and reset policy", testHistoryViewSetsAndResetPolicy },
         { "Discarded content and stale export", testDiscardedContentsAndStaleExportAreRejected },
         { "Nonoverlap reuse", testNonoverlappingResourcesReuseSlot },
         { "Overlap and incompatibility", testOverlappingAndIncompatibleResourcesDoNotReuse },

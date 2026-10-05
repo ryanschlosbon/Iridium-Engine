@@ -811,10 +811,12 @@ void VulkanRenderGraphExecutor::rebuild(RenderGraph::CompiledGraph graph) {
     // History slots are global, created once per plan outside the per-frame
     // pool. Create them first so a failure leaves the active plan untouched.
     std::vector<VulkanGraphPhysicalResource> candidateHistory;
-    candidateHistory.reserve(graph.historySlots().size());
+    candidateHistory.reserve(graph.historySlots().size() * RenderGraph::HistoryViewSetCount);
     try {
         for (const RenderGraph::PhysicalResourceSlot& slot : graph.historySlots())
             candidateHistory.push_back(factory_->create(slot));
+        // Later view sets stay empty until a view selects them.
+        candidateHistory.resize(graph.historySlots().size() * RenderGraph::HistoryViewSetCount);
         retiredHistory_.reserve(retiredHistory_.size() + historyResources_.size());
         resources_.rebuild(graph, aliasPlan ? &*aliasPlan : nullptr);
     }
@@ -828,7 +830,7 @@ void VulkanRenderGraphExecutor::rebuild(RenderGraph::CompiledGraph graph) {
     const uint32_t allFrames = resources_.frameCount() >= 32
         ? 0xFFFF'FFFFu : (1u << resources_.frameCount()) - 1u;
     for (VulkanGraphPhysicalResource& resource : historyResources_)
-        retiredHistory_.push_back({ resource, allFrames });
+        if (resource.isValid()) retiredHistory_.push_back({ resource, allFrames });
     historyResources_ = std::move(candidateHistory);
 
     const uint64_t hash = graph.topologyHash();
@@ -905,8 +907,11 @@ void VulkanRenderGraphExecutor::rebuild(RenderGraph::CompiledGraph graph) {
     // History: fresh slots, fresh state, nothing valid. Writer passes are
     // those writing a pair's `current`.
     const size_t pairCount = graph_->historyPairs().size();
+    historySlotsPerSet_ = static_cast<uint32_t>(graph_->historySlots().size());
+    historyPairsPerSet_ = static_cast<uint32_t>(pairCount);
+    activeHistorySet_ = 0;
     historyAccess_.assign(historyResources_.size(), RenderGraph::Access::Undefined);
-    historyParity_.assign(pairCount, 0);
+    historyParity_.assign(pairCount * RenderGraph::HistoryViewSetCount, 0);
     historyWriterBegun_.assign(pairCount, 0);
     historyDiscarded_.assign(pairCount, 0);
     passHistoryWrites_.clear();
@@ -1045,9 +1050,10 @@ bool VulkanRenderGraphExecutor::validateFrame(uint32_t frameIndex) noexcept {
                 ? resources_.frameCount() : frameIndex;
             if (!externalImages_[row][index].bound) return false;
         }
-        if (historyResources_.size() != graph->historySlots().size()) return false;
-        for (const VulkanGraphPhysicalResource& resource : historyResources_)
-            if (!resource.isValid()) return false;
+        if (historyResources_.size() !=
+            graph->historySlots().size() * RenderGraph::HistoryViewSetCount) return false;
+        for (size_t slot = 0; slot < graph->historySlots().size(); ++slot)
+            if (!historyResources_[slot].isValid()) return false;
         return resources_.activeResourceCount(frameIndex) == graph->physicalSlots().size();
     }
     catch (...) {
@@ -1064,14 +1070,15 @@ void VulkanRenderGraphExecutor::beginFrameExecution(uint32_t frameIndex,
     if (!validateFrame(frameIndex) || executingFrame_ != RenderGraph::InvalidIndex) {
         throw std::logic_error("Render-graph frame execution began in an invalid state");
     }
+    if (view.historySet >= RenderGraph::HistoryViewSetCount)
+        throw std::invalid_argument("Render-graph history view set is out of range");
     executingFrame_ = frameIndex;
     frameRetired_[frameIndex] = false;
     nextPass_ = 0;
     hasRecordContext_ = false;
     recordContext_ = {};
     openGroup_ = RenderGraph::InvalidIndex;
-    lastView_ = view;
-    historyValidity_.beginFrame(view);
+    selectHistoryView(view);
     std::fill(historyWriterBegun_.begin(), historyWriterBegun_.end(), uint8_t{ 0 });
     std::fill(historyDiscarded_.begin(), historyDiscarded_.end(), uint8_t{ 0 });
     // R4b.4: aliased slots hold no contents across frames (their memory is
@@ -1092,8 +1099,40 @@ void VulkanRenderGraphExecutor::beginViewExecution(
         throw std::logic_error(
             "Render-graph view execution must begin before the frame's first pass");
     }
+    selectHistoryView(view);
+}
+
+void VulkanRenderGraphExecutor::selectHistoryView(
+    const RenderGraph::ViewHistoryContext& view) {
+    if (view.historySet >= RenderGraph::HistoryViewSetCount)
+        throw std::invalid_argument("Render-graph history view set is out of range");
+    ensureHistorySet(view.historySet);
     lastView_ = view;
+    activeHistorySet_ = view.historySet;
     historyValidity_.beginFrame(view);
+}
+
+void VulkanRenderGraphExecutor::ensureHistorySet(uint32_t set) {
+    // M9 G2: a view set's slots are created the first time a view selects it
+    // (dual editor views), never on a steady frame; they retire with the plan.
+    if (graph_ == nullptr || historySlotsPerSet_ == 0) return;
+    const size_t first = static_cast<size_t>(set) * historySlotsPerSet_;
+    if (historyResources_[first].isValid()) return;
+    size_t created = 0;
+    try {
+        for (; created < historySlotsPerSet_; ++created)
+            historyResources_[first + created] =
+                factory_->create(graph_->historySlots()[created]);
+    }
+    catch (...) {
+        for (size_t index = 0; index < created; ++index) {
+            factory_->destroy(historyResources_[first + index]);
+            historyResources_[first + index] = {};
+        }
+        throw;
+    }
+    std::fill_n(historyAccess_.begin() + static_cast<std::ptrdiff_t>(first),
+        historySlotsPerSet_, RenderGraph::Access::Undefined);
 }
 
 bool VulkanRenderGraphExecutor::historyValid(RenderGraph::GraphResourceId id) const {
@@ -1111,11 +1150,11 @@ uint32_t VulkanRenderGraphExecutor::historySlot(
     // writer makes it `parity`. Either way the mapping is stable in a frame
     // and `previous` is always the slot written by the last writer.
     const uint32_t pair = resource.historyPair;
-    const uint32_t current = historyWriterBegun_[pair] != 0
-        ? historyParity_[pair] : (historyParity_[pair] ^ 1u);
+    const uint8_t parity = historyParity_[activeHistorySet_ * historyPairsPerSet_ + pair];
+    const uint32_t current = historyWriterBegun_[pair] != 0 ? parity : (parity ^ 1u);
     const uint32_t half = resource.historyRole == RenderGraph::HistoryRole::Current
         ? current : (current ^ 1u);
-    return pair * 2 + half;
+    return activeHistorySet_ * historySlotsPerSet_ + pair * 2 + half;
 }
 
 const VulkanRenderGraphExecutor::ExternalImageBinding*
@@ -1474,7 +1513,7 @@ void VulkanRenderGraphExecutor::beginPassAt(VkCommandBuffer commandBuffer,
          index < passHistoryWriteFirst_[passOrder + 1]; ++index) {
         const uint32_t pair = passHistoryWrites_[index];
         if (historyWriterBegun_[pair] == 0) {
-            historyParity_[pair] ^= 1u;
+            historyParity_[activeHistorySet_ * historyPairsPerSet_ + pair] ^= 1u;
             historyWriterBegun_[pair] = 1;
             historyValidity_.markWritten(pair);
         }
@@ -1892,7 +1931,7 @@ VulkanGpuRangeSink VulkanGpuRangeSink::forScheduler(
 void VulkanRenderGraphExecutor::destroyHistoryResources() noexcept {
     if (factory_ != nullptr) {
         for (VulkanGraphPhysicalResource& resource : historyResources_)
-            factory_->destroy(resource);
+            if (resource.isValid()) factory_->destroy(resource);
         for (RetiredHistory& retired : retiredHistory_)
             factory_->destroy(retired.resource);
     }
@@ -1929,6 +1968,7 @@ void VulkanRenderGraphExecutor::cleanupAfterDeviceIdle() noexcept {
     openGroup_ = RenderGraph::InvalidIndex;
     historyAccess_.clear();
     historyParity_.clear();
+    historySlotsPerSet_ = historyPairsPerSet_ = activeHistorySet_ = 0;
     historyWriterBegun_.clear();
     historyDiscarded_.clear();
     passHistoryWrites_.clear();
@@ -1960,7 +2000,10 @@ void VulkanRenderGraphExecutor::cleanupAfterDeviceIdle() noexcept {
 VulkanGraphStats VulkanRenderGraphExecutor::stats() const noexcept {
     uint64_t historyRequested = 0;
     uint64_t historyCommitted = 0;
+    uint32_t historySlotCount = 0;
     for (const VulkanGraphPhysicalResource& resource : historyResources_) {
+        if (!resource.isValid()) continue;
+        ++historySlotCount;
         historyRequested += resourceRequestedBytes(resource);
         historyCommitted += resourceCommittedBytes(resource);
     }
@@ -1980,7 +2023,7 @@ VulkanGraphStats VulkanRenderGraphExecutor::stats() const noexcept {
         .committedBytes = resources_.committedBytes() + historyCommitted,
         .rebuildCount = rebuildCount_,
         .cacheMissCount = cacheMissCount_,
-        .historySlotCount = static_cast<uint32_t>(historyResources_.size()),
+        .historySlotCount = historySlotCount,
         .transientAliasing = !aliasedSlots_.empty(),
         .aliasHeapCount = aliasHeapCount_,
         .aliasedResourceCount = static_cast<uint32_t>(aliasedSlots_.size()),

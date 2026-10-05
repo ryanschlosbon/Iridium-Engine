@@ -115,6 +115,40 @@ describes the execution model that replaces the imperative path.
    types (`Mesh.h`, identity 1 by default; `RenderGraph.h`, identity 0) before
    TAA history lands. See `docs/milestones/M7R-to-M9-handoff.md`.
 
+   *As implemented (M9 G1–G2, 2026-10-05):* this completes the item; it does not
+   change the contract.
+   - **One type.** `RenderGraph::ViewHistoryContext` (`renderer/graph/ViewHistory.h`)
+     is the only definition; rhi re-exports it. Identity 0 means "no view", and
+     nothing is valid under it. The extractor always sets an explicit identity:
+     scene view 1, asset preview `sessionSerial + 2`.
+   - **View supplied before the first pass.** `submitFrame` calls
+     `beginViewExecution(frame.history)` before any pass, which re-keys validity
+     for the frame's view.
+   - **Per-view sets.** History keeps `HistoryViewSetCount = 2` physical sets per
+     pair, selected by `ViewHistoryContext::historySet` (0 = scene view, 1 = asset
+     preview). Set 0 is created with the plan. Later sets are created the first
+     time a view selects them, and every set retires with the plan.
+   - **Validity per view.** Each set has its own parity, tracked access and
+     validity state. A pair is valid iff its writer ran on **that set's previous
+     turn** under an identical key. That turn is the last frame that rendered the
+     view, not necessarily the previous frame, because the editor renders one view
+     per frame and never gives the background view two turns in a row.
+   - **Reset policy.** `createHistory(name, desc, HistoryReset)`:
+     - `OnCut` (the default) keys on `resetRevision`;
+     - `SurviveCut` (adapted exposure) does not, but still follows identity,
+       extent, format and topology.
+
+     The policy is hashed into the topology only when it is not the default.
+   - **Cuts.** `resetRevision` is owned per retained view by
+     `ViewMotionTracker` (`renderer/rhi/ViewMotion.h`), fed by the extractor. It
+     advances on:
+     - a requested revision (benchmark cut, preview framing);
+     - an explicit cut;
+     - a projection-kind or extent change;
+     - a translation or rotation discontinuity (10 m or 45° in one turn).
+
+     A field-of-view change is reprojectable, not a cut.
+
 6. **Barriers allowed inside passes:** mip chains, scan/compaction steps inside
    one logical pass, VSM-internal compute ordering, probe prefiltering, and
    qualification readbacks. Every other dependency is declared.

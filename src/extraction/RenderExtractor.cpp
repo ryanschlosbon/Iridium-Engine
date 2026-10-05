@@ -943,15 +943,23 @@ namespace Iridium {
         renderBackend->setEnvironmentLightingSettings(assetPreviewActive
             ? view.previewEnvironmentSettings : inputs.sceneEnvironmentSettings);
         const float viewExposure = assetPreviewActive ? view.previewExposureEv : inputs.manualExposureEv;
+        // M9 G2: the retained view's History context. Set 0 is the scene view
+        // (identity 1), set 1 the asset preview (identity sessionSerial + 2).
+        lastViewMotion_ = viewMotion_.update({
+            .historySet = assetPreviewActive ? 1u : 0u,
+            .identity = assetPreviewActive ? view.previewSessionSerial + 2u : 1u,
+            .requestedResetRevision = assetPreviewActive ? view.previewFramingRevision :
+                inputs.viewHistoryResetRevision.value_or(0u),
+            .view = viewMatrix_,
+            .projectionKind = viewTransport.renderInfo.z,
+            .extent = { inputs.renderExtent.width, inputs.renderExtent.height },
+            .metresPerWorldUnit = viewTransport.worldUnits.x,
+        });
         // M7R R3c.11: the frame is assembled from spans over this frame's
         // queues and packets and submitted once, after extraction.
         renderFrame_ = RenderFrame{
             .view = viewTransport,
-            .history = {
-                .identity = assetPreviewActive ? view.previewSessionSerial + 2u : 1u,
-                .resetRevision = assetPreviewActive ? view.previewFramingRevision :
-                    inputs.viewHistoryResetRevision.value_or(0u),
-            },
+            .history = lastViewMotion_.history,
             .debugView = debugView,
             .output = { viewExposure, static_cast<float>(inputs.paperWhiteNits),
                 static_cast<float>(inputs.peakNits) },

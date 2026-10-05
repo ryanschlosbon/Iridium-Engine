@@ -277,6 +277,11 @@ iridium_add_test(DepthPyramidTests
         SOURCES renderer/DepthPyramidTests.cpp
         LIBS iridium_rhi)
 
+# M9 G2: per-retained-view cut detection.
+iridium_add_test(ViewMotionTests
+        SOURCES renderer/ViewMotionTests.cpp
+        LIBS iridium_rhi)
+
 iridium_add_test(GeometryArenaTests
         SOURCES renderer/GeometryArenaTests.cpp
         LIBS iridium_rhi iridium_assets)

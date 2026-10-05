@@ -11,6 +11,7 @@ add_library(iridium_rhi STATIC
         GpuSceneVisibility.cpp
         ReflectionProbeCapture.cpp
         TextureResidency.cpp
+        ViewMotion.cpp
         VirtualShadowMap.cpp
         ../scene/GpuScenePublisher.cpp
 )

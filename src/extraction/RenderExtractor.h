@@ -39,6 +39,7 @@
 #include "renderer/rhi/ReflectionProbeSettings.h"
 #include "renderer/rhi/RenderFrame.h"
 #include "renderer/rhi/ShadowSettings.h"
+#include "renderer/rhi/ViewMotion.h"
 #include "renderer/rhi/ViewportGridOverlay.h"
 #include "renderer/scene/GpuScenePublisher.h"
 #include "scene/SceneWorld.h"
@@ -393,6 +394,9 @@ namespace Iridium {
         glm::mat4 projMatrix_{ 1.0f };
         const EditorViewState* view_ = nullptr;
         RenderFrame renderFrame_{};
+        // M9 G2: per-retained-view cut detection and History context.
+        ViewMotionTracker viewMotion_{};
+        ViewMotionResult lastViewMotion_{};
 
         std::unique_ptr<GpuScenePublisher> gpuScenePublisher_;
         GpuSceneObservation gpuSceneObservation_;
