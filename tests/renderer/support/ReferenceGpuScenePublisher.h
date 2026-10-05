@@ -65,6 +65,7 @@ namespace Iridium {
             uint64_t previousTransformRevision = 1;
             std::vector<PrimitiveKey> activePrimitives;
             bool seen = false;
+            uint64_t movedPass = 0;   // M9 G3
         };
 
         GpuSceneCapacity capacity_;
@@ -90,6 +91,8 @@ namespace Iridium {
         bool cachedObservationsValid_ = false;
         uint64_t publicationRevision_ = 0;
         uint64_t recordRevision_ = 0;
+        uint64_t pass_ = 0;   // M9 G3: one per non-fast-path synchronize
+        bool settlePending_ = false;
         uint64_t sceneEpoch_ = 0;
 
         void packActiveSources();

@@ -75,6 +75,9 @@ namespace Iridium {
         uint32_t retiredGeometries = 0;
         uint32_t capacityFallbackInstances = 0;
         uint32_t unchangedFastPath = 0;
+        // M9 G3: instances whose transform stopped last pass and whose
+        // previous transform was set to the current one this pass.
+        uint32_t settledTransforms = 0;
         uint64_t changedInstanceBytes = 0;
         uint64_t changedTransformBytes = 0;
         uint64_t changedPrimitiveBytes = 0;
@@ -171,6 +174,8 @@ namespace Iridium {
             size_t observationIndex = 0;
             uint64_t observationRevision = 0;
             uint64_t matchedPass = 0;
+            // M9 G3: the pass whose observation changed the transform.
+            uint64_t movedPass = 0;
             uint32_t denseIndex = InvalidGpuSceneIndex;
             uint32_t firstPrimitive = 0;
         };
@@ -230,11 +235,14 @@ namespace Iridium {
         bool passConflict_ = false;
         bool topologyChanged_ = false;
         uint64_t pass_ = 0;
+        // M9 G3: a transform changed this pass; the next pass settles it.
+        bool settlePending_ = false;
         uint64_t publicationRevision_ = 0;
         uint64_t recordRevision_ = 0;
         uint64_t sceneEpoch_ = 0;
 
         void retireAllForEpochChange(uint64_t retireAfterSerial);
+        bool settleStoppedTransform(InstanceState& instance);
         void classifyObservations(
             std::span<const GpuSceneObservedInstance> observations,
             bool fullScan);
