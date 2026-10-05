@@ -102,6 +102,12 @@ namespace Iridium {
         float knee = 0.0f;
         // Chain levels from half resolution (1..8; clamped to the extent).
         uint32_t levels = 6u;
+        // Karis (1 / (1 + luma)) box weights on the first downsample. They
+        // keep aliased sub-pixel highlights from flickering in the chain but
+        // remove part of their energy. Measured share of the scene's energy
+        // the chain keeps (M9.4): TF-hdr 63% with them, 99.9% without;
+        // TF-static and TF-emissive 99.0% with, 99.7-99.8% without.
+        bool karisAverage = true;
 
         friend bool operator==(const BloomSettings&, const BloomSettings&) = default;
     };

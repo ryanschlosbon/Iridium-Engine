@@ -216,7 +216,7 @@ void VulkanBloomFeature::execute(void* owner, VulkanPassContext& context) {
         const glm::vec4 read = sizeAndInverse(source);
         push.source = { read.z, read.w, sourceLod, 0.0f };
         push.filter = { settings.threshold, settings.knee, scale, 0.0f };
-        push.control = { mode, 0u, 0u, 0u };
+        push.control = { mode, settings.karisAverage ? 1u : 0u, 0u, 0u };
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, self.pipelineLayout_,
             0, 1, &set, 0, nullptr);
         vkCmdPushConstants(cmd, self.pipelineLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0,

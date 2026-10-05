@@ -5,8 +5,9 @@
 // Input: the resolved scene colour (scene-linear ACEScg/AP1, before
 // exposure). Output: the RGBA16F chain, level 0 at half resolution.
 // - Prefilter (mode 0): scene -> level 0 with the 13-tap downsample. Its five
-//   2x2 boxes are averaged with Karis weights 1 / (1 + luma) (anti-firefly),
-//   non-finite input is dropped and the optional soft-knee threshold applied.
+//   2x2 boxes are averaged with Karis weights 1 / (1 + luma) (anti-firefly;
+//   optional, on by default), non-finite input is dropped and the optional
+//   soft-knee threshold applied.
 // - Downsample (mode 1): level i-1 -> level i, the 13-tap filter (box weights
 //   0.5 centre and 0.125 per corner box).
 // - Upsample (mode 2): level i = (level i + tent3x3(level i+1)) * scale.
@@ -21,7 +22,7 @@ layout(push_constant) uniform BloomPush {
     vec4 destination;   // xy size, zw 1 / size
     vec4 source;        // xy 1 / size of the read level, z its lod
     vec4 shaping;        // x threshold, y knee, z output scale
-    uvec4 control;      // x mode
+    uvec4 control;      // x mode, y 1 = Karis weights on the prefilter
 } push;
 
 const uint ModePrefilter = 0u;
@@ -73,7 +74,7 @@ vec3 downsample13(vec2 uv, bool prefilter) {
     vec3 topRight = karisAverage(b, c, e, f);
     vec3 bottomLeft = karisAverage(d, e, g, h);
     vec3 bottomRight = karisAverage(e, f, h, i);
-    if (!prefilter) {
+    if (!prefilter || push.control.y == 0u) {
         return centre * 0.5 + (topLeft + topRight + bottomLeft + bottomRight) * 0.125;
     }
     // Karis: each box's share scaled by 1 / (1 + luma), renormalised, so a

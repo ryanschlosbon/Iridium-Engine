@@ -417,20 +417,22 @@ namespace Iridium::AppCli {
                 else throw std::invalid_argument("--bloom requires off or on");
             });
 
-        addValueOption(registry, owner, "--bloom-settings", "INTENSITY,THRESHOLD,KNEE,LEVELS",
-            "Bloom tuning for evidence runs: scatter 0-1, scene-linear threshold and knee (0: none), 1-8 levels",
-            "--bloom-settings requires four comma-separated numbers",
+        addValueOption(registry, owner, "--bloom-settings", "INTENSITY,THRESHOLD,KNEE,LEVELS,KARIS",
+            "Bloom tuning for evidence runs: scatter 0-1, scene-linear threshold and knee (0: none), 1-8 levels, Karis prefilter 0|1",
+            "--bloom-settings requires five comma-separated numbers",
             [&c](std::string_view value) {
                 constexpr const char* message =
-                    "--bloom-settings requires four comma-separated numbers";
-                const std::array<float, 4> v = parseNumberList<4>(value, message);
+                    "--bloom-settings requires five comma-separated numbers";
+                const std::array<float, 5> v = parseNumberList<5>(value, message);
                 if (v[0] < 0.0f || v[0] > 1.0f || v[1] < 0.0f || v[2] < 0.0f ||
-                    v[3] < 1.0f || v[3] > 8.0f || v[3] != std::floor(v[3]))
+                    v[3] < 1.0f || v[3] > 8.0f || v[3] != std::floor(v[3]) ||
+                    (v[4] != 0.0f && v[4] != 1.0f))
                     throw std::invalid_argument(message);
                 c.bloom.intensity = v[0];
                 c.bloom.threshold = v[1];
                 c.bloom.knee = v[2];
                 c.bloom.levels = static_cast<uint32_t>(v[3]);
+                c.bloom.karisAverage = v[4] != 0.0f;
             });
 
         addValueOption(registry, owner, "--temporal-jitter", "on|off",

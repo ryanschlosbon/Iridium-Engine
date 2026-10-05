@@ -138,7 +138,8 @@ namespace {
             : std::string("default"));
         flag("bloom.enabled", c.bloom.enabled);
         field("bloom.settings", exact(c.bloom.intensity) + "/" + exact(c.bloom.threshold) +
-            "/" + exact(c.bloom.knee) + "/" + exact(c.bloom.levels));
+            "/" + exact(c.bloom.knee) + "/" + exact(c.bloom.levels) + "/" +
+            exact(c.bloom.karisAverage ? 1 : 0));
         field("uploadQueue", exact(enumValue(c.uploadQueue)));
         flag("aliasPoison", c.aliasPoison);
         flag("validateDepthPyramidCapture", c.validateDepthPyramidCapture);
@@ -547,19 +548,20 @@ namespace {
                 "--bloom requires off or on",
                 { { "yes", "--bloom requires off or on" },
                   { "", "--bloom requires off or on" } } },
-            { "--bloom-settings", G, "0.1,2,0.5,5", {}, [](C& c) {
+            { "--bloom-settings", G, "0.1,2,0.5,5,0", {}, [](C& c) {
                 c.bloom.intensity = 0.1f; c.bloom.threshold = 2.0f; c.bloom.knee = 0.5f;
-                c.bloom.levels = 5u; },
-                "--bloom-settings requires four comma-separated numbers",
-                { { "0.1,2,0.5", "--bloom-settings requires four comma-separated numbers" },
-                  { "0.1,2,0.5,5,1", "--bloom-settings requires four comma-separated numbers" },
-                  { "0.1,2,0.5,", "--bloom-settings requires four comma-separated numbers" },
-                  { "1.5,0,0,6", "--bloom-settings requires four comma-separated numbers" },
-                  { "0.04,-1,0,6", "--bloom-settings requires four comma-separated numbers" },
-                  { "0.04,0,0,9", "--bloom-settings requires four comma-separated numbers" },
-                  { "0.04,0,0,2.5", "--bloom-settings requires four comma-separated numbers" },
-                  { "0.04,0,0,0", "--bloom-settings requires four comma-separated numbers" },
-                  { "", "--bloom-settings requires four comma-separated numbers" } } },
+                c.bloom.levels = 5u; c.bloom.karisAverage = false; },
+                "--bloom-settings requires five comma-separated numbers",
+                { { "0.1,2,0.5,5", "--bloom-settings requires five comma-separated numbers" },
+                  { "0.1,2,0.5,5,1,1", "--bloom-settings requires five comma-separated numbers" },
+                  { "0.1,2,0.5,5,", "--bloom-settings requires five comma-separated numbers" },
+                  { "1.5,0,0,6,1", "--bloom-settings requires five comma-separated numbers" },
+                  { "0.04,-1,0,6,1", "--bloom-settings requires five comma-separated numbers" },
+                  { "0.04,0,0,9,1", "--bloom-settings requires five comma-separated numbers" },
+                  { "0.04,0,0,2.5,1", "--bloom-settings requires five comma-separated numbers" },
+                  { "0.04,0,0,0,1", "--bloom-settings requires five comma-separated numbers" },
+                  { "0.04,0,0,6,0.5", "--bloom-settings requires five comma-separated numbers" },
+                  { "", "--bloom-settings requires five comma-separated numbers" } } },
             { "--temporal-jitter", G, "on", {}, [](C& c) {
                 c.temporalJitter = true; },
                 "--temporal-jitter requires on or off",
