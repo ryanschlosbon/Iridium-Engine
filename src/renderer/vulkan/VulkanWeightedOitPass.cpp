@@ -53,7 +53,9 @@ namespace {
         result.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
         result.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
         result.colorBlendOp = VK_BLEND_OP_ADD;
-        result.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+        // M9.3: scene alpha keeps the revealage (the TAA reactive mask):
+        // the resolve multiplies it by the WeightedOIT revealage.
+        result.srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
         result.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
         result.alphaBlendOp = VK_BLEND_OP_ADD;
         result.colorWriteMask = VK_COLOR_COMPONENT_R_BIT |

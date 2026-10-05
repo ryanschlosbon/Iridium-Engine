@@ -48,6 +48,11 @@ namespace Iridium {
         float staticVarianceGamma = 3.0f;
         // History weight of still pixels (0: the moving-content rule).
         float stillHistoryWeight = 0.97f;
+        // M9.3: the lowest history weight of fully reactive pixels (covered
+        // by transparency; see the reactive mask in TemporalUpscaleInputs.h):
+        // the floor of their luma rule and the cap where coverage changed.
+        // Not part of --taa-settings: its seven numbers keep this default.
+        float reactiveHistoryWeight = 0.2f;
 
         friend bool operator==(const TemporalAntiAliasingTuning&,
             const TemporalAntiAliasingTuning&) = default;

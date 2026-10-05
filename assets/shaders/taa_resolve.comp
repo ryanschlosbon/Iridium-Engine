@@ -17,6 +17,18 @@
 //    (no geometry) reproject with the camera matrices.
 // 4. History with a 5-tap Catmull-Rom filter, clipped to the box.
 // 5. Blend: history weight from luma similarity (anti-flicker) and motion.
+// 6. Reactive (M9.3): transparency writes no velocity or depth, so a moving
+//    transparent surface over still background looks like a still pixel. The
+//    scene colour's alpha holds the revealage of everything blended over the
+//    opaque scene (opaque 1; each sorted, glass, layered or WeightedOIT layer
+//    multiplies it by 1 - its coverage), so reactive = 1 - alpha, dilated over
+//    the 3x3 neighbourhood. Reactive pixels lose the still-pixel trust (wide
+//    box, still weight) and reject history on a luma difference against the
+//    unclipped history; pixels whose coverage changed have their history
+//    weight capped. A static transparent surface over static content keeps
+//    accumulating. History alpha remembers last frame's reactive (as a
+//    negative value), so the pixels a transparent surface has just left are
+//    treated as reactive once.
 
 #include "include/view_uniforms.glsl"
 
@@ -36,14 +48,19 @@ layout(push_constant) uniform TaaPushConstants {
     vec4 extent;       // xy size, zw 1 / size
     vec4 exposure;     // x current pre-exposure, y history pre-exposure, z history valid, w flags (bit 0: pre-expose with exposureState)
     vec4 feedback;     // x minimum history weight, y maximum, z motion pixels for minimum, w variance gamma
-    vec4 tuning;       // x reconstruction sharpness, y still-pixel gamma, z still-pixel history weight
+    vec4 tuning;       // x reconstruction sharpness, y still-pixel gamma, z still-pixel history weight, w reactive history weight
 } push;
 
 const vec3 Ap1Luma = vec3(0.2722287, 0.6740818, 0.0536895);
 const float NoHistoryMotion = 3.5;   // include/motion_vectors.glsl reports 4.0
+// Reactive (M9.3): coverage above 1/4 is fully reactive; reactive pixels
+// reject history 3x as readily on a luma difference.
+const float ReactiveScale = 4.0;
+const float ReactiveDifferenceScale = 3.0;
 
 shared vec3 tileColor[10][10];   // compressed YCoCg
 shared float tileDepth[10][10];
+shared float tileReactive[10][10];
 
 float luma(vec3 c) { return dot(c, Ap1Luma); }
 
@@ -121,7 +138,11 @@ void main() {
     for (int index = int(gl_LocalInvocationIndex); index < 100; index += 64) {
         ivec2 t = ivec2(index % 10, index / 10);
         ivec2 p = clampPixel(group + t - 1);
-        tileColor[t.y][t.x] = toYCoCg(compress(texelFetch(currentColor, p, 0).rgb, exposure));
+        vec4 sceneSample = texelFetch(currentColor, p, 0);
+        tileColor[t.y][t.x] = toYCoCg(compress(sceneSample.rgb, exposure));
+        // Reactive: 1 - the revealage in alpha (NaN reads as opaque).
+        float revealage = isnan(sceneSample.a) ? 1.0 : sceneSample.a;
+        tileReactive[t.y][t.x] = 1.0 - clamp(revealage, 0.0, 1.0);
         tileDepth[t.y][t.x] = texelFetch(sceneDepth, p, 0).r;
     }
     barrier();
@@ -141,6 +162,7 @@ void main() {
     vec3 boxMax = vec3(-1.0e9);
     float closestDepth = 2.0;
     ivec2 closestOffset = ivec2(0);
+    float reactive = 0.0;
     for (int y = -1; y <= 1; ++y) {
         for (int x = -1; x <= 1; ++x) {
             ivec2 t = local + 1 + ivec2(x, y);
@@ -153,6 +175,7 @@ void main() {
             m2 += c * c;
             boxMin = min(boxMin, c);
             boxMax = max(boxMax, c);
+            reactive = max(reactive, tileReactive[t.y][t.x]);
             float depth = tileDepth[t.y][t.x];
             if (depth < closestDepth) {
                 closestDepth = depth;
@@ -161,6 +184,7 @@ void main() {
         }
     }
     filtered /= max(filterWeight, 1.0e-6);
+    reactive = min(reactive * ReactiveScale, 1.0);
     m1 *= 1.0 / 9.0;
     m2 *= 1.0 / 9.0;
     vec3 sigma = sqrt(max(m2 - m1 * m1, vec3(0.0)));
@@ -193,18 +217,28 @@ void main() {
     // that wrote it. A static background just uncovered by a moving occluder
     // has zero motion of its own, but its history moved; such pixels are
     // treated as moving (tight box, fresh weight), not as still ones.
+    // A negative history alpha is last frame's reactive instead (its motion
+    // is not compared: the pixel is reactive this frame either way).
+    float historyReactive = 0.0;
     if (historyAvailable) {
-        float historyMotion = texelFetch(historyColor,
+        float historyAlpha = texelFetch(historyColor,
             clampPixel(ivec2(previousUv * push.extent.xy)), 0).a;
-        movedPixels = max(movedPixels, abs(historyMotion - movedPixels));
+        if (historyAlpha < 0.0)
+            historyReactive = min(-historyAlpha, 1.0);
+        else
+            movedPixels = max(movedPixels, abs(historyAlpha - movedPixels));
     }
+    // Covered now or last frame: no still-pixel trust. Coverage that changed
+    // (a transparent edge arrived or left): history capped.
+    float effectiveReactive = max(reactive, historyReactive);
+    float reactiveChange = abs(reactive - historyReactive);
     // Still-pixel trust. Jittered sub-pixel detail keeps the history near the
     // luma range its 3x3 neighbourhood spans (a coverage-weighted mix of it); a
     // real change on static geometry (a moving shadow, a light switching) puts
     // the history far outside that range. Only the former keeps the wide box
     // and the high still weight.
     vec3 historySample = vec3(0.0);
-    float stillness = 1.0 - clamp(movedPixels, 0.0, 1.0);
+    float stillness = (1.0 - clamp(movedPixels, 0.0, 1.0)) * (1.0 - effectiveReactive);
     if (historyAvailable) {
         historySample = toYCoCg(compress(sampleHistory(previousUv), historyExposure));
         float outside = max(max(boxMin.x - historySample.x, historySample.x - boxMax.x), 0.0);
@@ -231,6 +265,22 @@ void main() {
             max(max(lumaCurrent, lumaHistory), 0.2);
         float similarity = (1.0 - difference) * (1.0 - difference);
         float historyWeight = mix(push.feedback.x, push.feedback.y, similarity);
+        // Reactive pixels: the transparent layer's own motion is unknown, so
+        // the comparison uses the history before clipping (the clip box can
+        // span a moving pattern), rejects 3x as readily and may fall to the
+        // reactive weight. Static transparency over static content matches
+        // its history and keeps accumulating. (Non-reactive pixels keep the
+        // rule above bit for bit.)
+        if (effectiveReactive > 0.0) {
+            lumaHistory = mix(history.x, historySample.x, effectiveReactive);
+            difference = abs(lumaCurrent - lumaHistory) /
+                max(max(lumaCurrent, lumaHistory), 0.2);
+            difference = min(difference *
+                mix(1.0, ReactiveDifferenceScale, effectiveReactive), 1.0);
+            similarity = (1.0 - difference) * (1.0 - difference);
+            historyWeight = mix(mix(push.feedback.x, push.tuning.w, effectiveReactive),
+                push.feedback.y, similarity);
+        }
         // Still pixels: the jittered samples of sub-pixel detail differ every
         // frame by design, so luma difference is not a reason to refresh;
         // a fixed high weight integrates them instead of letting them flicker
@@ -240,13 +290,20 @@ void main() {
         // Motion: fresh samples matter more for moving content.
         historyWeight = mix(historyWeight, push.feedback.x,
             clamp(movedPixels / max(push.feedback.z, 1.0e-3), 0.0, 1.0));
+        // Changed coverage: capped toward the reactive weight.
+        if (reactiveChange > 0.0)
+            historyWeight = mix(historyWeight, min(historyWeight, push.tuning.w),
+                reactiveChange);
         resolved = mix(filtered, history, historyWeight);
     }
 
     vec3 linear = decompress(fromYCoCg(resolved), exposure);
     if (any(isnan(linear)) || any(isinf(linear)))
         linear = max(texelFetch(currentColor, pixel, 0).rgb, vec3(0.0));
-    // Alpha: this pixel's motion in pixels (the next frame's disocclusion test;
-    // no consumer reads the resolved alpha).
-    imageStore(resolvedColor, pixel, vec4(linear, min(length(motion * push.extent.xy), 1024.0)));
+    // Alpha: this pixel's motion in pixels (the next frame's disocclusion
+    // test), or minus its reactive where transparency covers it. No consumer
+    // reads the resolved alpha.
+    float historyTag = reactive > (1.0 / 256.0)
+        ? -reactive : min(length(motion * push.extent.xy), 1024.0);
+    imageStore(resolvedColor, pixel, vec4(linear, historyTag));
 }

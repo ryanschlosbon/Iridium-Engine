@@ -19,7 +19,10 @@
 // - Exposure: the multiplier the output applies (2^EV; auto-exposure's
 //   adapted value from M9.5). Providers that pre-expose use it.
 // - Reactive: [0,1] per pixel, how much the current sample should replace
-//   history (transparency, particles, animated emissive; M9.3).
+//   history (transparency, particles, animated emissive; M9.3). It is
+//   1 - the colour input's alpha: opaque surfaces write alpha 1 and every
+//   blended layer (sorted, glass, layered, WeightedOIT) multiplies it by
+//   1 - its coverage, so alpha is the revealage of the opaque scene.
 
 #include "renderer/rhi/RenderBackendConfig.h"
 

@@ -219,6 +219,9 @@ void iridiumWriteMaterialOutput(vec4 value, bool premultiplied) {
 #else
     outColor = value;
 #if defined(IRIDIUM_WRITE_VELOCITY)
+    // M9.3: forward-opaque surfaces are opaque in the scene colour's alpha
+    // (the revealage the TAA reactive mask reads), like deferred lighting.
+    outColor.a = 1.0;
     outVelocity = iridiumMotionVector();
 #endif
 #endif

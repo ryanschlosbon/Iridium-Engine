@@ -48,8 +48,13 @@ namespace Iridium {
         void onGraphReleased() override;
         void destroy() noexcept override;
 
-        // Before the frame's first drain that reaches the resolve.
-        void stage(const FrameInputs& inputs) noexcept { staged_ = inputs; }
+        // Before the frame's first drain that reaches the resolve. M9.3: the
+        // reactive mask is always available, as 1 - the scene colour's alpha
+        // (the revealage the blended passes leave there).
+        void stage(const FrameInputs& inputs) noexcept {
+            staged_ = inputs;
+            staged_.request.reactiveMaskAvailable = true;
+        }
         [[nodiscard]] bool active() const noexcept { return resolvePass_.isValid(); }
         // Whether this frame's resolve found valid history (after it ran).
         [[nodiscard]] bool historyWasValid() const noexcept { return lastHistoryValid_; }

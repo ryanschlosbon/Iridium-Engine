@@ -19,7 +19,7 @@ namespace {
         glm::vec4 extent{ 0.0f };     // xy size, zw 1 / size
         glm::vec4 exposure{ 0.0f };   // x current, y history, z history valid, w flags (1: state)
         glm::vec4 feedback{ 0.0f };   // x min history weight, y max, z motion px, w gamma
-        glm::vec4 tuning{ 0.0f };     // x reconstruction sharpness
+        glm::vec4 tuning{ 0.0f };     // x sharpness, y still gamma, z still weight, w reactive weight
     };
     static_assert(sizeof(TaaPushConstants) == 64);
 
@@ -185,7 +185,7 @@ void VulkanTemporalAntiAliasingFeature::executeResolve(void* owner, VulkanPassCo
     push.feedback = { settings.minimumHistoryWeight, settings.maximumHistoryWeight,
         settings.motionPixelsForMinimum, settings.varianceGamma };
     push.tuning = { settings.reconstructionSharpness, settings.staticVarianceGamma,
-        settings.stillHistoryWeight, 0.0f };
+        settings.stillHistoryWeight, settings.reactiveHistoryWeight };
 
     const VkCommandBuffer cmd = context.commandBuffer;
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, self.pipeline_);

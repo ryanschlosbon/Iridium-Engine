@@ -68,13 +68,17 @@ namespace Iridium {
             case BlendMode::Opaque:
                 attachment.blendEnable = VK_FALSE;
                 return;
+            // M9.3: blended surfaces leave the scene colour's alpha as the
+            // revealage of everything drawn over the opaque scene (opaque
+            // writes 1; each layer multiplies it by 1 - its coverage). TAA
+            // reads 1 - alpha as its reactive mask. Colour is unchanged.
             case BlendMode::AlphaBlend:
                 attachment.blendEnable = VK_TRUE;
                 attachment.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
                 attachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
                 attachment.colorBlendOp = VK_BLEND_OP_ADD;
-                attachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
-                attachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+                attachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+                attachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
                 attachment.alphaBlendOp = VK_BLEND_OP_ADD;
                 return;
             case BlendMode::PremultipliedAlpha:
@@ -83,7 +87,7 @@ namespace Iridium {
                 attachment.dstColorBlendFactor =
                     VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
                 attachment.colorBlendOp = VK_BLEND_OP_ADD;
-                attachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+                attachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
                 attachment.dstAlphaBlendFactor =
                     VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
                 attachment.alphaBlendOp = VK_BLEND_OP_ADD;
