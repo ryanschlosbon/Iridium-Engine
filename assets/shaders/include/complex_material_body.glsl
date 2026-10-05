@@ -102,6 +102,12 @@ layout(location = 0) out vec4 outColor;
 #ifdef IRIDIUM_WEIGHTED_OIT
 layout(location = 1) out float outRevealage;
 #endif
+#if defined(IRIDIUM_WRITE_VELOCITY)
+// M9.1: forward-opaque writes velocity beside scene colour.
+#define IRIDIUM_MOTION_FRAGMENT 1
+#include "include/motion_vectors.glsl"
+layout(location = 1) out vec2 outVelocity;
+#endif
 
 layout(push_constant) uniform CanonicalPushConstants {
     mat4 renderMatrix;
@@ -212,6 +218,9 @@ void iridiumWriteMaterialOutput(vec4 value, bool premultiplied) {
     outRevealage = coverage;
 #else
     outColor = value;
+#if defined(IRIDIUM_WRITE_VELOCITY)
+    outVelocity = iridiumMotionVector();
+#endif
 #endif
 }
 

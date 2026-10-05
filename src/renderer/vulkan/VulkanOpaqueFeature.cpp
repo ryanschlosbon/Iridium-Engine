@@ -30,17 +30,31 @@ namespace Iridium {
             uint32_t indexCount = 0;
             uint32_t firstIndex = 0;
             bool gpuScene = false;
+            glm::mat4 previousWorldTransform{ 1.0f };   // M9.1
         };
+
+        // M9.1: the motion push block of one direct draw.
+        CanonicalMotionPushConstants motionPush(const OpaqueDirectDraw& draw,
+            uint32_t debugView) noexcept {
+            CanonicalMotionPushConstants push{};
+            push.mesh.renderMatrix = draw.worldTransform;
+            push.mesh.materialIndex = draw.material.getIndex();
+            push.mesh.padding[0] = debugView;
+            push.previousRenderMatrix = draw.previousWorldTransform;
+            return push;
+        }
 
         bool resolveOpaqueDraw(const VulkanIndirectScene& scene,
             const OpaqueSubmission& opaque, uint32_t entry,
             OpaqueDirectDraw& draw) noexcept {
             if (OpaqueSubmission::isDirect(entry)) {
-                const DrawPacket& packet =
-                    opaque.directPackets[OpaqueSubmission::indexOf(entry)];
+                const uint32_t index = OpaqueSubmission::indexOf(entry);
+                const DrawPacket& packet = opaque.directPackets[index];
                 draw = { packet.geometry, packet.material, packet.pipeline,
                     packet.worldTransform, packet.indexCount, packet.firstIndex,
-                    hasGpuScenePrimitive(packet) };
+                    hasGpuScenePrimitive(packet),
+                    index < opaque.directPreviousTransforms.size()
+                        ? opaque.directPreviousTransforms[index] : packet.worldTransform };
                 return true;
             }
             VulkanResolvedCaster caster{};
@@ -48,7 +62,8 @@ namespace Iridium {
                     caster))
                 return false;
             draw = { caster.geometry, caster.material, caster.pipeline,
-                caster.worldTransform, caster.indexCount, caster.firstIndex, true };
+                caster.worldTransform, caster.indexCount, caster.firstIndex, true,
+                resolveIndirectCasterPreviousTransform(scene, entry, caster.worldTransform) };
             return true;
         }
 
@@ -415,10 +430,7 @@ namespace Iridium {
                             toVkIndexType(geometry->indexFormat));
                         lastBoundGeometry = packet.geometry;
                     }
-                    CanonicalMeshPushConstants push{};
-                    push.renderMatrix = packet.worldTransform;
-                    push.materialIndex = packet.material.getIndex();
-                    push.padding[0] = debugView;
+                    const CanonicalMotionPushConstants push = motionPush(packet, debugView);
                     vkCmdPushConstants(cmd, meshLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                         0, sizeof(push), &push);
                     vkCmdDrawIndexed(cmd, packet.indexCount, 1, packet.firstIndex, 0, 0);
@@ -495,10 +507,7 @@ namespace Iridium {
                     lastBoundGeometry = packet.geometry;
                 }
 
-                CanonicalMeshPushConstants push{};
-                push.renderMatrix = packet.worldTransform;
-                push.materialIndex = packet.material.getIndex();
-                push.padding[0] = debugView;
+                const CanonicalMotionPushConstants push = motionPush(packet, debugView);
                 vkCmdPushConstants(cmd, meshLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                     0, sizeof(push), &push);
                 vkCmdDrawIndexed(cmd, packet.indexCount, 1, packet.firstIndex, 0, 0);
@@ -544,10 +553,7 @@ namespace Iridium {
                     lastBoundGeometry = packet.geometry;
                 }
 
-                CanonicalMeshPushConstants push{};
-                push.renderMatrix = packet.worldTransform;
-                push.materialIndex = packet.material.getIndex();
-                push.padding[0] = debugView;
+                const CanonicalMotionPushConstants push = motionPush(packet, debugView);
                 vkCmdPushConstants(cmd, activeLayout,
                     VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                     0, sizeof(push), &push);

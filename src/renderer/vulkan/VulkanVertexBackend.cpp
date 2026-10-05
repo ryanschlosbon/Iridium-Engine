@@ -407,12 +407,25 @@ namespace Iridium {
         opaque_.setCullerServices(cullerServices());
         opaque_.create(*featureContext_);
 
+        // M9.1: velocity-writing direct draws push 144 B (Vulkan guarantees
+        // 128; every supported desktop GPU exposes 256).
+        if (vkContext->getPhysicalDeviceProperties().limits.maxPushConstantsSize <
+                sizeof(CanonicalMotionPushConstants))
+            throw std::runtime_error(
+                "Iridium requires at least 144 bytes of push constants");
         // R4a: material pipelines use dynamic rendering (formats + layout).
         pipelineLibrary.init(vkContext->getDevice(), pipelineCache_.handle(),
-            { vulkanGBufferColorAttachmentFormats(gBufferLayout_),
-                vulkanGBufferFormats(gBufferLayout_).colorAttachmentCount,
+            { [&] {
+                std::array<VkFormat, VulkanPipelineMaxColorTargets> formats{};
+                const auto pass = vulkanGBufferPassColorAttachmentFormats(gBufferLayout_);
+                std::copy(pass.begin(), pass.end(), formats.begin());
+                return formats;
+              }(), VulkanGBufferPassColorAttachmentCount,
                 VK_FORMAT_D32_SFLOAT, meshLayouts.getGBufferPipelineLayout() },
             { { VulkanSceneColorFormat }, 1, VK_FORMAT_D32_SFLOAT,
+                meshLayouts.getForwardPipelineLayout() },
+            // M9.1: forward-opaque writes scene colour and velocity.
+            { { VulkanSceneColorFormat, VulkanVelocityFormat }, 2, VK_FORMAT_D32_SFLOAT,
                 meshLayouts.getForwardPipelineLayout() },
             { { VulkanSceneColorFormat }, 1, VK_FORMAT_D32_SFLOAT,
                 meshLayouts.getForwardPipelineLayout() },
@@ -1862,7 +1875,8 @@ namespace Iridium {
             frame.view.projection, frame.view.jitteredProjection, frame.view.depthRange.x,
             frame.view.depthRange.y, *frame.lights, *frame.reflectionProbes);
         stageComplete(RenderFrameStage::Lighting);
-        submitForwardQueues(frame.forwardOpaqueQueue, frame.sortedSurfaceQueue,
+        submitForwardQueues(frame.forwardOpaqueQueue,
+            frame.forwardOpaquePreviousTransforms, frame.sortedSurfaceQueue,
             frame.compatibilityTransparentQueue, frame.instanceTransforms);
         stageComplete(RenderFrameStage::SceneLinearComplete);
         submitOutputPass();
@@ -2145,6 +2159,7 @@ namespace Iridium {
 
     void VulkanVertexBackend::submitForwardQueues(
         std::span<const DrawPacket> opaqueForwardQueue,
+        std::span<const glm::mat4> opaqueForwardPreviousTransforms,
         std::span<const DrawPacket> sortedSurfaceQueue,
         std::span<const DrawPacket> compatibilityTransparentQueue,
         std::span<const glm::mat4> instanceTransforms) {
@@ -2178,6 +2193,7 @@ namespace Iridium {
         });
         forward_.stage({
             .opaqueForwardQueue = opaqueForwardQueue,
+            .opaqueForwardPreviousTransforms = opaqueForwardPreviousTransforms,
             .sortedSurfaceQueue = sortedSurfaceQueue,
             .compatibilityTransparentQueue = compatibilityTransparentQueue,
             .skipWeightedOit = weightedOit.executionEnabled,

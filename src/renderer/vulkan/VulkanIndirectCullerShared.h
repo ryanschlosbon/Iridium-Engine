@@ -185,6 +185,11 @@ namespace Iridium {
     [[nodiscard]] bool resolveIndirectCaster(const VulkanIndirectScene& scene,
         uint32_t primitiveIndex, uint32_t consumerMask,
         VulkanResolvedCaster& caster) noexcept;
+    // M9.1: a resolved primitive's previous world transform (slot 2d + 1);
+    // `current` when the record is out of range.
+    [[nodiscard]] glm::mat4 resolveIndirectCasterPreviousTransform(
+        const VulkanIndirectScene& scene, uint32_t primitiveIndex,
+        const glm::mat4& current) noexcept;
 
     // The fixed indirect reject ladder shared by the shadow and probe views.
     [[nodiscard]] GpuSceneIndirectFallbackReason evaluateIndirectPolicy(

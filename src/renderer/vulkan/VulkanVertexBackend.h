@@ -338,6 +338,7 @@ namespace Iridium {
             const LightingFramePacket& lights,
             const ReflectionProbeGpuFramePacket& reflectionProbes);
         void submitForwardQueues(std::span<const DrawPacket> opaqueForwardQueue,
+            std::span<const glm::mat4> opaqueForwardPreviousTransforms,
             std::span<const DrawPacket> sortedSurfaceQueue,
             std::span<const DrawPacket> compatibilityTransparentQueue,
             std::span<const glm::mat4> instanceTransforms);

@@ -224,6 +224,10 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
         "gbuffer.f0-roughness", imageDesc(toGraphFormat(formats.f0Roughness), sceneExtent));
     RenderGraph::ResourceHandle materialFlags = graph.createResource(
         "gbuffer.material-flags", imageDesc(toGraphFormat(formats.materialFlags), sceneExtent));
+    // M9.1: per-pixel motion (current minus previous unjittered UV), written
+    // by every opaque depth writer (gbuffer, forward-opaque).
+    RenderGraph::ResourceHandle velocity = graph.createResource(
+        "gbuffer.velocity", imageDesc(toGraphFormat(VulkanVelocityFormat), sceneExtent));
     RenderGraph::ResourceDesc directionalShadowDesc = imageDesc(
         RenderGraph::Format::D32Float,
         { directionalShadowResolution, directionalShadowResolution },
@@ -488,6 +492,10 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
         Access::ColorAttachment, LoadOp::Clear, StoreOp::Store, opaqueBlack);
     materialFlags = graph.write(gbuffer, materialFlags,
         Access::ColorAttachment, LoadOp::Clear, StoreOp::Store, zeroUint);
+    // Appended after the surface targets: attachment 5. Background pixels keep
+    // zero (camera motion is reconstructed from depth by its consumers).
+    velocity = graph.write(gbuffer, velocity, Access::ColorAttachment, LoadOp::Clear,
+        StoreOp::Store, transparentBlack);
     depth = graph.write(gbuffer, depth, Access::DepthAttachmentWrite, LoadOp::Clear,
         StoreOp::Store, farDepth);
 
@@ -615,6 +623,8 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
     depth = graph.write(opaqueForward, depth,
         Access::DepthAttachmentWrite, LoadOp::Load);
     litScene = graph.write(opaqueForward, litScene,
+        Access::ColorAttachment, LoadOp::Load);
+    velocity = graph.write(opaqueForward, velocity,
         Access::ColorAttachment, LoadOp::Load);
 
     if (virtualShadowWorkingSetBytes) {
@@ -1074,6 +1084,7 @@ VulkanProductionGraphIds resolveVulkanProductionGraphIds(
     ids.gbufferEmissive = resource("gbuffer.emissive");
     ids.gbufferF0Roughness = resource("gbuffer.f0-roughness");
     ids.gbufferMaterialFlags = resource("gbuffer.material-flags");
+    ids.gbufferVelocity = resource("gbuffer.velocity");
     ids.depth = resource("depth.opaque");
     ids.sceneColor = resource("scene.color");
     ids.refractionColorPyramid = resource("scene.refraction-color-pyramid");

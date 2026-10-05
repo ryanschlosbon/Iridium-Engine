@@ -111,6 +111,7 @@ namespace Iridium {
         RenderGraph::GraphResourceId gbufferEmissive;
         RenderGraph::GraphResourceId gbufferF0Roughness;
         RenderGraph::GraphResourceId gbufferMaterialFlags;
+        RenderGraph::GraphResourceId gbufferVelocity;   // M9.1
         RenderGraph::GraphResourceId depth;
         RenderGraph::GraphResourceId sceneColor;
         RenderGraph::GraphResourceId refractionColorPyramid;

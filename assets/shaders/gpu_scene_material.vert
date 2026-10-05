@@ -15,6 +15,8 @@ layout(location = 4) out vec4 fragTangent;
 layout(location = 5) out vec2 fragTexCoord1;
 
 #include "include/view_uniforms.glsl"
+#define IRIDIUM_MOTION_VERTEX 1
+#include "include/motion_vectors.glsl"
 
 layout(push_constant) uniform CanonicalPushConstants {
     mat4 renderMatrix;
@@ -47,9 +49,7 @@ layout(std430, set = 4, binding = 3) readonly buffer Geometries {
     GpuSceneGeometry values[];
 } geometries;
 
-mat4 renderMatrixForPrimitive(uint primitiveIndex) {
-    uint instanceIndex = primitives.values[primitiveIndex].binding.x;
-    uint transformIndex = instances.values[instanceIndex].references.x;
+mat4 affineMatrix(uint transformIndex) {
     GpuSceneTransform value = transforms.values[transformIndex];
     return mat4(
         vec4(value.row0.x, value.row1.x, value.row2.x, 0.0),
@@ -59,8 +59,12 @@ mat4 renderMatrixForPrimitive(uint primitiveIndex) {
 }
 
 void main() {
-    mat4 renderMatrix = renderMatrixForPrimitive(gl_InstanceIndex);
+    uint instanceIndex = primitives.values[gl_InstanceIndex].binding.x;
+    uvec4 references = instances.values[instanceIndex].references;
+    mat4 renderMatrix = affineMatrix(references.x);
     vec4 worldPos = renderMatrix * vec4(inPosition, 1.0);
+    // M9.1: slot 2d + 1 is last frame's transform (settled, M9 G3).
+    iridiumEmitMotion(worldPos, affineMatrix(references.y) * vec4(inPosition, 1.0));
     gl_Position = ubo.jitteredProjection * ubo.view * worldPos;
     fragColor = inColor;
     fragTexCoord0 = inTexCoord0;

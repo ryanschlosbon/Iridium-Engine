@@ -56,6 +56,7 @@ namespace {
     constexpr std::array ForwardMaterial{
         "complex_material_indexed_frag.spv",
         "complex_opaque_material_indexed_frag.spv",
+        "complex_opaque_material_velocity_indexed_frag.spv",   // M9.1
         "layered_ordinary2_material_indexed_frag.spv",
         "layered_deep_material_indexed_frag.spv",
         "layered_deep_residual_material_indexed_frag.spv",

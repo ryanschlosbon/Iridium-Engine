@@ -88,6 +88,15 @@ iridium_compile_shader("${IRIDIUM_SHADER_SOURCE_DIR}/gpu_scene_frustum_compact.c
         "${IRIDIUM_SHADER_SOURCE_DIR}/gpu_scene_frustum_occlusion_compact_comp.spv"
         -DIRIDIUM_GPU_SCENE_OCCLUSION=1)
 
+# M9.1: direct G-buffer and forward-opaque draws emit motion (previous
+# transform in the push block); forward-opaque writes velocity.
+iridium_compile_shader("${IRIDIUM_SHADER_SOURCE_DIR}/canonical_material.vert"
+        "${IRIDIUM_SHADER_SOURCE_DIR}/canonical_material_velocity_vert.spv"
+        -DIRIDIUM_MOTION_VERTEX=1)
+iridium_compile_shader("${IRIDIUM_SHADER_SOURCE_DIR}/complex_opaque_material_indexed.frag"
+        "${IRIDIUM_SHADER_SOURCE_DIR}/complex_opaque_material_velocity_indexed_frag.spv"
+        -DIRIDIUM_WRITE_VELOCITY=1)
+
 # M9 G5b: the selection mask's vertex stage stays unjittered (output reads
 # the mask after temporal resolve).
 iridium_compile_shader("${IRIDIUM_SHADER_SOURCE_DIR}/canonical_material.vert"

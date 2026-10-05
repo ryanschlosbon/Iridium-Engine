@@ -358,6 +358,8 @@ VkFormat toVkFormat(RenderGraph::Format format) {
     case RenderGraph::Format::R32Uint: return VK_FORMAT_R32_UINT;
     case RenderGraph::Format::R32Float: return VK_FORMAT_R32_SFLOAT;
     case RenderGraph::Format::D32Float: return VK_FORMAT_D32_SFLOAT;
+    case RenderGraph::Format::Rg16Float: return VK_FORMAT_R16G16_SFLOAT;
+    case RenderGraph::Format::R8Unorm: return VK_FORMAT_R8_UNORM;
     case RenderGraph::Format::Undefined: break;
     }
     throw std::invalid_argument("Unsupported render-graph format");
@@ -377,6 +379,8 @@ RenderGraph::Format toGraphFormat(VkFormat format) {
     case VK_FORMAT_R32_UINT: return RenderGraph::Format::R32Uint;
     case VK_FORMAT_R32_SFLOAT: return RenderGraph::Format::R32Float;
     case VK_FORMAT_D32_SFLOAT: return RenderGraph::Format::D32Float;
+    case VK_FORMAT_R16G16_SFLOAT: return RenderGraph::Format::Rg16Float;
+    case VK_FORMAT_R8_UNORM: return RenderGraph::Format::R8Unorm;
     default: break;
     }
     throw std::invalid_argument("Unsupported Vulkan format for render graph");

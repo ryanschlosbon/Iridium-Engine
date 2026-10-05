@@ -168,6 +168,17 @@ namespace Iridium {
     static_assert(sizeof(CanonicalMeshPushConstants) == 80);
     static_assert(offsetof(CanonicalMeshPushConstants, materialIndex) == 64);
 
+    // M9.1: direct draws that write velocity (G-buffer, forward-opaque) also
+    // push last frame's world transform. Only the G-buffer and forward
+    // pipeline layouts carry the larger range; every other layout keeps 80 B.
+    struct CanonicalMotionPushConstants {
+        CanonicalMeshPushConstants mesh{};
+        alignas(16) glm::mat4 previousRenderMatrix{ 1.0f };
+    };
+
+    static_assert(sizeof(CanonicalMotionPushConstants) == 144);
+    static_assert(offsetof(CanonicalMotionPushConstants, previousRenderMatrix) == 80);
+
     struct UniformBufferObject {
         alignas(16) glm::mat4 model;
         alignas(16) glm::mat4 view;

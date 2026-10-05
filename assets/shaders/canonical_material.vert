@@ -15,6 +15,7 @@ layout(location = 4) out vec4 fragTangent;
 layout(location = 5) out vec2 fragTexCoord1;
 
 #include "include/view_uniforms.glsl"
+#include "include/motion_vectors.glsl"
 
 layout(push_constant) uniform CanonicalPushConstants {
     mat4 renderMatrix;
@@ -22,6 +23,10 @@ layout(push_constant) uniform CanonicalPushConstants {
     uint padding0;
     uint padding1;
     uint padding2;
+#if defined(IRIDIUM_MOTION_VERTEX)
+    // M9.1: CanonicalMotionPushConstants (G-buffer and forward-opaque).
+    mat4 previousRenderMatrix;
+#endif
 } push;
 
 void main() {
@@ -39,4 +44,7 @@ void main() {
     fragNormal = normalMatrix * inNormal;
     fragTangent = vec4(mat3(push.renderMatrix) * inTangent.xyz, inTangent.w);
     fragWorldPos = worldPos.xyz;
+#if defined(IRIDIUM_MOTION_VERTEX)
+    iridiumEmitMotion(worldPos, push.previousRenderMatrix * vec4(inPosition, 1.0));
+#endif
 }

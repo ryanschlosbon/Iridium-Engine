@@ -93,6 +93,9 @@ namespace Iridium::RenderGraph {
         R32Uint,
         R32Float,
         D32Float,
+        // M9 (appended: existing values and topology hashes are unchanged).
+        Rg16Float,
+        R8Unorm,
     };
 
     enum class Access : uint8_t {

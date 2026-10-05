@@ -400,6 +400,10 @@ namespace {
     constexpr std::array<std::string_view, 6> DeclaredSinceR3b6{
         "shadow.directional.compact", "shadow.spot.compact", "shadow.point.compact",
         "gpu-scene.opaque.compact", "lighting.probe-cluster", "probe.capture" };
+    // Transient resources added after R3b.6 (M9.1). They are left out of the
+    // slot comparison, so the golden still pins every earlier resource's slot
+    // membership; slots that held only these resources are dropped.
+    constexpr std::array<std::string_view, 1> ResourcesSinceR3b6{ "gbuffer.velocity" };
 
     bool testDeclaredWorkKeepsOrderAndSlots() {
         const VulkanLayeredGraphConfig all{ Ordinary2Atlas, Hero4Atlas, Cinematic8Atlas, true };
@@ -429,13 +433,19 @@ namespace {
                     DeclaredSinceR3b6.end())
                     previous.push_back(pass.name);
             IRIDIUM_CHECK_MSG(previous == golden.passes, name);
-            IRIDIUM_CHECK_MSG(compiled.physicalSlots().size() == golden.slots.size(), name);
-            for (size_t slot = 0; slot < golden.slots.size(); ++slot) {
+            std::vector<std::vector<std::string_view>> slots;
+            for (const RenderGraph::PhysicalResourceSlot& slot : compiled.physicalSlots()) {
                 std::vector<std::string_view> members;
-                for (const uint32_t logical : compiled.physicalSlots()[slot].logicalResources)
-                    members.push_back(compiled.resources()[logical].name);
-                IRIDIUM_CHECK_MSG(members == golden.slots[slot], name << " slot " << slot);
+                for (const uint32_t logical : slot.logicalResources) {
+                    const std::string_view member = compiled.resources()[logical].name;
+                    if (std::ranges::find(ResourcesSinceR3b6, member) == ResourcesSinceR3b6.end())
+                        members.push_back(member);
+                }
+                if (!members.empty()) slots.push_back(std::move(members));
             }
+            IRIDIUM_CHECK_MSG(slots.size() == golden.slots.size(), name);
+            for (size_t slot = 0; slot < golden.slots.size() && slot < slots.size(); ++slot)
+                IRIDIUM_CHECK_MSG(slots[slot] == golden.slots[slot], name << " slot " << slot);
 
             // Producers run directly before their consumers (shadows, gbuffer).
             const GraphQuery graph(compiled);
@@ -561,6 +571,8 @@ namespace {
             IRIDIUM_CHECK(clears("transparent.oit.accumulate", "transparency.oit.revealage",
                 ClearValue::color(1.0f, 0.0f, 0.0f, 0.0f)));
             IRIDIUM_CHECK(clears("output-transform", "output.display", opaqueBlack));
+            // M9.1: velocity is cleared to zero motion.
+            IRIDIUM_CHECK(clears("gbuffer", "gbuffer.velocity", transparentBlack));
             if (hdr10) {
                 IRIDIUM_CHECK(clears("ui-compose", "output.ui-composition", opaqueBlack));
                 IRIDIUM_CHECK(clears("hdr10-encode-present", "swapchain", opaqueBlack));

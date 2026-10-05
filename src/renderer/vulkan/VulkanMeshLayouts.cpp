@@ -68,7 +68,8 @@ namespace Iridium {
             VkPushConstantRange meshPushConstants{};
             meshPushConstants.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
             meshPushConstants.offset = 0;
-            meshPushConstants.size = sizeof(CanonicalMeshPushConstants);
+            // M9.1: G-buffer and forward draws push the motion block.
+            meshPushConstants.size = sizeof(CanonicalMotionPushConstants);
 
             std::array<VkDescriptorSetLayout, 5> gBufferSetLayouts{
                 globalSetLayout_, materialSetLayout_, samplerSetLayout_,

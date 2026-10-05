@@ -105,6 +105,8 @@ namespace {
     constexpr std::array ViewUniformShaders{
         "canonical_material_vert.spv",
         "canonical_material_unjittered_vert.spv",
+        "canonical_material_velocity_vert.spv",
+        "complex_opaque_material_velocity_indexed_frag.spv",
         "gpu_scene_material_vert.spv",
         "weighted_oit_instanced_vert.spv",
         "gpu_scene_frustum_compact_comp.spv",
@@ -340,9 +342,24 @@ namespace {
     // Stage3 group 2 / StandardMaterialShadingTests: mesh push block, packed
     // material record and the view UBO.
     bool testMeshPushMaterialAndViewAbi() {
+        // M9.1: the motion vertex variant reads the previous transform after
+        // the mesh block (CanonicalMotionPushConstants).
+        {
+            const SpirvModule motion = load("canonical_material_velocity_vert.spv");
+            IRIDIUM_CHECK(motion.pushConstantExtent() == sizeof(CanonicalMotionPushConstants));
+            IRIDIUM_CHECK(offsetsInOrder(motion.pushConstantMembers(), {
+                offsetof(CanonicalMeshPushConstants, renderMatrix),
+                offsetof(CanonicalMeshPushConstants, materialIndex),
+                offsetof(CanonicalMeshPushConstants, padding),
+                offsetof(CanonicalMeshPushConstants, padding) + 4u,
+                offsetof(CanonicalMeshPushConstants, padding) + 8u,
+                offsetof(CanonicalMotionPushConstants, previousRenderMatrix) },
+                "CanonicalMotionPushConstants"));
+        }
         for (const char* spv : { "canonical_material_vert.spv",
                 "gpu_scene_material_vert.spv", "complex_material_indexed_frag.spv",
                 "complex_opaque_material_indexed_frag.spv",
+                "complex_opaque_material_velocity_indexed_frag.spv",
                 "layered_ordinary2_material_indexed_frag.spv",
                 "layered_deep_material_indexed_frag.spv",
                 "layered_deep_residual_material_indexed_frag.spv",
