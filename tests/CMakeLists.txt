@@ -177,6 +177,12 @@ iridium_add_test(ImageComparisonTests
         SOURCES capture/ImageComparisonTests.cpp
         LIBS iridium_capture)
 
+# M9 G6d temporal metrics tool library; iridium_capture supplies the engine's PFM/TGA
+# writers and readers for the round-trip checks.
+iridium_add_test(TemporalMetricsTests
+        SOURCES tools/TemporalMetricsTests.cpp
+        LIBS iridium_temporal_metrics iridium_capture)
+
 iridium_add_test(BenchmarkManifestTests
         SOURCES benchmarks/BenchmarkManifestTests.cpp
         LIBS iridium_benchmarks)

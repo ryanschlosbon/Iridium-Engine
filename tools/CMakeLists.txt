@@ -29,6 +29,18 @@ iridium_add_executable(IridiumImageCompare
         SOURCES ImageCompare.cpp
         LIBS iridium_capture)
 
+# Temporal image-quality metrics (M9 G6d). The metric math is a standard-C++ static
+# library shared with tests/tools/TemporalMetricsTests.cpp; it is never linked into
+# the engine.
+add_library(iridium_temporal_metrics STATIC
+        temporal/TemporalMetrics.cpp
+        temporal/TemporalMetrics.h)
+target_include_directories(iridium_temporal_metrics PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+
+iridium_add_executable(IridiumTemporalMetrics
+        SOURCES TemporalMetrics.cpp
+        LIBS iridium_temporal_metrics nlohmann_json::nlohmann_json)
+
 # --- Benchmarks ------------------------------------------------------------------------
 iridium_add_executable(IridiumSourceSceneBenchmark
         SOURCES SourceSceneBenchmark.cpp

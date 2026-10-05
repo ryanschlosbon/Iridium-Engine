@@ -1,5 +1,17 @@
 # M9 tools
 
+## Temporal image-quality metrics (G6d)
+
+`IridiumTemporalMetrics` (C++, `tools/TemporalMetrics.cpp`) reports the following
+from scene-linear PFM and final-SDR TGA captures:
+- reference error;
+- static-camera stability and flicker;
+- ghosting trail energy;
+- disocclusion recovery;
+- mean accumulation.
+
+See [Temporal-Metrics.md](Temporal-Metrics.md) for the formulas and the CLI.
+
 ## Feature-admission timing (G6a)
 
 `Run-FeatureAdmission.ps1` runs the feature-admission protocol from
