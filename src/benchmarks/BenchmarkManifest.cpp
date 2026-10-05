@@ -5,12 +5,15 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cmath>
 #include <fstream>
+#include <initializer_list>
 #include <numbers>
 #include <set>
 #include <stdexcept>
+#include <string_view>
 #include <utility>
 
 namespace Iridium {
@@ -108,6 +111,392 @@ namespace Iridium {
                 value == 1'024u || value == 2'048u || value == 4'096u;
         }
 
+        // The M9 schema objects are new, so they reject unknown keys: a
+        // misspelled motion or cut field must fail loudly, never parse as a
+        // static fixture. (Older objects keep their permissive parsing.)
+        void requireKnownKeys(const Json& object,
+            std::initializer_list<std::string_view> known,
+            const std::string& context, const std::string& fixtureId) {
+            if (!object.is_object()) {
+                throw std::runtime_error(context + " must be an object: " +
+                    fixtureId);
+            }
+            for (const auto& item : object.items()) {
+                if (std::find(known.begin(), known.end(), item.key()) ==
+                    known.end()) {
+                    throw std::runtime_error("Unknown key '" + item.key() +
+                        "' in " + context + ": " + fixtureId);
+                }
+            }
+        }
+
+        bool nonzeroScale(const glm::vec3& scale) noexcept {
+            return std::abs(scale.x) > 1.0e-7f && std::abs(scale.y) > 1.0e-7f &&
+                std::abs(scale.z) > 1.0e-7f;
+        }
+
+        // Keyframes start at frame 0 and strictly increase. A periodic
+        // sequence ends at or before its period; a frame-0 flag marks the
+        // wrap as discontinuous and is valid only when periodic.
+        template <typename Keyframe>
+        void validateKeyframeFrames(const std::vector<Keyframe>& keyframes,
+            uint64_t periodFrames, const std::string& context,
+            const std::string& fixtureId) {
+            if (keyframes.empty() || keyframes.front().frame != 0u) {
+                throw std::runtime_error(context +
+                    " keyframes must be nonempty and start at frame 0: " +
+                    fixtureId);
+            }
+            for (size_t index = 1; index < keyframes.size(); ++index) {
+                if (keyframes[index].frame <= keyframes[index - 1].frame) {
+                    throw std::runtime_error(context +
+                        " keyframe frames must strictly increase: " + fixtureId);
+                }
+            }
+            if (periodFrames != 0u && keyframes.back().frame > periodFrames) {
+                throw std::runtime_error(context +
+                    " keyframes must not extend past period_frames: " +
+                    fixtureId);
+            }
+        }
+
+        BenchmarkEntityMotion readEntityMotion(const Json& source,
+            const std::string& context, const std::string& fixtureId) {
+            BenchmarkEntityMotion motion{};
+            const std::string kind = source.at("kind").get<std::string>();
+            if (kind == "none") {
+                requireKnownKeys(source, { "kind" }, context, fixtureId);
+                return motion;
+            }
+            if (kind == "linear") {
+                requireKnownKeys(source,
+                    { "kind", "velocity_per_frame", "period_frames" },
+                    context, fixtureId);
+                motion.kind = BenchmarkEntityMotionKind::Linear;
+                motion.velocityPerFrame = readVec3(
+                    source.at("velocity_per_frame"),
+                    "motion.velocity_per_frame");
+                motion.periodFrames = source.value("period_frames",
+                    uint64_t{ 0 });
+                if (!finiteVec3(motion.velocityPerFrame) ||
+                    (source.contains("period_frames") &&
+                        motion.periodFrames == 0u)) {
+                    throw std::runtime_error("Invalid linear " + context +
+                        ": " + fixtureId);
+                }
+                return motion;
+            }
+            if (kind == "rotation") {
+                requireKnownKeys(source,
+                    { "kind", "axis", "degrees_per_frame" }, context,
+                    fixtureId);
+                motion.kind = BenchmarkEntityMotionKind::Rotation;
+                const glm::vec3 axis = readVec3(source.at("axis"),
+                    "motion.axis");
+                motion.rotationDegreesPerFrame =
+                    source.at("degrees_per_frame").get<float>();
+                if (!finiteVec3(axis) || glm::length(axis) <= 1.0e-6f ||
+                    !std::isfinite(motion.rotationDegreesPerFrame)) {
+                    throw std::runtime_error("Invalid rotation " + context +
+                        ": " + fixtureId);
+                }
+                motion.rotationAxis = glm::normalize(axis);
+                return motion;
+            }
+            if (kind == "keyframes") {
+                requireKnownKeys(source,
+                    { "kind", "keyframes", "period_frames" }, context,
+                    fixtureId);
+                motion.kind = BenchmarkEntityMotionKind::Keyframes;
+                motion.periodFrames = source.value("period_frames",
+                    uint64_t{ 0 });
+                if (source.contains("period_frames") &&
+                    motion.periodFrames == 0u) {
+                    throw std::runtime_error("Invalid keyframe period in " +
+                        context + ": " + fixtureId);
+                }
+                const Json& keyframes = source.at("keyframes");
+                if (!keyframes.is_array() || keyframes.size() > 4'096u) {
+                    throw std::runtime_error(context +
+                        " keyframes must be an array of at most 4096 entries: " +
+                        fixtureId);
+                }
+                for (const Json& keyframeSource : keyframes) {
+                    requireKnownKeys(keyframeSource,
+                        { "frame", "translation", "teleport" },
+                        context + " keyframe", fixtureId);
+                    BenchmarkTranslationKeyframe keyframe{};
+                    keyframe.frame = keyframeSource.at("frame").get<uint64_t>();
+                    keyframe.translation = readVec3(
+                        keyframeSource.at("translation"),
+                        "keyframes.translation");
+                    keyframe.teleport = keyframeSource.value("teleport", false);
+                    if (!finiteVec3(keyframe.translation)) {
+                        throw std::runtime_error("Non-finite keyframe in " +
+                            context + ": " + fixtureId);
+                    }
+                    motion.keyframes.push_back(keyframe);
+                }
+                validateKeyframeFrames(motion.keyframes, motion.periodFrames,
+                    context, fixtureId);
+                const BenchmarkTranslationKeyframe& first =
+                    motion.keyframes.front();
+                const BenchmarkTranslationKeyframe& last =
+                    motion.keyframes.back();
+                if (first.teleport && motion.periodFrames == 0u) {
+                    throw std::runtime_error(
+                        "A frame-0 teleport requires period_frames in " +
+                        context + ": " + fixtureId);
+                }
+                if (motion.periodFrames != 0u && last.frame ==
+                        motion.periodFrames && last.teleport) {
+                    throw std::runtime_error(
+                        "A teleport at period_frames is never shown; flag the "
+                        "frame-0 keyframe instead in " + context + ": " +
+                        fixtureId);
+                }
+                if (motion.periodFrames != 0u && !first.teleport &&
+                    last.translation != first.translation) {
+                    throw std::runtime_error(
+                        "A discontinuous periodic wrap must be flagged as a "
+                        "frame-0 teleport in " + context + ": " + fixtureId);
+                }
+                return motion;
+            }
+            throw std::runtime_error("Unsupported " + context + " kind '" +
+                kind + "': " + fixtureId);
+        }
+
+        std::vector<BenchmarkCompositionEntity> readCompositionEntities(
+            const Json& factory, const std::string& fixtureId) {
+            requireKnownKeys(factory, { "kind", "entities", "camera_motion" },
+                "composition scene_factory", fixtureId);
+            const Json& entities = factory.at("entities");
+            if (!entities.is_array() || entities.empty() ||
+                entities.size() > 4'096u) {
+                throw std::runtime_error(
+                    "Composition entities must be an array of 1 to 4096 entries: " +
+                    fixtureId);
+            }
+            std::vector<BenchmarkCompositionEntity> result;
+            result.reserve(entities.size());
+            std::set<std::string> ids;
+            for (const Json& source : entities) {
+                if (source.is_object() && source.contains("source_asset")) {
+                    // One --cooked-model-artifact backs a fixture; entities
+                    // select top-level nodes of the fixture's source_asset.
+                    throw std::runtime_error(
+                        "Composition entities select a 'node' of the fixture "
+                        "source_asset; per-entity source_asset is unsupported: " +
+                        fixtureId);
+                }
+                requireKnownKeys(source, { "id", "node", "transform", "motion" },
+                    "composition entity", fixtureId);
+                BenchmarkCompositionEntity entity{};
+                entity.id = source.at("id").get<std::string>();
+                if (entity.id.empty() || !ids.insert(entity.id).second) {
+                    throw std::runtime_error(
+                        "Composition entity IDs must be nonempty and unique: " +
+                        fixtureId);
+                }
+                const std::string context = "composition entity '" +
+                    entity.id + "'";
+                entity.sourceNode = source.at("node").get<uint32_t>();
+                if (source.contains("transform")) {
+                    const Json& transform = source.at("transform");
+                    requireKnownKeys(transform,
+                        { "translation", "rotation_degrees", "scale" },
+                        context + " transform", fixtureId);
+                    entity.translation = readVec3(transform.value(
+                        "translation", Json::array({ 0.0, 0.0, 0.0 })),
+                        "transform.translation");
+                    entity.rotationDegrees = readVec3(transform.value(
+                        "rotation_degrees", Json::array({ 0.0, 0.0, 0.0 })),
+                        "transform.rotation_degrees");
+                    entity.scale = readVec3(transform.value(
+                        "scale", Json::array({ 1.0, 1.0, 1.0 })),
+                        "transform.scale");
+                    if (!finiteVec3(entity.translation) ||
+                        !finiteVec3(entity.rotationDegrees) ||
+                        !finiteVec3(entity.scale) ||
+                        !nonzeroScale(entity.scale)) {
+                        throw std::runtime_error("Invalid transform for " +
+                            context + ": " + fixtureId);
+                    }
+                }
+                if (source.contains("motion")) {
+                    entity.motion = readEntityMotion(source.at("motion"),
+                        context + " motion", fixtureId);
+                }
+                result.push_back(std::move(entity));
+            }
+            return result;
+        }
+
+        void readCameraPath(const Json& path, const BenchmarkCamera& camera,
+            BenchmarkSceneFactory& factory, const std::string& fixtureId) {
+            requireKnownKeys(path, { "keyframes", "cuts", "period_frames" },
+                "camera_motion.path", fixtureId);
+            factory.cameraPathEnabled = true;
+            factory.cameraPathPeriodFrames = path.value("period_frames",
+                uint64_t{ 0 });
+            if (path.contains("period_frames") &&
+                factory.cameraPathPeriodFrames == 0u) {
+                throw std::runtime_error(
+                    "Invalid camera path period_frames: " + fixtureId);
+            }
+            const Json& keyframes = path.at("keyframes");
+            if (!keyframes.is_array() || keyframes.size() > 4'096u) {
+                throw std::runtime_error(
+                    "Camera path keyframes must be an array of at most 4096 entries: " +
+                    fixtureId);
+            }
+            for (const Json& source : keyframes) {
+                requireKnownKeys(source, { "frame", "position", "target" },
+                    "camera path keyframe", fixtureId);
+                BenchmarkCameraKeyframe keyframe{};
+                keyframe.frame = source.at("frame").get<uint64_t>();
+                keyframe.position = readVec3(source.at("position"),
+                    "camera_motion.path.position");
+                keyframe.target = readVec3(source.at("target"),
+                    "camera_motion.path.target");
+                const glm::vec3 forward = keyframe.target - keyframe.position;
+                if (!finiteVec3(keyframe.position) ||
+                    !finiteVec3(keyframe.target) ||
+                    glm::length(forward) <= 0.0f ||
+                    glm::length(glm::cross(forward, camera.up)) <= 0.0f) {
+                    throw std::runtime_error(
+                        "Invalid camera path keyframe: " + fixtureId);
+                }
+                factory.cameraPathKeyframes.push_back(keyframe);
+            }
+            validateKeyframeFrames(factory.cameraPathKeyframes,
+                factory.cameraPathPeriodFrames, "camera_motion.path",
+                fixtureId);
+            factory.cameraPathCuts = path.value("cuts",
+                std::vector<uint64_t>{});
+            bool wrapCut = false;
+            for (size_t index = 0; index < factory.cameraPathCuts.size();
+                ++index) {
+                const uint64_t cut = factory.cameraPathCuts[index];
+                if (index > 0 && cut <= factory.cameraPathCuts[index - 1]) {
+                    throw std::runtime_error(
+                        "Camera path cuts must strictly increase: " + fixtureId);
+                }
+                if (cut == 0u) {
+                    if (factory.cameraPathPeriodFrames == 0u) {
+                        throw std::runtime_error(
+                            "A frame-0 camera cut requires period_frames: " +
+                            fixtureId);
+                    }
+                    wrapCut = true;
+                    continue;
+                }
+                const bool onKeyframe = std::ranges::any_of(
+                    factory.cameraPathKeyframes,
+                    [cut](const BenchmarkCameraKeyframe& keyframe) {
+                        return keyframe.frame == cut;
+                    });
+                if (!onKeyframe || (factory.cameraPathPeriodFrames != 0u &&
+                        cut >= factory.cameraPathPeriodFrames)) {
+                    throw std::runtime_error(
+                        "Each camera path cut must be a keyframe frame inside "
+                        "the period: " + fixtureId);
+                }
+            }
+            const BenchmarkCameraKeyframe& first =
+                factory.cameraPathKeyframes.front();
+            const BenchmarkCameraKeyframe& last =
+                factory.cameraPathKeyframes.back();
+            if (factory.cameraPathPeriodFrames != 0u && !wrapCut &&
+                (last.position != first.position ||
+                    last.target != first.target)) {
+                throw std::runtime_error(
+                    "A discontinuous periodic camera wrap must be a frame-0 cut: " +
+                    fixtureId);
+            }
+        }
+
+        // Linear interpolation over [frame(i), frame(i+1)); a step keyframe
+        // (teleport or cut) holds the previous value until its own frame.
+        template <typename Keyframe, typename IsStep>
+        std::pair<size_t, float> keyframeSegment(
+            const std::vector<Keyframe>& keyframes, uint64_t frame,
+            IsStep isStep) noexcept {
+            if (frame >= keyframes.back().frame) {
+                return { keyframes.size() - 1u, 0.0f };
+            }
+            const auto next = std::ranges::upper_bound(keyframes, frame, {},
+                &Keyframe::frame);
+            const size_t upper = static_cast<size_t>(
+                next - keyframes.begin());
+            const size_t lower = upper - 1u;
+            if (isStep(keyframes[upper])) return { lower, 0.0f };
+            const double span = static_cast<double>(
+                keyframes[upper].frame - keyframes[lower].frame);
+            const double offset = static_cast<double>(
+                frame - keyframes[lower].frame);
+            return { lower, static_cast<float>(offset / span) };
+        }
+
+        // Euler degrees with R = Rz(z) * Ry(y) * Rx(x), TransformComponent's
+        // convention; double precision so the result is stable per frame.
+        using Matrix3d = std::array<std::array<double, 3>, 3>;
+
+        Matrix3d multiply(const Matrix3d& lhs, const Matrix3d& rhs) noexcept {
+            Matrix3d result{};
+            for (size_t row = 0; row < 3; ++row) {
+                for (size_t column = 0; column < 3; ++column) {
+                    for (size_t inner = 0; inner < 3; ++inner) {
+                        result[row][column] += lhs[row][inner] *
+                            rhs[inner][column];
+                    }
+                }
+            }
+            return result;
+        }
+
+        Matrix3d axisAngle(glm::dvec3 axis, double radians) noexcept {
+            const double c = std::cos(radians);
+            const double s = std::sin(radians);
+            const double t = 1.0 - c;
+            return { {
+                { t * axis.x * axis.x + c, t * axis.x * axis.y - s * axis.z,
+                    t * axis.x * axis.z + s * axis.y },
+                { t * axis.x * axis.y + s * axis.z, t * axis.y * axis.y + c,
+                    t * axis.y * axis.z - s * axis.x },
+                { t * axis.x * axis.z - s * axis.y,
+                    t * axis.y * axis.z + s * axis.x, t * axis.z * axis.z + c },
+            } };
+        }
+
+        Matrix3d eulerZyx(const glm::vec3& degrees) noexcept {
+            const double radiansPerDegree = std::numbers::pi / 180.0;
+            return multiply(multiply(
+                axisAngle({ 0.0, 0.0, 1.0 }, degrees.z * radiansPerDegree),
+                axisAngle({ 0.0, 1.0, 0.0 }, degrees.y * radiansPerDegree)),
+                axisAngle({ 1.0, 0.0, 0.0 }, degrees.x * radiansPerDegree));
+        }
+
+        glm::vec3 toEulerZyx(const Matrix3d& rotation) noexcept {
+            const double degreesPerRadian = 180.0 / std::numbers::pi;
+            const double sinY = std::clamp(-rotation[2][0], -1.0, 1.0);
+            double x = 0.0;
+            double z = 0.0;
+            const double y = std::asin(sinY);
+            if (std::abs(sinY) < 1.0 - 1.0e-12) {
+                x = std::atan2(rotation[2][1], rotation[2][2]);
+                z = std::atan2(rotation[1][0], rotation[0][0]);
+            }
+            else {
+                // Gimbal lock: fold the X angle into Z.
+                z = std::atan2(-rotation[0][1], rotation[1][1]);
+            }
+            return glm::vec3(static_cast<float>(x * degreesPerRadian),
+                static_cast<float>(y * degreesPerRadian),
+                static_cast<float>(z * degreesPerRadian));
+        }
+
     } // namespace
 
     BenchmarkManifest loadBenchmarkManifest(const std::filesystem::path& path,
@@ -177,9 +566,17 @@ namespace Iridium {
             }
 
             const Json& factory = source.at("scene_factory");
-            if (factory.at("kind").get<std::string>() != "instanced_grid") {
+            const std::string factoryKind = factory.at("kind").get<std::string>();
+            if (factoryKind == "composition") {
+                fixture.sceneFactory.kind =
+                    BenchmarkSceneFactoryKind::Composition;
+                fixture.sceneFactory.compositionEntities =
+                    readCompositionEntities(factory, fixture.id);
+            }
+            else if (factoryKind != "instanced_grid") {
                 throw std::runtime_error("Unsupported benchmark scene factory: " + fixture.id);
             }
+            else {
             fixture.sceneFactory.instanceGrid = readUVec3(
                 factory.at("instance_grid"), "scene_factory.instance_grid");
             fixture.sceneFactory.instanceSpacing = readVec3(
@@ -197,98 +594,107 @@ namespace Iridium {
                 fixture.sceneFactory.renderInstanceBatch = true;
             }
             else {
-                throw std::runtime_error(
-                    "Unsupported benchmark instance submission: " +
-                    fixture.id);
-            }
-            if (!finiteVec3(fixture.sceneFactory.instanceSpacing) ||
-                !finiteVec3(fixture.sceneFactory.instanceScale) ||
-                std::abs(fixture.sceneFactory.instanceScale.x) <= 1.0e-7f ||
-                std::abs(fixture.sceneFactory.instanceScale.y) <= 1.0e-7f ||
-                std::abs(fixture.sceneFactory.instanceScale.z) <= 1.0e-7f) {
-                throw std::runtime_error("Benchmark instance spacing/scale must be finite and scale must be nonzero: " +
-                    fixture.id);
-            }
-            const uint64_t instanceCount = benchmarkInstanceCount(
-                fixture.sceneFactory.instanceGrid);
-            if (instanceCount == 0) {
-                throw std::runtime_error("Benchmark instance count is out of range: " + fixture.id);
-            }
-            if (factory.contains("instance_scale_override")) {
-                const Json& scaleOverride = factory.at(
-                    "instance_scale_override");
-                fixture.sceneFactory.instanceScaleOverrideEnabled = true;
-                fixture.sceneFactory.instanceScaleOverrideIndex =
-                    scaleOverride.at("instance_index").get<size_t>();
-                fixture.sceneFactory.instanceScaleOverride = readVec3(
-                    scaleOverride.at("scale"),
-                    "scene_factory.instance_scale_override.scale");
-                const glm::vec3& scale =
-                    fixture.sceneFactory.instanceScaleOverride;
-                if (fixture.sceneFactory.instanceScaleOverrideIndex >=
-                        instanceCount ||
-                    !finiteVec3(scale) ||
-                    std::abs(scale.x) <= 1.0e-7f ||
-                    std::abs(scale.y) <= 1.0e-7f ||
-                    std::abs(scale.z) <= 1.0e-7f) {
                     throw std::runtime_error(
-                        "Invalid benchmark instance-scale override: " +
+                        "Unsupported benchmark instance submission: " +
                         fixture.id);
                 }
-            }
-            if (factory.contains("object_motion")) {
-                const Json& motion = factory.at("object_motion");
-                fixture.sceneFactory.animateInstances = motion.value("enabled", false);
-                fixture.sceneFactory.motionAmplitude = motion.value("amplitude", 0.0f);
-                fixture.sceneFactory.motionPeriodFrames = motion.value("period_frames", 1ull);
-                if (!std::isfinite(fixture.sceneFactory.motionAmplitude) ||
-                    (fixture.sceneFactory.animateInstances &&
-                        fixture.sceneFactory.motionPeriodFrames == 0)) {
-                    throw std::runtime_error("Benchmark motion period must be nonzero: " + fixture.id);
+                if (!finiteVec3(fixture.sceneFactory.instanceSpacing) ||
+                    !finiteVec3(fixture.sceneFactory.instanceScale) ||
+                    std::abs(fixture.sceneFactory.instanceScale.x) <= 1.0e-7f ||
+                    std::abs(fixture.sceneFactory.instanceScale.y) <= 1.0e-7f ||
+                    std::abs(fixture.sceneFactory.instanceScale.z) <= 1.0e-7f) {
+                    throw std::runtime_error("Benchmark instance spacing/scale must be finite and scale must be nonzero: " +
+                        fixture.id);
                 }
-                if (motion.contains("step")) {
-                    const Json& step = motion.at("step");
-                    fixture.sceneFactory.objectStepEnabled = true;
-                    fixture.sceneFactory.objectStepInstanceIndex =
-                        step.at("instance_index").get<size_t>();
-                    fixture.sceneFactory.objectStepFrame =
-                        step.at("frame").get<uint64_t>();
-                    fixture.sceneFactory.objectStepOffset = readVec3(
-                        step.at("offset"), "object_motion.step.offset");
-                    if (fixture.sceneFactory.objectStepInstanceIndex >= instanceCount ||
-                        !finiteVec3(fixture.sceneFactory.objectStepOffset)) {
+                const uint64_t instanceCount = benchmarkInstanceCount(
+                    fixture.sceneFactory.instanceGrid);
+                if (instanceCount == 0) {
+                    throw std::runtime_error("Benchmark instance count is out of range: " + fixture.id);
+                }
+                if (factory.contains("instance_scale_override")) {
+                    const Json& scaleOverride = factory.at(
+                        "instance_scale_override");
+                    fixture.sceneFactory.instanceScaleOverrideEnabled = true;
+                    fixture.sceneFactory.instanceScaleOverrideIndex =
+                        scaleOverride.at("instance_index").get<size_t>();
+                    fixture.sceneFactory.instanceScaleOverride = readVec3(
+                        scaleOverride.at("scale"),
+                        "scene_factory.instance_scale_override.scale");
+                    const glm::vec3& scale =
+                        fixture.sceneFactory.instanceScaleOverride;
+                    if (fixture.sceneFactory.instanceScaleOverrideIndex >=
+                            instanceCount ||
+                        !finiteVec3(scale) ||
+                        std::abs(scale.x) <= 1.0e-7f ||
+                        std::abs(scale.y) <= 1.0e-7f ||
+                        std::abs(scale.z) <= 1.0e-7f) {
                         throw std::runtime_error(
-                            "Invalid benchmark object-motion step: " + fixture.id);
+                            "Invalid benchmark instance-scale override: " +
+                            fixture.id);
                     }
                 }
-            }
-            if (factory.contains("object_visibility")) {
-                const Json& visibility = factory.at("object_visibility");
-                const Json& step = visibility.at("step");
-                fixture.sceneFactory.objectVisibilityStepEnabled = true;
-                fixture.sceneFactory.objectVisibilityStepInstanceIndex =
-                    step.at("instance_index").get<size_t>();
-                fixture.sceneFactory.objectVisibilityStepFrame =
-                    step.at("frame").get<uint64_t>();
-                fixture.sceneFactory.objectVisibilityAfterStep =
-                    step.at("enabled").get<bool>();
-                if (fixture.sceneFactory.objectVisibilityStepInstanceIndex >=
-                        instanceCount) {
+                if (factory.contains("object_motion")) {
+                    const Json& motion = factory.at("object_motion");
+                    fixture.sceneFactory.animateInstances = motion.value("enabled", false);
+                    fixture.sceneFactory.motionAmplitude = motion.value("amplitude", 0.0f);
+                    fixture.sceneFactory.motionPeriodFrames = motion.value("period_frames", 1ull);
+                    if (!std::isfinite(fixture.sceneFactory.motionAmplitude) ||
+                        (fixture.sceneFactory.animateInstances &&
+                            fixture.sceneFactory.motionPeriodFrames == 0)) {
+                        throw std::runtime_error("Benchmark motion period must be nonzero: " + fixture.id);
+                    }
+                    if (motion.contains("step")) {
+                        const Json& step = motion.at("step");
+                        fixture.sceneFactory.objectStepEnabled = true;
+                        fixture.sceneFactory.objectStepInstanceIndex =
+                            step.at("instance_index").get<size_t>();
+                        fixture.sceneFactory.objectStepFrame =
+                            step.at("frame").get<uint64_t>();
+                        fixture.sceneFactory.objectStepOffset = readVec3(
+                            step.at("offset"), "object_motion.step.offset");
+                        if (fixture.sceneFactory.objectStepInstanceIndex >= instanceCount ||
+                            !finiteVec3(fixture.sceneFactory.objectStepOffset)) {
+                            throw std::runtime_error(
+                                "Invalid benchmark object-motion step: " + fixture.id);
+                        }
+                    }
+                }
+                if (factory.contains("object_visibility")) {
+                    const Json& visibility = factory.at("object_visibility");
+                    const Json& step = visibility.at("step");
+                    fixture.sceneFactory.objectVisibilityStepEnabled = true;
+                    fixture.sceneFactory.objectVisibilityStepInstanceIndex =
+                        step.at("instance_index").get<size_t>();
+                    fixture.sceneFactory.objectVisibilityStepFrame =
+                        step.at("frame").get<uint64_t>();
+                    fixture.sceneFactory.objectVisibilityAfterStep =
+                        step.at("enabled").get<bool>();
+                    if (fixture.sceneFactory.objectVisibilityStepInstanceIndex >=
+                            instanceCount) {
+                        throw std::runtime_error(
+                            "Invalid benchmark object-visibility step: " +
+                            fixture.id);
+                    }
+                }
+                if (fixture.sceneFactory.renderInstanceBatch &&
+                    (fixture.sceneFactory.animateInstances ||
+                        fixture.sceneFactory.objectStepEnabled ||
+                        fixture.sceneFactory.objectVisibilityStepEnabled ||
+                        fixture.sceneFactory.instanceScaleOverrideEnabled)) {
                     throw std::runtime_error(
-                        "Invalid benchmark object-visibility step: " +
+                        "Render-batch benchmark per-instance overrides are not implemented: " +
                         fixture.id);
                 }
             }
-            if (fixture.sceneFactory.renderInstanceBatch &&
-                (fixture.sceneFactory.animateInstances ||
-                    fixture.sceneFactory.objectStepEnabled ||
-                    fixture.sceneFactory.objectVisibilityStepEnabled ||
-                    fixture.sceneFactory.instanceScaleOverrideEnabled)) {
-                throw std::runtime_error(
-                    "Render-batch benchmark per-instance overrides are not implemented: " +
+            if (factory.contains("camera_motion") &&
+                factory.at("camera_motion").contains("path")) {
+                const Json& motion = factory.at("camera_motion");
+                requireKnownKeys(motion, { "path" }, "camera_motion with a path",
                     fixture.id);
+                readCameraPath(motion.at("path"), fixture.camera,
+                    fixture.sceneFactory, fixture.id);
             }
-            if (factory.contains("camera_motion")) {
+            else if (factory.contains("camera_motion")) {
                 const Json& motion = factory.at("camera_motion");
                 fixture.sceneFactory.cameraVelocityPerFrame = readVec3(
                     motion.value("velocity_per_frame", Json::array({ 0.0, 0.0, 0.0 })),
@@ -502,6 +908,23 @@ namespace Iridium {
 
     BenchmarkCameraPose evaluateBenchmarkCamera(const BenchmarkFixture& fixture,
         uint64_t frameIndex) noexcept {
+        const BenchmarkSceneFactory& factory = fixture.sceneFactory;
+        if (factory.cameraPathEnabled) {
+            const std::vector<BenchmarkCameraKeyframe>& keyframes =
+                factory.cameraPathKeyframes;
+            const uint64_t localFrame = factory.cameraPathPeriodFrames != 0u
+                ? frameIndex % factory.cameraPathPeriodFrames : frameIndex;
+            const auto [index, weight] = keyframeSegment(keyframes, localFrame,
+                [&factory](const BenchmarkCameraKeyframe& keyframe) {
+                    return std::ranges::find(factory.cameraPathCuts,
+                        keyframe.frame) != factory.cameraPathCuts.end();
+                });
+            const BenchmarkCameraKeyframe& from = keyframes[index];
+            if (weight == 0.0f) return { from.position, from.target };
+            const BenchmarkCameraKeyframe& to = keyframes[index + 1u];
+            return { glm::mix(from.position, to.position, weight),
+                glm::mix(from.target, to.target, weight) };
+        }
         BenchmarkCameraPose pose{ fixture.camera.position, fixture.camera.target };
         uint64_t segmentFrame = frameIndex;
         if (fixture.sceneFactory.cameraCutEnabled &&
@@ -520,6 +943,74 @@ namespace Iridium {
         }
         pose.position += offset;
         pose.target += offset;
+        return pose;
+    }
+
+    uint64_t evaluateBenchmarkViewHistoryResetRevision(
+        const BenchmarkFixture& fixture, uint64_t frameIndex) noexcept {
+        const BenchmarkSceneFactory& factory = fixture.sceneFactory;
+        if (!factory.cameraPathEnabled) {
+            return factory.cameraCutEnabled &&
+                frameIndex >= factory.cameraCutFrame ? 1u : 0u;
+        }
+        const uint64_t period = factory.cameraPathPeriodFrames;
+        const uint64_t cycles = period != 0u ? frameIndex / period : 0u;
+        const uint64_t localFrame = period != 0u ? frameIndex % period
+            : frameIndex;
+        uint64_t revision = 0;
+        for (const uint64_t cut : factory.cameraPathCuts) {
+            // A frame-0 cut is the periodic wrap: it first occurs at `period`.
+            if (cut == 0u) revision += cycles;
+            else revision += cycles + (cut <= localFrame ? 1u : 0u);
+        }
+        return revision;
+    }
+
+    BenchmarkEntityPose evaluateBenchmarkCompositionEntity(
+        const BenchmarkCompositionEntity& entity, uint64_t frameIndex) noexcept {
+        BenchmarkEntityPose pose{ entity.translation, entity.rotationDegrees,
+            entity.scale, false };
+        const BenchmarkEntityMotion& motion = entity.motion;
+        const uint64_t localFrame = motion.periodFrames != 0u
+            ? frameIndex % motion.periodFrames : frameIndex;
+        const bool wrapped = motion.periodFrames != 0u && localFrame == 0u &&
+            frameIndex != 0u;
+        switch (motion.kind) {
+        case BenchmarkEntityMotionKind::None:
+            break;
+        case BenchmarkEntityMotionKind::Linear:
+            pose.translation += motion.velocityPerFrame *
+                static_cast<float>(localFrame);
+            pose.teleported = wrapped &&
+                motion.velocityPerFrame != glm::vec3(0.0f);
+            break;
+        case BenchmarkEntityMotionKind::Rotation: {
+            const double degrees = std::fmod(
+                static_cast<double>(motion.rotationDegreesPerFrame) *
+                    static_cast<double>(frameIndex), 360.0);
+            if (degrees != 0.0) {
+                const Matrix3d spin = axisAngle(glm::dvec3(motion.rotationAxis),
+                    degrees * std::numbers::pi / 180.0);
+                pose.rotationDegrees = toEulerZyx(multiply(spin,
+                    eulerZyx(entity.rotationDegrees)));
+            }
+            break;
+        }
+        case BenchmarkEntityMotionKind::Keyframes: {
+            const auto [index, weight] = keyframeSegment(motion.keyframes,
+                localFrame, [](const BenchmarkTranslationKeyframe& keyframe) {
+                    return keyframe.teleport;
+                });
+            const BenchmarkTranslationKeyframe& from = motion.keyframes[index];
+            pose.translation = weight == 0.0f ? from.translation
+                : glm::mix(from.translation,
+                    motion.keyframes[index + 1u].translation, weight);
+            pose.teleported = (index > 0u && from.frame == localFrame &&
+                    from.teleport) ||
+                (wrapped && motion.keyframes.front().teleport);
+            break;
+        }
+        }
         return pose;
     }
 

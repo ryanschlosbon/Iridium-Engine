@@ -13,6 +13,7 @@
 #include <cmath>
 #include <filesystem>
 #include <limits>
+#include <map>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -112,8 +113,123 @@ namespace Iridium {
         }
     }
 
+    namespace {
+        // A composition entity draws one top-level glTF node of the startup
+        // model: a non-owning view sharing the cooked model's geometry,
+        // materials and textures (the AssetManager material-preview pattern).
+        // Each view is a distinct ModelAsset address, which is the identity
+        // extraction and the GPU-scene observation key per-model state on.
+        std::shared_ptr<ModelAsset> makeModelNodeView(const ModelAsset& model,
+            uint32_t sourceNode) {
+            auto view = std::make_shared<ModelAsset>(model);
+            view->ownsGeometry = view->ownsMaterials = view->ownsTextures =
+                false;
+            view->ownedTextures.clear();
+            view->subMeshes.clear();
+            view->lodChains.clear();
+            view->totalIndices = 0;
+            for (const SubMesh& subMesh : model.subMeshes) {
+                if (subMesh.sourceNode != sourceNode) continue;
+                view->subMeshes.push_back(subMesh);
+                view->totalIndices += subMesh.indexCount;
+                for (const ModelLodChain& chain : model.lodChains) {
+                    if (chain.basePrimitiveGuid == subMesh.primitiveGuid)
+                        view->lodChains.push_back(chain);
+                }
+            }
+            if (view->subMeshes.empty()) {
+                throw std::invalid_argument(
+                    "Composition entity names glTF node " +
+                    std::to_string(sourceNode) +
+                    ", which has no cooked primitives in the startup model");
+            }
+            return view;
+        }
+
+        // Stable identity: a fixed UUIDv7 timestamp per ordinal plus a hash
+        // of the fixture and entity IDs, so it survives ECS index reuse and
+        // differs between fixtures.
+        SceneEntityUuid compositionEntityUuid(const std::string& fixtureId,
+            const std::string& entityId, uint32_t ordinal) {
+            uint64_t hash = 1469598103934665603ull;
+            for (const std::string* text : { &fixtureId, &entityId }) {
+                for (const unsigned char character : *text) {
+                    hash = (hash ^ character) * 1099511628211ull;
+                }
+                hash = (hash ^ 0xffu) * 1099511628211ull;
+            }
+            std::array<uint8_t, 10> random{ 0x49, 0x52 };
+            for (size_t byte = 0; byte < sizeof(hash); ++byte) {
+                random[2 + byte] = static_cast<uint8_t>(hash >> (byte * 8u));
+            }
+            return SceneEntityUuid::fromUuidV7Fields(
+                1'775'000'600'000ull + ordinal, random);
+        }
+
+        void applyCompositionPose(TransformComponent& transform,
+            const BenchmarkEntityPose& pose) {
+            if (transform.position == pose.translation &&
+                transform.rotation == pose.rotationDegrees &&
+                transform.scale == pose.scale) return;
+            transform.position = pose.translation;
+            transform.rotation = pose.rotationDegrees;
+            transform.scale = pose.scale;
+            transform.isDirty = true;
+        }
+    }
+
+    void QualificationHarness::constructBenchmarkComposition(
+        AppStartupContext& context) {
+        if (!context.mainModel) {
+            throw std::logic_error(
+                "Composition benchmark requires a loaded startup model");
+        }
+        SceneWorld& sceneWorld = context.scene;
+        Registry& registry = sceneWorld.registry();
+        const std::vector<BenchmarkCompositionEntity>& entities =
+            benchmark_->sceneFactory.compositionEntities;
+        std::map<uint32_t, std::shared_ptr<ModelAsset>> nodeViews;
+        benchmarkInstances_.reserve(benchmarkInstances_.size() +
+            entities.size());
+        Entity firstEntity = NULL_ENTITY;
+        for (uint32_t ordinal = 0; ordinal < entities.size(); ++ordinal) {
+            const BenchmarkCompositionEntity& spec = entities[ordinal];
+            std::shared_ptr<ModelAsset>& view = nodeViews[spec.sourceNode];
+            if (!view) view = makeModelNodeView(*context.mainModel,
+                spec.sourceNode);
+            const Entity entity = sceneWorld.createEntity(
+                compositionEntityUuid(benchmark_->id, spec.id, ordinal));
+            registry.addComponent<NameComponent>(entity).name =
+                "Benchmark " + spec.id;
+            auto& transform = registry.addComponent<TransformComponent>(entity);
+            const BenchmarkEntityPose pose =
+                evaluateBenchmarkCompositionEntity(spec, 0);
+            applyCompositionPose(transform, pose);
+            transform.worldMatrix = glm::mat4(1.0f);
+            transform.isDirty = true;
+            registry.addComponent<RelationshipComponent>(entity).siblingOrder =
+                static_cast<int32_t>(ordinal);
+            auto& mesh = registry.addComponent<MeshComponent>(entity);
+            // No requestedAssetGuid: resolving it would replace the node view
+            // with the whole startup model.
+            mesh.model = view;
+            mesh.assetGuid = context.startupModelGuid;
+            mesh.enabled = true;
+            if (firstEntity == NULL_ENTITY) firstEntity = entity;
+            benchmarkInstances_.push_back({ entity, pose.translation });
+        }
+        context.firstEntity = firstEntity;
+        context.initialSelection = options_.selectBenchmarkEntity
+            ? firstEntity : NULL_ENTITY;
+    }
+
     void QualificationHarness::constructBenchmarkScene(
         AppStartupContext& context) {
+        if (benchmark_->sceneFactory.kind ==
+            BenchmarkSceneFactoryKind::Composition) {
+            constructBenchmarkComposition(context);
+            return;
+        }
         Registry& registry = context.scene.registry();
         const std::shared_ptr<ModelAsset>& mainModel = context.mainModel;
         const AssetGuid startupModelGuid = context.startupModelGuid;
@@ -543,6 +659,24 @@ namespace Iridium {
         const uint64_t frameIndex = context.applicationFrameIndex;
         Registry& registry = context.scene.registry();
         const BenchmarkSceneFactory& factory = benchmark_->sceneFactory;
+        if (factory.kind == BenchmarkSceneFactoryKind::Composition) {
+            auto* transforms = registry.getPool<TransformComponent>();
+            const std::vector<BenchmarkCompositionEntity>& entities =
+                factory.compositionEntities;
+            for (size_t index = 0; transforms != nullptr &&
+                    index < entities.size() &&
+                    index < benchmarkInstances_.size(); ++index) {
+                BenchmarkInstanceState& instance = benchmarkInstances_[index];
+                if (entities[index].motion.kind ==
+                        BenchmarkEntityMotionKind::None ||
+                    !transforms->has(instance.entity)) continue;
+                const BenchmarkEntityPose pose =
+                    evaluateBenchmarkCompositionEntity(entities[index],
+                        frameIndex);
+                instance.teleportedThisFrame = pose.teleported;
+                applyCompositionPose(transforms->get(instance.entity), pose);
+            }
+        }
         if (factory.animateInstances || factory.objectStepEnabled) {
             auto* transforms = registry.getPool<TransformComponent>();
             if (transforms != nullptr) {
@@ -583,8 +717,7 @@ namespace Iridium {
         context.camera.position = camera.position;
         context.camera.front = glm::normalize(camera.target - camera.position);
         context.requests.viewHistoryResetRevision =
-            factory.cameraCutEnabled &&
-                frameIndex >= factory.cameraCutFrame ? 1u : 0u;
+            evaluateBenchmarkViewHistoryResetRevision(*benchmark_, frameIndex);
     }
 
 } // namespace Iridium

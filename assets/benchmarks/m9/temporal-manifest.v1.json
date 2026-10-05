@@ -1,0 +1,2058 @@
+{
+  "schema_version": 1,
+  "generator": "Iridium Engine M9 G6b deterministic temporal fixture generator v1",
+  "fixtures": [
+    {
+      "id": "m9_tf_thin_v1",
+      "revision": 1,
+      "required": true,
+      "source_asset": "temporal_thin.gltf",
+      "environment": {
+        "kind": "procedural_constant",
+        "constant_linear_rgb": [
+          0.05,
+          0.06,
+          0.08
+        ]
+      },
+      "camera": {
+        "id": "m9_tf_thin_camera_v1",
+        "position": [
+          0.0,
+          1.6,
+          6.0
+        ],
+        "target": [
+          0.0,
+          1.5,
+          0.0
+        ],
+        "up": [
+          0.0,
+          1.0,
+          0.0
+        ],
+        "vertical_fov_degrees": 40.0,
+        "near": 0.05,
+        "far": 120.0
+      },
+      "scene_factory": {
+        "kind": "composition",
+        "entities": [
+          {
+            "id": "ground",
+            "node": 0
+          },
+          {
+            "id": "fence",
+            "node": 1
+          },
+          {
+            "id": "wires",
+            "node": 2,
+            "transform": {
+              "translation": [
+                0.0,
+                0.0,
+                -0.6
+              ]
+            }
+          }
+        ],
+        "camera_motion": {
+          "path": {
+            "period_frames": 480,
+            "keyframes": [
+              {
+                "frame": 0,
+                "position": [
+                  -0.8,
+                  1.6,
+                  6.0
+                ],
+                "target": [
+                  -0.8,
+                  1.5,
+                  0.0
+                ]
+              },
+              {
+                "frame": 240,
+                "position": [
+                  0.8,
+                  1.6,
+                  6.0
+                ],
+                "target": [
+                  0.8,
+                  1.5,
+                  0.0
+                ]
+              },
+              {
+                "frame": 480,
+                "position": [
+                  -0.8,
+                  1.6,
+                  6.0
+                ],
+                "target": [
+                  -0.8,
+                  1.5,
+                  0.0
+                ]
+              }
+            ]
+          }
+        }
+      },
+      "lights": [
+        {
+          "type": "directional",
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation_degrees": [
+            50.0,
+            160.0,
+            0.0
+          ],
+          "color_linear_rec709": [
+            1.0,
+            0.96,
+            0.9
+          ],
+          "illuminance_lux": 80000.0,
+          "range_meters": 1.0,
+          "casts_shadows": true,
+          "shadow_quality": "ultra",
+          "priority": 1
+        }
+      ],
+      "output_label": "m9_tf_thin_v1",
+      "warmup_frames": 120,
+      "measured_frames": 600,
+      "content_files": [
+        {
+          "path": "temporal_thin.gltf",
+          "sha256": "1dea2250f30ede03693871aca6af1bb491cf7696c754fea8ecb245d80b9f845e"
+        },
+        {
+          "path": "temporal_thin.gltf.iridium.meta",
+          "sha256": "cef394e24bdb9732ebf6e727452ef9868f64661ae6ac26991d594bb76bcb9a6e"
+        }
+      ],
+      "expected_behavior": [
+        "A 6 m grille (8 mm bars left, 3 mm bars right, 4 cm pitch) and 0.5-3 mm wires fill the native-4K view under a slow lateral camera pan.",
+        "Thin coverage is continuous: no bar or wire breaks into dashes, crawls or flickers as it slides across pixels.",
+        "The 4 mm ground grid lines and 16 mm checker cells stay stable rather than aliasing into moire."
+      ],
+      "unavailable_capabilities": []
+    },
+    {
+      "id": "m9_tf_foliage_v1",
+      "revision": 1,
+      "required": true,
+      "source_asset": "temporal_foliage.gltf",
+      "environment": {
+        "kind": "procedural_constant",
+        "constant_linear_rgb": [
+          0.06,
+          0.07,
+          0.09
+        ]
+      },
+      "camera": {
+        "id": "m9_tf_foliage_camera_v1",
+        "position": [
+          0.0,
+          1.3,
+          4.2
+        ],
+        "target": [
+          0.0,
+          0.9,
+          0.0
+        ],
+        "up": [
+          0.0,
+          1.0,
+          0.0
+        ],
+        "vertical_fov_degrees": 40.0,
+        "near": 0.05,
+        "far": 120.0
+      },
+      "scene_factory": {
+        "kind": "composition",
+        "entities": [
+          {
+            "id": "ground",
+            "node": 0
+          },
+          {
+            "id": "bush_turning",
+            "node": 1,
+            "transform": {
+              "translation": [
+                -0.9,
+                0.0,
+                0.0
+              ]
+            },
+            "motion": {
+              "kind": "rotation",
+              "axis": [
+                0.0,
+                1.0,
+                0.0
+              ],
+              "degrees_per_frame": 0.15
+            }
+          },
+          {
+            "id": "bush_static",
+            "node": 2,
+            "transform": {
+              "translation": [
+                1.5,
+                0.0,
+                -0.8
+              ]
+            }
+          },
+          {
+            "id": "wall",
+            "node": 3,
+            "transform": {
+              "translation": [
+                0.0,
+                0.0,
+                -3.0
+              ]
+            }
+          }
+        ]
+      },
+      "lights": [
+        {
+          "type": "directional",
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation_degrees": [
+            50.0,
+            160.0,
+            0.0
+          ],
+          "color_linear_rec709": [
+            1.0,
+            0.96,
+            0.9
+          ],
+          "illuminance_lux": 80000.0,
+          "range_meters": 1.0,
+          "casts_shadows": true,
+          "shadow_quality": "ultra",
+          "priority": 1
+        }
+      ],
+      "output_label": "m9_tf_foliage_v1",
+      "warmup_frames": 120,
+      "measured_frames": 600,
+      "content_files": [
+        {
+          "path": "temporal_foliage.gltf",
+          "sha256": "14cacd9ac5c3a15ac5b235d0f1ea3bda9486275d4759d1fc831f717c0507bda6"
+        },
+        {
+          "path": "temporal_foliage.gltf.iridium.meta",
+          "sha256": "0d1e102d91a71461019790125245ae42e1330e9d0356b1eb13008c53b634c08e"
+        }
+      ],
+      "expected_behavior": [
+        "72 + 40 alpha-mask leaf cards (binary alpha, cutoff 0.5) cover most of the view in front of a colour-band wall.",
+        "The turning bush keeps crisp, stable mask edges with no shimmering, ghosted leaves or smeared background between cards.",
+        "The static bush is stable frame to frame."
+      ],
+      "unavailable_capabilities": []
+    },
+    {
+      "id": "m9_tf_disocclude_v1",
+      "revision": 1,
+      "required": true,
+      "source_asset": "temporal_disocclude.gltf",
+      "environment": {
+        "kind": "procedural_constant",
+        "constant_linear_rgb": [
+          0.05,
+          0.06,
+          0.08
+        ]
+      },
+      "camera": {
+        "id": "m9_tf_disocclude_camera_v1",
+        "position": [
+          0.0,
+          1.4,
+          7.0
+        ],
+        "target": [
+          0.0,
+          1.2,
+          0.0
+        ],
+        "up": [
+          0.0,
+          1.0,
+          0.0
+        ],
+        "vertical_fov_degrees": 40.0,
+        "near": 0.05,
+        "far": 120.0
+      },
+      "scene_factory": {
+        "kind": "composition",
+        "entities": [
+          {
+            "id": "ground",
+            "node": 0
+          },
+          {
+            "id": "wall",
+            "node": 1,
+            "transform": {
+              "translation": [
+                0.0,
+                0.0,
+                -2.5
+              ]
+            }
+          },
+          {
+            "id": "props",
+            "node": 2,
+            "transform": {
+              "translation": [
+                0.0,
+                0.0,
+                -0.5
+              ]
+            }
+          },
+          {
+            "id": "occluder",
+            "node": 3,
+            "transform": {
+              "translation": [
+                -3.5,
+                0.0,
+                1.5
+              ]
+            },
+            "motion": {
+              "kind": "keyframes",
+              "period_frames": 240,
+              "keyframes": [
+                {
+                  "frame": 0,
+                  "translation": [
+                    -3.5,
+                    0.0,
+                    1.5
+                  ]
+                },
+                {
+                  "frame": 120,
+                  "translation": [
+                    3.5,
+                    0.0,
+                    1.5
+                  ]
+                },
+                {
+                  "frame": 240,
+                  "translation": [
+                    -3.5,
+                    0.0,
+                    1.5
+                  ]
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "lights": [
+        {
+          "type": "directional",
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation_degrees": [
+            50.0,
+            160.0,
+            0.0
+          ],
+          "color_linear_rec709": [
+            1.0,
+            0.96,
+            0.9
+          ],
+          "illuminance_lux": 80000.0,
+          "range_meters": 1.0,
+          "casts_shadows": true,
+          "shadow_quality": "ultra",
+          "priority": 1
+        }
+      ],
+      "output_label": "m9_tf_disocclude_v1",
+      "warmup_frames": 120,
+      "measured_frames": 600,
+      "content_files": [
+        {
+          "path": "temporal_disocclude.gltf",
+          "sha256": "435a97bc93877a02d4e643fcf1a9802325b0837ffff55ee760cc6f0d97aa6b80"
+        },
+        {
+          "path": "temporal_disocclude.gltf.iridium.meta",
+          "sha256": "2318c76346c8de9635629f25778b5eaea183af70bf69fbf0d92a5d0a4411b1df"
+        }
+      ],
+      "expected_behavior": [
+        "A 2.4 m x 2.6 m matte slab sweeps 7 m across the view every 120 frames in front of props, a colour-band wall and a high-frequency floor.",
+        "Disoccluded regions behind the slab's trailing edge recover the background without a red trail or ghost.",
+        "The leading edge never smears background over the slab."
+      ],
+      "unavailable_capabilities": []
+    },
+    {
+      "id": "m9_tf_pan_v1",
+      "revision": 1,
+      "required": true,
+      "source_asset": "temporal_pan.gltf",
+      "environment": {
+        "kind": "procedural_constant",
+        "constant_linear_rgb": [
+          0.06,
+          0.07,
+          0.09
+        ]
+      },
+      "camera": {
+        "id": "m9_tf_pan_camera_v1",
+        "position": [
+          0.0,
+          1.6,
+          8.0
+        ],
+        "target": [
+          -6.0,
+          1.2,
+          0.0
+        ],
+        "up": [
+          0.0,
+          1.0,
+          0.0
+        ],
+        "vertical_fov_degrees": 40.0,
+        "near": 0.05,
+        "far": 120.0
+      },
+      "scene_factory": {
+        "kind": "composition",
+        "entities": [
+          {
+            "id": "ground",
+            "node": 0
+          },
+          {
+            "id": "fence",
+            "node": 1,
+            "transform": {
+              "translation": [
+                0.0,
+                0.0,
+                -1.0
+              ]
+            }
+          },
+          {
+            "id": "props",
+            "node": 2,
+            "transform": {
+              "translation": [
+                0.0,
+                0.0,
+                1.2
+              ]
+            }
+          },
+          {
+            "id": "sphere",
+            "node": 3,
+            "transform": {
+              "translation": [
+                -3.2,
+                1.0,
+                2.2
+              ]
+            }
+          },
+          {
+            "id": "wall",
+            "node": 4,
+            "transform": {
+              "translation": [
+                0.0,
+                0.0,
+                -4.0
+              ]
+            }
+          }
+        ],
+        "camera_motion": {
+          "path": {
+            "period_frames": 240,
+            "cuts": [
+              0,
+              90,
+              180
+            ],
+            "keyframes": [
+              {
+                "frame": 0,
+                "position": [
+                  0.0,
+                  1.6,
+                  8.0
+                ],
+                "target": [
+                  -6.0,
+                  1.2,
+                  0.0
+                ]
+              },
+              {
+                "frame": 30,
+                "position": [
+                  0.0,
+                  1.6,
+                  8.0
+                ],
+                "target": [
+                  -6.0,
+                  1.2,
+                  0.0
+                ]
+              },
+              {
+                "frame": 89,
+                "position": [
+                  0.0,
+                  1.6,
+                  8.0
+                ],
+                "target": [
+                  6.0,
+                  1.2,
+                  0.0
+                ]
+              },
+              {
+                "frame": 90,
+                "position": [
+                  6.0,
+                  2.5,
+                  5.0
+                ],
+                "target": [
+                  0.0,
+                  1.0,
+                  0.0
+                ]
+              },
+              {
+                "frame": 179,
+                "position": [
+                  4.5,
+                  2.2,
+                  4.0
+                ],
+                "target": [
+                  0.0,
+                  1.0,
+                  0.0
+                ]
+              },
+              {
+                "frame": 180,
+                "position": [
+                  -5.0,
+                  1.2,
+                  6.0
+                ],
+                "target": [
+                  0.0,
+                  1.0,
+                  0.0
+                ]
+              },
+              {
+                "frame": 239,
+                "position": [
+                  -4.2,
+                  1.3,
+                  6.6
+                ],
+                "target": [
+                  0.0,
+                  1.0,
+                  0.0
+                ]
+              }
+            ]
+          }
+        }
+      },
+      "lights": [
+        {
+          "type": "directional",
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation_degrees": [
+            50.0,
+            160.0,
+            0.0
+          ],
+          "color_linear_rec709": [
+            1.0,
+            0.96,
+            0.9
+          ],
+          "illuminance_lux": 80000.0,
+          "range_meters": 1.0,
+          "casts_shadows": true,
+          "shadow_quality": "ultra",
+          "priority": 1
+        }
+      ],
+      "output_label": "m9_tf_pan_v1",
+      "warmup_frames": 120,
+      "measured_frames": 600,
+      "content_files": [
+        {
+          "path": "temporal_pan.gltf",
+          "sha256": "ee2bdb661478f99315b887c37795218ebef56b9bbc48071c488a941657d1f537"
+        },
+        {
+          "path": "temporal_pan.gltf.iridium.meta",
+          "sha256": "14dcaf021ea4f319cdbb0e18fa875b61f115510abb0c076075ec7290e197abe6"
+        }
+      ],
+      "expected_behavior": [
+        "Hold 30 frames, then a fast 74-degree yaw pan in 59 frames (about 1.25 degrees per frame), then cuts at frames 90, 180 and every period wrap (240).",
+        "Each cut bumps the view history-reset revision to the cut ordinal; no pre-cut content ghosts into the first post-cut frame.",
+        "During the pan, the grille and floor resolve without smearing or excessive blur; history rejection, not accumulation, dominates."
+      ],
+      "unavailable_capabilities": []
+    },
+    {
+      "id": "m9_tf_emissive_v1",
+      "revision": 1,
+      "required": true,
+      "source_asset": "temporal_emissive.gltf",
+      "environment": {
+        "kind": "procedural_constant",
+        "constant_linear_rgb": [
+          0.01,
+          0.01,
+          0.015
+        ]
+      },
+      "camera": {
+        "id": "m9_tf_emissive_camera_v1",
+        "position": [
+          0.0,
+          1.5,
+          6.0
+        ],
+        "target": [
+          0.0,
+          1.4,
+          0.0
+        ],
+        "up": [
+          0.0,
+          1.0,
+          0.0
+        ],
+        "vertical_fov_degrees": 40.0,
+        "near": 0.05,
+        "far": 120.0
+      },
+      "scene_factory": {
+        "kind": "composition",
+        "entities": [
+          {
+            "id": "ground",
+            "node": 0
+          },
+          {
+            "id": "wall",
+            "node": 1,
+            "transform": {
+              "translation": [
+                0.0,
+                0.0,
+                -2.0
+              ]
+            }
+          },
+          {
+            "id": "bar",
+            "node": 2,
+            "transform": {
+              "translation": [
+                -3.0,
+                1.2,
+                0.5
+              ]
+            },
+            "motion": {
+              "kind": "keyframes",
+              "period_frames": 180,
+              "keyframes": [
+                {
+                  "frame": 0,
+                  "translation": [
+                    -3.0,
+                    1.2,
+                    0.5
+                  ]
+                },
+                {
+                  "frame": 90,
+                  "translation": [
+                    3.0,
+                    1.2,
+                    0.5
+                  ]
+                },
+                {
+                  "frame": 180,
+                  "translation": [
+                    -3.0,
+                    1.2,
+                    0.5
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "id": "spinner",
+            "node": 3,
+            "transform": {
+              "translation": [
+                0.0,
+                2.4,
+                -0.5
+              ]
+            },
+            "motion": {
+              "kind": "rotation",
+              "axis": [
+                0.0,
+                0.0,
+                1.0
+              ],
+              "degrees_per_frame": 2.0
+            }
+          }
+        ]
+      },
+      "lights": [
+        {
+          "type": "directional",
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation_degrees": [
+            50.0,
+            160.0,
+            0.0
+          ],
+          "color_linear_rec709": [
+            1.0,
+            0.96,
+            0.9
+          ],
+          "illuminance_lux": 20000.0,
+          "range_meters": 1.0,
+          "casts_shadows": true,
+          "shadow_quality": "ultra",
+          "priority": 1
+        }
+      ],
+      "output_label": "m9_tf_emissive_v1",
+      "warmup_frames": 120,
+      "measured_frames": 600,
+      "content_files": [
+        {
+          "path": "temporal_emissive.gltf",
+          "sha256": "d2a35d45741756c069bbf13545ac905cdfdbcaab3828223dd24b4dbcfb94e095"
+        },
+        {
+          "path": "temporal_emissive.gltf.iridium.meta",
+          "sha256": "42663ad049fa3f7b8bc88ec0f83baf31630aa65793a9b4f4b43d01d7a82aabc6"
+        }
+      ],
+      "expected_behavior": [
+        "An emissive bar (strength 40) sweeps 6 m every 90 frames and a cyan emissive cross (strength 25) spins 2 degrees per frame over a dim scene.",
+        "Moving emissive surfaces leave no bright trails and do not dim or flicker from history clamping.",
+        "Emissive light does not illuminate other surfaces (emission is surface radiance only)."
+      ],
+      "unavailable_capabilities": []
+    },
+    {
+      "id": "m9_tf_glass_v1",
+      "revision": 1,
+      "required": true,
+      "source_asset": "temporal_glass.gltf",
+      "environment": {
+        "kind": "procedural_constant",
+        "constant_linear_rgb": [
+          0.06,
+          0.07,
+          0.09
+        ]
+      },
+      "camera": {
+        "id": "m9_tf_glass_camera_v1",
+        "position": [
+          0.0,
+          1.4,
+          6.0
+        ],
+        "target": [
+          0.0,
+          1.2,
+          0.0
+        ],
+        "up": [
+          0.0,
+          1.0,
+          0.0
+        ],
+        "vertical_fov_degrees": 40.0,
+        "near": 0.05,
+        "far": 120.0
+      },
+      "scene_factory": {
+        "kind": "composition",
+        "entities": [
+          {
+            "id": "ground",
+            "node": 0
+          },
+          {
+            "id": "wall",
+            "node": 1,
+            "transform": {
+              "translation": [
+                0.0,
+                0.0,
+                -2.5
+              ]
+            }
+          },
+          {
+            "id": "props",
+            "node": 2,
+            "transform": {
+              "translation": [
+                0.0,
+                0.0,
+                -0.5
+              ]
+            }
+          },
+          {
+            "id": "glass",
+            "node": 3,
+            "transform": {
+              "translation": [
+                -2.5,
+                1.2,
+                1.5
+              ]
+            },
+            "motion": {
+              "kind": "keyframes",
+              "period_frames": 240,
+              "keyframes": [
+                {
+                  "frame": 0,
+                  "translation": [
+                    -2.5,
+                    1.2,
+                    1.5
+                  ]
+                },
+                {
+                  "frame": 120,
+                  "translation": [
+                    2.5,
+                    1.2,
+                    1.5
+                  ]
+                },
+                {
+                  "frame": 240,
+                  "translation": [
+                    -2.5,
+                    1.2,
+                    1.5
+                  ]
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "lights": [
+        {
+          "type": "directional",
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation_degrees": [
+            50.0,
+            160.0,
+            0.0
+          ],
+          "color_linear_rec709": [
+            1.0,
+            0.96,
+            0.9
+          ],
+          "illuminance_lux": 80000.0,
+          "range_meters": 1.0,
+          "casts_shadows": true,
+          "shadow_quality": "ultra",
+          "priority": 1
+        }
+      ],
+      "output_label": "m9_tf_glass_v1",
+      "warmup_frames": 120,
+      "measured_frames": 600,
+      "content_files": [
+        {
+          "path": "temporal_glass.gltf",
+          "sha256": "c9def80ae44a0b6212989922c1871c918d9f15abad2e0bd24ea43250e4d57c98"
+        },
+        {
+          "path": "temporal_glass.gltf.iridium.meta",
+          "sha256": "7a99572f783225217a0e9d3673321d735341a33b3b5680ed93348b08042e6b2a"
+        }
+      ],
+      "expected_behavior": [
+        "A framed 2 m x 1.5 m blue-tinted thin-glass panel (transmission 1, IOR 1.5, roughness 0.1, thin_glass policy) slides 5 m every 120 frames in front of props and a colour-band wall.",
+        "Content seen through the moving glass stays sharp and correctly placed: no ghosted copies of the background, no smearing at the frame edges.",
+        "Glass writes no depth, so reprojection behind it follows the opaque background."
+      ],
+      "unavailable_capabilities": []
+    },
+    {
+      "id": "m9_tf_specular_v1",
+      "revision": 1,
+      "required": true,
+      "source_asset": "temporal_specular.gltf",
+      "environment": {
+        "kind": "procedural_constant",
+        "constant_linear_rgb": [
+          0.2,
+          0.22,
+          0.26
+        ]
+      },
+      "camera": {
+        "id": "m9_tf_specular_camera_v1",
+        "position": [
+          0.0,
+          1.8,
+          5.5
+        ],
+        "target": [
+          0.0,
+          1.0,
+          0.0
+        ],
+        "up": [
+          0.0,
+          1.0,
+          0.0
+        ],
+        "vertical_fov_degrees": 40.0,
+        "near": 0.05,
+        "far": 120.0
+      },
+      "scene_factory": {
+        "kind": "composition",
+        "entities": [
+          {
+            "id": "ground",
+            "node": 0
+          },
+          {
+            "id": "sphere",
+            "node": 1,
+            "transform": {
+              "translation": [
+                -1.3,
+                1.0,
+                0.0
+              ]
+            }
+          },
+          {
+            "id": "torus",
+            "node": 2,
+            "transform": {
+              "translation": [
+                1.4,
+                1.1,
+                0.0
+              ]
+            },
+            "motion": {
+              "kind": "rotation",
+              "axis": [
+                0.3,
+                1.0,
+                0.2
+              ],
+              "degrees_per_frame": 0.25
+            }
+          },
+          {
+            "id": "balls",
+            "node": 3,
+            "transform": {
+              "translation": [
+                0.0,
+                0.0,
+                1.4
+              ]
+            }
+          }
+        ],
+        "camera_motion": {
+          "path": {
+            "period_frames": 1440,
+            "keyframes": [
+              {
+                "frame": 0,
+                "position": [
+                  0.0,
+                  1.8,
+                  5.5
+                ],
+                "target": [
+                  0.0,
+                  1.0,
+                  0.0
+                ]
+              },
+              {
+                "frame": 40,
+                "position": [
+                  0.9551,
+                  1.8,
+                  5.4164
+                ],
+                "target": [
+                  0.0,
+                  1.0,
+                  0.0
+                ]
+              },
+              {
+                "frame": 80,
+                "position": [
+                  1.8811,
+                  1.8,
+                  5.1683
+                ],
+                "target": [
+                  0.0,
+                  1.0,
+                  0.0
+                ]
+              },
+              {
+                "frame": 120,
+                "position": [
+                  2.75,
+                  1.8,
+                  4.7631
+                ],
+                "target": [
+                  0.0,
+                  1.0,
+                  0.0
+                ]
+              },
+              {
+                "frame": 160,
+                "position": [
+                  3.5353,
+                  1.8,
+                  4.2132
+                ],
+                "target": [
+                  0.0,
+                  1.0,
+                  0.0
+                ]
+              },
+              {
+                "frame": 200,
+                "position": [
+                  4.2132,
+                  1.8,
+                  3.5353
+                ],
+                "target": [
+                  0.0,
+                  1.0,
+                  0.0
+                ]
+              },
+              {
+                "frame": 240,
+                "position": [
+                  4.7631,
+                  1.8,
+                  2.75
+                ],
+                "target": [
+                  0.0,
+                  1.0,
+                  0.0
+                ]
+              },
+              {
+                "frame": 280,
+                "position": [
+                  5.1683,
+                  1.8,
+                  1.8811
+                ],
+                "target": [
+                  0.0,
+                  1.0,
+                  0.0
+                ]
+              },
+              {
+                "frame": 320,
+                "position": [
+                  5.4164,
+                  1.8,
+                  0.9551
+                ],
+                "target": [
+                  0.0,
+                  1.0,
+                  0.0
+                ]
+              },
+              {
+                "frame": 360,
+                "position": [
+                  5.5,
+                  1.8,
+                  0.0
+                ],
+                "target": [
+                  0.0,
+                  1.0,
+                  0.0
+                ]
+              },
+              {
+                "frame": 400,
+                "position": [
+                  5.4164,
+                  1.8,
+                  -0.9551
+                ],
+                "target": [
+                  0.0,
+                  1.0,
+                  0.0
+                ]
+              },
+              {
+                "frame": 440,
+                "position": [
+                  5.1683,
+                  1.8,
+                  -1.8811
+                ],
+                "target": [
+                  0.0,
+                  1.0,
+                  0.0
+                ]
+              },
+              {
+                "frame": 480,
+                "position": [
+                  4.7631,
+                  1.8,
+                  -2.75
+                ],
+                "target": [
+                  0.0,
+                  1.0,
+                  0.0
+                ]
+              },
+              {
+                "frame": 520,
+                "position": [
+                  4.2132,
+                  1.8,
+                  -3.5353
+                ],
+                "target": [
+                  0.0,
+                  1.0,
+                  0.0
+                ]
+              },
+              {
+                "frame": 560,
+                "position": [
+                  3.5353,
+                  1.8,
+                  -4.2132
+                ],
+                "target": [
+                  0.0,
+                  1.0,
+                  0.0
+                ]
+              },
+              {
+                "frame": 600,
+                "position": [
+                  2.75,
+                  1.8,
+                  -4.7631
+                ],
+                "target": [
+                  0.0,
+                  1.0,
+                  0.0
+                ]
+              },
+              {
+                "frame": 640,
+                "position": [
+                  1.8811,
+                  1.8,
+                  -5.1683
+                ],
+                "target": [
+                  0.0,
+                  1.0,
+                  0.0
+                ]
+              },
+              {
+                "frame": 680,
+                "position": [
+                  0.9551,
+                  1.8,
+                  -5.4164
+                ],
+                "target": [
+                  0.0,
+                  1.0,
+                  0.0
+                ]
+              },
+              {
+                "frame": 720,
+                "position": [
+                  0.0,
+                  1.8,
+                  -5.5
+                ],
+                "target": [
+                  0.0,
+                  1.0,
+                  0.0
+                ]
+              },
+              {
+                "frame": 760,
+                "position": [
+                  -0.9551,
+                  1.8,
+                  -5.4164
+                ],
+                "target": [
+                  0.0,
+                  1.0,
+                  0.0
+                ]
+              },
+              {
+                "frame": 800,
+                "position": [
+                  -1.8811,
+                  1.8,
+                  -5.1683
+                ],
+                "target": [
+                  0.0,
+                  1.0,
+                  0.0
+                ]
+              },
+              {
+                "frame": 840,
+                "position": [
+                  -2.75,
+                  1.8,
+                  -4.7631
+                ],
+                "target": [
+                  0.0,
+                  1.0,
+                  0.0
+                ]
+              },
+              {
+                "frame": 880,
+                "position": [
+                  -3.5353,
+                  1.8,
+                  -4.2132
+                ],
+                "target": [
+                  0.0,
+                  1.0,
+                  0.0
+                ]
+              },
+              {
+                "frame": 920,
+                "position": [
+                  -4.2132,
+                  1.8,
+                  -3.5353
+                ],
+                "target": [
+                  0.0,
+                  1.0,
+                  0.0
+                ]
+              },
+              {
+                "frame": 960,
+                "position": [
+                  -4.7631,
+                  1.8,
+                  -2.75
+                ],
+                "target": [
+                  0.0,
+                  1.0,
+                  0.0
+                ]
+              },
+              {
+                "frame": 1000,
+                "position": [
+                  -5.1683,
+                  1.8,
+                  -1.8811
+                ],
+                "target": [
+                  0.0,
+                  1.0,
+                  0.0
+                ]
+              },
+              {
+                "frame": 1040,
+                "position": [
+                  -5.4164,
+                  1.8,
+                  -0.9551
+                ],
+                "target": [
+                  0.0,
+                  1.0,
+                  0.0
+                ]
+              },
+              {
+                "frame": 1080,
+                "position": [
+                  -5.5,
+                  1.8,
+                  0.0
+                ],
+                "target": [
+                  0.0,
+                  1.0,
+                  0.0
+                ]
+              },
+              {
+                "frame": 1120,
+                "position": [
+                  -5.4164,
+                  1.8,
+                  0.9551
+                ],
+                "target": [
+                  0.0,
+                  1.0,
+                  0.0
+                ]
+              },
+              {
+                "frame": 1160,
+                "position": [
+                  -5.1683,
+                  1.8,
+                  1.8811
+                ],
+                "target": [
+                  0.0,
+                  1.0,
+                  0.0
+                ]
+              },
+              {
+                "frame": 1200,
+                "position": [
+                  -4.7631,
+                  1.8,
+                  2.75
+                ],
+                "target": [
+                  0.0,
+                  1.0,
+                  0.0
+                ]
+              },
+              {
+                "frame": 1240,
+                "position": [
+                  -4.2132,
+                  1.8,
+                  3.5353
+                ],
+                "target": [
+                  0.0,
+                  1.0,
+                  0.0
+                ]
+              },
+              {
+                "frame": 1280,
+                "position": [
+                  -3.5353,
+                  1.8,
+                  4.2132
+                ],
+                "target": [
+                  0.0,
+                  1.0,
+                  0.0
+                ]
+              },
+              {
+                "frame": 1320,
+                "position": [
+                  -2.75,
+                  1.8,
+                  4.7631
+                ],
+                "target": [
+                  0.0,
+                  1.0,
+                  0.0
+                ]
+              },
+              {
+                "frame": 1360,
+                "position": [
+                  -1.8811,
+                  1.8,
+                  5.1683
+                ],
+                "target": [
+                  0.0,
+                  1.0,
+                  0.0
+                ]
+              },
+              {
+                "frame": 1400,
+                "position": [
+                  -0.9551,
+                  1.8,
+                  5.4164
+                ],
+                "target": [
+                  0.0,
+                  1.0,
+                  0.0
+                ]
+              },
+              {
+                "frame": 1440,
+                "position": [
+                  0.0,
+                  1.8,
+                  5.5
+                ],
+                "target": [
+                  0.0,
+                  1.0,
+                  0.0
+                ]
+              }
+            ]
+          }
+        }
+      },
+      "lights": [
+        {
+          "type": "directional",
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation_degrees": [
+            50.0,
+            160.0,
+            0.0
+          ],
+          "color_linear_rec709": [
+            1.0,
+            0.96,
+            0.9
+          ],
+          "illuminance_lux": 80000.0,
+          "range_meters": 1.0,
+          "casts_shadows": true,
+          "shadow_quality": "ultra",
+          "priority": 1
+        }
+      ],
+      "output_label": "m9_tf_specular_v1",
+      "warmup_frames": 120,
+      "measured_frames": 600,
+      "content_files": [
+        {
+          "path": "temporal_specular.gltf",
+          "sha256": "51182fbb93a540642f09bc4dc11d93900699717e922cb2aa7ba9023c7039c3d3"
+        },
+        {
+          "path": "temporal_specular.gltf.iridium.meta",
+          "sha256": "4ff5d7f5b5def1e0cffa99f3043be6406eacbf8b16f5e68c14bc73b6694da498"
+        }
+      ],
+      "expected_behavior": [
+        "A chrome sphere (roughness 0.04), a turning gold torus (0.12) and fifteen 12 cm mirror spheres (0.02) under a sun, with a full slow camera orbit every 1440 frames.",
+        "Sun highlights on the curved low-roughness surfaces stay stable: no sparkle, crawling or popping as they slide across pixels."
+      ],
+      "unavailable_capabilities": []
+    },
+    {
+      "id": "m9_tf_static_v1",
+      "revision": 1,
+      "required": true,
+      "source_asset": "temporal_static.gltf",
+      "environment": {
+        "kind": "procedural_constant",
+        "constant_linear_rgb": [
+          0.06,
+          0.07,
+          0.09
+        ]
+      },
+      "camera": {
+        "id": "m9_tf_static_camera_v1",
+        "position": [
+          0.5,
+          1.7,
+          6.5
+        ],
+        "target": [
+          0.0,
+          1.2,
+          0.0
+        ],
+        "up": [
+          0.0,
+          1.0,
+          0.0
+        ],
+        "vertical_fov_degrees": 40.0,
+        "near": 0.05,
+        "far": 120.0
+      },
+      "scene_factory": {
+        "kind": "composition",
+        "entities": [
+          {
+            "id": "ground",
+            "node": 0
+          },
+          {
+            "id": "fence",
+            "node": 1,
+            "transform": {
+              "translation": [
+                0.0,
+                0.0,
+                -1.5
+              ]
+            }
+          },
+          {
+            "id": "wires",
+            "node": 2,
+            "transform": {
+              "translation": [
+                0.0,
+                0.0,
+                -1.8
+              ]
+            }
+          },
+          {
+            "id": "bush",
+            "node": 3,
+            "transform": {
+              "translation": [
+                -1.6,
+                0.0,
+                0.4
+              ]
+            }
+          },
+          {
+            "id": "sphere",
+            "node": 4,
+            "transform": {
+              "translation": [
+                1.6,
+                1.0,
+                0.0
+              ]
+            }
+          },
+          {
+            "id": "balls",
+            "node": 5,
+            "transform": {
+              "translation": [
+                0.2,
+                0.0,
+                1.5
+              ]
+            }
+          }
+        ]
+      },
+      "lights": [
+        {
+          "type": "directional",
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation_degrees": [
+            50.0,
+            160.0,
+            0.0
+          ],
+          "color_linear_rec709": [
+            1.0,
+            0.96,
+            0.9
+          ],
+          "illuminance_lux": 80000.0,
+          "range_meters": 1.0,
+          "casts_shadows": true,
+          "shadow_quality": "ultra",
+          "priority": 1
+        }
+      ],
+      "output_label": "m9_tf_static_v1",
+      "warmup_frames": 120,
+      "measured_frames": 600,
+      "content_files": [
+        {
+          "path": "temporal_static.gltf",
+          "sha256": "70a0bb3a7dec1de8d5bf52565e8332d07b9a52b031d3b246bb85acbfd6bb9475"
+        },
+        {
+          "path": "temporal_static.gltf.iridium.meta",
+          "sha256": "57a400cbeca3c88321f6f1b6727eecb20435891c5ff90f9cd8436ebb9060a275"
+        }
+      ],
+      "expected_behavior": [
+        "Static camera and content: thin bars and wires, alpha-mask foliage, a chrome sphere, mirror spheres and a high-frequency floor.",
+        "With temporal AA the converged image is stable: per-pixel frame-to-frame luma change approaches zero (jitter must not read as flicker)."
+      ],
+      "unavailable_capabilities": []
+    },
+    {
+      "id": "m9_tf_hdr_v1",
+      "revision": 1,
+      "required": true,
+      "source_asset": "temporal_hdr.gltf",
+      "environment": {
+        "kind": "procedural_constant",
+        "constant_linear_rgb": [
+          0.004,
+          0.004,
+          0.005
+        ]
+      },
+      "camera": {
+        "id": "m9_tf_hdr_camera_v1",
+        "position": [
+          0.0,
+          1.0,
+          4.5
+        ],
+        "target": [
+          0.0,
+          1.0,
+          0.0
+        ],
+        "up": [
+          0.0,
+          1.0,
+          0.0
+        ],
+        "vertical_fov_degrees": 40.0,
+        "near": 0.05,
+        "far": 120.0
+      },
+      "scene_factory": {
+        "kind": "composition",
+        "entities": [
+          {
+            "id": "ground",
+            "node": 0
+          },
+          {
+            "id": "plate",
+            "node": 1,
+            "transform": {
+              "translation": [
+                0.0,
+                0.85,
+                -0.1
+              ]
+            }
+          },
+          {
+            "id": "highlights",
+            "node": 2,
+            "transform": {
+              "translation": [
+                0.0,
+                1.0,
+                0.0
+              ]
+            },
+            "motion": {
+              "kind": "keyframes",
+              "period_frames": 240,
+              "keyframes": [
+                {
+                  "frame": 0,
+                  "translation": [
+                    0.0,
+                    1.0,
+                    0.0
+                  ]
+                },
+                {
+                  "frame": 120,
+                  "translation": [
+                    0.04,
+                    1.0,
+                    0.0
+                  ]
+                },
+                {
+                  "frame": 240,
+                  "translation": [
+                    0.0,
+                    1.0,
+                    0.0
+                  ]
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "lights": [
+        {
+          "type": "directional",
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation_degrees": [
+            50.0,
+            160.0,
+            0.0
+          ],
+          "color_linear_rec709": [
+            1.0,
+            0.96,
+            0.9
+          ],
+          "illuminance_lux": 5000.0,
+          "range_meters": 1.0,
+          "casts_shadows": true,
+          "shadow_quality": "ultra",
+          "priority": 1
+        }
+      ],
+      "output_label": "m9_tf_hdr_v1",
+      "warmup_frames": 120,
+      "measured_frames": 600,
+      "content_files": [
+        {
+          "path": "temporal_hdr.gltf",
+          "sha256": "418fb6642c880070000286a2aba39f7fa721efcba0b11b4af98073b87a45ddd9"
+        },
+        {
+          "path": "temporal_hdr.gltf.iridium.meta",
+          "sha256": "bb66b8d79932ea8cd7e7f3360afa3a800df63d10c6ad253cff0cc9ea46cf698d"
+        }
+      ],
+      "expected_behavior": [
+        "65 emissive points (strength 64, 512 and 4096; radius 10 mm down to 0.75 mm) over a dark plate, drifting 4 cm (about 0.2 px per frame).",
+        "Sub-pixel super-bright points neither flicker (fireflies) nor vanish; their integrated energy is stable frame to frame.",
+        "Bloom and exposure adaptation (when enabled) stay stable on the small highlights."
+      ],
+      "unavailable_capabilities": []
+    },
+    {
+      "id": "m9_tf_teleport_v1",
+      "revision": 1,
+      "required": true,
+      "source_asset": "temporal_teleport.gltf",
+      "environment": {
+        "kind": "procedural_constant",
+        "constant_linear_rgb": [
+          0.05,
+          0.06,
+          0.08
+        ]
+      },
+      "camera": {
+        "id": "m9_tf_teleport_camera_v1",
+        "position": [
+          0.0,
+          1.5,
+          7.0
+        ],
+        "target": [
+          0.0,
+          0.8,
+          0.0
+        ],
+        "up": [
+          0.0,
+          1.0,
+          0.0
+        ],
+        "vertical_fov_degrees": 40.0,
+        "near": 0.05,
+        "far": 120.0
+      },
+      "scene_factory": {
+        "kind": "composition",
+        "entities": [
+          {
+            "id": "ground",
+            "node": 0
+          },
+          {
+            "id": "wall",
+            "node": 1,
+            "transform": {
+              "translation": [
+                0.0,
+                0.0,
+                -2.5
+              ]
+            }
+          },
+          {
+            "id": "cube",
+            "node": 2,
+            "transform": {
+              "translation": [
+                -3.2,
+                0.6,
+                0.8
+              ]
+            },
+            "motion": {
+              "kind": "keyframes",
+              "period_frames": 240,
+              "keyframes": [
+                {
+                  "frame": 0,
+                  "translation": [
+                    -3.2,
+                    0.6,
+                    0.8
+                  ],
+                  "teleport": true
+                },
+                {
+                  "frame": 60,
+                  "translation": [
+                    -0.8,
+                    0.6,
+                    0.8
+                  ]
+                },
+                {
+                  "frame": 61,
+                  "translation": [
+                    1.6,
+                    0.6,
+                    0.8
+                  ],
+                  "teleport": true
+                },
+                {
+                  "frame": 120,
+                  "translation": [
+                    3.2,
+                    0.6,
+                    0.8
+                  ]
+                },
+                {
+                  "frame": 121,
+                  "translation": [
+                    0.0,
+                    0.6,
+                    -0.6
+                  ],
+                  "teleport": true
+                },
+                {
+                  "frame": 180,
+                  "translation": [
+                    0.0,
+                    0.6,
+                    1.8
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "id": "props",
+            "node": 3,
+            "transform": {
+              "translation": [
+                0.0,
+                0.0,
+                -1.2
+              ]
+            }
+          }
+        ]
+      },
+      "lights": [
+        {
+          "type": "directional",
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation_degrees": [
+            50.0,
+            160.0,
+            0.0
+          ],
+          "color_linear_rec709": [
+            1.0,
+            0.96,
+            0.9
+          ],
+          "illuminance_lux": 80000.0,
+          "range_meters": 1.0,
+          "casts_shadows": true,
+          "shadow_quality": "ultra",
+          "priority": 1
+        }
+      ],
+      "output_label": "m9_tf_teleport_v1",
+      "warmup_frames": 120,
+      "measured_frames": 600,
+      "content_files": [
+        {
+          "path": "temporal_teleport.gltf",
+          "sha256": "1a384d9fdd5864c0837778df93fa1a282ded6ada664b41ae05651799836cb9ac"
+        },
+        {
+          "path": "temporal_teleport.gltf.iridium.meta",
+          "sha256": "09b58438159406fa6aa40a34ad16b165520039a8a64df9ed0dbeea940668c46d"
+        }
+      ],
+      "expected_behavior": [
+        "A colour-band cube moves, then teleports 2.4 m at frame 61, again at frame 121 and at every period wrap (240); the evaluated pose flags each teleport.",
+        "Neither the cube's old position nor its old appearance ghosts after a teleport; per-instance history resets on the flagged frames."
+      ],
+      "unavailable_capabilities": []
+    }
+  ]
+}

@@ -1,0 +1,76 @@
+{
+  "schemaVersion": 1,
+  "assetGuid": "01a19000-0002-7000-8000-c3749b7421d5",
+  "assetType": "iridium.model",
+  "importer": {
+    "id": "iridium.gltf-model",
+    "version": 7
+  },
+  "settings": {
+    "schemaVersion": 2,
+    "values": {
+      "bake_node_transforms": true,
+      "generate_missing_tangents": true,
+      "import_scale": 1.0,
+      "preserve_rt_geometry": true,
+      "transparency_execution_mode": "classified",
+      "transparency_policies": {}
+    }
+  },
+  "subassets": [
+    {
+      "guid": "01a19000-0002-7004-8000-b5ed91ec3924",
+      "assetType": "iridium.texture",
+      "sourceKey": "images/0"
+    },
+    {
+      "guid": "01a19000-0002-7005-8000-a29777979ea1",
+      "assetType": "iridium.texture",
+      "sourceKey": "images/1"
+    },
+    {
+      "guid": "01a19000-0002-7006-8000-d67fb6957d6c",
+      "assetType": "iridium.texture",
+      "sourceKey": "images/2"
+    },
+    {
+      "guid": "01a19000-0002-7001-8000-e94f62089420",
+      "assetType": "iridium.material",
+      "sourceKey": "materials/0"
+    },
+    {
+      "guid": "01a19000-0002-7002-8000-5beefa4ef30b",
+      "assetType": "iridium.material",
+      "sourceKey": "materials/1"
+    },
+    {
+      "guid": "01a19000-0002-7003-8000-c2f83cc2d0b4",
+      "assetType": "iridium.material",
+      "sourceKey": "materials/2"
+    },
+    {
+      "guid": "01a19000-0002-7007-8000-8c33afa8185b",
+      "assetType": "iridium.model-primitive",
+      "sourceKey": "nodes/0/meshes/0/primitives/0"
+    },
+    {
+      "guid": "01a19000-0002-7008-8000-bd216494eb85",
+      "assetType": "iridium.model-primitive",
+      "sourceKey": "nodes/1/meshes/1/primitives/0"
+    },
+    {
+      "guid": "01a19000-0002-7009-8000-47b78481287a",
+      "assetType": "iridium.model-primitive",
+      "sourceKey": "nodes/2/meshes/2/primitives/0"
+    },
+    {
+      "guid": "01a19000-0002-700a-8000-db0fc15a3e93",
+      "assetType": "iridium.model-primitive",
+      "sourceKey": "nodes/3/meshes/3/primitives/0"
+    }
+  ],
+  "tags": [
+    "m9-g6b-fixture",
+    "tracked"
+  ]
+}

@@ -1,0 +1,81 @@
+{
+  "schemaVersion": 1,
+  "assetGuid": "01a19000-0007-7000-8000-a71e2d06af0a",
+  "assetType": "iridium.model",
+  "importer": {
+    "id": "iridium.gltf-model",
+    "version": 7
+  },
+  "settings": {
+    "schemaVersion": 2,
+    "values": {
+      "bake_node_transforms": true,
+      "generate_missing_tangents": true,
+      "import_scale": 1.0,
+      "preserve_rt_geometry": true,
+      "transparency_execution_mode": "classified",
+      "transparency_policies": {}
+    }
+  },
+  "subassets": [
+    {
+      "guid": "01a19000-0007-7006-8000-efd72622616a",
+      "assetType": "iridium.texture",
+      "sourceKey": "images/0"
+    },
+    {
+      "guid": "01a19000-0007-7001-8000-c92ce273a61a",
+      "assetType": "iridium.material",
+      "sourceKey": "materials/0"
+    },
+    {
+      "guid": "01a19000-0007-7002-8000-7db3dbd1a8f1",
+      "assetType": "iridium.material",
+      "sourceKey": "materials/1"
+    },
+    {
+      "guid": "01a19000-0007-7003-8000-4931e1abd0bc",
+      "assetType": "iridium.material",
+      "sourceKey": "materials/2"
+    },
+    {
+      "guid": "01a19000-0007-7004-8000-0bfaea5fffe8",
+      "assetType": "iridium.material",
+      "sourceKey": "materials/3"
+    },
+    {
+      "guid": "01a19000-0007-7005-8000-708cb5f4cdfa",
+      "assetType": "iridium.material",
+      "sourceKey": "materials/4"
+    },
+    {
+      "guid": "01a19000-0007-7007-8000-094e9bcd2dd4",
+      "assetType": "iridium.model-primitive",
+      "sourceKey": "nodes/0/meshes/0/primitives/0"
+    },
+    {
+      "guid": "01a19000-0007-7008-8000-56a1c970b549",
+      "assetType": "iridium.model-primitive",
+      "sourceKey": "nodes/1/meshes/1/primitives/0"
+    },
+    {
+      "guid": "01a19000-0007-7009-8000-60c1ad540b38",
+      "assetType": "iridium.model-primitive",
+      "sourceKey": "nodes/2/meshes/2/primitives/0"
+    },
+    {
+      "guid": "01a19000-0007-700a-8000-302a076b1da2",
+      "assetType": "iridium.model-primitive",
+      "sourceKey": "nodes/3/meshes/3/primitives/0"
+    },
+    {
+      "guid": "01a19000-0007-700b-8000-1b5481b6e959",
+      "assetType": "iridium.model-primitive",
+      "sourceKey": "nodes/3/meshes/3/primitives/1"
+    }
+  ],
+  "tags": [
+    "m9-g6b-fixture",
+    "tracked"
+  ]
+}

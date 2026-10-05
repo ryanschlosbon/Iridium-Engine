@@ -100,6 +100,10 @@ namespace Iridium {
         struct BenchmarkInstanceState {
             Entity entity = NULL_ENTITY;
             glm::vec3 basePosition{ 0.0f };
+            // Composition fixtures: this frame's evaluated pose is a teleport
+            // (BenchmarkEntityPose::teleported). Recorded for the M9
+            // per-instance history reset; nothing consumes it yet.
+            bool teleportedThisFrame = false;
         };
         // Requests decided at PostSceneUpdate and issued inside the open frame. A
         // frame lost to a swapchain recreate in beginFrame loses them, as before.
@@ -116,6 +120,7 @@ namespace Iridium {
         void checkPreconditions(AppStartupContext& context);
         void recordTopologyBaselines(AppStartupContext& context);
         void constructBenchmarkScene(AppStartupContext& context);
+        void constructBenchmarkComposition(AppStartupContext& context);
         void constructGeneratedLights(AppStartupContext& context);
         void constructProbeValidationEntities(AppStartupContext& context);
         void allocateResidencyChurnProbe(AppStartupContext& context);
