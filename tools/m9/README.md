@@ -15,7 +15,9 @@ See [Temporal-Metrics.md](Temporal-Metrics.md) for the formulas and the CLI.
 ## Motion evaluation (M9.2d)
 
 `Run-MotionEvaluation.ps1` captures a fixed frame plan of each moving fixture: pan cut and
-recovery, disocclusion, teleport, moving glass, and one moving pair each for the others.
+recovery, disocclusion, teleport, moving glass, moving transparency over a still backdrop
+(TF-reactive, M9.3), and one moving pair each for the others. In a git worktree, both scripts
+also use references found under the main checkout's `out/m9/motion/ref64`.
 For every planned frame it also captures a 64-phase accumulation reference held at that
 frame, under `out/m9/motion/ref64` (shared by all candidates and reused). The candidate
 set goes under `out/m9/motion/<Label>`. Runs resume: existing references and ranges are
