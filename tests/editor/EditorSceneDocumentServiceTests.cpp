@@ -76,7 +76,10 @@ namespace {
         Iridium::SceneWorld world;
         Iridium::EditorSceneDocumentService service(world);
         CHECK(service.ready());
+        CHECK(service.openRevision() == 0u);
         CHECK(service.open(valid));
+        // M9.6: an opened document cuts temporal view history.
+        CHECK(service.openRevision() == 1u);
         const Entity loaded = world.registry().aliveEntities().front();
         CHECK(world.registry().getComponent<NameComponent>(loaded).name == "Loaded");
         const auto path = service.currentPath();
@@ -84,6 +87,7 @@ namespace {
         CHECK(!service.dirty());
 
         CHECK(!service.open(invalid));
+        CHECK(service.openRevision() == 1u);
         CHECK(service.currentPath() == path);
         CHECK(service.currentState() == token);
         CHECK(!service.dirty());

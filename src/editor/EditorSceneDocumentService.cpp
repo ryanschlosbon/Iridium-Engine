@@ -174,6 +174,7 @@ namespace Iridium {
         // No document/path/token state changes occur before this atomic world swap.
         SourceSceneDocument adoptedDocument = staged.staging->document;
         commitStagedSourceScene(world_, *staged.staging);
+        ++openRevision_;
         document_ = std::move(adoptedDocument);
         sceneAssetGuid_ = metadata.metadata->assetGuid;
         currentPath_ = adoptedPath.lexically_normal();

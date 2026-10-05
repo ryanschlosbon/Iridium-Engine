@@ -165,6 +165,10 @@ namespace Iridium {
 
     AssetIntegration::~AssetIntegration() = default;
 
+    uint64_t AssetIntegration::sceneOpenRevision() const noexcept {
+        return sceneDocumentService_.openRevision();
+    }
+
     AssetManager& AssetIntegration::createAssetManager(IRenderBackend& backend,
         IEditorRenderBridge* editorBridge,
         TransparencyExecutionMode transparencyExecutionMode,

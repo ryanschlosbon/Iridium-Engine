@@ -60,6 +60,9 @@ namespace Iridium {
         [[nodiscard]] const std::filesystem::path& currentPath() const noexcept {
             return currentPath_;
         }
+        // Advances whenever a document replaces the world (open, recovery):
+        // temporal view history does not carry across scenes (M9.6).
+        [[nodiscard]] uint64_t openRevision() const noexcept { return openRevision_; }
         [[nodiscard]] std::filesystem::path backupPath() const;
         [[nodiscard]] const SourceSceneDocument& document() const noexcept {
             return document_;
@@ -106,6 +109,7 @@ namespace Iridium {
         SceneDocumentStateToken nextState_ = 2;
         SceneDocumentStateToken currentState_ = 1;
         SceneDocumentStateToken savedState_ = 0;
+        uint64_t openRevision_ = 0;
         std::vector<SceneDiagnostic> diagnostics_;
         std::string operationDiagnostic_;
         EditorSceneHistoryObserver* historyObserver_ = nullptr;

@@ -383,7 +383,9 @@ namespace Iridium {
             .manualExposureEv = config_.manualExposureEv,
             .paperWhiteNits = config_.paperWhiteNits,
             .peakNits = config_.peakNits,
-            .viewHistoryResetRevision = frameRequests_.viewHistoryResetRevision,
+            // A benchmark's cut schedule, plus one revision per scene opened.
+            .viewHistoryResetRevision = frameRequests_.viewHistoryResetRevision.value_or(0u) +
+                assets_.sceneOpenRevision(),
             .temporalJitter = config_.temporalJitter.value_or(
                 config_.antiAliasing == AntiAliasingMode::Taa),
             .temporalJitterSequenceLength = config_.temporalJitterSequenceLength,
