@@ -35,13 +35,14 @@ namespace Iridium {
     };
 
     // M9.2 native TAA parameters (taa_resolve.comp). Defaults are the best
-    // measured against the 64-sample reference (M9 plan, TAA tuning s2-s4).
+    // measured against the 64-sample references, held and in motion (M9 plan,
+    // TAA tuning s2-s8 and the motion sweeps).
     struct TemporalAntiAliasingTuning {
-        float minimumHistoryWeight = 0.88f;
+        float minimumHistoryWeight = 0.70f;
         float maximumHistoryWeight = 0.97f;
-        float motionPixelsForMinimum = 32.0f;
+        float motionPixelsForMinimum = 2.0f;
         float varianceGamma = 1.0f;
-        float reconstructionSharpness = 3.0f;
+        float reconstructionSharpness = 6.0f;
         // Clip half-width for still pixels (blended toward varianceGamma
         // as motion grows to one pixel).
         float staticVarianceGamma = 3.0f;

@@ -12,6 +12,20 @@ from scene-linear PFM and final-SDR TGA captures:
 
 See [Temporal-Metrics.md](Temporal-Metrics.md) for the formulas and the CLI.
 
+## Motion evaluation (M9.2d)
+
+`Run-MotionEvaluation.ps1` captures a fixed frame plan of each moving fixture: pan cut and
+recovery, disocclusion, teleport, moving glass, and one moving pair each for the others.
+For every planned frame it also captures a 64-phase accumulation reference held at that
+frame, under `out/m9/motion/ref64` (shared by all candidates and reused). The candidate
+set goes under `out/m9/motion/<Label>`. Runs resume: existing references and ranges are
+skipped. Each 4K reference writes 64 PFM frames (about 6.4 GB) before averaging them, so
+leave room on the disk.
+
+`Evaluate-TemporalMotion.py --candidate L [--baseline noaa]` scores every frame against its
+held reference. It reports the tone-mapped RMSE, the share of pixels above 1/64, and the
+trail energy over the pixels whose reference changed since the previous frame.
+
 ## Feature-admission timing (G6a)
 
 `Run-FeatureAdmission.ps1` runs the feature-admission protocol from

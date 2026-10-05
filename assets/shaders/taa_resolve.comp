@@ -189,19 +189,40 @@ void main() {
     // (sub-pixel detail that appears in only some jitter phases survives);
     // moving pixels use the tight box.
     float movedPixels = length(motion * push.extent.xy);
-    float gamma = mix(push.tuning.y, push.feedback.w, clamp(movedPixels, 0.0, 1.0));
+    // Disocclusion: history alpha holds the motion (pixels) of the content
+    // that wrote it. A static background just uncovered by a moving occluder
+    // has zero motion of its own, but its history moved; such pixels are
+    // treated as moving (tight box, fresh weight), not as still ones.
+    if (historyAvailable) {
+        float historyMotion = texelFetch(historyColor,
+            clampPixel(ivec2(previousUv * push.extent.xy)), 0).a;
+        movedPixels = max(movedPixels, abs(historyMotion - movedPixels));
+    }
+    // Still-pixel trust. Jittered sub-pixel detail keeps the history near the
+    // luma range its 3x3 neighbourhood spans (a coverage-weighted mix of it); a
+    // real change on static geometry (a moving shadow, a light switching) puts
+    // the history far outside that range. Only the former keeps the wide box
+    // and the high still weight.
+    vec3 historySample = vec3(0.0);
+    float stillness = 1.0 - clamp(movedPixels, 0.0, 1.0);
+    if (historyAvailable) {
+        historySample = toYCoCg(compress(sampleHistory(previousUv), historyExposure));
+        float outside = max(max(boxMin.x - historySample.x, historySample.x - boxMax.x), 0.0);
+        float relative = outside / max(max(historySample.x, boxMax.x), 0.05);
+        stillness *= 1.0 - smoothstep(0.1, 0.3, relative);
+    }
+    float gamma = mix(push.feedback.w, push.tuning.y, stillness);
     vec3 clipMin = max(boxMin, m1 - gamma * sigma);
     vec3 clipMax = min(boxMax, m1 + gamma * sigma);
     if (push.tuning.y > push.feedback.w) {
         // A widened still-pixel box may exceed the neighbourhood min/max.
-        clipMin = mix(clipMin, m1 - gamma * sigma, clamp(1.0 - movedPixels, 0.0, 1.0));
-        clipMax = mix(clipMax, m1 + gamma * sigma, clamp(1.0 - movedPixels, 0.0, 1.0));
+        clipMin = mix(clipMin, m1 - gamma * sigma, stillness);
+        clipMax = mix(clipMax, m1 + gamma * sigma, stillness);
     }
 
     vec3 resolved = filtered;
     if (historyAvailable) {
-        vec3 history = toYCoCg(compress(sampleHistory(previousUv), historyExposure));
-        history = clipToBox(history, clipMin, clipMax);
+        vec3 history = clipToBox(historySample, clipMin, clipMax);
         // Moving content: similar lumas keep more history (Lottes), so a
         // changed surface refreshes quickly.
         float lumaCurrent = filtered.x;
@@ -215,8 +236,7 @@ void main() {
         // a fixed high weight integrates them instead of letting them flicker
         // (the clip box still rejects real changes).
         if (push.tuning.z > 0.0)
-            historyWeight = mix(historyWeight, push.tuning.z,
-                1.0 - clamp(movedPixels, 0.0, 1.0));
+            historyWeight = mix(historyWeight, push.tuning.z, stillness);
         // Motion: fresh samples matter more for moving content.
         historyWeight = mix(historyWeight, push.feedback.x,
             clamp(movedPixels / max(push.feedback.z, 1.0e-3), 0.0, 1.0));
@@ -226,5 +246,7 @@ void main() {
     vec3 linear = decompress(fromYCoCg(resolved), exposure);
     if (any(isnan(linear)) || any(isinf(linear)))
         linear = max(texelFetch(currentColor, pixel, 0).rgb, vec3(0.0));
-    imageStore(resolvedColor, pixel, vec4(linear, 1.0));
+    // Alpha: this pixel's motion in pixels (the next frame's disocclusion test;
+    // no consumer reads the resolved alpha).
+    imageStore(resolvedColor, pixel, vec4(linear, min(length(motion * push.extent.xy), 1024.0)));
 }
