@@ -162,7 +162,10 @@ namespace {
         RenderFrame frame{
             .view = makeViewTransportRecord(view, projection, eye, 0.1f, 100.0f,
                 { extent.width, extent.height }),
-            .history = { .identity = 1u },
+            // Retained views keep their own History set, as extraction gives
+            // the scene view and the asset preview (M9 G2).
+            .history = { .identity = 1u + (retainedViews ? renderView : 0u),
+                .historySet = retainedViews ? renderView : 0u },
             .output = output,
         };
         frame.submitReflectionProbeCaptures = true;
@@ -268,6 +271,15 @@ namespace {
             CHECK(bridge->sceneTextureId() != nullptr);
             for (uint32_t frame = 0; frame < 4; ++frame)
                 (void)renderFrame(*backend, bridge.get(), window.get(), frame >= 2u, 0);
+            // M9.6: alternating retained views with TAA: each view's TAA
+            // history lives in its own set (set 1 is created on first use).
+            for (uint32_t frame = 0; frame < 6; ++frame)
+                (void)renderFrame(*backend, bridge.get(), window.get(), true, frame % 2u);
+            CHECK(bridge->retainedViewTextureId(0) != bridge->retainedViewTextureId(1));
+            // M9.6: a scene resize with TAA on rebuilds every history.
+            CHECK(backend->resizeSceneRenderExtent({ 256, 144 }, diagnostic));
+            for (uint32_t frame = 0; frame < 2; ++frame)
+                (void)renderFrame(*backend, bridge.get(), window.get(), true, frame % 2u);
             CHECK(backend->setAntiAliasing(AntiAliasingMode::Taa, diagnostic));
             CHECK(backend->setAntiAliasing(AntiAliasingMode::None, diagnostic));
             for (uint32_t frame = 0; frame < 2; ++frame)
