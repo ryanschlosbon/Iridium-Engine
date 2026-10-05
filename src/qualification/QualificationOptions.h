@@ -139,6 +139,9 @@ namespace Iridium {
         bool allocationTrace = false;
         // M9 G7: deterministic probe-capture publication.
         bool probeFinalizeDrain = false;
+        // M9.5: read back the adapted exposure and histogram summary of every
+        // frame (auto-exposure only) and print them at the end of the run.
+        bool exposureTrace = false;
     };
 
     // Whether this run captures at all (--capture-frame or --capture-frames).

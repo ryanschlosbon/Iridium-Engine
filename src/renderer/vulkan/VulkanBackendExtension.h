@@ -40,6 +40,7 @@ namespace Iridium {
     class VulkanDepthPyramid;
     class VulkanResourceRegistry;
     struct VulkanImageResource;
+    struct VulkanBufferResource;
     struct VulkanIndirectScene;
 
     // Points where the backend hands an open command buffer to its extensions.
@@ -86,6 +87,10 @@ namespace Iridium {
         // TransferSource state, for FrameCapturePoint::SceneResolved.
         const VulkanImageResource* sceneResolved = nullptr;
         VkFormat sceneResolvedFormat = VK_FORMAT_UNDEFINED;
+        // M9.5 (final-capture hook, auto-exposure only): this frame's
+        // adapted state (16 B) and metering summary, in TransferSource.
+        const VulkanBufferResource* exposureState = nullptr;
+        const VulkanBufferResource* exposureMetering = nullptr;
     };
     struct VulkanOrdinary2HookPayload {
         VkExtent2D atlasExtent{};

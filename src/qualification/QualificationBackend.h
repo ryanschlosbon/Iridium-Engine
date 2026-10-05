@@ -39,6 +39,8 @@ namespace Iridium {
         // Exercise reflection-probe capture-target acquire/promote/retire at
         // backend initialization.
         bool validateProbeCaptureTargets = false;
+        // M9.5: exposure readbacks will be armed every frame.
+        bool exposureTrace = false;
     };
 
     class IQualificationBackend {
@@ -80,6 +82,15 @@ namespace Iridium {
         // of whenever the GPU happens to finish (the R4c.3 promotion race).
         // Returns whether it waited.
         virtual bool drainReflectionProbeCaptures() = 0;
+
+        // M9.5 (--qualification-exposure-trace). Armed inside the open frame;
+        // the frame's final-capture hook copies its exposure state and
+        // metering (nothing without auto-exposure). Re-arming replaces an
+        // unconsumed request. Readbacks complete when their slot retires;
+        // collection is between frames.
+        virtual void armExposureReadback(uint64_t applicationFrameIndex) = 0;
+        [[nodiscard]] virtual std::vector<ExposureReadbackSample>
+            collectExposureReadbacks(bool waitForPending) = 0;
     };
 
 } // namespace Iridium

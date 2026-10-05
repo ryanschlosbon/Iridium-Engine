@@ -2380,6 +2380,12 @@ namespace Iridium {
         finalSource.sceneResolved = &renderGraph_.image(scheduler.currentFrameIndex(),
             graphIds_.resolvedSceneColor);
         finalSource.sceneResolvedFormat = frameTargets.format();
+        if (graphIds_.exposureCurrent.isValid()) {   // M9.5
+            finalSource.exposureState = &renderGraph_.buffer(scheduler.currentFrameIndex(),
+                graphIds_.exposureCurrent);
+            finalSource.exposureMetering = &renderGraph_.buffer(
+                scheduler.currentFrameIndex(), graphIds_.exposureMetering);
+        }
         hooks_.runFinalCapture(currentCmd, finalSource,
             editor != nullptr && editor->retainedViewsEnabled());
     }

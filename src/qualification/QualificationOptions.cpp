@@ -301,6 +301,9 @@ namespace Iridium {
         addSwitch(registry, owner, "--qualification-probe-finalize-drain",
             "Publish each reflection-probe capture at the frame after it is recorded (waits for the GPU when one is pending)",
             [&q] { q.probeFinalizeDrain = true; });
+        addSwitch(registry, owner, "--qualification-exposure-trace",
+            "Read back each frame's adapted exposure and histogram summary (auto-exposure); print IRIDIUM_EXPOSURE lines",
+            [&q] { q.exposureTrace = true; });
         addSwitch(registry, owner, "--validate-depth-pyramid-capture",
             "Read back live depth and verify every pyramid mip",
             [&q, &c] {

@@ -127,6 +127,27 @@ namespace Iridium {
         }
     };
 
+    // M9.5 (--qualification-exposure-trace): one frame's adapted exposure
+    // state and histogram summary, read back after the output transform.
+    // Luminances are log2 scene-linear; EV100 is photometric at ISO 100.
+    struct ExposureReadbackSample {
+        uint64_t frameIndex = 0;   // application frame
+        float adaptedLog2Luminance = 0.0f;
+        float multiplier = 0.0f;   // the output's, compensation included
+        float ev100 = 0.0f;        // adapted
+        float meteredLog2Luminance = 0.0f;
+        float targetEv100 = 0.0f;  // metered and clamped to the limits
+        float lowPercentileLog2Luminance = 0.0f;
+        float highPercentileLog2Luminance = 0.0f;
+        uint32_t totalWeight = 0;
+        uint32_t lowestBinWeight = 0;    // at or below the histogram range
+        uint32_t highestBinWeight = 0;   // at or above it
+        uint32_t histogramRows = 0;
+        uint32_t firstOccupiedBin = 0;
+        uint32_t lastOccupiedBin = 0;
+        uint32_t peakBin = 0;
+    };
+
     struct DepthPyramidCaptureValidationResult {
         uint64_t validationId = 0;
         DepthPyramidExtent extent{};

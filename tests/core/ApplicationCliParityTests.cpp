@@ -227,6 +227,7 @@ namespace {
         flag("frameTaskProbe", c.frameTaskProbe);
         flag("allocationTrace", c.allocationTrace);
         flag("probeFinalizeDrain", c.probeFinalizeDrain);
+        flag("exposureTrace", c.exposureTrace);
         return s.str();
     }
 
@@ -661,6 +662,9 @@ namespace {
             // M9 G7.
             { "--qualification-probe-finalize-drain", Q, {}, {}, [](C& c) {
                 c.probeFinalizeDrain = true; }, {}, {} },
+            // M9.5.
+            { "--qualification-exposure-trace", Q, {}, {}, [](C& c) {
+                c.exposureTrace = true; }, {}, {} },
             { "--validate-depth-pyramid-capture", Q, {}, {}, [](C& c) {
                 c.experimentalDepthPyramid = true; c.validateDepthPyramidCapture = true; },
                 {}, {} },
@@ -723,8 +727,8 @@ namespace {
         Cli::CliOptionRegistry registry;
         registerEngineOptions(registry, scratch);
 
-        CHECK(table.size() == 103);
-        CHECK(registry.options().size() == 103);
+        CHECK(table.size() == 104);
+        CHECK(registry.options().size() == 104);
         std::set<std::string_view> names;
         std::map<std::string_view, size_t> ownerCounts;
         for (const FlagCase& row : table) {
@@ -809,7 +813,7 @@ namespace {
         CHECK(ownerCounts[R] == 14);
         CHECK(ownerCounts[E] == 4);
         CHECK(ownerCounts[G] == 38);
-        CHECK(ownerCounts[Q] == 47);
+        CHECK(ownerCounts[Q] == 48);
         std::cout << "  owners: runtime " << ownerCounts[R] << ", editor " << ownerCounts[E]
                   << ", renderer " << ownerCounts[G] << ", qualification "
                   << ownerCounts[Q] << '\n';
@@ -860,7 +864,7 @@ namespace {
     bool testUsageParity() {
         const std::string usage = engineUsage();
         CHECK(usage.starts_with("Usage: IridiumEngine [options]\n"));
-        CHECK(optionLines(usage).size() == 103);
+        CHECK(optionLines(usage).size() == 104);
         // Groups appear in owner order: runtime, editor, renderer, qualification.
         const size_t runtime = usage.find("runtime options:");
         const size_t editor = usage.find("editor options:");

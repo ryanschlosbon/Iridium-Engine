@@ -13,8 +13,10 @@
 #include "qualification/vulkan/VulkanIndirectOracle.h"
 #include "qualification/vulkan/VulkanIndirectStreamDigest.h"
 #include "renderer/vulkan/VulkanBackendExtension.h"
+#include "renderer/vulkan/VulkanFrameScheduler.h"
 #include "renderer/vulkan/VulkanResourceAllocator.h"
 
+#include <array>
 #include <optional>
 #include <vector>
 
@@ -83,8 +85,18 @@ namespace Iridium {
         [[nodiscard]] std::vector<DepthPyramidCaptureValidationResult>
             collectDepthPyramidCaptureValidations(bool waitForPending) override;
         bool drainReflectionProbeCaptures() override;
+        void armExposureReadback(uint64_t applicationFrameIndex) override;
+        [[nodiscard]] std::vector<ExposureReadbackSample>
+            collectExposureReadbacks(bool waitForPending) override;
 
     private:
+        // M9.5: one persistently mapped readback per frame slot, reused
+        // (state at 0, metering after it).
+        struct ExposureReadbackSlot {
+            uint64_t frameIndex = 0;
+            bool pending = false;
+            VulkanBufferResource readback;
+        };
         struct PendingFrameCapture {
             uint64_t captureId = 0;
             uint32_t frameIndex = 0;
@@ -150,6 +162,9 @@ namespace Iridium {
         void collectOrdinary2ValidationsForSlot(uint32_t frameIndex);
         void collectDeepLayeredValidationsForSlot(uint32_t frameIndex);
         void collectDepthPyramidValidationsForSlot(uint32_t frameIndex);
+        void recordExposureReadback(uint64_t applicationFrameIndex, VkCommandBuffer cmd,
+            uint32_t slot, const VulkanCaptureHookPayload& source);
+        void collectExposureReadbackForSlot(uint32_t frameIndex);
         [[nodiscard]] VulkanBufferResource createReadback(VkDeviceSize bytes);
         [[nodiscard]] bool attached() const noexcept {
             return services_.allocator != nullptr;
@@ -182,6 +197,10 @@ namespace Iridium {
         std::optional<uint64_t> depthPyramidRequest_;
         std::vector<PendingDepthPyramidCaptureValidation> pendingDepthPyramid_;
         std::vector<DepthPyramidCaptureValidationResult> completedDepthPyramid_;
+        bool exposureTrace_ = false;
+        std::optional<uint64_t> exposureRequest_;
+        std::array<ExposureReadbackSlot, VulkanFrameScheduler::FramesInFlight> exposureSlots_{};
+        std::vector<ExposureReadbackSample> completedExposure_;
     };
 
 } // namespace Iridium

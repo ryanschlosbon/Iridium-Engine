@@ -55,6 +55,7 @@ namespace Iridium {
             .casterRevisionOracle = options.casterRevisionOracle,
             .aliasPoison = options.aliasPoison,
             .validateProbeCaptureTargets = options.validateReflectionProbes,
+            .exposureTrace = options.exposureTrace,
         };
     }
 
@@ -532,6 +533,11 @@ namespace Iridium {
             }
             if (frame_.depthPyramidValidation) {
                 backend_->armDepthPyramidCaptureValidation(0u);
+            }
+            // M9.5: every frame, warmup included (the adaptation starts at
+            // the view's first turn).
+            if (options_.exposureTrace) {
+                backend_->armExposureReadback(context.applicationFrameIndex);
             }
             if (frame_.captureId) {
                 backend_->armFrameCapture(*frame_.captureId,

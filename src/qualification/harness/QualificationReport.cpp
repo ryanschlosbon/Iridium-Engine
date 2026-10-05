@@ -55,6 +55,29 @@ namespace Iridium {
             streamCompletedCaptures(context.config, true);
             verifyCaptureSequence();
         }
+        if (options_.exposureTrace) {
+            // M9.5: one line per frame that ran auto-exposure, in order.
+            for (const ExposureReadbackSample& sample :
+                    backend_->collectExposureReadbacks(true)) {
+                std::cout << "IRIDIUM_EXPOSURE {\"frame\":" << sample.frameIndex
+                    << ",\"ev100\":" << sample.ev100
+                    << ",\"target_ev100\":" << sample.targetEv100
+                    << ",\"multiplier\":" << sample.multiplier
+                    << ",\"adapted_log2_luminance\":" << sample.adaptedLog2Luminance
+                    << ",\"metered_log2_luminance\":" << sample.meteredLog2Luminance
+                    << ",\"percentile_log2_luminance\":["
+                    << sample.lowPercentileLog2Luminance << ','
+                    << sample.highPercentileLog2Luminance << ']'
+                    << ",\"total_weight\":" << sample.totalWeight
+                    << ",\"below_range_weight\":" << sample.lowestBinWeight
+                    << ",\"above_range_weight\":" << sample.highestBinWeight
+                    << ",\"occupied_bins\":[" << sample.firstOccupiedBin << ','
+                    << sample.lastOccupiedBin << ']'
+                    << ",\"peak_bin\":" << sample.peakBin
+                    << ",\"rows\":" << sample.histogramRows << "}\n";
+            }
+            std::cout << std::flush;
+        }
         if (options_.validateDepthPyramidCapture) {
             const auto validations =
                 backend_->collectDepthPyramidCaptureValidations(true);

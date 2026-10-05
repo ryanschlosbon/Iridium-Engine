@@ -246,6 +246,11 @@ namespace IridiumTest {
             collectDepthPyramidCaptureValidations(bool) override { return {}; }
         uint32_t probeDrains = 0;
         bool drainReflectionProbeCaptures() override { ++probeDrains; return false; }
+        uint32_t exposureReadbacksArmed = 0;
+        void armExposureReadback(uint64_t) override { ++exposureReadbacksArmed; }
+        std::vector<ExposureReadbackSample> collectExposureReadbacks(bool) override {
+            return {};
+        }
 
     private:
         class Extension final : public IRenderBackendExtension {
