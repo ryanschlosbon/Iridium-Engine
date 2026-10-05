@@ -1,6 +1,7 @@
 #include "renderer/vulkan/VulkanProductionRenderGraph.h"
 
 #include "renderer/vulkan/VulkanRenderGraphExecutor.h"
+#include "renderer/vulkan/VulkanBloomFeature.h"
 #include "renderer/vulkan/VulkanExposureFeature.h"
 #include "renderer/vulkan/VulkanGBufferLayout.h"
 #include "renderer/lighting/ClusteredLighting.h"
@@ -970,8 +971,27 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
         exposureMetering = graph.write(adapt, exposureMetering, Access::StorageWrite);
     }
 
-    const RenderGraph::PassHandle bloomHook = graph.addPass("bloom-hook");
-    graph.read(bloomHook, resolved, Access::SampledRead);
+    // M9.4: the bloom chain from the resolved colour. Off, the inactive hook
+    // keeps the M7R topology. On, every texel of every level is written
+    // before it is read (level-to-level barriers stay inside the pass), so
+    // the chain is a whole-resource write and aliases.
+    RenderGraph::ResourceHandle bloomChain{};
+    if (features.bloomLevels != 0u) {
+        RenderGraph::ResourceDesc chainDesc = imageDesc(RenderGraph::Format::Rgba16Float,
+            { bloomChainSize(sceneExtent.width), bloomChainSize(sceneExtent.height) });
+        chainDesc.image.mipLevels = static_cast<uint16_t>(bloomChainLevels(
+            sceneExtent.width, sceneExtent.height, features.bloomLevels));
+        bloomChain = graph.createResource("bloom.chain", chainDesc);
+        const RenderGraph::PassHandle bloom = graph.addPass(
+            "post.bloom", RenderGraph::QueueClass::Compute);
+        graph.read(bloom, resolved, Access::SampledRead);
+        bloomChain = graph.write(bloom, bloomChain, Access::StorageReadWrite);
+        graph.declareWholeResourceWrite(bloomChain);
+    }
+    else {
+        const RenderGraph::PassHandle bloomHook = graph.addPass("bloom-hook");
+        graph.read(bloomHook, resolved, Access::SampledRead);
+    }
 
     const RenderGraph::PassHandle outputTransform =
         graph.addPass("output-transform");
@@ -983,6 +1003,9 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
     // M9.5: this frame's adapted exposure.
     if (features.autoExposure)
         graph.read(outputTransform, exposureState, Access::StorageRead);
+    // M9.4: the chain's level 0, composited before exposure.
+    if (bloomChain.isValid())
+        graph.read(outputTransform, bloomChain, Access::SampledRead);
     output = graph.write(outputTransform, output,
         Access::ColorAttachment, LoadOp::Clear, StoreOp::Store, opaqueBlack);
 
@@ -1137,6 +1160,8 @@ VulkanProductionGraphIds resolveVulkanProductionGraphIds(
     ids.exposureMetering = resource("exposure.metering");
     ids.exposurePrevious = resource("exposure.previous");
     ids.exposureCurrent = resource("exposure.current");
+    ids.bloom = pass("post.bloom");
+    ids.bloomChain = resource("bloom.chain");
     ids.outputTransform = pass("output-transform");
     ids.finalCaptureHook = pass("final-capture-hook");
     ids.ui = pass("ui-compose");

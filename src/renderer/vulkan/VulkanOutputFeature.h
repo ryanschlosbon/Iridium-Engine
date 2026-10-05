@@ -3,9 +3,9 @@
 // M7R R3c.2: the single scene-linear -> display output transform as a feature
 // owner. Owns the output-transform pass and pipeline, the HDR10 encode pass,
 // the ACES 2 LUT binding, the manual exposure and output operator, and the
-// viewport grid overlay. Registers "bloom-hook" (always skipped until M9
-// bloom), "output-transform" and, for HDR10 composition,
-// "hdr10-encode-present". The swapchain, transport selection and paper-white
+// viewport grid overlay. Registers "bloom-hook" (always skipped; declared
+// only without M9.4 bloom), "output-transform" and, for HDR10 composition,
+// "hdr10-encode-present". With bloom it composites the chain (binding 6). The swapchain, transport selection and paper-white
 // and peak luminance stay with the backend (they also drive the swapchain
 // metadata and the editor bridge's display colour) and are staged per frame.
 
@@ -33,6 +33,9 @@ namespace Iridium {
             float peakNits = 1000.0f;
             bool selectionOutline = false;
             bool motionVectorView = false;   // M9.1 debug view
+            // M9.4 (read only when the graph declares bloom).
+            float bloomIntensity = 0.0f;
+            bool bloomAdditive = false;
         };
 
         VulkanOutputFeature() = default;
@@ -96,6 +99,7 @@ namespace Iridium {
         RenderGraph::GraphResourceId resolvedScene_{};   // M9.2
         bool taaActive_ = false;
         RenderGraph::GraphResourceId exposureState_{};   // M9.5 (auto only)
+        RenderGraph::GraphResourceId bloomChain_{};      // M9.4 (bloom only)
         RenderGraph::PassId hdr10EncodePass_{};
         float manualExposureEv_ = 0.0f;
         OutputTransformOperator outputOperator_ = OutputTransformOperator::Aces2;

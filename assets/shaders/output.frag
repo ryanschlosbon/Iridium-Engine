@@ -15,6 +15,9 @@ layout(set = 0, binding = 4) uniform sampler2D motionVectors;
 layout(set = 0, binding = 5, std430) readonly buffer ExposureState {
     vec4 exposureState;
 };
+// M9.4: the bloom chain's level 0 (half resolution, scene-linear, already
+// normalised to the scene's energy). Read only when bloom is active.
+layout(set = 0, binding = 6) uniform sampler2D bloomChain;
 layout(push_constant) uniform OutputPushConstants {
     mat4 inverseViewProjection;
     vec4 gridPlane;
@@ -24,6 +27,7 @@ layout(push_constant) uniform OutputPushConstants {
     float paperWhiteNits;
     float peakNits;
     uint packedModes;
+    vec4 bloom;   // M9.4: x intensity, y 1 = additive (threshold set)
 } push;
 
 uint outputOperator() { return push.packedModes & 0x3u; }
@@ -32,6 +36,22 @@ bool selectionActive() { return (push.packedModes & (1u << 4u)) != 0u; }
 bool gridActive() { return (push.packedModes & (1u << 5u)) != 0u; }
 bool motionVectorView() { return (push.packedModes & (1u << 6u)) != 0u; }
 bool autoExposure() { return (push.packedModes & (1u << 7u)) != 0u; }
+bool bloomActive() { return (push.packedModes & (1u << 8u)) != 0u; }
+
+// M9.4: four bilinear taps half a chain texel apart form a 3x3 tent on the
+// half-resolution level 0. Without a threshold the composite is the
+// energy-conserving lerp; with one, the selected energy is added.
+vec3 compositeBloom(vec3 scene) {
+    vec2 texel = 0.5 / vec2(textureSize(bloomChain, 0));
+    vec3 bloom = (textureLod(bloomChain, fragTexCoord + vec2(-texel.x, -texel.y), 0.0).rgb +
+        textureLod(bloomChain, fragTexCoord + vec2(texel.x, -texel.y), 0.0).rgb +
+        textureLod(bloomChain, fragTexCoord + vec2(-texel.x, texel.y), 0.0).rgb +
+        textureLod(bloomChain, fragTexCoord + vec2(texel.x, texel.y), 0.0).rgb) * 0.25;
+    float intensity = push.bloom.x;
+    // lerp written so that intensity 0 returns the scene exactly (also +Inf).
+    return push.bloom.y > 0.5 ? scene + bloom * intensity
+        : scene * (1.0 - intensity) + bloom * intensity;
+}
 
 // Hue is the screen-space direction, brightness log2 of the pixels moved
 // (white at 64 px); black is no motion and magenta no previous position.
@@ -336,7 +356,9 @@ void main() {
             ivec2(gl_FragCoord.xy), 0).xy), 1.0);
         return;
     }
-    vec3 sceneAcesCg = texture(sceneColor, fragTexCoord).rgb *
+    vec3 sceneLinear = texture(sceneColor, fragTexCoord).rgb;
+    if (bloomActive()) sceneLinear = compositeBloom(sceneLinear);
+    vec3 sceneAcesCg = sceneLinear *
         (autoExposure() ? exposureState.y : exp2(push.manualExposureEv));
     if (outputOperator() == 0u) {
         vec3 encoded = sampleAces2Encoded(sceneAcesCg);

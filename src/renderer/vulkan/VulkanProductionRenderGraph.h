@@ -155,6 +155,10 @@ namespace Iridium {
         // (SurviveCut) and post.exposure.{histogram,adapt} after the resolve;
         // TAA and the output transform read the adapted state.
         bool autoExposure = false;
+        // M9.4: bloom chain levels; 0 keeps the inactive "bloom-hook". Nonzero
+        // replaces it with post.bloom (the transient mipped "bloom.chain",
+        // a whole-resource write), which the output transform reads.
+        uint32_t bloomLevels = 0;
     };
 
     [[nodiscard]] RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(

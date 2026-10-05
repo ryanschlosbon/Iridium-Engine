@@ -191,6 +191,7 @@ namespace Iridium {
             .taaTuning = config_.taaTuning.value_or(TemporalAntiAliasingTuning{}),
             .exposureMode = config_.exposureMode,
             .autoExposure = config_.autoExposureSettings.value_or(AutoExposureSettings{}),
+            .bloom = config_.bloom,
             .cpuProfiler = &cpuProfiler_,
             .enableGpuProfiling = config_.enableGpuProfiling,
             .enableTransparentPipelineStatistics =

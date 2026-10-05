@@ -91,7 +91,7 @@ namespace Iridium {
         RenderGraph::PassId oitAccumulate;
         RenderGraph::PassId oitResolve;
         RenderGraph::PassId sceneColorCaptureHook;
-        RenderGraph::PassId bloomHook;
+        RenderGraph::PassId bloomHook;   // without bloom (the M7R topology)
         // M9.2 (invalid without TAA).
         RenderGraph::PassId taaResolve;
         RenderGraph::GraphResourceId taaHistoryPrevious;
@@ -105,6 +105,9 @@ namespace Iridium {
         RenderGraph::GraphResourceId exposureMetering;
         RenderGraph::GraphResourceId exposurePrevious;
         RenderGraph::GraphResourceId exposureCurrent;
+        // M9.4 bloom (invalid when off; bloomHook is declared instead).
+        RenderGraph::PassId bloom;
+        RenderGraph::GraphResourceId bloomChain;
         RenderGraph::PassId outputTransform;
         RenderGraph::PassId finalCaptureHook;
         // "ui-compose" (HDR10 composition) or "ui-present".

@@ -16,6 +16,7 @@ add_library(iridium_vulkan STATIC
         VulkanDeletionQueue.cpp
         VulkanDepthPyramid.cpp
         VulkanDirectionalShadowMap.cpp
+        VulkanBloomFeature.cpp
         VulkanExposureFeature.cpp
         VulkanExtensionHooks.cpp
         VulkanForwardFeature.cpp

@@ -176,6 +176,12 @@ void EditorSystem::setAntiAliasingStatus(Iridium::AntiAliasingMode active,
     uiState.outputSettings.antiAliasingDiagnostic = std::move(diagnostic);
 }
 
+void EditorSystem::setBloomStatus(const Iridium::BloomSettings& active,
+    std::string diagnostic) {
+    uiState.outputSettings.bloom = active;
+    uiState.outputSettings.bloomDiagnostic = std::move(diagnostic);
+}
+
 bool EditorSystem::consumeShadowSettings(
     Iridium::ProjectShadowSettings& settings) {
     if (!uiState.shadowSettingsChanged) return false;

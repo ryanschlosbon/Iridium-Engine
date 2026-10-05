@@ -36,6 +36,7 @@
 #include "VulkanClusterLightingFeature.h"
 #include "VulkanOutputFeature.h"
 #include "VulkanExposureFeature.h"
+#include "VulkanBloomFeature.h"
 #include "VulkanTemporalAntiAliasingFeature.h"
 #include "VulkanWeightedOitFeature.h"
 #include "VulkanHookPasses.h"
@@ -140,6 +141,7 @@ namespace Iridium {
         VulkanOutputFeature output_;
         VulkanTemporalAntiAliasingFeature taa_;   // M9.2
         VulkanExposureFeature exposure_;   // M9.5
+        VulkanBloomFeature bloom_;   // M9.4
 
         // R3c.10: the UI pass (clear, the editor bridge's contribution,
         // present). The editor bridge (renderer/vulkan_imgui) is an attached
@@ -242,10 +244,10 @@ namespace Iridium {
         void collectIndirectViewValidations(uint32_t frameIndex);
 
         // Feature owners in registration (and graph) order.
-        [[nodiscard]] std::array<IVulkanFeature*, 14> features() noexcept {
+        [[nodiscard]] std::array<IVulkanFeature*, 15> features() noexcept {
             return { &shadows_, &localShadows_, &probes_, &opaque_,
                 &clusterLighting_, &lighting_, &forward_, &layered_, &taa_, &exposure_,
-                &output_, &oit_, &hooks_, &ui_ };
+                &bloom_, &output_, &oit_, &hooks_, &ui_ };
         }
         // Between frames, after every slot retired (resize, transport and
         // topology changes): release and recreate the graph, the frame
@@ -369,6 +371,8 @@ namespace Iridium {
             RenderExtent extent, std::string& diagnostic) override;
         [[nodiscard]] bool setAntiAliasing(
             AntiAliasingMode mode, std::string& diagnostic) override;
+        [[nodiscard]] bool setBloom(
+            const BloomSettings& settings, std::string& diagnostic) override;
         [[nodiscard]] RenderBackendCapabilities getCapabilities() const override;
         [[nodiscard]] RenderBackendRuntimeInfo getRuntimeInfo() const override;
         [[nodiscard]] FrameTopologyPreparation prepareFrameTopology(

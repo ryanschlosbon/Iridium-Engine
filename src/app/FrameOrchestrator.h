@@ -117,6 +117,8 @@ namespace Iridium {
         void publishOutputTransportStatus();
         // M9.2c: between frames, from an editor request.
         void switchAntiAliasing(AntiAliasingMode requested);
+        // M9.4: between frames; true when the graph was rebuilt.
+        bool switchBloom(const BloomSettings& requested);
 
         // IRenderFrameStageObserver
         void onRenderFrameStage(RenderFrameStage stage) override;
@@ -150,6 +152,7 @@ namespace Iridium {
             Color::OutputTransport::SdrSrgb;
         std::optional<Color::OutputTransport> pendingOutputTransport_;
         std::optional<AntiAliasingMode> pendingAntiAliasing_;
+        std::optional<BloomSettings> pendingBloom_;
         uint64_t outputTransportSwitchCount_ = 0;
         RenderBackendRuntimeInfo renderRuntimeInfo_{};
         RenderExtent renderExtent_{};

@@ -408,6 +408,31 @@ namespace Iridium::AppCli {
                 c.autoExposureSettings = settings;
             });
 
+        addValueOption(registry, owner, "--bloom", "off|on",
+            "Bloom: energy-conserving scatter of the resolved colour (default off)",
+            "--bloom requires off or on",
+            [&c](std::string_view value) {
+                if (value == "on") c.bloom.enabled = true;
+                else if (value == "off") c.bloom.enabled = false;
+                else throw std::invalid_argument("--bloom requires off or on");
+            });
+
+        addValueOption(registry, owner, "--bloom-settings", "INTENSITY,THRESHOLD,KNEE,LEVELS",
+            "Bloom tuning for evidence runs: scatter 0-1, scene-linear threshold and knee (0: none), 1-8 levels",
+            "--bloom-settings requires four comma-separated numbers",
+            [&c](std::string_view value) {
+                constexpr const char* message =
+                    "--bloom-settings requires four comma-separated numbers";
+                const std::array<float, 4> v = parseNumberList<4>(value, message);
+                if (v[0] < 0.0f || v[0] > 1.0f || v[1] < 0.0f || v[2] < 0.0f ||
+                    v[3] < 1.0f || v[3] > 8.0f || v[3] != std::floor(v[3]))
+                    throw std::invalid_argument(message);
+                c.bloom.intensity = v[0];
+                c.bloom.threshold = v[1];
+                c.bloom.knee = v[2];
+                c.bloom.levels = static_cast<uint32_t>(v[3]);
+            });
+
         addValueOption(registry, owner, "--temporal-jitter", "on|off",
             "Sub-pixel raster jitter (default: on with TAA, off otherwise)",
             "--temporal-jitter requires on or off",

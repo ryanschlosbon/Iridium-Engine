@@ -60,6 +60,9 @@ namespace Iridium {
         // and its evidence-run tuning (--auto-exposure-settings).
         ExposureMode exposureMode = ExposureMode::Manual;
         std::optional<AutoExposureSettings> autoExposureSettings;
+        // M9.4: bloom (--bloom off|on; off until admission) and its settings
+        // (--bloom-settings).
+        BloomSettings bloom{};
         uint32_t temporalJitterSequenceLength = 8;
         // M7R R4d: --upload-queue auto|graphics|legacy-blocking.
         UploadQueueMode uploadQueue = UploadQueueMode::Auto;

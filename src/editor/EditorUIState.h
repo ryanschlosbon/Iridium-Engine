@@ -23,6 +23,9 @@ struct EditorOutputSettings {
     // M9.2c: the active mode, and why the last switch failed (if it did).
     Iridium::AntiAliasingMode antiAliasing = Iridium::AntiAliasingMode::None;
     std::string antiAliasingDiagnostic;
+    // M9.4: the active bloom settings, and why the last switch failed.
+    Iridium::BloomSettings bloom{};
+    std::string bloomDiagnostic;
     bool changed = false;
 };
 

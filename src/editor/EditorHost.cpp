@@ -69,6 +69,10 @@ namespace Iridium {
         editor_->setAntiAliasingStatus(active, std::move(diagnostic));
     }
 
+    void EditorHost::setBloomStatus(const BloomSettings& active, std::string diagnostic) {
+        editor_->setBloomStatus(active, std::move(diagnostic));
+    }
+
     void EditorHost::setDebugView(RenderDebugView view) {
         editor_->setDebugView(view);
     }

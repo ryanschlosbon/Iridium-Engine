@@ -61,6 +61,7 @@ namespace Iridium {
         renderRuntimeInfo_ = renderBackend->getRuntimeInfo();
         publishOutputTransportStatus();
         editorHost_.setAntiAliasingStatus(config_.antiAliasing, {});
+        editorHost_.setBloomStatus(config_.bloom, {});
     }
 
     void FrameOrchestrator::initializeOutputTransformLut() {
@@ -255,6 +256,8 @@ namespace Iridium {
             }
             if (outputSettings.antiAliasing != config_.antiAliasing)
                 pendingAntiAliasing_ = outputSettings.antiAliasing;
+            if (outputSettings.bloom != config_.bloom)
+                pendingBloom_ = outputSettings.bloom;
             config_.manualExposureEv = outputSettings.manualExposureEv;
             config_.paperWhiteNits = outputSettings.paperWhiteNits;
             config_.peakNits = outputSettings.peakNits;
@@ -442,6 +445,11 @@ namespace Iridium {
             switchAntiAliasing(*pendingAntiAliasing_);
             pendingAntiAliasing_.reset();
             return;
+        }
+        if (pendingBloom_) {
+            const BloomSettings requested = *pendingBloom_;
+            pendingBloom_.reset();
+            if (switchBloom(requested)) return;
         }
         if (!policy_.fullscreenScenePresentation && config_.windowVisible) {
             const RenderExtent requested =
@@ -695,6 +703,18 @@ namespace Iridium {
         else
             std::cerr << "Anti-aliasing switch failed: " << diagnostic << '\n';
         editorHost_.setAntiAliasingStatus(config_.antiAliasing, std::move(diagnostic));
+    }
+
+    bool FrameOrchestrator::switchBloom(const BloomSettings& requested) {
+        const bool topology = requested.enabled != config_.bloom.enabled ||
+            (requested.enabled && requested.levels != config_.bloom.levels);
+        std::string diagnostic;
+        if (renderBackend->setBloom(requested, diagnostic))
+            config_.bloom = requested;
+        else
+            std::cerr << "Bloom switch failed: " << diagnostic << '\n';
+        editorHost_.setBloomStatus(config_.bloom, std::move(diagnostic));
+        return topology;
     }
 
     bool FrameOrchestrator::resizeSceneExtent(RenderExtent requested,

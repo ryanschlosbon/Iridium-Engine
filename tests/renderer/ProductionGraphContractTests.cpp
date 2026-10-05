@@ -10,6 +10,7 @@
 #include "TestHarness.h"
 
 #include "renderer/lighting/ClusteredLighting.h"
+#include "renderer/vulkan/VulkanBloomFeature.h"
 #include "renderer/vulkan/VulkanProductionRenderGraph.h"
 
 #include <algorithm>
@@ -697,6 +698,71 @@ namespace {
         return true;
     }
 
+    // M9.4: bloom replaces the inactive bloom-hook only when enabled. Off, the
+    // graph is exactly the M7R/M9 topology (hook present, no chain); on,
+    // post.bloom reads the resolved colour after TAA and exposure, writes the
+    // transient mipped chain as a whole-resource write (alias-eligible), and
+    // the output transform samples it.
+    bool testBloomDeclaration() {
+        for (const bool taa : { false, true }) {
+            for (const bool aliasing : { false, true }) {
+                VulkanProductionGraphFeatures offFeatures{};
+                offFeatures.temporalAntiAliasing = taa;
+                offFeatures.autoExposure = true;
+                offFeatures.transientAliasing = aliasing;
+                const RenderGraph::CompiledGraph off = layeredGraph({}, offFeatures);
+                const GraphQuery offGraph(off);
+                IRIDIUM_CHECK(offGraph.hasPass("bloom-hook"));
+                IRIDIUM_CHECK(!offGraph.hasPass("post.bloom"));
+                IRIDIUM_CHECK(offGraph.resource("bloom.chain") == nullptr);
+
+                VulkanProductionGraphFeatures onFeatures = offFeatures;
+                onFeatures.bloomLevels = 6;
+                const RenderGraph::CompiledGraph on = layeredGraph({}, onFeatures);
+                const GraphQuery graph(on);
+                IRIDIUM_CHECK(on.topologyHash() != off.topologyHash());
+                IRIDIUM_CHECK(!graph.hasPass("bloom-hook"));
+                IRIDIUM_CHECK(graph.pass("post.bloom")->queue == RenderGraph::QueueClass::Compute);
+                const std::string_view resolved = taa ? "taa.history.current" : "scene.color";
+                IRIDIUM_CHECK(graph.reads("post.bloom", resolved, Access::SampledRead));
+                IRIDIUM_CHECK(graph.writes("post.bloom", "bloom.chain",
+                    Access::StorageReadWrite, LoadOp::DontCare));
+                IRIDIUM_CHECK(graph.writers("bloom.chain").size() == 1u);
+                IRIDIUM_CHECK(graph.reads("output-transform", "bloom.chain", Access::SampledRead));
+                IRIDIUM_CHECK((graph.users("bloom.chain") ==
+                    std::vector<std::string_view>{ "post.bloom", "output-transform" }));
+                IRIDIUM_CHECK(graph.ordered({ "scene-color-capture-hook", "post.exposure.adapt",
+                    "post.bloom", "output-transform", "final-capture-hook" }));
+                if (taa)
+                    IRIDIUM_CHECK(graph.ordered({ "temporal.taa.resolve", "post.bloom" }));
+                // Half the 1920x1080 scene, six levels down to 30x16, transient
+                // and alias-eligible (its first use writes every texel).
+                const auto* chain = graph.resource("bloom.chain");
+                IRIDIUM_CHECK(chain != nullptr);
+                IRIDIUM_CHECK(chain->desc.lifetime == RenderGraph::ResourceLifetime::Transient);
+                IRIDIUM_CHECK(chain->desc.image.format == RenderGraph::Format::Rgba16Float);
+                IRIDIUM_CHECK(chain->desc.image.extent.width == 960u &&
+                    chain->desc.image.extent.height == 540u);
+                IRIDIUM_CHECK(chain->desc.image.mipLevels == 6u);
+                IRIDIUM_CHECK(chain->aliasEligibility == RenderGraph::AliasEligibility::Eligible);
+                IRIDIUM_CHECK(on.historyPairs().size() == off.historyPairs().size());
+                if (aliasing) {
+                    const auto& slots = on.physicalSlots();
+                    IRIDIUM_CHECK(chain->physicalSlot < slots.size() &&
+                        slots[chain->physicalSlot].aliased);
+                }
+            }
+        }
+        // The level count follows the extent: a 40x20 scene has a 20x10 chain
+        // with 5 levels (20, 10, 5, 2, 1).
+        IRIDIUM_CHECK(bloomChainLevels(40, 20, 6) == 5u);
+        IRIDIUM_CHECK(bloomChainLevels(3840, 2160, 6) == 6u);
+        IRIDIUM_CHECK(bloomChainLevels(3840, 2160, 0) == 1u);
+        IRIDIUM_CHECK(bloomChainLevels(3840, 2160, 12) == BloomMaximumLevels);
+        IRIDIUM_CHECK(bloomChainSize(3839) == 1920u && bloomChainSize(1) == 1u);
+        return true;
+    }
+
 } // namespace
 
 int main() {
@@ -713,6 +779,7 @@ int main() {
         { "declared work keeps the R3b.6 order and slots",
             testDeclaredWorkKeepsOrderAndSlots },
         { "auto-exposure declaration (M9.5)", testAutoExposureDeclaration },
+        { "bloom declaration (M9.4)", testBloomDeclaration },
     };
     return Iridium::Test::runTests(tests);
 }

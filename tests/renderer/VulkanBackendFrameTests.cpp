@@ -273,6 +273,28 @@ namespace {
             for (uint32_t frame = 0; frame < 2; ++frame)
                 (void)renderFrame(*backend, bridge.get(), window.get(), false, 0);
             CHECK(bridge->sceneTextureId() != nullptr);
+            // M9.4: bloom on rebuilds the graph (post.bloom and its chain),
+            // with and without TAA; an intensity or threshold change applies
+            // without a rebuild; off restores the hook topology.
+            BloomSettings bloom{};
+            bloom.enabled = true;
+            CHECK(backend->setBloom(bloom, diagnostic));
+            CHECK(diagnostic.empty());
+            CHECK(bridge->sceneTextureId() != nullptr);
+            for (uint32_t frame = 0; frame < 3; ++frame)
+                (void)renderFrame(*backend, bridge.get(), window.get(), frame >= 1u, 0);
+            bloom.intensity = 0.2f;
+            bloom.threshold = 1.0f;
+            bloom.knee = 0.5f;
+            CHECK(backend->setBloom(bloom, diagnostic));
+            CHECK(backend->setAntiAliasing(AntiAliasingMode::Taa, diagnostic));
+            for (uint32_t frame = 0; frame < 3; ++frame)
+                (void)renderFrame(*backend, bridge.get(), window.get(), false, 0);
+            CHECK(backend->setAntiAliasing(AntiAliasingMode::None, diagnostic));
+            bloom.enabled = false;
+            CHECK(backend->setBloom(bloom, diagnostic));
+            (void)renderFrame(*backend, bridge.get(), window.get(), false, 0);
+            CHECK(bridge->sceneTextureId() != nullptr);
             // Live output settings reach the bridge's display colour.
             (void)renderFrame(*backend, bridge.get(), window.get(), false, 0, nullptr,
                 { .manualExposureEv = 0.5f, .paperWhiteNits = 240.0f, .peakNits = 1000.0f });

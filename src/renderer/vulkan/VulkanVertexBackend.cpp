@@ -156,6 +156,7 @@ namespace Iridium {
         antiAliasing_ = config.antiAliasing;
         taaTuning_ = config.taaTuning;
         exposure_.configure(config.exposureMode, config.autoExposure);   // M9.5
+        bloom_.configure(config.bloom);   // M9.4
         uploadQueueMode_ = config.uploadQueue;
         experimentalShadowLodErrorTexels_ =
             config.experimentalShadowLodErrorTexels;
@@ -371,6 +372,7 @@ namespace Iridium {
         forward_.create(*featureContext_);
         exposure_.create(*featureContext_);   // M9.5 (before its consumers)
         taa_.create(*featureContext_);   // M9.2
+        bloom_.create(*featureContext_);   // M9.4
         output_.create(*featureContext_);
         output_.setExposureFallback(exposure_.fallbackState());
         output_.createPipelines(outputTargetFormat_,
@@ -649,6 +651,7 @@ namespace Iridium {
         ui_.destroy();
         output_.destroy();
         taa_.destroy();
+        bloom_.destroy();
         exposure_.destroy();
 
         forward_.destroy();
@@ -736,6 +739,7 @@ namespace Iridium {
             .transientAliasing = renderGraphAliasing_,
             .temporalAntiAliasing = antiAliasing_ == AntiAliasingMode::Taa,
             .autoExposure = exposure_.mode() == ExposureMode::Auto,
+            .bloomLevels = bloom_.graphLevels(),
         };
     }
 
@@ -1309,6 +1313,36 @@ namespace Iridium {
             releaseFrameTargets();
             antiAliasing_ = previous;
             rebuild();
+            return false;
+        }
+    }
+
+    bool VulkanVertexBackend::setBloom(const BloomSettings& settings,
+        std::string& diagnostic) {
+        diagnostic.clear();
+        if (!initialized_ || frameOpen_) {
+            diagnostic = "Bloom can only change between frames of an initialized backend";
+            return false;
+        }
+        // Intensity and threshold apply from the next frame; turning bloom on
+        // or off (or a new level count) changes the graph, like a resize.
+        const BloomSettings previous = bloom_.settings();
+        const uint32_t previousLevels = bloom_.graphLevels();
+        bloom_.configure(settings);
+        if (bloom_.graphLevels() == previousLevels) return true;
+        scheduler.waitForAllFrames();
+        releaseFrameTargets();
+        try {
+            createFrameTargets();
+            registerEditorTargetTextures();
+            return true;
+        }
+        catch (const std::exception& exception) {
+            diagnostic = std::string("Bloom switch failed: ") + exception.what();
+            releaseFrameTargets();
+            bloom_.configure(previous);
+            createFrameTargets();
+            registerEditorTargetTextures();
             return false;
         }
     }
@@ -2370,6 +2404,8 @@ namespace Iridium {
             .peakNits = peakNits_,
             .selectionOutline = selectionOutlineActive_,
             .motionVectorView = debugView_ == RenderDebugView::MotionVectors,
+            .bloomIntensity = bloom_.composite().intensity,
+            .bloomAdditive = bloom_.composite().additive,
         });
         // R3c.4 drain point: final-output captures and the retained views.
         const IVulkanEditorUi* editor = editorUi();

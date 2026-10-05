@@ -98,6 +98,12 @@ namespace Iridium {
         // remains active.
         [[nodiscard]] virtual bool setAntiAliasing(
             AntiAliasingMode mode, std::string& diagnostic) = 0;
+        // Between frames (M9.4): applies bloom settings. Intensity and
+        // threshold take effect next frame; enabling, disabling or a new
+        // level count changes the graph topology. On failure the previous
+        // settings remain active.
+        [[nodiscard]] virtual bool setBloom(
+            const BloomSettings& settings, std::string& diagnostic) = 0;
         [[nodiscard]] virtual RenderBackendCapabilities getCapabilities() const = 0;
         [[nodiscard]] virtual RenderBackendRuntimeInfo getRuntimeInfo() const = 0;
         // May only be called between frames. Startup callers use this to move

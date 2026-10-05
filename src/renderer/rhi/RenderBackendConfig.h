@@ -85,6 +85,27 @@ namespace Iridium {
             const AutoExposureSettings&) = default;
     };
 
+    // M9.4 bloom (bloom.comp, output.frag). A dual-filter chain over the
+    // resolved scene colour from half resolution down, composited before
+    // exposure and the output transform. With no threshold the composite is
+    // energy-conserving: colour = lerp(scene, bloom, intensity), so bloom
+    // only redistributes light. A threshold selects the energy above it
+    // (soft knee) and adds it: colour = scene + intensity * bloom.
+    struct BloomSettings {
+        // Off until admission (M9.7); then on by owner decision.
+        bool enabled = false;
+        // The share of light scattered into the bloom (0..1).
+        float intensity = 0.04f;
+        // Scene-linear (pre-exposure) threshold; 0 disables it.
+        float threshold = 0.0f;
+        // Soft-knee half-width around the threshold (scene-linear).
+        float knee = 0.0f;
+        // Chain levels from half resolution (1..8; clamped to the extent).
+        uint32_t levels = 6u;
+
+        friend bool operator==(const BloomSettings&, const BloomSettings&) = default;
+    };
+
     struct RenderBackendConfig {
         bool enableValidation = false;
         // Adds Khronos synchronization validation when enableValidation is set.
@@ -111,6 +132,8 @@ namespace Iridium {
         // M9.5: Manual until admission (M9.7); Auto adds the exposure passes.
         ExposureMode exposureMode = ExposureMode::Manual;
         AutoExposureSettings autoExposure{};
+        // M9.4: off until admission; enabled adds post.bloom.
+        BloomSettings bloom{};
         CpuProfiler* cpuProfiler = nullptr;
         bool enableGpuProfiling = false;
         bool enableTransparentPipelineStatistics = false;

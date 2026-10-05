@@ -136,6 +136,9 @@ namespace {
                 std::to_string(c.autoExposureSettings->speedDownEvPerSecond) + "/" +
                 std::to_string(c.autoExposureSettings->centreWeight)
             : std::string("default"));
+        flag("bloom.enabled", c.bloom.enabled);
+        field("bloom.settings", exact(c.bloom.intensity) + "/" + exact(c.bloom.threshold) +
+            "/" + exact(c.bloom.knee) + "/" + exact(c.bloom.levels));
         field("uploadQueue", exact(enumValue(c.uploadQueue)));
         flag("aliasPoison", c.aliasPoison);
         flag("validateDepthPyramidCapture", c.validateDepthPyramidCapture);
@@ -539,6 +542,24 @@ namespace {
                   { "-8,16,0.05,0.95,-2,18,2.5,1.5,2",
                     "--auto-exposure-settings requires nine comma-separated numbers" },
                   { "", "--auto-exposure-settings requires nine comma-separated numbers" } } },
+            // M9.4; off by default (on, subtle, at M9.7 per the owner decision).
+            { "--bloom", G, "on", {}, [](C& c) { c.bloom.enabled = true; },
+                "--bloom requires off or on",
+                { { "yes", "--bloom requires off or on" },
+                  { "", "--bloom requires off or on" } } },
+            { "--bloom-settings", G, "0.1,2,0.5,5", {}, [](C& c) {
+                c.bloom.intensity = 0.1f; c.bloom.threshold = 2.0f; c.bloom.knee = 0.5f;
+                c.bloom.levels = 5u; },
+                "--bloom-settings requires four comma-separated numbers",
+                { { "0.1,2,0.5", "--bloom-settings requires four comma-separated numbers" },
+                  { "0.1,2,0.5,5,1", "--bloom-settings requires four comma-separated numbers" },
+                  { "0.1,2,0.5,", "--bloom-settings requires four comma-separated numbers" },
+                  { "1.5,0,0,6", "--bloom-settings requires four comma-separated numbers" },
+                  { "0.04,-1,0,6", "--bloom-settings requires four comma-separated numbers" },
+                  { "0.04,0,0,9", "--bloom-settings requires four comma-separated numbers" },
+                  { "0.04,0,0,2.5", "--bloom-settings requires four comma-separated numbers" },
+                  { "0.04,0,0,0", "--bloom-settings requires four comma-separated numbers" },
+                  { "", "--bloom-settings requires four comma-separated numbers" } } },
             { "--temporal-jitter", G, "on", {}, [](C& c) {
                 c.temporalJitter = true; },
                 "--temporal-jitter requires on or off",
@@ -727,8 +748,8 @@ namespace {
         Cli::CliOptionRegistry registry;
         registerEngineOptions(registry, scratch);
 
-        CHECK(table.size() == 104);
-        CHECK(registry.options().size() == 104);
+        CHECK(table.size() == 106);
+        CHECK(registry.options().size() == 106);
         std::set<std::string_view> names;
         std::map<std::string_view, size_t> ownerCounts;
         for (const FlagCase& row : table) {
@@ -812,7 +833,7 @@ namespace {
         }
         CHECK(ownerCounts[R] == 14);
         CHECK(ownerCounts[E] == 4);
-        CHECK(ownerCounts[G] == 38);
+        CHECK(ownerCounts[G] == 40);
         CHECK(ownerCounts[Q] == 48);
         std::cout << "  owners: runtime " << ownerCounts[R] << ", editor " << ownerCounts[E]
                   << ", renderer " << ownerCounts[G] << ", qualification "
@@ -864,7 +885,7 @@ namespace {
     bool testUsageParity() {
         const std::string usage = engineUsage();
         CHECK(usage.starts_with("Usage: IridiumEngine [options]\n"));
-        CHECK(optionLines(usage).size() == 104);
+        CHECK(optionLines(usage).size() == 106);
         // Groups appear in owner order: runtime, editor, renderer, qualification.
         const size_t runtime = usage.find("runtime options:");
         const size_t editor = usage.find("editor options:");
@@ -883,7 +904,7 @@ namespace {
         AppCli::registerRuntimeOptions(registry, config);
         AppCli::registerEditorOptions(registry, config);
         AppCli::registerRendererOptions(registry, config);
-        CHECK(registry.options().size() == 56);
+        CHECK(registry.options().size() == 58);
         try {
             registry.parse(Args{ "--benchmark", "material_lab_v1" });
             CHECK(false);

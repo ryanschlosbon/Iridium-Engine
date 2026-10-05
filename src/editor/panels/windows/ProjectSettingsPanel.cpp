@@ -53,15 +53,16 @@ void ProjectSettingsPanel::OnImGuiRender(Registry& registry, Iridium::AssetManag
     if (ImGui::Begin("Project Settings", isOpen)) {
         search_.Draw("Search settings", -1.0f);
         constexpr const char* categories[]{"Display and HDR", "Lighting and shadows",
-            "Reflection probes", "Transparency", "Anti-aliasing"};
+            "Reflection probes", "Transparency", "Anti-aliasing", "Post-processing"};
         constexpr const char* searchTerms[]{
             "Display HDR transport SDR scRGB exposure EV paper white nits peak brightness",
             "Lighting shadows directional resolution spot atlas point pool PCF PCSS filter quality penumbra cascade split guard depth padding budget stale",
             "Reflection probes capture budget faces flight realtime interval GGX prefilter samples",
             "Transparency glass layers interfaces quality Ordinary2 Hero4 Cinematic8 bulbs headlight override",
-            "Anti-aliasing AA TAA temporal jitter"};
+            "Anti-aliasing AA TAA temporal jitter",
+            "Post-processing bloom glow scatter intensity"};
         ImGui::BeginChild("Settings categories", ImVec2(190, 0), ImGuiChildFlags_Borders);
-        for (int index = 0; index < 5; ++index) {
+        for (int index = 0; index < 6; ++index) {
             if (search_.IsActive() && !search_.PassFilter(searchTerms[index])) continue;
             if (ImGui::Selectable(categories[index], selectedCategory_ == index)) {
                 selectedCategory_ = index;
@@ -75,7 +76,8 @@ void ProjectSettingsPanel::OnImGuiRender(Registry& registry, Iridium::AssetManag
             return search_.IsActive() ? search_.PassFilter(searchTerms[category]) : selectedCategory_ == category;
         };
         if (search_.IsActive()) ImGui::TextDisabled("Showing matching setting groups. Select a category to clear search.");
-        if (!show(0) && !show(1) && !show(2) && !show(3) && !show(4)) ImGui::TextWrapped("No matching settings.");
+        if (!show(0) && !show(1) && !show(2) && !show(3) && !show(4) && !show(5))
+            ImGui::TextWrapped("No matching settings.");
         constexpr uint64_t texelsPerMebiTexel = 1024ull * 1024ull;
         if (show(0)) {
 
@@ -384,6 +386,22 @@ void ProjectSettingsPanel::OnImGuiRender(Registry& registry, Iridium::AssetManag
                 "boundary; accumulated history starts over.");
             if (!outputSettings->antiAliasingDiagnostic.empty())
                 ImGui::TextColored(ImVec4(1, .4f, .3f, 1), "%s", outputSettings->antiAliasingDiagnostic.c_str());
+        }
+        if (show(5)) {
+            ImGui::SeparatorText("Bloom");
+            Iridium::BloomSettings& bloom = outputSettings->bloom;
+            if (ImGui::Checkbox("Bloom", &bloom.enabled)) outputSettings->changed = true;
+            ImGui::BeginDisabled(!bloom.enabled);
+            if (ImGui::SliderFloat("Bloom intensity", &bloom.intensity, 0.0f, 0.25f, "%.3f",
+                    ImGuiSliderFlags_AlwaysClamp))
+                outputSettings->changed = true;
+            ImGui::EndDisabled();
+            ImGui::TextWrapped("Bloom scatters a small share of the scene's light (about 4%%) into a wide "
+                "glow, as a lens does. It conserves energy: the glow is taken from the image, not added. "
+                "Turning it on or off rebuilds the frame graph at the next frame boundary; the intensity "
+                "applies immediately.");
+            if (!outputSettings->bloomDiagnostic.empty())
+                ImGui::TextColored(ImVec4(1, .4f, .3f, 1), "%s", outputSettings->bloomDiagnostic.c_str());
         }
         ImGui::EndChild();
     }
