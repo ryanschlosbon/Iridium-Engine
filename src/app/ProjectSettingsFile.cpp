@@ -2,6 +2,8 @@
 
 #include <nlohmann/json.hpp>
 
+#include <cstdio>
+#include <cstdlib>
 #include <fstream>
 #include <system_error>
 
@@ -184,6 +186,19 @@ namespace Iridium {
             read(j, "prefilter_sample_count", p.prefilterSampleCount);
         }
 
+        // Settings are single precision; write them at that precision
+        // (0.7, not 0.699999988079071) so the file reads and diffs cleanly.
+        void roundFloats(Json& value) {
+            if (value.is_number_float()) {
+                char text[32];
+                std::snprintf(text, sizeof(text), "%.7g", value.get<double>());
+                value = std::strtod(text, nullptr);
+            }
+            else if (value.is_structured()) {
+                for (Json& child : value) roundFloats(child);
+            }
+        }
+
     } // namespace
 
     std::filesystem::path defaultProjectSettingsPath() {
@@ -239,7 +254,7 @@ namespace Iridium {
     bool saveProjectSettings(const std::filesystem::path& path, const ApplicationConfig& config,
         std::string& diagnostic) {
         diagnostic.clear();
-        const Json root{
+        Json root{
             { "schema_version", SchemaVersion },
             { "display", { { "exposure_ev", config.manualExposureEv },
                 { "paper_white_nits", config.paperWhiteNits },
@@ -255,6 +270,7 @@ namespace Iridium {
             { "shadows", shadowJson(config.shadowSettings) },
             { "reflection_probes", probeJson(config.reflectionProbeSettings) },
         };
+        roundFloats(root);
         std::filesystem::path temporary = path;
         temporary += ".tmp";
         {

@@ -308,7 +308,11 @@ namespace Iridium {
     }
 
     void FrameOrchestrator::flushProjectSettings(bool force) {
-        if (!settingsChangedAt_) return;
+        // At shutdown an interactive project without the file gets one, so the
+        // project's settings are always on disk (and can be committed).
+        const bool create = force && !config_.projectSettingsPath.empty() &&
+            !std::filesystem::exists(config_.projectSettingsPath);
+        if (!settingsChangedAt_ && !create) return;
         if (!force && std::chrono::steady_clock::now() - *settingsChangedAt_ <
                 std::chrono::milliseconds(500))
             return;
