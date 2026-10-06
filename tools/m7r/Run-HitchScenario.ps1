@@ -89,7 +89,7 @@ foreach ($route in $M7RHitchRoutes) {
             '--cache-state', 'fresh-process-os-driver-cache-uncontrolled',
             '--warmup-frames', "$warmup", '--frame-limit', "$frames",
             '--qualification-scripted-changes', $scenarioPath
-        ) + @(Get-M7RPipelineCacheArgs $exe $PipelineCache) + $fixture.Args + $ExtraArgs + $sideArgs[$side]
+        ) + @(Get-M7REngineBaseArgs $exe $PipelineCache) + $fixture.Args + $ExtraArgs + $sideArgs[$side]
         if ($fixture.Environment) {
             $arguments += @('--cooked-environment-artifact', (Join-Path $ArtifactRoot (Get-M7RModelArtifact $ArtifactRoot $fixture.Environment)))
         }

@@ -84,6 +84,28 @@ function Get-M7RPipelineCacheArgs([string] $exe, [string] $mode) {
     return @('--pipeline-cache', $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($mode))
 }
 
+# M9.7: the product defaults are TAA, Auto exposure and bloom. Measurement routes (frozen
+# set, timing, sweeps, digests, admission baselines) pin the M7R route explicitly so
+# their results stay comparable: TAA off, Manual exposure, bloom off. A tool or side that
+# wants a feature passes it afterwards (a later option wins). Executables that predate a
+# flag do not receive it (they cannot run the feature anyway).
+$M7RRouteSupport = @{}
+function Get-M7RRouteArgs([string] $exe) {
+    if (-not $M7RRouteSupport.ContainsKey($exe)) {
+        $usage = (cmd /c "`"$exe`" --help 2>&1") -join "`n"
+        $M7RRouteSupport[$exe] = @(
+            $(if ($usage -match '--anti-aliasing') { '--anti-aliasing'; 'none' })
+            $(if ($usage -match '--exposure ') { '--exposure'; 'manual' })
+            $(if ($usage -match '--bloom ') { '--bloom'; 'off' }))
+    }
+    return $M7RRouteSupport[$exe]
+}
+
+# The pinned route plus the pipeline-cache arguments: the base of every measurement run.
+function Get-M7REngineBaseArgs([string] $exe, [string] $mode) {
+    return @(Get-M7RRouteArgs $exe) + @(Get-M7RPipelineCacheArgs $exe $mode)
+}
+
 # Runs the engine with stdout and stderr merged into $log (Windows PowerShell 5.1
 # would otherwise turn native stderr into terminating errors). Returns the exit code.
 function Invoke-M7REngine([string] $exe, [string[]] $arguments, [string] $log) {

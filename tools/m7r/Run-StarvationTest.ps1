@@ -76,7 +76,7 @@ if (-not $SkipFrames) {
                 '--cache-state', 'fresh-process-os-driver-cache-uncontrolled',
                 '--warmup-frames', "$Warmup", '--frame-limit', "$Frames",
                 '--qualification-frame-task-probe'
-            ) + @(Get-M7RPipelineCacheArgs $exePath $PipelineCache) + $route.Args
+            ) + @(Get-M7REngineBaseArgs $exePath $PipelineCache) + $route.Args
             if ($side -eq 'B') { $arguments += @('--qualification-background-cook', $CookSource) }
             # The engine runs from its own checkout (shaders); manifests, artifacts
             # and the cook source come from absolute paths or its assets/ root.

@@ -342,7 +342,7 @@ namespace Iridium::AppCli {
             });
 
         addValueOption(registry, owner, "--anti-aliasing", "none|taa",
-            "Main-view anti-aliasing: none or native temporal AA (default none)",
+            "Main-view anti-aliasing: none or native temporal AA (default taa)",
             "--anti-aliasing requires none or taa",
             [&c](std::string_view value) {
                 if (value == "none") c.antiAliasing = AntiAliasingMode::None;
@@ -378,7 +378,7 @@ namespace Iridium::AppCli {
             });
 
         addValueOption(registry, owner, "--exposure", "manual|auto",
-            "Exposure: the manual EV, or GPU auto-exposure with it as compensation (default manual)",
+            "Exposure: the manual EV, or GPU auto-exposure with it as compensation (default auto)",
             "--exposure requires manual or auto",
             [&c](std::string_view value) {
                 if (value == "manual") c.exposureMode = ExposureMode::Manual;
@@ -409,7 +409,7 @@ namespace Iridium::AppCli {
             });
 
         addValueOption(registry, owner, "--bloom", "off|on",
-            "Bloom: energy-conserving scatter of the resolved colour (default off)",
+            "Bloom: energy-conserving scatter of the resolved colour (default on)",
             "--bloom requires off or on",
             [&c](std::string_view value) {
                 if (value == "on") c.bloom.enabled = true;

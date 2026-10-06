@@ -42,7 +42,7 @@ Push-Location $root
 try {
     $exePath = (Resolve-Path $Exe).Path
     $cookPath = (Resolve-Path $Cook).Path
-    $cacheArgs = @(Get-M7RPipelineCacheArgs $exePath $PipelineCache)
+    $cacheArgs = @(Get-M7REngineBaseArgs $exePath $PipelineCache)
     $outDir = Join-Path $DataRoot "out/m7r/sweeps/$Label"
     if (Test-Path $outDir) { throw "Sweep label already exists: $outDir (sweeps are never overwritten)" }
     New-Item -ItemType Directory -Force $outDir | Out-Null

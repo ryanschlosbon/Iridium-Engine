@@ -25,7 +25,7 @@ $root = Get-M7RRepoRoot
 Push-Location $root
 try {
     $exePath = (Resolve-Path $Exe).Path
-    $cacheArgs = @(Get-M7RPipelineCacheArgs $exePath $PipelineCache)
+    $cacheArgs = @(Get-M7REngineBaseArgs $exePath $PipelineCache)
     $outDir = Join-Path $root "out/m7r/captures/$Label"
     if (Test-Path $outDir) { throw "Output directory already exists: $outDir (captures are never overwritten)" }
     New-Item -ItemType Directory -Force $outDir | Out-Null

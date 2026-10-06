@@ -510,9 +510,9 @@ namespace {
                 { { "yes", "--render-graph-aliasing requires on or off" },
                   { "", "--render-graph-aliasing requires on or off" } } },
             // M9 G5b; off by default.
-            // M9.2; none by default.
-            { "--anti-aliasing", G, "taa", {}, [](C& c) {
-                c.antiAliasing = AntiAliasingMode::Taa; },
+            // M9.2; TAA by default since M9.7, so the row selects none.
+            { "--anti-aliasing", G, "none", {}, [](C& c) {
+                c.antiAliasing = AntiAliasingMode::None; },
                 "--anti-aliasing requires none or taa",
                 { { "fxaa", "--anti-aliasing requires none or taa" },
                   { "", "--anti-aliasing requires none or taa" } } },
@@ -522,9 +522,9 @@ namespace {
                 { { "1,2", "--taa-settings requires seven comma-separated numbers" },
                   { "0.8,0.95,16,1.25,2,1.5,0.97,7", "--taa-settings requires seven comma-separated numbers" },
                   { "", "--taa-settings requires seven comma-separated numbers" } } },
-            // M9.5; manual by default (auto becomes the default at M9.7).
-            { "--exposure", G, "auto", {}, [](C& c) {
-                c.exposureMode = ExposureMode::Auto; },
+            // M9.5; auto by default since M9.7, so the row selects manual.
+            { "--exposure", G, "manual", {}, [](C& c) {
+                c.exposureMode = ExposureMode::Manual; },
                 "--exposure requires manual or auto",
                 { { "automatic", "--exposure requires manual or auto" },
                   { "", "--exposure requires manual or auto" } } },
@@ -543,8 +543,8 @@ namespace {
                   { "-8,16,0.05,0.95,-2,18,2.5,1.5,2",
                     "--auto-exposure-settings requires nine comma-separated numbers" },
                   { "", "--auto-exposure-settings requires nine comma-separated numbers" } } },
-            // M9.4; off by default (on, subtle, at M9.7 per the owner decision).
-            { "--bloom", G, "on", {}, [](C& c) { c.bloom.enabled = true; },
+            // M9.4; on (subtle) by default since M9.7, so the row selects off.
+            { "--bloom", G, "off", {}, [](C& c) { c.bloom.enabled = false; },
                 "--bloom requires off or on",
                 { { "yes", "--bloom requires off or on" },
                   { "", "--bloom requires off or on" } } },

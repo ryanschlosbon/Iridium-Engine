@@ -211,6 +211,60 @@ A = R4 accepted `9f2a28e`, B = R5 complete).
   overlapped, because of a fence-reuse bug fixed in M7R R4d). See the M7R plan's
   evidence sections.
 
+### M9 temporal and post-processing admission (2026-10-06, `9c5f5fc`)
+
+Five-process feature admission (`tools/m9/Run-FeatureAdmission.ps1`): native 4K, Release,
+A,B,B,A,A,B,B,A,A,B, 500 + 10,000 frames, quiet machine (`-RequireQuiet`). A is the same
+build with the feature off; B turns it on. Results are in `out/m9/timing/m9-adm-*`.
+
+GPU frame median, B − A, in ms:
+
+| Route | TAA | Auto-exposure | Bloom | All three |
+|---|---|---|---|---|
+| T-F1-all | +0.196 | +0.027 | +0.134 | +0.367 |
+| T-F7-stack | +0.184 | +0.020 | +0.136 | +0.369 |
+| T-F5-hetero | +0.213 | +0.028 | +0.139 | +0.374 |
+| T-F6-probecap | +0.206 | +0.013 | +0.139 | +0.353 |
+
+GPU pass times (B, median of run medians):
+
+| Pass | Time (ms) |
+|---|---|
+| `temporal.taa` | 0.191–0.207 |
+| `post.exposure.histogram` + `post.exposure.adapt` | 0.013–0.028 + 0.008–0.011 |
+| `post.bloom` | 0.108–0.113 |
+| Output transform with bloom sampling | +0.02–0.04 |
+
+Against the budget table:
+
+- **Native temporal AA (0.40 ms):** about 0.25 ms used. That is the TAA pass at 0.20 ms
+  plus the M9.1 velocity target at about 0.05 ms, which is present on both sides and
+  charged to this row.
+- **Post-processing, bloom, exposure, output (0.50 ms):** about 0.21–0.23 ms used
+  (bloom 0.11, exposure 0.03, output 0.075–0.095).
+- **Total:** the heaviest admission route, T-F6-probecap, goes from 3.60 to 3.95 ms GPU
+  with all three on.
+
+Memory, committed graph:
+
+- TAA adds 127.5 MB, its 4K RGBA16F History pair.
+- Exposure adds a 16 B History buffer pair plus a 255 KB transient.
+- Bloom adds nothing: its half-resolution mip chain aliases.
+
+Steady allocations are 0 on every route and side. Since M9.7 these three features are
+the **product defaults**. Measurement tools pin the M7R route (`--anti-aliasing none
+--exposure manual --bloom off`) through `Get-M7REngineBaseArgs`, so the frozen set and
+older baselines stay comparable.
+
+**F6 re-measure** (the M7R watch item; `out/m9/timing/m9-f6-remeasure`; A = M7R final
+`da8e4e8`, B = M9 with the measurement route pinned):
+
+- T-F6-probecap GPU changed by +0.057 ms (+1.6%). Passes: `forward.opaque` +0.040 and
+  `gbuffer.opaque` +0.012 (the M9.1 velocity targets), and `frustum_compact` +0.002 (G8
+  deterministic compaction). Under 0.005 ms (about 0.1%) remains unattributed.
+- No placement-attributed regression above 1% remains, so no placement policy is
+  applied (director decision rule).
+
 ## Evidence tiers (owner decision, 2026-10-02)
 
 | Change type | Required evidence |

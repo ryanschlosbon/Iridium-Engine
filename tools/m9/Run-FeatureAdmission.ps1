@@ -265,7 +265,7 @@ try {
                 '--profile-cpu', '--profile-gpu', '--profile-cpu-output', $profile,
                 '--cache-state', 'fresh-process-os-driver-cache-uncontrolled',
                 '--warmup-frames', "$Warmup", '--frame-limit', "$Frames"
-            ) + @(Get-M7RPipelineCacheArgs $s.exe $PipelineCache) + $route.Args + $ExtraArgs + $sideArgs[$side]
+            ) + @(Get-M7REngineBaseArgs $s.exe $PipelineCache) + $route.Args + $ExtraArgs + $sideArgs[$side]
             if ($route.Environment) {
                 $arguments += @('--cooked-environment-artifact', (Join-Path $RepoDataRoot (Get-M7RModelArtifact $RepoDataRoot $route.Environment)))
             }

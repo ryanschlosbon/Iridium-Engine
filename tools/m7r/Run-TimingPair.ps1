@@ -55,7 +55,7 @@ foreach ($route in $M7RTimingRoutes) {
             '--profile-cpu', '--profile-gpu', '--profile-cpu-output', $profile,
             '--cache-state', 'fresh-process-os-driver-cache-uncontrolled',
             '--warmup-frames', "$Warmup", '--frame-limit', "$Frames"
-        ) + @(Get-M7RPipelineCacheArgs $exe $PipelineCache) + $route.Args + $ExtraArgs
+        ) + @(Get-M7REngineBaseArgs $exe $PipelineCache) + $route.Args + $ExtraArgs
         if ($route.Environment) {
             $arguments += @('--cooked-environment-artifact', (Join-Path $ArtifactRoot (Get-M7RModelArtifact $ArtifactRoot $route.Environment)))
         }

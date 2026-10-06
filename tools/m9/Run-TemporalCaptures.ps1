@@ -175,7 +175,7 @@ try {
     }
     $M9DataRoot = (Resolve-Path $M9DataRoot).Path
     $exePath = (Resolve-Path $Exe).Path
-    $cacheArgs = @(Get-M7RPipelineCacheArgs $exePath $PipelineCache)
+    $cacheArgs = @(Get-M7REngineBaseArgs $exePath $PipelineCache)
     if (-not $OutRoot) { $OutRoot = Join-Path $root 'out/m9/captures' }
     $outDir = Join-Path $OutRoot $Label
     if (Test-Path $outDir) { throw "Output directory already exists: $outDir (captures are never overwritten)" }
