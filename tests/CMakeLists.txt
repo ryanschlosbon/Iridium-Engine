@@ -79,6 +79,11 @@ endif()
 iridium_add_test(CliOptionRegistryTests
         SOURCES core/CliOptionRegistryTests.cpp)
 
+# Local asset library root: iridium.local.json, worktree fallback, environment
+# override and resolution order.
+iridium_add_test(ProjectAssetRootsTests
+        SOURCES core/ProjectAssetRootsTests.cpp)
+
 # M7R R5b.0 spike: the enkiTS v1.12 properties ADR-0015 relies on, against the
 # library itself (priorities, pinned I/O thread, waits inside tasks, no allocation
 # after Initialize). enkiTS publishes ENKITS_TASK_PRIORITIES_NUM, so no shared PCH.

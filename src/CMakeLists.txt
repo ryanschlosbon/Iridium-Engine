@@ -1,6 +1,6 @@
 # Engine modules. Each directory owns one library; dependencies point downward:
 #
-#   iridium_core          core/** (EngineLog, types/*, cli/*, generated BuildInfo), utils/* -> glm
+#   iridium_core          core/** (EngineLog, ProjectAssetRoots, types/*, cli/*, generated BuildInfo), utils/* -> glm
 #   iridium_profiling     profiling/* (except CpuAllocationProfile)       -> core
 #   iridium_allocation_profile (OBJECT) profiling/CpuAllocationProfile    -> core
 #   iridium_platform      platform/*                                       -> core, glfw
