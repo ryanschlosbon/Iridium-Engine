@@ -225,7 +225,14 @@ namespace Iridium {
     ProjectAssetRootEntry ProjectAssetRoots::resolveRoot(
         const std::filesystem::path& rootRelative) const {
         ProjectAssetRootEntry project{ std::string(kProjectAssetRootId), projectAssetRoot_ };
-        if (rootRelative.is_absolute() || !localAssetRoot_) return project;
+        if (!localAssetRoot_) return project;
+        if (rootRelative.is_absolute()) {
+            if (relativeInside(rootRelative, *localAssetRoot_) &&
+                !relativeInside(rootRelative, projectAssetRoot_)) {
+                return { std::string(kLocalAssetRootId), *localAssetRoot_ };
+            }
+            return project;
+        }
         std::error_code error;
         if (std::filesystem::exists(projectAssetRoot_ / rootRelative, error)) return project;
         error.clear();

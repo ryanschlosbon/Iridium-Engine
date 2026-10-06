@@ -1,4 +1,5 @@
 #include "assets/thumbnail/AssetThumbnailService.h"
+#include "core/ProjectAssetRoots.h"
 #include "core/tasks/TaskSystem.h"
 #include "assets/thumbnail/AssetThumbnailUploadQueue.h"
 #include "assets/model/AssetModelPreparationService.h"
@@ -368,11 +369,10 @@ namespace {
         const std::filesystem::path source =
             temporary.path / "texture.png";
         std::filesystem::copy_file(
-            std::filesystem::path(
-                PROJECT_ROOT_DIR) /
-                "assets" / "models" /
+            Iridium::resolveProjectAssetPath(
+                std::filesystem::path("models") /
                 "alfa_romeo" / "textures" /
-                "ID04_plastic_textured_001_rtint_colors_001_diff_6_1_baseColor.png",
+                "ID04_plastic_textured_001_rtint_colors_001_diff_6_1_baseColor.png"),
             source);
         const AssetGuid textureGuid =
             createAssetGuidV7();

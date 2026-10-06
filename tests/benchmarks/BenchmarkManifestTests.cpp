@@ -1,4 +1,5 @@
 #include "benchmarks/BenchmarkManifest.h"
+#include "core/ProjectAssetRoots.h"
 #include "utils/Sha256.h"
 
 #include <glm/gtc/matrix_transform.hpp>
@@ -6,6 +7,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <exception>
 #include <filesystem>
@@ -29,6 +31,19 @@ namespace {
                 return false; \
             } \
         } while (false)
+
+    // A project-relative content path ("assets/models/..."): under assets/ it
+    // resolves through the project and local asset roots.
+    std::filesystem::path projectContentPath(const std::string& projectRelative) {
+        const std::filesystem::path path(projectRelative);
+        auto part = path.begin();
+        if (part != path.end() && *part == "assets") {
+            std::filesystem::path rootRelative;
+            for (++part; part != path.end(); ++part) rootRelative /= *part;
+            return resolveProjectAssetPath(rootRelative);
+        }
+        return std::filesystem::path(PROJECT_ROOT_DIR) / path;
+    }
 
     std::filesystem::path manifestPath() {
         return std::filesystem::path(PROJECT_ROOT_DIR) /
@@ -448,9 +463,8 @@ namespace {
                 coveredAxes.insert(axis.get<std::string>());
             }
             if (fixture.contains("source_asset")) {
-                const std::filesystem::path source =
-                    std::filesystem::path(PROJECT_ROOT_DIR) /
-                    fixture.at("source_asset").get<std::string>();
+                const std::filesystem::path source = projectContentPath(
+                    fixture.at("source_asset").get<std::string>());
                 CHECK(std::filesystem::is_regular_file(source));
                 CHECK(sha256File(source) ==
                     fixture.at("source_sha256").get<std::string>());
@@ -1355,6 +1369,75 @@ namespace {
         return loadBenchmarkManifest(path, false);
     }
 
+    // Manifest content resolution: the manifest directory first, then the same
+    // relative location in the local asset library, with the escape check
+    // applied to whichever root matched.
+    bool testContentResolutionThroughLocalRoot() {
+        const std::filesystem::path base =
+            std::filesystem::temp_directory_path() /
+            ("iridium-benchmark-local-root-" + std::to_string(
+                std::chrono::steady_clock::now().time_since_epoch().count()));
+        const std::filesystem::path project = base / "project";
+        const std::filesystem::path library = base / "library";
+        const std::filesystem::path assets = project / "assets";
+        const auto write = [](const std::filesystem::path& path) {
+            std::filesystem::create_directories(path.parent_path());
+            std::ofstream(path, std::ios::binary) << "{}";
+        };
+        write(assets / "benchmarks" / "m9" / "fixture.gltf");
+        write(assets / "shared.gltf");
+        write(library / "shared.gltf");
+        write(library / "models" / "car" / "car.gltf");
+        write(library / "benchmarks" / "m9" / "local-only.gltf");
+        write(base / "outside.gltf");
+        std::ofstream(project / "iridium.local.json") <<
+            "{ \"localAssetRoot\": \"" + library.generic_string() + "\" }";
+        const ProjectAssetRoots roots =
+            ProjectAssetRoots::fromProjectRoot(project, std::nullopt);
+        const ProjectAssetRoots projectOnly =
+            ProjectAssetRoots::fromProjectRoot(base / "no-config", std::nullopt);
+        const auto canonical = [](const std::filesystem::path& path) {
+            return std::filesystem::weakly_canonical(path);
+        };
+        const auto rejected = [&](const std::filesystem::path& directory,
+            const std::filesystem::path& relative) {
+            try {
+                (void)resolveBenchmarkContentPath(directory, relative, roots);
+            }
+            catch (const std::exception&) {
+                return true;
+            }
+            return false;
+        };
+        bool passed = roots.localAssetRoot().has_value();
+        // Manifest-local content and project content win over the library.
+        passed = passed && resolveBenchmarkContentPath(assets / "benchmarks" / "m9",
+            "fixture.gltf", roots) == canonical(assets / "benchmarks/m9/fixture.gltf");
+        passed = passed && resolveBenchmarkContentPath(assets, "shared.gltf", roots) ==
+            canonical(assets / "shared.gltf");
+        // Missing in the project: the same relative location in the library.
+        passed = passed && resolveBenchmarkContentPath(assets, "models/car/car.gltf",
+            roots) == canonical(library / "models/car/car.gltf");
+        passed = passed && resolveBenchmarkContentPath(assets / "benchmarks" / "m9",
+            "local-only.gltf", roots) == canonical(library / "benchmarks/m9/local-only.gltf");
+        // Missing everywhere: the manifest-relative path, as before.
+        passed = passed && resolveBenchmarkContentPath(assets, "models/none.gltf",
+            roots) == canonical(assets / "models/none.gltf");
+        // Without a local root nothing changes.
+        passed = passed && resolveBenchmarkContentPath(assets, "models/car/car.gltf",
+            projectOnly) == canonical(assets / "models/car/car.gltf");
+        // A manifest outside the project asset root never maps into the library.
+        passed = passed && resolveBenchmarkContentPath(project / "tests",
+            "models/car/car.gltf", roots) == canonical(project / "tests/models/car/car.gltf");
+        // Escapes and absolute paths are rejected for either root.
+        passed = passed && rejected(assets, "../outside.gltf");
+        passed = passed && rejected(assets / "benchmarks", "../shared.gltf");
+        passed = passed && rejected(assets, library / "shared.gltf");
+        std::error_code ignored;
+        std::filesystem::remove_all(base, ignored);
+        return passed;
+    }
+
     bool syntheticFactoryRejected(const std::string& name,
         const nlohmann::json& factory) {
         try {
@@ -1943,6 +2026,7 @@ int main() {
     constexpr TestCase tests[] = {
         { "SHA-256 known vector", testSha256KnownVector },
         { "manifest and content verification", testManifestAndContentVerification },
+        { "content resolution through the local asset root", testContentResolutionThroughLocalRoot },
         { "nested transparency fixture contract", testNestedTransparencyFixtureContract },
         { "opaque emissive range fixture contract", testOpaqueEmissiveRangeFixtureContract },
         { "M1 color-volume fixture contract", testM1ColorVolumeFixtureContract },

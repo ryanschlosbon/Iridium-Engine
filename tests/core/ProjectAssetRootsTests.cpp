@@ -235,6 +235,9 @@ namespace {
         CHECK(roots.resolveRoot("models/none.gltf").id == "project");
         const std::filesystem::path absolute = library.path / "shared.txt";
         CHECK(roots.resolve(absolute) == absolute);
+        CHECK(roots.resolveRoot(absolute).id == "local");
+        CHECK(roots.resolveRoot(assets / "shared.txt").id == "project");
+        CHECK(roots.resolveRoot(project.path / "elsewhere.txt").id == "project");
 
         const auto mapped = roots.mapProjectPathToLocal(assets / "benchmarks" / "m0");
         CHECK(mapped && same(*mapped, library.path / "benchmarks" / "m0"));

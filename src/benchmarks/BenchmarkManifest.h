@@ -11,6 +11,8 @@
 
 namespace Iridium {
 
+    class ProjectAssetRoots;
+
     struct BenchmarkContentFile {
         std::filesystem::path relativePath;
         std::filesystem::path path;
@@ -227,6 +229,17 @@ namespace Iridium {
 
     [[nodiscard]] BenchmarkManifest loadBenchmarkManifest(
         const std::filesystem::path& path, bool verifyContentHashes = true);
+    // A manifest content path, relative to the manifest's directory and never
+    // escaping it. When the target is missing there and the directory lies inside
+    // the project asset root, the same relative location under the local asset
+    // library is used when it exists (licensed third-party content lives there),
+    // with the escape check applied to that root. Otherwise the manifest-relative
+    // path is returned, so missing-content errors name it as before.
+    // loadBenchmarkManifest resolves through ProjectAssetRoots::current().
+    [[nodiscard]] std::filesystem::path resolveBenchmarkContentPath(
+        const std::filesystem::path& manifestDirectory,
+        const std::filesystem::path& relative,
+        const ProjectAssetRoots& roots);
     [[nodiscard]] const BenchmarkFixture& findBenchmarkFixture(
         const BenchmarkManifest& manifest, const std::string& id);
     [[nodiscard]] BenchmarkCameraPose evaluateBenchmarkCamera(

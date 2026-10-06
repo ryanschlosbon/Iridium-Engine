@@ -101,6 +101,7 @@ namespace Iridium {
         [[nodiscard]] std::filesystem::path resolve(
             const std::filesystem::path& rootRelative) const;
         // The root a root-relative path resolves under (same order as resolve).
+        // For an absolute path, the root that contains it (project otherwise).
         [[nodiscard]] ProjectAssetRootEntry resolveRoot(
             const std::filesystem::path& rootRelative) const;
 

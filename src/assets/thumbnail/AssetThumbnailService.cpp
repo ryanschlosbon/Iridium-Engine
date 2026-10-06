@@ -99,13 +99,32 @@ namespace Iridium {
         std::shared_ptr<LocalDerivedDataCache> cache,
         CookTarget target,
         EngineLog* log)
-        : assetRoot_(std::move(assetRoot)),
+        : AssetThumbnailService(
+            tasks,
+            std::vector<AssetRoot>{
+                AssetRoot{ "project", std::move(assetRoot) },
+            },
+            std::move(cache),
+            std::move(target),
+            log) {}
+
+    AssetThumbnailService::AssetThumbnailService(
+        Tasks::TaskSystem& tasks,
+        std::vector<AssetRoot> roots,
+        std::shared_ptr<LocalDerivedDataCache> cache,
+        CookTarget target,
+        EngineLog* log)
+        : roots_(std::move(roots)),
           cache_(std::move(cache)),
           target_(std::move(target)),
           importers_(
               createStandardAssetImporterRegistry()),
           log_(log) {
-        if (assetRoot_.empty() || !cache_) {
+        if (roots_.empty() ||
+            std::ranges::any_of(roots_, [](const AssetRoot& root) {
+                return root.path.empty();
+            }) ||
+            !cache_) {
             throw std::invalid_argument(
                 "Asset thumbnail service requires an asset root and DDC.");
         }
@@ -545,18 +564,20 @@ namespace Iridium {
         PreparedAssetThumbnailBatch& result = cook.result;
         result.rootAssetGuid = job.rootAssetGuid;
         try {
+            const std::filesystem::path& recordRoot =
+                assetRootPathFor(roots_, job.rootRecord);
             const std::filesystem::path
                 sourcePath =
-                    assetRoot_ /
+                    recordRoot /
                     job.rootRecord.sourcePath;
             const std::filesystem::path
                 metadataPath =
-                    assetRoot_ /
+                    recordRoot /
                     job.rootRecord.metadataPath;
             if (!isInsideRoot(
-                    assetRoot_, sourcePath) ||
+                    recordRoot, sourcePath) ||
                 !isInsideRoot(
-                    assetRoot_, metadataPath)) {
+                    recordRoot, metadataPath)) {
                 throw std::runtime_error(
                     "Thumbnail source paths escape the registered asset root.");
             }
@@ -578,7 +599,7 @@ namespace Iridium {
                 warmPrepared =
                     tryPrepareAssetCookFromReceipt(
                         importers_, *cache_,
-                        assetRoot_,
+                        recordRoot,
                         job.rootRecord.sourcePath,
                         *metadata.metadata,
                         target_,
@@ -597,7 +618,7 @@ namespace Iridium {
                 usedReceipt
                 ? std::move(*warmPrepared)
                 : prepareAssetCook(
-                    importers_, assetRoot_,
+                    importers_, recordRoot,
                     job.rootRecord.sourcePath,
                     *metadata.metadata,
                     target_,

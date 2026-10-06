@@ -1,7 +1,10 @@
 #include "assets/AssetDiscovery.h"
 
+#include "core/ProjectAssetRoots.h"
+
 #include <algorithm>
 #include <map>
+#include <stdexcept>
 #include <system_error>
 
 namespace Iridium {
@@ -168,6 +171,36 @@ namespace Iridium {
             std::unique(result.sourceDirectories.begin(),
                 result.sourceDirectories.end()),
             result.sourceDirectories.end());
+        return result;
+    }
+
+    const AssetRoot* findAssetRoot(
+        std::span<const AssetRoot> roots, std::string_view id) noexcept {
+        for (const AssetRoot& root : roots) {
+            if (root.id == id) return &root;
+        }
+        return nullptr;
+    }
+
+    const std::filesystem::path& assetRootPathFor(
+        std::span<const AssetRoot> roots, const AssetCatalogRecord& record) {
+        if (const AssetRoot* root = findAssetRoot(roots, record.assetRoot)) {
+            return root->path;
+        }
+        if (record.assetRoot.empty() && roots.size() == 1) return roots.front().path;
+        throw std::runtime_error(
+            "Asset record uses an unregistered asset root: '" + record.assetRoot + "'.");
+    }
+
+    bool isProjectContentRoot(std::string_view id) noexcept {
+        return id == kProjectAssetRootId || id == kLocalAssetRootId;
+    }
+
+    std::vector<AssetRoot> configuredProjectAssetRoots() {
+        std::vector<AssetRoot> result;
+        for (ProjectAssetRootEntry& entry : ProjectAssetRoots::current().roots()) {
+            result.push_back({ std::move(entry.id), std::move(entry.path) });
+        }
         return result;
     }
 

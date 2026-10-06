@@ -1,5 +1,6 @@
 #include "benchmarks/BenchmarkManifest.h"
 
+#include "core/ProjectAssetRoots.h"
 #include "utils/Sha256.h"
 
 #include <nlohmann/json.hpp>
@@ -55,15 +56,8 @@ namespace Iridium {
 
         std::filesystem::path resolveContentPath(const std::filesystem::path& root,
             const std::filesystem::path& relative) {
-            if (relative.is_absolute()) {
-                throw std::runtime_error("Benchmark content paths must be relative");
-            }
-            const auto resolved = std::filesystem::weakly_canonical(root / relative);
-            if (!pathWithin(resolved, root)) {
-                throw std::runtime_error("Benchmark content path escapes manifest directory: " +
-                    relative.string());
-            }
-            return resolved;
+            return resolveBenchmarkContentPath(root, relative,
+                ProjectAssetRoots::current());
         }
 
         std::string lowercase(std::string value) {
@@ -498,6 +492,39 @@ namespace Iridium {
         }
 
     } // namespace
+
+    std::filesystem::path resolveBenchmarkContentPath(
+        const std::filesystem::path& manifestDirectory,
+        const std::filesystem::path& relative,
+        const ProjectAssetRoots& roots) {
+        if (relative.is_absolute()) {
+            throw std::runtime_error("Benchmark content paths must be relative");
+        }
+        const std::filesystem::path root =
+            std::filesystem::weakly_canonical(manifestDirectory);
+        const auto resolved = std::filesystem::weakly_canonical(root / relative);
+        if (!pathWithin(resolved, root)) {
+            throw std::runtime_error("Benchmark content path escapes manifest directory: " +
+                relative.string());
+        }
+        std::error_code error;
+        if (std::filesystem::exists(resolved, error)) return resolved;
+        // Manifests stay in the repository; the third-party content they name
+        // lives at the same relative location in the local asset library.
+        const std::optional<std::filesystem::path> localDirectory =
+            roots.mapProjectPathToLocal(root);
+        if (!localDirectory) return resolved;
+        const std::filesystem::path localRoot =
+            std::filesystem::weakly_canonical(*localDirectory);
+        const auto local = std::filesystem::weakly_canonical(localRoot / relative);
+        if (!pathWithin(local, localRoot)) {
+            throw std::runtime_error(
+                "Benchmark content path escapes the local asset library directory: " +
+                relative.string());
+        }
+        error.clear();
+        return std::filesystem::exists(local, error) ? local : resolved;
+    }
 
     BenchmarkManifest loadBenchmarkManifest(const std::filesystem::path& path,
         bool verifyContentHashes) {

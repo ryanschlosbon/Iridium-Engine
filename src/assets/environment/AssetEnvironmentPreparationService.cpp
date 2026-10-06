@@ -5,6 +5,7 @@
 #include "core/EngineLog.h"
 #include "core/tasks/TaskSystem.h"
 
+#include <algorithm>
 #include <stdexcept>
 
 namespace Iridium {
@@ -48,10 +49,23 @@ AssetEnvironmentPreparationService::AssetEnvironmentPreparationService(
     std::shared_ptr<LocalDerivedDataCache> cache,
     CookTarget target,
     EngineLog* log)
-    : assetRoot_(std::move(assetRoot)), cache_(std::move(cache)),
+    : AssetEnvironmentPreparationService(tasks,
+          std::vector<AssetRoot>{ AssetRoot{ "project", std::move(assetRoot) } },
+          std::move(cache), std::move(target), log) {}
+
+AssetEnvironmentPreparationService::AssetEnvironmentPreparationService(
+    Tasks::TaskSystem& tasks,
+    std::vector<AssetRoot> roots,
+    std::shared_ptr<LocalDerivedDataCache> cache,
+    CookTarget target,
+    EngineLog* log)
+    : roots_(std::move(roots)), cache_(std::move(cache)),
       target_(std::move(target)), importers_(createStandardAssetImporterRegistry()),
       log_(log) {
-    if (assetRoot_.empty() || !cache_) {
+    if (roots_.empty() ||
+        std::ranges::any_of(roots_,
+            [](const AssetRoot& root) { return root.path.empty(); }) ||
+        !cache_) {
         throw std::invalid_argument(
             "Catalog environment preparation requires an asset root and DDC.");
     }
@@ -125,10 +139,11 @@ AssetEnvironmentPreparationService::prepareCook(
     const AssetCatalogRecord& record, std::stop_token stopToken,
     PreparedCatalogEnvironment& result) {
     try {
-        const auto sourcePath = assetRoot_ / record.sourcePath;
-        const auto metadataPath = assetRoot_ / record.metadataPath;
-        if (!isInsideRoot(assetRoot_, sourcePath) ||
-            !isInsideRoot(assetRoot_, metadataPath)) {
+        const std::filesystem::path& recordRoot = assetRootPathFor(roots_, record);
+        const auto sourcePath = recordRoot / record.sourcePath;
+        const auto metadataPath = recordRoot / record.metadataPath;
+        if (!isInsideRoot(recordRoot, sourcePath) ||
+            !isInsideRoot(recordRoot, metadataPath)) {
             throw std::runtime_error("Environment paths escape the asset root.");
         }
         const AssetMetadataReadResult metadata = readAssetMetadata(metadataPath);
@@ -139,12 +154,12 @@ AssetEnvironmentPreparationService::prepareCook(
         }
         std::vector<CookDiagnostic> receiptDiagnostics;
         std::optional<PreparedAssetCook> warm = tryPrepareAssetCookFromReceipt(
-            importers_, *cache_, assetRoot_, record.sourcePath,
+            importers_, *cache_, recordRoot, record.sourcePath,
             *metadata.metadata, target_, "reflection-resolution-v3",
             receiptDiagnostics);
         PreparedAssetCook prepared = warm
             ? std::move(*warm)
-            : prepareAssetCook(importers_, assetRoot_, record.sourcePath,
+            : prepareAssetCook(importers_, recordRoot, record.sourcePath,
                 *metadata.metadata, target_, "reflection-resolution-v3", stopToken);
         if (!prepared.valid()) {
             throw std::runtime_error(failureMessage(

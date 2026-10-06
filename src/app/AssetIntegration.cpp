@@ -15,6 +15,7 @@
 #include <fstream>
 #include <iostream>
 #include <map>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <charconv>
@@ -28,6 +29,7 @@
 #include "assets/AssetDiscovery.h"
 #include "assets/AssetMetadata.h"
 #include "assets/SqliteAssetCatalog.h"
+#include "core/ProjectAssetRoots.h"
 #include "assets/cooker/AssetCooker.h"
 #include "assets/cooker/CookKey.h"
 #include "assets/cooker/CookReceipt.h"
@@ -150,7 +152,33 @@ namespace Iridium {
             std::filesystem::remove(temporary, filesystemError);
             return false;
         }
-    }
+
+        struct RootLocation {
+            const AssetRoot* root = nullptr;
+            std::filesystem::path relative;
+        };
+
+        // The registered root holding `path` and the root-relative location.
+        std::optional<RootLocation> locateInAssetRoots(
+            std::span<const AssetRoot> roots, const std::filesystem::path& path) {
+            std::error_code error;
+            const auto canonicalPath = std::filesystem::weakly_canonical(path, error);
+            if (error) return std::nullopt;
+            for (const AssetRoot& root : roots) {
+                const auto canonicalRoot =
+                    std::filesystem::weakly_canonical(root.path, error);
+                if (error) {
+                    error.clear();
+                    continue;
+                }
+                const auto relative = canonicalPath.lexically_relative(canonicalRoot);
+                if (relative.empty() || *relative.begin() == "..") continue;
+                return RootLocation{ &root, relative };
+            }
+            return std::nullopt;
+        }
+
+    } // namespace
 
     AssetIntegration::AssetIntegration(ApplicationConfig& config,
         CpuProfiler& profiler, EngineLog& log, Tasks::TaskSystem& tasks,
@@ -192,18 +220,22 @@ namespace Iridium {
                         !deterministicContent,
                     .tasks = &tasks_,
                 });
-        const std::filesystem::path assetRoot =
-            std::filesystem::path(PROJECT_ROOT_DIR) / "assets";
+        // "project" (<repo>/assets) plus the local asset library when one is
+        // configured (iridium.local.json / IRIDIUM_LOCAL_ASSET_ROOT).
+        const std::vector<AssetRoot> assetRoots =
+            configuredProjectAssetRoots();
         assetCatalog_ = createSqliteAssetCatalog(
             !deterministicContent
                 ? std::filesystem::path(PROJECT_ROOT_DIR) / "out" /
                     "editor" / "asset-catalog.sqlite"
                 : std::filesystem::path(":memory:"));
         if (!deterministicContent) {
+            for (const std::string& diagnostic :
+                ProjectAssetRoots::current().configuration().diagnostics) {
+                std::cerr << "Asset roots: " << diagnostic << '\n';
+            }
             const AssetDiscoveryResult discovery =
-                discoverAssetRoots(std::array{
-                    AssetRoot{ "project", assetRoot },
-                });
+                discoverAssetRoots(assetRoots);
             assetCatalog_->rebuild(
                 discovery.records,
                 discovery.sourceDirectories);
@@ -216,9 +248,7 @@ namespace Iridium {
                 std::make_unique<AssetCatalogService>(
                     tasks_,
                     assetCatalog_.get(),
-                    std::vector<AssetRoot>{
-                        AssetRoot{ "project", assetRoot },
-                    },
+                    assetRoots,
                     &engineLog_);
             editorModelDdc_ =
                 std::make_shared<
@@ -231,7 +261,7 @@ namespace Iridium {
             assetModelPreparationService_ =
                 std::make_unique<AssetModelPreparationService>(
                     tasks_,
-                    assetRoot,
+                    assetRoots,
                     editorModelDdc_,
                     CookTarget{
                         .platform = "windows-x64",
@@ -245,7 +275,7 @@ namespace Iridium {
             assetEnvironmentPreparationService_ =
                 std::make_unique<AssetEnvironmentPreparationService>(
                     tasks_,
-                    assetRoot,
+                    assetRoots,
                     editorModelDdc_,
                     CookTarget{
                         .platform = "windows-x64",
@@ -259,7 +289,7 @@ namespace Iridium {
             assetThumbnailService_ =
                 std::make_unique<AssetThumbnailService>(
                     tasks_,
-                    assetRoot,
+                    assetRoots,
                     editorModelDdc_,
                     CookTarget{
                         .platform = "windows-x64",
@@ -468,8 +498,21 @@ namespace Iridium {
             const std::filesystem::path relativeSource =
                 std::filesystem::path("generated") / "reflection-probes" /
                 sceneGuid.toString() / (owner.toString() + ".irprobe");
+            // A baked probe is derived from the scene's content, so it lives in
+            // the root that holds the scene document: a scene in the local asset
+            // library (licensed third-party content) bakes there, never into the
+            // repository. A scene outside every root bakes into the local root
+            // when one is configured, else the project root.
+            const std::vector<AssetRoot> assetRoots =
+                configuredProjectAssetRoots();
+            const std::optional<RootLocation> sceneLocation =
+                locateInAssetRoots(assetRoots, scenePath);
+            const AssetRoot* generatedRoot = sceneLocation
+                ? sceneLocation->root
+                : findAssetRoot(assetRoots, kLocalAssetRootId);
+            if (generatedRoot == nullptr) generatedRoot = &assetRoots.front();
             const std::filesystem::path sourcePath =
-                projectRoot / "assets" / relativeSource;
+                generatedRoot->path / relativeSource;
             const std::filesystem::path metadataPath =
                 assetMetadataSidecarPath(sourcePath);
 
@@ -545,8 +588,13 @@ namespace Iridium {
                 {
                     .type = AssetDependencyType::Asset,
                     .assetGuid = sceneGuid,
-                    .location = std::filesystem::relative(scenePath,
-                        projectRoot, filesystemError).generic_string(),
+                    // "assets/<root-relative>" for a scene in any root: the
+                    // project form, unchanged when the scene moves roots.
+                    .location = sceneLocation
+                        ? (std::filesystem::path("assets") /
+                            sceneLocation->relative).generic_string()
+                        : std::filesystem::relative(scenePath,
+                            projectRoot, filesystemError).generic_string(),
                     .contentHash = sceneHash,
                 },
                 {
@@ -971,7 +1019,7 @@ namespace Iridium {
                     [](const AssetCatalogRecord& candidate) {
                         return !candidate.parentGuid &&
                             candidate.assetType == "iridium.environment" &&
-                            candidate.assetRoot == "project" &&
+                            isProjectContentRoot(candidate.assetRoot) &&
                             candidate.status == AssetCatalogStatus::Ready;
                     });
                 if (record == records.end()) {
@@ -1080,7 +1128,7 @@ namespace Iridium {
                                 return !candidate.parentGuid &&
                                     candidate.assetType ==
                                         "iridium.environment" &&
-                                    candidate.assetRoot == "project" &&
+                                    isProjectContentRoot(candidate.assetRoot) &&
                                     candidate.status ==
                                         AssetCatalogStatus::Ready;
                             });
@@ -1187,8 +1235,8 @@ namespace Iridium {
                                 return !candidate.parentGuid &&
                                     candidate.assetType ==
                                         "iridium.model" &&
-                                    candidate.assetRoot ==
-                                        "project" &&
+                                    isProjectContentRoot(
+                                        candidate.assetRoot) &&
                                     candidate.status ==
                                         AssetCatalogStatus::Ready;
                             });
@@ -1370,13 +1418,10 @@ namespace Iridium {
             baselineBlob.artifactHash);
         std::shared_ptr<ModelSourceReimportContext>
             sourceContext;
-        const std::filesystem::path assetRoot =
-            std::filesystem::path(
-                PROJECT_ROOT_DIR) / "assets";
+        const std::vector<AssetRoot> assetRoots =
+            configuredProjectAssetRoots();
         const AssetDiscoveryResult discovery =
-            discoverAssetRoots(std::array{
-                AssetRoot{ "project", assetRoot },
-            });
+            discoverAssetRoots(assetRoots);
         const auto sourceRecord =
             std::ranges::find_if(
                 discovery.records,
@@ -1390,6 +1435,10 @@ namespace Iridium {
                 });
         if (sourceRecord !=
             discovery.records.end()) {
+            // The source resolves under its own root (project or local); cook
+            // keys use root-relative locations, so they do not depend on it.
+            const std::filesystem::path assetRoot =
+                assetRootPathFor(assetRoots, *sourceRecord);
             sourceContext =
                 std::make_shared<
                     ModelSourceReimportContext>();

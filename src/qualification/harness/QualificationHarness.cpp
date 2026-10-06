@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "assets/AssetManager.h"
+#include "core/ProjectAssetRoots.h"
 #include "platform/SystemProfile.h"
 #include "profiling/CpuProfiler.h"
 #include "qualification/harness/HarnessDetail.h"
@@ -147,8 +148,12 @@ namespace Iridium {
                 static_cast<size_t>(frames)));
         }
         if (!options_.backgroundCookSource.empty()) {
+            // A relative source resolves under the project asset root, else the
+            // local asset library (licensed third-party content); the cook key
+            // is root-relative either way.
             backgroundCook_.reset(new BackgroundCookLoad(*tasks,
-                std::filesystem::path(PROJECT_ROOT_DIR) / "assets",
+                ProjectAssetRoots::current().resolveRoot(
+                    options_.backgroundCookSource).path,
                 options_.backgroundCookSource));
             backgroundCook_->start();
         }
