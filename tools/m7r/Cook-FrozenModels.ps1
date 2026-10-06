@@ -1,6 +1,8 @@
 # Cooks the M7R frozen-set models into out/m7r/ddc and writes out/m7r/ddc/artifacts.json
 # (model name -> source, artifact path, cook key, artifact hash). Re-running is a cache hit.
-# Third-party sources (e.g. models/alfa_romeo) are local-only and never committed.
+# Third-party sources (e.g. models/alfa_romeo) are read in place from the local asset
+# library (iridium.local.json; Resolve-IridiumAssetPath) and never committed. The cook
+# key is root-relative, so it does not depend on which root holds the source.
 #
 #   powershell -File tools/m7r/Cook-FrozenModels.ps1
 param([string] $Cook = 'out/build/x64-release/bin/IridiumCookAsset.exe')
@@ -16,7 +18,8 @@ try {
         $model = $M7RModels[$name]
         $source = $model.Source
         $metadata = if ($model.Metadata) { " --metadata `"$($model.Metadata)`"" } else { '' }
-        $json = (cmd /c "`"$Cook`" --source `"assets/$source`"$metadata --ddc `"$ddc`" 2>nul") -join "`n"
+        $sourcePath = Resolve-IridiumAssetPath $root $source
+        $json = (cmd /c "`"$Cook`" --source `"$sourcePath`"$metadata --ddc `"$ddc`" 2>nul") -join "`n"
         if ($LASTEXITCODE -ne 0) { throw "Cook failed for $name" }
         $result = $json | ConvertFrom-Json
         if ($result.status -notin @('built', 'cache-hit')) { throw "Cook status $($result.status) for $source" }

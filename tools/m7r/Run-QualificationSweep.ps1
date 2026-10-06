@@ -14,10 +14,10 @@
 # -DataRoot is the checkout that owns out/m7r (cooked DDC, sweeps); it defaults to the
 # main checkout of this repository, so a worktree build reuses its cooked artifacts.
 # The engine runs with its own checkout as the working directory (shaders, manifests).
-# Alfa entries (R04/R05, O02-O04, X01) also need the local-only model sources under the
-# run root's assets/models/alfa_romeo (manifest content hashes). In a worktree use real
-# files or hard links: a directory junction resolves outside assets/ and the manifest
-# loader rejects it ("content path escapes manifest directory"). Never commit them.
+# Alfa entries (R04/R05, O02-O04, X01) read the licensed model through the manifests'
+# content checks; the engine resolves it in place from the local asset library
+# (iridium.local.json, or the main checkout's for a worktree). Never copy or link
+# third-party content into a checkout.
 param(
     [Parameter(Mandatory)] [string] $Label,
     [string] $Exe = 'out/build/x64-release/bin/IridiumEngine.exe',

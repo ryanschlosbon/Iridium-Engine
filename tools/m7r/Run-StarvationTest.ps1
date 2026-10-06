@@ -78,8 +78,9 @@ if (-not $SkipFrames) {
                 '--qualification-frame-task-probe'
             ) + @(Get-M7REngineBaseArgs $exePath $PipelineCache) + $route.Args
             if ($side -eq 'B') { $arguments += @('--qualification-background-cook', $CookSource) }
-            # The engine runs from its own checkout (shaders); manifests, artifacts
-            # and the cook source come from absolute paths or its assets/ root.
+            # The engine runs from its own checkout (shaders); manifests and artifacts
+            # come from absolute paths, the cook source from its asset roots (assets/,
+            # else the local asset library).
             Push-Location $root
             try { $exit = Invoke-M7REngine $exePath $arguments $log } finally { Pop-Location }
             Write-Host ("{0,-11} run {1} side {2} exit {3}" -f $route.Key, $index, $side, $exit)
@@ -94,7 +95,7 @@ $cookPath = (Resolve-Path (Join-Path $root $Cook)).Path
 $tools = [ordered]@{ B = $cookPath }
 if ($BaselineCookExe) { $tools['A'] = (Resolve-Path $BaselineCookExe).Path }
 $order = if ($BaselineCookExe) { @('A', 'B', 'B', 'A') } else { @('B') }
-$source = Join-Path $root "assets/$CookSource"
+$source = Resolve-IridiumAssetPath $root $CookSource
 for ($repeat = 0; $repeat -lt $CookRepeats; $repeat++) {
     foreach ($side in $order) {
         if (Test-Path $CookWorkDir) { Remove-Item -Recurse -Force $CookWorkDir }

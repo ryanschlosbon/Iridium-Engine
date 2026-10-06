@@ -14,7 +14,7 @@
 # Manifests and cooked artifacts (out/m7r/ddc, from tools/m7r/Cook-FrozenModels.ps1)
 # come from -RepoDataRoot, which defaults to the main checkout of this repository (the
 # parent of the git common directory), so a git worktree uses the main checkout's
-# cooked data and local-only assets. Results go to <OutRoot>/<Label> (default:
+# cooked data; third-party content is read from the local asset library. Results go to <OutRoot>/<Label> (default:
 # out/m9/timing of this checkout); an existing label is never overwritten.
 #
 #   powershell -ExecutionPolicy Bypass -File tools/m9/Run-FeatureAdmission.ps1 -Label taa-on `

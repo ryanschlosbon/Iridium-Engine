@@ -55,7 +55,7 @@ powershell -ExecutionPolicy Bypass -File tools/m9/Run-FeatureAdmission.ps1 -Labe
 | `-ExeA`, `-ExeB` | Explicit executable per side; the working directory is derived from `<checkout>/out/build/<preset>/bin`, or given by `-RootX`. |
 | `-ArgsA`, `-ArgsB`, `-ExtraArgs` | Extra engine flags for side A, side B, or both. Space-separated when passed through `-File`. |
 | `-Warmup`, `-Frames` | 500 and 10,000 by default. Use tiny values only for smoke tests. |
-| `-RepoDataRoot` | Where manifests and cooked artifacts (`out/m7r/ddc`, from `tools/m7r/Cook-FrozenModels.ps1`) come from. Default: the main checkout (parent of the git common directory), so a git worktree uses the main checkout's cooked data and local-only assets. |
+| `-RepoDataRoot` | Where manifests and cooked artifacts (`out/m7r/ddc`, from `tools/m7r/Cook-FrozenModels.ps1`) come from. Default: the main checkout (parent of the git common directory), so a git worktree uses the main checkout's cooked data. Third-party content is read in place from the local asset library (`iridium.local.json`, see `docs/PROJECT_CONTEXT.md`). |
 | `-PipelineCache` | `off` (default) or a cache directory, as in the M7R scripts. |
 | `-RequireQuiet` | Before the first run, GPU utilization and per-process CPU are sampled for `-QuietSampleSeconds` (3). Above `-QuietThresholdPercent` (5%, CPU as a share of all logical processors, engine and this script excluded), the runner warns; with `-RequireQuiet` it aborts before creating the label directory. |
 | `-StateSampleSeconds` | CPU sample window for the per-process top-10 record (default 1 s). |
@@ -122,7 +122,7 @@ powershell -ExecutionPolicy Bypass -File tools/m9/Run-TemporalCaptures.ps1 -Labe
 | `-ExtraArgs` | Extra engine flags, e.g. `--temporal-jitter on`. |
 | `-Reference`, `-HoldFrame`, `-Samples`, `-Settle` | Accumulation reference (below). |
 | `-MetricsExe` | The G6d metrics tool, `out/build/x64-release/bin/IridiumTemporalMetrics.exe` by default. |
-| `-RepoDataRoot`, `-M9DataRoot` | Where the frozen-set data (`out/m7r/ddc`, local-only assets) and the M9 cooked models come from. Default: the main checkout, and this checkout for M9 when it has `out/m9/ddc`. |
+| `-RepoDataRoot`, `-M9DataRoot` | Where the frozen-set data (`out/m7r/ddc`) and the M9 cooked models come from (third-party content comes from the local asset library). Default: the main checkout, and this checkout for M9 when it has `out/m9/ddc`. |
 
 Each frame is one `iridium.frame_capture` artifact (`..__mf<N>.pfm|.tga` plus `.json`),
 written as its readback completes, so a long 4K sequence never sits in memory. The

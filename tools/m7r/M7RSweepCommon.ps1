@@ -30,8 +30,8 @@ function Initialize-M7RSweepInputs([string] $dataRoot, [string] $cook, $entries)
             }
             $spec = $M7RSweepInputs[$name]
             if (-not $spec) { throw "Sweep input $name is neither frozen (artifacts.json) nor in `$M7RSweepInputs" }
-            $source = Join-Path 'assets' $spec.Source
-            if (-not (Test-Path $source)) { throw "Source for $name not found under $dataRoot\assets: $($spec.Source) (local-only content?)" }
+            $source = Resolve-IridiumAssetPath $dataRoot $spec.Source
+            if (-not (Test-Path $source)) { throw "Source for $name not found under $dataRoot\assets or the local asset library: $($spec.Source) (configure iridium.local.json)" }
             $metadata = if ($spec.Metadata) { " --metadata `"$($spec.Metadata)`"" } else { '' }
             $json = (cmd /c "`"$cook`" --source `"$source`"$metadata --ddc `"out/m7r/ddc`" 2>nul") -join "`n"
             if ($LASTEXITCODE -ne 0) { throw "Cook failed for $name ($source)" }

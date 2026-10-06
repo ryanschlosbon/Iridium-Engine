@@ -46,7 +46,7 @@ param(
     [string] $MetricsExe = 'out/build/x64-release/bin/IridiumTemporalMetrics.exe',
     # Where the frozen-set manifests and cooked artifacts (out/m7r/ddc) come from. Default: the main
     # checkout (parent of the git common directory), so a worktree uses the main checkout's data
-    # and local-only assets.
+    # (third-party content comes from the local asset library).
     [string] $RepoDataRoot = '',
     # Where the M9 cooked artifacts (out/m9/ddc, from Cook-TemporalModels.ps1) come from. Default:
     # this checkout when it has them, else the main checkout.

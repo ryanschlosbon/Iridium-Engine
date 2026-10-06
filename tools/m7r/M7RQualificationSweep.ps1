@@ -17,8 +17,9 @@
 . (Join-Path $PSScriptRoot 'M7RFixtures.ps1')
 . (Join-Path $PSScriptRoot 'M7RSweepCommon.ps1')
 
-# Sweep-only cooked inputs (frozen-set models come from artifacts.json). Sources are under
-# assets/ of the data root; hdri/ content is local-only third-party and never committed.
+# Sweep-only cooked inputs (frozen-set models come from artifacts.json). Sources resolve
+# through the data root's asset roots (assets/, else the local asset library); hdri/
+# content is third-party, lives in the local library and is never committed.
 $M7RSweepInputs = [ordered]@{
     'ordinary2-open' = @{ Source = 'benchmarks/m6/ordinary2_invalid_open_tetrahedron.gltf' }
     'hero4'          = @{ Source = 'benchmarks/m6/hero4_nested_tetrahedra.gltf' }

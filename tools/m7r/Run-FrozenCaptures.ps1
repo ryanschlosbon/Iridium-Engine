@@ -22,6 +22,10 @@ $ExtraArgs = @($ExtraArgs | ForEach-Object { $_ -split ' ' } | Where-Object { $_
 $Points = @($Points | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
 . (Join-Path $PSScriptRoot 'M7RFixtures.ps1')
 $root = Get-M7RRepoRoot
+# Cooked frozen-set artifacts: this checkout's out/m7r/ddc, else the main checkout's.
+# Manifests come from this checkout; the engine resolves their third-party content
+# from the local asset library.
+$artifactRoot = Get-M7RArtifactRoot $root
 Push-Location $root
 try {
     $exePath = (Resolve-Path $Exe).Path
@@ -39,7 +43,7 @@ try {
             $log = Join-Path $outDir "$($fixture.Key)__$point.log"
             # Absolute paths: an engine built elsewhere resolves relative paths
             # against its own compiled-in project root.
-            $artifact = Join-Path $root (Get-M7RModelArtifact $root $fixture.Model)
+            $artifact = Join-Path $artifactRoot (Get-M7RModelArtifact $artifactRoot $fixture.Model)
             $arguments = @(
                 '--benchmark', $fixture.Id, '--benchmark-manifest', (Join-Path $root $fixture.Manifest),
                 '--cooked-model-artifact', $artifact,
@@ -51,7 +55,7 @@ try {
                 $(if ($SyncValidation) { '--validation-sync' } elseif ($Validation) { '--validation' } else { '--no-validation' })
             ) + $cacheArgs + $fixture.Args + $ExtraArgs
             if ($fixture.Environment) {
-                $arguments += @('--cooked-environment-artifact', (Join-Path $root (Get-M7RModelArtifact $root $fixture.Environment)))
+                $arguments += @('--cooked-environment-artifact', (Join-Path $artifactRoot (Get-M7RModelArtifact $artifactRoot $fixture.Environment)))
             }
             $started = Get-Date
             $exit = Invoke-M7REngine $exePath $arguments $log
@@ -81,6 +85,7 @@ try {
     $report = [pscustomobject]@{
         label = $Label; commit = $git; dirtyTrackedFiles = $dirty; executable = $Exe; executableSha256 = $exeSha
         validation = [bool]($Validation -or $SyncValidation); syncValidation = [bool]$SyncValidation; extraArgs = $ExtraArgs
+        artifactRoot = $artifactRoot; localAssetRoot = (Get-IridiumLocalAssetRoot $root)
         pipelineCacheArgs = $cacheArgs; captured = (Get-Date).ToString('o'); results = $results
     }
     $report | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 (Join-Path $outDir 'hashes.json')

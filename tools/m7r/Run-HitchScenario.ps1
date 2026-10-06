@@ -43,7 +43,7 @@ $sideArgs = @{
 }
 . (Join-Path $PSScriptRoot 'M7RFixtures.ps1')
 $root = Get-M7RRepoRoot
-if (-not $ArtifactRoot) { $ArtifactRoot = $root }
+if (-not $ArtifactRoot) { $ArtifactRoot = Get-M7RArtifactRoot $root }
 $ArtifactRoot = (Resolve-Path $ArtifactRoot).Path
 if (-not $OutRoot) { $OutRoot = Join-Path $root 'out/m7r/hitch' }
 
