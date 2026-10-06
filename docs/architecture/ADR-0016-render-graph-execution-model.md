@@ -6,6 +6,7 @@
   frozen set. Callback registration by feature owners proceeds in R3c.
 - Date: 2026-10-02
 - Owners: Renderer, RHI, and Vulkan backend
+- Refined by: ADR-0017 (history survives compatible rebuilds; proposed 2026-10-06).
 - Refines: ADR-0002. Its scene-linear HDR and output-transform decisions are unchanged.
 
 ## Context

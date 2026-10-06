@@ -44,8 +44,9 @@ namespace Iridium {
     inline constexpr uint64_t ExposureStateBytes = 16;
     // exposure.metering: vec4(metered log2 luminance, target EV100, low and
     // high percentile log2 luminance), uvec4(total weight, bin 0, bin 127,
-    // rows), then the 128 summed bins.
-    inline constexpr uint64_t ExposureMeteringBytes = 32 + 4 * ExposureHistogramBins;
+    // rows), the 128 summed bins, then the adaptation inputs: vec4(delta
+    // seconds, 1 = previous state valid, previous EV100, 0).
+    inline constexpr uint64_t ExposureMeteringBytes = 48 + 4 * ExposureHistogramBins;
 
     [[nodiscard]] constexpr uint32_t exposureHistogramRowCount(
         uint32_t width, uint32_t height) noexcept {

@@ -32,6 +32,7 @@ layout(set = 0, binding = 3, std430) writeonly buffer Metering {
     vec4 meteringLuminance;   // x metered log2 luminance, y target EV100, z low, w high
     uvec4 meteringCounts;     // x total weight, y lowest bin, z highest bin, w rows
     uint meteringBins[128];
+    vec4 meteringAdaptation;  // x delta seconds, y 1 = previous valid, z previous EV100
 };
 
 layout(push_constant) uniform ExposureAdaptPush {
@@ -121,4 +122,6 @@ void main() {
         exp2(log2(MiddleGrey) - adaptedLuminance + push.adaptation.w), adapted, 1.0);
     meteringLuminance = vec4(metered, target, lowLuminance, highLuminance);
     meteringCounts = uvec4(totalCount, bins[0], bins[BinCount - 1u], push.control.x);
+    meteringAdaptation = vec4(push.adaptation.z, previousValid ? 1.0 : 0.0,
+        previousState.z, 0.0);
 }

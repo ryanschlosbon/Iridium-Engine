@@ -1247,7 +1247,8 @@ namespace {
 
     // scene -> resolve (reads taa.previous, writes taa.current) -> post (copies
     // taa.current out, so the slot ends in TransferSource).
-    RenderGraph::CompiledGraph historyGraph(uint32_t width = 64) {
+    // `extraPass` adds an unrelated pass: a different topology, the same pair.
+    RenderGraph::CompiledGraph historyGraph(uint32_t width = 64, bool extraPass = false) {
         RenderGraph::RenderGraphBuilder builder;
         RenderGraph::ResourceDesc desc = imageDesc();
         desc.image.extent.width = width;
@@ -1265,6 +1266,14 @@ namespace {
         builder.read(post, current, Access::TransferSource);
         output = builder.write(post, output, Access::TransferDestination);
         builder.exportResource(output, Access::TransferDestination);
+        if (extraPass) {
+            const auto extra = builder.addPass("extra");
+            auto written = builder.createResource("extra", desc);
+            builder.read(extra, scene, Access::SampledRead);
+            written = builder.write(extra, written, Access::ColorAttachment,
+                RenderGraph::LoadOp::Clear);
+            builder.exportResource(written, Access::ColorAttachment);
+        }
         RenderGraph::CompileResult result = builder.compile();
         if (!result.succeeded()) throw std::runtime_error("history graph failed to compile");
         return std::move(*result.graph);
@@ -1285,6 +1294,16 @@ namespace {
         }
         void rebuild(uint32_t width) {
             executor.rebuild(historyGraph(width));
+            previous = executor.resourceId("taa.previous");
+            current = executor.resourceId("taa.current");
+        }
+        // ADR-0017: the production device-idle rebuild (retain, cleanup, init).
+        void rebuildRetained(uint32_t width, bool extraPass = false) {
+            executor.retainHistoryForRebuild();
+            executor.cleanupAfterDeviceIdle();
+            executor.init(factory, 2);
+            executor.setBarrierApi(VulkanBarrierApi::Synchronization2);
+            executor.rebuild(historyGraph(width, extraPass));
             previous = executor.resourceId("taa.previous");
             current = executor.resourceId("taa.current");
         }
@@ -1333,6 +1352,8 @@ namespace {
             executor.skipPass(executor.passId("resolve"));
             executor.skipPass(executor.passId("post"));
         }
+        if (executor.compiledGraph()->passes().size() > 3)
+            executor.beginPass(FakeCommandBuffer, executor.passId("extra"));
         executor.finishFrameExecution();
         return result;
     }
@@ -1513,6 +1534,62 @@ namespace {
         CHECK(!runHistoryFrame(fixture, 0, preview).valid);
         CHECK(executor.stats().historySlotCount == 4);
         executor.cleanupAfterDeviceIdle();
+        CHECK(fixture.factory.destroyCount == fixture.factory.createCount);
+        return true;
+    }
+
+    // ADR-0017: a device-idle rebuild keeps a pair with the same name, reset
+    // policy and slots (images, parity, validity in every view set), also
+    // across a topology change; a resize starts fresh, and retained history
+    // no plan adopts is destroyed.
+    bool testHistorySurvivesCompatibleRebuild() {
+        HistoryFixture fixture;
+        auto& executor = fixture.executor;
+        const RenderGraph::ViewHistoryContext scene{ 1, 0, 0 };
+        const RenderGraph::ViewHistoryContext preview{ 7, 0, 1 };
+        uint32_t frame = 0;
+        const auto next = [&](RenderGraph::ViewHistoryContext view) {
+            return runHistoryFrame(fixture, frame++, view);
+        };
+        (void)next(scene);
+        const HistoryFrame s1 = next(scene);
+        (void)next(preview);
+        const HistoryFrame p1 = next(preview);
+        CHECK(s1.valid && p1.valid);
+        const uint64_t topology = executor.compiledGraph()->topologyHash();
+        fixture.rebuildRetained(64, true);
+        CHECK(executor.compiledGraph()->topologyHash() != topology);
+        CHECK(executor.stats().historySlotCount == 4);   // both sets adopted
+        // Production order: the one-argument begin (the last view, carried
+        // across the rebuild), then the frame's view before the first pass.
+        VkImage carried = VK_NULL_HANDLE;
+        {
+            const uint32_t slot = frame % 2;
+            executor.onFrameFenceCompleted(slot);
+            executor.beginFrameExecution(slot);
+            executor.beginViewExecution(scene);
+            CHECK(executor.historyValid(fixture.previous));
+            CHECK(executor.image(slot, fixture.previous).image == s1.current);
+            carried = executor.image(slot, fixture.current).image;
+            for (const char* pass : { "scene", "resolve", "post", "extra" })
+                executor.beginPass(FakeCommandBuffer, executor.passId(pass));
+            executor.finishFrameExecution();
+            ++frame;
+        }
+        const HistoryFrame s2 = next(scene);
+        CHECK(s2.valid && s2.previous == carried);
+        const HistoryFrame p2 = next(preview);
+        CHECK(p2.valid && p2.previous == p1.current);
+        // Retained twice before one compile: the first retention stands.
+        executor.retainHistoryForRebuild();
+        fixture.rebuildRetained(64);
+        CHECK(next(scene).valid);
+        fixture.rebuildRetained(128);                 // resize
+        CHECK(!next(scene).valid);
+        CHECK(next(scene).valid);
+        executor.retainHistoryForRebuild();
+        executor.cleanupAfterDeviceIdle();
+        executor.discardRetainedHistory();
         CHECK(fixture.factory.destroyCount == fixture.factory.createCount);
         return true;
     }
@@ -2206,6 +2283,7 @@ int main() {
         { "History view supplied before first pass", testHistoryViewSuppliedBeforeFirstPass },
         { "History view sets", testHistoryViewSets },
         { "History retirement", testHistoryRetirement },
+        { "History survives a compatible rebuild (ADR-0017)", testHistorySurvivesCompatibleRebuild },
         { "production declares no History", testProductionDeclaresNoHistory },
         { "external image policies", testExternalImagePolicies },
         { "production imported-image policies", testProductionImportedImagePolicies },

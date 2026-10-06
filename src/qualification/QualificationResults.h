@@ -146,6 +146,10 @@ namespace Iridium {
         uint32_t firstOccupiedBin = 0;
         uint32_t lastOccupiedBin = 0;
         uint32_t peakBin = 0;
+        // The adaptation's inputs: an invalid previous state adapts instantly.
+        float deltaSeconds = 0.0f;
+        bool previousValid = false;
+        float previousEv100 = 0.0f;
     };
 
     struct DepthPyramidCaptureValidationResult {

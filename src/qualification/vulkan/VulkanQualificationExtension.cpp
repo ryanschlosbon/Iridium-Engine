@@ -408,7 +408,7 @@ namespace Iridium {
         ExposureReadbackSlot& target = exposureSlots_[slot];
         const VkDeviceSize stateBytes = source.exposureState->size;
         const VkDeviceSize meteringBytes = source.exposureMetering->size;
-        if (stateBytes != 16u || meteringBytes != 32u + 4u * 128u)
+        if (stateBytes != 16u || meteringBytes != 48u + 4u * 128u)
             throw std::logic_error("Exposure readback sources have an unexpected layout.");
         // Created once per slot; the slot's previous readback was collected
         // when its fence retired.
@@ -436,6 +436,9 @@ namespace Iridium {
         std::array<uint32_t, 4 + 128> words{};   // metering counts, then the bins
         std::memcpy(floats.data(), bytes, sizeof(floats));
         std::memcpy(words.data(), bytes + sizeof(floats), sizeof(words));
+        std::array<float, 4> adaptation{};   // delta seconds, previous valid, previous EV100
+        std::memcpy(adaptation.data(), bytes + sizeof(floats) + sizeof(words),
+            sizeof(adaptation));
         ExposureReadbackSample sample{};
         sample.frameIndex = slot.frameIndex;
         sample.adaptedLog2Luminance = floats[0];
@@ -449,6 +452,9 @@ namespace Iridium {
         sample.lowestBinWeight = words[1];
         sample.highestBinWeight = words[2];
         sample.histogramRows = words[3];
+        sample.deltaSeconds = adaptation[0];
+        sample.previousValid = adaptation[1] != 0.0f;
+        sample.previousEv100 = adaptation[2];
         bool occupied = false;
         for (uint32_t bin = 0; bin < 128u; ++bin) {
             const uint32_t weight = words[4u + bin];

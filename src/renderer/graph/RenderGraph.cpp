@@ -956,6 +956,21 @@ void HistoryValidityTracker::beginFrame(const ViewHistoryContext& view) {
     }
 }
 
+void HistoryValidityTracker::adoptPair(uint32_t pair,
+    const HistoryValidityTracker& previous, uint32_t previousPair) {
+    if (pair >= m_pairCount || previousPair >= previous.m_pairCount) {
+        throw GraphBuildError("History adoption targets an unknown pair");
+    }
+    for (uint32_t set = 0; set < HistoryViewSetCount; ++set) {
+        PairState state = previous.m_pairs[
+            static_cast<size_t>(set) * previous.m_pairCount + previousPair];
+        state.key.topologyHash = m_topologyHash;
+        state.valid = false;
+        state.written = false;
+        m_pairs[static_cast<size_t>(set) * m_pairCount + pair] = state;
+    }
+}
+
 void HistoryValidityTracker::markWritten(uint32_t pair) {
     if (pair >= m_pairCount) {
         throw GraphBuildError("History write targets an unknown pair");

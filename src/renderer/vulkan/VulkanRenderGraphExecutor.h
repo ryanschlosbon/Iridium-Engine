@@ -492,6 +492,14 @@ namespace Iridium {
         // beginPass of the frame supplies {commandBuffer, frameIndex}.
         void setFrameRecordContext(const VulkanFrameRecordContext& context);
         void cleanupAfterDeviceIdle() noexcept;
+        // ADR-0017: before a device-idle rebuild (cleanupAfterDeviceIdle, init,
+        // rebuild), keeps the bound plan's history. The next compiled plan
+        // adopts every pair with the same name, reset policy and slots (images,
+        // parity, tracked access and validity); the rest is destroyed then. A
+        // second call before that compile keeps the first retention.
+        void retainHistoryForRebuild();
+        // Destroys retained history no plan adopted (shutdown).
+        void discardRetainedHistory() noexcept;
 
         // nullptr restores the Vulkan command sink.
         void setBarrierSink(VulkanBarrierSink* sink) noexcept;
@@ -606,6 +614,21 @@ namespace Iridium {
             uint32_t pendingFrames = 0;   // bit per frame slot still to retire
         };
         std::vector<RetiredHistory> retiredHistory_;
+        // ADR-0017: history kept by retainHistoryForRebuild for the next plan,
+        // with a factory that outlives cleanupAfterDeviceIdle.
+        struct RetainedHistory {
+            std::optional<VulkanAllocatorGraphResourceFactory> ownedFactory;
+            VulkanGraphResourceFactory* factory = nullptr;
+            std::vector<RenderGraph::CompiledHistoryPair> pairs;
+            std::vector<RenderGraph::PhysicalResourceSlot> slots;   // one set
+            std::vector<VulkanGraphPhysicalResource> resources;     // set-major
+            std::vector<RenderGraph::Access> access;
+            std::vector<uint8_t> parity;
+            RenderGraph::HistoryValidityTracker validity;
+            // The one-argument beginFrameExecution re-keys with the last view.
+            RenderGraph::ViewHistoryContext lastView{};
+        };
+        std::optional<RetainedHistory> retainedHistory_;
         RenderGraph::HistoryValidityTracker historyValidity_;
         RenderGraph::ViewHistoryContext lastView_{};
         struct ExternalImageBinding {

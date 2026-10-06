@@ -564,6 +564,12 @@ namespace Iridium::RenderGraph {
         // view's resetRevision, SurviveCut pairs do not. Other sets are left
         // untouched, so alternating views keep their history.
         void beginFrame(const ViewHistoryContext& view);
+        // ADR-0017: after resetForGraph, `pair` takes over the per-set state of
+        // `previousPair` in the replaced plan's tracker (a compatible pair kept
+        // across a rebuild). Its key moves to this plan's topology hash, so a
+        // pair written on its view's previous turn stays valid.
+        void adoptPair(uint32_t pair, const HistoryValidityTracker& previous,
+            uint32_t previousPair);
         void markWritten(uint32_t pair);
         void endFrame() noexcept;
         [[nodiscard]] bool pairValid(uint32_t pair) const noexcept;

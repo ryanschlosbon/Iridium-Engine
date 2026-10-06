@@ -74,7 +74,10 @@ namespace Iridium {
                     << ",\"occupied_bins\":[" << sample.firstOccupiedBin << ','
                     << sample.lastOccupiedBin << ']'
                     << ",\"peak_bin\":" << sample.peakBin
-                    << ",\"rows\":" << sample.histogramRows << "}\n";
+                    << ",\"rows\":" << sample.histogramRows
+                    << ",\"delta_seconds\":" << sample.deltaSeconds
+                    << ",\"previous_valid\":" << (sample.previousValid ? "true" : "false")
+                    << ",\"previous_ev100\":" << sample.previousEv100 << "}\n";
             }
             std::cout << std::flush;
         }

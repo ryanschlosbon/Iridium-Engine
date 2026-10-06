@@ -629,6 +629,7 @@ namespace Iridium {
         layered_.clearDescriptors();
         oit_.clearDescriptors();
         frameTargets.cleanup();
+        renderGraph_.discardRetainedHistory();
         renderGraph_.cleanupAfterDeviceIdle();
         shadows_.destroy();
         localShadows_.destroy();
@@ -934,6 +935,8 @@ namespace Iridium {
     }
 
     void VulkanVertexBackend::rebuildRenderGraphAfterDeviceIdle() {
+        // Temporal history survives only compatible rebuilds (ADR-0017).
+        if (cpuProfiler_ && cpuProfiler_->isEnabled()) cpuProfiler_->recordCounter("render_graph.rebuilds", 1);
         renderGraph_.cleanupAfterDeviceIdle();
         renderGraph_.init(resourceAllocator,
             VulkanFrameScheduler::FramesInFlight,
@@ -1715,6 +1718,8 @@ namespace Iridium {
         layered_.clearDescriptors();
         oit_.clearDescriptors();
         frameTargets.cleanup();
+        // ADR-0017: the rebuilt plan adopts compatible history (TAA, exposure).
+        renderGraph_.retainHistoryForRebuild();
         renderGraph_.cleanupAfterDeviceIdle();
     }
 
@@ -1989,6 +1994,12 @@ namespace Iridium {
                 .exposureState = exposureState.buffer,
                 .exposureFromState = exposureState.valid,
             });
+            // Temporal health (editor Profiler): 0 means history was discarded.
+            if (cpuProfiler_ && cpuProfiler_->isEnabled()) {
+                cpuProfiler_->recordCounter("temporal.taa.history_valid", taa_.historyWasValid() ? 1 : 0);
+                if (exposure_.mode() == ExposureMode::Auto)
+                    cpuProfiler_->recordCounter("exposure.history_valid", exposureState.valid ? 1 : 0);
+            }
         }
         submitForwardQueues(frame.forwardOpaqueQueue,
             frame.forwardOpaquePreviousTransforms, frame.sortedSurfaceQueue,
