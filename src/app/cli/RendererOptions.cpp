@@ -418,7 +418,7 @@ namespace Iridium::AppCli {
             });
 
         addValueOption(registry, owner, "--bloom-settings", "INTENSITY,THRESHOLD,KNEE,LEVELS,KARIS",
-            "Bloom tuning for evidence runs: scatter 0-1, scene-linear threshold and knee (0: none), 1-8 levels, Karis prefilter 0|1",
+            "Bloom tuning for evidence runs: scatter 0-1, scene-linear threshold and knee (0: none), 1-8 levels, Karis prefilter 0 off|1 on|2 auto (off with TAA)",
             "--bloom-settings requires five comma-separated numbers",
             [&c](std::string_view value) {
                 constexpr const char* message =
@@ -426,13 +426,14 @@ namespace Iridium::AppCli {
                 const std::array<float, 5> v = parseNumberList<5>(value, message);
                 if (v[0] < 0.0f || v[0] > 1.0f || v[1] < 0.0f || v[2] < 0.0f ||
                     v[3] < 1.0f || v[3] > 8.0f || v[3] != std::floor(v[3]) ||
-                    (v[4] != 0.0f && v[4] != 1.0f))
+                    (v[4] != 0.0f && v[4] != 1.0f && v[4] != 2.0f))
                     throw std::invalid_argument(message);
                 c.bloom.intensity = v[0];
                 c.bloom.threshold = v[1];
                 c.bloom.knee = v[2];
                 c.bloom.levels = static_cast<uint32_t>(v[3]);
-                c.bloom.karisAverage = v[4] != 0.0f;
+                c.bloom.karis = v[4] == 2.0f ? BloomKarisMode::Auto
+                    : v[4] == 1.0f ? BloomKarisMode::On : BloomKarisMode::Off;
             });
 
         addValueOption(registry, owner, "--temporal-jitter", "on|off",

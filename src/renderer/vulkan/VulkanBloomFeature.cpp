@@ -120,6 +120,8 @@ void VulkanBloomFeature::onGraphRebuilt(const VulkanProductionGraphIds& ids) {
     releaseViews();
     bloomPass_ = ids.bloom;
     sceneColor_ = ids.resolvedSceneColor;
+    // Karis Auto follows the plan: off when TAA resolves the scene colour.
+    temporalResolve_ = ids.taaResolve.isValid();
     chain_ = ids.bloomChain;
     levels_ = 0;
     if (!bloomPass_.isValid()) return;
@@ -216,7 +218,9 @@ void VulkanBloomFeature::execute(void* owner, VulkanPassContext& context) {
         const glm::vec4 read = sizeAndInverse(source);
         push.source = { read.z, read.w, sourceLod, 0.0f };
         push.filter = { settings.threshold, settings.knee, scale, 0.0f };
-        push.control = { mode, settings.karisAverage ? 1u : 0u, 0u, 0u };
+        const bool karis = settings.karis == BloomKarisMode::On ||
+            (settings.karis == BloomKarisMode::Auto && !self.temporalResolve_);
+        push.control = { mode, karis ? 1u : 0u, 0u, 0u };
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, self.pipelineLayout_,
             0, 1, &set, 0, nullptr);
         vkCmdPushConstants(cmd, self.pipelineLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0,

@@ -97,6 +97,8 @@ namespace Iridium {
     // energy-conserving: colour = lerp(scene, bloom, intensity), so bloom
     // only redistributes light. A threshold selects the energy above it
     // (soft knee) and adds it: colour = scene + intensity * bloom.
+    enum class BloomKarisMode : uint8_t { Auto, Off, On };
+
     struct BloomSettings {
         // Off until admission (M9.7); then on by owner decision.
         bool enabled = false;
@@ -112,8 +114,10 @@ namespace Iridium {
         // keep aliased sub-pixel highlights from flickering in the chain but
         // remove part of their energy. Measured share of the scene's energy
         // the chain keeps (M9.4): TF-hdr 63% with them, 99.9% without;
-        // TF-static and TF-emissive 99.0% with, 99.7-99.8% without.
-        bool karisAverage = true;
+        // TF-static and TF-emissive 99.0% with, 99.7-99.8% without. Auto
+        // (owner decision, 2026-10-06): off with TAA, which already stabilises
+        // sub-pixel highlights, so bloom keeps their energy; on without it.
+        BloomKarisMode karis = BloomKarisMode::Auto;
 
         friend bool operator==(const BloomSettings&, const BloomSettings&) = default;
     };

@@ -139,7 +139,7 @@ namespace {
         flag("bloom.enabled", c.bloom.enabled);
         field("bloom.settings", exact(c.bloom.intensity) + "/" + exact(c.bloom.threshold) +
             "/" + exact(c.bloom.knee) + "/" + exact(c.bloom.levels) + "/" +
-            exact(c.bloom.karisAverage ? 1 : 0));
+            exact(static_cast<int>(c.bloom.karis)));
         field("uploadQueue", exact(enumValue(c.uploadQueue)));
         flag("aliasPoison", c.aliasPoison);
         flag("validateDepthPyramidCapture", c.validateDepthPyramidCapture);
@@ -550,10 +550,11 @@ namespace {
                   { "", "--bloom requires off or on" } } },
             { "--bloom-settings", G, "0.1,2,0.5,5,0", {}, [](C& c) {
                 c.bloom.intensity = 0.1f; c.bloom.threshold = 2.0f; c.bloom.knee = 0.5f;
-                c.bloom.levels = 5u; c.bloom.karisAverage = false; },
+                c.bloom.levels = 5u; c.bloom.karis = BloomKarisMode::Off; },
                 "--bloom-settings requires five comma-separated numbers",
                 { { "0.1,2,0.5,5", "--bloom-settings requires five comma-separated numbers" },
                   { "0.1,2,0.5,5,1,1", "--bloom-settings requires five comma-separated numbers" },
+                  { "0.1,2,0.5,5,3", "--bloom-settings requires five comma-separated numbers" },
                   { "0.1,2,0.5,5,", "--bloom-settings requires five comma-separated numbers" },
                   { "1.5,0,0,6,1", "--bloom-settings requires five comma-separated numbers" },
                   { "0.04,-1,0,6,1", "--bloom-settings requires five comma-separated numbers" },

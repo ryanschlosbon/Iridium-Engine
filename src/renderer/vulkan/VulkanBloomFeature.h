@@ -98,6 +98,7 @@ namespace Iridium {
 
         const VulkanFeatureContext* context_ = nullptr;
         BloomSettings settings_{};
+        bool temporalResolve_ = false;
         VkDescriptorSetLayout descriptorLayout_ = VK_NULL_HANDLE;
         VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;
         VkPipeline pipeline_ = VK_NULL_HANDLE;
