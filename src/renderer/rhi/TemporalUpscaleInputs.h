@@ -23,6 +23,11 @@
 //   1 - the colour input's alpha: opaque surfaces write alpha 1 and every
 //   blended layer (sorted, glass, layered, WeightedOIT) multiplies it by
 //   1 - its coverage, so alpha is the revealage of the opaque scene.
+//   M9.8e: sorted and compatibility layers count only the coverage that
+//   moves relative to the velocity under them (more than a pixel of motion
+//   disagreement); a layer moving with its surface (a clear-coat shell, a
+//   window in its frame) reprojects with that surface and is not reactive.
+//   Layered tiers and WeightedOIT stay reactive by coverage.
 
 #include "renderer/rhi/RenderBackendConfig.h"
 

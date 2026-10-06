@@ -681,6 +681,8 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
         graph.addDependency(depthPyramidValidation, sortedTransparency);
     readClusterProduct(sortedTransparency);
     graph.read(sortedTransparency, depth, Access::DepthAttachmentRead);
+    // M9.8e: motion-aware reactive coverage reads the opaque velocity.
+    graph.read(sortedTransparency, velocity, Access::SampledRead);
     litScene = graph.write(sortedTransparency, litScene,
         Access::ColorAttachment, LoadOp::Load);
 
@@ -887,6 +889,7 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
         graph.read(compatibilityForward, refractionDepth,
             Access::SampledRead);
     }
+    graph.read(compatibilityForward, velocity, Access::SampledRead);
     depth = graph.write(compatibilityForward, depth,
         Access::DepthAttachmentWrite, LoadOp::Load);
     litScene = graph.write(compatibilityForward, litScene,

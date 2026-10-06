@@ -352,7 +352,7 @@ namespace Iridium {
             std::span<const glm::mat4> opaqueForwardPreviousTransforms,
             std::span<const DrawPacket> sortedSurfaceQueue,
             std::span<const DrawPacket> compatibilityTransparentQueue,
-            std::span<const glm::mat4> instanceTransforms);
+            std::span<const glm::mat4> instanceTransforms, const RenderFrame& frame);
         void submitOutputPass();
         void submitUIPass();
 

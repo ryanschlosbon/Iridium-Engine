@@ -185,11 +185,15 @@ namespace Iridium {
         bool wireframe = false;
         std::span<const DrawPacket> forwardOpaqueQueue{};
         // M9 G4: last frame's world transform per forward-opaque packet
-        // (parallel to forwardOpaqueQueue). Transparent queues carry none:
-        // transparency writes no velocity (it feeds the reactive mask).
+        // (parallel to forwardOpaqueQueue).
         std::span<const glm::mat4> forwardOpaquePreviousTransforms{};
         std::span<const DrawPacket> sortedSurfaceQueue{};
         std::span<const DrawPacket> compatibilityTransparentQueue{};
+        // M9.8e: the same for the sorted and compatibility queues. Blended
+        // surfaces write no velocity; they compare this motion with the
+        // opaque velocity under them (motion-aware reactive coverage).
+        std::span<const glm::mat4> sortedSurfacePreviousTransforms{};
+        std::span<const glm::mat4> compatibilityPreviousTransforms{};
         // Frame-local transforms referenced by DrawPacket instance ranges.
         std::span<const glm::mat4> instanceTransforms{};
 

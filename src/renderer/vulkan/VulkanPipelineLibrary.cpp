@@ -70,15 +70,18 @@ namespace Iridium {
                 return;
             // M9.3: blended surfaces leave the scene colour's alpha as the
             // revealage of everything drawn over the opaque scene (opaque
-            // writes 1; each layer multiplies it by 1 - its coverage). TAA
-            // reads 1 - alpha as its reactive mask. Colour is unchanged.
+            // writes 1; each layer multiplies it by 1 - its reactive
+            // coverage). TAA reads 1 - alpha as its reactive mask. M9.8e:
+            // the reactive coverage is the shader's second blend source
+            // (zero where the layer moves with the surface under it), so
+            // the colour blend is unchanged.
             case BlendMode::AlphaBlend:
                 attachment.blendEnable = VK_TRUE;
                 attachment.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
                 attachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
                 attachment.colorBlendOp = VK_BLEND_OP_ADD;
                 attachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
-                attachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+                attachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC1_ALPHA;
                 attachment.alphaBlendOp = VK_BLEND_OP_ADD;
                 return;
             case BlendMode::PremultipliedAlpha:
@@ -89,7 +92,7 @@ namespace Iridium {
                 attachment.colorBlendOp = VK_BLEND_OP_ADD;
                 attachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
                 attachment.dstAlphaBlendFactor =
-                    VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+                    VK_BLEND_FACTOR_ONE_MINUS_SRC1_ALPHA;
                 attachment.alphaBlendOp = VK_BLEND_OP_ADD;
                 return;
             case BlendMode::Additive:
@@ -237,11 +240,11 @@ namespace Iridium {
         const char* fragmentShaderPath = nullptr;
         const bool velocity = desc.renderPass == RenderPassClass::GBuffer ||
             writesVelocity(desc);
-        if (vertexShaderPath == nullptr) {
-            vertexShaderPath = velocity
-                ? "assets/shaders/canonical_material_velocity_vert.spv"
-                : "assets/shaders/canonical_material_vert.spv";
-        }
+        // Every material pipeline emits motion: G-buffer and forward-opaque
+        // write velocity, and (M9.8e) blended forward surfaces compare their
+        // motion with the velocity under them (reactive coverage).
+        if (vertexShaderPath == nullptr)
+            vertexShaderPath = "assets/shaders/canonical_material_velocity_vert.spv";
         switch (desc.shaderProgram) {
         case ShaderProgram::CanonicalPbrGBuffer:
             if (gBufferLayout_ == GBufferLayout::CanonicalReference) {

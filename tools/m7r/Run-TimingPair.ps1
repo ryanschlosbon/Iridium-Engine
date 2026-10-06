@@ -2,8 +2,9 @@
 # timing route, runs baseline (A) and candidate (B) in A,B,B,A order as fresh
 # processes, then summarizes with Summarize-Profiles.py. Each root is a checkout with
 # its own out/build/x64-release and assets/shaders (use a git worktree for the
-# baseline commit). Manifests and cooked artifacts come from -ArtifactRoot (default:
-# this repository), which must hold out/m7r/ddc; a worktree passes the main checkout.
+# baseline commit). Each side reads its own manifests; cooked artifacts come from
+# -ArtifactRoot (default: this repository), which must hold out/m7r/ddc; a worktree
+# passes the main checkout.
 # Results go to <OutRoot>/<Label> (default: out/m7r/timing of this repository).
 #
 #   powershell -File tools/m7r/Run-TimingPair.ps1 -Label r1 -BaselineRoot out/m7r/worktrees/r0
@@ -40,13 +41,15 @@ $runs = @()
 foreach ($route in $M7RTimingRoutes) {
     if ($Only.Count -gt 0 -and $Only -notcontains $route.Key) { continue }
     $artifact = Join-Path $ArtifactRoot (Get-M7RModelArtifact $ArtifactRoot $route.Model)
-    $manifest = Join-Path $ArtifactRoot $route.Manifest
     $index = 0
     foreach ($side in @('A', 'B', 'B', 'A')) {
         $index++
         $profile = Join-Path $outDir "$($route.Key)__$index-$side.jsonl"
         $log = Join-Path $outDir "$($route.Key)__$index-$side.log"
         $exe = Join-Path $roots[$side] 'out/build/x64-release/bin/IridiumEngine.exe'
+        # Each side reads its own (tracked) manifests: the engine maps a manifest's
+        # third-party content to the local asset library only under its own assets/.
+        $manifest = Join-Path $roots[$side] $route.Manifest
         $arguments = @(
             '--benchmark', $route.Id, '--benchmark-manifest', $manifest,
             '--cooked-model-artifact', $artifact,

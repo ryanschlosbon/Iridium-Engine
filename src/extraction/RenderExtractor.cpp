@@ -1890,6 +1890,8 @@ namespace Iridium {
         previousTransforms_.beginFrame();
         resolvePreviousTransforms(opaqueQueue, opaqueDirectPrevious_);
         resolvePreviousTransforms(forwardOpaqueQueue, forwardOpaquePrevious_);
+        resolvePreviousTransforms(sortedSurfaceQueue, sortedSurfacePrevious_);
+        resolvePreviousTransforms(transparentQueue, compatibilityPrevious_);
         previousTransforms_.endFrame();
         renderFrame.opaque = {
             .order = opaqueOrder_,
@@ -1909,6 +1911,8 @@ namespace Iridium {
         renderFrame.forwardOpaquePreviousTransforms = forwardOpaquePrevious_;
         renderFrame.sortedSurfaceQueue = sortedSurfaceQueue;
         renderFrame.compatibilityTransparentQueue = transparentQueue;
+        renderFrame.sortedSurfacePreviousTransforms = sortedSurfacePrevious_;
+        renderFrame.compatibilityPreviousTransforms = compatibilityPrevious_;
         renderFrame.instanceTransforms = forwardInstanceTransforms_;
         renderFrame.lights = &lightingFrame;
         renderFrame.reflectionProbes = &publishedProbes;

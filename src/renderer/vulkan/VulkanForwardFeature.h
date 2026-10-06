@@ -39,6 +39,10 @@ namespace Iridium {
             std::span<const glm::mat4> opaqueForwardPreviousTransforms{};
             std::span<const DrawPacket> sortedSurfaceQueue{};
             std::span<const DrawPacket> compatibilityTransparentQueue{};
+            // M9.8e: last frame's transform per sorted and compatibility
+            // packet (motion-aware reactive coverage).
+            std::span<const glm::mat4> sortedSurfacePreviousTransforms{};
+            std::span<const glm::mat4> compatibilityPreviousTransforms{};
             // The WeightedOIT owner draws the queue's WeightedOIT packets.
             bool skipWeightedOit = false;
             VkDescriptorSet globalSet = VK_NULL_HANDLE;

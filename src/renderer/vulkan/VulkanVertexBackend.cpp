@@ -2003,7 +2003,7 @@ namespace Iridium {
         }
         submitForwardQueues(frame.forwardOpaqueQueue,
             frame.forwardOpaquePreviousTransforms, frame.sortedSurfaceQueue,
-            frame.compatibilityTransparentQueue, frame.instanceTransforms);
+            frame.compatibilityTransparentQueue, frame.instanceTransforms, frame);
         stageComplete(RenderFrameStage::SceneLinearComplete);
         submitOutputPass();
         stageComplete(RenderFrameStage::OutputComplete);
@@ -2288,7 +2288,7 @@ namespace Iridium {
         std::span<const glm::mat4> opaqueForwardPreviousTransforms,
         std::span<const DrawPacket> sortedSurfaceQueue,
         std::span<const DrawPacket> compatibilityTransparentQueue,
-        std::span<const glm::mat4> instanceTransforms) {
+        std::span<const glm::mat4> instanceTransforms, const RenderFrame& frame) {
         if (!opaqueForwardQueue.empty()) {
             telemetry_.counters().opaqueIndirectFallbackPackets +=
                 opaqueForwardQueue.size();
@@ -2322,6 +2322,8 @@ namespace Iridium {
             .opaqueForwardPreviousTransforms = opaqueForwardPreviousTransforms,
             .sortedSurfaceQueue = sortedSurfaceQueue,
             .compatibilityTransparentQueue = compatibilityTransparentQueue,
+            .sortedSurfacePreviousTransforms = frame.sortedSurfacePreviousTransforms,
+            .compatibilityPreviousTransforms = frame.compatibilityPreviousTransforms,
             .skipWeightedOit = weightedOit.executionEnabled,
             .globalSet = globalSet,
             .sceneSet = sceneSet,

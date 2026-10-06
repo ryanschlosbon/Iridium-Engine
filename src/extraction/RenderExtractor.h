@@ -409,6 +409,8 @@ namespace Iridium {
         PreviousTransformCache previousTransforms_;
         std::vector<glm::mat4> opaqueDirectPrevious_;
         std::vector<glm::mat4> forwardOpaquePrevious_;
+        std::vector<glm::mat4> sortedSurfacePrevious_;
+        std::vector<glm::mat4> compatibilityPrevious_;
         // M9 G2: per-retained-view cut detection and History context.
         ViewMotionTracker viewMotion_{};
         ViewMotionResult lastViewMotion_{};

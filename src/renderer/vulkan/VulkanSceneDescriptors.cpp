@@ -107,7 +107,7 @@ namespace Iridium {
                         : target.normal.view,
                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
 
-                std::array<VkWriteDescriptorSet, 33> writes{};
+                std::array<VkWriteDescriptorSet, 34> writes{};
                 writes[0] = imageWrite(sets_.back(), 0, depth);
                 writes[1] = imageWrite(sets_.back(), 1, normal);
                 writes[2] = imageWrite(sets_.back(), 2, albedo);
@@ -115,6 +115,12 @@ namespace Iridium {
                 writes[4] = imageWrite(sets_.back(), 5, refractionDepth);
                 writes[5] = imageWrite(sets_.back(), 6, emissive);
                 uint32_t writeCount = 6;
+                // M9.8e: sorted and compatibility transparency compare their
+                // motion with the opaque velocity (sampled in those passes).
+                VkDescriptorImageInfo velocity{ frameTargets.sampler(),
+                    target.velocity.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+                if (target.velocity.view != VK_NULL_HANDLE)
+                    writes[writeCount++] = imageWrite(sets_.back(), 3, velocity);
                 if (target.f0Roughness.view != VK_NULL_HANDLE &&
                     target.materialFlags.view != VK_NULL_HANDLE) {
                     writes[writeCount++] = imageWrite(sets_.back(), 7, f0Roughness);

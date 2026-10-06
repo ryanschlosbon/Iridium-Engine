@@ -163,8 +163,9 @@ namespace Iridium {
         const VkDescriptorSet globalSet = staged_.globalSet;
 
         const std::span<const glm::mat4> previousTransforms =
-            pass.queue == Queue::OpaqueForward
-            ? staged_.opaqueForwardPreviousTransforms : std::span<const glm::mat4>{};
+            pass.queue == Queue::OpaqueForward ? staged_.opaqueForwardPreviousTransforms
+            : pass.queue == Queue::Sorted ? staged_.sortedSurfacePreviousTransforms
+            : staged_.compatibilityPreviousTransforms;
         for (size_t packetIndex = 0; packetIndex < queue.size(); ++packetIndex) {
             const DrawPacket& packet = queue[packetIndex];
             if (skipped(pass, packet, queue)) continue;
@@ -221,15 +222,13 @@ namespace Iridium {
             push.mesh.padding[0] = static_cast<uint32_t>(staged_.debugView);
             push.mesh.padding[1] = mirrored ? 1u : 0u;
             // M9.1: forward-opaque writes velocity from last frame's transform;
-            // transparency pushes only the mesh block.
-            const bool motion = pass.expectedColorAttachments == 2;
-            if (motion) push.previousRenderMatrix = packetIndex < previousTransforms.size()
+            // M9.8e: transparency compares the same motion with the velocity.
+            push.previousRenderMatrix = packetIndex < previousTransforms.size()
                 ? previousTransforms[packetIndex] : packet.worldTransform;
             vkCmdPushConstants(cmd, activeLayout,
                 VK_SHADER_STAGE_VERTEX_BIT |
                     VK_SHADER_STAGE_FRAGMENT_BIT,
-                0, motion ? sizeof(CanonicalMotionPushConstants)
-                    : sizeof(CanonicalMeshPushConstants), &push);
+                0, sizeof(CanonicalMotionPushConstants), &push);
             vkCmdDrawIndexed(cmd, packet.indexCount, 1,
                 packet.firstIndex, 0, 0);
             telemetry.recordDraw(telemetry.counters().drawTransparentForward,
