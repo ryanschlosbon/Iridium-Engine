@@ -32,9 +32,45 @@ Claude Code took over from Codex on 2026-10-02.
   into feature owners before adding to it.
 - Evidence tiers, the 6.94 ms budget, the M7R CPU baseline and the M9 admission are in
   `docs/performance/FRAME_BUDGET.md`.
-- Third-party content is never committed.
+- Third-party content is never committed; it lives in the local asset library
+  (below).
 - The history below is a dated record; prefer ROADMAP.md and the active plan for
   status.
+
+## Local asset library (third-party content)
+
+Licensed third-party test content (the Alfa and other models, HDRIs, Sponza,
+`ship_in_a_bottle`, the owner's scene documents in `scenes/`) lives outside the
+repository in a **local asset root**, for example `D:/IridiumAssets`, with the same
+relative layout the repository's `assets/` used (`models/alfa_romeo/alfa_romeo.gltf`,
+`hdri/...`, `scenes/...`). Licences allow local testing only, so it is never
+committed and never copied, hard-linked or junctioned into a checkout or worktree;
+every checkout reads it in place.
+
+- **Configuration.** A gitignored `iridium.local.json` at the repository root,
+  `{ "localAssetRoot": "D:/IridiumAssets" }` (format in
+  `iridium.local.example.json`). A git worktree without its own file uses the main
+  checkout's. The `IRIDIUM_LOCAL_ASSET_ROOT` environment variable overrides both. A
+  configured root that does not exist is ignored with a diagnostic. With nothing
+  configured, only `<repo>/assets` is used, exactly as before.
+- **Engine.** `core/ProjectAssetRoots.h` lists the roots (`project`, plus `local`
+  when configured) and resolves a root-relative path: the project copy, else the
+  local copy, else the project path. Benchmark manifests stay in `assets/`; content
+  they name that is missing beside the manifest resolves at the same relative
+  location in the local root, with the escape check applied to that root. The
+  catalog, the preparation services and the qualification background cook register
+  both roots, and each record resolves under its own root.
+- **Cook keys** use root-relative source and dependency locations plus content
+  hashes, never absolute paths, so moving content between roots changes no cook key
+  or artifact hash (verified with `Verify-CookedArtifacts.ps1 -SourceRoot`).
+- **Editor.** The Asset Browser shows "Project" and "Local library" sections. Items
+  keep their root for rename, delete and folder operations. Moves between roots are
+  refused. Imports with nothing selected go to the local library. New scene
+  documents default to `<local>/scenes`. Baked reflection probes go to the root
+  that holds their scene.
+- **Tools.** `tools/m7r/M7RFixtures.ps1` provides `Resolve-IridiumAssetPath` and
+  `Get-IridiumLocalAssetRoot` over the same configuration. A worktree reuses the
+  main checkout's cooked `out/m7r/ddc` and frozen-set baselines.
 
 ## Why this document exists
 
