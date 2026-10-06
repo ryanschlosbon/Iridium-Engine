@@ -47,6 +47,8 @@ namespace {
             "  recovery        --frames F... --references R... --region X0 Y0 X1 Y1\n"
             "                  [--threshold T] [--steady-multiplier M]\n"
             "  accumulate      --frames F.pfm... --out MEAN.pfm [--report FILE]\n"
+            "  error-flicker   --frames F... --references R... [--flicker-threshold T] [--mask M]\n"
+            "                  (frame-to-frame change of the error: shimmer in motion)\n"
             "\n"
             "Common options:\n"
             "  --out FILE            JSON report path (default stdout; accumulate: the mean PFM)\n"
@@ -616,6 +618,73 @@ namespace {
         return files;
     }
 
+    // Shimmer under motion: for consecutive frames t-1, t (each with its own
+    // reference, e.g. held accumulation references), the change of the
+    // tone-mapped luma error e = test - reference. Content that legitimately
+    // changes is in both test and reference and cancels; what remains is the
+    // frame-to-frame instability of the test (jitter shimmer, crawl).
+    Json runErrorFlicker(const Options& options) {
+        const FramePairInputs inputs = pairedInputs(options);
+        if (inputs.frames.size() < 2)
+            throw std::invalid_argument("error-flicker needs at least two frames.");
+        const std::optional<tmx::Mask> limit = loadOptionalMask(options);
+        const double scale = std::exp2(options.exposureEv);
+        LumaStream frameStream(inputs.frames, inputs.domain, scale);
+        LumaStream referenceStream(inputs.references, inputs.domain, scale);
+        std::vector<float> previousError;
+        Json perPair = Json::array();
+        double sumAll = 0.0;
+        uint64_t countAll = 0;
+        uint64_t aboveAll = 0;
+        for (size_t i = 0; i < inputs.frames.size(); ++i) {
+            const tmx::Plane frame = frameStream.take(i);
+            const tmx::Plane reference = referenceStream.take(i);
+            if (frame.values.size() != reference.values.size())
+                throw std::invalid_argument("Frame and reference sizes differ.");
+            std::vector<float> error(frame.values.size());
+            for (size_t p = 0; p < error.size(); ++p) error[p] = frame.values[p] - reference.values[p];
+            if (!previousError.empty()) {
+                double sum = 0.0;
+                uint64_t above = 0;
+                std::vector<float> deltas;
+                deltas.reserve(error.size());
+                for (size_t p = 0; p < error.size(); ++p) {
+                    if (limit && limit->include[p] == 0) continue;
+                    const float d = std::abs(error[p] - previousError[p]);
+                    sum += d;
+                    if (d > options.flickerThreshold) ++above;
+                    deltas.push_back(d);
+                }
+                const uint64_t count = deltas.size();
+                double p99 = 0.0;
+                if (count != 0) {
+                    const auto nth = deltas.begin() + static_cast<std::ptrdiff_t>(count * 99 / 100);
+                    std::nth_element(deltas.begin(), nth, deltas.end());
+                    p99 = *nth;
+                }
+                perPair.push_back(Json{ { "from", i - 1 }, { "to", i },
+                    { "mean_error_delta", count ? sum / static_cast<double>(count) : 0.0 },
+                    { "p99_error_delta", p99 },
+                    { "shimmer_pixel_fraction",
+                        count ? static_cast<double>(above) / static_cast<double>(count) : 0.0 } });
+                sumAll += sum;
+                countAll += count;
+                aboveAll += above;
+            }
+            previousError = std::move(error);
+        }
+        return Json{
+            { "schema", "iridium.temporal_metrics.v1" },
+            { "command", "error-flicker" },
+            { "flicker_threshold", options.flickerThreshold },
+            { "pairs", perPair },
+            { "summary", Json{
+                { "mean_error_delta", countAll ? sumAll / static_cast<double>(countAll) : 0.0 },
+                { "shimmer_pixel_fraction",
+                    countAll ? static_cast<double>(aboveAll) / static_cast<double>(countAll) : 0.0 } } },
+        };
+    }
+
     Json runGhosting(const Options& options) {
         const FramePairInputs inputs = pairedInputs(options);
         const std::optional<tmx::Mask> limit = loadOptionalMask(options);
@@ -855,6 +924,7 @@ int main(int argc, char** argv) {
         if (options.command == "reference-error") report = runReferenceError(options);
         else if (options.command == "stability") report = runStability(options);
         else if (options.command == "ghosting") report = runGhosting(options);
+        else if (options.command == "error-flicker") report = runErrorFlicker(options);
         else if (options.command == "recovery") report = runRecovery(options);
         else if (options.command == "accumulate") report = runAccumulate(options);
         else throw std::invalid_argument("Unknown command: " + options.command);

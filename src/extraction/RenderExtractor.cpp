@@ -968,6 +968,10 @@ namespace Iridium {
             lastViewMotion_.previousJitterNdc);
         uint32_t temporalFlags = 0;
         if (lastViewMotion_.cut != ViewCutReason::None) temporalFlags |= ViewTemporalHistoryReset;
+        // Temporal health in profiles: a view cut and its reason (0 none, 1 first
+        // turn, 2 requested, 3 explicit, 4 projection, 5 translation, 6 rotation).
+        cpuProfiler_.recordCounter("view.cut", lastViewMotion_.cut != ViewCutReason::None ? 1 : 0);
+        cpuProfiler_.recordCounter("view.cut_reason", static_cast<uint64_t>(lastViewMotion_.cut));
         if (lastViewMotion_.jitterNdc != glm::vec2(0.0f)) {
             temporalFlags |= ViewTemporalJitterActive;
             viewTransport.jitteredProjection =

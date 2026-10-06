@@ -182,6 +182,24 @@ exclusive, and the region is clipped to the image. Each frame reports
 Start the sequence at the disocclusion event (the first frame after the cut or
 reveal). The default threshold assumes that the sequence ends converged.
 
+### `error-flicker`
+
+```powershell
+IridiumTemporalMetrics error-flicker --frames F... --references R... [--flicker-threshold T] [--mask M]
+```
+
+For consecutive frames, this measures the change of the tone-mapped luma error `e_t = t(F_t) - t(R_t)`,
+where each frame has its own reference (for example a held 64-phase accumulation reference, as in
+`Run-MotionEvaluation.ps1`). It reports, per pair and pooled:
+- `mean_error_delta`: the mean of `abs(e_t - e_{t-1})`;
+- `p99_error_delta`: the 99th percentile of the same;
+- `shimmer_pixel_fraction`: the share of pixels where it exceeds `--flicker-threshold` (default 1/255).
+
+**Limitation:** errors are compared at the same pixel, not along motion. Under camera or object motion,
+any error that travels with the content (blur, lag) also counts. More history weight therefore scores
+*worse* here, even when it shimmers less. Use it on held or near-still sequences, or alongside the
+reference error, and do not tune against it alone. A motion-compensated variant is future work.
+
 ### `accumulate`
 
 ```powershell
