@@ -176,6 +176,13 @@ void EditorSystem::setAntiAliasingStatus(Iridium::AntiAliasingMode active,
     uiState.outputSettings.antiAliasingDiagnostic = std::move(diagnostic);
 }
 
+void EditorSystem::setExposureStatus(Iridium::ExposureMode mode,
+    const Iridium::AutoExposureSettings& settings, std::string diagnostic) {
+    uiState.outputSettings.exposureMode = mode;
+    uiState.outputSettings.autoExposure = settings;
+    uiState.outputSettings.exposureDiagnostic = std::move(diagnostic);
+}
+
 void EditorSystem::setBloomStatus(const Iridium::BloomSettings& active,
     std::string diagnostic) {
     uiState.outputSettings.bloom = active;

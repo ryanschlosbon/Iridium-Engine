@@ -985,6 +985,8 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
         const RenderGraph::PassHandle bloom = graph.addPass(
             "post.bloom", RenderGraph::QueueClass::Compute);
         graph.read(bloom, resolved, Access::SampledRead);
+        // The adapted exposure puts the threshold in exposed units.
+        if (exposureState.isValid()) graph.read(bloom, exposureState, Access::StorageRead);
         bloomChain = graph.write(bloom, bloomChain, Access::StorageReadWrite);
         graph.declareWholeResourceWrite(bloomChain);
     }

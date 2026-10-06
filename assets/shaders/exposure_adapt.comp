@@ -7,9 +7,10 @@
 //    percentiles of the total weight (fractional bins count partially).
 // 3. Target EV100 = metered luminance in photometric units at ISO 100
 //    (K = 12.5), clamped to the EV100 limits.
-// 4. Adapt the previous EV100 toward the target at the up (brighter scene) or
-//    down (darker scene) speed in EV/s over the view's time delta; invalid
-//    history adapts instantly.
+// 4. Adapt the previous EV100 toward the target over the view's time delta
+//    with the up (brighter scene) or down (darker scene) speed. Exponential:
+//    close 1 - e^(-speed * dt) of the gap (optionally at most max EV/s);
+//    Linear: move at most speed EV/s. Invalid history adapts instantly.
 // 5. The output multiplier maps the adapted luminance to middle grey (0.18),
 //    times 2^compensation (the manual EV).
 //
@@ -34,10 +35,10 @@ layout(set = 0, binding = 3, std430) writeonly buffer Metering {
 };
 
 layout(push_constant) uniform ExposureAdaptPush {
-    vec4 range;        // x histogram min log2 luminance, y log2 units per bin, z EV100 - log2 luminance
+    vec4 range;        // x histogram min log2 luminance, y log2 units per bin, z EV100 - log2 luminance, w max EV/s (0: none)
     vec4 limits;       // x low percentile, y high percentile, z minimum EV100, w maximum EV100
     vec4 adaptation;   // x up EV/s, y down EV/s, z delta seconds, w compensation EV
-    uvec4 control;     // x rows, y previous state valid
+    uvec4 control;     // x rows, y previous state valid, z 1 = linear adaptation
 } push;
 
 const uint BinCount = 128u;
@@ -103,9 +104,17 @@ void main() {
         float previous = previousState.z;
         float delta = target - previous;
         float seconds = clamp(push.adaptation.z, 0.0, 1.0);
-        adapted = previous + (delta > 0.0
-            ? min(delta, push.adaptation.x * seconds)
-            : max(delta, -push.adaptation.y * seconds));
+        float speed = delta > 0.0 ? push.adaptation.x : push.adaptation.y;
+        float step;
+        if (push.control.z != 0u) {
+            step = clamp(delta, -speed * seconds, speed * seconds);
+        }
+        else {
+            step = delta * (1.0 - exp(-max(speed, 0.0) * seconds));
+            if (push.range.w > 0.0)
+                step = clamp(step, -push.range.w * seconds, push.range.w * seconds);
+        }
+        adapted = previous + step;
     }
     float adaptedLuminance = adapted - push.range.z;
     currentState = vec4(adaptedLuminance,

@@ -27,10 +27,10 @@ namespace {
     static_assert(sizeof(HistogramPushConstants) == 32);
 
     struct AdaptPushConstants {
-        glm::vec4 range{ 0.0f };        // x min log2 luminance, y log2 per bin, z EV100 offset
+        glm::vec4 range{ 0.0f };        // x min log2 luminance, y log2 per bin, z EV100 offset, w max EV/s
         glm::vec4 limits{ 0.0f };       // x low, y high percentile, z min, w max EV100
-        glm::vec4 adaptation{ 0.0f };   // x up, y down EV/s, z delta seconds, w compensation EV
-        glm::uvec4 control{ 0u };       // x rows, y previous valid
+        glm::vec4 adaptation{ 0.0f };   // x up, y down speed, z delta seconds, w compensation EV
+        glm::uvec4 control{ 0u };       // x rows, y previous valid, z 1 = linear adaptation
     };
     static_assert(sizeof(AdaptPushConstants) == 64);
 
@@ -159,6 +159,9 @@ void VulkanExposureFeature::createPipelines() {
 }
 
 void VulkanExposureFeature::onGraphRebuilt(const VulkanProductionGraphIds& ids) {
+    // A live switch to Auto (editor) declares the passes before any pipeline
+    // exists; the rebuild follows device idle.
+    if (ids.exposureAdapt.isValid() && adaptPipeline_ == VK_NULL_HANDLE) createPipelines();
     histogramPass_ = ids.exposureHistogram;
     adaptPass_ = ids.exposureAdapt;
     sceneColor_ = ids.resolvedSceneColor;
@@ -256,7 +259,8 @@ void VulkanExposureFeature::executeAdapt(void* owner, VulkanPassContext& context
     AdaptPushConstants push{};
     push.range = { log2LuminanceOfEv100(settings.histogramMinEv100),
         (settings.histogramMaxEv100 - settings.histogramMinEv100) /
-            static_cast<float>(ExposureHistogramBins), Ev100Offset, 0.0f };
+            static_cast<float>(ExposureHistogramBins), Ev100Offset,
+        (std::max)(settings.maximumEvPerSecond, 0.0f) };
     push.limits = { settings.lowPercentile, settings.highPercentile,
         settings.minimumEv100, settings.maximumEv100 };
     const float seconds = std::isfinite(self.staged_.deltaSeconds)
@@ -264,7 +268,8 @@ void VulkanExposureFeature::executeAdapt(void* owner, VulkanPassContext& context
     push.adaptation = { settings.speedUpEvPerSecond, settings.speedDownEvPerSecond,
         seconds, self.staged_.compensationEv };
     push.control = { exposureHistogramRowCount(extent.width, extent.height),
-        graph.historyValid(self.previous_) ? 1u : 0u, 0u, 0u };
+        graph.historyValid(self.previous_) ? 1u : 0u,
+        settings.adaptation == ExposureAdaptation::Linear ? 1u : 0u, 0u };
 
     const VkCommandBuffer cmd = context.commandBuffer;
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, self.adaptPipeline_);

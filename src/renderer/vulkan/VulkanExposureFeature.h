@@ -30,6 +30,7 @@
 #include <vulkan/vulkan.h>
 
 #include <array>
+#include <cmath>
 #include <cstdint>
 
 namespace Iridium {
@@ -74,6 +75,7 @@ namespace Iridium {
             settings_ = settings;
         }
         [[nodiscard]] ExposureMode mode() const noexcept { return mode_; }
+        [[nodiscard]] const AutoExposureSettings& settings() const noexcept { return settings_; }
 
         void create(const VulkanFeatureContext& context) override;
         void onGraphRebuilt(const VulkanProductionGraphIds& ids) override;
@@ -86,6 +88,10 @@ namespace Iridium {
         [[nodiscard]] bool active() const noexcept { return adaptPass_.isValid(); }
         // Valid between create and destroy (16 bytes, multiplier 1).
         [[nodiscard]] VkBuffer fallbackState() const noexcept { return fallback_.buffer; }
+        // This frame's manual exposure multiplier (2^EV; Manual mode).
+        [[nodiscard]] float manualMultiplier() const noexcept {
+            return std::exp2(staged_.compensationEv);
+        }
         // After the frame's view selected its history set and before the
         // adapt pass: last frame's state for this view, or the fallback.
         [[nodiscard]] PreviousState previousState(uint32_t frameIndex) const;

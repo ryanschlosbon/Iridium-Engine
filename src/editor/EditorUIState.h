@@ -26,6 +26,10 @@ struct EditorOutputSettings {
     // M9.4: the active bloom settings, and why the last switch failed.
     Iridium::BloomSettings bloom{};
     std::string bloomDiagnostic;
+    // M9.5: the active exposure mode and auto-exposure settings.
+    Iridium::ExposureMode exposureMode = Iridium::ExposureMode::Auto;
+    Iridium::AutoExposureSettings autoExposure{};
+    std::string exposureDiagnostic;
     bool changed = false;
 };
 

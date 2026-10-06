@@ -298,10 +298,26 @@ namespace {
             bloom.intensity = 0.2f;
             bloom.threshold = 1.0f;
             bloom.knee = 0.5f;
+            bloom.radius = 0.5f;
+            bloom.tint = { 1.0f, 0.9f, 0.8f };
             CHECK(backend->setBloom(bloom, diagnostic));
             CHECK(backend->setAntiAliasing(AntiAliasingMode::Taa, diagnostic));
             for (uint32_t frame = 0; frame < 3; ++frame)
                 (void)renderFrame(*backend, bridge.get(), window.get(), false, 0);
+            // Live auto-exposure: Manual -> Auto declares the exposure passes
+            // (the bloom threshold then reads the adapted state), a settings
+            // change applies without a rebuild, and Auto -> Manual removes them.
+            AutoExposureSettings autoExposure{};
+            CHECK(backend->setExposure(ExposureMode::Auto, autoExposure, diagnostic));
+            CHECK(diagnostic.empty());
+            for (uint32_t frame = 0; frame < 3; ++frame)
+                (void)renderFrame(*backend, bridge.get(), window.get(), false, 0);
+            autoExposure.adaptation = ExposureAdaptation::Linear;
+            autoExposure.speedUpEvPerSecond = 0.5f;
+            CHECK(backend->setExposure(ExposureMode::Auto, autoExposure, diagnostic));
+            (void)renderFrame(*backend, bridge.get(), window.get(), false, 0);
+            CHECK(backend->setExposure(ExposureMode::Manual, autoExposure, diagnostic));
+            (void)renderFrame(*backend, bridge.get(), window.get(), false, 0);
             CHECK(backend->setAntiAliasing(AntiAliasingMode::None, diagnostic));
             bloom.enabled = false;
             CHECK(backend->setBloom(bloom, diagnostic));

@@ -104,6 +104,12 @@ namespace Iridium {
         // settings remain active.
         [[nodiscard]] virtual bool setBloom(
             const BloomSettings& settings, std::string& diagnostic) = 0;
+        // Between frames: applies the exposure mode and auto-exposure
+        // settings. Settings take effect next frame; a mode change declares
+        // or removes the exposure passes (graph topology). On failure the
+        // previous mode and settings remain active.
+        [[nodiscard]] virtual bool setExposure(ExposureMode mode,
+            const AutoExposureSettings& settings, std::string& diagnostic) = 0;
         [[nodiscard]] virtual RenderBackendCapabilities getCapabilities() const = 0;
         [[nodiscard]] virtual RenderBackendRuntimeInfo getRuntimeInfo() const = 0;
         // May only be called between frames. Startup callers use this to move

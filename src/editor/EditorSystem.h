@@ -107,6 +107,8 @@ public:
         std::string diagnostic);
     void setAntiAliasingStatus(Iridium::AntiAliasingMode active, std::string diagnostic);
     void setBloomStatus(const Iridium::BloomSettings& active, std::string diagnostic);
+    void setExposureStatus(Iridium::ExposureMode mode,
+        const Iridium::AutoExposureSettings& settings, std::string diagnostic);
     [[nodiscard]] bool consumeShadowSettings(
         Iridium::ProjectShadowSettings& settings);
     [[nodiscard]] bool consumeReflectionProbeSettings(

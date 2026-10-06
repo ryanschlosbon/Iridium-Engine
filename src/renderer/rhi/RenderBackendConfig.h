@@ -6,6 +6,7 @@
 #include "renderer/rhi/ReflectionProbeSettings.h"
 #include "renderer/rhi/VirtualShadowMap.h"
 
+#include <array>
 #include <cstdint>
 #include <filesystem>
 
@@ -69,6 +70,12 @@ namespace Iridium {
     // M9.5 auto-exposure parameters (exposure_histogram.comp,
     // exposure_adapt.comp). EV100 is scene luminance in photometric units
     // (scene-linear / PhotometricToSceneScale) at ISO 100, K = 12.5.
+    // How the adapted exposure approaches the metered target.
+    // Exponential: each second closes 1 - e^(-speed) of the remaining gap in
+    // EV (fast for large changes, easing in near the target; Unreal-like).
+    // Linear: moves at most `speed` EV per second, then stops (M9.5).
+    enum class ExposureAdaptation : uint8_t { Exponential, Linear };
+
     struct AutoExposureSettings {
         // The 128 log2-luminance histogram bins span this range.
         float histogramMinEv100 = -10.0f;
@@ -80,12 +87,15 @@ namespace Iridium {
         // The adapted EV100 never leaves [minimumEv100, maximumEv100].
         float minimumEv100 = -10.0f;
         float maximumEv100 = 20.0f;
-        // Toward a brighter scene (up) and a darker one (down), EV per second
-        // of the view's own time.
-        float speedUpEvPerSecond = 3.0f;
+        // Toward a brighter scene (up) and a darker one (down), over the view's
+        // own time: per-second rates (Exponential) or EV per second (Linear).
+        float speedUpEvPerSecond = 2.0f;
         float speedDownEvPerSecond = 1.0f;
         // 0 meters every pixel equally; 1 weights the centre up to 16x.
         float centreWeight = 0.0f;
+        ExposureAdaptation adaptation = ExposureAdaptation::Exponential;
+        // Exponential only: the fastest EV per second (0: no limit).
+        float maximumEvPerSecond = 0.0f;
 
         friend bool operator==(const AutoExposureSettings&,
             const AutoExposureSettings&) = default;
@@ -100,14 +110,23 @@ namespace Iridium {
     enum class BloomKarisMode : uint8_t { Auto, Off, On };
 
     struct BloomSettings {
-        // Off until admission (M9.7); then on by owner decision.
+        // Off in the backend; the application default is on (M9.7).
         bool enabled = false;
         // The share of light scattered into the bloom (0..1).
         float intensity = 0.04f;
-        // Scene-linear (pre-exposure) threshold; 0 disables it.
+        // Threshold in *exposed* units (after exposure, before the output
+        // transform; 1 is roughly diffuse white), so one value means the
+        // same visible brightness with auto-exposure. 0 disables it.
         float threshold = 0.0f;
-        // Soft-knee half-width around the threshold (scene-linear).
+        // Soft-knee half-width around the threshold (exposed units).
         float knee = 0.0f;
+        // Falloff from the finest chain level to the coarsest: level i
+        // weighs radius^i (normalised, energy-conserving). 1 weighs every
+        // level equally (a wide haze); lower values give a tight core with a
+        // falling tail, like a lens point-spread function.
+        float radius = 0.6f;
+        // Linear AP1 tint of the scattered light.
+        std::array<float, 3> tint{ 1.0f, 1.0f, 1.0f };
         // Chain levels from half resolution (1..8; clamped to the extent).
         uint32_t levels = 6u;
         // Karis (1 / (1 + luma)) box weights on the first downsample. They

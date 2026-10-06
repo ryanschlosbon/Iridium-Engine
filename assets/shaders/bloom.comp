@@ -10,19 +10,27 @@
 //   soft-knee threshold applied.
 // - Downsample (mode 1): level i-1 -> level i, the 13-tap filter (box weights
 //   0.5 centre and 0.125 per corner box).
-// - Upsample (mode 2): level i = (level i + tent3x3(level i+1)) * scale.
+// - Upsample (mode 2): level i = level i * a + tent3x3(level i+1) * b, with
+//   the normalised level weights (radius^i), so level 0 ends as the weighted
+//   sum of the levels' blurs.
 // All filter weights sum to one, so every level carries the scene's energy.
+// The prefilter threshold works in exposed units (scene * exposure), and the
+// prefilter applies the tint.
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
 layout(set = 0, binding = 0) uniform sampler2D source;   // bilinear, clamp, explicit lod
 layout(set = 0, binding = 1, rgba16f) uniform image2D destination;
+// The adapted exposure (y: the output multiplier); read in Auto mode only.
+layout(set = 0, binding = 2, std430) readonly buffer ExposureState {
+    vec4 exposureState;
+};
 
 layout(push_constant) uniform BloomPush {
     vec4 destination;   // xy size, zw 1 / size
     vec4 source;        // xy 1 / size of the read level, z its lod
-    vec4 shaping;        // x threshold, y knee, z output scale
-    uvec4 control;      // x mode, y 1 = Karis weights on the prefilter
+    vec4 shaping;       // x threshold, y knee (exposed units); prefilter w manual multiplier; upsample z, w weights
+    uvec4 control;      // x mode, y 1 = Karis weights on the prefilter, z half(tint.rg), w half(tint.b, auto)
 } push;
 
 const uint ModePrefilter = 0u;
@@ -88,12 +96,14 @@ vec3 downsample13(vec2 uv, bool prefilter) {
         bottomRight * w3) / (wc + w0 + w1 + w2 + w3);
 }
 
-// Soft-knee threshold on the maximum channel (0 disables it).
+// Soft-knee threshold on the maximum exposed channel (0 disables it).
 vec3 threshold(vec3 color) {
     float limit = push.shaping.x;
     if (limit <= 0.0) return color;
     float knee = max(push.shaping.y, 0.0);
-    float brightness = max(color.r, max(color.g, color.b));
+    bool autoExposure = unpackHalf2x16(push.control.w).y > 0.5;
+    float exposure = autoExposure ? exposureState.y : push.shaping.w;
+    float brightness = max(color.r, max(color.g, color.b)) * exposure;
     float soft = clamp(brightness - limit + knee, 0.0, 2.0 * knee);
     soft = soft * soft / (4.0 * knee + 1.0e-5);
     float contribution = max(soft, brightness - limit) / max(brightness, 1.0e-5);
@@ -116,10 +126,11 @@ void main() {
     uint mode = push.control.x;
     vec3 result;
     if (mode == ModeUpsample) {
-        result = (imageLoad(destination, pixel).rgb + tent9(uv)) * push.shaping.z;
+        result = imageLoad(destination, pixel).rgb * push.shaping.z + tent9(uv) * push.shaping.w;
     }
     else if (mode == ModePrefilter) {
-        result = threshold(downsample13(uv, true));
+        vec3 tint = vec3(unpackHalf2x16(push.control.z), unpackHalf2x16(push.control.w).x);
+        result = threshold(downsample13(uv, true)) * tint;
     }
     else {
         result = downsample13(uv, false);

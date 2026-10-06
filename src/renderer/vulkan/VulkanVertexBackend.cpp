@@ -373,6 +373,7 @@ namespace Iridium {
         exposure_.create(*featureContext_);   // M9.5 (before its consumers)
         taa_.create(*featureContext_);   // M9.2
         bloom_.create(*featureContext_);   // M9.4
+        bloom_.setExposureSource(&exposure_);   // exposed-unit threshold
         output_.create(*featureContext_);
         output_.setExposureFallback(exposure_.fallbackState());
         output_.createPipelines(outputTargetFormat_,
@@ -1286,6 +1287,29 @@ namespace Iridium {
         }
     }
 
+    // A graph topology change between frames, like a resize: retire every
+    // slot, rebuild the graph and targets (temporal history starts over); on
+    // failure restore the previous state and rebuild again.
+    template <class Restore>
+    bool VulkanVertexBackend::rebuildFrameTargets(Restore&& restore,
+        std::string& diagnostic, const char* what) {
+        scheduler.waitForAllFrames();
+        releaseFrameTargets();
+        try {
+            createFrameTargets();
+            registerEditorTargetTextures();
+            return true;
+        }
+        catch (const std::exception& exception) {
+            diagnostic = std::string(what) + " switch failed: " + exception.what();
+            releaseFrameTargets();
+            restore();
+            createFrameTargets();
+            registerEditorTargetTextures();
+            return false;
+        }
+    }
+
     bool VulkanVertexBackend::setAntiAliasing(AntiAliasingMode mode,
         std::string& diagnostic) {
         diagnostic.clear();
@@ -1294,27 +1318,9 @@ namespace Iridium {
             return false;
         }
         if (mode == antiAliasing_) return true;
-        // Like a resize: retire every slot, then rebuild the graph and the
-        // targets (TAA history starts from the current frame).
         const AntiAliasingMode previous = antiAliasing_;
-        const auto rebuild = [&] {
-            createFrameTargets();
-            registerEditorTargetTextures();
-        };
-        scheduler.waitForAllFrames();
-        releaseFrameTargets();
         antiAliasing_ = mode;
-        try {
-            rebuild();
-            return true;
-        }
-        catch (const std::exception& exception) {
-            diagnostic = std::string("Anti-aliasing switch failed: ") + exception.what();
-            releaseFrameTargets();
-            antiAliasing_ = previous;
-            rebuild();
-            return false;
-        }
+        return rebuildFrameTargets([&] { antiAliasing_ = previous; }, diagnostic, "Anti-aliasing");
     }
 
     bool VulkanVertexBackend::setBloom(const BloomSettings& settings,
@@ -1324,27 +1330,30 @@ namespace Iridium {
             diagnostic = "Bloom can only change between frames of an initialized backend";
             return false;
         }
-        // Intensity and threshold apply from the next frame; turning bloom on
-        // or off (or a new level count) changes the graph, like a resize.
+        // Intensity and shaping apply from the next frame; turning bloom on
+        // or off (or a new level count) changes the graph.
         const BloomSettings previous = bloom_.settings();
         const uint32_t previousLevels = bloom_.graphLevels();
         bloom_.configure(settings);
         if (bloom_.graphLevels() == previousLevels) return true;
-        scheduler.waitForAllFrames();
-        releaseFrameTargets();
-        try {
-            createFrameTargets();
-            registerEditorTargetTextures();
-            return true;
-        }
-        catch (const std::exception& exception) {
-            diagnostic = std::string("Bloom switch failed: ") + exception.what();
-            releaseFrameTargets();
-            bloom_.configure(previous);
-            createFrameTargets();
-            registerEditorTargetTextures();
+        return rebuildFrameTargets([&] { bloom_.configure(previous); }, diagnostic, "Bloom");
+    }
+
+    bool VulkanVertexBackend::setExposure(ExposureMode mode,
+        const AutoExposureSettings& settings, std::string& diagnostic) {
+        diagnostic.clear();
+        if (!initialized_ || frameOpen_) {
+            diagnostic = "Exposure can only change between frames of an initialized backend";
             return false;
         }
+        // Settings apply from the next frame; the mode declares or removes
+        // the exposure passes (a graph change).
+        const ExposureMode previousMode = exposure_.mode();
+        const AutoExposureSettings previous = exposure_.settings();
+        exposure_.configure(mode, settings);
+        if (mode == previousMode) return true;
+        return rebuildFrameTargets([&] { exposure_.configure(previousMode, previous); },
+            diagnostic, "Exposure");
     }
 
     RenderBackendCapabilities VulkanVertexBackend::getCapabilities() const {

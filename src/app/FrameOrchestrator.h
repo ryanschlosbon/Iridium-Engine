@@ -119,6 +119,8 @@ namespace Iridium {
         void switchAntiAliasing(AntiAliasingMode requested);
         // M9.4: between frames; true when the graph was rebuilt.
         bool switchBloom(const BloomSettings& requested);
+        // Applies an editor exposure request; returns whether the graph changed.
+        bool switchExposure(ExposureMode mode, const AutoExposureSettings& settings);
 
         // IRenderFrameStageObserver
         void onRenderFrameStage(RenderFrameStage stage) override;
@@ -153,6 +155,11 @@ namespace Iridium {
         std::optional<Color::OutputTransport> pendingOutputTransport_;
         std::optional<AntiAliasingMode> pendingAntiAliasing_;
         std::optional<BloomSettings> pendingBloom_;
+        struct PendingExposure {
+            ExposureMode mode = ExposureMode::Auto;
+            AutoExposureSettings settings{};
+        };
+        std::optional<PendingExposure> pendingExposure_;
         uint64_t outputTransportSwitchCount_ = 0;
         RenderBackendRuntimeInfo renderRuntimeInfo_{};
         RenderExtent renderExtent_{};

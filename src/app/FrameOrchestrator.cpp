@@ -62,6 +62,8 @@ namespace Iridium {
         publishOutputTransportStatus();
         editorHost_.setAntiAliasingStatus(config_.antiAliasing, {});
         editorHost_.setBloomStatus(config_.bloom, {});
+        editorHost_.setExposureStatus(config_.exposureMode,
+            config_.autoExposureSettings.value_or(AutoExposureSettings{}), {});
     }
 
     void FrameOrchestrator::initializeOutputTransformLut() {
@@ -258,6 +260,11 @@ namespace Iridium {
                 pendingAntiAliasing_ = outputSettings.antiAliasing;
             if (outputSettings.bloom != config_.bloom)
                 pendingBloom_ = outputSettings.bloom;
+            if (outputSettings.exposureMode != config_.exposureMode ||
+                outputSettings.autoExposure !=
+                    config_.autoExposureSettings.value_or(AutoExposureSettings{}))
+                pendingExposure_ = PendingExposure{ outputSettings.exposureMode,
+                    outputSettings.autoExposure };
             config_.manualExposureEv = outputSettings.manualExposureEv;
             config_.paperWhiteNits = outputSettings.paperWhiteNits;
             config_.peakNits = outputSettings.peakNits;
@@ -450,6 +457,11 @@ namespace Iridium {
             const BloomSettings requested = *pendingBloom_;
             pendingBloom_.reset();
             if (switchBloom(requested)) return;
+        }
+        if (pendingExposure_) {
+            const PendingExposure requested = *pendingExposure_;
+            pendingExposure_.reset();
+            if (switchExposure(requested.mode, requested.settings)) return;
         }
         if (!policy_.fullscreenScenePresentation && config_.windowVisible) {
             const RenderExtent requested =
@@ -714,6 +726,21 @@ namespace Iridium {
         else
             std::cerr << "Bloom switch failed: " << diagnostic << '\n';
         editorHost_.setBloomStatus(config_.bloom, std::move(diagnostic));
+        return topology;
+    }
+
+    bool FrameOrchestrator::switchExposure(ExposureMode mode,
+        const AutoExposureSettings& settings) {
+        const bool topology = mode != config_.exposureMode;
+        std::string diagnostic;
+        if (renderBackend->setExposure(mode, settings, diagnostic)) {
+            config_.exposureMode = mode;
+            config_.autoExposureSettings = settings;
+        }
+        else
+            std::cerr << "Exposure switch failed: " << diagnostic << '\n';
+        editorHost_.setExposureStatus(config_.exposureMode,
+            config_.autoExposureSettings.value_or(AutoExposureSettings{}), std::move(diagnostic));
         return topology;
     }
 

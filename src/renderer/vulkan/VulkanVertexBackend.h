@@ -255,6 +255,9 @@ namespace Iridium {
         // target textures (the editor bridge's onFrameTargets* events).
         void releaseFrameTargets();
         void createFrameTargets();
+        // Graph topology switches (anti-aliasing, bloom, exposure mode).
+        template <class Restore>
+        bool rebuildFrameTargets(Restore&& restore, std::string& diagnostic, const char* what);
         void releaseEditorTargetTextures();
         void registerEditorTargetTextures();
         void initFrameTargets();
@@ -371,6 +374,8 @@ namespace Iridium {
             RenderExtent extent, std::string& diagnostic) override;
         [[nodiscard]] bool setAntiAliasing(
             AntiAliasingMode mode, std::string& diagnostic) override;
+        [[nodiscard]] bool setExposure(ExposureMode mode,
+            const AutoExposureSettings& settings, std::string& diagnostic) override;
         [[nodiscard]] bool setBloom(
             const BloomSettings& settings, std::string& diagnostic) override;
         [[nodiscard]] RenderBackendCapabilities getCapabilities() const override;

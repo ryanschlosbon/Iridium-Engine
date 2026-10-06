@@ -26,6 +26,7 @@
 // Disabled, nothing is declared and nothing is created; "bloom-hook" keeps
 // its place (the M7R topology), and the output binds a fallback it never reads.
 
+#include "VulkanExposureFeature.h"
 #include "VulkanFeatureContext.h"
 #include "VulkanFrameScheduler.h"
 #include "VulkanRenderGraphExecutor.h"
@@ -73,6 +74,11 @@ namespace Iridium {
         // Before create(); also between frames (enabled changes need a graph
         // rebuild, which the backend performs; the rest applies next frame).
         void configure(const BloomSettings& settings) noexcept { settings_ = settings; }
+        // The exposure that puts the threshold in exposed units: the adapted
+        // state in Auto mode, the manual multiplier otherwise.
+        void setExposureSource(const VulkanExposureFeature* exposure) noexcept {
+            exposure_ = exposure;
+        }
         [[nodiscard]] const BloomSettings& settings() const noexcept { return settings_; }
         // The chain levels the graph declares (0: no bloom).
         [[nodiscard]] uint32_t graphLevels() const noexcept {
@@ -99,6 +105,8 @@ namespace Iridium {
         const VulkanFeatureContext* context_ = nullptr;
         BloomSettings settings_{};
         bool temporalResolve_ = false;
+        const VulkanExposureFeature* exposure_ = nullptr;
+        RenderGraph::GraphResourceId exposureState_{};
         VkDescriptorSetLayout descriptorLayout_ = VK_NULL_HANDLE;
         VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;
         VkPipeline pipeline_ = VK_NULL_HANDLE;

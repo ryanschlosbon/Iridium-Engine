@@ -60,7 +60,7 @@ void ProjectSettingsPanel::OnImGuiRender(Registry& registry, Iridium::AssetManag
             "Reflection probes capture budget faces flight realtime interval GGX prefilter samples",
             "Transparency glass layers interfaces quality Ordinary2 Hero4 Cinematic8 bulbs headlight override",
             "Anti-aliasing AA TAA temporal jitter",
-            "Post-processing bloom glow scatter intensity"};
+            "Post-processing exposure auto-exposure eye adaptation EV metering bloom glow scatter intensity threshold radius tint"};
         ImGui::BeginChild("Settings categories", ImVec2(190, 0), ImGuiChildFlags_Borders);
         for (int index = 0; index < 6; ++index) {
             if (search_.IsActive() && !search_.PassFilter(searchTerms[index])) continue;
@@ -135,8 +135,12 @@ void ProjectSettingsPanel::OnImGuiRender(Registry& registry, Iridium::AssetManag
             "Changes rebuild presentation resources at the next frame boundary; scene assets stay resident.");
         ImGui::Spacing();
 
-        changed |= Reflection::DrawField("Scene exposure (EV)",
+        changed |= Reflection::DrawField(
+            outputSettings->exposureMode == Iridium::ExposureMode::Auto
+                ? "Exposure compensation (EV)" : "Scene exposure (EV)",
             outputSettings->manualExposureEv, -16.0f, 16.0f);
+        if (outputSettings->exposureMode == Iridium::ExposureMode::Auto)
+            ImGui::TextDisabled("Auto-exposure is on (Post-processing): this offsets its result.");
         changed |= Reflection::DrawField("UI / paper white (nits)",
             outputSettings->paperWhiteNits, 80.0f, 1000.0f);
         if (outputSettings->peakNits < outputSettings->paperWhiteNits) {
@@ -388,18 +392,132 @@ void ProjectSettingsPanel::OnImGuiRender(Registry& registry, Iridium::AssetManag
                 ImGui::TextColored(ImVec4(1, .4f, .3f, 1), "%s", outputSettings->antiAliasingDiagnostic.c_str());
         }
         if (show(5)) {
+            const auto tip = [](const char* text) {
+                if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) ImGui::SetTooltip("%s", text);
+            };
+            const auto slider = [&](const char* label, float& value, float minimum, float maximum,
+                    const char* format, const char* help) {
+                if (ImGui::SliderFloat(label, &value, minimum, maximum, format,
+                        ImGuiSliderFlags_AlwaysClamp))
+                    outputSettings->changed = true;
+                tip(help);
+            };
+
+            ImGui::SeparatorText("Exposure");
+            bool autoExposure = outputSettings->exposureMode == Iridium::ExposureMode::Auto;
+            if (ImGui::Checkbox("Auto-exposure", &autoExposure)) {
+                outputSettings->exposureMode = autoExposure
+                    ? Iridium::ExposureMode::Auto : Iridium::ExposureMode::Manual;
+                outputSettings->changed = true;
+            }
+            tip("Meters the scene each frame and adapts like an eye. Off: the fixed exposure from "
+                "Display and HDR > Scene exposure (EV). On, that value is exposure compensation.");
+            Iridium::AutoExposureSettings& ae = outputSettings->autoExposure;
+            ImGui::BeginDisabled(!autoExposure);
+            int curve = ae.adaptation == Iridium::ExposureAdaptation::Linear ? 1 : 0;
+            constexpr const char* curves[]{ "Exponential (smooth)", "Linear" };
+            if (ImGui::Combo("Adaptation curve", &curve, curves, 2)) {
+                ae.adaptation = curve == 1 ? Iridium::ExposureAdaptation::Linear
+                                           : Iridium::ExposureAdaptation::Exponential;
+                outputSettings->changed = true;
+            }
+            tip("Exponential closes a share of the remaining gap each second: big changes start fast "
+                "and ease in. Linear moves at a fixed EV per second and stops abruptly at the target.");
+            const bool linear = ae.adaptation == Iridium::ExposureAdaptation::Linear;
+            slider("Speed up (to brighter)", ae.speedUpEvPerSecond, 0.05f, 10.0f,
+                linear ? "%.2f EV/s" : "%.2f /s",
+                "How fast the eye adjusts when the scene gets brighter. Exponential: a rate per "
+                "second (1 = about 63% of the gap in one second). Linear: EV per second.");
+            slider("Speed down (to darker)", ae.speedDownEvPerSecond, 0.05f, 10.0f,
+                linear ? "%.2f EV/s" : "%.2f /s",
+                "How fast the eye adjusts when the scene gets darker. Real eyes adapt to darkness "
+                "more slowly than to brightness.");
+            ImGui::BeginDisabled(linear);
+            slider("Max speed", ae.maximumEvPerSecond, 0.0f, 10.0f,
+                ae.maximumEvPerSecond > 0.0f ? "%.2f EV/s" : "unlimited",
+                "Exponential only: caps how many EV per second the exposure may move (0: no cap). "
+                "Use it to soften very large jumps, such as stepping from a dark room into daylight.");
+            ImGui::EndDisabled();
+            slider("Min EV100", ae.minimumEv100, -10.0f, 20.0f, "%.1f",
+                "The darkest exposure auto-exposure may choose (lower EV100 = brighter image in "
+                "dark scenes). Raise it to keep night scenes dark.");
+            slider("Max EV100", ae.maximumEv100, -10.0f, 20.0f, "%.1f",
+                "The brightest-scene exposure auto-exposure may choose. Lower it so bright skies "
+                "can stay bright instead of being pulled down to grey.");
+            if (ae.maximumEv100 < ae.minimumEv100) ae.maximumEv100 = ae.minimumEv100;
+            slider("Low percentile", ae.lowPercentile, 0.0f, 0.99f, "%.2f",
+                "Metering ignores this darkest share of the pixels (deep shadows, black sky).");
+            slider("High percentile", ae.highPercentile, 0.01f, 1.0f, "%.2f",
+                "Metering ignores the brightest share above this point (the sun, light sources, "
+                "specular highlights), so they do not darken the whole image.");
+            if (ae.highPercentile <= ae.lowPercentile) ae.highPercentile = ae.lowPercentile + 0.01f;
+            slider("Centre weighting", ae.centreWeight, 0.0f, 1.0f, "%.2f",
+                "0 meters the whole frame equally; 1 weights the centre of the view up to 16x, like "
+                "a camera's centre-weighted metering.");
+            if (ImGui::TreeNode("Histogram range")) {
+                slider("Histogram min EV100", ae.histogramMinEv100, -16.0f, 10.0f, "%.1f",
+                    "The darkest luminance the metering histogram can see.");
+                slider("Histogram max EV100", ae.histogramMaxEv100, 0.0f, 26.0f, "%.1f",
+                    "The brightest luminance the metering histogram can see.");
+                if (ae.histogramMaxEv100 <= ae.histogramMinEv100)
+                    ae.histogramMaxEv100 = ae.histogramMinEv100 + 1.0f;
+                ImGui::TreePop();
+            }
+            ImGui::EndDisabled();
+            if (ImGui::Button("Reset exposure defaults")) {
+                ae = Iridium::AutoExposureSettings{};
+                outputSettings->changed = true;
+            }
+            if (!outputSettings->exposureDiagnostic.empty())
+                ImGui::TextColored(ImVec4(1, .4f, .3f, 1), "%s", outputSettings->exposureDiagnostic.c_str());
+
             ImGui::SeparatorText("Bloom");
             Iridium::BloomSettings& bloom = outputSettings->bloom;
             if (ImGui::Checkbox("Bloom", &bloom.enabled)) outputSettings->changed = true;
+            tip("Scatters bright light into a glow, as a camera lens does. Turning it on or off "
+                "rebuilds the frame graph at the next frame boundary; every other setting applies "
+                "immediately.");
             ImGui::BeginDisabled(!bloom.enabled);
-            if (ImGui::SliderFloat("Bloom intensity", &bloom.intensity, 0.0f, 0.25f, "%.3f",
-                    ImGuiSliderFlags_AlwaysClamp))
-                outputSettings->changed = true;
+            slider("Intensity", bloom.intensity, 0.0f, 0.25f, "%.3f",
+                "Without a threshold: the share of all light scattered into the glow, taken from the "
+                "image (energy-conserving). With a threshold: how strongly the light above it is added.");
+            slider("Radius", bloom.radius, 0.05f, 1.0f, "%.2f",
+                "How far the glow spreads. Low values give a tight core around bright sources, as a "
+                "good lens does; 1 spreads the light evenly across every blur size (a wide haze).");
+            slider("Threshold", bloom.threshold, 0.0f, 16.0f,
+                bloom.threshold > 0.0f ? "%.2f" : "off",
+                "Only light brighter than this blooms, measured after exposure (1 is roughly diffuse "
+                "white), so the same value works with auto-exposure. 0 lets all light bloom.");
+            ImGui::BeginDisabled(bloom.threshold <= 0.0f);
+            slider("Threshold knee", bloom.knee, 0.0f, 4.0f, "%.2f",
+                "Softens the threshold: light within this distance of it blooms partially, so bright "
+                "areas fade into the glow instead of switching on abruptly.");
             ImGui::EndDisabled();
-            ImGui::TextWrapped("Bloom scatters a small share of the scene's light (about 4%%) into a wide "
-                "glow, as a lens does. It conserves energy: the glow is taken from the image, not added. "
-                "Turning it on or off rebuilds the frame graph at the next frame boundary; the intensity "
-                "applies immediately.");
+            if (ImGui::ColorEdit3("Tint", bloom.tint.data(), ImGuiColorEditFlags_Float))
+                outputSettings->changed = true;
+            tip("Colours the scattered light (linear). White keeps the source colours.");
+            int levels = static_cast<int>(bloom.levels);
+            if (ImGui::SliderInt("Levels", &levels, 1, 8, "%d", ImGuiSliderFlags_AlwaysClamp)) {
+                bloom.levels = static_cast<uint32_t>(levels);
+                outputSettings->changed = true;
+            }
+            tip("How many blur sizes the glow is built from (each doubles the size). More levels reach "
+                "farther. Changing it rebuilds the frame graph.");
+            int karis = static_cast<int>(bloom.karis);
+            constexpr const char* karisModes[]{ "Auto (off with TAA)", "Off", "On" };
+            if (ImGui::Combo("Anti-firefly filter", &karis, karisModes, 3)) {
+                bloom.karis = static_cast<Iridium::BloomKarisMode>(karis);
+                outputSettings->changed = true;
+            }
+            tip("Suppresses flickering glow from tiny, very bright points; it also removes some of "
+                "their energy. Auto turns it off when TAA already stabilises them.");
+            ImGui::EndDisabled();
+            if (ImGui::Button("Reset bloom defaults")) {
+                const bool enabled = bloom.enabled;
+                bloom = Iridium::BloomSettings{};
+                bloom.enabled = enabled;
+                outputSettings->changed = true;
+            }
             if (!outputSettings->bloomDiagnostic.empty())
                 ImGui::TextColored(ImVec4(1, .4f, .3f, 1), "%s", outputSettings->bloomDiagnostic.c_str());
         }

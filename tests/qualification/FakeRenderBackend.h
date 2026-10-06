@@ -60,6 +60,9 @@ namespace IridiumTest {
         RenderExtent getRenderExtent() const override { return { 1280u, 720u }; }
         bool setAntiAliasing(AntiAliasingMode, std::string&) override { return true; }
         bool setBloom(const BloomSettings&, std::string&) override { return true; }
+        bool setExposure(ExposureMode, const AutoExposureSettings&, std::string&) override {
+            return true;
+        }
         bool resizeSceneRenderExtent(RenderExtent, std::string&) override {
             return true;
         }
