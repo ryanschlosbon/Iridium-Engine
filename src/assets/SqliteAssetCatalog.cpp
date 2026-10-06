@@ -185,6 +185,7 @@ namespace Iridium {
                     ? " AND asset_search MATCH ?"
                     : " AND search_text LIKE ? ESCAPE '\\'";
             }
+            if (query.assetRoot) where += " AND asset_root=?";
             if (query.sourceDirectory) {
                 where +=
                     " AND source_path LIKE ? ESCAPE '\\'"
@@ -220,6 +221,7 @@ namespace Iridium {
                     ? ftsQuery(query.text)
                     : "%" + escapeLike(query.text) + "%");
             }
+            if (query.assetRoot) statement.bindText(binding++, *query.assetRoot);
             if (query.sourceDirectory) {
                 statement.bindText(binding++,
                     escapeLike(*query.sourceDirectory) + "/%");
@@ -259,10 +261,9 @@ namespace Iridium {
 
             void rebuild(
                 std::span<const AssetCatalogRecord> records,
-                std::span<const std::string>
+                std::span<const AssetSourceDirectory>
                     sourceDirectories) override {
-                std::set<std::string> directorySet;
-                directorySet.insert(
+                std::set<AssetSourceDirectory> directorySet(
                     sourceDirectories.begin(),
                     sourceDirectories.end());
                 for (const AssetCatalogRecord& record : records) {
@@ -270,11 +271,12 @@ namespace Iridium {
                     std::filesystem::path directory =
                         std::filesystem::path(record.sourcePath).parent_path();
                     while (!directory.empty() && directory != ".") {
-                        directorySet.insert(directory.generic_string());
+                        directorySet.insert({ record.assetRoot,
+                            directory.generic_string() });
                         directory = directory.parent_path();
                     }
                 }
-                std::vector<std::string> directories(
+                std::vector<AssetSourceDirectory> directories(
                     directorySet.begin(), directorySet.end());
 
                 std::lock_guard lock(m_mutex);
@@ -397,7 +399,7 @@ namespace Iridium {
                 return static_cast<uint64_t>(sqlite3_column_int64(statement.get(), 0));
             }
 
-            std::vector<std::string>
+            std::vector<AssetSourceDirectory>
                 sourceDirectories() const override {
                 std::lock_guard lock(m_mutex);
                 return m_directories;
@@ -463,7 +465,7 @@ namespace Iridium {
             sqlite3* m_database = nullptr;
             bool m_fullTextSearch = false;
             mutable std::mutex m_mutex;
-            std::vector<std::string> m_directories;
+            std::vector<AssetSourceDirectory> m_directories;
         };
 
     } // namespace

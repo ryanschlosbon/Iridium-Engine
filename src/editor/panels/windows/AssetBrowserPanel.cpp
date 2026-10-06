@@ -4,6 +4,7 @@
 #include "material/TransparencyDiagnostics.h"
 
 #include "assets/AssetCatalogService.h"
+#include "core/ProjectAssetRoots.h"
 #include "assets/AssetManager.h"
 #include "assets/environment/EnvironmentConvolution.h"
 #include "assets/environment/EnvironmentProduct.h"
@@ -57,11 +58,21 @@ namespace {
         return nullptr;
     }
 
+    // Folder-order keys: the parent path for the project root (the original
+    // file format), "<root>:<parent>" for other roots.
+    std::string folderOrderKey(std::string_view root, std::string_view parent) {
+        if (root.empty() || root == Iridium::kProjectAssetRootId) {
+            return std::string(parent);
+        }
+        return std::string(root) + ":" + std::string(parent);
+    }
+
     void applyFolderOrder(
         std::vector<Iridium::AssetBrowserFolder>& folders,
         const std::map<std::string, std::vector<std::string>>& order,
+        std::string_view root,
         std::string_view parent = {}) {
-        const auto found = order.find(std::string(parent));
+        const auto found = order.find(folderOrderKey(root, parent));
         if (found != order.end()) {
             const auto rank = [&found](std::string_view path) {
                 const auto position = std::ranges::find(found->second, path);
@@ -80,7 +91,7 @@ namespace {
                 });
         }
         for (auto& folder : folders) {
-            applyFolderOrder(folder.children, order, folder.path);
+            applyFolderOrder(folder.children, order, root, folder.path);
         }
     }
 
@@ -567,6 +578,7 @@ void AssetBrowserPanel::selectItem(
 
 void AssetBrowserPanel::requestAssetMove(
     Iridium::AssetGuid assetGuid,
+    std::string_view destinationRoot,
     const std::filesystem::path&
         destinationDirectory) {
     if (!catalog_ || !catalogService_) {
@@ -588,6 +600,14 @@ void AssetBrowserPanel::requestAssetMove(
             "Imported materials and textures stay nested under their source model.";
         return;
     }
+    if (root->assetRoot != destinationRoot) {
+        // A cross-root move would relocate licensed local content into the
+        // repository (or the reverse); import into the other root instead.
+        actionDiagnostic_ = "Cannot move '" + root->displayName + "' from " +
+            rootLabel(root->assetRoot) + " to " + rootLabel(destinationRoot) +
+            ": assets move only within their own root. Import a copy instead.";
+        return;
+    }
     (void)catalogService_->requestMoveAsset(
         root->guid, destinationDirectory);
     actionDiagnostic_ =
@@ -595,13 +615,21 @@ void AssetBrowserPanel::requestAssetMove(
 }
 
 void AssetBrowserPanel::requestFolderMove(
+    std::string_view sourceRoot,
     std::string_view sourceDirectory,
+    std::string_view destinationRoot,
     const std::filesystem::path& destinationDirectory) {
-    if (!catalogService_ || sourceDirectory.empty()) {
+    if (!catalogService_ || sourceDirectory.empty() || sourceRoot.empty()) {
         actionDiagnostic_ = "Folder move is unavailable.";
         return;
     }
-    (void)catalogService_->requestMoveFolder("project",
+    if (sourceRoot != destinationRoot) {
+        actionDiagnostic_ = "Cannot move folder '" + std::string(sourceDirectory) +
+            "' from " + rootLabel(sourceRoot) + " to " + rootLabel(destinationRoot) +
+            ": folders move only within their own root.";
+        return;
+    }
+    (void)catalogService_->requestMoveFolder(std::string(sourceRoot),
         std::filesystem::path(sourceDirectory), destinationDirectory);
     actionDiagnostic_ = "Folder move queued.";
 }
@@ -645,15 +673,19 @@ void AssetBrowserPanel::saveFolderOrder() {
 }
 
 void AssetBrowserPanel::rebuildOrderedFolders() {
-    orderedFolders_ = folders_;
-    applyFolderOrder(orderedFolders_, folderOrder_);
+    for (RootSection& section : rootSections_) {
+        section.orderedFolders = section.folders;
+        applyFolderOrder(section.orderedFolders, folderOrder_, section.id);
+    }
 }
 
-void AssetBrowserPanel::reorderFolderBefore(
+void AssetBrowserPanel::reorderFolderBefore(std::string_view root,
     std::string_view sourcePath, std::string_view targetPath) {
     if (sourcePath.empty() || targetPath.empty() || sourcePath == targetPath) {
         return;
     }
+    const RootSection* section = rootSection(root);
+    if (section == nullptr) return;
     const std::string sourceParent = std::filesystem::path(sourcePath)
         .parent_path().generic_string();
     const std::string targetParent = std::filesystem::path(targetPath)
@@ -664,10 +696,10 @@ void AssetBrowserPanel::reorderFolderBefore(
         return;
     }
     const auto* parentFolder = sourceParent.empty()
-        ? nullptr : findFolder(folders_, sourceParent);
+        ? nullptr : findFolder(section->folders, sourceParent);
     const auto siblings = parentFolder
         ? std::span<const Iridium::AssetBrowserFolder>(parentFolder->children)
-        : std::span<const Iridium::AssetBrowserFolder>(folders_);
+        : std::span<const Iridium::AssetBrowserFolder>(section->folders);
     std::vector<std::string> order;
     order.reserve(siblings.size());
     for (const auto& sibling : siblings) order.push_back(sibling.path);
@@ -678,7 +710,7 @@ void AssetBrowserPanel::reorderFolderBefore(
     order.erase(source);
     const auto targetAfterErase = std::ranges::find(order, targetPath);
     order.insert(targetAfterErase, moved);
-    folderOrder_.insert_or_assign(sourceParent, std::move(order));
+    folderOrder_.insert_or_assign(folderOrderKey(root, sourceParent), std::move(order));
     rebuildOrderedFolders();
     saveFolderOrder();
     actionDiagnostic_ = "Custom folder order saved.";
@@ -889,12 +921,128 @@ void AssetBrowserPanel::drawItem(Registry& registry,
 
 void AssetBrowserPanel::rebuildFolders() {
     foldersInitialized_ = true;
-    folders_ = catalog_
-        ? Iridium::buildAssetBrowserFolders(
-            catalog_->sourceDirectories())
-        : std::vector<
-            Iridium::AssetBrowserFolder>{};
+    const std::vector<Iridium::AssetRoot> roots = catalogService_
+        ? catalogService_->roots()
+        : std::vector<Iridium::AssetRoot>{
+            Iridium::AssetRoot{ std::string(Iridium::kProjectAssetRootId), {} },
+        };
+    const std::vector<Iridium::AssetSourceDirectory> directories = catalog_
+        ? catalog_->sourceDirectories()
+        : std::vector<Iridium::AssetSourceDirectory>{};
+    rootSections_.clear();
+    for (const Iridium::AssetRoot& root : roots) {
+        rootSections_.push_back({
+            .id = root.id,
+            .label = rootLabel(root.id),
+            .path = root.path,
+            .folders = Iridium::buildAssetBrowserFolders(directories, root.id),
+        });
+    }
+    // A root that disappeared from the service leaves no stale selection.
+    if (model_.assetRoot() && !rootSection(*model_.assetRoot())) {
+        browse(std::nullopt, std::nullopt);
+    }
     rebuildOrderedFolders();
+}
+
+const AssetBrowserPanel::RootSection* AssetBrowserPanel::rootSection(
+    std::string_view id) const noexcept {
+    for (const RootSection& section : rootSections_) {
+        if (section.id == id) return &section;
+    }
+    return nullptr;
+}
+
+std::string AssetBrowserPanel::rootLabel(std::string_view id) const {
+    if (id == Iridium::kProjectAssetRootId) return "Project";
+    if (id == Iridium::kLocalAssetRootId) return "Local library";
+    return std::string(id);
+}
+
+std::optional<std::string> AssetBrowserPanel::browseRoot() const {
+    if (model_.assetRoot()) return model_.assetRoot();
+    if (rootSections_.size() == 1) return rootSections_.front().id;
+    return std::nullopt;
+}
+
+std::string AssetBrowserPanel::contentRoot() const {
+    if (const auto root = browseRoot()) return *root;
+    if (rootSection(Iridium::kLocalAssetRootId)) {
+        return std::string(Iridium::kLocalAssetRootId);
+    }
+    return rootSections_.empty()
+        ? std::string(Iridium::kProjectAssetRootId)
+        : rootSections_.front().id;
+}
+
+std::string AssetBrowserPanel::contentDirectory() const {
+    return browseRoot() ? model_.directory().value_or("") : std::string{};
+}
+
+void AssetBrowserPanel::browse(std::optional<std::string> root,
+    std::optional<std::string> directory) {
+    // With a single root the query keeps no root filter (today's behaviour).
+    model_.setAssetRoot(rootSections_.size() > 1 ? std::move(root) : std::nullopt);
+    model_.setDirectory(std::move(directory));
+}
+
+void AssetBrowserPanel::drawRootActions(const std::string& root) {
+    if (ImGui::BeginPopupContextItem(
+            ("asset-root-context##" + root).c_str())) {
+        if (ImGui::MenuItem(
+                "Import...")) {
+            queueImportFromDialog(root);
+        }
+        if (ImGui::MenuItem(
+                "New folder")) {
+            openContentDialog(
+                ContentDialogMode::
+                    CreateFolder,
+                {}, {}, {}, root);
+        }
+        ImGui::Separator();
+        if (ImGui::MenuItem("Refresh") &&
+            catalogService_) {
+            (void)catalogService_
+                ->requestRefresh();
+            actionDiagnostic_ =
+                "Catalog refresh queued.";
+        }
+        ImGui::EndPopup();
+    }
+    if (ImGui::BeginDragDropTarget()) {
+        if (const ImGuiPayload* payload =
+                ImGui::AcceptDragDropPayload(
+                    Iridium::kAssetBrowserFolderDragPayloadType.data())) {
+            const auto source = Iridium::decodeAssetFolderDragPayload(
+                payload->DataType,
+                std::span(static_cast<const std::byte*>(payload->Data),
+                    static_cast<size_t>(payload->DataSize)));
+            if (source) requestFolderMove(draggedFolderRoot_, *source, root, {});
+        }
+        if (const ImGuiPayload* payload =
+                ImGui::AcceptDragDropPayload(
+                    Iridium::
+                        kAssetBrowserDragPayloadType
+                            .data())) {
+            const auto decoded =
+                Iridium::
+                    decodeAssetDragPayload(
+                        payload->DataType,
+                        std::span(
+                            static_cast<
+                                const std::byte*>(
+                                payload->Data),
+                            static_cast<size_t>(
+                                payload->DataSize)));
+            if (decoded &&
+                catalogService_) {
+                requestAssetMove(
+                    decoded->guid, root, {});
+            }
+        }
+        ImGui::EndDragDropTarget();
+    }
 }
 
 void AssetBrowserPanel::drawDrawerRecord(
@@ -1133,6 +1281,7 @@ void AssetBrowserPanel::ensureDrawerCache(
 }
 
 void AssetBrowserPanel::drawFolders(
+    const std::string& root,
     std::span<const
         Iridium::AssetBrowserFolder> folders) {
     for (const Iridium::AssetBrowserFolder&
@@ -1147,8 +1296,14 @@ void AssetBrowserPanel::drawFolders(
                     payload->DataType,
                     std::span(static_cast<const std::byte*>(payload->Data),
                         static_cast<size_t>(payload->DataSize)));
-                if (source) pendingFolderReorder_ =
-                    std::pair<std::string, std::string>{ *source, folder.path };
+                if (source && draggedFolderRoot_ == root) {
+                    pendingFolderReorder_ =
+                        PendingFolderReorder{ root, *source, folder.path };
+                }
+                else if (source) {
+                    actionDiagnostic_ =
+                        "Folders reorder only among siblings in the same root.";
+                }
             }
             ImGui::EndDragDropTarget();
         }
@@ -1156,7 +1311,8 @@ void AssetBrowserPanel::drawFolders(
             ImGuiTreeNodeFlags_OpenOnArrow |
             ImGuiTreeNodeFlags_SpanAvailWidth;
         if (model_.directory() ==
-            std::optional(folder.path)) {
+                std::optional(folder.path) &&
+            browseRoot() == std::optional(root)) {
             flags |=
                 ImGuiTreeNodeFlags_Selected;
         }
@@ -1172,10 +1328,10 @@ void AssetBrowserPanel::drawFolders(
                 folder.name.c_str());
         if (ImGui::IsItemClicked() &&
             !ImGui::IsItemToggledOpen()) {
-            model_.setDirectory(
-                folder.path);
+            browse(root, folder.path);
         }
         if (ImGui::BeginDragDropSource()) {
+            draggedFolderRoot_ = root;
             ImGui::SetDragDropPayload(
                 Iridium::kAssetBrowserFolderDragPayloadType.data(),
                 folder.path.c_str(), folder.path.size() + 1);
@@ -1188,27 +1344,27 @@ void AssetBrowserPanel::drawFolders(
                     folder.path).c_str())) {
             if (ImGui::MenuItem(
                     "Import...")) {
-                queueImportFromDialog();
+                queueImportFromDialog(root, folder.path);
             }
             if (ImGui::MenuItem(
                     "New subfolder")) {
                 openContentDialog(
                     ContentDialogMode::
                         CreateFolder,
-                    folder.path);
+                    folder.path, {}, {}, root);
             }
             if (ImGui::MenuItem("Rename")) {
                 openContentDialog(
                     ContentDialogMode::
                         RenameFolder,
                     folder.path, {},
-                    folder.name);
+                    folder.name, root);
             }
             if (ImGui::MenuItem("Delete")) {
                 openContentDialog(
                     ContentDialogMode::
                         DeleteFolder,
-                    folder.path);
+                    folder.path, {}, {}, root);
             }
             ImGui::Separator();
             if (ImGui::MenuItem("Refresh") &&
@@ -1228,7 +1384,10 @@ void AssetBrowserPanel::drawFolders(
                     payload->DataType,
                     std::span(static_cast<const std::byte*>(payload->Data),
                         static_cast<size_t>(payload->DataSize)));
-                if (source) requestFolderMove(*source, folder.path);
+                if (source) {
+                    requestFolderMove(draggedFolderRoot_, *source,
+                        root, folder.path);
+                }
             }
             if (const ImGuiPayload* payload =
                     ImGui::AcceptDragDropPayload(
@@ -1248,7 +1407,7 @@ void AssetBrowserPanel::drawFolders(
                 if (decoded &&
                     catalogService_) {
                     requestAssetMove(
-                        decoded->guid,
+                        decoded->guid, root,
                         folder.path);
                 }
             }
@@ -1256,7 +1415,7 @@ void AssetBrowserPanel::drawFolders(
         }
         if (open &&
             !folder.children.empty()) {
-            drawFolders(folder.children);
+            drawFolders(root, folder.children);
             ImGui::TreePop();
         }
         ImGui::PopID();
@@ -1265,12 +1424,17 @@ void AssetBrowserPanel::drawFolders(
 
 std::span<const Iridium::AssetBrowserFolder>
     AssetBrowserPanel::currentFolders() const {
+    // The "All Assets" view of several roots shows no folder cards; the folder
+    // pane lists each root's tree.
+    const std::optional<std::string> root = browseRoot();
+    const RootSection* section = root ? rootSection(*root) : nullptr;
+    if (section == nullptr) return {};
     if (!model_.directory()) {
-        return folders_;
+        return section->folders;
     }
     const auto* folder =
         findFolder(
-            folders_,
+            section->folders,
             *model_.directory());
     return folder
         ? std::span<const
@@ -1302,11 +1466,13 @@ void AssetBrowserPanel::drawFolderItem(
                     thumbnailSize)
                 : ImVec2(180.0f, 0.0f));
     ImGui::PopStyleColor();
+    // Folder cards belong to the browsed root (currentFolders()).
+    const std::string root = contentRoot();
     if (open) {
-        model_.setDirectory(
-            folder.path);
+        browse(root, folder.path);
     }
     if (ImGui::BeginDragDropSource()) {
+        draggedFolderRoot_ = root;
         ImGui::SetDragDropPayload(
             Iridium::kAssetBrowserFolderDragPayloadType.data(),
             folder.path.c_str(), folder.path.size() + 1);
@@ -1316,28 +1482,27 @@ void AssetBrowserPanel::drawFolderItem(
     if (ImGui::BeginPopupContextItem(
             "folder-item-context")) {
         if (ImGui::MenuItem("Open")) {
-            model_.setDirectory(
-                folder.path);
+            browse(root, folder.path);
         }
         if (ImGui::MenuItem(
                 "New subfolder")) {
             openContentDialog(
                 ContentDialogMode::
                     CreateFolder,
-                folder.path);
+                folder.path, {}, {}, root);
         }
         if (ImGui::MenuItem("Rename")) {
             openContentDialog(
                 ContentDialogMode::
                     RenameFolder,
                 folder.path, {},
-                folder.name);
+                folder.name, root);
         }
         if (ImGui::MenuItem("Delete")) {
             openContentDialog(
                 ContentDialogMode::
                     DeleteFolder,
-                folder.path);
+                folder.path, {}, {}, root);
         }
         ImGui::EndPopup();
     }
@@ -1349,7 +1514,10 @@ void AssetBrowserPanel::drawFolderItem(
                 payload->DataType,
                 std::span(static_cast<const std::byte*>(payload->Data),
                     static_cast<size_t>(payload->DataSize)));
-            if (source) requestFolderMove(*source, folder.path);
+            if (source) {
+                requestFolderMove(draggedFolderRoot_, *source,
+                    root, folder.path);
+            }
         }
         if (const ImGuiPayload* payload =
                 ImGui::AcceptDragDropPayload(
@@ -1368,7 +1536,7 @@ void AssetBrowserPanel::drawFolderItem(
                                 payload->DataSize)));
             if (decoded) {
                 requestAssetMove(
-                    decoded->guid,
+                    decoded->guid, root,
                     folder.path);
             }
         }
@@ -1381,11 +1549,22 @@ void AssetBrowserPanel::drawFolderItem(
     ImGui::PopID();
 }
 
-void AssetBrowserPanel::queueImportFromDialog() {
+void AssetBrowserPanel::queueImportFromDialog(
+    std::optional<std::string> explicitRoot, std::string explicitDirectory) {
     if (!catalogService_ ||
         catalogService_->busy()) {
         return;
     }
+    // An explicit target (a folder's or root's context menu), else the browsed
+    // root and folder, else the local asset library when configured.
+    const std::string root = explicitRoot ? *explicitRoot : contentRoot();
+    const std::string directory = explicitRoot
+        ? std::move(explicitDirectory) : contentDirectory();
+    const RootSection* section = rootSection(root);
+    const std::filesystem::path dialogDirectory =
+        section && !section->path.empty()
+        ? section->path
+        : std::filesystem::path(PROJECT_ROOT_DIR) / "assets";
     constexpr std::array filters = {
         Iridium::FileDialogFilter{
             "Supported assets",
@@ -1397,17 +1576,17 @@ void AssetBrowserPanel::queueImportFromDialog() {
     if (const auto path =
             Iridium::openFileDialog(
                 filters,
-                std::filesystem::path(
-                    PROJECT_ROOT_DIR) /
-                    "assets")) {
+                dialogDirectory)) {
         (void)catalogService_
             ->requestImport(
                 *path,
-                "project",
-                model_.directory()
-                    .value_or(""));
+                root,
+                directory);
         actionDiagnostic_ =
-            "Import queued. Open Window > Console for progress and errors.";
+            (rootSections_.size() > 1
+                ? "Import into " + rootLabel(root) + " queued."
+                : std::string("Import queued.")) +
+            " Open Window > Console for progress and errors.";
     }
 }
 
@@ -1428,7 +1607,7 @@ void AssetBrowserPanel::
     if (ImGui::MenuItem("New Folder")) {
         openContentDialog(
             ContentDialogMode::CreateFolder,
-            model_.directory().value_or(""));
+            contentDirectory(), {}, {}, contentRoot());
     }
     ImGui::Separator();
     if (ImGui::MenuItem("Refresh")) {
@@ -1445,11 +1624,13 @@ void AssetBrowserPanel::openContentDialog(
     ContentDialogMode mode,
     std::filesystem::path path,
     Iridium::AssetGuid assetGuid,
-    std::string_view initialName) {
+    std::string_view initialName,
+    std::string root) {
     contentDialogMode_ = mode;
     contentDialogPending_ = true;
     contentDialogPath_ =
         std::move(path);
+    contentDialogRoot_ = root.empty() ? contentRoot() : std::move(root);
     contentDialogAssetGuid_ =
         assetGuid;
     contentDialogName_.fill('\0');
@@ -1504,10 +1685,21 @@ void AssetBrowserPanel::drawContentDialog() {
         contentDialogMode_ ==
             ContentDialogMode::DeleteAsset;
     if (deleting) {
-        ImGui::TextWrapped(
-            "Delete '%s' from the physical project assets folder?",
-            contentDialogPath_
-                .generic_string().c_str());
+        if (contentDialogMode_ ==
+            ContentDialogMode::DeleteFolder &&
+            rootSections_.size() > 1) {
+            ImGui::TextWrapped(
+                "Delete '%s' from the physical %s folder?",
+                contentDialogPath_
+                    .generic_string().c_str(),
+                rootLabel(contentDialogRoot_).c_str());
+        }
+        else {
+            ImGui::TextWrapped(
+                "Delete '%s' from the physical project assets folder?",
+                contentDialogPath_
+                    .generic_string().c_str());
+        }
         ImGui::TextColored(
             ImVec4(1.0f, 0.55f,
                 0.25f, 1.0f),
@@ -1520,13 +1712,17 @@ void AssetBrowserPanel::drawContentDialog() {
         }
     }
     else {
+        const std::string location =
+            (rootSections_.size() > 1 &&
+                    contentDialogMode_ !=
+                        ContentDialogMode::RenameAsset
+                ? rootLabel(contentDialogRoot_) + " / "
+                : std::string{}) +
+            (contentDialogPath_.empty()
+                ? std::string("Assets")
+                : contentDialogPath_.generic_string());
         ImGui::TextWrapped(
-            "%s",
-            contentDialogPath_.empty()
-                ? "Assets"
-                : contentDialogPath_
-                    .generic_string()
-                    .c_str());
+            "%s", location.c_str());
         ImGui::InputText(
             contentDialogMode_ ==
                 ContentDialogMode::CreateFolder
@@ -1549,14 +1745,14 @@ void AssetBrowserPanel::drawContentDialog() {
             case ContentDialogMode::CreateFolder:
                 (void)catalogService_
                     ->requestCreateFolder(
-                        "project",
+                        contentDialogRoot_,
                         contentDialogPath_,
                         contentDialogName_.data());
                 break;
             case ContentDialogMode::RenameFolder:
                 (void)catalogService_
                     ->requestRenameFolder(
-                        "project",
+                        contentDialogRoot_,
                         contentDialogPath_,
                         contentDialogName_.data());
                 break;
@@ -1569,7 +1765,7 @@ void AssetBrowserPanel::drawContentDialog() {
             case ContentDialogMode::DeleteFolder:
                 (void)catalogService_
                     ->requestDeleteFolder(
-                        "project",
+                        contentDialogRoot_,
                         contentDialogPath_);
                 break;
             case ContentDialogMode::DeleteAsset:
@@ -2764,7 +2960,7 @@ void AssetBrowserPanel::OnImGuiRender(Registry& registry,
     if (ImGui::Button("New Folder")) {
         openContentDialog(
             ContentDialogMode::CreateFolder,
-            model_.directory().value_or(""));
+            contentDirectory(), {}, {}, contentRoot());
     }
     ImGui::SameLine();
     if (ImGui::Button("Refresh")) {
@@ -3051,61 +3247,49 @@ void AssetBrowserPanel::OnImGuiRender(Registry& registry,
                         ? -statusReserve
                         : 0.0f))) {
             const bool allSelected =
-                !model_.directory();
+                !model_.directory() && !model_.assetRoot();
             if (ImGui::Selectable(
                     "All Assets",
                     allSelected)) {
-                model_.setDirectory(
-                    std::nullopt);
+                browse(std::nullopt, std::nullopt);
             }
-            if (ImGui::BeginPopupContextItem(
-                    "asset-root-context")) {
-                if (ImGui::MenuItem(
-                        "Import...")) {
-                    queueImportFromDialog();
+            if (rootSections_.size() <= 1) {
+                // One root (no local library configured): the tree as before.
+                const std::string root = contentRoot();
+                drawRootActions(root);
+                if (!rootSections_.empty()) {
+                    drawFolders(root, rootSections_.front().orderedFolders);
                 }
-                if (ImGui::MenuItem(
-                        "New folder")) {
-                    openContentDialog(
-                        ContentDialogMode::
-                            CreateFolder);
-                }
-                ImGui::EndPopup();
             }
-            if (ImGui::BeginDragDropTarget()) {
-                if (const ImGuiPayload* payload =
-                        ImGui::AcceptDragDropPayload(
-                            Iridium::kAssetBrowserFolderDragPayloadType.data())) {
-                    const auto source = Iridium::decodeAssetFolderDragPayload(
-                        payload->DataType,
-                        std::span(static_cast<const std::byte*>(payload->Data),
-                            static_cast<size_t>(payload->DataSize)));
-                    if (source) requestFolderMove(*source, {});
-                }
-                if (const ImGuiPayload* payload =
-                        ImGui::AcceptDragDropPayload(
-                            Iridium::
-                                kAssetBrowserDragPayloadType
-                                    .data())) {
-                    const auto decoded =
-                        Iridium::
-                            decodeAssetDragPayload(
-                                payload->DataType,
-                                std::span(
-                                    static_cast<
-                                        const std::byte*>(
-                                        payload->Data),
-                                    static_cast<size_t>(
-                                        payload->DataSize)));
-                    if (decoded &&
-                        catalogService_) {
-                        requestAssetMove(
-                            decoded->guid, {});
+            else {
+                // One top-level section per root ("Project", "Local library").
+                for (const RootSection& section : rootSections_) {
+                    ImGuiTreeNodeFlags flags =
+                        ImGuiTreeNodeFlags_OpenOnArrow |
+                        ImGuiTreeNodeFlags_SpanAvailWidth |
+                        ImGuiTreeNodeFlags_DefaultOpen;
+                    if (model_.assetRoot() == std::optional(section.id) &&
+                        !model_.directory()) {
+                        flags |= ImGuiTreeNodeFlags_Selected;
+                    }
+                    const bool open = ImGui::TreeNodeEx(
+                        ("asset-root##" + section.id).c_str(), flags,
+                        "%s", section.label.c_str());
+                    if (ImGui::IsItemClicked() &&
+                        !ImGui::IsItemToggledOpen()) {
+                        browse(section.id, std::nullopt);
+                    }
+                    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) {
+                        ImGui::SetTooltip("%s",
+                            section.path.generic_string().c_str());
+                    }
+                    drawRootActions(section.id);
+                    if (open) {
+                        drawFolders(section.id, section.orderedFolders);
+                        ImGui::TreePop();
                     }
                 }
-                ImGui::EndDragDropTarget();
             }
-            drawFolders(orderedFolders_);
             }
             ImGui::EndChild();
             if (!actionDiagnostic_.empty()) {
@@ -3178,23 +3362,43 @@ void AssetBrowserPanel::OnImGuiRender(Registry& registry,
                 "asset-content",
                 ImVec2(0.0f, 0.0f),
                 ImGuiChildFlags_None)) {
+            const bool severalRoots = rootSections_.size() > 1;
+            const std::string rootName = severalRoots && model_.assetRoot()
+                ? rootLabel(*model_.assetRoot())
+                : std::string("Assets");
             const std::string location =
                 model_.directory()
-                ? "Assets / " +
+                ? rootName + " / " +
                     *model_.directory()
-                : "All Assets";
-            if (model_.directory()) {
+                : (severalRoots && model_.assetRoot()
+                    ? rootName
+                    : std::string("All Assets"));
+            if (model_.directory() ||
+                (severalRoots && model_.assetRoot())) {
                 if (ImGui::Button("Up", ImVec2(72.0f, 0.0f))) {
-                    const std::string parent =
-                        std::filesystem::path(
-                            *model_.directory())
-                            .parent_path()
-                            .generic_string();
-                    model_.setDirectory(
-                        parent.empty()
-                            ? std::nullopt
-                            : std::optional(
-                                parent));
+                    if (model_.directory()) {
+                        const std::string parent =
+                            std::filesystem::path(
+                                *model_.directory())
+                                .parent_path()
+                                .generic_string();
+                        browse(model_.assetRoot(),
+                            parent.empty()
+                                ? std::nullopt
+                                : std::optional(
+                                    parent));
+                    }
+                    else {
+                        browse(std::nullopt, std::nullopt);
+                    }
+                }
+                if (severalRoots && model_.assetRoot() &&
+                    ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) {
+                    if (const RootSection* section =
+                            rootSection(*model_.assetRoot())) {
+                        ImGui::SetTooltip("%s",
+                            section->path.generic_string().c_str());
+                    }
                 }
                 ImGui::SameLine();
             }
@@ -3264,9 +3468,9 @@ void AssetBrowserPanel::OnImGuiRender(Registry& registry,
         ImGui::EndPopup();
     }
     if (pendingFolderReorder_) {
-        const auto [source, target] = std::move(*pendingFolderReorder_);
+        const PendingFolderReorder reorder = std::move(*pendingFolderReorder_);
         pendingFolderReorder_.reset();
-        reorderFolderBefore(source, target);
+        reorderFolderBefore(reorder.root, reorder.source, reorder.target);
     }
     drawContentDialog();
     ImGui::End();

@@ -99,6 +99,10 @@ namespace Iridium {
         [[nodiscard]] uint64_t requestDeleteAsset(
             AssetGuid assetGuid);
         [[nodiscard]] std::vector<AssetCatalogJobResult> takeResults();
+        // The registered roots, in registration order (fixed at construction).
+        [[nodiscard]] const std::vector<AssetRoot>& roots() const noexcept {
+            return roots_;
+        }
         [[nodiscard]] bool busy() const;
         void shutdown() noexcept;
 

@@ -54,8 +54,31 @@ private:
         Iridium::AssetManager* assetManager,
         const Iridium::AssetBrowserItem& item,
         bool grid);
+    // One registered asset root ("project", "local") and its folder tree.
+    struct RootSection {
+        std::string id;
+        std::string label;
+        std::filesystem::path path;
+        std::vector<Iridium::AssetBrowserFolder> folders;
+        std::vector<Iridium::AssetBrowserFolder> orderedFolders;
+    };
+
     void rebuildFolders();
+    [[nodiscard]] const RootSection* rootSection(
+        std::string_view id) const noexcept;
+    [[nodiscard]] std::string rootLabel(std::string_view id) const;
+    // The root being browsed: the selected root section, or the only root.
+    [[nodiscard]] std::optional<std::string> browseRoot() const;
+    // Where root-level content actions (import, new folder) go: the browsed
+    // root and folder; with nothing selected, the local asset library when one
+    // is configured (third-party content belongs there), else the project.
+    [[nodiscard]] std::string contentRoot() const;
+    [[nodiscard]] std::string contentDirectory() const;
+    void browse(std::optional<std::string> root,
+        std::optional<std::string> directory);
+    void drawRootActions(const std::string& root);
     void drawFolders(
+        const std::string& root,
         std::span<const
             Iridium::AssetBrowserFolder> folders);
     void drawFolderItem(
@@ -64,7 +87,9 @@ private:
     [[nodiscard]] std::span<const
         Iridium::AssetBrowserFolder>
         currentFolders() const;
-    void queueImportFromDialog();
+    void queueImportFromDialog(
+        std::optional<std::string> root = std::nullopt,
+        std::string directory = {});
     void drawAssetViewContextMenu();
     void drawAssetDrawer(
         const Iridium::AssetBrowserItem& root,
@@ -81,19 +106,25 @@ private:
         ContentDialogMode mode,
         std::filesystem::path path = {},
         Iridium::AssetGuid assetGuid = {},
-        std::string_view initialName = {});
+        std::string_view initialName = {},
+        std::string root = {});
     void drawContentDialog();
     void requestAssetMove(
         Iridium::AssetGuid assetGuid,
+        std::string_view destinationRoot,
         const std::filesystem::path&
             destinationDirectory);
+    // Folders and assets move within their own root only.
     void requestFolderMove(
+        std::string_view sourceRoot,
         std::string_view sourceDirectory,
+        std::string_view destinationRoot,
         const std::filesystem::path& destinationDirectory);
     void rebuildOrderedFolders();
     void loadFolderOrder();
     void saveFolderOrder();
     void reorderFolderBefore(
+        std::string_view root,
         std::string_view sourcePath,
         std::string_view targetPath);
     void drawResults(Registry& registry,
@@ -142,15 +173,20 @@ private:
     int thumbnailSizeIndex_ = 2;
     bool showFolderPanel_ = true;
     bool showDetailsPanel_ = true;
-    std::vector<Iridium::AssetBrowserFolder>
-        folders_;
-    std::vector<Iridium::AssetBrowserFolder>
-        orderedFolders_;
+    std::vector<RootSection> rootSections_;
+    // Keyed by parent folder; non-project roots prefix the key with "<root>:".
     std::map<std::string, std::vector<std::string>>
         folderOrder_;
     std::filesystem::path folderOrderPath_;
-    std::optional<std::pair<std::string, std::string>>
+    struct PendingFolderReorder {
+        std::string root;
+        std::string source;
+        std::string target;
+    };
+    std::optional<PendingFolderReorder>
         pendingFolderReorder_;
+    // Root of the folder being dragged (the payload carries only its path).
+    std::string draggedFolderRoot_;
     bool foldersInitialized_ = false;
     std::optional<Iridium::AssetGuid>
         settingsGuid_;
@@ -203,6 +239,7 @@ private:
     bool contentDialogPending_ = false;
     std::filesystem::path
         contentDialogPath_;
+    std::string contentDialogRoot_;
     Iridium::AssetGuid
         contentDialogAssetGuid_;
     std::array<char, 256>

@@ -19,6 +19,7 @@
 
 #include "imgui.h"
 #include "assets/AssetCatalog.h"
+#include "assets/AssetDiscovery.h"
 #include "assets/AssetManager.h"
 #include "assets/environment/AssetEnvironmentPreparationService.h"
 #include "assets/model/AssetModelPreparationService.h"
@@ -202,7 +203,7 @@ namespace Iridium {
             [](const AssetCatalogRecord& candidate) {
                 return !candidate.parentGuid &&
                     candidate.assetType == "iridium.model" &&
-                    candidate.assetRoot == "project" &&
+                    isProjectContentRoot(candidate.assetRoot) &&
                     candidate.status == AssetCatalogStatus::Ready;
             });
         if (record != records.end()) {
@@ -285,7 +286,7 @@ namespace Iridium {
                         const auto records = assetCatalog_->recordsForGuid(requested);
                         const auto record = std::ranges::find_if(records, [](const AssetCatalogRecord& item) {
                             return !item.parentGuid && item.assetType == "iridium.environment" &&
-                                item.assetRoot == "project" && item.status == AssetCatalogStatus::Ready;
+                                isProjectContentRoot(item.assetRoot) && item.status == AssetCatalogStatus::Ready;
                         });
                         if (record == records.end()) viewer.environmentDiagnostic = "The selected HDRI is no longer available in this project.";
                         else if (!state || state->state != RuntimeAssetState::Queued) {

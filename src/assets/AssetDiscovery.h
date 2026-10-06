@@ -25,7 +25,7 @@ namespace Iridium {
 
     struct AssetDiscoveryResult {
         std::vector<AssetCatalogRecord> records;
-        std::vector<std::string> sourceDirectories;
+        std::vector<AssetSourceDirectory> sourceDirectories;
         std::vector<AssetDiscoveryDiagnostic> diagnostics;
 
         [[nodiscard]] bool hasErrors() const noexcept;

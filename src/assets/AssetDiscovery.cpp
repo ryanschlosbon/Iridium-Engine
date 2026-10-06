@@ -77,8 +77,10 @@ namespace Iridium {
                 const std::filesystem::directory_entry entry = *iterator;
                 iterator.increment(error);
                 if (entry.is_directory()) {
-                    result.sourceDirectories.push_back(
-                        relativePath(entry.path(), root.path));
+                    result.sourceDirectories.push_back({
+                        .assetRoot = root.id,
+                        .path = relativePath(entry.path(), root.path),
+                    });
                     continue;
                 }
                 if (!entry.is_regular_file() || !isSidecar(entry.path())) continue;

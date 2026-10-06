@@ -113,7 +113,8 @@ namespace {
             Iridium::discoverAssetRoots(roots);
         CHECK(std::ranges::find(
             discovery.sourceDirectories,
-            "Models") !=
+            Iridium::AssetSourceDirectory{
+                "project", "Models" }) !=
             discovery.sourceDirectories.end());
 
         const auto renamed = operations.renameFolder(
@@ -124,7 +125,8 @@ namespace {
         discovery = Iridium::discoverAssetRoots(roots);
         CHECK(std::ranges::find(
             discovery.sourceDirectories,
-            "Vehicles") !=
+            Iridium::AssetSourceDirectory{
+                "project", "Vehicles" }) !=
             discovery.sourceDirectories.end());
 
         const auto deleted = operations.deleteFolder(

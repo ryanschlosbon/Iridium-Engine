@@ -14,6 +14,7 @@
 #include "editor/EditorSceneDocumentService.h"
 #include "editor/EditorSceneCommandService.h"
 #include "editor/EditorTransactionService.h"
+#include "assets/AssetDiscovery.h"
 #include "assets/runtime/AssetRuntimeService.h"
 
 #include <vector>
@@ -131,7 +132,8 @@ void EditorSystem::init(GLFWwindow* window, Iridium::CpuProfiler* cpuProfiler,
         query.calculateTotalMatches = false;
         for (;;) {
             auto page = assetCatalog->query(query);
-            for (auto& record : page.records) if (record.assetRoot == "project") records.push_back(std::move(record));
+            for (auto& record : page.records)
+                if (Iridium::isProjectContentRoot(record.assetRoot)) records.push_back(std::move(record));
             if (page.records.size() < query.limit) break;
             query.offset += query.limit;
         }
