@@ -7,6 +7,7 @@ add_library(iridium_app STATIC
         ApplicationConfig.cpp
         AssetIntegration.cpp
         FrameOrchestrator.cpp
+        ProjectSettingsFile.cpp
         cli/CliValueParsers.cpp
         cli/RuntimeOptions.cpp
         cli/EditorOptions.cpp

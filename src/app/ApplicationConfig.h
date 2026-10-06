@@ -48,6 +48,9 @@ namespace Iridium {
         // M7R R4b: --render-graph-aliasing on|off (on since R4b.6; the switch
         // is kept until R6).
         bool renderGraphAliasing = true;
+        // M9.8c: where the Project Settings window is persisted; empty for
+        // benchmark and capture runs (nothing is loaded or saved).
+        std::filesystem::path projectSettingsPath;
         // M9.2: anti-aliasing (--anti-aliasing none|taa). Product default TAA
         // since M9.7 admission; measurement tools pin none (M7R route).
         AntiAliasingMode antiAliasing = AntiAliasingMode::Taa;

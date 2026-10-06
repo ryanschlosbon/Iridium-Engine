@@ -14,6 +14,7 @@
 #include <glm/glm.hpp>
 
 #include <cstdint>
+#include <chrono>
 #include <optional>
 #include <string>
 #include <vector>
@@ -72,6 +73,9 @@ namespace Iridium {
         void adoptBackend(IRenderBackend& backend);
         // Reads the backend's output-transport state and shows it in the editor.
         void refreshOutputTransportStatus();
+        // M9.8c: writes the Project Settings file once edits have settled
+        // (force: now, e.g. at shutdown). No-op without a settings path.
+        void flushProjectSettings(bool force);
         // The ACES output LUT for the effective output transport.
         void initializeOutputTransformLut();
 
@@ -155,6 +159,7 @@ namespace Iridium {
         std::optional<Color::OutputTransport> pendingOutputTransport_;
         std::optional<AntiAliasingMode> pendingAntiAliasing_;
         std::optional<BloomSettings> pendingBloom_;
+        std::optional<std::chrono::steady_clock::time_point> settingsChangedAt_;
         struct PendingExposure {
             ExposureMode mode = ExposureMode::Auto;
             AutoExposureSettings settings{};

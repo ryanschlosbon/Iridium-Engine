@@ -434,6 +434,7 @@ namespace Iridium {
     }
 
     void Application::cleanup(bool completed) {
+        orchestrator_.flushProjectSettings(true);
         notifyShutdown(ShutdownPhase::ReleaseResources, completed);
         editorHost_.cleanup();
         assets_.shutdown();

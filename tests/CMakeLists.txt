@@ -109,6 +109,11 @@ if(TARGET iridium_qualification)
             SOURCES core/ApplicationConfigTests.cpp
             LIBS iridium_qualification)
 
+    # M9.8c: the persisted Project Settings file.
+    iridium_add_test(ProjectSettingsFileTests
+            SOURCES core/ProjectSettingsFileTests.cpp
+            LIBS iridium_qualification)
+
     # R2.4 CLI contract: per-flag table written from the 6b000ad parser.
     iridium_add_test(ApplicationCliParityTests
             SOURCES core/ApplicationCliParityTests.cpp

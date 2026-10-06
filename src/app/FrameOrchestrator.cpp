@@ -18,6 +18,7 @@
 #include <utility>
 
 #include "app/AssetIntegration.h"
+#include "app/ProjectSettingsFile.h"
 #include "core/EngineLog.h"
 #include "editor/EditorHost.h"
 #include "extraction/RenderExtractor.h"
@@ -300,6 +301,21 @@ namespace Iridium {
             renderBackend->configureReflectionProbeCaptures(
                 probeSettings);
         }
+        // M9.8c: persist after the edits settle (switches apply at the frame end).
+        if (!config_.projectSettingsPath.empty() &&
+            (requests.output || requests.shadows || requests.probes))
+            settingsChangedAt_ = std::chrono::steady_clock::now();
+    }
+
+    void FrameOrchestrator::flushProjectSettings(bool force) {
+        if (!settingsChangedAt_) return;
+        if (!force && std::chrono::steady_clock::now() - *settingsChangedAt_ <
+                std::chrono::milliseconds(500))
+            return;
+        settingsChangedAt_.reset();
+        std::string diagnostic;
+        if (!saveProjectSettings(config_.projectSettingsPath, config_, diagnostic))
+            std::cerr << "Project settings not saved: " << diagnostic << '\n';
     }
 
     void FrameOrchestrator::drawFrame(AppFrameContext& frame) {
@@ -449,6 +465,7 @@ namespace Iridium {
             observer_->onFrameEnd(frame);
             if (outputTransportSwitchCount_ != switchesBefore) return;
         }
+        flushProjectSettings(false);
         if (pendingOutputTransport_) {
             const Color::OutputTransport requested = *pendingOutputTransport_;
             pendingOutputTransport_.reset();
