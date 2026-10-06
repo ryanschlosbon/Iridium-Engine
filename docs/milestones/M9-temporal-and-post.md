@@ -5,13 +5,13 @@
 | Item | Value |
 |---|---|
 | Milestone | M9 — native motion vectors, jitter, native TAA (DLAA-class at 1:1), reactive handling, bloom, auto-exposure, generic reprojection/history utilities, vendor-neutral super-resolution input contract |
-| Status | **Approved** by the owner 2026-10-05. G1 `In Progress`. |
+| Status | **Accepted** 2026-10-06 (completion report below; hand-off `docs/milestones/M9-to-M7.9-handoff.md`). |
 | Lead | M9 lead session (Claude Code), from `docs/milestones/M9-task-lead-prompt.md` |
 | Branch / PR | `m9-temporal` from `Render-Refactor-for-Modularity` at `da8e4e8` (PR #7 merged). One PR into `Render-Refactor-for-Modularity`. |
 | ADRs | ADR-0002 (scene-linear HDR, single output transform, auto-exposure deferred to M9), ADR-0006 (velocity not GBuffer-only), ADR-0012, ADR-0013 (transport switch rebuilds the graph), ADR-0014 (identity; current/previous records), ADR-0015 (task rules), ADR-0016 (graph execution; History item 5) |
 | Dependencies | M1, M2, M7R (accepted 2026-10-04), the M7.1/M7.2 GPU scene |
-| Next lead | M7.9 (hand-off written at M9.7) |
-| Last updated | 2026-10-05 |
+| Next lead | M7.9 (`docs/milestones/M9-to-M7.9-handoff.md`) |
+| Last updated | 2026-10-06 |
 
 ## Objective and user-visible outcome
 
@@ -478,20 +478,20 @@ time on the integration branch; parallel lanes run in their own worktrees.
 | G5a | refactor | Shared `view_uniforms.glsl`; offset asserts; ABI tests for every declarer. **Accepted** `92ded54` |
 | G5b | refactor | Jitter, previous view-projection and temporal-info fields; per-view counter; Halton; zero-jitter identity. **Accepted** `56132eb` |
 | G3 | refactor | Publisher settle; upload-byte report. **Accepted** (teleport flag moved to M9.6) |
-| G4 | refactor | Previous transforms for opaque direct and forward-opaque packets (GPU-scene tables or identity-keyed cache). `In Progress` |
+| G4 | refactor | Previous transforms for opaque direct and forward-opaque packets (GPU-scene tables or identity-keyed cache). **Accepted** `1e559b5` |
 | G6a | tooling | Five-process feature-admission runner (lane). **Accepted** `ee0fd4f` |
 | G6b | tooling | Engine-authored temporal geometry, composition scene factory, camera paths, M9 fixture set (lane). **Accepted** `ce24794` |
-| G6c | tooling | Capture sequences, post-TAA capture domain, jitter metadata, accumulation reference |
-| G6d | tooling | Temporal metrics tool (lane) |
+| G6c | tooling | Capture sequences, post-TAA capture domain, jitter metadata, accumulation reference. **Accepted** |
+| G6d | tooling | Temporal metrics tool (lane). **Accepted** `3c8d8b8` |
 | G7 | refactor | Probe-promotion race: qualification finalize drain or warm-up past publication. **Accepted** (qualification finalize drain) |
 | G8 | feature | Deterministic opaque compaction; new feature-set hashes. **Accepted** `9dc44fe` |
-| M9.1 | refactor (images) | Velocity target, writers, debug view, oracle; GPU cost and bandwidth |
-| M9.2 | feature | Native TAA feature owner, SR contract, overlays; quality candidates |
+| M9.1 | refactor (images) | Velocity target, writers, debug view, oracle; GPU cost and bandwidth. **Accepted** |
+| M9.2 | feature | Native TAA feature owner, SR contract, overlays; quality candidates. **Accepted** (M9.2a–d; default on) |
 | M9.3 | feature | Reactive and transparency handling. **Accepted** (revealage-alpha reactive mask) |
-| M9.5 | feature | Auto-exposure |
-| M9.4 | feature | Bloom |
-| M9.6 | feature | History invalidation and robustness matrix |
-| M9.7 | feature | Admission, F6 re-measure, completion report, M9-to-M7.9 hand-off, M9b definition |
+| M9.5 | feature | Auto-exposure. **Accepted** (default auto) |
+| M9.4 | feature | Bloom. **Accepted** (default on, subtle; Karis auto) |
+| M9.6 | feature | History invalidation and robustness matrix. **Accepted** (M9.6a/b) |
+| M9.7 | feature | Admission, F6 re-measure, completion report, M9-to-M7.9 hand-off, M9b definition. **Accepted** 2026-10-06 |
 
 Exposure (M9.5) comes before bloom (M9.4): TAA's HDR weighting reads the previous
 exposure, and the two are otherwise independent.
@@ -777,4 +777,180 @@ unless the route names a transport.
 
 ## Completion report
 
-To be written at M9.7.
+**M9 is accepted (2026-10-06)** on `m9-temporal` (PR #8): 37 commits from `52fdb6e`
+(plan) to the M9.7 defaults flip `449fbcc` and these documents. The next lead starts from
+`docs/milestones/M9-to-M7.9-handoff.md`.
+
+### Changed behaviour and architecture
+
+- **Product defaults.** Native TAA (jitter follows it), GPU auto-exposure with the manual
+  EV as compensation, and subtle bloom (4% scatter, no threshold, Karis prefilter only
+  without TAA), per the owner decisions of 2026-10-05 and 2026-10-06.
+  - Measurement tools pin the M7R route (`Get-M7REngineBaseArgs`:
+    `--anti-aliasing none --exposure manual --bloom off`). The frozen set and every
+    earlier baseline therefore stay comparable.
+  - The editor switches anti-aliasing and bloom live in Project Settings.
+- **History.** One `ViewHistoryContext` keys graph History per view, with up to two
+  physical sets per view, a per-pair `HistoryReset{OnCut, SurviveCut}`, and validity
+  defined as "written on this view's previous turn" (G1, G2; ADR-0016 item 5 as-built
+  note).
+  - The view tracker detects cuts.
+  - Opening a scene document cuts (M9.6a).
+- **Motion.**
+  - GPU-scene settle publication (G3) and previous matrices for direct packets (G4).
+  - Matrix jitter that culling, Hi-Z, LOD, shadows, probes and layered atlas rects never
+    see (G5).
+  - An RG16F velocity target written by every opaque writer (M9.1).
+- **TAA** (M9.2, M9.3): `VulkanTemporalAntiAliasingFeature`, one compute pass.
+  - Gaussian reconstruction (sharpness 6).
+  - YCoCg variance clip in a pre-exposed, compressed space.
+  - Closest-depth motion with camera reprojection.
+  - Catmull-Rom history.
+  - Still-pixel trust (gamma 3, weight 0.97), gated by the 3x3 range.
+  - Velocity-disagreement disocclusion: history alpha holds content motion.
+  - A reactive mask from scene-colour revealage alpha. This is a new contract: opaque
+    writers output alpha 1.
+- **Auto-exposure** (M9.5): a deterministic per-tile histogram, percentile metering,
+  EV100 limits, and 3/1 EV/s adaptation on the per-view time delta. The state is a
+  16 B `SurviveCut` History buffer read by the output (current) and by TAA (previous).
+- **Bloom** (M9.4): a dual filter (13-tap down, tent up, 6 levels, one aliased transient
+  chain) and an energy-conserving composite in scene-linear, before the single output
+  transform.
+- **Contract.** `TemporalUpscaleInputs` is the vendor-neutral SR input for M9b; native
+  TAA consumes it.
+- **Determinism and qualification.**
+  - Deterministic opaque compaction (G8, new feature-set hashes `m9-g8`).
+  - The qualification probe-finalize drain (G7).
+  - The exposure trace.
+
+### Interfaces and files
+
+- **Core:**
+  - `renderer/graph/ViewHistory.h`, RenderGraph and the executor (view sets, reset policy);
+  - `renderer/rhi/ViewMotion.*`, `Mesh.h` (view ABI), `TemporalUpscaleInputs.h`,
+    `RenderBackendConfig.h` (AA, exposure and bloom settings);
+  - `IRenderBackend::setAntiAliasing`, `setBloom` and `resizeSceneRenderExtent` (unchanged).
+- **New feature owners:** `VulkanTemporalAntiAliasingFeature`, `VulkanExposureFeature`,
+  `VulkanBloomFeature`.
+- **New shaders:** `taa_resolve.comp`, `exposure_histogram.comp`, `exposure_adapt.comp`,
+  `bloom.comp`, `gpu_scene_compact_bins.comp`, `include/view_uniforms.glsl` and
+  `include/motion_vectors.glsl`.
+- **Qualification:** `IQualificationBackend::drainReflectionProbeCaptures`,
+  `armExposureReadback` and `collectExposureReadbacks`. No core test hooks.
+- **Tools:**
+  - `tools/m9/*`: admission, temporal captures, metrics, the motion evaluation, eleven
+    engine-authored temporal fixtures (TF-reactive added in M9.3);
+  - `tools/m7r` route pins.
+
+### Verification
+
+- **Tests:** Debug and Release 116/116; shipping 109/109.
+- **Frozen set:** `m9-defaults` is identical to the `m9-g8` hashes except F4-woit (known
+  WeightedOIT order, within its envelope), with sync validation clean (0 messages, 0
+  hazards). The route pins reproduce the M7R route under the new defaults.
+- **Validation:**
+  - Qualification routes for resize, transport switch, residency, deep-layered
+    lifecycle, depth-pyramid resize and selection, with every M9 feature on: 0 messages
+    under validation and sync validation.
+  - Layered capture validators under jitter: pass.
+  - The M9 fixture set at product defaults under sync validation (`m97-sync`, 11
+    fixtures): 0 messages, 0 hazards.
+- **Smoke:** the editor smoke (`--hidden-window --frame-limit 120 --validation-sync`, at
+  product defaults) and the shipping smoke report 0 messages and 0 hazards, and leave
+  `imgui.ini` unchanged.
+- **Allocations:** steady-frame allocations are 0 on every admission route and side
+  (TAA, Auto exposure and bloom, alone and combined, and on TF-reactive).
+
+### Visual and motion evidence
+
+The method: 64-phase held accumulation references per frame (`out/m9/motion/ref64`, 47
+references), tone-mapped RMSE, the share of pixels above 1/64, trail energy over the
+pixels whose reference changed, held-scene flicker, and crops and error heatmaps
+inspected by eye (decision log).
+
+- **Static** (TF-static / TF-thin, against no AA 0.0256 / 0.0297): RMSE 0.0157 / 0.0183,
+  with 5.6% / 7.9% of pixels above 1/64 and flicker 0.67% / 1.14%.
+- **Motion** (TAA / no AA):
+  - disocclude 0.0097 / 0.0105;
+  - teleport 0.0089–0.0105 / 0.0133;
+  - thin 0.0212 / 0.0299;
+  - emissive 0.0076 / 0.0123;
+  - hdr 0.0067 / 0.0080;
+  - pan steady 0.018–0.024 / 0.025;
+  - specular 0.0030 / 0.0033;
+  - reactive 0.0074–0.0078 / 0.0120 (trail 0.017–0.019 → 0.006–0.008).
+- **Worse than no AA:** TF-glass 0.0135 / 0.0125 (motion softness on the opaque frame;
+  the glass itself does not ghost) and TF-foliage 0.0089 / 0.0071 (rotating alpha-tested
+  edges).
+- **Rejected candidates**, each with its numbers in the log:
+  - temporal neighbourhood extents;
+  - a softer motion kernel;
+  - a mean-statistics lighting gate;
+  - a coverage weight cap;
+  - a mean-distance gate.
+
+### Performance and memory against the budget
+
+These are the five-process native-4K results (`out/m9/timing/m9-adm-*`; FRAME_BUDGET "M9
+temporal and post-processing admission").
+
+- **TAA:** +0.18–0.21 ms GPU, from a 0.20 ms pass. Its 0.40 ms row is at about 0.25 ms
+  with the velocity target.
+- **Exposure:** +0.01–0.03 ms.
+- **Bloom:** +0.13–0.14 ms.
+- **Post row:** about 0.22 ms of 0.50.
+- **All three:** +0.35–0.37 ms. The heaviest route goes from 3.60 to 3.95 ms GPU, against
+  the 6.94 ms frame budget.
+- **Memory:** TAA History is +127.5 MB at 4K. Exposure adds a 16 B pair plus a 255 KB
+  transient. Bloom adds 0, because its chain aliases.
+- **CPU:** non-wait CPU is unchanged within noise.
+- **F6 watch item, closed:** +1.6% against M7R final, attributed pass by pass to the
+  velocity targets (+0.052 ms) and G8 (+0.002 ms). No placement policy is needed.
+- **Hitch rerun** (`m97-hitch`; A = pinned route, B = all three on, A,B,B,A):
+  - per-event frame peaks match A on H-stress, H-probe and H-upload;
+  - 0 drain frames and 0 upload waits;
+  - medians rise by the GPU cost (GPU-bound);
+  - one 175 ms frame outside any event window in H-stress B run 2 is the known
+    intermittent-spike watch item.
+- **Starvation:**
+  - The first run (`m97-starvation`) failed two criteria. Comparison and repetition
+    explain both:
+    - The T-F7 non-wait median was +34.6%. Its A runs sat in the metric's known low
+      state (1.53–1.75 ms, against 2.04–2.16 elsewhere); with-cook B was 2.16–2.25 ms.
+      The repeat (`m97-starvation-2`) passes at −1.2% (A 2.16/2.07, B 2.10/2.08 ms),
+      matching the M7R final build under today's conditions
+      (`m97-starvation-m7rfinal`: −0.5%).
+    - The T-F1 "no frame over 2x median from a frame-task wait" criterion fails on the
+      M7R final build too (2, 0), and in the repeat it fails on side A without any cook
+      (1, 1). It is environmental, not M9, and is logged as a watch item for M7.10.
+
+### Deferred work and risks
+
+These are listed in the hand-off, section 4.
+
+- **Open TAA work:**
+  - sub-pixel wires;
+  - moving-shadow trails on high-contrast texture;
+  - the WeightedOIT soft-edge halo;
+  - the jitter-phase pulse under motion;
+  - motion softness on TF-pan (pixels above 1/64);
+  - a sharpening pass.
+- **Not yet covered:** layered-tier reactive has no fixture, and the TF-glass fixture's
+  glass carries no tint.
+- **Code size:** `VulkanVertexBackend.cpp` is at 2,474 of its 2,500-line cap.
+- **Moved out of M9:**
+  - M9b: DLSS/FSR/XeSS and dynamic resolution;
+  - M13: skinned motion;
+  - M10: denoiser consumers.
+
+### ADR and roadmap status
+
+- **ADRs:** no new ADR. ADR-0016 item 5 carries the as-built note on view-keyed,
+  reset-policy History (G1/G2). Buffer History needed no change.
+- **New invariants** (documented in the plan and the hand-off):
+  - scene-colour alpha is revealage;
+  - measurement routes pin the M7R route.
+- **ROADMAP:** M9 is `Accepted`, M9b is defined (Planned, before M11), and the schedule
+  is updated.
+- **Other documents:** FRAME_BUDGET gains the M9 admission section, and PROJECT_CONTEXT
+  "Current direction" is updated.

@@ -1005,8 +1005,27 @@ Acceptance gate: mesh shaders produce matching images and visibility identities 
 
 ### M9 - Temporal rendering and reconstruction
 
-Status: `In Progress` (lead prompt `docs/milestones/M9-task-lead-prompt.md`; execution plan
-`docs/milestones/M9-temporal-and-post.md`, approved by the owner 2026-10-05)
+Status: `Accepted` (2026-10-06; lead prompt `docs/milestones/M9-task-lead-prompt.md`;
+execution plan and completion report `docs/milestones/M9-temporal-and-post.md`; hand-off
+`docs/milestones/M9-to-M7.9-handoff.md`; branch `m9-temporal`, PR #8)
+
+Outcome (2026-10-06):
+
+- **Delivered:** native-resolution motion vectors and previous transforms; matrix
+  jitter; native TAA with velocity-disagreement disocclusion, a still-trust gate and a
+  revealage-alpha reactive mask; histogram auto-exposure; dual-filter bloom; the
+  vendor-neutral `TemporalUpscaleInputs` contract; per-view, reset-policy graph
+  History.
+- **Defaults:** TAA, auto-exposure and bloom are now product defaults. Measurement
+  routes pin the M7R route, and the frozen set stays identical.
+- **Costs** (five-process native 4K): TAA about 0.25 ms of 0.40; bloom, exposure and
+  output about 0.22 ms of 0.50.
+- **F6 watch item closed:** +1.6% against M7R final, attributed to the velocity
+  targets and G8; no placement policy needed.
+- **Moved to M9b:** DLSS/FSR/XeSS providers, dynamic resolution and SDK negotiation.
+- **Moved elsewhere:** skinned motion to M13 (the velocity contract is ready).
+  Stochastic-shadow and GTAO denoiser consumers go to M10, on the generic History
+  utilities.
 
 Director decisions (2026-10-04):
 
@@ -1056,6 +1075,28 @@ Deliverables:
   soft shadows, screen-space contact shadows, GTAO, and later hybrid visibility.
 
 Acceptance gate: high-quality reconstruction is stable in motion, transparencies provide appropriate reactive behavior, and displayed versus base-render frame rates are reported separately.
+
+### M9b - Super-resolution providers and dynamic resolution
+
+Status: `Planned` (defined at M9 acceptance, 2026-10-06; scheduled before M11)
+
+Scope:
+
+- **Providers:** DLSS first, then FSR and XeSS, behind a temporal-resolve provider
+  interface (native TAA is provider 0). Each consumes `TemporalUpscaleInputs`
+  unchanged. Each SDK needs owner approval of the library and its licence first.
+- **Render/output split:** the resolve writes output-extent history; bloom, exposure
+  and the output run at output extent.
+- **Jitter and LOD bias:** the jitter sequence length scales with the upscale ratio;
+  texture LOD bias follows the ratio.
+- **Dynamic resolution:** a viewport-rect path through fixed-size graph targets, so a
+  render-extent change does not rebuild History.
+- **Masks:** a transparency-composition mask, and reactive refinements (layered tiers,
+  wide soft particles).
+- **Evidence:** motion evaluation against 64-phase references at output resolution,
+  five-process admission, and the TAA-off frozen identity.
+
+Dependencies: M9 (accepted). Consumer: the M11 RT tier.
 
 ### M10 - Non-ray-traced GI production paths
 
@@ -1179,8 +1220,9 @@ optimization is accepted from those counters and matched imagery, not title FPS
 alone.
 
 Program schedule (owner decision 2026-10-02): **M7R architecture consolidation ->
-M9 temporal AA, motion vectors, bloom, and auto-exposure -> M7.9-M7.12 -> M8 ->
-M7.8 Virtual Shadow Maps resumed on meshlet caster submission -> M10 -> M11.** The
+M9 temporal AA, motion vectors, bloom, and auto-exposure (accepted 2026-10-06) ->
+M7.9-M7.12 -> M8 -> M7.8 Virtual Shadow Maps resumed on meshlet caster submission ->
+M10 -> M9b super-resolution providers -> M11.** The
 material editor follow-ups and the Porsche mixed-class glass ordering defect are
 deferred until after M7R/M9. Previously the order was M6 through M11. M12 material authoring and M13 animation
 graph work are intentionally placed afterward and must not expand active renderer

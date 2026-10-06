@@ -1,7 +1,6 @@
 # M9 to M7.9 hand-off
 
-Status: **draft**. It is completed at M9 acceptance; admission numbers marked *pending* come from M9.7.
-Branch `m9-temporal` (PR #8). Authoritative detail lives in the M9 plan's decision log
+Status: **final** (M9 accepted 2026-10-06). Branch `m9-temporal` (PR #8). Authoritative detail lives in the M9 plan's decision log
 (`docs/milestones/M9-temporal-and-post.md`). This document is the brief for the next lead (M7.9–M7.12) and
 for M9b.
 
@@ -22,9 +21,16 @@ for M9b.
 | Settings | `--anti-aliasing`, `--temporal-jitter[-sequence]`, `--taa-settings`, `--exposure`, `--auto-exposure-settings`, `--bloom`, `--bloom-settings`. Editor Project Settings > Anti-aliasing and Post-processing switch live (graph rebuild at a frame boundary). | RendererOptions, ProjectSettingsPanel |
 | Gaps closed | G1–G8: view-keyed History, per-view sets and reset policy, settle publication, previous matrices for direct packets, the jitter ABI, the admission runner, temporal fixtures and metrics, the probe-promotion race (qualification drain), deterministic opaque compaction. | Plan decision log |
 
-**Defaults after M9.7** (owner decisions, 2026-10-05): TAA on, auto-exposure on (manual EV becomes
-compensation), and bloom on at a subtle 4% with no threshold. Frozen and benchmark fixtures pin TAA off,
-Manual exposure and bloom off. *(Pending M9.7 admission.)*
+**Product defaults since M9.7** (owner decisions, 2026-10-05 and 2026-10-06): TAA on, auto-exposure
+on (manual EV becomes compensation), and bloom on at a subtle 4% with no threshold; the Karis
+prefilter is Auto, so off with TAA. Measurement tools pin TAA off, Manual exposure and bloom off through
+`Get-M7REngineBaseArgs` (`tools/m7r/M7RFixtures.ps1`); a later feature flag wins.
+
+**Admitted costs** (five-process native 4K; FRAME_BUDGET "M9 temporal and post-processing admission"):
+- TAA: +0.18–0.21 ms GPU (pass 0.20 ms; the 0.40 ms row is at about 0.25 ms with velocity).
+- Exposure: +0.01–0.03 ms. Bloom: +0.13–0.14 ms. The post row is at about 0.22 ms of 0.50.
+- All three: +0.35–0.37 ms; the heaviest route is 3.95 ms GPU.
+- Memory: TAA History is +127.5 MB at 4K.
 
 ## 2. Contracts the next milestones must keep
 
@@ -69,11 +75,11 @@ Manual exposure and bloom off. *(Pending M9.7 admission.)*
 | WeightedOIT soft-edge halo | The largest remaining TF-reactive error. | Later TAA work |
 | Jitter-phase pulse under motion | About 0.018 / 0.024 RMSE alternation on TF-pan; a softer motion kernel was worse. | Later TAA work |
 | Motion softness | On TF-pan, 17–21% of pixels exceed 1/64 against 11% without AA, though RMSE is better. A sharpening pass is not done. | Later TAA work |
-| Bloom Karis prefilter | Loses 1.5% of energy on TF-hdr sub-pixel highlights. Default *pending M9.7*. | M9.7 |
+| Bloom Karis prefilter | Resolved: Auto, so off with TAA (owner decision, 2026-10-06). | Closed |
 | `VulkanVertexBackend.cpp` | **2,474 / 2,500 lines.** The next backend addition must first move code into a feature owner. | M7.10 |
 | TF-glass fixture | `thicknessFactor 0`, so only Fresnel is visible. TF-reactive covers tinted glass. | Fixture debt |
 | Layered-tier reactive | No fixture yet. Additive blend has no users. | M7.11 or a later reactive pass |
-| F6 placement watch item | *Pending M9.7 re-measure.* | M9.7 |
+| F6 placement watch item | Closed: +1.6% against M7R final, attributed to the velocity targets and G8; no placement policy. | Closed |
 
 ## 5. What M9b needs (DLSS / FSR / XeSS and dynamic resolution)
 

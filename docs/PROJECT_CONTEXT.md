@@ -1,28 +1,36 @@
 # Iridium Engine Project Context
 
-## Current direction (2026-10-04, read first)
+## Current direction (2026-10-06, read first)
 
 Claude Code took over from Codex on 2026-10-02.
 
-- **M7R architecture consolidation is accepted** (2026-10-04, branch
-  `m7r-consolidation`, PR #7; completion report in
-  `docs/milestones/M7R-architecture-consolidation.md`). Rendered output is unchanged.
+- **M9 temporal rendering and core post-processing is accepted** (2026-10-06,
+  branch `m9-temporal`, PR #8; completion report in
+  `docs/milestones/M9-temporal-and-post.md`; hand-off
+  `docs/milestones/M9-to-M7.9-handoff.md`).
+- **Product defaults are now** native TAA, GPU auto-exposure (the manual EV is
+  compensation) and subtle bloom (4% scatter, no threshold). Measurement tools pin
+  the M7R route (`--anti-aliasing none --exposure manual --bloom off`) through
+  `Get-M7REngineBaseArgs`, so the frozen set (`out/m7r/captures/m9-g8` hashes) and
+  older baselines stay comparable.
 - **The engine now has:**
-  - a single-compile module build, and qualification outside production code;
-  - an index-addressed render graph with feature-owner callbacks, batched
-    synchronization2 barriers, dynamic rendering, VMA, transient aliasing and a
-    deletion queue (ADR-0016);
-  - a pipeline cache, transfer-queue uploads, and timeline-semaphore frame pacing;
-  - an enkiTS task system (ADR-0015);
-  - change-driven, parallel extraction with zero steady-frame allocations.
-- **Reference measurement (T-F7):** frame 6.9 → 1.9 ms; serial main thread 1.39 ms
-  against the 3.0 ms target. Every timing route is now GPU-bound.
-- **Next milestone: M9** (native temporal AA, motion vectors, bloom, auto-exposure).
-  Start from `docs/milestones/M7R-to-M9-handoff.md`, which lists the gaps to close
-  first (per-view history keying, previous-transform semantics, jitter versus the
-  Hi-Z history).
-- **After M9:** M7.9–M7.12, M8, resumed M7.8 Virtual Shadow Maps, M10 and M11.
-- Evidence tiers, the 6.94 ms budget and the M7R CPU baseline are in
+  - per-view, reset-policy graph History;
+  - matrix jitter, kept out of culling, Hi-Z, shadows, probes and LOD;
+  - an RG16F velocity target with previous transforms;
+  - a native TAA tuned against 64-phase references in motion;
+  - a revealage-alpha reactive mask;
+  - histogram auto-exposure;
+  - a dual-filter bloom;
+  - the vendor-neutral SR input contract (`TemporalUpscaleInputs`).
+- **Cost** (five-process native 4K): TAA about 0.25 ms of its 0.40 ms row; post
+  (bloom, exposure, output) about 0.22 ms of its 0.50 ms row. The heaviest timing
+  route is 3.95 ms GPU with everything on.
+- **Next:** M7.9–M7.12, starting from the hand-off. Then M8, resumed M7.8 Virtual
+  Shadow Maps, M10, **M9b** (DLSS/FSR/XeSS providers and dynamic resolution, before
+  M11) and M11.
+- **Watch:** `VulkanVertexBackend.cpp` is at 2,474 of its 2,500-line cap, so move code
+  into feature owners before adding to it.
+- Evidence tiers, the 6.94 ms budget, the M7R CPU baseline and the M9 admission are in
   `docs/performance/FRAME_BUDGET.md`.
 - Third-party content is never committed.
 - The history below is a dated record; prefer ROADMAP.md and the active plan for
