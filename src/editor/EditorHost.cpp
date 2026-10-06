@@ -65,6 +65,10 @@ namespace Iridium {
             std::move(diagnostic));
     }
 
+    void EditorHost::setTemporalAntiAliasingTuning(const TemporalAntiAliasingTuning& tuning) {
+        editor_->setTemporalAntiAliasingTuning(tuning);
+    }
+
     void EditorHost::setAntiAliasingStatus(AntiAliasingMode active,
         std::string diagnostic) {
         editor_->setAntiAliasingStatus(active, std::move(diagnostic));

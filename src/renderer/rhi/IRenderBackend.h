@@ -108,6 +108,9 @@ namespace Iridium {
         // settings. Settings take effect next frame; a mode change declares
         // or removes the exposure passes (graph topology). On failure the
         // previous mode and settings remain active.
+        // Between frames: TAA tuning (history weights, clip, reconstruction);
+        // applies from the next frame without a graph change.
+        virtual void setTemporalAntiAliasingTuning(const TemporalAntiAliasingTuning& tuning) = 0;
         [[nodiscard]] virtual bool setExposure(ExposureMode mode,
             const AutoExposureSettings& settings, std::string& diagnostic) = 0;
         [[nodiscard]] virtual RenderBackendCapabilities getCapabilities() const = 0;

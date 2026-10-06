@@ -172,6 +172,10 @@ void EditorSystem::setOutputTransportStatus(
     uiState.outputSettings.transportDiagnostic = std::move(diagnostic);
 }
 
+void EditorSystem::setTemporalAntiAliasingTuning(const Iridium::TemporalAntiAliasingTuning& tuning) {
+    uiState.outputSettings.taaTuning = tuning;
+}
+
 void EditorSystem::setAntiAliasingStatus(Iridium::AntiAliasingMode active,
     std::string diagnostic) {
     uiState.outputSettings.antiAliasing = active;

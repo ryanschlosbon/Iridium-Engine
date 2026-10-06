@@ -61,6 +61,8 @@ namespace Iridium {
         renderRuntimeInfo_ = renderBackend->getRuntimeInfo();
         publishOutputTransportStatus();
         editorHost_.setAntiAliasingStatus(config_.antiAliasing, {});
+        editorHost_.setTemporalAntiAliasingTuning(
+            config_.taaTuning.value_or(TemporalAntiAliasingTuning{}));
         editorHost_.setBloomStatus(config_.bloom, {});
         editorHost_.setExposureStatus(config_.exposureMode,
             config_.autoExposureSettings.value_or(AutoExposureSettings{}), {});
@@ -258,6 +260,11 @@ namespace Iridium {
             }
             if (outputSettings.antiAliasing != config_.antiAliasing)
                 pendingAntiAliasing_ = outputSettings.antiAliasing;
+            if (outputSettings.taaTuning !=
+                    config_.taaTuning.value_or(TemporalAntiAliasingTuning{})) {
+                config_.taaTuning = outputSettings.taaTuning;
+                renderBackend->setTemporalAntiAliasingTuning(outputSettings.taaTuning);
+            }
             if (outputSettings.bloom != config_.bloom)
                 pendingBloom_ = outputSettings.bloom;
             if (outputSettings.exposureMode != config_.exposureMode ||

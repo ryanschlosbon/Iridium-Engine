@@ -390,6 +390,69 @@ void ProjectSettingsPanel::OnImGuiRender(Registry& registry, Iridium::AssetManag
                 "boundary; accumulated history starts over.");
             if (!outputSettings->antiAliasingDiagnostic.empty())
                 ImGui::TextColored(ImVec4(1, .4f, .3f, 1), "%s", outputSettings->antiAliasingDiagnostic.c_str());
+
+            // M9.8: motion behaviour presets and the full tuning (live).
+            Iridium::TemporalAntiAliasingTuning& taa = outputSettings->taaTuning;
+            ImGui::BeginDisabled(outputSettings->antiAliasing != Iridium::AntiAliasingMode::Taa);
+            struct Preset { const char* name; float minimum; float motionPixels; };
+            constexpr Preset presets[]{
+                { "Sharp (crisp motion, more crawl)", 0.70f, 2.0f },
+                { "Balanced", 0.85f, 6.0f },
+                { "Stable (calm motion, softer)", 0.92f, 16.0f },
+            };
+            int preset = 3;
+            for (int index = 0; index < 3; ++index) {
+                if (taa.minimumHistoryWeight == presets[index].minimum &&
+                    taa.motionPixelsForMinimum == presets[index].motionPixels)
+                    preset = index;
+            }
+            const char* presetName = preset < 3 ? presets[preset].name : "Custom";
+            if (ImGui::BeginCombo("Motion preset", presetName)) {
+                for (int index = 0; index < 3; ++index) {
+                    if (ImGui::Selectable(presets[index].name, preset == index)) {
+                        taa.minimumHistoryWeight = presets[index].minimum;
+                        taa.motionPixelsForMinimum = presets[index].motionPixels;
+                        outputSettings->changed = true;
+                    }
+                }
+                ImGui::EndCombo();
+            }
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+                ImGui::SetTooltip("How much each new (jittered) frame replaces the accumulated image while "
+                    "the camera or objects move. Sharp follows motion closely but fine edges crawl; Stable keeps "
+                    "more history, so edges stay calm and motion is slightly softer.");
+            if (ImGui::TreeNode("Advanced TAA tuning")) {
+                const auto slider = [&](const char* label, float& value, float minimum, float maximum,
+                        const char* format, const char* help) {
+                    if (ImGui::SliderFloat(label, &value, minimum, maximum, format,
+                            ImGuiSliderFlags_AlwaysClamp))
+                        outputSettings->changed = true;
+                    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) ImGui::SetTooltip("%s", help);
+                };
+                slider("History weight in motion", taa.minimumHistoryWeight, 0.5f, 0.98f, "%.2f",
+                    "The share of the accumulated image kept per frame at full motion. Higher = calmer edges "
+                    "in motion but softer, with more lag.");
+                if (taa.minimumHistoryWeight > taa.maximumHistoryWeight)
+                    taa.maximumHistoryWeight = taa.minimumHistoryWeight;
+                slider("Motion for full response", taa.motionPixelsForMinimum, 0.5f, 64.0f, "%.1f px",
+                    "How many pixels per frame of motion it takes to reach the motion history weight. Larger "
+                    "values keep slow movement calm.");
+                slider("History weight (still)", taa.stillHistoryWeight, 0.8f, 0.99f, "%.3f",
+                    "History kept per frame where nothing moves. Higher = smoother and more stable stills, "
+                    "slower to settle after a change.");
+                slider("Still clip width", taa.staticVarianceGamma, 1.0f, 4.0f, "%.2f",
+                    "How far still pixels' history may differ from the current frame before it is clipped. "
+                    "Wider keeps thin details steady; narrower reacts faster to lighting changes.");
+                slider("Reconstruction sharpness", taa.reconstructionSharpness, 2.0f, 10.0f, "%.1f",
+                    "Sharpness of the filter that combines each frame's jittered samples. Higher = crisper "
+                    "texture, slightly more shimmer.");
+                if (ImGui::Button("Reset TAA tuning")) {
+                    taa = Iridium::TemporalAntiAliasingTuning{};
+                    outputSettings->changed = true;
+                }
+                ImGui::TreePop();
+            }
+            ImGui::EndDisabled();
         }
         if (show(5)) {
             const auto tip = [](const char* text) {

@@ -59,6 +59,7 @@ namespace IridiumTest {
         void setOutputTransport(GLFWwindow*, Color::OutputTransport) override {}
         RenderExtent getRenderExtent() const override { return { 1280u, 720u }; }
         bool setAntiAliasing(AntiAliasingMode, std::string&) override { return true; }
+        void setTemporalAntiAliasingTuning(const TemporalAntiAliasingTuning&) override {}
         bool setBloom(const BloomSettings&, std::string&) override { return true; }
         bool setExposure(ExposureMode, const AutoExposureSettings&, std::string&) override {
             return true;

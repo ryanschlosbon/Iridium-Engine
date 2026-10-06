@@ -374,6 +374,9 @@ namespace Iridium {
             RenderExtent extent, std::string& diagnostic) override;
         [[nodiscard]] bool setAntiAliasing(
             AntiAliasingMode mode, std::string& diagnostic) override;
+        void setTemporalAntiAliasingTuning(const TemporalAntiAliasingTuning& tuning) override {
+            taaTuning_ = tuning;
+        }
         [[nodiscard]] bool setExposure(ExposureMode mode,
             const AutoExposureSettings& settings, std::string& diagnostic) override;
         [[nodiscard]] bool setBloom(

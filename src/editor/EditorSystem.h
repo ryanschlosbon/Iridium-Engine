@@ -106,6 +106,7 @@ public:
         const std::array<bool, 3>& supported,
         std::string diagnostic);
     void setAntiAliasingStatus(Iridium::AntiAliasingMode active, std::string diagnostic);
+    void setTemporalAntiAliasingTuning(const Iridium::TemporalAntiAliasingTuning& tuning);
     void setBloomStatus(const Iridium::BloomSettings& active, std::string diagnostic);
     void setExposureStatus(Iridium::ExposureMode mode,
         const Iridium::AutoExposureSettings& settings, std::string diagnostic);

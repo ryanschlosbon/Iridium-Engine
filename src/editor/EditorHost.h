@@ -124,6 +124,7 @@ namespace Iridium {
             Color::OutputTransport effective,
             const std::array<bool, 3>& supported, std::string diagnostic);
         void setAntiAliasingStatus(AntiAliasingMode active, std::string diagnostic);
+        void setTemporalAntiAliasingTuning(const TemporalAntiAliasingTuning& tuning);
         void setBloomStatus(const BloomSettings& active, std::string diagnostic);
         void setExposureStatus(ExposureMode mode, const AutoExposureSettings& settings,
             std::string diagnostic);
