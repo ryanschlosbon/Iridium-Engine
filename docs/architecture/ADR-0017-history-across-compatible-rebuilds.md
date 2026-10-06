@@ -1,7 +1,6 @@
 # ADR-0017: History Survives Compatible Graph Rebuilds
 
-- Status: Proposed 2026-10-06 (M9.8d). Implemented and tested on `m9-temporal`;
-  awaiting the owner's acceptance.
+- Status: Accepted 2026-10-06 by the owner (M9.8d, `2821920` on `m9-temporal`).
 - Date: 2026-10-06
 - Owners: Renderer (render graph), Vulkan backend
 - Refines: ADR-0016 decision 5 ("History is a graph lifetime"). The rule that
