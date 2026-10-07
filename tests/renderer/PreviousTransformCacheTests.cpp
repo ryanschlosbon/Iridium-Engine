@@ -2,7 +2,12 @@
 // keyed by stable identity.
 #include "extraction/PreviousTransformCache.h"
 
+#include <cstdio>
+#include <cstring>
 #include <iostream>
+#include <map>
+#include <random>
+#include <utility>
 
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -174,12 +179,66 @@ namespace {
         cache.clear();
         CHECK(cache.trackedCount() == 0);
     }
+
+    // M7.10.3: the hashed index against an ordered-map reference over
+    // thousands of keys, growth, duplicates, touches in either order and
+    // aging out.
+    void hashedIndexMatchesReference() {
+        const auto makeKey = [](uint32_t owner, uint32_t primitive) {
+            char ownerText[37], primitiveText[37];
+            std::snprintf(ownerText, sizeof(ownerText),
+                "019fb73d-5a60-7000-8000-%012x", owner);
+            std::snprintf(primitiveText, sizeof(primitiveText),
+                "019fb73d-5a61-7000-8000-%012x", primitive);
+            return key(ownerText, primitiveText);
+        };
+        std::mt19937 random(7);
+        std::map<std::pair<uint32_t, uint32_t>, glm::mat4> previous;
+        PreviousTransformCache cache;
+        for (int frame = 0; frame < 12; ++frame) {
+            std::map<std::pair<uint32_t, uint32_t>, std::pair<glm::mat4, bool>> current;
+            cache.beginFrame();
+            const uint32_t count = 500u + static_cast<uint32_t>(frame) * 500u;
+            for (uint32_t index = 0; index < count; ++index) {
+                const uint32_t owner = random() % 64u;
+                const uint32_t primitive = random() % 128u;
+                const auto id = std::make_pair(owner, primitive);
+                const glm::mat4 world = at(static_cast<float>(random() % 1000u));
+                const auto k = makeKey(owner, primitive);
+                if (random() % 4u == 0u) {
+                    cache.touch(k, world);
+                    current.try_emplace(id, world, true);
+                }
+                else {
+                    const auto found = previous.find(id);
+                    const glm::mat4 expected = found != previous.end() ? found->second : world;
+                    CHECK(cache.resolve(k, world) == expected);
+                    auto [entry, inserted] = current.try_emplace(id, world, false);
+                    if (!inserted && entry->second.second) entry->second = { world, false };
+                }
+            }
+            cache.endFrame();
+            previous.clear();
+            for (const auto& [id, value] : current) previous.emplace(id, value.first);
+            CHECK(cache.trackedCount() == previous.size());
+        }
+        // Touch first, then resolve: the resolved entry wins.
+        const auto k = makeKey(900u, 900u);
+        cache.beginFrame();
+        cache.touch(k, at(1.0f));
+        (void)cache.resolve(k, at(2.0f));
+        cache.endFrame();
+        cache.beginFrame();
+        CHECK(cache.resolve(k, at(3.0f)) == at(2.0f));
+        cache.endFrame();
+    }
 }
 
 int main() {
     previousIsLastFrame();
     touchedKeysStayTracked();
     touchedOwnersStandInForTheirKeys();
+    hashedIndexMatchesReference();
     if (failures == 0) std::cout << "PreviousTransformCacheTests passed\n";
     return failures == 0 ? 0 : 1;
 }

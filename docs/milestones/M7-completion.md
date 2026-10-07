@@ -755,6 +755,36 @@ None open. The two-car scene was never saved, so PC3 is the reference approximat
     | n16-half | 2.568 → 1.749 ms | 2.45 → 1.35 ms |
     | n16-all | unchanged | unchanged |
 
+- **2026-10-07 — M7.10.3: hashed previous-transform index (refactor tier).**
+  - **Problem:** the new `cpu.render.previous_transforms` scope showed the M9 G4
+    previous-transform cache was the largest main-thread cost with many objects:
+    1.10 of 2.2 ms with 16 Porsches visible. It did a binary search per packet plus
+    a full sort of 96-byte entries every frame.
+  - **Fix:** `PreviousTransformCache` now keeps each frame's entries dense with an
+    open-addressing index (linear probing; the capacity is kept and sized from last
+    frame's population). That makes a frame O(packets), with no sort. All semantics
+    are unchanged:
+    - a duplicate resolve keeps the first entry;
+    - a resolved entry beats a touch in either order;
+    - one-frame aging;
+    - owner fallback.
+  - **Evidence:**
+    - Debug and Release pass 120/120 tests, including a randomized 6,000-key test
+      against an ordered-map reference across growth;
+    - frozen set `m7c-1030` with sync validation: 0 failures, zero messages;
+    - owner cases 50/50 identical;
+    - TAA-on composition set 88/88 identical to `1758e0d`;
+    - the re-entry scratch 16/16 identical.
+  - **Timing:** native 4K, A,B,B,A, product route, A = `1758e0d`,
+    `m7c-owner-product-pc1c`:
+
+    | Route | Non-wait CPU | Wall time |
+    |---|---|---|
+    | PC1-911-n16-all | 2.19 → 1.18 ms | unchanged; now GPU-bound at 2.3 ms |
+    | PC1-911-n16-half | 2.44 → 0.87 ms | 2.56 → 1.76 ms |
+    | PC1-alfa-n16 | 0.85 → 0.64 ms | — |
+    | PC1-stress256 | 7.94 → 4.21 ms | 8.26 → 7.50 ms; now GPU-bound |
+
 ## Completion report
 
 To be written at M7.12, following AGENTS.md:
