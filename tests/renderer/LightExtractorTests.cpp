@@ -1,10 +1,13 @@
 #include "scene/systems/TransformSystem.h"
+#include "renderer/lighting/DirectionalShadow.h"
 #include "renderer/lighting/LightExtractor.h"
+#include "renderer/lighting/LocalShadow.h"
 #include "renderer/rhi/LightUploadPlanner.h"
 #include "scene/components/LightComponent.h"
 #include "scene/components/RelationshipComponent.h"
 #include "scene/components/TransformComponent.h"
 
+#include <algorithm>
 #include <array>
 #include <bit>
 #include <cmath>
@@ -263,6 +266,208 @@ namespace {
         return true;
     }
 
+    // M7.10.5: a radiometric edit revises the record (it still uploads) but
+    // not the shadow revision; anything that changes shadow-map content
+    // revises both.
+    bool shadowRevisionsTrackOnlyShadowGeometry() {
+        Iridium::SceneWorld world;
+        const Entity spot = addLight(world, 1, LightType::Spot, 0);
+        const Entity point = addLight(world, 2, LightType::Point, 1);
+        const Entity sun = addLight(world, 3, LightType::Directional, 2);
+        updateTransforms(world);
+        Iridium::LightExtractor extractor;
+        const auto first = extractor.extract(world);
+        CHECK(first.shadowRevisions.size() == first.recordRevisions.size());
+        for (uint32_t slot : first.activeSlots)
+            CHECK(first.shadowRevisions[slot] != 0);
+
+        const auto edit = [&](Entity entity, uint32_t suffix,
+            const auto& mutate, bool recordChanges, bool shadowChanges) {
+            const uint32_t slot = *extractor.slotFor(uuid(suffix));
+            const auto before = extractor.extract(world);
+            const uint64_t record = before.recordRevisions[slot];
+            const uint64_t shadow = before.shadowRevisions[slot];
+            auto& transform = world.registry().getComponent<TransformComponent>(
+                entity);
+            mutate(world.registry().getComponent<LightComponent>(entity),
+                transform);
+            transform.isDirty = true;
+            updateTransforms(world);
+            const auto after = extractor.extract(world);
+            return (after.recordRevisions[slot] != record) == recordChanges &&
+                (after.shadowRevisions[slot] != shadow) == shadowChanges;
+        };
+        using Light = LightComponent;
+        using Transform = TransformComponent;
+        // Radiometric and sampling-only inputs.
+        CHECK(edit(spot, 1, [](Light& l, Transform&) {
+            l.luminousIntensityCandela = 50'000.0f; }, true, false));
+        CHECK(edit(spot, 1, [](Light& l, Transform&) {
+            l.colorLinearRec709 = { 0.25f, 0.5f, 1.0f }; }, true, false));
+        CHECK(edit(spot, 1, [](Light& l, Transform&) {
+            l.sourceRadiusMeters = 0.4f; }, true, false));
+        CHECK(edit(spot, 1, [](Light& l, Transform&) {
+            l.innerConeDegrees = 25.0f; }, true, false));
+        CHECK(edit(spot, 1, [](Light& l, Transform&) {
+            l.priority = 7; }, false, false));
+        CHECK(edit(point, 2, [](Light& l, Transform&) {
+            l.luminousIntensityCandela = 1.0e6f; }, true, false));
+        CHECK(edit(sun, 3, [](Light& l, Transform&) {
+            l.illuminanceLux = 1'000.0f; }, true, false));
+        // Shadow view, projection, far plane and shadow settings.
+        CHECK(edit(spot, 1, [](Light&, Transform& t) {
+            t.position.x += 1.0f; }, true, true));
+        CHECK(edit(spot, 1, [](Light&, Transform& t) {
+            t.rotation.y += 10.0f; }, true, true));
+        CHECK(edit(spot, 1, [](Light& l, Transform&) {
+            l.rangeMeters = 30.0f; }, true, true));
+        CHECK(edit(spot, 1, [](Light& l, Transform&) {
+            l.outerConeDegrees = 40.0f; }, true, true));
+        CHECK(edit(spot, 1, [](Light& l, Transform&) {
+            l.shadowQuality = LightShadowQuality::Low; }, true, true));
+        CHECK(edit(spot, 1, [](Light& l, Transform&) {
+            l.castsShadows = false; }, true, true));
+        CHECK(edit(point, 2, [](Light& l, Transform&) {
+            l.rangeMeters = 5.0f; }, true, true));
+        CHECK(edit(point, 2, [](Light&, Transform& t) {
+            t.position.z -= 2.0f; }, true, true));
+        CHECK(edit(point, 2, [](Light& l, Transform&) {
+            l.type = LightType::Spot; }, true, true));
+        CHECK(edit(sun, 3, [](Light&, Transform& t) {
+            t.rotation.x += 15.0f; }, true, true));
+
+        // A removed light's cleared record revises its slot's shadow too.
+        const uint32_t sunSlot = *extractor.slotFor(uuid(3));
+        const uint64_t sunShadow = extractor.extract(world)
+            .shadowRevisions[sunSlot];
+        CHECK(world.destroyEntity(sun));
+        const auto removed = extractor.extract(world);
+        CHECK(removed.shadowRevisions[sunSlot] != sunShadow);
+        return true;
+    }
+
+    // M7.10.5: the cached local and directional shadow maps survive an
+    // intensity or colour drag when keyed on the shadow revision (as
+    // RenderExtractor keys them); a range or position edit re-renders.
+    bool shadowCachesSurviveRadiometricEdits() {
+        using namespace Iridium;
+        SceneWorld world;
+        const Entity point = addLight(world, 1, LightType::Point, 0);
+        const Entity spot = addLight(world, 2, LightType::Spot, 1);
+        const Entity sun = addLight(world, 3, LightType::Directional, 2);
+        updateTransforms(world);
+        LightExtractor extractor;
+        StableSpotShadowAtlas atlas;
+        StablePointShadowPools pools;
+        // Ultra tiles exceed the default per-frame texel budget.
+        constexpr LocalShadowScheduleConfig budget{
+            .maximumRenderedTexels = 64ull * 1024ull * 1024ull };
+        LocalShadowCacheScheduler spotCache(budget);
+        LocalShadowCacheScheduler pointCache(budget);
+        DirectionalShadowCache sunCache;
+        std::vector<LocalShadowRequest> requests;
+        std::vector<DirectionalShadowSelection> selections;
+        std::vector<LocalShadowCacheInput> inputs;
+        struct Reasons {
+            LocalShadowDirtyReason point = LocalShadowDirtyReason::None;
+            LocalShadowDirtyReason spot = LocalShadowDirtyReason::None;
+            uint32_t sunDirtyMask = 0;
+            uint32_t allocationChanges = 0;
+        };
+        const auto frame = [&] {
+            Reasons result;
+            const LightingFramePacket packet = extractor.extract(world);
+            buildLocalShadowRequests(packet, glm::vec3(0.0f, 1.0f, 5.0f),
+                requests);
+            const LocalShadowAllocationStats spotStats =
+                atlas.reconcile(requests);
+            const LocalShadowAllocationStats pointStats =
+                pools.reconcile(requests);
+            result.allocationChanges = spotStats.relocated +
+                spotStats.evicted + pointStats.relocated + pointStats.evicted;
+            const auto input = [&](LocalShadowKind kind, SceneEntityUuid owner,
+                uint32_t slot, uint32_t resolution) {
+                const auto request = std::ranges::find_if(requests,
+                    [&](const LocalShadowRequest& candidate) {
+                        return candidate.kind == kind &&
+                            candidate.owner == owner;
+                    });
+                return LocalShadowCacheInput{ .request = *request,
+                    .resolution = resolution, .allocationRevision = 1,
+                    .lightRevision = packet.shadowRevisions[slot],
+                    .casterRevision = 1, .projectionRevision = 1 };
+            };
+            inputs.clear();
+            for (const SpotShadowTile& tile : atlas.allocations())
+                inputs.push_back(input(LocalShadowKind::Spot, tile.owner,
+                    tile.lightSlot, tile.size));
+            const LocalShadowSchedule& spotSchedule =
+                spotCache.schedule(inputs);
+            if (spotSchedule.entries.size() == 1)
+                result.spot = spotSchedule.entries[0].dirtyReason;
+            spotCache.markScheduledRendered();
+            inputs.clear();
+            for (const PointShadowSlot& slot : pools.allocations())
+                inputs.push_back(input(LocalShadowKind::Point, slot.owner,
+                    slot.lightSlot, slot.resolution));
+            const LocalShadowSchedule& pointSchedule =
+                pointCache.schedule(inputs);
+            if (pointSchedule.entries.size() == 1)
+                result.point = pointSchedule.entries[0].dirtyReason;
+            pointCache.markScheduledRendered();
+            selectDirectionalShadowLights(packet,
+                kDirectionalShadowLightCapacity, selections);
+            if (selections.size() == 1) {
+                const DirectionalShadowSchedule schedule = sunCache.schedule({
+                    .selection = selections[0],
+                    .lightRevision =
+                        packet.shadowRevisions[selections[0].lightSlot],
+                    .casterRevisions = { 1, 1, 1, 1 },
+                }, kDirectionalShadowCascadeCount);
+                result.sunDirtyMask = schedule.dirtyMask;
+                sunCache.markRendered(schedule.updateMask);
+            }
+            return result;
+        };
+        const auto lightOf = [&](Entity entity) -> LightComponent& {
+            return world.registry().getComponent<LightComponent>(entity);
+        };
+        const auto steady = [](const Reasons& reasons) {
+            return reasons.point == LocalShadowDirtyReason::None &&
+                reasons.spot == LocalShadowDirtyReason::None &&
+                reasons.sunDirtyMask == 0 && reasons.allocationChanges == 0;
+        };
+
+        Reasons reasons = frame();
+        CHECK(reasons.point == LocalShadowDirtyReason::NewAllocation);
+        CHECK(reasons.spot == LocalShadowDirtyReason::NewAllocation);
+        CHECK(reasons.sunDirtyMask != 0);
+        CHECK(steady(frame()));
+        // The slider drag of owner case 3: intensity and colour every frame.
+        for (uint32_t step = 1; step <= 8; ++step) {
+            lightOf(point).luminousIntensityCandela = 1'000.0f * step;
+            lightOf(spot).luminousIntensityCandela = 2'000.0f * step;
+            lightOf(sun).illuminanceLux = 10'000.0f * step;
+            lightOf(point).colorLinearRec709 = { 1.0f, 0.1f * step, 0.5f };
+            lightOf(spot).sourceRadiusMeters = 0.05f * step;
+            CHECK(steady(frame()));
+        }
+        lightOf(point).rangeMeters = 12.0f;
+        reasons = frame();
+        CHECK(reasons.point == LocalShadowDirtyReason::LightChanged);
+        CHECK(reasons.spot == LocalShadowDirtyReason::None);
+        auto& spotTransform = world.registry().getComponent<TransformComponent>(
+            spot);
+        spotTransform.position.y += 0.5f;
+        spotTransform.isDirty = true;
+        updateTransforms(world);
+        reasons = frame();
+        CHECK(reasons.spot == LocalShadowDirtyReason::LightChanged);
+        CHECK(reasons.point == LocalShadowDirtyReason::None);
+        CHECK(steady(frame()));
+        return true;
+    }
+
     bool perFrameUploadPlanningIsRevisionExact() {
         std::array<uint64_t, 4> source{ 1, 0, 2, 2 };
         std::array<uint64_t, 4> firstFrame{};
@@ -304,6 +509,8 @@ int main() {
         std::pair{ "invalid capacity and swap", invalidCapacityAndWorldSwapAreDeterministic },
         std::pair{ "per-frame upload revisions", perFrameUploadPlanningIsRevisionExact },
         std::pair{ "capacity growth keeps new candidates valid", capacityGrowthKeepsNewCandidatesValid },
+        std::pair{ "shadow revisions track only shadow geometry", shadowRevisionsTrackOnlyShadowGeometry },
+        std::pair{ "shadow caches survive radiometric edits", shadowCachesSurviveRadiometricEdits },
     };
     for (const auto& [name, run] : tests) {
         if (!run()) { std::cerr << "[FAIL] " << name << '\n'; return 1; }

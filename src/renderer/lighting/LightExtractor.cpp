@@ -90,6 +90,7 @@ namespace Iridium {
         }
         records_.resize(config_.initialCapacity);
         recordRevisions_.resize(config_.initialCapacity);
+        shadowRevisions_.resize(config_.initialCapacity);
         selectionMetadata_.resize(config_.initialCapacity);
         activeSlots_.reserve(config_.initialCapacity);
         previousActiveSlots_.reserve(config_.initialCapacity);
@@ -109,9 +110,11 @@ namespace Iridium {
         world_ = nullptr;
         worldEpoch_ = 0;
         nextRevision_ = 0;
+        nextShadowRevision_ = 0;
         activeListRevision_ = 0;
         std::ranges::fill(records_, PackedGpuLight{});
         std::ranges::fill(recordRevisions_, uint64_t{ 0 });
+        std::ranges::fill(shadowRevisions_, uint64_t{ 0 });
         std::ranges::fill(selectionMetadata_, LightSelectionMetadata{});
         activeSlots_.clear();
         previousActiveSlots_.clear();
@@ -153,6 +156,11 @@ namespace Iridium {
         value = nextRevision_;
     }
 
+    void LightExtractor::advanceShadowRevision(uint64_t& value) noexcept {
+        if (++nextShadowRevision_ == 0) ++nextShadowRevision_;
+        value = nextShadowRevision_;
+    }
+
     void LightExtractor::ensureCapacity(uint32_t required) {
         if (required <= records_.size()) return;
         uint32_t capacity = static_cast<uint32_t>(records_.size());
@@ -163,6 +171,7 @@ namespace Iridium {
         }
         records_.resize(capacity);
         recordRevisions_.resize(capacity);
+        shadowRevisions_.resize(capacity);
         selectionMetadata_.resize(capacity);
         activeSlots_.reserve(capacity);
         previousActiveSlots_.reserve(capacity);
@@ -182,6 +191,8 @@ namespace Iridium {
         if (slot >= records_.size()) throw std::out_of_range(
             "Light record slot is outside extractor capacity");
         if (same(records_[slot], record)) return;
+        if (!sameLightShadowGeometry(records_[slot], record))
+            advanceShadowRevision(shadowRevisions_[slot]);
         records_[slot] = record;
         advanceRevision(recordRevisions_[slot]);
         changedSlots_.push_back(slot);
@@ -580,6 +591,7 @@ namespace Iridium {
         return {
             .records = records_,
             .recordRevisions = recordRevisions_,
+            .shadowRevisions = shadowRevisions_,
             .activeSlots = activeSlots_,
             .selectionMetadata = selectionMetadata_,
             .changedRanges = changedRanges_,

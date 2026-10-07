@@ -841,6 +841,30 @@ None open. The two-car scene was never saved, so PC3 is the reference approximat
   - **Hypothesis:** the heavy local-memory traffic of the old shader is implicated. To be
     re-tested with M7.10.4 in place. Owner informed.
 
+- **2026-10-07 — M7.10.5: light edits invalidate only what they can change (refactor tier;
+  owner-requested).**
+  - **Shadow-geometry revision:** `LightingFramePacket::shadowRevisions` advances only when
+    position and range, emission direction and outer cone, type, shadow enable or quality,
+    or the shadow-data slot change. It is checked by `sameLightShadowGeometry`.
+    - Directional, spot and point shadow caches key on it, so intensity, colour,
+      source-radius and inner-cone edits keep cached maps.
+    - Source radius only feeds PCSS sampling, rebuilt each frame.
+    - Candela-driven ranking still dirties through AllocationChanged.
+    - `recordRevisions` and record uploads are unchanged.
+  - **Probe captures:** each capture's lighting revision hashes only directional lights and
+    local lights whose range sphere reaches the capture cube (half-extent captureFar,
+    small margin), plus membership. Out-of-reach edits no longer recapture every probe.
+  - **Evidence:**
+    - Debug and Release pass 120/120 tests (new extractor, scheduler and probe tests; the
+      replay reference checks `shadowRevisions`; zero steady allocations);
+    - frozen set `m7c-1050` with sync validation: 0 failures;
+    - owner cases 50/50 identical.
+    - There was no live drag measurement: the harness has no light-parameter animation.
+  - **Found, not fixed (pre-existing, shader):** `reflection_probe_capture.frag` loops raw
+    slots `0..activeLightCount-1`, so after a light is removed, active lights in higher slots
+    are not evaluated in captures. Queued as a follow-up after the M7.10.6 shader lane
+    merges.
+
 ## Completion report
 
 To be written at M7.12, following AGENTS.md:

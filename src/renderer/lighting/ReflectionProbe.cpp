@@ -654,4 +654,50 @@ namespace Iridium {
             ? glm::normalize(correctedWorld) : fallback;
     }
 
+    bool lightCanReachReflectionProbeCapture(const PackedGpuLight& light,
+        glm::vec3 capturePosition, float captureFarMeters) noexcept {
+        const uint32_t type = std::bit_cast<uint32_t>(
+            light.shapeMetadata.z) & 3u;
+        if (type == static_cast<uint32_t>(PackedGpuLightType::Directional))
+            return true;
+        const float range = light.positionRange.w;
+        if (!std::isfinite(range) || !std::isfinite(captureFarMeters) ||
+            !(captureFarMeters > 0.0f)) return true;
+        // Squared distance from the light to the capture cube, against the
+        // range inflated by a margin far above float shading error.
+        const glm::vec3 outside = glm::max(glm::abs(
+            glm::vec3(light.positionRange) - capturePosition) -
+            glm::vec3(captureFarMeters), glm::vec3(0.0f));
+        const float reach = (std::max)(range, 0.0f) * 1.001f +
+            captureFarMeters * 1.0e-3f + 1.0e-3f;
+        // NaN compares false and therefore reaches.
+        return !(glm::dot(outside, outside) > reach * reach);
+    }
+
+    uint64_t reflectionProbeCaptureLightingRevision(
+        const LightingFramePacket& lights, glm::vec3 capturePosition,
+        float captureFarMeters) noexcept {
+        uint64_t hash = 1469598103934665603ull;
+        const auto append = [&hash](uint64_t value) {
+            for (uint32_t byte = 0; byte < 8; ++byte) {
+                hash ^= (value >> (byte * 8u)) & 0xffu;
+                hash *= 1099511628211ull;
+            }
+        };
+        // The capture shader evaluates raw slots [0, activeLightCount), not
+        // the active list; with slot holes an active light can lie outside
+        // that window, so its membership is part of the revision.
+        const uint32_t evaluatedSlots = lights.stats.activeLightCount;
+        for (uint32_t slot : lights.activeSlots) {
+            if (slot >= lights.records.size() ||
+                slot >= lights.recordRevisions.size()) continue;
+            if (!lightCanReachReflectionProbeCapture(lights.records[slot],
+                    capturePosition, captureFarMeters)) continue;
+            append(slot);
+            append(lights.recordRevisions[slot]);
+            append(slot < evaluatedSlots ? 1u : 0u);
+        }
+        return hash == 0u ? 1u : hash;
+    }
+
 } // namespace Iridium
