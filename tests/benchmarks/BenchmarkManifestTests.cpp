@@ -1840,14 +1840,21 @@ namespace {
     }
 
     // M7C P1 owner cases (local third-party content, verified by hash): PC1
-    // instance grids, PC2 glass camera series, PC3 two-model composition.
+    // instance grids, PC2 glass camera series, PC3 two-model composition; and
+    // the M7.10.6 PC4 local-shadow receiver cases (local light only).
     bool testM7cOwnerCasesFixtureContract() {
         const BenchmarkManifest manifest = loadBenchmarkManifest(
             m7cOwnerCasesManifestPath());
-        CHECK(manifest.fixtures.size() == 24);
+        CHECK(manifest.fixtures.size() == 30);
         for (const BenchmarkFixture& fixture : manifest.fixtures) {
             CHECK(fixture.id.starts_with("m7c_"));
             CHECK(fixture.warmupFrames == 500 && fixture.measuredFrames == 2000);
+            if (fixture.id.starts_with("m7c_pc4_")) {
+                CHECK(fixture.lights.size() == 1 &&
+                    fixture.lights[0].type != BenchmarkLightType::Directional &&
+                    fixture.lights[0].castsShadows);
+                continue;
+            }
             CHECK(!fixture.lights.empty() &&
                 fixture.lights[0].type == BenchmarkLightType::Directional &&
                 !fixture.lights[0].castsShadows);
@@ -1903,6 +1910,27 @@ namespace {
             CHECK(fixture.camera.target == unlit.camera.target);
             CHECK(benchmarkFixtureSourceAssets(fixture) == sources);
         }
+        // PC4: grazing door cases share one camera and light position; the
+        // contact cases compose the Carrera with the project-owned M5 receiver.
+        const BenchmarkFixture& graze = findBenchmarkFixture(manifest,
+            "m7c_pc4_graze_high_v1");
+        CHECK(graze.lights[0].type == BenchmarkLightType::Point);
+        CHECK(graze.lights[0].shadowQuality == BenchmarkShadowQuality::High);
+        CHECK(findBenchmarkFixture(manifest, "m7c_pc4_graze_ultra_v1")
+            .lights[0].shadowQuality == BenchmarkShadowQuality::Ultra);
+        for (const char* id : { "m7c_pc4_graze_ultra_v1",
+                "m7c_pc4_graze_spot_high_v1", "m7c_pc4_graze_spot_ultra_v1" }) {
+            const BenchmarkFixture& fixture = findBenchmarkFixture(manifest, id);
+            CHECK(fixture.camera.position == graze.camera.position);
+            CHECK(fixture.lights[0].position == graze.lights[0].position);
+        }
+        CHECK(findBenchmarkFixture(manifest, "m7c_pc4_graze_spot_high_v1")
+            .lights[0].type == BenchmarkLightType::Spot);
+        const BenchmarkFixture& contact = findBenchmarkFixture(manifest,
+            "m7c_pc4_contact_high_v1");
+        CHECK(contact.sceneFactory.compositionEntities.size() == 2);
+        CHECK(!contact.sceneFactory.compositionEntities[1].wholeModel);
+        CHECK(benchmarkFixtureSourceAssets(contact).size() == 2);
         return true;
     }
 

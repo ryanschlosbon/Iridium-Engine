@@ -902,8 +902,8 @@ void main() {
     result += iblLobes;
     vec3 directContribution = vec3(0.0);
     float shadowVisibility = 1.0;
-    IridiumDirectionalShadowReceiver shadowReceiver =
-        IridiumDirectionalShadowReceiver(fragWorldPos, frame.normal,
+    IridiumShadowReceiver shadowReceiver =
+        IridiumShadowReceiver(fragWorldPos, frame.normal,
             shadowGeometricNormal, dFdx(fragWorldPos), dFdy(fragWorldPos));
 
     IridiumDirectLightRange lightRange = iridiumDirectLightRange(
@@ -921,11 +921,11 @@ void main() {
         if ((floatBitsToUint(lightRecord.shapeMetadata.z) & 3u) ==
             IRIDIUM_LIGHT_TYPE_SPOT)
             visibility *= iridiumSpotShadowVisibility(lightSlot,
-                lightRecord, fragWorldPos, frame.normal, light);
+                lightRecord, shadowReceiver, light);
         else if ((floatBitsToUint(lightRecord.shapeMetadata.z) & 3u) ==
             IRIDIUM_LIGHT_TYPE_POINT)
             visibility *= iridiumPointShadowVisibility(lightSlot,
-                lightRecord, fragWorldPos, frame.normal, light);
+                lightRecord, shadowReceiver, light);
         shadowVisibility = min(shadowVisibility, visibility);
         vec3 radiance = directLight.radiance * visibility;
         float noL = max(dot(frame.normal, light), 0.0);

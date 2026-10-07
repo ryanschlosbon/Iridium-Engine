@@ -45,8 +45,12 @@ BOUNDS = {
 
 
 def sha(path):
+    # Project-owned fixture content (assets/benchmarks) first, else the local library.
     h = hashlib.sha256()
-    with open(LOCAL / path, 'rb') as f:
+    resolved = REPO / 'assets' / path
+    if not resolved.is_file():
+        resolved = LOCAL / path
+    with open(resolved, 'rb') as f:
         for block in iter(lambda: f.read(1 << 20), b''):
             h.update(block)
     return h.hexdigest()
@@ -263,6 +267,86 @@ for variant, light, text in PC3_VARIANTS:
          f'the camera between them behind the rear bumpers looking forward along the gap; {text}.',
          'The local light sits 1.5 m up between the cars; the directional light is unshadowed.'],
         PC3_BOXES, sources=[P930, P911])
+
+# --- PC4 local-shadow receiver bias (M7.10.6) ------------------------------------------
+# Owner report 2026-10-07: parallel stripes across the car door/side panel under a bright
+# point light at grazing incidence (finer, but still present, at Ultra). The Carrera's
+# right door is the x ~ +0.84 m panel at z in [-0.6, 0.2] (the mirror sits at z ~ +0.25,
+# so +z is forward); the light sits just outside the rear fender, behind the door and
+# close to its plane, so the panel is lit at roughly 8 degrees of elevation (N.L ~ 0.14).
+# The directional light is omitted so the local light dominates.
+PC4_LIGHT_POS = [1.3, 0.05, -1.7]
+PC4_DOOR = (0.84, -0.1, -0.2)
+PC4_CAMERA = ((2.7, 0.15, -0.45), (0.84, -0.1, -0.3), 40.0)
+
+
+def pc4_point(quality):
+    return {'type': 'point', 'position': PC4_LIGHT_POS, 'rotation_degrees': [0.0, 0.0, 0.0],
+            'color_linear_rec709': [1.0, 0.9, 0.8], 'luminous_intensity_candela': 1000000.0,
+            'range_meters': 10.0, 'source_radius_meters': 0.05,
+            'casts_shadows': True, 'shadow_quality': quality, 'priority': 2}
+
+
+def pc4_spot(quality):
+    # Emission is local +z rotated by rotation_degrees: aim from the light at the door.
+    aim = np.array(PC4_DOOR) - np.array(PC4_LIGHT_POS)
+    aim = aim / np.linalg.norm(aim)
+    pitch = math.degrees(math.asin(-aim[1]))
+    yaw = math.degrees(math.atan2(aim[0], aim[2]))
+    return {'type': 'spot', 'position': PC4_LIGHT_POS,
+            'rotation_degrees': [round(pitch, 3), round(yaw, 3), 0.0],
+            'color_linear_rec709': [1.0, 0.9, 0.8], 'luminous_intensity_candela': 1000000.0,
+            'range_meters': 10.0, 'source_radius_meters': 0.05,
+            'inner_cone_degrees': 40.0, 'outer_cone_degrees': 60.0,
+            'casts_shadows': True, 'shadow_quality': quality, 'priority': 2}
+
+
+PC4_GRAZE = [
+    ('graze_high', pc4_point('high'), 'one shadowed (High, 512 cube) point light, 1e6 cd, 10 m range'),
+    ('graze_ultra', pc4_point('ultra'), 'one shadowed (Ultra, 1024 cube, PCSS) point light, 1e6 cd, 10 m range'),
+    ('graze_spot_high', pc4_spot('high'), 'one shadowed (High) spot light, 1e6 cd, 10 m range, 40/60 degree cone'),
+    ('graze_spot_ultra', pc4_spot('ultra'), 'one shadowed (Ultra, PCSS) spot light, 1e6 cd, 10 m range, 40/60 degree cone'),
+]
+for variant, light, text in PC4_GRAZE:
+    fid = f'm7c_pc4_{variant}_v1'
+    pos, target, fov = PC4_CAMERA
+    add(fid, P911, camera('m7c_pc4_door_camera_v1', pos, target, fov),
+        {'kind': 'instanced_grid', 'instance_grid': [1, 1, 1], 'instance_spacing': [0.0, 0.0, 0.0]},
+        [light],
+        [f'PC4 grazing local light: one Porsche 911 Carrera 4S, the camera about 1.9 m from its right door; {text} '
+         'just outside the rear fender, so the door is lit at grazing incidence (N.L about 0.14).',
+         'No directional light. Receiver self-shadowing shows as parallel stripes across the lit panel.'],
+        grid_boxes(P911, [1, 1, 1], [0, 0, 0]))
+
+# Contact check: the Carrera standing on a ground plane, plus a large triangle blocker 1 cm
+# above that plane, under an overhead point light. Over-biasing shows as light leaking
+# under the tyres and car body or a lit gap along the triangle's shadowed edges. The
+# ground and triangle are the project-owned M5 receiver/blocker (node 0), flattened to a
+# 1 cm separation and turned to face +y; the triangle sits beside the car's right side.
+CONTACT = 'benchmarks/m5/directional-shadow-contact.gltf'
+PC4_CONTACT_ENTITIES = [
+    {'id': 'porsche_911', 'source_asset': P911, 'transform': {'translation': [0.0, 0.632, 0.0]}},
+    {'id': 'ground_and_blocker', 'source_asset': CONTACT, 'node': 0,
+     'transform': {'translation': [2.0, 0.01, 0.0], 'rotation_degrees': [-90.0, 0.0, 0.0],
+                   'scale': [1.0, 1.0, 0.01]}},
+]
+PC4_CONTACT_BOXES = [tuple(np.array(b) + np.array([0.0, 0.632, 0.0]) for b in BOUNDS[P911]),
+                     ((-2.0, 0.0, -3.0), (6.0, 0.01, 3.0))]
+for quality in ('high', 'ultra'):
+    fid = f'm7c_pc4_contact_{quality}_v1'
+    light = {'type': 'point', 'position': [1.7, 1.6, 0.6], 'rotation_degrees': [0.0, 0.0, 0.0],
+             'color_linear_rec709': [1.0, 0.9, 0.8], 'luminous_intensity_candela': 100000.0,
+             'range_meters': 10.0, 'source_radius_meters': 0.05,
+             'casts_shadows': True, 'shadow_quality': quality, 'priority': 2}
+    add(fid, P911, camera('m7c_pc4_contact_camera_v1', (4.2, 1.5, 2.9), (1.3, 0.1, 0.3), 40.0),
+        {'kind': 'composition', 'entities': PC4_CONTACT_ENTITIES},
+        [light],
+        [f'PC4 contact check: the Porsche 911 Carrera 4S standing on a ground plane, a 1.6 m triangle blocker 1 cm '
+         f'above the plane beside its right side; one shadowed ({quality.capitalize()}) point light, 1e5 cd, '
+         '10 m range, 1.6 m up between them.',
+         'No directional light. Over-biasing shows as light leaking at the tyre contacts and under the body, or a '
+         'lit gap along the triangle shadow edges.'],
+        PC4_CONTACT_BOXES, sources=[P911, CONTACT])
 
 manifest = {
     'schema_version': 1,

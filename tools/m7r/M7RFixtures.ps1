@@ -97,6 +97,16 @@ $M7COwnerCases = @(
             'point_r10_unshadowed', 'point_r10_ultra', 'point_r10_1e3cd', 'point_r10_1e6cd', 'spot_r10')) {
         @{ Key = "PC3-$($variant -replace '_', '-')"; Id = "m7c_pc3_$($variant)_v1"; Manifest = $m7c; Models = @('porsche930', 'porsche911'); Args = @() }
     }
+    # PC4 local-shadow receiver bias (M7.10.6): the Carrera's door lit at grazing
+    # incidence by a shadowed point or spot light (High and Ultra), and a contact check
+    # (the Carrera on a ground plane with a 1 cm triangle blocker beside it, overhead
+    # point light) where over-biasing would leak light.
+    foreach ($variant in @('graze_high', 'graze_ultra', 'graze_spot_high', 'graze_spot_ultra')) {
+        @{ Key = "PC4-$($variant -replace '_', '-')"; Id = "m7c_pc4_$($variant)_v1"; Manifest = $m7c; Model = 'porsche911'; Args = @() }
+    }
+    foreach ($quality in @('high', 'ultra')) {
+        @{ Key = "PC4-contact-$quality"; Id = "m7c_pc4_contact_$($quality)_v1"; Manifest = $m7c; Models = @('porsche911', 'contact'); Args = @() }
+    }
 )
 $M7CTimingRoutes = @($M7COwnerCases | ForEach-Object {
     $route = $_.Clone()
