@@ -585,7 +585,9 @@ namespace Iridium {
             static_cast<uint64_t>(config_.maximumLightReferences) * 4u +
             static_cast<uint64_t>(config_.maximumFallbackLights) * 4u +
             64u + clusterCount * 4u + clusterCount * 4u +
-            clusterScanScratchElementCount(clusterCount) * 4u + 32u;
+            clusterScanScratchElementCount(clusterCount) * 4u + 32u +
+            static_cast<uint64_t>(kMaximumGpuLightCapacity) *
+                sizeof(PackedGpuClusterLightBounds);
         clusterTelemetry_ = {
             .bufferBytesPerFrame = bufferBytesPerFrame,
             .clusterCount = submittedClusterCounts_[frameIndex],

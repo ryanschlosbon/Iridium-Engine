@@ -689,6 +689,40 @@ None open. The two-car scene was never saved, so PC3 is the reference approximat
   as M7.10.2 (parallel assignment, refactor tier). The sorted-forward increase is the
   next PC3 attribution item.
 
+- **2026-10-07 — M7.10.2 parallel clustered-light assignment landed (refactor tier;
+  timing pair pending).**
+  - **New pass:** `cluster_light_bounds.comp` evaluates each active light once:
+    directional list, local diagnostic, cluster AABB and reference reservation. It
+    writes a 32-byte record to the new graph transient `lighting.cluster.light-bounds`
+    (2 MiB per slot, sized to the 65,536-light bound).
+  - **Count and fill:** they dispatch (light, chunk), with
+    K = clamp(16384 / lights, 1, 64), and grid-stride the light's AABB. Their
+    per-cluster atomics and enable conditions are unchanged; fill's overflow gate is
+    equivalent because overflow is monotonic within a frame.
+  - **Placement:** the bounds dispatch runs inside the existing
+    `lighting.cluster.count` pass, so pass order is unchanged. The aliasing and
+    executor goldens gain exactly one transient slot.
+  - **Evidence:**
+    - Debug and Release pass 120/120 tests, with new CPU-reference cases (a
+      camera-enclosing light; 49 lights with order independence);
+    - frozen set `m7c-1020` with sync validation: 22 of 24 byte-identical, F4-woit
+      within its envelope;
+    - PC2 and PC3 owner cases 28/28 identical;
+    - the 512-light cluster-stress capture is identical, and every cluster counter
+      is identical including the dense-sort path.
+  - **Diagnostic single-process timings:**
+
+    | Case | `gpu.lighting.cluster` (ms) | `gpu.frame` (ms) |
+    |---|---|---|
+    | PC3 point light, 10 m | 2.009 → 0.074 | 5.637 → 3.144 |
+    | PC3 point light, 40 m | 2.792 → 0.083 | 6.716 → 3.152 |
+
+    The no-light case is unchanged. The earlier 4.16 ms reading came from a busier
+    machine.
+  - **Overflow note:** under per-cluster overflow, the LOCAL and REQUESTED diagnostics
+    may differ from before. They were already schedule-dependent there, and the image
+    fallback is unchanged.
+
 ## Completion report
 
 To be written at M7.12, following AGENTS.md:

@@ -35,6 +35,10 @@ namespace Iridium {
         "lighting.cluster.scan-scratch";
     inline constexpr const char* kClusterIndirectResourceName =
         "lighting.cluster.indirect";
+    // M7.10.2: one cluster-bounds record per active light, written once by the
+    // count pass's bounds dispatch and read by every count/fill workgroup.
+    inline constexpr const char* kClusterLightBoundsResourceName =
+        "lighting.cluster.light-bounds";
 
     [[nodiscard]] constexpr uint64_t clusterScanScratchElementCount(
         uint64_t clusterCount) noexcept {
@@ -96,6 +100,17 @@ namespace Iridium {
         friend bool operator==(ClusterLightHeader,
             ClusterLightHeader) = default;
     };
+
+    // GPU-only mirror of ClusterLightBounds (include/clustered_lighting.glsl):
+    // the light's cluster AABB (minimum, span), its slot and the enable flags
+    // the count (bounds valid and references reserved) and fill (bounds valid)
+    // stages test.
+    struct alignas(16) PackedGpuClusterLightBounds {
+        glm::uvec4 minimumSlot{}; // minimum tile x/y, slice, light slot
+        glm::uvec4 spanFlags{};   // span x/y/z, flags
+    };
+    inline constexpr uint32_t kClusterLightBoundsFill = 1u;
+    inline constexpr uint32_t kClusterLightBoundsCount = 2u;
 
     enum class ClusterOverflowCode : uint32_t {
         None = 0,
@@ -166,6 +181,7 @@ namespace Iridium {
 
     static_assert(sizeof(ClusterLightHeader) == 8);
     static_assert(alignof(ClusterLightHeader) == 4);
+    static_assert(sizeof(PackedGpuClusterLightBounds) == 32);
     static_assert(sizeof(PackedGpuClusterParameters) == 208);
     static_assert(alignof(PackedGpuClusterParameters) == 16);
 

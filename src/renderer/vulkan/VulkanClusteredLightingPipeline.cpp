@@ -65,6 +65,8 @@ void VulkanClusteredLightingPipeline::init(VkDevice device, VkPipelineCache pipe
                 "Failed to create clustered-lighting pipeline layout");
         }
         clearPipeline_ = createPipeline("assets/shaders/cluster_clear_comp.spv");
+        boundsPipeline_ = createPipeline(
+            "assets/shaders/cluster_light_bounds_comp.spv");
         countPipeline_ = createPipeline("assets/shaders/cluster_count_comp.spv");
         scanPipeline_ = createPipeline("assets/shaders/cluster_scan_comp.spv");
         fillPipeline_ = createPipeline("assets/shaders/cluster_fill_comp.spv");
@@ -143,7 +145,14 @@ void VulkanClusteredLightingPipeline::rebuildDescriptors(
                 graphBuffer(graph, frame, ids.cursors),
                 graphBuffer(graph, frame, ids.scanScratch),
                 graphBuffer(graph, frame, ids.indirect),
+                graphBuffer(graph, frame, ids.lightBounds),
             };
+            const VkDeviceSize boundsCapacity = buffers[13].range /
+                sizeof(PackedGpuClusterLightBounds);
+            lightBoundsCapacity_ = frame == 0
+                ? static_cast<uint32_t>(boundsCapacity)
+                : (std::min)(lightBoundsCapacity_,
+                    static_cast<uint32_t>(boundsCapacity));
             std::array<VkWriteDescriptorSet, BindingCount> writes{};
             for (uint32_t binding = 0; binding < BindingCount; ++binding) {
                 writes[binding].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -187,6 +196,7 @@ void VulkanClusteredLightingPipeline::clearDescriptors() {
         allocator_->free(std::span<const VkDescriptorSet>(descriptorSets_));
     }
     descriptorSets_.clear();
+    lightBoundsCapacity_ = 0;
 }
 
 void VulkanClusteredLightingPipeline::bindAndDispatch(
@@ -227,9 +237,21 @@ uint32_t VulkanClusteredLightingPipeline::recordClear(VkCommandBuffer commandBuf
 uint32_t VulkanClusteredLightingPipeline::recordCount(VkCommandBuffer commandBuffer,
     uint32_t frameIndex, uint32_t activeLightCount) {
     if (activeLightCount == 0) return 0;
+    if (frameIndex >= descriptorSets_.size() ||
+        activeLightCount > lightBoundsCapacity_) {
+        throw std::out_of_range(
+            "Clustered-lighting count is outside the prepared frame");
+    }
+    // M7.10.2: one invocation per light evaluates its bounds and reserves
+    // its references once; then every (light, chunk) workgroup counts its
+    // share of the light's clusters (the shaders read the chunk count from
+    // gl_NumWorkGroups.y).
+    bindAndDispatch(commandBuffer, boundsPipeline_, frameIndex,
+        (activeLightCount + 63u) / 64u);
+    computeBarrier(commandBuffer);
     bindAndDispatch(commandBuffer, countPipeline_, frameIndex,
-        activeLightCount);
-    return 1;
+        activeLightCount, chunkCount(activeLightCount));
+    return 2;
 }
 
 uint32_t VulkanClusteredLightingPipeline::recordScan(VkCommandBuffer commandBuffer,
@@ -292,8 +314,13 @@ uint32_t VulkanClusteredLightingPipeline::recordFill(VkCommandBuffer commandBuff
     uint32_t frameIndex, uint32_t activeLightCount) {
     uint32_t dispatchCount = 0;
     if (activeLightCount != 0) {
+        if (frameIndex >= descriptorSets_.size() ||
+            activeLightCount > lightBoundsCapacity_) {
+            throw std::out_of_range(
+                "Clustered-lighting fill is outside the prepared frame");
+        }
         bindAndDispatch(commandBuffer, fillPipeline_, frameIndex,
-            activeLightCount);
+            activeLightCount, chunkCount(activeLightCount));
         ++dispatchCount;
     }
     computeBarrier(commandBuffer);
@@ -320,9 +347,9 @@ uint32_t VulkanClusteredLightingPipeline::recordFinalize(VkCommandBuffer command
 void VulkanClusteredLightingPipeline::cleanup() noexcept {
     clearDescriptors();
     if (device_ != VK_NULL_HANDLE) {
-        for (VkPipeline pipeline : { clearPipeline_, countPipeline_,
-                scanPipeline_, fillPipeline_, sortPreparePipeline_, sortPipeline_,
-                denseSortPipeline_, finalizePipeline_ }) {
+        for (VkPipeline pipeline : { clearPipeline_, boundsPipeline_,
+                countPipeline_, scanPipeline_, fillPipeline_, sortPreparePipeline_,
+                sortPipeline_, denseSortPipeline_, finalizePipeline_ }) {
             if (pipeline != VK_NULL_HANDLE)
                 vkDestroyPipeline(device_, pipeline, nullptr);
         }
@@ -331,9 +358,9 @@ void VulkanClusteredLightingPipeline::cleanup() noexcept {
         if (descriptorSetLayout_ != VK_NULL_HANDLE)
             vkDestroyDescriptorSetLayout(device_, descriptorSetLayout_, nullptr);
     }
-    clearPipeline_ = countPipeline_ = scanPipeline_ = fillPipeline_ =
-        sortPreparePipeline_ = sortPipeline_ = denseSortPipeline_ =
-        finalizePipeline_ = VK_NULL_HANDLE;
+    clearPipeline_ = boundsPipeline_ = countPipeline_ = scanPipeline_ =
+        fillPipeline_ = sortPreparePipeline_ = sortPipeline_ =
+        denseSortPipeline_ = finalizePipeline_ = VK_NULL_HANDLE;
     pipelineLayout_ = VK_NULL_HANDLE;
     descriptorSetLayout_ = VK_NULL_HANDLE;
     allocator_ = nullptr;

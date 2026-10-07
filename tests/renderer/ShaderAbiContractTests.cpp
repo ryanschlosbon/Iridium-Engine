@@ -134,7 +134,7 @@ namespace {
     // LightExtractorTests: PackedGpuLight mirror, in the cluster builder and in
     // both deferred and forward consumers (one record representation).
     bool testPackedLightRecordAbi() {
-        for (const char* spv : { "cluster_count_comp.spv",
+        for (const char* spv : { "cluster_light_bounds_comp.spv",
                 "canonical_reference_lighting_frag.spv",
                 "complex_material_indexed_frag.spv" }) {
             const SpirvModule module = load(spv);
@@ -145,11 +145,25 @@ namespace {
                 IRIDIUM_MEMBER(PackedGpuLight, shapeMetadata) },
                 sizeof(PackedGpuLight)));
         }
-        const SpirvModule builder = load("cluster_count_comp.spv");
+        // M7.10.2: the bounds dispatch reads the light records; fill reads
+        // the headers. All three builder stages share the bounds records.
+        const SpirvModule builder = load("cluster_light_bounds_comp.spv");
         IRIDIUM_CHECK(builder.memberArrayStride("LightRecords", "lights") ==
             sizeof(PackedGpuLight));
-        IRIDIUM_CHECK(builder.structExtent("ClusterLightHeader") ==
+        IRIDIUM_CHECK(load("cluster_fill_comp.spv").structExtent("ClusterLightHeader") ==
             sizeof(ClusterLightHeader));
+        for (const char* spv : { "cluster_light_bounds_comp.spv",
+                "cluster_count_comp.spv", "cluster_fill_comp.spv" }) {
+            const SpirvModule stage = load(spv);
+            IRIDIUM_CHECK_MSG(stage.memberArrayStride("ClusterLightBoundsBuffer",
+                "clusterLightBounds") == sizeof(PackedGpuClusterLightBounds), spv);
+            const auto bounds = stage.descriptorNamed("ClusterLightBoundsBuffer");
+            IRIDIUM_CHECK_MSG(bounds.has_value() &&
+                bounds->kind == SpirvDescriptorKind::StorageBuffer &&
+                bounds->set == 0 && bounds->binding == 13, spv);
+            IRIDIUM_CHECK_MSG((stage.localSize() == std::array<uint32_t, 3>{ 64, 1, 1 }),
+                spv);
+        }
         for (const char* spv : { "canonical_reference_lighting_frag.spv",
                 "complex_material_indexed_frag.spv" }) {
             const SpirvModule consumer = load(spv);

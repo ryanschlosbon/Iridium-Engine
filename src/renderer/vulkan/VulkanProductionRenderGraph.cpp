@@ -215,6 +215,12 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
         bufferDesc(checkedBufferBytes(scanScratchWords, sizeof(uint32_t))));
     RenderGraph::ResourceHandle clusterIndirect = graph.createResource(
         kClusterIndirectResourceName, bufferDesc(32, 16));
+    // M7.10.2: sized for the light-record bound (the active list never
+    // exceeds the record capacity).
+    RenderGraph::ResourceHandle clusterLightBounds = graph.createResource(
+        kClusterLightBoundsResourceName,
+        bufferDesc(checkedBufferBytes(kMaximumGpuLightCapacity,
+            sizeof(PackedGpuClusterLightBounds)), 16));
 
     RenderGraph::ResourceHandle normal = graph.createResource("gbuffer.normal",
         imageDesc(toGraphFormat(formats.normalF90), sceneExtent));
@@ -547,6 +553,10 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
         Access::StorageReadWrite);
     clusterDiagnostics = graph.write(clusterCountPass, clusterDiagnostics,
         Access::StorageReadWrite);
+    // Written by the pass's bounds dispatch before its count dispatch reads
+    // it (an in-pass barrier, as the scan's scratch levels).
+    clusterLightBounds = graph.write(clusterCountPass, clusterLightBounds,
+        Access::StorageWrite);
 
     const RenderGraph::PassHandle clusterScan = graph.addPass(
         "lighting.cluster.scan", RenderGraph::QueueClass::Compute);
@@ -561,6 +571,7 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
     const RenderGraph::PassHandle clusterFill = graph.addPass(
         "lighting.cluster.fill", RenderGraph::QueueClass::Compute);
     graph.read(clusterFill, clusterHeaders, Access::StorageRead);
+    graph.read(clusterFill, clusterLightBounds, Access::StorageRead);
     clusterCursors = graph.write(clusterFill, clusterCursors,
         Access::StorageReadWrite);
     clusterIndices = graph.write(clusterFill, clusterIndices,
@@ -1101,6 +1112,7 @@ VulkanProductionGraphIds resolveVulkanProductionGraphIds(
         .cursors = resource(kClusterCursorResourceName),
         .scanScratch = resource(kClusterScanScratchResourceName),
         .indirect = resource(kClusterIndirectResourceName),
+        .lightBounds = resource(kClusterLightBoundsResourceName),
     };
     ids.clusterReadback = pass("lighting.cluster.readback");
     ids.lighting = pass("lighting");
