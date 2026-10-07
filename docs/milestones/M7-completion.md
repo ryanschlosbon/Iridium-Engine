@@ -3,7 +3,8 @@
 ## Header
 
 - **Milestone:** M7 — GPU Scene and Indirect Visibility, completion slices M7.9–M7.12
-- **Status:** Approved by the owner 2026-10-07. Active slice: M7.10.0 (backend headroom).
+- **Status:** Approved by the owner 2026-10-07. **Phase 1 complete; at the owner checkpoint**
+  (2026-10-07). Report: `docs/performance/M7C-owner-cases-phase1-2026-10-07.md`.
 - **Lead:** one Claude Code lead session for all four slices
   (`docs/milestones/M7-completion-task-lead-prompt.md`)
 - **Branch / PR:** `m7-completion` from `main` (`8a9a601`); one PR into `main`
@@ -784,6 +785,27 @@ None open. The two-car scene was never saved, so PC3 is the reference approximat
     | PC1-911-n16-half | 2.44 → 0.87 ms | 2.56 → 1.76 ms |
     | PC1-alfa-n16 | 0.85 → 0.64 ms | — |
     | PC1-stress256 | 7.94 → 4.21 ms | 8.26 → 7.50 ms; now GPU-bound |
+
+- **2026-10-07 — Phase 1 complete; owner checkpoint.**
+  - **Report:** `docs/performance/M7C-owner-cases-phase1-2026-10-07.md`.
+  - **Fixes landed (all refactor tier, byte-identical):** M7.10.0 (backend headroom),
+    M7.10.1 and M7.10.1b (transparent frustum culling and its O(owners) bookkeeping),
+    M7.10.2 (parallel cluster assignment), M7.10.3 (hashed previous-transform index).
+  - **Standard-route pairs** against `main`: pair 1 at `13e6675`, pair 2 at `5c87384`. No
+    regression beyond noise: T-F1 GPU +0.9%, within spread. Gains:
+
+    | Route | Change |
+    |---|---|
+    | T-F5 GPU | 2.96 → 0.72 ms |
+    | T-F6 GPU | 3.59 → 1.41 ms |
+    | T-F7 non-wait CPU | 2.22 → 1.45 ms |
+
+  - **Close to glass:** attributed but not fixed. A single full-screen 240-triangle windshield
+    draw costs about 2.4 ms in fixed-function work, independent of its fragment shader. Nsight
+    GPU Trace (needs owner UAC) is the next step.
+  - **Intermittent driver event 153** on the baseline binary is a watch item.
+  - **Evidence:** the accepted slices' raw evidence was pruned to summaries (retention policy).
+    The baseline worktrees `base-main` and `base-p1` were removed after their comparisons.
 
 ## Completion report
 
