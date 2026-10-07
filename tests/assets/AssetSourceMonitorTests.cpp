@@ -1,8 +1,11 @@
 #include "assets/runtime/AssetSourceMonitor.h"
 
+#include "core/tasks/TaskSystem.h"
 #include "utils/Sha256.h"
 
+#include <chrono>
 #include <filesystem>
+#include <thread>
 #include <fstream>
 #include <iostream>
 #include <stdexcept>
@@ -203,6 +206,49 @@ namespace {
         return true;
     }
 
+    // M7R R5b.2: automatic mode runs the watcher scan on the pinned I/O
+    // thread and the monitor pass as a Background task, both started by the
+    // frame tick (TaskSystem::tickPeriodic).
+    bool automaticModeRunsOnTheTaskSystem() {
+        TemporaryDirectory temporary;
+        const auto path = temporary.path / "auto.bin";
+        write(path, "auto-a");
+        const AssetGuid asset = guid(
+            "019f9bce-85b8-7630-8203-040506070809");
+        Tasks::TaskSystem tasks(Tasks::TaskSystemConfig{
+            .workerThreadCount = 2 });
+        AssetSourceMonitor monitor(
+            0, std::chrono::milliseconds(1),
+            {}, true, &tasks);
+        const TrackedSourceFile source{
+            path, sha256File(path),
+        };
+        monitor.trackAsset(asset, std::span(&source, 1), {});
+        write(path, "auto-b-longer");
+        std::vector<SourceChangeBatch> batches;
+        const auto deadline = std::chrono::steady_clock::now() +
+            std::chrono::seconds(10);
+        while (batches.empty() &&
+            std::chrono::steady_clock::now() < deadline) {
+            tasks.tickPeriodic();
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            batches = monitor.drainBatches();
+        }
+        CHECK(batches.size() == 1);
+        CHECK(batches[0].changedAssets == std::vector{ asset });
+        CHECK(batches[0].changedSources[0].contentHash ==
+            sha256File(path));
+        bool manualRejected = false;
+        try {
+            monitor.processOnce(UINT64_MAX);
+        } catch (const std::logic_error&) {
+            manualRejected = true;
+        }
+        CHECK(manualRejected);
+        monitor.shutdown();
+        return true;
+    }
+
 } // namespace
 
 int main() {
@@ -217,6 +263,8 @@ int main() {
             sameContentTimestampIsSuppressed },
         { "cycle blocks composed batch",
             cycleBlocksComposedBatch },
+        { "automatic mode on the task system",
+            automaticModeRunsOnTheTaskSystem },
     };
     size_t failures = 0;
     for (const TestCase& test : tests) {

@@ -1,6 +1,7 @@
 #include "assets/AssetCatalogService.h"
 #include "assets/AssetMetadata.h"
 #include "assets/SqliteAssetCatalog.h"
+#include "core/tasks/TaskSystem.h"
 #include "editor/EditorAssetSettingsTransactionService.h"
 
 #include <algorithm>
@@ -145,8 +146,10 @@ namespace {
             std::filesystem::path(PROJECT_ROOT_DIR) / "tests" / "assets" /
                 "gltf_model_cooker_fixture.gltf",
             source);
+        // The catalog service runs on the engine task system (M7R R5b.2).
+        Tasks::TaskSystem tasks(Tasks::TaskSystemConfig{ .workerThreadCount = 2 });
         auto catalog = createSqliteAssetCatalog(":memory:");
-        AssetCatalogService catalogService(catalog.get(), {
+        AssetCatalogService catalogService(tasks, catalog.get(), {
             AssetRoot{ "project", temporary.path },
         });
 

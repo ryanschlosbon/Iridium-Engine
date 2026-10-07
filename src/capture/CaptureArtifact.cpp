@@ -52,7 +52,7 @@ namespace Iridium {
 
         // Called only after the image writer has validated dimensions and storage.
         // Ignore alpha and row padding: an opaque black render is still black.
-        [[nodiscard]] nlohmann::json captureSignal(const FrameCapture& capture) {
+        [[nodiscard]] CaptureSignalSummary captureSignal(const FrameCapture& capture) {
             const bool floating = capture.pixelFormat == FrameCapturePixelFormat::Rgba32Float;
             const bool bgra = capture.pixelFormat == FrameCapturePixelFormat::Bgra8Srgb;
             const size_t pixelBytes = floating ? 4 * sizeof(float) : 4;
@@ -86,16 +86,88 @@ namespace Iridium {
             double range = 0.0;
             for (size_t channel = 0; channel < 3; ++channel)
                 range = std::max(range, maximum[channel] - minimum[channel]);
-            const uint64_t pixelCount = uint64_t(capture.width) * capture.height;
-            return {
-                { "sample_domain", floating ? "source_linear_rgb" : "encoded_rgb_normalized_0_1" },
-                { "pixel_count", pixelCount }, { "finite_rgb_pixels", finitePixels },
-                { "nonzero_finite_rgb_pixels", nonzeroPixels },
-                { "finite_pixel_rgb_min", finitePixels ? nlohmann::json(minimum) : nlohmann::json(nullptr) },
-                { "finite_pixel_rgb_max", finitePixels ? nlohmann::json(maximum) : nlohmann::json(nullptr) },
-                { "maximum_spatial_channel_range", range },
-                { "has_finite_spatial_signal", finitePixels == pixelCount && range > 0.0 },
+            return CaptureSignalSummary{
+                .floating = floating,
+                .pixelCount = uint64_t(capture.width) * capture.height,
+                .finitePixels = finitePixels,
+                .nonzeroPixels = nonzeroPixels,
+                .minimum = minimum,
+                .maximum = maximum,
+                .maximumRange = range,
             };
+        }
+
+        [[nodiscard]] bool hasFiniteSpatialSignal(
+            const CaptureSignalSummary& signal) noexcept {
+            return signal.finitePixels == signal.pixelCount &&
+                signal.maximumRange > 0.0;
+        }
+
+        [[nodiscard]] nlohmann::json signalJson(const CaptureSignalSummary& signal) {
+            const uint64_t finitePixels = signal.finitePixels;
+            return {
+                { "sample_domain", signal.floating ? "source_linear_rgb" : "encoded_rgb_normalized_0_1" },
+                { "pixel_count", signal.pixelCount }, { "finite_rgb_pixels", finitePixels },
+                { "nonzero_finite_rgb_pixels", signal.nonzeroPixels },
+                { "finite_pixel_rgb_min", finitePixels ? nlohmann::json(signal.minimum) : nlohmann::json(nullptr) },
+                { "finite_pixel_rgb_max", finitePixels ? nlohmann::json(signal.maximum) : nlohmann::json(nullptr) },
+                { "maximum_spatial_channel_range", signal.maximumRange },
+                { "has_finite_spatial_signal", hasFiniteSpatialSignal(signal) },
+            };
+        }
+
+        [[nodiscard]] nlohmann::json temporalJitterJson(
+            const std::optional<CaptureTemporalJitter>& jitter) {
+            if (!jitter) return nlohmann::json(nullptr);
+            return {
+                { "enabled", jitter->enabled },
+                { "sequence_length", jitter->sequenceLength },
+                { "sequence_index", jitter->sequenceIndex },
+                { "offset_pixels", jitter->offsetPixels },
+                { "offset_ndc", jitter->offsetNdc },
+                { "turns_since_cut", jitter->turnsSinceCut },
+                { "history_reset", jitter->historyReset },
+            };
+        }
+
+        struct CaptureKind {
+            bool sceneLinear = false;
+            bool displayLinearHdr = false;
+            bool modernFinal = false;
+            bool finalSdr = false;
+        };
+
+        [[nodiscard]] CaptureKind captureKind(FrameCapturePixelFormat pixelFormat,
+            FrameCaptureColorDomain colorDomain) noexcept {
+            CaptureKind kind{};
+            kind.sceneLinear =
+                pixelFormat == FrameCapturePixelFormat::Rgba32Float &&
+                colorDomain == FrameCaptureColorDomain::SceneLinearAcesCg;
+            kind.displayLinearHdr =
+                pixelFormat == FrameCapturePixelFormat::Rgba32Float &&
+                colorDomain == FrameCaptureColorDomain::DisplayLinearHdr;
+            kind.modernFinal =
+                colorDomain == FrameCaptureColorDomain::DisplayEncodedSdr ||
+                colorDomain == FrameCaptureColorDomain::DisplayLinearHdr;
+            kind.finalSdr =
+                (pixelFormat == FrameCapturePixelFormat::Rgba8Srgb ||
+                    pixelFormat == FrameCapturePixelFormat::Bgra8Srgb) &&
+                (colorDomain == FrameCaptureColorDomain::LegacyDisplayReferred ||
+                    colorDomain == FrameCaptureColorDomain::DisplayEncodedSdr);
+            return kind;
+        }
+
+        [[nodiscard]] std::string captureStem(const CaptureArtifactMetadata& metadata,
+            uint32_t width, uint32_t height, FrameCaptureColorDomain colorDomain,
+            const CaptureKind& kind) {
+            std::string stem = makeCaptureArtifactStem(metadata, width, height);
+            if (colorDomain == FrameCaptureColorDomain::DisplayEncodedSdr) {
+                stem += "__final-sdr";
+            }
+            else if (kind.displayLinearHdr) {
+                stem += "__final-hdr";
+            }
+            return stem;
         }
 
     } // namespace
@@ -110,61 +182,91 @@ namespace Iridium {
             std::to_string(metadata.measuredFrameIndex);
     }
 
-    CaptureArtifactPaths writeCaptureArtifact(
+    PendingCaptureImage writeCaptureImage(
         const std::filesystem::path& directory, const FrameCapture& capture,
         const CaptureArtifactMetadata& metadata) {
         if (directory.empty()) {
             throw std::invalid_argument("Capture artifact directory cannot be empty.");
         }
-        const bool sceneLinear =
-            capture.pixelFormat == FrameCapturePixelFormat::Rgba32Float &&
-            capture.colorDomain == FrameCaptureColorDomain::SceneLinearAcesCg;
-        const bool displayLinearHdr =
-            capture.pixelFormat == FrameCapturePixelFormat::Rgba32Float &&
-            capture.colorDomain == FrameCaptureColorDomain::DisplayLinearHdr;
-        const bool modernFinal =
-            capture.colorDomain == FrameCaptureColorDomain::DisplayEncodedSdr ||
-            capture.colorDomain == FrameCaptureColorDomain::DisplayLinearHdr;
-        const bool finalSdr =
-            (capture.pixelFormat == FrameCapturePixelFormat::Rgba8Srgb ||
-                capture.pixelFormat == FrameCapturePixelFormat::Bgra8Srgb) &&
-            (capture.colorDomain == FrameCaptureColorDomain::LegacyDisplayReferred ||
-                capture.colorDomain == FrameCaptureColorDomain::DisplayEncodedSdr);
-        if (!sceneLinear && !displayLinearHdr && !finalSdr) {
+        const CaptureKind kind = captureKind(capture.pixelFormat, capture.colorDomain);
+        if (!kind.sceneLinear && !kind.displayLinearHdr && !kind.finalSdr) {
             throw std::invalid_argument(
                 "Capture pixel format and color domain are incompatible.");
         }
-        std::string stem = makeCaptureArtifactStem(
-            metadata, capture.width, capture.height);
-        if (capture.colorDomain == FrameCaptureColorDomain::DisplayEncodedSdr) {
-            stem += "__final-sdr";
-        }
-        else if (displayLinearHdr) {
-            stem += "__final-hdr";
-        }
-        CaptureArtifactPaths paths{};
-        paths.image = directory / (stem +
-            ((sceneLinear || displayLinearHdr) ? ".pfm" : ".tga"));
-        paths.metadata = directory / (stem + ".json");
+        PendingCaptureImage image{};
+        image.stem = captureStem(metadata, capture.width, capture.height,
+            capture.colorDomain, kind);
+        image.captureId = capture.captureId;
+        image.width = capture.width;
+        image.height = capture.height;
+        image.pixelFormat = capture.pixelFormat;
+        image.colorDomain = capture.colorDomain;
+        CaptureArtifactPaths& paths = image.paths;
+        paths.image = directory / (image.stem +
+            ((kind.sceneLinear || kind.displayLinearHdr) ? ".pfm" : ".tga"));
+        paths.metadata = directory / (image.stem + ".json");
         requireNewArtifactPaths(paths);
         CaptureArtifactPaths temporary = paths;
         temporary.image += ".tmp";
         temporary.metadata += ".tmp";
         requireNewArtifactPaths(temporary);
+        image.temporaryImage = temporary.image;
+        image.temporaryMetadata = temporary.metadata;
         std::filesystem::create_directories(directory);
+
+        try {
+            if (kind.sceneLinear || kind.displayLinearHdr) writeFrameCapturePfm(temporary.image, capture);
+            else writeFrameCaptureTga(temporary.image, capture);
+            image.signal = captureSignal(capture);
+            if (metadata.requireSpatialSignal && !hasFiniteSpatialSignal(image.signal)) {
+                throw std::runtime_error(
+                    "Capture signal check failed: RGB image is constant or contains nonfinite pixels.");
+            }
+            paths.imageSha256 = sha256File(temporary.image);
+        }
+        catch (...) {
+            discardCaptureImage(image);
+            throw;
+        }
+        return image;
+    }
+
+    void discardCaptureImage(const PendingCaptureImage& image) noexcept {
+        std::error_code ignored;
+        if (!image.temporaryImage.empty())
+            std::filesystem::remove(image.temporaryImage, ignored);
+        if (!image.temporaryMetadata.empty())
+            std::filesystem::remove(image.temporaryMetadata, ignored);
+    }
+
+    CaptureArtifactPaths writeCaptureArtifact(
+        const std::filesystem::path& directory, const FrameCapture& capture,
+        const CaptureArtifactMetadata& metadata) {
+        const PendingCaptureImage image = writeCaptureImage(directory, capture, metadata);
+        return commitCaptureArtifact(image, metadata);
+    }
+
+    CaptureArtifactPaths commitCaptureArtifact(const PendingCaptureImage& image,
+        const CaptureArtifactMetadata& metadata) {
+        // The sidecar describes the pending image under the same names.
+        const PendingCaptureImage& capture = image;
+        const CaptureKind kind = captureKind(capture.pixelFormat, capture.colorDomain);
+        const bool sceneLinear = kind.sceneLinear;
+        const bool displayLinearHdr = kind.displayLinearHdr;
+        const bool modernFinal = kind.modernFinal;
+        const CaptureArtifactPaths paths = image.paths;
+        CaptureArtifactPaths temporary = paths;
+        temporary.image = image.temporaryImage;
+        temporary.metadata = image.temporaryMetadata;
 
         bool imageCommitted = false;
         try {
-        if (sceneLinear || displayLinearHdr) writeFrameCapturePfm(temporary.image, capture);
-        else writeFrameCaptureTga(temporary.image, capture);
-        nlohmann::json signal = captureSignal(capture);
-        if (metadata.requireSpatialSignal &&
-            !signal.at("has_finite_spatial_signal").get<bool>()) {
-            throw std::runtime_error(
-                "Capture signal check failed: RGB image is constant or contains nonfinite pixels.");
+        if (captureStem(metadata, capture.width, capture.height, capture.colorDomain,
+                kind) != image.stem) {
+            throw std::logic_error(
+                "Capture metadata names a different artifact than its pending image.");
         }
-        paths.imageSha256 = sha256File(temporary.image);
-
+        requireNewArtifactPaths(paths);
         nlohmann::json contentHashes = nlohmann::json::array();
         for (const auto& [path, sha] : metadata.contentHashes) {
             contentHashes.push_back({ { "path", path }, { "sha256", sha } });
@@ -183,7 +285,7 @@ namespace Iridium {
                 { "row_pitch_bytes", (sceneLinear || displayLinearHdr) ? capture.width * 3u * 4u :
                     capture.width * 4u },
                 { "source_pixel_format", frameCapturePixelFormatName(capture.pixelFormat) },
-                { "signal", std::move(signal) }
+                { "signal", signalJson(image.signal) }
             } },
             { "capture", {
                 { "capture_id", capture.captureId },
@@ -256,6 +358,7 @@ namespace Iridium {
                     { "width", capture.width }, { "height", capture.height }
                 } },
                 { "reconstruction_mode", metadata.reconstructionMode },
+                { "temporal_jitter", temporalJitterJson(metadata.temporalJitter) },
                 { "output_mode", metadata.outputMode },
                 { "swapchain_format", metadata.swapchainFormat },
                 { "swapchain_color_space", metadata.swapchainColorSpace },

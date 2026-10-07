@@ -27,8 +27,7 @@ namespace Iridium {
           depthPyramidSampler_(other.depthPyramidSampler_),
           extent_(other.extent_),
           format_(other.format_),
-          targets_(std::move(other.targets_)),
-          uiFramebuffers_(std::move(other.uiFramebuffers_)) {
+          targets_(std::move(other.targets_)) {
         other.device_ = VK_NULL_HANDLE;
         other.sampler_ = VK_NULL_HANDLE;
         other.integerSampler_ = VK_NULL_HANDLE;
@@ -37,7 +36,6 @@ namespace Iridium {
         other.extent_ = {};
         other.format_ = VK_FORMAT_UNDEFINED;
         other.targets_.clear();
-        other.uiFramebuffers_.clear();
     }
 
     VulkanFrameTargets& VulkanFrameTargets::operator=(VulkanFrameTargets&& other) noexcept {
@@ -54,7 +52,6 @@ namespace Iridium {
         extent_ = other.extent_;
         format_ = other.format_;
         targets_ = std::move(other.targets_);
-        uiFramebuffers_ = std::move(other.uiFramebuffers_);
 
         other.device_ = VK_NULL_HANDLE;
         other.sampler_ = VK_NULL_HANDLE;
@@ -64,7 +61,6 @@ namespace Iridium {
         other.extent_ = {};
         other.format_ = VK_FORMAT_UNDEFINED;
         other.targets_.clear();
-        other.uiFramebuffers_.clear();
         return *this;
     }
 
@@ -72,40 +68,22 @@ namespace Iridium {
         cleanup();
     }
 
-    void VulkanFrameTargets::init(VkDevice device,
-        const ::VkSwapchain& swapchain, VkExtent2D sceneExtent,
-        VulkanTargetRenderPasses renderPasses,
+    void VulkanFrameTargets::init(VkDevice device, VkExtent2D sceneExtent,
         uint32_t frameContextCount,
         bool hdr10Composition,
         bool transparencyPyramids,
-        bool legacyTransparency,
         const VulkanLayeredGraphConfig& layered,
-        const VulkanRenderGraphExecutor& graphResources) {
-        if (device == VK_NULL_HANDLE || swapchain.getSwapchain() == VK_NULL_HANDLE ||
-            swapchain.getImageCount() == 0 ||
-            swapchain.getImageViews().size() != swapchain.getImageCount() ||
-            frameContextCount == 0) {
-            throw std::invalid_argument("VulkanFrameTargets requires a valid swapchain.");
+        const VulkanRenderGraphExecutor& graphResources,
+        const VulkanProductionGraphIds& ids) {
+        if (device == VK_NULL_HANDLE || frameContextCount == 0) {
+            throw std::invalid_argument(
+                "VulkanFrameTargets requires a device and frame contexts.");
         }
         if (sceneExtent.width == 0 || sceneExtent.height == 0) {
             throw std::invalid_argument(
                 "VulkanFrameTargets requires a non-empty scene extent.");
         }
-        if (renderPasses.gBuffer == VK_NULL_HANDLE || renderPasses.lighting == VK_NULL_HANDLE ||
-            renderPasses.forward == VK_NULL_HANDLE ||
-            renderPasses.transparent == VK_NULL_HANDLE ||
-            renderPasses.output == VK_NULL_HANDLE || renderPasses.ui == VK_NULL_HANDLE) {
-            throw std::invalid_argument("VulkanFrameTargets requires all render passes.");
-        }
-        if (legacyTransparency &&
-            renderPasses.glassDepth == VK_NULL_HANDLE) {
-            throw std::invalid_argument(
-                "VulkanFrameTargets requires the legacy glass-depth render pass when enabled.");
-        }
-        const VkExtent2D ordinary2AtlasExtent = layered.atlasExtent(
-            TransparencyQuality::Ordinary2);
         const bool ordinary2 = layered.enabled(TransparencyQuality::Ordinary2);
-        const bool anyLayered = layered.anyEnabled();
         for (const TransparencyQuality quality : {
                 TransparencyQuality::Ordinary2,
                 TransparencyQuality::Hero4,
@@ -117,23 +95,11 @@ namespace Iridium {
                     "VulkanFrameTargets requires complete layered atlas extents.");
             }
         }
-        if (anyLayered &&
-            (renderPasses.layeredInterfaceCapture == VK_NULL_HANDLE ||
-                renderPasses.layeredLocalComposition == VK_NULL_HANDLE)) {
-            throw std::invalid_argument(
-                "VulkanFrameTargets requires complete layered render passes.");
-        }
-        if (layered.weightedOit &&
-            (renderPasses.weightedOitAccumulation == VK_NULL_HANDLE ||
-                renderPasses.weightedOitResolve == VK_NULL_HANDLE)) {
-            throw std::invalid_argument(
-                "VulkanFrameTargets requires complete WeightedOIT render passes.");
-        }
         if (device_ != VK_NULL_HANDLE || sampler_ != VK_NULL_HANDLE ||
             integerSampler_ != VK_NULL_HANDLE ||
             pyramidSampler_ != VK_NULL_HANDLE ||
             depthPyramidSampler_ != VK_NULL_HANDLE ||
-            !targets_.empty() || !uiFramebuffers_.empty()) {
+            !targets_.empty()) {
             throw std::logic_error("VulkanFrameTargets was initialized more than once.");
         }
 
@@ -141,45 +107,36 @@ namespace Iridium {
         extent_ = sceneExtent;
         format_ = VulkanSceneColorFormat;
         targets_.resize(frameContextCount);
-        uiFramebuffers_.resize(swapchain.getImageCount(), VK_NULL_HANDLE);
 
         try {
             for (VulkanFrameContextTargets& target : targets_) {
                 const uint32_t frameIndex = static_cast<uint32_t>(
                     &target - targets_.data());
-                target.normal = graphResources.imageResource(frameIndex, "gbuffer.normal");
-                target.albedo = graphResources.imageResource(frameIndex, "gbuffer.albedo");
-                target.emissive = graphResources.imageResource(frameIndex, "gbuffer.emissive");
-                target.f0Roughness = graphResources.imageResource(
-                    frameIndex, "gbuffer.f0-roughness");
-                target.materialFlags = graphResources.imageResource(
-                    frameIndex, "gbuffer.material-flags");
-                target.depth = graphResources.imageResource(frameIndex, "depth.opaque");
-                target.litScene = graphResources.imageResource(frameIndex, "scene.color");
+                const auto image = [&](RenderGraph::GraphResourceId id) {
+                    return graphResources.image(frameIndex, id);
+                };
+                target.normal = image(ids.gbufferNormal);
+                target.albedo = image(ids.gbufferAlbedo);
+                target.emissive = image(ids.gbufferEmissive);
+                target.f0Roughness = image(ids.gbufferF0Roughness);
+                target.materialFlags = image(ids.gbufferMaterialFlags);
+                target.velocity = image(ids.gbufferVelocity);
+                target.depth = image(ids.depth);
+                target.litScene = image(ids.sceneColor);
                 if (transparencyPyramids) {
-                    target.refractionColorPyramid = graphResources.imageResource(
-                        frameIndex, "scene.refraction-color-pyramid");
-                    target.refractionDepthPyramid = graphResources.imageResource(
-                        frameIndex, "depth.refraction-nearest-pyramid");
-                }
-                if (legacyTransparency) {
-                    target.glassDepth = graphResources.imageResource(
-                        frameIndex, "depth.glass");
+                    target.refractionColorPyramid = image(ids.refractionColorPyramid);
+                    target.refractionDepthPyramid = image(ids.refractionDepthPyramid);
                 }
                 if (ordinary2) {
-                    target.layeredEntryDepth = graphResources.imageResource(
-                        frameIndex, "depth.layered.entry");
-                    target.layeredEntryIdentity = graphResources.imageResource(
-                        frameIndex, "identity.layered.entry");
-                    target.layeredExitDepth = graphResources.imageResource(
-                        frameIndex, "depth.layered.exit");
-                    target.layeredExitIdentity = graphResources.imageResource(
-                        frameIndex, "identity.layered.exit");
-                    target.layeredLocalColor = graphResources.imageResource(
-                        frameIndex, "scene.layered.local-color");
+                    target.layeredEntryDepth = image(ids.ordinary2EntryDepth);
+                    target.layeredEntryIdentity = image(ids.ordinary2EntryIdentity);
+                    target.layeredExitDepth = image(ids.ordinary2ExitDepth);
+                    target.layeredExitIdentity = image(ids.ordinary2ExitIdentity);
+                    target.layeredLocalColor = image(ids.ordinary2LocalColor);
                 }
                 const auto acquireDeepLayeredTier = [&](
-                        TransparencyQuality quality, const char* name,
+                        TransparencyQuality quality,
+                        const VulkanDeepLayeredGraphIds& tierIds,
                         VulkanFrameContextTargets::DeepLayeredTier& tier) {
                     if (!layered.enabled(quality)) return;
                     tier.atlasExtent = layered.atlasExtent(quality);
@@ -188,45 +145,34 @@ namespace Iridium {
                     for (uint32_t interfaceIndex = 0u;
                         interfaceIndex < tier.interfaceCount;
                         ++interfaceIndex) {
-                        const std::string suffix = std::string(name) +
-                            ".interface." + std::to_string(interfaceIndex);
                         tier.interfaceDepth[interfaceIndex] =
-                            graphResources.imageResource(frameIndex,
-                                "depth.layered." + suffix);
+                            image(tierIds.interfaceDepth[interfaceIndex]);
                         tier.interfaceIdentity[interfaceIndex] =
-                            graphResources.imageResource(frameIndex,
-                                "identity.layered." + suffix);
+                            image(tierIds.interfaceIdentity[interfaceIndex]);
                         if (deepLayeredTerminationInterface(interfaceIndex,
                                 tier.interfaceCount)) {
                             tier.tileTermination[interfaceIndex] =
-                                graphResources.imageResource(frameIndex,
-                                    "termination.layered." + suffix);
+                                image(tierIds.tileTermination[interfaceIndex]);
                         }
                     }
-                    tier.localColor = graphResources.imageResource(frameIndex,
-                        std::string("scene.layered.") + name +
-                            ".local-color");
+                    tier.localColor = image(tierIds.localColor);
                 };
-                acquireDeepLayeredTier(TransparencyQuality::Hero4, "hero4",
+                acquireDeepLayeredTier(TransparencyQuality::Hero4, ids.hero4,
                     target.hero4);
                 acquireDeepLayeredTier(TransparencyQuality::Cinematic8,
-                    "cinematic8", target.cinematic8);
+                    ids.cinematic8, target.cinematic8);
                 if (layered.weightedOit) {
-                    target.weightedOitAccumulation =
-                        graphResources.imageResource(frameIndex,
-                            "transparency.oit.accumulation");
-                    target.weightedOitRevealage =
-                        graphResources.imageResource(frameIndex,
-                            "transparency.oit.revealage");
+                    target.weightedOitAccumulation = image(ids.oitAccumulation);
+                    target.weightedOitRevealage = image(ids.oitRevealage);
                 }
-                target.output = graphResources.imageResource(frameIndex, "output.display");
+                target.output = image(ids.output);
             }
             if (hdr10Composition) {
                 for (VulkanFrameContextTargets& target : targets_) {
                     const uint32_t frameIndex = static_cast<uint32_t>(
                         &target - targets_.data());
-                    target.uiComposition = graphResources.imageResource(
-                        frameIndex, "output.ui-composition");
+                    target.uiComposition = graphResources.image(frameIndex,
+                        ids.uiComposition);
                 }
             }
 
@@ -271,11 +217,7 @@ namespace Iridium {
                 }
             }
 
-            for (size_t i = 0; i < targets_.size(); ++i) {
-                VulkanFrameContextTargets& target = targets_[i];
-                const uint32_t width = extent_.width;
-                const uint32_t height = extent_.height;
-
+            for (VulkanFrameContextTargets& target : targets_) {
                 const auto createMipViews = [&](const VulkanImageResource& image,
                         std::vector<VkImageView>& views,
                         const char* operation) {
@@ -302,215 +244,6 @@ namespace Iridium {
                         target.refractionDepthMipViews,
                         "vkCreateImageView(refraction depth mip)");
                 }
-
-                const auto createFramebuffer = [&](VkRenderPass renderPass,
-                    std::span<const VkImageView> attachments, VkFramebuffer& framebuffer,
-                    const char* name) {
-                    VkFramebufferCreateInfo info{ VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO };
-                    info.renderPass = renderPass;
-                    info.attachmentCount = static_cast<uint32_t>(attachments.size());
-                    info.pAttachments = attachments.data();
-                    info.width = width;
-                    info.height = height;
-                    info.layers = 1;
-                    const VkResult framebufferResult = vkCreateFramebuffer(
-                        device_, &info, nullptr, &framebuffer);
-                    if (framebufferResult != VK_SUCCESS) {
-                        throwVkError(name, framebufferResult);
-                    }
-                };
-
-                const std::array<VkImageView, 6> gBufferAttachments = {
-                    target.normal.view, target.albedo.view, target.emissive.view,
-                    target.f0Roughness.view, target.materialFlags.view, target.depth.view };
-                createFramebuffer(renderPasses.gBuffer, gBufferAttachments,
-                    target.gBufferFramebuffer, "vkCreateFramebuffer(gBuffer)");
-
-                const std::array<VkImageView, 1> lightingAttachments = { target.litScene.view };
-                createFramebuffer(renderPasses.lighting, lightingAttachments,
-                    target.lightingFramebuffer, "vkCreateFramebuffer(lighting)");
-
-                const std::array<VkImageView, 2> forwardAttachments = {
-                    target.litScene.view, target.depth.view };
-                createFramebuffer(renderPasses.forward, forwardAttachments,
-                    target.forwardFramebuffer, "vkCreateFramebuffer(forward)");
-                createFramebuffer(renderPasses.transparent, forwardAttachments,
-                    target.transparentFramebuffer,
-                    "vkCreateFramebuffer(transparent)");
-
-                if (legacyTransparency) {
-                    const std::array<VkImageView, 1> glassDepthAttachments = {
-                        target.glassDepth.view };
-                    createFramebuffer(renderPasses.glassDepth,
-                        glassDepthAttachments, target.glassDepthFramebuffer,
-                        "vkCreateFramebuffer(glassDepth)");
-                }
-
-                if (layered.weightedOit) {
-                    const std::array<VkImageView, 3> accumulationAttachments{
-                        target.weightedOitAccumulation.view,
-                        target.weightedOitRevealage.view,
-                        target.depth.view };
-                    createFramebuffer(renderPasses.weightedOitAccumulation,
-                        accumulationAttachments,
-                        target.weightedOitAccumulationFramebuffer,
-                        "vkCreateFramebuffer(WeightedOIT accumulation)");
-                    const std::array<VkImageView, 1> resolveAttachments{
-                        target.litScene.view };
-                    createFramebuffer(renderPasses.weightedOitResolve,
-                        resolveAttachments,
-                        target.weightedOitResolveFramebuffer,
-                        "vkCreateFramebuffer(WeightedOIT resolve)");
-                }
-
-                if (ordinary2) {
-                    const auto createLayeredFramebuffer = [&](VkImageView identity,
-                            VkImageView depth, VkFramebuffer& framebuffer,
-                            const char* name) {
-                        const std::array<VkImageView, 2> attachments{
-                            identity, depth };
-                        VkFramebufferCreateInfo info{
-                            VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO };
-                        info.renderPass = renderPasses.layeredInterfaceCapture;
-                        info.attachmentCount =
-                            static_cast<uint32_t>(attachments.size());
-                        info.pAttachments = attachments.data();
-                        info.width = ordinary2AtlasExtent.width;
-                        info.height = ordinary2AtlasExtent.height;
-                        info.layers = 1u;
-                        const VkResult result = vkCreateFramebuffer(
-                            device_, &info, nullptr, &framebuffer);
-                        if (result != VK_SUCCESS)
-                            throwVkError(name, result);
-                    };
-                    createLayeredFramebuffer(target.layeredEntryIdentity.view,
-                        target.layeredEntryDepth.view,
-                        target.layeredEntryFramebuffer,
-                        "vkCreateFramebuffer(layered entry)");
-                    createLayeredFramebuffer(target.layeredExitIdentity.view,
-                        target.layeredExitDepth.view,
-                        target.layeredExitFramebuffer,
-                        "vkCreateFramebuffer(layered exit)");
-                    const std::array<VkImageView, 1> localAttachments{
-                        target.layeredLocalColor.view };
-                    VkFramebufferCreateInfo localInfo{
-                        VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO };
-                    localInfo.renderPass =
-                        renderPasses.layeredLocalComposition;
-                    localInfo.attachmentCount =
-                        static_cast<uint32_t>(localAttachments.size());
-                    localInfo.pAttachments = localAttachments.data();
-                    localInfo.width = ordinary2AtlasExtent.width;
-                    localInfo.height = ordinary2AtlasExtent.height;
-                    localInfo.layers = 1u;
-                    const VkResult localResult = vkCreateFramebuffer(device_,
-                        &localInfo, nullptr,
-                        &target.layeredLocalCompositionFramebuffer);
-                    if (localResult != VK_SUCCESS)
-                        throwVkError(
-                            "vkCreateFramebuffer(layered local composition)",
-                            localResult);
-                }
-
-                const auto createDeepLayeredTierFramebuffers = [&]
-                    (VulkanFrameContextTargets::DeepLayeredTier& tier,
-                        const char* tierName) {
-                    if (!tier.active()) return;
-                    for (uint32_t interfaceIndex = 0u;
-                        interfaceIndex < tier.interfaceCount;
-                        ++interfaceIndex) {
-                        const std::array<VkImageView, 2> attachments{
-                            tier.interfaceIdentity[interfaceIndex].view,
-                            tier.interfaceDepth[interfaceIndex].view };
-                        VkFramebufferCreateInfo info{
-                            VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO };
-                        info.renderPass =
-                            renderPasses.layeredInterfaceCapture;
-                        info.attachmentCount = static_cast<uint32_t>(
-                            attachments.size());
-                        info.pAttachments = attachments.data();
-                        info.width = tier.atlasExtent.width;
-                        info.height = tier.atlasExtent.height;
-                        info.layers = 1u;
-                        const VkResult result = vkCreateFramebuffer(device_,
-                            &info, nullptr,
-                            &tier.interfaceFramebuffers[interfaceIndex]);
-                        if (result != VK_SUCCESS) {
-                            const std::string operation = std::string(
-                                "vkCreateFramebuffer(layered ") + tierName +
-                                " interface)";
-                            throwVkError(operation.c_str(), result);
-                        }
-                    }
-                    const std::array<VkImageView, 1> attachments{
-                        tier.localColor.view };
-                    VkFramebufferCreateInfo info{
-                        VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO };
-                    info.renderPass = renderPasses.layeredLocalComposition;
-                    info.attachmentCount = static_cast<uint32_t>(
-                        attachments.size());
-                    info.pAttachments = attachments.data();
-                    info.width = tier.atlasExtent.width;
-                    info.height = tier.atlasExtent.height;
-                    info.layers = 1u;
-                    const VkResult result = vkCreateFramebuffer(device_,
-                        &info, nullptr,
-                        &tier.localCompositionFramebuffer);
-                    if (result != VK_SUCCESS) {
-                        const std::string operation = std::string(
-                            "vkCreateFramebuffer(layered ") + tierName +
-                            " local composition)";
-                        throwVkError(operation.c_str(), result);
-                    }
-                };
-                createDeepLayeredTierFramebuffers(target.hero4, "hero4");
-                createDeepLayeredTierFramebuffers(target.cinematic8,
-                    "cinematic8");
-
-                const std::array<VkImageView, 1> outputAttachments = {
-                    target.output.view };
-                createFramebuffer(renderPasses.output, outputAttachments,
-                    target.outputFramebuffer, "vkCreateFramebuffer(output)");
-
-                if (hdr10Composition) {
-                    const std::array<VkImageView, 1> uiAttachments = {
-                        target.uiComposition.view };
-                    VkFramebufferCreateInfo info{
-                        VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO };
-                    info.renderPass = renderPasses.ui;
-                    info.attachmentCount = static_cast<uint32_t>(
-                        uiAttachments.size());
-                    info.pAttachments = uiAttachments.data();
-                    info.width = swapchain.getExtent().width;
-                    info.height = swapchain.getExtent().height;
-                    info.layers = 1;
-                    const VkResult result = vkCreateFramebuffer(
-                        device_, &info, nullptr,
-                        &target.uiCompositionFramebuffer);
-                    if (result != VK_SUCCESS) {
-                        throwVkError(
-                            "vkCreateFramebuffer(uiComposition)", result);
-                    }
-                }
-
-            }
-            if (!hdr10Composition) for (size_t i = 0; i < uiFramebuffers_.size(); ++i) {
-                const std::array<VkImageView, 1> uiAttachments = {
-                    swapchain.getImageViews()[i] };
-                const uint32_t width = swapchain.getExtent().width;
-                const uint32_t height = swapchain.getExtent().height;
-                VkFramebufferCreateInfo info{ VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO };
-                info.renderPass = renderPasses.ui;
-                info.attachmentCount = static_cast<uint32_t>(uiAttachments.size());
-                info.pAttachments = uiAttachments.data();
-                info.width = width;
-                info.height = height;
-                info.layers = 1;
-                const VkResult result = vkCreateFramebuffer(device_, &info, nullptr,
-                    &uiFramebuffers_[i]);
-                if (result != VK_SUCCESS) {
-                    throwVkError("vkCreateFramebuffer(ui)", result);
-                }
             }
         }
         catch (...) {
@@ -522,7 +255,6 @@ namespace Iridium {
     void VulkanFrameTargets::cleanup() {
         if (device_ == VK_NULL_HANDLE) {
             targets_.clear();
-            uiFramebuffers_.clear();
             sampler_ = VK_NULL_HANDLE;
             integerSampler_ = VK_NULL_HANDLE;
             pyramidSampler_ = VK_NULL_HANDLE;
@@ -532,58 +264,7 @@ namespace Iridium {
             return;
         }
 
-        for (VkFramebuffer& framebuffer : uiFramebuffers_) {
-            if (framebuffer != VK_NULL_HANDLE) {
-                vkDestroyFramebuffer(device_, framebuffer, nullptr);
-                framebuffer = VK_NULL_HANDLE;
-            }
-        }
-        uiFramebuffers_.clear();
         for (VulkanFrameContextTargets& target : targets_) {
-            const auto destroyDeepLayeredTier = [&](
-                    VulkanFrameContextTargets::DeepLayeredTier& tier) {
-                if (tier.localCompositionFramebuffer != VK_NULL_HANDLE) {
-                    vkDestroyFramebuffer(device_,
-                        tier.localCompositionFramebuffer, nullptr);
-                    tier.localCompositionFramebuffer = VK_NULL_HANDLE;
-                }
-                for (VkFramebuffer& framebuffer :
-                        tier.interfaceFramebuffers) {
-                    if (framebuffer != VK_NULL_HANDLE)
-                        vkDestroyFramebuffer(device_, framebuffer, nullptr);
-                    framebuffer = VK_NULL_HANDLE;
-                }
-                tier.atlasExtent = {};
-                tier.interfaceCount = 0u;
-            };
-            destroyDeepLayeredTier(target.cinematic8);
-            destroyDeepLayeredTier(target.hero4);
-            if (target.weightedOitResolveFramebuffer != VK_NULL_HANDLE) {
-                vkDestroyFramebuffer(device_,
-                    target.weightedOitResolveFramebuffer, nullptr);
-                target.weightedOitResolveFramebuffer = VK_NULL_HANDLE;
-            }
-            if (target.weightedOitAccumulationFramebuffer != VK_NULL_HANDLE) {
-                vkDestroyFramebuffer(device_,
-                    target.weightedOitAccumulationFramebuffer, nullptr);
-                target.weightedOitAccumulationFramebuffer = VK_NULL_HANDLE;
-            }
-            if (target.layeredLocalCompositionFramebuffer !=
-                    VK_NULL_HANDLE) {
-                vkDestroyFramebuffer(device_,
-                    target.layeredLocalCompositionFramebuffer, nullptr);
-                target.layeredLocalCompositionFramebuffer = VK_NULL_HANDLE;
-            }
-            if (target.layeredExitFramebuffer != VK_NULL_HANDLE) {
-                vkDestroyFramebuffer(device_, target.layeredExitFramebuffer,
-                    nullptr);
-                target.layeredExitFramebuffer = VK_NULL_HANDLE;
-            }
-            if (target.layeredEntryFramebuffer != VK_NULL_HANDLE) {
-                vkDestroyFramebuffer(device_, target.layeredEntryFramebuffer,
-                    nullptr);
-                target.layeredEntryFramebuffer = VK_NULL_HANDLE;
-            }
             for (VkImageView& view : target.refractionColorMipViews) {
                 if (view != VK_NULL_HANDLE)
                     vkDestroyImageView(device_, view, nullptr);
@@ -596,35 +277,6 @@ namespace Iridium {
                 view = VK_NULL_HANDLE;
             }
             target.refractionDepthMipViews.clear();
-            if (target.uiCompositionFramebuffer != VK_NULL_HANDLE) {
-                vkDestroyFramebuffer(device_, target.uiCompositionFramebuffer, nullptr);
-                target.uiCompositionFramebuffer = VK_NULL_HANDLE;
-            }
-            if (target.glassDepthFramebuffer != VK_NULL_HANDLE) {
-                vkDestroyFramebuffer(device_, target.glassDepthFramebuffer, nullptr);
-                target.glassDepthFramebuffer = VK_NULL_HANDLE;
-            }
-            if (target.outputFramebuffer != VK_NULL_HANDLE) {
-                vkDestroyFramebuffer(device_, target.outputFramebuffer, nullptr);
-                target.outputFramebuffer = VK_NULL_HANDLE;
-            }
-            if (target.forwardFramebuffer != VK_NULL_HANDLE) {
-                vkDestroyFramebuffer(device_, target.forwardFramebuffer, nullptr);
-                target.forwardFramebuffer = VK_NULL_HANDLE;
-            }
-            if (target.transparentFramebuffer != VK_NULL_HANDLE) {
-                vkDestroyFramebuffer(device_, target.transparentFramebuffer,
-                    nullptr);
-                target.transparentFramebuffer = VK_NULL_HANDLE;
-            }
-            if (target.lightingFramebuffer != VK_NULL_HANDLE) {
-                vkDestroyFramebuffer(device_, target.lightingFramebuffer, nullptr);
-                target.lightingFramebuffer = VK_NULL_HANDLE;
-            }
-            if (target.gBufferFramebuffer != VK_NULL_HANDLE) {
-                vkDestroyFramebuffer(device_, target.gBufferFramebuffer, nullptr);
-                target.gBufferFramebuffer = VK_NULL_HANDLE;
-            }
         }
 
         if (sampler_ != VK_NULL_HANDLE) {
@@ -684,15 +336,6 @@ namespace Iridium {
 
     VkFormat VulkanFrameTargets::format() const noexcept {
         return format_;
-    }
-
-    VkFramebuffer VulkanFrameTargets::uiFramebuffer(
-        size_t swapchainImageIndex) const {
-        return uiFramebuffers_.at(swapchainImageIndex);
-    }
-
-    size_t VulkanFrameTargets::uiFramebufferCount() const noexcept {
-        return uiFramebuffers_.size();
     }
 
     std::span<VulkanFrameContextTargets> VulkanFrameTargets::targets() noexcept {

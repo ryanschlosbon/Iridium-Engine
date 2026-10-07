@@ -924,6 +924,26 @@ Deliverables:
 - Matched conventional packed-deferred versus visibility-resolved 4K image, timing,
   bandwidth, memory, and material-coherence evidence.
 
+Owner-observed performance cases (2026-10-07), to be captured as native-4K Release
+fixtures at the start of M7.9 and owned by M7.10 (CPU/cluster/scheduling) and M7.12
+(production qualification), each reported with GPU pass times, non-waiting CPU
+stages, requested/visible/recorded work and VRAM, not title FPS:
+
+- **Many objects:** frame rate falls steeply as model instances are added. Measured
+  lead (M9.8e investigation): sorted and compatibility transparency is not frustum-
+  culled. With the Porsche fully out of view, all of its transparent packets were
+  still requested, sorted (26,910 ambiguous sort intervals for one car) and recorded.
+  Transparent culling, sort cost and per-packet CPU work must scale with visible
+  transparent work.
+- **Camera close to glass:** cost rises sharply as glass covers the screen. Candidates
+  to measure: per-pixel complex-forward glass shading, refraction-pyramid builds and
+  sampling, layered-tier atlas capacity and composition, and overdraw from nested
+  interfaces.
+- **A very bright point light:** cost rises with intensity. Candidates to measure: an
+  influence radius derived from intensity (more clusters and shaded pixels per
+  light), point-shadow cube faces and caster counts within that radius, and any
+  per-light work that should be bounded by an authored or perceptual cutoff instead.
+
 Acceptance gate: CPU render preparation and submission scale primarily with changed
 data and visible batches rather than total source draws. A fixed native-4K scene with
 three high-fidelity assets records presentation wait separately from CPU and GPU
@@ -939,9 +959,9 @@ fallback.
 
 ### M7R - Architecture consolidation
 
-Status: `Ready` (owner-approved 2026-10-02; lead prompt
-`docs/milestones/M7R-task-lead-prompt.md`; execution plan to be written by the lead
-as `docs/milestones/M7R-architecture-consolidation.md`)
+Status: `Accepted` 2026-10-04 (execution plan
+`docs/milestones/M7R-architecture-consolidation.md`; completion report there; R0-R6
+accepted 2026-10-02/04; M9 hand-off `docs/milestones/M7R-to-M9-handoff.md`; lead prompt `docs/milestones/M7R-task-lead-prompt.md`)
 
 Dependencies: accepted M0-M7.7 and the committed M7.8 checkpoint.
 
@@ -1005,10 +1025,58 @@ Acceptance gate: mesh shaders produce matching images and visibility identities 
 
 ### M9 - Temporal rendering and reconstruction
 
-Status: `Proposed`
+Status: `Accepted` (2026-10-06; lead prompt `docs/milestones/M9-task-lead-prompt.md`;
+execution plan and completion report `docs/milestones/M9-temporal-and-post.md`; hand-off
+`docs/milestones/M9-to-M7.9-handoff.md`; branch `m9-temporal`, PR #8)
+
+Outcome (2026-10-06):
+
+- **Delivered:** native-resolution motion vectors and previous transforms; matrix
+  jitter; native TAA with velocity-disagreement disocclusion, a still-trust gate and a
+  revealage-alpha reactive mask; histogram auto-exposure; dual-filter bloom; the
+  vendor-neutral `TemporalUpscaleInputs` contract; per-view, reset-policy graph
+  History.
+- **Defaults:** TAA, auto-exposure and bloom are now product defaults. Measurement
+  routes pin the M7R route, and the frozen set stays identical.
+- **Costs** (five-process native 4K): TAA about 0.25 ms of 0.40; bloom, exposure and
+  output about 0.22 ms of 0.50.
+- **F6 watch item closed:** +1.6% against M7R final, attributed to the velocity
+  targets and G8; no placement policy needed.
+- **Moved to M9b:** DLSS/FSR/XeSS providers, dynamic resolution and SDK negotiation.
+- **Moved elsewhere:** skinned motion to M13 (the velocity contract is ready).
+  Stochastic-shadow and GTAO denoiser consumers go to M10, on the generic History
+  utilities.
+
+Director decisions (2026-10-04):
+
+- **Branching:** PR #7 (M7R) merges into `Render-Refactor-for-Modularity`; M9 branches
+  from there.
+- **F6 +1.8% GPU (VMA placement):** carried as a watch item, not a pre-slice. The
+  delta (~0.06 ms on a non-gating probe route) is smaller than the observed
+  environmental swing, and M9's new alias-eligible images will reshuffle placement
+  anyway. M9 bisects any regression by pass GPU ranges, and re-measures F6 at
+  acceptance; a placement policy (dedicated/aligned allocations for the refraction
+  pyramids and cluster buffers) is applied only if a placement-attributed regression
+  above 1% remains.
+- **Capture point under TAA:** the scene-linear (`scene`) capture stays **before**
+  TAA as the single-frame radiance domain. A TAA-off, jitter-off route is mandatory
+  and must reproduce the M7R frozen set byte-for-byte (refactor tier). TAA-on adds a
+  new post-TAA scene-linear capture domain (before bloom/exposure) plus the final
+  output; its fixtures use deterministic per-view jitter sequences and measured
+  envelopes (feature tier).
+- **Scope split:** M9 delivers native-resolution motion vectors, jitter, TAA,
+  reactive handling, bloom, and auto-exposure, plus the vendor-neutral
+  super-resolution input contract. DLSS/FSR/XeSS integration and dynamic resolution
+  move to **M9b**, scheduled before M11 (the RT tier is their consumer). Generic
+  reprojection/history utilities land in M9; their stochastic-shadow/GTAO consumers
+  land in M10.
 
 Dependencies: M1, M2, M7R, and the current/previous transform data already provided
-by the accepted M7.1/M7.2 GPU scene. Scheduled immediately after M7R (2026-10-02).
+by the accepted M7.1/M7.2 GPU scene. Scheduled immediately after M7R (2026-10-02). M7R is accepted (2026-10-04). Its hand-off
+(`docs/milestones/M7R-to-M9-handoff.md`) notes that the GPU scene's previous transform
+changes only when the transform changes (a stopped object keeps stale motion), that
+direct-packet draws carry no previous matrix, and that graph History is not yet keyed
+per view. M9 closes these first.
 As the raster target is native 4K, M9's first production deliverable is native-
 resolution temporal AA plus motion vectors; sub-native reconstruction serves the RT
 tier.
@@ -1028,6 +1096,65 @@ Deliverables:
 
 Acceptance gate: high-quality reconstruction is stable in motion, transparencies provide appropriate reactive behavior, and displayed versus base-render frame rates are reported separately.
 
+### M9b - Super-resolution providers and dynamic resolution
+
+Status: `Planned` (defined at M9 acceptance, 2026-10-06; scheduled before M11)
+
+Scope:
+
+- **Providers:** DLSS first, then FSR and XeSS, behind a temporal-resolve provider
+  interface (native TAA is provider 0). Each consumes `TemporalUpscaleInputs`
+  unchanged. Each SDK needs owner approval of the library and its licence first.
+- **Render/output split:** the resolve writes output-extent history; bloom, exposure
+  and the output run at output extent.
+- **Jitter and LOD bias:** the jitter sequence length scales with the upscale ratio;
+  texture LOD bias follows the ratio.
+- **Dynamic resolution:** a viewport-rect path through fixed-size graph targets, so a
+  render-extent change does not rebuild History.
+- **Masks:** a transparency-composition mask, and reactive refinements (layered tiers,
+  wide soft particles).
+- **Evidence:** motion evaluation against 64-phase references at output resolution,
+  five-process admission, and the TAA-off frozen identity.
+
+Dependencies: M9 (accepted). Consumer: the M11 RT tier.
+
+### M9c - Camera and post-process stack
+
+Status: `Proposed` (owner decision 2026-10-07: scheduled after M7.9-M7.12, before M8)
+
+Dependencies: M4 scene/editor identity and transactions, M9 motion vectors, depth,
+TAA, auto-exposure and bloom, ADR-0002 (one output transform).
+
+Effects are parameterized by a scene-owned camera and post-process volumes, so the
+volume and camera system comes first and every later effect reads from it.
+
+Deliverables, in order:
+
+1. **Physical camera and post-process volumes.** A camera component with aperture,
+   shutter, ISO, focal length, sensor size and focus distance; global and bounded
+   post-process volumes with priority, blend weight and falloff, serialized with the
+   scene and editable through transactions. Today's Project Settings exposure, bloom
+   and TAA values become the project defaults that volumes override. Physical-camera
+   exposure (EV100 from aperture, shutter and ISO) is selectable beside auto-exposure.
+2. **Colour grading.** White balance, ASC CDL (slope, offset, power, saturation),
+   lift/gamma/gain and authored 3D grading LUTs, applied scene-referred in ACEScct
+   before the single ACES 2.0 output transform. The output operator stays a project
+   and display decision (ADR-0002); an alternative operator such as AgX would be a
+   project-level option, never per volume.
+3. **Motion blur.** Shutter-driven per-object and camera blur from M9 velocity
+   (tile-based maximum-velocity dilation and reconstruction), consistent with TAA and
+   reactive transparency.
+4. **Depth of field.** Physically based, aperture-driven bokeh with correct near and
+   far fields, TAA-compatible sampling and bounded cost at native 4K.
+5. **Lens effects.** Chromatic aberration, vignette, film grain and physically
+   motivated lens flare (bloom-convolution or ghost-based, not sprite-only), each
+   per volume and off by default where it is a stylistic choice.
+
+Acceptance gate: volumes blend deterministically and round-trip through scene
+serialization; grading is scene-referred and consistent across SDR and HDR; motion
+blur and DoF pass five-process feature admission with matched 4K timing and image
+evidence; and the TAA-off frozen set stays byte-identical with every effect disabled.
+
 ### M10 - Non-ray-traced GI production paths
 
 Status: `Proposed`
@@ -1037,6 +1164,15 @@ Dependencies: M3, M5, M9 as appropriate.
 Deliverables:
 
 - Production-ready selection of baked lightmaps, irradiance probes/volumes, screen-space techniques, and probe updates.
+- **Area lights** (owner request 2026-10-07): sphere, tube/capsule, rectangle and
+  disk light components with LTC-class diffuse and specular, energy-consistent with
+  the shared BSDF library, clustered with the existing light records, and shadowed
+  with penumbrae sized by the emitter. A light-shaped object (for example a glowing
+  cube) uses a light component for its direct lighting; emission alone only glows
+  and blooms.
+- **Emissive surfaces as indirect light:** emission contributes to probe, lightmap
+  and screen-space GI, so emissive objects light their surroundings indirectly; an
+  editor helper derives a matching area light from an emissive primitive.
 - GTAO-class high-quality horizon AO with depth/normal pyramids, optional bent
   normals, temporal/spatial filtering, multi-bounce compensation, and bounded
   diffuse/specular occlusion; measure FidelityFX CACAO as a Vulkan fallback.
@@ -1067,6 +1203,8 @@ Deliverables:
 - Progressive hybrid effects: physically sized area/contact-hardening shadows, RTAO,
   reflections, GI, colored transmission, and participating-media visibility as
   justified, sharing raster light/material semantics and quality controls.
+- Many-light and emissive-geometry sampling (ReSTIR-class), so emissive meshes act as
+  true light sources with ray-traced visibility.
 - Denoiser integration using correct motion/depth/normal/material demodulation inputs.
 - Reference/photo-mode path tracer for visual validation.
 
@@ -1085,6 +1223,9 @@ Deliverables:
 - A versioned, GUID-addressed source material graph with deterministic serialization,
   explicit migrations, copy/paste, comments/groups, search, validation, undo/redo,
   and recoverable autosave.
+- Editing existing materials and creating new ones (owner request 2026-10-07): any
+  imported material opens as an editable graph or instance that overrides its source
+  non-destructively, and new material assets are created from scratch or templates.
 - Nodes that compile into the existing standard, complex-forward, transparent, and
   RT-compatible closure contracts rather than introducing an editor-only shading
   representation.
@@ -1130,6 +1271,41 @@ motion vectors and shadows remain correct, graph edits hot-reload without corrup
 runtime state, and CPU/GPU animation cost scales with visible animated work and
 quality policy rather than every loaded clip or character.
 
+### M14 - Projects, runtime decoupling, and game packaging
+
+Status: `Proposed` (owner request 2026-10-07; scheduled after M11, before M12)
+
+Dependencies: M3 assets/DDC, M4 cooked runtime scenes and the runtime-only link
+boundary, the local asset library (project and local roots), and the then-current
+renderer.
+
+Deliverables:
+
+- **Projects.** A versioned project descriptor and a project browser: the editor
+  creates, opens and switches projects, each with its own asset roots, settings
+  (Project Settings move into the project), DDC and scenes, separate from the engine
+  installation; project templates.
+- **Runtime and editor decoupling.** The engine builds as separable libraries (core,
+  platform, assets runtime, scene runtime, renderer and RHI/Vulkan) plus a game-module
+  entry point. The editor, ImGui, importers, source parsers, cookers, qualification
+  harness and test oracles are editor-side only. A shipped game links none of them,
+  enforced by a build check from the start of this milestone.
+- **Shipping cook.** Reachability-based cooking from startup scenes into packaged,
+  compressed, versioned containers with prebuilt shader and pipeline caches, no
+  source assets, and a content manifest that refuses third-party content without a
+  recorded licence approval.
+- **Packaged runtime.** A standalone Windows executable with game configuration,
+  graphics and display settings, logging and crash reporting, version stamping, and a
+  clean-machine install layout.
+
+Acceptance gate: a sample game packages deterministically into a folder that runs on
+a clean machine without the editor, sources or DDC; the shipped binary contains no
+editor, importer or qualification code; and package size, cook time and startup time
+are measured and budgeted.
+
+Until M14, every milestone preserves the M4 runtime-only link boundary: runtime
+components and renderer code must not depend on editor, ImGui or importer code.
+
 ## Program controls
 
 M5 post-acceptance hardening is tracked in M5.12 (reflection resolution) and M5.13
@@ -1150,8 +1326,11 @@ optimization is accepted from those counters and matched imagery, not title FPS
 alone.
 
 Program schedule (owner decision 2026-10-02): **M7R architecture consolidation ->
-M9 temporal AA, motion vectors, bloom, and auto-exposure -> M7.9-M7.12 -> M8 ->
-M7.8 Virtual Shadow Maps resumed on meshlet caster submission -> M10 -> M11.** The
+M9 temporal AA, motion vectors, bloom, and auto-exposure (accepted 2026-10-06) ->
+M7.9-M7.12 -> M9c camera and post-process stack -> M8 -> M7.8 Virtual Shadow Maps
+resumed on meshlet caster submission -> M10 -> M9b super-resolution providers -> M11
+-> M14 projects and packaging -> M12 material editor -> M13 animation.** (M9c and M14
+added by the owner 2026-10-07.) The
 material editor follow-ups and the Porsche mixed-class glass ordering defect are
 deferred until after M7R/M9. Previously the order was M6 through M11. M12 material authoring and M13 animation
 graph work are intentionally placed afterward and must not expand active renderer

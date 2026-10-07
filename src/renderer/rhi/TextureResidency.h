@@ -1,7 +1,7 @@
 #pragma once
 
-#include "renderer/rhi/RenderHandles.h"
-#include "renderer/rhi/TextureTypes.h"
+#include "core/types/RenderHandles.h"
+#include "core/types/TextureTypes.h"
 
 #include <cstdint>
 #include <optional>

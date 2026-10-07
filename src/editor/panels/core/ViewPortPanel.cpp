@@ -615,7 +615,7 @@ void ViewportPanel::render(void* sceneTextureID, void* glassDepthTextureID,
         "Shadow Cascade", "Shadow Visibility", "Transparency Class",
         "Transparency Fallback", "Transparency Interval",
         "Transparency Pyramid Mip", "Transparency Layers",
-        "Transparency Overflow"
+        "Transparency Overflow", "Motion Vectors"
     };
     ImGui::SetNextItemWidth(180);
     ImGui::Combo("##renderMode", &currentRenderMode, items, IM_ARRAYSIZE(items));

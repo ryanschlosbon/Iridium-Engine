@@ -2,6 +2,7 @@
 #include "material/MaterialAuthoringPatch.h"
 #include "material/MaterialAuthoringPatch.h"
 #include "core/EngineLog.h"
+#include "core/tasks/TaskSystem.h"
 
 #include "assets/cooker/AssetCooker.h"
 #include "assets/cooker/CookReceipt.h"
@@ -78,37 +79,57 @@ namespace Iridium {
     } // namespace
 
     AssetThumbnailService::AssetThumbnailService(
+        Tasks::TaskSystem& tasks,
         std::filesystem::path assetRoot,
         std::filesystem::path ddcRoot,
         CookTarget target,
         EngineLog* log)
         : AssetThumbnailService(
+            tasks,
             std::move(assetRoot),
             std::make_shared<
                 LocalDerivedDataCache>(
-                    std::move(ddcRoot)),
+                    std::move(ddcRoot), tasks),
             std::move(target),
             log) {}
 
     AssetThumbnailService::AssetThumbnailService(
+        Tasks::TaskSystem& tasks,
         std::filesystem::path assetRoot,
         std::shared_ptr<LocalDerivedDataCache> cache,
         CookTarget target,
         EngineLog* log)
-        : assetRoot_(std::move(assetRoot)),
+        : AssetThumbnailService(
+            tasks,
+            std::vector<AssetRoot>{
+                AssetRoot{ "project", std::move(assetRoot) },
+            },
+            std::move(cache),
+            std::move(target),
+            log) {}
+
+    AssetThumbnailService::AssetThumbnailService(
+        Tasks::TaskSystem& tasks,
+        std::vector<AssetRoot> roots,
+        std::shared_ptr<LocalDerivedDataCache> cache,
+        CookTarget target,
+        EngineLog* log)
+        : roots_(std::move(roots)),
           cache_(std::move(cache)),
           target_(std::move(target)),
           importers_(
               createStandardAssetImporterRegistry()),
           log_(log) {
-        if (assetRoot_.empty() || !cache_) {
+        if (roots_.empty() ||
+            std::ranges::any_of(roots_, [](const AssetRoot& root) {
+                return root.path.empty();
+            }) ||
+            !cache_) {
             throw std::invalid_argument(
                 "Asset thumbnail service requires an asset root and DDC.");
         }
-        worker_ = std::jthread(
-            [this](std::stop_token stopToken) {
-                workerLoop(stopToken);
-            });
+        strand_ = std::make_unique<Tasks::FunctionStrand>(tasks,
+            Tasks::TaskPriority::Background, "asset.thumbnail.prepare");
     }
 
     AssetThumbnailService::~AssetThumbnailService() {
@@ -149,7 +170,7 @@ namespace Iridium {
             visibleRecords) {
         auto grouped =
             groupDemand(visibleRecords);
-        std::lock_guard lock(mutex_);
+        DrainLock lock(*this);
         if (shutdown_) return;
         visibleDemandByRoot_ =
             std::move(grouped);
@@ -162,7 +183,7 @@ namespace Iridium {
                 AssetCatalogRecord> records) {
         auto grouped =
             groupDemand(records);
-        std::lock_guard lock(mutex_);
+        DrainLock lock(*this);
         if (shutdown_) return;
         pinnedDemandByRoot_ =
             std::move(grouped);
@@ -171,7 +192,7 @@ namespace Iridium {
 
     void AssetThumbnailService::setViewerDemand(std::span<const AssetCatalogRecord> records) {
         auto grouped = groupDemand(records);
-        std::lock_guard lock(mutex_);
+        DrainLock lock(*this);
         if (shutdown_) return;
         viewerDemandByRoot_ = std::move(grouped);
         rebuildDemandLocked();
@@ -183,7 +204,7 @@ namespace Iridium {
                 AssetCatalogRecord> sourceRecords,
             std::optional<AssetGuid>
                 selectedAsset) {
-        std::lock_guard lock(mutex_);
+        DrainLock lock(*this);
         if (shutdown_) return;
         if (detailAsset_ == selectedAsset) {
             return;
@@ -199,7 +220,7 @@ namespace Iridium {
         detailAsset_ = selectedAsset;
         if (!selectedAsset ||
             selectedAsset->isNil()) {
-            condition_.notify_all();
+            drainRequested_ = true;
             return;
         }
         auto grouped =
@@ -236,7 +257,7 @@ namespace Iridium {
         stats_.queuedRoots =
             static_cast<uint32_t>(
                 jobs_.size());
-        condition_.notify_all();
+        drainRequested_ = true;
     }
 
     void AssetThumbnailService::
@@ -308,12 +329,12 @@ namespace Iridium {
                 demandedAssets_.size());
         stats_.active =
             activeRoot_.has_value();
-        condition_.notify_all();
+        drainRequested_ = true;
     }
 
     void AssetThumbnailService::invalidate(
         AssetGuid rootAssetGuid) {
-        std::lock_guard lock(mutex_);
+        DrainLock lock(*this);
         const auto demanded =
             demandByRoot_.find(rootAssetGuid);
         if (demanded ==
@@ -350,7 +371,7 @@ namespace Iridium {
         }
         stats_.queuedRoots =
             static_cast<uint32_t>(jobs_.size());
-        condition_.notify_all();
+        drainRequested_ = true;
     }
 
     void AssetThumbnailService::markPublished(
@@ -364,7 +385,7 @@ namespace Iridium {
 
     void AssetThumbnailService::markEvicted(
         AssetGuid assetGuid) {
-        std::lock_guard lock(mutex_);
+        DrainLock lock(*this);
         completedAssets_.erase(assetGuid);
         info_.erase(assetGuid);
         if (!demandedAssets_.contains(
@@ -390,7 +411,7 @@ namespace Iridium {
                 grouped.emplace(rootGuid, job);
                 queueMissingLocked(
                     std::move(grouped));
-                condition_.notify_all();
+                drainRequested_ = true;
                 break;
             }
         }
@@ -516,34 +537,47 @@ namespace Iridium {
             viewerDemandByRoot_.clear();
             demandedAssets_.clear();
         }
-        worker_.request_stop();
-        condition_.notify_all();
-        if (worker_.joinable()) {
-            worker_.join();
+        stop_.request_stop();
+        // Waits for the root in preparation, then for a cook in flight (its
+        // continuation finishes the root), then for any drain it posted.
+        strand_->waitIdle();
+        {
+            std::unique_lock lock(mutex_);
+            cookIdle_.wait(lock, [this] { return !cookInFlight_; });
         }
+        strand_->waitIdle();
     }
 
-    PreparedAssetThumbnailBatch
-        AssetThumbnailService::prepare(
-            const Job& job,
-            std::stop_token stopToken) {
-        PreparedAssetThumbnailBatch result{
-            .rootAssetGuid =
-                job.rootAssetGuid,
-        };
+    struct AssetThumbnailService::ThumbnailCook {
+        PreparedAssetThumbnailBatch result;
+        bool usedReceipt = false;
+        std::filesystem::path sourcePath;
+        std::shared_ptr<PreparedAssetCook> prepared;
+    };
+
+    // Phase 1, on the strand: metadata, receipt and cook preparation. Returns
+    // false when cook.result is already final (failed or deferred).
+    bool AssetThumbnailService::prepareCook(
+        const Job& job,
+        std::stop_token stopToken,
+        ThumbnailCook& cook) {
+        PreparedAssetThumbnailBatch& result = cook.result;
+        result.rootAssetGuid = job.rootAssetGuid;
         try {
+            const std::filesystem::path& recordRoot =
+                assetRootPathFor(roots_, job.rootRecord);
             const std::filesystem::path
                 sourcePath =
-                    assetRoot_ /
+                    recordRoot /
                     job.rootRecord.sourcePath;
             const std::filesystem::path
                 metadataPath =
-                    assetRoot_ /
+                    recordRoot /
                     job.rootRecord.metadataPath;
             if (!isInsideRoot(
-                    assetRoot_, sourcePath) ||
+                    recordRoot, sourcePath) ||
                 !isInsideRoot(
-                    assetRoot_, metadataPath)) {
+                    recordRoot, metadataPath)) {
                 throw std::runtime_error(
                     "Thumbnail source paths escape the registered asset root.");
             }
@@ -565,7 +599,7 @@ namespace Iridium {
                 warmPrepared =
                     tryPrepareAssetCookFromReceipt(
                         importers_, *cache_,
-                        assetRoot_,
+                        recordRoot,
                         job.rootRecord.sourcePath,
                         *metadata.metadata,
                         target_,
@@ -578,13 +612,13 @@ namespace Iridium {
                     "iridium.model") {
                 result.deferredReason =
                     "Preview will be generated after the model's first editor cook.";
-                return result;
+                return false;
             }
             PreparedAssetCook prepared =
                 usedReceipt
                 ? std::move(*warmPrepared)
                 : prepareAssetCook(
-                    importers_, assetRoot_,
+                    importers_, recordRoot,
                     job.rootRecord.sourcePath,
                     *metadata.metadata,
                     target_,
@@ -600,13 +634,33 @@ namespace Iridium {
                 throw std::runtime_error(
                     "Thumbnail preparation was cancelled.");
             }
-            auto sharedPrepared =
-                std::make_shared<PreparedAssetCook>(
-                    std::move(prepared));
-            DdcRequestResult cooked =
-                requestPreparedCook(
-                    *cache_, sharedPrepared,
-                    stopToken).get();
+            cook.usedReceipt = usedReceipt;
+            cook.sourcePath = sourcePath;
+            cook.prepared = std::make_shared<PreparedAssetCook>(
+                std::move(prepared));
+            return true;
+        }
+        catch (const std::exception& exception) {
+            result.diagnostic =
+                exception.what();
+        }
+        return false;
+    }
+
+    // Phase 2, the cook's continuation (M7R R5b.2: it replaced the blocking
+    // future get): artifact validation and thumbnail rasterization.
+    PreparedAssetThumbnailBatch
+        AssetThumbnailService::finishCook(
+            const Job& job,
+            std::stop_token stopToken,
+            ThumbnailCook& cook,
+            const DdcRequestResult& cooked) {
+        PreparedAssetThumbnailBatch result = std::move(cook.result);
+        const bool usedReceipt = cook.usedReceipt;
+        const std::filesystem::path& sourcePath = cook.sourcePath;
+        const std::shared_ptr<PreparedAssetCook>& sharedPrepared =
+            cook.prepared;
+        try {
             if ((cooked.status !=
                     DdcRequestStatus::Built &&
                  cooked.status !=
@@ -872,27 +926,40 @@ namespace Iridium {
         }
     }
 
-    void AssetThumbnailService::workerLoop(
-        std::stop_token stopToken) {
-#if defined(_WIN32)
-        // Thumbnail rasterization is opportunistic editor work. Large selected
-        // models must not compete at normal priority with the render/UI thread.
-        (void)SetThreadPriority(
-            GetCurrentThread(),
-            THREAD_PRIORITY_BELOW_NORMAL);
-#endif
-        while (!stopToken.stop_requested()) {
+    AssetThumbnailService::DrainLock::DrainLock(
+        AssetThumbnailService& service)
+        : service_(service) {
+        service_.mutex_.lock();
+    }
+
+    AssetThumbnailService::DrainLock::~DrainLock() {
+        // Posts the drain after unlocking, so the strand never waits on (or
+        // runs inline under) the service mutex.
+        const bool post = service_.drainRequested_ &&
+            !service_.drainScheduled_ && !service_.shutdown_ &&
+            !service_.jobs_.empty();
+        if (post) {
+            service_.drainScheduled_ = true;
+        }
+        service_.drainRequested_ = false;
+        service_.mutex_.unlock();
+        if (post) {
+            (void)service_.strand_->post(
+                [service = &service_] { service->drain(); });
+        }
+    }
+
+    void AssetThumbnailService::drain() {
+        // Thumbnail rasterization is opportunistic editor work: a Background
+        // strand of the task system (M7R R5b.2; it ran on a BELOW_NORMAL
+        // thread). One drain item runs the queued roots one at a time.
+        const std::stop_token stopToken = stop_.get_token();
+        for (;;) {
             Job job;
             {
-                std::unique_lock lock(mutex_);
-                condition_.wait(
-                    lock, stopToken,
-                    [this] {
-                        return shutdown_ ||
-                            !jobs_.empty();
-                    });
-                if (shutdown_ ||
-                    stopToken.stop_requested()) {
+                std::lock_guard lock(mutex_);
+                if (shutdown_ || jobs_.empty()) {
+                    drainScheduled_ = false;
                     return;
                 }
                 job = std::move(
@@ -911,168 +978,216 @@ namespace Iridium {
                         job.rootRecord
                             .sourcePath);
             }
-            PreparedAssetThumbnailBatch result =
-                prepare(job, stopToken);
-            if (log_) {
-                const std::string source =
-                    job.rootRecord.sourcePath;
-                if (stopToken.stop_requested()) {
-                    log_->warning(
-                        "Asset Thumbnail",
-                        "Thumbnail preparation cancelled: " +
-                            source);
+            auto cook = std::make_shared<ThumbnailCook>();
+            if (!prepareCook(job, stopToken, *cook)) {
+                if (!completeJob(job, std::move(cook->result), stopToken)) {
+                    return;
                 }
-                else if (!result.diagnostic.empty()) {
-                    log_->error(
-                        "Asset Thumbnail",
-                        "Thumbnail preparation failed for " +
-                            source + ": " +
-                            result.diagnostic);
-                }
-                else if (!result.deferredReason.empty()) {
-                    log_->info(
-                        "Asset Thumbnail",
-                        "Thumbnail deferred for " +
-                            source + ": " +
-                            result.deferredReason);
-                }
-                else {
-                    log_->info(
-                        "Asset Thumbnail",
-                        std::string(
-                            job.detail
-                            ? "Selected preview ready: "
-                            : "Thumbnails ready: ") +
-                            source);
-                }
+                continue;
             }
+            // The root waits for its cook without holding this strand: the
+            // cook's continuation finishes the root and resumes the drain
+            // (M7R R5b.2). The drain stays scheduled meanwhile, so roots
+            // still run one at a time.
             {
                 std::lock_guard lock(mutex_);
-                activeRoot_.reset();
-                if (shutdown_) return;
-                if (!result.deferredReason.empty() &&
-                    !job.detail) {
-                    for (const AssetCatalogRecord&
-                        record : job.records) {
-                        if (!demandedAssets_.contains(
-                                record.guid)) {
-                            continue;
-                        }
-                        completedAssets_.insert(
-                            record.guid);
-                        info_[record.guid] = {
+                cookInFlight_ = true;
+            }
+            const auto finished = [this, job, cook, stopToken](
+                const DdcRequestResult& cooked) {
+                PreparedAssetThumbnailBatch result =
+                    finishCook(job, stopToken, *cook, cooked);
+                if (completeJob(job, std::move(result), stopToken)) {
+                    // Posted before cookInFlight_ clears, so shutdown's
+                    // waitIdle sees it.
+                    (void)strand_->post([this] { drain(); });
+                }
+                std::lock_guard lock(mutex_);
+                cookInFlight_ = false;
+                cookIdle_.notify_all();
+            };
+            try {
+                (void)requestPreparedCook(
+                    *cache_, cook->prepared, stopToken, finished);
+            }
+            catch (const std::exception& exception) {
+                finished(DdcRequestResult{
+                    .status = DdcRequestStatus::Failed,
+                    .diagnostics = { CookDiagnostic{
+                        .code = "THUMBNAIL_COOK_REQUEST",
+                        .message = exception.what(),
+                    } },
+                });
+            }
+            return;
+        }
+    }
+
+    bool AssetThumbnailService::completeJob(const Job& job,
+        PreparedAssetThumbnailBatch result, std::stop_token stopToken) {
+        if (log_) {
+            const std::string source =
+                job.rootRecord.sourcePath;
+            if (stopToken.stop_requested()) {
+                log_->warning(
+                    "Asset Thumbnail",
+                    "Thumbnail preparation cancelled: " +
+                        source);
+            }
+            else if (!result.diagnostic.empty()) {
+                log_->error(
+                    "Asset Thumbnail",
+                    "Thumbnail preparation failed for " +
+                        source + ": " +
+                        result.diagnostic);
+            }
+            else if (!result.deferredReason.empty()) {
+                log_->info(
+                    "Asset Thumbnail",
+                    "Thumbnail deferred for " +
+                        source + ": " +
+                        result.deferredReason);
+            }
+            else {
+                log_->info(
+                    "Asset Thumbnail",
+                    std::string(
+                        job.detail
+                        ? "Selected preview ready: "
+                        : "Thumbnails ready: ") +
+                        source);
+            }
+        }
+        {
+            std::lock_guard lock(mutex_);
+            activeRoot_.reset();
+            if (shutdown_) {
+                drainScheduled_ = false;
+                return false;
+            }
+            if (!result.deferredReason.empty() &&
+                !job.detail) {
+                for (const AssetCatalogRecord&
+                    record : job.records) {
+                    if (!demandedAssets_.contains(
+                            record.guid)) {
+                        continue;
+                    }
+                    completedAssets_.insert(
+                        record.guid);
+                    info_[record.guid] = {
+                        .status =
+                            AssetThumbnailStatus::Unavailable,
+                        .diagnostic =
+                            result.deferredReason,
+                    };
+                }
+            }
+            auto thumbnail =
+                result.thumbnails.begin();
+            while (thumbnail !=
+                result.thumbnails.end()) {
+                const bool demanded =
+                    job.detail
+                    ? detailAsset_ ==
+                        std::optional(
+                            thumbnail->assetGuid)
+                    : demandedAssets_.contains(
+                        thumbnail->assetGuid);
+                if (!demanded) {
+                    thumbnail =
+                        result.thumbnails.erase(
+                            thumbnail);
+                    continue;
+                }
+                if (!job.detail) {
+                    completedAssets_.insert(
+                        thumbnail->assetGuid);
+                }
+                if (thumbnail->valid()) {
+                    ++stats_.thumbnailsProduced;
+                    if (!job.detail) {
+                        info_[thumbnail->assetGuid] = {
                             .status =
-                                AssetThumbnailStatus::Unavailable,
-                            .diagnostic =
-                                result.deferredReason,
+                                AssetThumbnailStatus::Prepared,
                         };
                     }
                 }
-                auto thumbnail =
-                    result.thumbnails.begin();
-                while (thumbnail !=
-                    result.thumbnails.end()) {
-                    const bool demanded =
-                        job.detail
-                        ? detailAsset_ ==
-                            std::optional(
-                                thumbnail->assetGuid)
-                        : demandedAssets_.contains(
-                            thumbnail->assetGuid);
-                    if (!demanded) {
-                        thumbnail =
-                            result.thumbnails.erase(
-                                thumbnail);
-                        continue;
-                    }
+                else {
+                    ++stats_.thumbnailsFailed;
                     if (!job.detail) {
-                        completedAssets_.insert(
-                            thumbnail->assetGuid);
-                    }
-                    if (thumbnail->valid()) {
-                        ++stats_.thumbnailsProduced;
-                        if (!job.detail) {
-                            info_[thumbnail->assetGuid] = {
-                                .status =
-                                    AssetThumbnailStatus::Prepared,
-                            };
-                        }
-                    }
-                    else {
-                        ++stats_.thumbnailsFailed;
-                        if (!job.detail) {
-                            info_[thumbnail->assetGuid] = {
-                                .status =
-                                    AssetThumbnailStatus::Failed,
-                                .diagnostic =
-                                    thumbnail->diagnostic,
-                            };
-                        }
-                    }
-                    ++thumbnail;
-                }
-                if (!result.diagnostic.empty() &&
-                    !job.detail) {
-                    for (const AssetCatalogRecord&
-                        record : job.records) {
-                        if (demandedAssets_.contains(
-                                record.guid)) {
-                            completedAssets_.insert(
-                                record.guid);
-                            ++stats_.thumbnailsFailed;
-                            info_[record.guid] = {
-                                .status =
-                                    AssetThumbnailStatus::Failed,
-                                .diagnostic =
-                                    result.diagnostic,
-                            };
-                        }
+                        info_[thumbnail->assetGuid] = {
+                            .status =
+                                AssetThumbnailStatus::Failed,
+                            .diagnostic =
+                                thumbnail->diagnostic,
+                        };
                     }
                 }
-                detailByRoot_[
-                    job.rootAssetGuid] = {
-                    .available =
-                        result.diagnostic.empty(),
-                    .sourceCookKey = result.sourceCookKey,
-                    .settingsJson =
-                        result.settingsJson,
-                    .materialSourceValues = result.materialSourceValues,
-                    .materialSources = result.materialSources,
-                    .dependencies =
-                        result.dependencies,
-                    .associations =
-                        result.associations,
-                    .transparencyDetails =
-                        result.transparencyDetails,
-                    .diagnostic =
-                        !result.diagnostic.empty()
-                        ? result.diagnostic
-                        : result.deferredReason,
-                };
-                if (!result.thumbnails.empty() ||
-                    !result.diagnostic.empty()) {
-                    results_.push_back(
-                        std::move(result));
-                }
-                const auto demand =
-                    demandByRoot_.find(
-                        job.rootAssetGuid);
-                if (demand !=
-                    demandByRoot_.end()) {
-                    std::map<AssetGuid, Job>
-                        grouped;
-                    grouped.emplace(
-                        demand->first,
-                        demand->second);
-                    queueMissingLocked(
-                        std::move(grouped));
-                }
-                stats_.queuedRoots =
-                    static_cast<uint32_t>(
-                        jobs_.size());
-                stats_.active = false;
+                ++thumbnail;
             }
+            if (!result.diagnostic.empty() &&
+                !job.detail) {
+                for (const AssetCatalogRecord&
+                    record : job.records) {
+                    if (demandedAssets_.contains(
+                            record.guid)) {
+                        completedAssets_.insert(
+                            record.guid);
+                        ++stats_.thumbnailsFailed;
+                        info_[record.guid] = {
+                            .status =
+                                AssetThumbnailStatus::Failed,
+                            .diagnostic =
+                                result.diagnostic,
+                        };
+                    }
+                }
+            }
+            detailByRoot_[
+                job.rootAssetGuid] = {
+                .available =
+                    result.diagnostic.empty(),
+                .sourceCookKey = result.sourceCookKey,
+                .settingsJson =
+                    result.settingsJson,
+                .materialSourceValues = result.materialSourceValues,
+                .materialSources = result.materialSources,
+                .dependencies =
+                    result.dependencies,
+                .associations =
+                    result.associations,
+                .transparencyDetails =
+                    result.transparencyDetails,
+                .diagnostic =
+                    !result.diagnostic.empty()
+                    ? result.diagnostic
+                    : result.deferredReason,
+            };
+            if (!result.thumbnails.empty() ||
+                !result.diagnostic.empty()) {
+                results_.push_back(
+                    std::move(result));
+            }
+            const auto demand =
+                demandByRoot_.find(
+                    job.rootAssetGuid);
+            if (demand !=
+                demandByRoot_.end()) {
+                std::map<AssetGuid, Job>
+                    grouped;
+                grouped.emplace(
+                    demand->first,
+                    demand->second);
+                queueMissingLocked(
+                    std::move(grouped));
+            }
+            stats_.queuedRoots =
+                static_cast<uint32_t>(
+                    jobs_.size());
+            stats_.active = false;
         }
+        return true;
     }
 
 } // namespace Iridium

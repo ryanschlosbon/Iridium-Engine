@@ -1,6 +1,6 @@
 #pragma once
 
-#include "assets/AssetGuid.h"
+#include "core/types/AssetGuid.h"
 #include "assets/cooker/CookTypes.h"
 #include "scene/SceneWorld.h"
 #include "scene/runtime/RuntimeComponentRegistry.h"

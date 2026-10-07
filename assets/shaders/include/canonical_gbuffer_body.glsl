@@ -1,6 +1,8 @@
 #include "include/scene_color.glsl"
 #include "include/packed_material.glsl"
 #include "include/material_normal.glsl"
+#define IRIDIUM_MOTION_FRAGMENT 1
+#include "include/motion_vectors.glsl"
 
 layout(location = 0) in vec4 fragColor;
 layout(location = 1) in vec2 fragTexCoord0;
@@ -41,6 +43,7 @@ layout(location = 1) out vec4 outDiffuseAo;
 layout(location = 2) out vec4 outEmissive;
 layout(location = 3) out vec4 outF0Roughness;
 layout(location = 4) out uint outMaterialFlags;
+layout(location = 5) out vec2 outVelocity;   // M9.1
 
 layout(push_constant) uniform CanonicalPushConstants {
     mat4 renderMatrix;
@@ -172,4 +175,5 @@ void main() {
 #else
     outMaterialFlags = packedFlags;
 #endif
+    outVelocity = iridiumMotionVector();
 }

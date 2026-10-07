@@ -14,6 +14,7 @@
 #include "editor/EditorSceneDocumentService.h"
 #include "editor/EditorSceneCommandService.h"
 #include "editor/EditorTransactionService.h"
+#include "assets/AssetDiscovery.h"
 #include "assets/runtime/AssetRuntimeService.h"
 
 #include <vector>
@@ -63,7 +64,8 @@ void EditorSystem::init(GLFWwindow* window, Iridium::CpuProfiler* cpuProfiler,
     Iridium::AssetRuntimeService* assetRuntimeService,
     Iridium::EngineLog* engineLog,
     Iridium::EditorSceneDocumentService* sceneDocumentService,
-    Iridium::EditorTransactionService* transactionService) {
+    Iridium::EditorTransactionService* transactionService,
+    Iridium::Tasks::TaskSystem* tasks) {
     // 1. INIT: All Vulkan Descriptor Pool and ImGui_ImplVulkan logic is gone!
     // The backend's init() function handles the heavy lifting now. We just create the panels.
 
@@ -100,7 +102,7 @@ void EditorSystem::init(GLFWwindow* window, Iridium::CpuProfiler* cpuProfiler,
         &transformSettings_));
     panels.push_back(std::make_unique<MenuBarPanel>(
         &selection_.primary, &uiState, sceneDocumentService,
-        transactionService, sceneCommands_.get()));
+        transactionService, sceneCommands_.get(), tasks));
     panels.push_back(std::make_unique<ProfilerPanel>(&uiState.showProfiler, cpuProfiler));
     panels.push_back(std::make_unique<MaterialDiagnosticsPanel>(
         &uiState.showMaterialDiagnostics, &selection_.primary));
@@ -130,7 +132,8 @@ void EditorSystem::init(GLFWwindow* window, Iridium::CpuProfiler* cpuProfiler,
         query.calculateTotalMatches = false;
         for (;;) {
             auto page = assetCatalog->query(query);
-            for (auto& record : page.records) if (record.assetRoot == "project") records.push_back(std::move(record));
+            for (auto& record : page.records)
+                if (Iridium::isProjectContentRoot(record.assetRoot)) records.push_back(std::move(record));
             if (page.records.size() < query.limit) break;
             query.offset += query.limit;
         }
@@ -169,6 +172,29 @@ void EditorSystem::setOutputTransportStatus(
     uiState.outputSettings.transportDiagnostic = std::move(diagnostic);
 }
 
+void EditorSystem::setTemporalAntiAliasingTuning(const Iridium::TemporalAntiAliasingTuning& tuning) {
+    uiState.outputSettings.taaTuning = tuning;
+}
+
+void EditorSystem::setAntiAliasingStatus(Iridium::AntiAliasingMode active,
+    std::string diagnostic) {
+    uiState.outputSettings.antiAliasing = active;
+    uiState.outputSettings.antiAliasingDiagnostic = std::move(diagnostic);
+}
+
+void EditorSystem::setExposureStatus(Iridium::ExposureMode mode,
+    const Iridium::AutoExposureSettings& settings, std::string diagnostic) {
+    uiState.outputSettings.exposureMode = mode;
+    uiState.outputSettings.autoExposure = settings;
+    uiState.outputSettings.exposureDiagnostic = std::move(diagnostic);
+}
+
+void EditorSystem::setBloomStatus(const Iridium::BloomSettings& active,
+    std::string diagnostic) {
+    uiState.outputSettings.bloom = active;
+    uiState.outputSettings.bloomDiagnostic = std::move(diagnostic);
+}
+
 bool EditorSystem::consumeShadowSettings(
     Iridium::ProjectShadowSettings& settings) {
     if (!uiState.shadowSettingsChanged) return false;
@@ -200,7 +226,7 @@ void EditorSystem::update(Registry& registry, Iridium::AssetManager* assetManage
     float sceneAspect) {
 
     // NOTE: ImGui_ImplVulkan_NewFrame(), ImGui_ImplGlfw_NewFrame(), and ImGui::NewFrame()
-    // are now handled by renderBackend->beginUI() in Application.cpp BEFORE calling this function!
+    // are now handled by the editor bridge's beginUI() in Application.cpp BEFORE calling this function!
 
     selection_.reconcile(registry);
     const ImGuiViewport* mainViewport =

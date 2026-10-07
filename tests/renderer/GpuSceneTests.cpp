@@ -1,6 +1,7 @@
 #include "renderer/rhi/GpuScene.h"
 #include "renderer/rhi/GpuSceneUploadPlanner.h"
 #include "renderer/scene/GpuScenePublisher.h"
+#include "qualification/LegacyGpuSceneMembershipHash.h"
 
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -9,6 +10,7 @@
 #include <cstring>
 #include <iostream>
 #include <limits>
+#include <random>
 
 namespace {
     using namespace Iridium;
@@ -284,6 +286,74 @@ namespace {
         return result;
     }
 
+    // M9 G3: "previous" is last frame's transform. The pass after a move,
+    // a stopped instance's previous slot is set to current (2d + 1 only), and
+    // the steady frame after that takes the unchanged fast path again.
+    bool publisherSettlesStoppedTransforms() {
+        GpuSceneCapacity capacity{ 8, 16, 8, 16 };
+        GpuScenePublisher publisher(capacity);
+        std::array<GpuSceneObservedInstance, 2> inputs{
+            observed("019fb73d-5a60-7000-8000-000000000060",
+                "019fb73d-5a60-7000-8000-000000000061"),
+            observed("019fb73d-5a60-7000-8000-000000000062",
+                "019fb73d-5a60-7000-8000-000000000063") };
+        const auto sync = [&](uint64_t serial) -> const GpuScenePackedTables& {
+            return publisher.synchronize(1, std::span(inputs), serial, 0);
+        };
+        (void)sync(1);
+        (void)sync(2);
+        CHECK(publisher.stats().unchangedFastPath == 1);
+
+        // Frame 3: instance 0 moves; previous = the old transform.
+        inputs[0].worldTransform = glm::translate(glm::mat4(1.0f), { 2.0f, 0.0f, 0.0f });
+        ++inputs[0].observationRevision;
+        const GpuScenePackedTables& moved = sync(3);
+        CHECK(publisher.stats().settledTransforms == 0);
+        const uint32_t current = moved.instances[0].references.x;
+        const uint32_t previous = moved.instances[0].references.y;
+        CHECK(transformGpuScenePoint(moved.transforms[current], {}).x == 2.0f);
+        CHECK(transformGpuScenePoint(moved.transforms[previous], {}).x == 0.0f);
+        const auto movedRevisions = moved.transformRevisions;
+        const auto movedInstanceRevisions = moved.instanceRevisions;
+
+        // Frame 4: nothing moves. Not the fast path: instance 0 settles.
+        const GpuScenePackedTables& settled = sync(4);
+        CHECK(publisher.stats().unchangedFastPath == 0);
+        CHECK(publisher.stats().settledTransforms == 1);
+        CHECK(publisher.stats().changedTransforms == 1);
+        CHECK(publisher.stats().changedInstances == 0);
+        CHECK(transformGpuScenePoint(settled.transforms[previous], {}).x == 2.0f);
+        CHECK(std::memcmp(&settled.transforms[previous], &settled.transforms[current],
+            sizeof(GpuSceneAffineTransform)) == 0);
+        // Only the previous slot's revision moved; the current slot (which
+        // the shadow/probe watermarks read) and every instance record did not.
+        CHECK(settled.transformRevisions[current] == movedRevisions[current]);
+        CHECK(settled.transformRevisions[previous] != movedRevisions[previous]);
+        for (size_t index = 0; index < movedRevisions.size(); ++index)
+            if (index != previous)
+                CHECK(settled.transformRevisions[index] == movedRevisions[index]);
+        CHECK(settled.instanceRevisions == movedInstanceRevisions);
+
+        // Frame 5: steady again.
+        (void)sync(5);
+        CHECK(publisher.stats().unchangedFastPath == 1);
+        CHECK(publisher.stats().settledTransforms == 0);
+
+        // Continuous motion never settles; it settles once it stops.
+        for (uint64_t frame = 6; frame < 10; ++frame) {
+            inputs[1].worldTransform = glm::translate(glm::mat4(1.0f),
+                { 0.0f, static_cast<float>(frame), 0.0f });
+            ++inputs[1].observationRevision;
+            (void)sync(frame);
+            CHECK(publisher.stats().settledTransforms == 0);
+        }
+        (void)sync(10);
+        CHECK(publisher.stats().settledTransforms == 1);
+        (void)sync(11);
+        CHECK(publisher.stats().unchangedFastPath == 1);
+        return true;
+    }
+
     bool publisherIsSparseAndRevisionIsolated() {
         GpuSceneCapacity capacity{ 8, 16, 8, 16 };
         GpuScenePublisher publisher(capacity);
@@ -328,7 +398,10 @@ namespace {
         ++input.observationRevision;
         const auto& materialEdited = publisher.synchronize(
             1, std::span(&input, 1), 6, 0);
-        CHECK(publisher.stats().changedTransforms == 0);
+        // M9 G3: the pass after the move settles the stopped instance's
+        // previous transform (one transform record).
+        CHECK(publisher.stats().changedTransforms == 1);
+        CHECK(publisher.stats().settledTransforms == 1);
         CHECK(publisher.stats().changedGeometries == 0);
         CHECK(publisher.stats().changedPrimitives == 1);
         CHECK(materialEdited.geometryRevisions == geometryRevisions);
@@ -610,6 +683,143 @@ namespace {
         CHECK(scene.probeConsumerPrimitiveIndices.empty());
         return true;
     }
+
+    // M7R R5c.5: the membership revisions advance in exactly the calls where
+    // the retired FNV-1a revision changed, under random mutations of every
+    // hashed field, of fields the hash ignores (bounds, transforms, mobility,
+    // dense identity indices) and of the lists themselves.
+    bool membershipRevisionChangesExactlyWithLegacyHash() {
+        std::mt19937_64 random(5150);
+        const auto pick = [&random](uint32_t count) {
+            return static_cast<uint32_t>(random() % count);
+        };
+        uint64_t compared = 0, changed = 0;
+        for (uint32_t sequence = 0; sequence < 64u; ++sequence) {
+            GpuScenePackedTables scene;
+            scene.sceneEpoch = 1u + pick(3);
+            const uint32_t instanceCount = 1u + pick(6);
+            const uint32_t geometryCount = 1u + pick(6);
+            scene.instances.resize(instanceCount);
+            for (auto& instance : scene.instances) {
+                instance.state = { 1u + pick(3), pick(3),
+                    packGpuSceneInstanceFlags(GpuSceneInstanceEnabled, pick(4)),
+                    GpuSceneConsumerMainOpaque | GpuSceneConsumerShadow |
+                        GpuSceneConsumerProbe };
+            }
+            scene.geometries.resize(geometryCount);
+            scene.geometryRevisions.resize(geometryCount);
+            for (uint32_t index = 0; index < geometryCount; ++index) {
+                auto& geometry = scene.geometries[index];
+                geometry.draw = { pick(64), 3u + pick(64), pick(16), pick(2) };
+                geometry.storage = { pick(8), pick(8), pick(4), 1u };
+                // Coarser links point forward, or nowhere.
+                geometry.state = { 1u + pick(2), index,
+                    index + 1u < geometryCount && pick(2) == 0u
+                        ? index + 1u : InvalidGpuSceneIndex, pick(4) };
+                scene.geometryRevisions[index] = 1u + pick(4);
+            }
+            const uint32_t primitiveCount = 1u + pick(12);
+            scene.primitives.resize(primitiveCount);
+            for (uint32_t index = 0; index < primitiveCount; ++index) {
+                auto& primitive = scene.primitives[index];
+                primitive.binding = { pick(instanceCount), pick(geometryCount),
+                    1u + pick(4), 1u + pick(3) };
+                primitive.state = { 1u + pick(2), pick(4), index,
+                    GpuSceneConsumerShadow | GpuSceneConsumerProbe |
+                        (pick(2) == 0u ? GpuSceneConsumerMainOpaque :
+                            GpuSceneConsumerForwardOpaque) };
+                primitive.revisions = { 0u, pick(3), pick(5), pick(3) };
+            }
+            scene.transforms.resize(instanceCount * 2u);
+
+            uint64_t shadowHash = 0, probeHash = 0, mainHash = 0;
+            uint64_t shadowRevision = 0, probeRevision = 0, mainRevision = 0;
+            for (uint32_t step = 0; step < 96u; ++step) {
+                if (step != 0u) {
+                    // One to three mutations; many touch nothing hashed.
+                    const uint32_t mutations = 1u + pick(3);
+                    for (uint32_t mutation = 0; mutation < mutations; ++mutation) {
+                        auto& instance = scene.instances[pick(instanceCount)];
+                        auto& primitive = scene.primitives[pick(primitiveCount)];
+                        const uint32_t geometryIndex = pick(geometryCount);
+                        auto& geometry = scene.geometries[geometryIndex];
+                        switch (pick(30)) {
+                        case 0: instance.state.x ^= 1u; break;
+                        case 1: instance.state.y ^= 1u; break;            // not hashed
+                        case 2: instance.state.z = packGpuSceneInstanceFlags(
+                            GpuSceneInstanceEnabled, pick(4)); break;
+                        case 3: instance.state.z ^= GpuSceneInstanceEnabled; break;
+                        case 4: instance.state.w ^= GpuSceneConsumerProbe; break;
+                        case 5: instance.worldBoundsSphere.x += 1.0f; break;  // not hashed
+                        case 6: primitive.binding.z = 1u + pick(4); break;
+                        case 7: primitive.binding.y = pick(geometryCount); break;
+                        case 8: primitive.state.y ^= GpuScenePrimitiveAlphaMask; break;
+                        case 9: primitive.state.z += 7u; break;             // not hashed
+                        case 10: primitive.state.w ^= GpuSceneConsumerShadow; break;
+                        case 11: primitive.revisions.z += 1u; break;
+                        case 12: primitive.revisions.w += 1u; break;
+                        case 13: geometry.draw.y += 3u; break;
+                        case 14: geometry.storage.x ^= 2u; break;
+                        case 15: geometry.state.y += 5u; break;             // not hashed
+                        case 16: geometry.localBoundsMin.x -= 1.0f; break;  // not hashed
+                        case 17: geometry.state.z = geometryIndex + 1u < geometryCount &&
+                            geometry.state.z == InvalidGpuSceneIndex
+                                ? geometryIndex + 1u : InvalidGpuSceneIndex; break;
+                        case 18: ++scene.geometryRevisions[geometryIndex]; break;
+                        case 19: scene.transforms[pick(instanceCount * 2u)].row0.w +=
+                            1.0f; break;                                    // not hashed
+                        case 20: if (pick(8) == 0u) ++scene.sceneEpoch; break;
+                        case 21: primitive.binding.x = pick(instanceCount); break;
+                        case 22: geometry.state.w += 1u; break;
+                        case 23: primitive.binding.w = 1u + pick(3); break;
+                        case 24: primitive.revisions.y = pick(3); break;
+                        case 25: geometry.draw.z ^= 1u; break;
+                        case 26: primitive.state.w ^= GpuSceneConsumerMainOpaque |
+                            GpuSceneConsumerForwardOpaque; break;
+                        case 27: instance.state.w ^= GpuSceneConsumerMainOpaque; break;
+                        default: break;                                     // no-op call
+                        }
+                    }
+                }
+                publishGpuSceneConsumerMembership(scene);
+                const uint64_t newShadowHash = legacyGpuSceneMembershipHash(scene,
+                    GpuSceneConsumerShadow, scene.shadowConsumerPrimitiveIndices);
+                const uint64_t newProbeHash = legacyGpuSceneMembershipHash(scene,
+                    GpuSceneConsumerProbe, scene.probeConsumerPrimitiveIndices);
+                const uint64_t newMainHash = legacyGpuSceneMembershipHash(scene,
+                    GpuSceneConsumerMainOpaque,
+                    scene.mainOpaqueConsumerPrimitiveIndices);
+                CHECK(scene.mainOpaqueConsumerMembershipRevision != 0u);
+                CHECK(scene.shadowConsumerMembershipRevision != 0u);
+                CHECK(scene.probeConsumerMembershipRevision != 0u);
+                if (step != 0u) {
+                    CHECK((newShadowHash != shadowHash) ==
+                        (scene.shadowConsumerMembershipRevision != shadowRevision));
+                    CHECK((newProbeHash != probeHash) ==
+                        (scene.probeConsumerMembershipRevision != probeRevision));
+                    CHECK((newMainHash != mainHash) ==
+                        (scene.mainOpaqueConsumerMembershipRevision != mainRevision));
+                    compared += 2u;
+                    changed += (newShadowHash != shadowHash ? 1u : 0u) +
+                        (newProbeHash != probeHash ? 1u : 0u);
+                }
+                // The two lists never share a revision value.
+                CHECK(scene.shadowConsumerMembershipRevision !=
+                    scene.probeConsumerMembershipRevision);
+                shadowHash = newShadowHash;
+                probeHash = newProbeHash;
+                mainHash = newMainHash;
+                mainRevision = scene.mainOpaqueConsumerMembershipRevision;
+                shadowRevision = scene.shadowConsumerMembershipRevision;
+                probeRevision = scene.probeConsumerMembershipRevision;
+            }
+        }
+        // Both relations must actually be exercised.
+        CHECK(changed > compared / 8u && changed < compared - compared / 8u);
+        std::cout << "  membership: " << compared << " comparisons, " << changed
+            << " changes, identical change relation\n";
+        return true;
+    }
 }
 
 int main() {
@@ -623,6 +833,7 @@ int main() {
         { "uncertainty and overflow fail to direct path", uncertaintyAndOverflowFailToDirectPath },
         { "publisher is sparse and revision isolated",
             publisherIsSparseAndRevisionIsolated },
+        { "publisher settles stopped transforms", publisherSettlesStoppedTransforms },
         { "publisher retirement prevents ABA", publisherRetirementPreventsAba },
         { "publisher shares and safely revises LOD geometry", publisherLodGeometryIsSharedAndRevisionSafe },
         { "publisher revises relocated dense references",
@@ -633,6 +844,8 @@ int main() {
             consumerPrimitiveCollectionIsCameraIndependent },
         { "published consumer membership revisions are transform independent",
             publishedConsumerMembershipRevisionsAreTransformIndependent },
+        { "membership revision changes exactly with the legacy hash",
+            membershipRevisionChangesExactlyWithLegacyHash },
     };
     size_t passed = 0;
     for (const Test& test : tests) {

@@ -2,6 +2,7 @@
 
 #include "Entity.h"
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <limits>
@@ -87,6 +88,23 @@ public:
     virtual void* getVoid(Entity entity) = 0;
 };
 
+// M7R R5c.5: what a change-driven consumer (the GPU-scene observation) needs
+// to know about a pool between two of its reads.
+struct ComponentWriteJournal {
+    // Advanced whenever the dense order changes (a new component, a removal,
+    // clear), whether or not recording is enabled.
+    uint64_t structureRevision = 0;
+    // Opt-in (the consumer enables it): every mutable access through the pool
+    // (non-const get, getVoid, add replacing a component) appends the entity,
+    // duplicates included. The consumer reads and clears the list. Past a
+    // bound recording stops and `overflowed` is set; the consumer then treats
+    // every entity as written. Writes through `components` directly, or
+    // through a reference kept from an earlier access, are not recorded.
+    bool enabled = false;
+    bool overflowed = false;
+    std::vector<Entity> writtenEntities;
+};
+
 template<typename T>
 class ComponentPool : public IComponentPool {
 public:
@@ -96,6 +114,7 @@ public:
     // at the resulting slot is the generation authority. Demand-allocated pages
     // avoid hash nodes without allowing a recycled index to alias stale data.
     PagedSparseIndex sparseIndex;
+    ComponentWriteJournal journal;
 
     T& add(Entity entity, T component) {
         const uint32_t existing = sparseIndex.get(entity.index());
@@ -104,6 +123,7 @@ public:
                 throw std::logic_error(
                     "Component pool contains a stale generation for entity index");
             }
+            recordWrite(entity);
             components[existing] = std::move(component);
             return components[existing];
         }
@@ -118,6 +138,7 @@ public:
             components.pop_back();
             throw;
         }
+        ++journal.structureRevision;
         return components.back();
     }
 
@@ -126,6 +147,7 @@ public:
         if (found == PagedSparseIndex::Empty || entities[found] != entity) {
             throw std::out_of_range("Component does not exist for entity handle");
         }
+        recordWrite(entity);
         return components[found];
     }
 
@@ -156,19 +178,33 @@ public:
         components.pop_back();
         entities.pop_back();
         sparseIndex.erase(entity.index());
+        ++journal.structureRevision;
     }
 
     void* getVoid(Entity entity) override {
         const uint32_t found = sparseIndex.get(entity.index());
-        return found == PagedSparseIndex::Empty || entities[found] != entity
-            ? nullptr
-            : &components[found];
+        if (found == PagedSparseIndex::Empty || entities[found] != entity)
+            return nullptr;
+        recordWrite(entity);
+        return &components[found];
     }
 
     void clear() override {
         components.clear();
         entities.clear();
         sparseIndex.clear();
+        ++journal.structureRevision;
+    }
+
+private:
+    void recordWrite(Entity entity) {
+        if (!journal.enabled || journal.overflowed) return;
+        if (journal.writtenEntities.size() >=
+                (std::max)(size_t{ 4096 }, entities.size() * 4u)) {
+            journal.overflowed = true;
+            return;
+        }
+        journal.writtenEntities.push_back(entity);
     }
 };
 

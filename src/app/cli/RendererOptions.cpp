@@ -1,0 +1,489 @@
+#include "app/cli/ApplicationCliOptions.h"
+
+#include "app/ApplicationConfig.h"
+#include "app/cli/CliValueParsers.h"
+
+#include <array>
+#include <charconv>
+#include <cmath>
+#include <stdexcept>
+#include <string>
+#include <system_error>
+
+namespace Iridium::AppCli {
+
+    namespace {
+
+        double parseExposure(std::string_view text) {
+            double value = 0.0;
+            const auto [end, error] = std::from_chars(
+                text.data(), text.data() + text.size(), value);
+            if (error != std::errc{} || end != text.data() + text.size() ||
+                !std::isfinite(value) || value < -16.0 || value > 16.0) {
+                throw std::invalid_argument(
+                    "--exposure-ev requires a finite value in [-16, 16]");
+            }
+            return value;
+        }
+
+        // Shadow/GPU/probe LOD caps share one shape: "<name> requires 0..15".
+        uint32_t parseLodLevel(std::string_view text, const char* option) {
+            const uint64_t level = parseUnsigned(text, option);
+            if (level > 15u) {
+                throw std::invalid_argument(std::string(option) + " requires 0..15");
+            }
+            return static_cast<uint32_t>(level);
+        }
+
+        // Exactly N finite comma-separated numbers (nothing before, between
+        // or after them), or `message`.
+        template <size_t N>
+        std::array<float, N> parseNumberList(std::string_view value, const char* message) {
+            std::array<float, N> numbers{};
+            for (size_t index = 0; index < N; ++index) {
+                const size_t comma = value.find(',');
+                if ((comma == std::string_view::npos) != (index + 1 == N))
+                    throw std::invalid_argument(message);
+                const std::string_view part = value.substr(0, comma);
+                const auto [end, error] = std::from_chars(part.data(),
+                    part.data() + part.size(), numbers[index]);
+                if (error != std::errc{} || end != part.data() + part.size() ||
+                    !std::isfinite(numbers[index]))
+                    throw std::invalid_argument(message);
+                if (comma != std::string_view::npos) value.remove_prefix(comma + 1);
+            }
+            return numbers;
+        }
+
+    } // namespace
+
+    void registerRendererOptions(Cli::CliOptionRegistry& registry,
+        ApplicationConfig& config) {
+        const std::string_view owner = kRendererOwner;
+        ApplicationConfig& c = config;
+
+        addValueOption(registry, owner, "--cluster-tile-size", "SIZE",
+            "Diagnostic bake-off: 16 or 32 (default) pixels",
+            "--cluster-tile-size requires 16 or 32",
+            [&c](std::string_view value) {
+                const uint64_t size = parseUnsigned(value, "--cluster-tile-size");
+                if (size != 16 && size != 32) {
+                    throw std::invalid_argument("--cluster-tile-size requires 16 or 32");
+                }
+                c.clusterTileSize = static_cast<uint32_t>(size);
+            });
+        addValueOption(registry, owner, "--cluster-depth-slices", "COUNT",
+            "Diagnostic bake-off: 24 (default) or 32 logarithmic slices",
+            "--cluster-depth-slices requires 24 or 32",
+            [&c](std::string_view value) {
+                const uint64_t slices = parseUnsigned(value, "--cluster-depth-slices");
+                if (slices != 24 && slices != 32) {
+                    throw std::invalid_argument("--cluster-depth-slices requires 24 or 32");
+                }
+                c.clusterDepthSlices = static_cast<uint32_t>(slices);
+            });
+        addValueOption(registry, owner, "--shadow-directional-resolution", "SIZE",
+            "Directional map size: 512, 1024, 2048, or 4096",
+            "--shadow-directional-resolution requires 512, 1024, 2048, or 4096",
+            [&c](std::string_view value) {
+                const uint64_t resolution =
+                    parseUnsigned(value, "--shadow-directional-resolution");
+                if (resolution != 512 && resolution != 1024 &&
+                    resolution != 2048 && resolution != 4096) {
+                    throw std::invalid_argument(
+                        "--shadow-directional-resolution requires 512, 1024, 2048, or 4096");
+                }
+                c.shadowSettings.directionalResolution = static_cast<uint32_t>(resolution);
+            });
+        addValueOption(registry, owner, "--shadow-directional-lights", "COUNT",
+            "Concurrent shadowed directional lights: 1 or 2",
+            "--shadow-directional-lights requires 1 or 2",
+            [&c](std::string_view value) {
+                const uint64_t count = parseUnsigned(value, "--shadow-directional-lights");
+                if (count == 0 || count > kDirectionalShadowLightCapacity) {
+                    throw std::invalid_argument("--shadow-directional-lights requires 1 or 2");
+                }
+                c.shadowSettings.maximumDirectionalLights = static_cast<uint32_t>(count);
+            });
+        addValueOption(registry, owner, "--shadow-directional-source-diameter", "DEGREES",
+            "Directional emitter diameter: 0 to 5 degrees",
+            "--shadow-directional-source-diameter requires degrees in [0, 5]",
+            [&c](std::string_view value) {
+                c.shadowSettings.directionalSourceAngularDiameterDegrees =
+                    static_cast<float>(parseFiniteRange(value,
+                        "--shadow-directional-source-diameter", 0.0, 5.0));
+            });
+        addValueOption(registry, owner, "--shadow-directional-distance", "METRES",
+            "Maximum camera-relative directional shadow coverage",
+            "--shadow-directional-distance requires metres in [1, 100000]",
+            [&c](std::string_view value) {
+                c.shadowSettings.directionalMaximumDistanceMeters =
+                    static_cast<float>(parseFiniteRange(value,
+                        "--shadow-directional-distance", 1.0, 100'000.0));
+            });
+        addValueOption(registry, owner, "--shadow-directional-receiver-bias", "TEXELS",
+            "Constant receiver-depth bias: 0 to 8 shadow texels",
+            "--shadow-directional-receiver-bias requires shadow texels in [0, 8]",
+            [&c](std::string_view value) {
+                c.shadowSettings.directionalReceiverDepthBiasTexels =
+                    static_cast<float>(parseFiniteRange(value,
+                        "--shadow-directional-receiver-bias", 0.0, 8.0));
+            });
+        addValueOption(registry, owner, "--shadow-directional-receiver-plane-clamp", "TEXELS",
+            "Receiver-plane correction clamp: 0 to 8 shadow texels",
+            "--shadow-directional-receiver-plane-clamp requires shadow texels in [0, 8]",
+            [&c](std::string_view value) {
+                c.shadowSettings.directionalReceiverPlaneClampTexels =
+                    static_cast<float>(parseFiniteRange(value,
+                        "--shadow-directional-receiver-plane-clamp", 0.0, 8.0));
+            });
+        addValueOption(registry, owner, "--shadow-directional-normal-offset", "TEXELS",
+            "Geometric-normal receiver offset: 0 to 4 shadow texels",
+            "--shadow-directional-normal-offset requires shadow texels in [0, 4]",
+            [&c](std::string_view value) {
+                c.shadowSettings.directionalNormalOffsetTexels =
+                    static_cast<float>(parseFiniteRange(value,
+                        "--shadow-directional-normal-offset", 0.0, 4.0));
+            });
+        addValueOption(registry, owner, "--shadow-filter", "NAME",
+            "fixed or pcss (default)",
+            "--shadow-filter requires fixed or pcss",
+            [&c](std::string_view value) {
+                if (value == "fixed") {
+                    c.shadowSettings.filterMode = ShadowFilterMode::FixedPcf;
+                }
+                else if (value == "pcss") {
+                    c.shadowSettings.filterMode = ShadowFilterMode::ContactHardeningPcss;
+                }
+                else {
+                    throw std::invalid_argument("--shadow-filter requires fixed or pcss");
+                }
+            });
+        addValueOption(registry, owner, "--shadow-spot-atlas-resolution", "SIZE",
+            "Persistent spot atlas size: 2048, 4096, or 8192",
+            "--shadow-spot-atlas-resolution requires 2048, 4096, or 8192",
+            [&c](std::string_view value) {
+                const uint64_t resolution =
+                    parseUnsigned(value, "--shadow-spot-atlas-resolution");
+                if (resolution != 2048 && resolution != 4096 && resolution != 8192) {
+                    throw std::invalid_argument(
+                        "--shadow-spot-atlas-resolution requires 2048, 4096, or 8192");
+                }
+                c.shadowSettings.spotAtlasResolution = static_cast<uint32_t>(resolution);
+            });
+        addValueOption(registry, owner, "--gbuffer-layout", "NAME",
+            "reference (production) or quality/compact experiments",
+            "--gbuffer-layout requires reference, quality, or compact",
+            [&c](std::string_view value) {
+                const auto layout = parseGBufferLayout(value);
+                if (!layout) throw std::invalid_argument("unknown GBuffer layout");
+                c.gBufferLayout = *layout;
+            });
+        addValueOption(registry, owner, "--exposure-ev", "EV",
+            "Manual output exposure in [-16,+16] stops",
+            "--exposure-ev requires a value",
+            [&c](std::string_view value) { c.manualExposureEv = parseExposure(value); });
+        addValueOption(registry, owner, "--output-operator", "NAME",
+            "aces2 (default), legacy, or identity",
+            "--output-operator requires aces2, legacy, or identity",
+            [&c](std::string_view value) {
+                if (value == "aces2") {
+                    c.outputOperator = OutputTransformOperator::Aces2;
+                }
+                else if (value == "legacy") {
+                    c.outputOperator = OutputTransformOperator::AcesFittedLegacy;
+                }
+                else if (value == "identity") {
+                    c.outputOperator = OutputTransformOperator::IdentityClampDiagnostic;
+                }
+                else {
+                    throw std::invalid_argument(
+                        "--output-operator requires aces2, legacy, or identity");
+                }
+            });
+        addValueOption(registry, owner, "--output-transport", "NAME",
+            "auto, sdr (default), scrgb, or hdr10",
+            "--output-transport requires auto, sdr, scrgb, or hdr10",
+            [&c](std::string_view value) {
+                if (value == "auto") {
+                    c.outputTransport = Color::OutputTransport::Automatic;
+                }
+                else if (value == "sdr") {
+                    c.outputTransport = Color::OutputTransport::SdrSrgb;
+                }
+                else if (value == "scrgb") {
+                    c.outputTransport = Color::OutputTransport::ScRgb;
+                }
+                else if (value == "hdr10") {
+                    c.outputTransport = Color::OutputTransport::Hdr10Pq;
+                }
+                else {
+                    throw std::invalid_argument(
+                        "--output-transport requires auto, sdr, scrgb, or hdr10");
+                }
+            });
+        addValueOption(registry, owner, "--paper-white-nits", "NITS",
+            "HDR UI/reference-white luminance (default 203)",
+            "--paper-white-nits requires a value",
+            [&c](std::string_view value) {
+                c.paperWhiteNits = parseLuminance(value, "--paper-white-nits", 80.0, 1000.0);
+            });
+        addValueOption(registry, owner, "--peak-nits", "NITS",
+            "HDR mastering/display peak (default 1000)",
+            "--peak-nits requires a value",
+            [&c](std::string_view value) {
+                c.peakNits = parseLuminance(value, "--peak-nits", 100.0, 10000.0);
+            });
+        addValueOption(registry, owner, "--debug-view", "NAME",
+            "final, base-color, normal, roughness, metallic, emissive, depth, ao, f0, f90, "
+            "material-id, material-flags, closure-class, cluster-occupancy, cluster-overflow, "
+            "direct-lighting, shadow-cascade, shadow-visibility, transparency-class, "
+            "transparency-fallback, transparency-interval, transparency-pyramid-mip, "
+            "transparency-layers, or transparency-overflow",
+            "--debug-view requires a view name",
+            [&c](std::string_view value) {
+                const auto view = parseRenderDebugView(value);
+                if (!view) {
+                    throw std::invalid_argument("Unknown debug view: " + std::string(value));
+                }
+                c.debugView = *view;
+            });
+        addValueOption(registry, owner, "--experimental-shadow-lod-error-texels", "N",
+            "Opt-in directional/spot/point shadow-map LOD (0.01..64 texels)",
+            "--experimental-shadow-lod-error-texels requires a texel threshold",
+            [&c](std::string_view value) {
+                c.experimentalShadowLodErrorTexels = static_cast<float>(parseFiniteRange(
+                    value, "--experimental-shadow-lod-error-texels", 0.01, 64.0));
+            });
+        addSwitch(registry, owner, "--experimental-virtual-shadow-resources",
+            "M7.8 live depth page demand (no virtual sampling)",
+            [&c] { c.experimentalVirtualShadowResources = true; });
+        addValueOption(registry, owner, "--shadow-lod-max-level", "N",
+            "Shadow-map LOD cap 0..15; zero pins LOD0",
+            "--shadow-lod-max-level requires 0..15 (zero pins LOD0)",
+            [&c](std::string_view value) {
+                c.shadowLodMaximumLevel = parseLodLevel(value, "--shadow-lod-max-level");
+            });
+        addValueOption(registry, owner, "--experimental-gpu-lod-error-pixels", "N",
+            "Opt-in main-GBuffer LOD (0.01..64 pixels)",
+            "--experimental-gpu-lod-error-pixels requires a pixel threshold",
+            [&c](std::string_view value) {
+                c.experimentalGpuLodErrorPixels = static_cast<float>(parseFiniteRange(
+                    value, "--experimental-gpu-lod-error-pixels", 0.01, 64.0));
+            });
+        addValueOption(registry, owner, "--gpu-lod-max-level", "N",
+            "Experimental LOD cap 0..15; zero pins LOD0",
+            "--gpu-lod-max-level requires 0..15 (zero pins LOD0)",
+            [&c](std::string_view value) {
+                c.gpuLodMaximumLevel = parseLodLevel(value, "--gpu-lod-max-level");
+            });
+        addValueOption(registry, owner, "--gpu-lod-hysteresis-fraction", "N",
+            "Coarsening margin 0..0.5 (default 0.15)",
+            "--gpu-lod-hysteresis-fraction requires 0..0.5",
+            [&c](std::string_view value) {
+                c.gpuLodHysteresisFraction = static_cast<float>(parseFiniteRange(
+                    value, "--gpu-lod-hysteresis-fraction", 0.0, 0.5));
+            });
+        addValueOption(registry, owner, "--experimental-probe-lod-error-pixels", "N",
+            "Opt-in face-invariant probe-capture LOD (0.01..64 pixels)",
+            "--experimental-probe-lod-error-pixels requires a pixel threshold",
+            [&c](std::string_view value) {
+                c.experimentalProbeLodErrorPixels = static_cast<float>(parseFiniteRange(
+                    value, "--experimental-probe-lod-error-pixels", 0.01, 64.0));
+            });
+        addValueOption(registry, owner, "--probe-lod-max-level", "N",
+            "Probe-capture LOD cap 0..15; zero pins LOD0",
+            "--probe-lod-max-level requires 0..15 (zero pins LOD0)",
+            [&c](std::string_view value) {
+                c.probeLodMaximumLevel = parseLodLevel(value, "--probe-lod-max-level");
+            });
+        addSwitch(registry, owner, "--experimental-depth-pyramid",
+            "Build scene-depth mips for M7.6 qualification (no culling)",
+            [&c] { c.experimentalDepthPyramid = true; });
+        addSwitch(registry, owner, "--experimental-depth-occlusion-query",
+            "Query eligible history without rejecting draws",
+            [&c] {
+                c.experimentalDepthPyramid = true;
+                c.experimentalDepthOcclusionQuery = true;
+            });
+        addSwitch(registry, owner, "--experimental-depth-occlusion-rejection",
+            "Experimental qualified Hi-Z indirect rejection",
+            [&c] {
+                c.experimentalDepthPyramid = true;
+                c.experimentalDepthOcclusionQuery = true;
+                c.experimentalDepthOcclusionRejection = true;
+            });
+
+        addValueOption(registry, owner, "--pipeline-cache", "DIR|off",
+            "Pipeline cache directory (default: user cache), or off",
+            "--pipeline-cache requires a directory or off",
+            [&c](std::string_view value) {
+                if (value.empty()) {
+                    throw std::invalid_argument(
+                        "--pipeline-cache requires a directory or off");
+                }
+                if (value == "off") {
+                    c.pipelineCacheEnabled = false;
+                    c.pipelineCacheDirectory.clear();
+                }
+                else {
+                    c.pipelineCacheEnabled = true;
+                    c.pipelineCacheDirectory = std::filesystem::path(value);
+                }
+            });
+
+        addValueOption(registry, owner, "--render-graph-aliasing", "on|off",
+            "Share memory between transient graph images (default on)",
+            "--render-graph-aliasing requires on or off",
+            [&c](std::string_view value) {
+                if (value == "on") c.renderGraphAliasing = true;
+                else if (value == "off") c.renderGraphAliasing = false;
+                else throw std::invalid_argument("--render-graph-aliasing requires on or off");
+            });
+
+        addValueOption(registry, owner, "--anti-aliasing", "none|taa",
+            "Main-view anti-aliasing: none or native temporal AA (default taa)",
+            "--anti-aliasing requires none or taa",
+            [&c](std::string_view value) {
+                if (value == "none") c.antiAliasing = AntiAliasingMode::None;
+                else if (value == "taa") c.antiAliasing = AntiAliasingMode::Taa;
+                else throw std::invalid_argument("--anti-aliasing requires none or taa");
+            });
+
+        addValueOption(registry, owner, "--taa-settings", "MIN,MAX,MOTIONPX,GAMMA,SHARP,STATICGAMMA,STILLWEIGHT",
+            "TAA tuning for evidence runs: history weights, motion, clip, reconstruction",
+            "--taa-settings requires seven comma-separated numbers",
+            [&c](std::string_view value) {
+                std::array<float, 7> v{};
+                size_t index = 0;
+                while (index < v.size()) {
+                    const size_t comma = value.find(',');
+                    const std::string_view part = value.substr(0, comma);
+                    const auto [end, error] = std::from_chars(part.data(),
+                        part.data() + part.size(), v[index]);
+                    if (error != std::errc{} || end != part.data() + part.size() ||
+                        !std::isfinite(v[index]))
+                        throw std::invalid_argument(
+                            "--taa-settings requires seven comma-separated numbers");
+                    ++index;
+                    if (comma == std::string_view::npos) { value = {}; break; }
+                    value.remove_prefix(comma + 1);
+                }
+                // Exactly seven numbers: nothing may follow the seventh.
+                if (index != v.size() || !value.empty() ||
+                    v[0] < 0.0f || v[1] > 1.0f || v[0] > v[1])
+                    throw std::invalid_argument(
+                        "--taa-settings requires seven comma-separated numbers");
+                c.taaTuning = TemporalAntiAliasingTuning{ v[0], v[1], v[2], v[3], v[4], v[5], v[6] };
+            });
+
+        addValueOption(registry, owner, "--exposure", "manual|auto",
+            "Exposure: the manual EV, or GPU auto-exposure with it as compensation (default auto)",
+            "--exposure requires manual or auto",
+            [&c](std::string_view value) {
+                if (value == "manual") c.exposureMode = ExposureMode::Manual;
+                else if (value == "auto") c.exposureMode = ExposureMode::Auto;
+                else throw std::invalid_argument("--exposure requires manual or auto");
+            });
+
+        addValueOption(registry, owner, "--auto-exposure-settings",
+            "HMIN,HMAX,PLOW,PHIGH,EVMIN,EVMAX,UP,DOWN,CENTRE",
+            "Auto-exposure tuning for evidence runs: histogram EV100 range, percentiles, EV100 limits, EV/s speeds, centre weight",
+            "--auto-exposure-settings requires nine comma-separated numbers",
+            [&c](std::string_view value) {
+                constexpr const char* message =
+                    "--auto-exposure-settings requires nine comma-separated numbers";
+                const std::array<float, 9> v = parseNumberList<9>(value, message);
+                const AutoExposureSettings settings{ v[0], v[1], v[2], v[3], v[4], v[5],
+                    v[6], v[7], v[8] };
+                if (settings.histogramMinEv100 >= settings.histogramMaxEv100 ||
+                    settings.lowPercentile < 0.0f ||
+                    settings.lowPercentile >= settings.highPercentile ||
+                    settings.highPercentile > 1.0f ||
+                    settings.minimumEv100 > settings.maximumEv100 ||
+                    settings.speedUpEvPerSecond < 0.0f ||
+                    settings.speedDownEvPerSecond < 0.0f ||
+                    settings.centreWeight < 0.0f || settings.centreWeight > 1.0f)
+                    throw std::invalid_argument(message);
+                c.autoExposureSettings = settings;
+            });
+
+        addValueOption(registry, owner, "--bloom", "off|on",
+            "Bloom: energy-conserving scatter of the resolved colour (default on)",
+            "--bloom requires off or on",
+            [&c](std::string_view value) {
+                if (value == "on") c.bloom.enabled = true;
+                else if (value == "off") c.bloom.enabled = false;
+                else throw std::invalid_argument("--bloom requires off or on");
+            });
+
+        addValueOption(registry, owner, "--bloom-settings", "INTENSITY,THRESHOLD,KNEE,LEVELS,KARIS",
+            "Bloom tuning for evidence runs: scatter 0-1, scene-linear threshold and knee (0: none), 1-8 levels, Karis prefilter 0 off|1 on|2 auto (off with TAA)",
+            "--bloom-settings requires five comma-separated numbers",
+            [&c](std::string_view value) {
+                constexpr const char* message =
+                    "--bloom-settings requires five comma-separated numbers";
+                const std::array<float, 5> v = parseNumberList<5>(value, message);
+                if (v[0] < 0.0f || v[0] > 1.0f || v[1] < 0.0f || v[2] < 0.0f ||
+                    v[3] < 1.0f || v[3] > 8.0f || v[3] != std::floor(v[3]) ||
+                    (v[4] != 0.0f && v[4] != 1.0f && v[4] != 2.0f))
+                    throw std::invalid_argument(message);
+                c.bloom.intensity = v[0];
+                c.bloom.threshold = v[1];
+                c.bloom.knee = v[2];
+                c.bloom.levels = static_cast<uint32_t>(v[3]);
+                c.bloom.karis = v[4] == 2.0f ? BloomKarisMode::Auto
+                    : v[4] == 1.0f ? BloomKarisMode::On : BloomKarisMode::Off;
+            });
+
+        addValueOption(registry, owner, "--temporal-jitter", "on|off",
+            "Sub-pixel raster jitter (default: on with TAA, off otherwise)",
+            "--temporal-jitter requires on or off",
+            [&c](std::string_view value) {
+                if (value == "on") c.temporalJitter = true;
+                else if (value == "off") c.temporalJitter = false;
+                else throw std::invalid_argument("--temporal-jitter requires on or off");
+            });
+
+        addValueOption(registry, owner, "--temporal-jitter-sequence", "N",
+            "Jitter phases before the sequence repeats, 1-4096 (default 8)",
+            "--temporal-jitter-sequence requires a phase count from 1 to 4096",
+            [&c](std::string_view value) {
+                uint32_t parsed = 0;
+                const auto [end, error] = std::from_chars(value.data(),
+                    value.data() + value.size(), parsed);
+                if (error != std::errc{} || end != value.data() + value.size() ||
+                    parsed == 0 || parsed > 4096)
+                    throw std::invalid_argument(
+                        "--temporal-jitter-sequence requires a phase count from 1 to 4096");
+                c.temporalJitterSequenceLength = parsed;
+            });
+
+        addValueOption(registry, owner, "--upload-queue", "auto|graphics|legacy-blocking",
+            "Upload queue: transfer queue + timelines, graphics only, or pre-R4d blocking",
+            "--upload-queue requires auto, graphics or legacy-blocking",
+            [&c](std::string_view value) {
+                if (value == "auto") c.uploadQueue = UploadQueueMode::Auto;
+                else if (value == "graphics") c.uploadQueue = UploadQueueMode::Graphics;
+                else if (value == "legacy-blocking")
+                    c.uploadQueue = UploadQueueMode::LegacyBlocking;
+                else throw std::invalid_argument(
+                    "--upload-queue requires auto, graphics or legacy-blocking");
+            });
+
+        registry.addValidator(std::string(owner), [&c] {
+            if (c.outputTransport != Color::OutputTransport::SdrSrgb &&
+                c.outputOperator != OutputTransformOperator::Aces2) {
+                throw std::invalid_argument(
+                    "HDR output transports currently require --output-operator aces2");
+            }
+        }, kValidateHdrOperator);
+        registry.addValidator(std::string(owner), [&c] {
+            if (c.peakNits < c.paperWhiteNits) {
+                throw std::invalid_argument(
+                    "--peak-nits must be greater than or equal to --paper-white-nits");
+            }
+        }, kValidateNitsOrdering);
+    }
+
+} // namespace Iridium::AppCli

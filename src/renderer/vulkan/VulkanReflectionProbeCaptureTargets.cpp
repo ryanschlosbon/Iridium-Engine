@@ -1,5 +1,7 @@
 #include "renderer/vulkan/VulkanReflectionProbeCaptureTargets.h"
 
+#include "renderer/vulkan/VulkanFrameScheduler.h"
+
 #include <algorithm>
 #include <stdexcept>
 #include <string>
@@ -25,13 +27,11 @@ void VulkanReflectionProbeCaptureTargets::validateConfig(
 
 void VulkanReflectionProbeCaptureTargets::init(VkDevice device,
     VkPhysicalDevice physicalDevice, VulkanResourceAllocator& allocator,
-    VkRenderPass captureRenderPass,
     VulkanReflectionProbeCaptureTargetConfig config) {
     if (device_ != VK_NULL_HANDLE || allocator_ != nullptr)
         throw std::logic_error(
             "Reflection-probe capture targets were initialized twice");
-    if (device == VK_NULL_HANDLE || physicalDevice == VK_NULL_HANDLE ||
-        captureRenderPass == VK_NULL_HANDLE)
+    if (device == VK_NULL_HANDLE || physicalDevice == VK_NULL_HANDLE)
         throw std::invalid_argument(
             "Reflection-probe capture targets require a Vulkan device");
     validateConfig(config);
@@ -42,7 +42,6 @@ void VulkanReflectionProbeCaptureTargets::init(VkDevice device,
             "Vulkan cube-image limit cannot hold a reflection probe");
     device_ = device;
     allocator_ = &allocator;
-    captureRenderPass_ = captureRenderPass;
     config_ = config;
     maximumCubeDimension_ = properties.limits.maxImageDimensionCube;
     owners_.reserve(config.maximumOwners);
@@ -115,6 +114,10 @@ VulkanReflectionProbeCaptureTargets::acquire(SceneEntityUuid owner,
     }
 
     VulkanReflectionProbeCaptureStaging staging;
+    // M7R R5c.8: reuse the owner's previous mip-view storage (kept empty).
+    staging.prefilteredMipArrayViews =
+        std::move(state->staging.prefilteredMipArrayViews);
+    staging.prefilteredMipArrayViews.clear();
     staging.owner = owner;
     staging.captureTicket = captureTicket;
     staging.resolution = resolution;
@@ -151,20 +154,6 @@ VulkanReflectionProbeCaptureTargets::acquire(SceneEntityUuid owner,
             staging.depthFaceViews[face] = createView(staging.depth.image,
                 staging.depth.format, VK_IMAGE_ASPECT_DEPTH_BIT,
                 VK_IMAGE_VIEW_TYPE_2D, 0, 1, face, 1);
-            const std::array attachments{
-                staging.rawFaceViews[face], staging.depthFaceViews[face] };
-            VkFramebufferCreateInfo framebuffer{
-                VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO };
-            framebuffer.renderPass = captureRenderPass_;
-            framebuffer.attachmentCount = static_cast<uint32_t>(
-                attachments.size());
-            framebuffer.pAttachments = attachments.data();
-            framebuffer.width = resolution;
-            framebuffer.height = resolution;
-            framebuffer.layers = 1;
-            requireSuccess(vkCreateFramebuffer(device_, &framebuffer, nullptr,
-                &staging.framebuffers[face]),
-                "vkCreateFramebuffer(reflection probe capture)");
         }
         staging.prefilteredMipArrayViews.reserve(staging.mipLevels);
         for (uint32_t mip = 0; mip < staging.mipLevels; ++mip) {
@@ -190,28 +179,48 @@ VulkanReflectionProbeCaptureTargets::acquire(SceneEntityUuid owner,
     return state->staging;
 }
 
+bool VulkanReflectionProbeCaptureTargets::deferDestruction() const noexcept {
+    // Some submitted (or the open) frame may still reference the resource.
+    return scheduler_ != nullptr &&
+        scheduler_->retireValue() > scheduler_->completedSerial();
+}
+
+void VulkanReflectionProbeCaptureTargets::releaseImage(
+    VulkanImageResource& image) noexcept {
+    if (deferDestruction()) {
+        try { scheduler_->retire(image); image = {}; return; }
+        catch (...) {} // Out of queue memory: fall back to an immediate destroy.
+    }
+    if (allocator_ != nullptr) allocator_->destroy(image);
+}
+
+void VulkanReflectionProbeCaptureTargets::releaseView(VkImageView& view) noexcept {
+    if (view == VK_NULL_HANDLE) return;
+    if (deferDestruction()) {
+        try { scheduler_->retireImageView(view); view = VK_NULL_HANDLE; return; }
+        catch (...) {}
+    }
+    if (device_ != VK_NULL_HANDLE) vkDestroyImageView(device_, view, nullptr);
+    view = VK_NULL_HANDLE;
+}
+
 void VulkanReflectionProbeCaptureTargets::destroyStaging(
     VulkanReflectionProbeCaptureStaging& staging) noexcept {
-    if (device_ != VK_NULL_HANDLE) {
-        for (VkFramebuffer framebuffer : staging.framebuffers)
-            if (framebuffer != VK_NULL_HANDLE)
-                vkDestroyFramebuffer(device_, framebuffer, nullptr);
-        for (VkImageView view : staging.rawFaceViews)
-            if (view != VK_NULL_HANDLE)
-                vkDestroyImageView(device_, view, nullptr);
-        for (VkImageView view : staging.depthFaceViews)
-            if (view != VK_NULL_HANDLE)
-                vkDestroyImageView(device_, view, nullptr);
-        for (VkImageView view : staging.prefilteredMipArrayViews)
-            if (view != VK_NULL_HANDLE)
-                vkDestroyImageView(device_, view, nullptr);
-    }
-    if (allocator_ != nullptr) {
-        allocator_->destroy(staging.rawRadiance);
-        allocator_->destroy(staging.depth);
-        allocator_->destroy(staging.prefilteredRadiance);
-    }
+    for (VkImageView& view : staging.rawFaceViews) releaseView(view);
+    for (VkImageView& view : staging.depthFaceViews) releaseView(view);
+    for (VkImageView& view : staging.prefilteredMipArrayViews) releaseView(view);
+    releaseImage(staging.rawRadiance);
+    releaseImage(staging.depth);
+    releaseImage(staging.prefilteredRadiance);
+    resetStaging(staging);
+}
+
+void VulkanReflectionProbeCaptureTargets::resetStaging(
+    VulkanReflectionProbeCaptureStaging& staging) noexcept {
+    std::vector<VkImageView> views = std::move(staging.prefilteredMipArrayViews);
+    views.clear();
     staging = {};
+    staging.prefilteredMipArrayViews = std::move(views);
 }
 
 void VulkanReflectionProbeCaptureTargets::abandon(SceneEntityUuid owner,
@@ -246,37 +255,24 @@ void VulkanReflectionProbeCaptureTargets::promote(SceneEntityUuid owner,
         throw std::overflow_error(
             "Reflection-probe published VRAM budget is exhausted");
     stagingLogicalBytes_ -= state->staging.logicalBytes;
+    // R4c.3: frames in flight may still sample the replaced cube.
     if (state->hasPublished) {
         publishedLogicalBytes_ -= state->publishedLogicalBytes;
-        allocator_->destroy(state->published);
+        releaseImage(state->published);
     }
-    for (VkFramebuffer& framebuffer : state->staging.framebuffers) {
-        if (framebuffer != VK_NULL_HANDLE)
-            vkDestroyFramebuffer(device_, framebuffer, nullptr);
-        framebuffer = VK_NULL_HANDLE;
-    }
-    for (VkImageView& view : state->staging.rawFaceViews) {
-        if (view != VK_NULL_HANDLE)
-            vkDestroyImageView(device_, view, nullptr);
-        view = VK_NULL_HANDLE;
-    }
-    for (VkImageView& view : state->staging.depthFaceViews) {
-        if (view != VK_NULL_HANDLE)
-            vkDestroyImageView(device_, view, nullptr);
-        view = VK_NULL_HANDLE;
-    }
-    for (VkImageView view : state->staging.prefilteredMipArrayViews)
-        if (view != VK_NULL_HANDLE)
-            vkDestroyImageView(device_, view, nullptr);
+    for (VkImageView& view : state->staging.rawFaceViews) releaseView(view);
+    for (VkImageView& view : state->staging.depthFaceViews) releaseView(view);
+    for (VkImageView& view : state->staging.prefilteredMipArrayViews)
+        releaseView(view);
     state->staging.prefilteredMipArrayViews.clear();
-    allocator_->destroy(state->staging.rawRadiance);
-    allocator_->destroy(state->staging.depth);
+    releaseImage(state->staging.rawRadiance);
+    releaseImage(state->staging.depth);
     state->published = state->staging.prefilteredRadiance;
     state->staging.prefilteredRadiance = {};
     state->publishedLogicalBytes = newPublishedBytes;
     state->hasPublished = true;
     state->hasStaging = false;
-    state->staging = {};
+    resetStaging(state->staging);
     publishedLogicalBytes_ += newPublishedBytes;
 }
 
@@ -314,7 +310,7 @@ void VulkanReflectionProbeCaptureTargets::destroyOwner(
     }
     if (owner.hasPublished && allocator_ != nullptr) {
         publishedLogicalBytes_ -= owner.publishedLogicalBytes;
-        allocator_->destroy(owner.published);
+        releaseImage(owner.published);
     }
     owner = {};
 }
@@ -328,12 +324,12 @@ void VulkanReflectionProbeCaptureTargets::remove(
 }
 
 void VulkanReflectionProbeCaptureTargets::cleanup() noexcept {
+    scheduler_ = nullptr;
     for (OwnerState& owner : owners_) destroyOwner(owner);
     owners_.clear();
     stagingLogicalBytes_ = 0;
     publishedLogicalBytes_ = 0;
     maximumCubeDimension_ = 0;
-    captureRenderPass_ = VK_NULL_HANDLE;
     allocator_ = nullptr;
     device_ = VK_NULL_HANDLE;
 }

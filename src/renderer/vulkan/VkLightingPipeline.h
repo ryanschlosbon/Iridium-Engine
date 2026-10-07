@@ -1,7 +1,6 @@
 #pragma once
 
 #include "VkContext.h"
-#include "VkRenderPass.h"
 #include "renderer/rhi/GBufferLayout.h"
 #include "utils/File.h"
 #include <glm/glm.hpp>
@@ -20,9 +19,9 @@ static_assert(sizeof(LightingPushConstants) == 160);
 
 class VkLightingPipeline {
 public:
-    // Notice we don't need the swapchain here, just the render pass it will draw to!
-    VkLightingPipeline(VkContext* context, VkRenderPass renderPass,
-        Iridium::GBufferLayout gBufferLayout);
+    // M7R R4a: dynamic rendering into one colour attachment of `colorFormat`.
+    VkLightingPipeline(VkContext* context, VkPipelineCache pipelineCache,
+        VkFormat colorFormat, Iridium::GBufferLayout gBufferLayout);
     ~VkLightingPipeline();
 
     VkPipeline getPipeline() const { return pipeline; }
@@ -31,11 +30,12 @@ public:
 
 private:
     VkContext* context;
+    VkPipelineCache pipelineCache = VK_NULL_HANDLE;
     VkPipeline pipeline;
     VkPipelineLayout pipelineLayout;
     VkDescriptorSetLayout descriptorSetLayout;
 
     VkShaderModule createShaderModule(const std::vector<char>& code);
     void createDescriptorSetLayout();
-    void createPipeline(VkRenderPass renderPass, Iridium::GBufferLayout gBufferLayout);
+    void createPipeline(VkFormat colorFormat, Iridium::GBufferLayout gBufferLayout);
 };

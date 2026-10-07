@@ -1,4 +1,5 @@
 #include "assets/cooker/CookedArtifact.h"
+#include "core/tasks/TaskSystem.h"
 #include "assets/cooker/LocalDerivedDataCache.h"
 #include "ecs/Registry.h"
 #include "scene/authoring/CookedSceneCompiler.h"
@@ -17,6 +18,10 @@
 #include <vector>
 
 namespace {
+
+    // M7R R5b.2: the DDC and the services run on the engine task system
+    // (created in main).
+    Iridium::Tasks::TaskSystem* testTasks = nullptr;
 
 #define CHECK(condition) \
     do { \
@@ -341,7 +346,7 @@ namespace {
         size_t buildCount = 0;
         Iridium::CookedArtifactBlob warmBlob;
         {
-            Iridium::LocalDerivedDataCache cache(root);
+            Iridium::LocalDerivedDataCache cache(root, *testTasks);
             auto first = cache.request(value.artifact.cookKey, {},
                 [&](std::stop_token) {
                     ++buildCount;
@@ -391,6 +396,9 @@ namespace {
 } // namespace
 
 int main(int argc, char** argv) {
+    Iridium::Tasks::TaskSystem tasks(Iridium::Tasks::TaskSystemConfig{
+        .workerThreadCount = 4 });
+    testTasks = &tasks;
     if (argc == 3 && std::string_view(argv[1]) == "--emit") {
         return emitFixture(argv[2], false);
     }

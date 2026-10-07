@@ -1,6 +1,6 @@
 #pragma once
 
-#include "scene/SceneEntityUuid.h"
+#include "core/types/SceneEntityUuid.h"
 #include "renderer/rhi/ShadowSettings.h"
 
 #include <glm/glm.hpp>

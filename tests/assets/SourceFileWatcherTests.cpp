@@ -1,10 +1,15 @@
 #include "assets/runtime/SourceFileWatcher.h"
 
+#include "core/tasks/TaskSystem.h"
+
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <thread>
+#include <vector>
 
 namespace {
 
@@ -138,6 +143,54 @@ namespace {
         return true;
     }
 
+    // M7R R5b.2: automatic scanning is a Periodic on the task system's
+    // pinned I/O thread, started by the frame tick; shutdown stops it.
+    bool scansPeriodicallyOnTheIoThread() {
+        TemporaryDirectory temporary;
+        const auto path =
+            temporary.path / "periodic.bin";
+        write(path, "a");
+        const AssetGuid asset = guid(
+            "019f9bce-85b8-7530-8203-040506070809");
+        Tasks::TaskSystem tasks(Tasks::TaskSystemConfig{
+            .workerThreadCount = 2 });
+        bool rejected = false;
+        try {
+            SourceFileWatcher missing(
+                std::chrono::milliseconds(1), true, nullptr);
+        } catch (const std::invalid_argument&) {
+            rejected = true;
+        }
+        CHECK(rejected);
+        SourceFileWatcher watcher(
+            std::chrono::milliseconds(1), true, &tasks);
+        CHECK(watcher.watch(asset, path));
+        write(path, "changed-size");
+        std::vector<SourceFileChangeEvent> events;
+        const auto deadline =
+            std::chrono::steady_clock::now() +
+            std::chrono::seconds(10);
+        while (events.empty() &&
+            std::chrono::steady_clock::now() < deadline) {
+            tasks.tickPeriodic();
+            std::this_thread::sleep_for(
+                std::chrono::milliseconds(2));
+            events = watcher.drainEvents();
+        }
+        CHECK(events.size() == 1);
+        CHECK(events[0].assetGuid == asset);
+        CHECK(watcher.stats().scans >= 1);
+        watcher.shutdown();
+        const uint64_t scans = watcher.stats().scans;
+        for (int tick = 0; tick < 10; ++tick) {
+            tasks.tickPeriodic();
+        }
+        std::this_thread::sleep_for(
+            std::chrono::milliseconds(20));
+        CHECK(watcher.stats().scans == scans);
+        return true;
+    }
+
 } // namespace
 
 int main() {
@@ -152,6 +205,8 @@ int main() {
             detectsDeleteAndRecreate },
         { "unwatch and validation",
             unwatchAndValidation },
+        { "periodic scan on the I/O thread",
+            scansPeriodicallyOnTheIoThread },
     };
     size_t failures = 0;
     for (const TestCase& test : tests) {

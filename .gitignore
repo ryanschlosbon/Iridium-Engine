@@ -34,6 +34,11 @@ assets/shaders/*.spv
 /assets/scenes/*
 !/assets/scenes/test_scene.json
 
+# Per-machine configuration: the local asset library root (licensed third-party
+# test content lives there, outside the repository). iridium.local.example.json
+# shows the format.
+/iridium.local.json
+
 # Common third-party content formats anywhere outside the allowlist above
 *.hdr
 *.exr
@@ -41,6 +46,15 @@ assets/shaders/*.spv
 *.blend
 *.blend1
 
+# Uncompiled vendored samples (kept locally, not tracked; nothing in the build
+# references them). ImGuizmo's example tree carries a second copy of Dear ImGui.
+/src/vendor/imguizmo/example/
+/src/vendor/imguizmo/vcpkg-example/
+/src/vendor/imguizmo/Images/
+/src/vendor/imgui/examples/**/*.bat
+
 # System
 .DS_Store
 Thumbs.db
+# Claude Code agent worktrees (local only)
+/.claude/worktrees/

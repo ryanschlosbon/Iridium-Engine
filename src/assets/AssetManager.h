@@ -14,6 +14,7 @@
 #include <nlohmann/json.hpp>
 #include "renderer/rhi/Mesh.h"
 #include "renderer/rhi/IRenderBackend.h"
+#include "renderer/rhi/EditorRenderBridge.h"
 #include "assets/cooker/CookedArtifact.h"
 #include "assets/environment/EnvironmentProduct.h"
 #include "assets/model/ModelRuntimeProduct.h"
@@ -49,6 +50,17 @@ namespace Iridium {
                 TransparencyExecutionMode::Classified,
             uint32_t minimumResidentLodLevel = 0);
         ~AssetManager();
+
+        // Editor texture ids (material previews and thumbnails) come from the
+        // editor bridge (M7R R3c.10); null without one, e.g. in tools.
+        void setEditorRenderBridge(IEditorRenderBridge* bridge) noexcept {
+            editorBridge_ = bridge;
+        }
+        // Material-preview compiles run as Normal tasks on it (M7R R5b.2); null
+        // compiles them inline.
+        void setTaskSystem(Tasks::TaskSystem* tasks) {
+            previewCompiler_.setTaskSystem(tasks);
+        }
 
         std::shared_ptr<ModelAsset> loadModelFromCookedArtifact(
             const CookedArtifact& artifact,
@@ -127,6 +139,7 @@ namespace Iridium {
 
     private:
         IRenderBackend* renderBackend;
+        IEditorRenderBridge* editorBridge_ = nullptr;
         struct PreviewInputs {
             CookedModelProductData product; // Material/primitive metadata only; no geometry copies.
             std::vector<RuntimeTextureViewBinding> views;

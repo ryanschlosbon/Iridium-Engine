@@ -1,10 +1,13 @@
 #include "benchmarks/BenchmarkManifest.h"
+#include "core/ProjectAssetRoots.h"
 #include "utils/Sha256.h"
 
+#include <glm/gtc/matrix_transform.hpp>
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <exception>
 #include <filesystem>
@@ -28,6 +31,19 @@ namespace {
                 return false; \
             } \
         } while (false)
+
+    // A project-relative content path ("assets/models/..."): under assets/ it
+    // resolves through the project and local asset roots.
+    std::filesystem::path projectContentPath(const std::string& projectRelative) {
+        const std::filesystem::path path(projectRelative);
+        auto part = path.begin();
+        if (part != path.end() && *part == "assets") {
+            std::filesystem::path rootRelative;
+            for (++part; part != path.end(); ++part) rootRelative /= *part;
+            return resolveProjectAssetPath(rootRelative);
+        }
+        return std::filesystem::path(PROJECT_ROOT_DIR) / path;
+    }
 
     std::filesystem::path manifestPath() {
         return std::filesystem::path(PROJECT_ROOT_DIR) /
@@ -149,6 +165,11 @@ namespace {
     std::filesystem::path m7RunManifestPath() {
         return std::filesystem::path(PROJECT_ROOT_DIR) /
             "assets" / "benchmarks" / "m7" / "m7.0-run-manifest.v1.json";
+    }
+
+    std::filesystem::path m9TemporalManifestPath() {
+        return std::filesystem::path(PROJECT_ROOT_DIR) /
+            "assets" / "benchmarks" / "m9" / "temporal-manifest.v1.json";
     }
 
     nlohmann::json loadJson(const std::filesystem::path& path) {
@@ -442,9 +463,8 @@ namespace {
                 coveredAxes.insert(axis.get<std::string>());
             }
             if (fixture.contains("source_asset")) {
-                const std::filesystem::path source =
-                    std::filesystem::path(PROJECT_ROOT_DIR) /
-                    fixture.at("source_asset").get<std::string>();
+                const std::filesystem::path source = projectContentPath(
+                    fixture.at("source_asset").get<std::string>());
                 CHECK(std::filesystem::is_regular_file(source));
                 CHECK(sha256File(source) ==
                     fixture.at("source_sha256").get<std::string>());
@@ -1288,6 +1308,717 @@ namespace {
         return true;
     }
 
+    // --- M9 G6b: composition scene factory, camera paths and the temporal set ---
+
+    bool near(float lhs, float rhs, float tolerance = 1.0e-5f) {
+        return std::abs(lhs - rhs) <= tolerance;
+    }
+
+    bool near(const glm::vec3& lhs, const glm::vec3& rhs,
+        float tolerance = 1.0e-5f) {
+        return near(lhs.x, rhs.x, tolerance) && near(lhs.y, rhs.y, tolerance) &&
+            near(lhs.z, rhs.z, tolerance);
+    }
+
+    // TransformComponent's convention: T * Rz * Ry * Rx.
+    glm::mat3 eulerZyxMatrix(const glm::vec3& degrees) {
+        glm::mat4 matrix(1.0f);
+        matrix = glm::rotate(matrix, glm::radians(degrees.z), glm::vec3(0, 0, 1));
+        matrix = glm::rotate(matrix, glm::radians(degrees.y), glm::vec3(0, 1, 0));
+        matrix = glm::rotate(matrix, glm::radians(degrees.x), glm::vec3(1, 0, 0));
+        return glm::mat3(matrix);
+    }
+
+    bool nearMatrix(const glm::mat3& lhs, const glm::mat3& rhs) {
+        for (int column = 0; column < 3; ++column) {
+            if (!near(lhs[column], rhs[column], 1.0e-4f)) return false;
+        }
+        return true;
+    }
+
+    // A one-fixture manifest around `factory`, next to a placeholder source,
+    // loaded without content-hash verification.
+    BenchmarkManifest loadSyntheticFactory(const std::string& name,
+        const nlohmann::json& factory) {
+        const std::filesystem::path directory =
+            std::filesystem::temp_directory_path() /
+            "iridium-benchmark-manifest-tests";
+        std::filesystem::create_directories(directory);
+        std::ofstream(directory / "source.gltf") << "{}";
+        nlohmann::json root = nlohmann::json::parse(R"json({
+            "schema_version": 1,
+            "fixtures": [{
+                "id": "synthetic_v1",
+                "revision": 1,
+                "source_asset": "source.gltf",
+                "environment": { "kind": "procedural_constant",
+                    "constant_linear_rgb": [0.1, 0.1, 0.1] },
+                "camera": { "id": "synthetic_camera", "position": [0.0, 1.0, 5.0],
+                    "target": [0.0, 1.0, 0.0], "up": [0.0, 1.0, 0.0],
+                    "vertical_fov_degrees": 40.0, "near": 0.1, "far": 100.0 },
+                "output_label": "synthetic",
+                "warmup_frames": 0,
+                "measured_frames": 1,
+                "content_files": [{ "path": "source.gltf",
+                    "sha256": "0000000000000000000000000000000000000000000000000000000000000000" }]
+            }]
+        })json");
+        root["fixtures"][0]["scene_factory"] = factory;
+        const std::filesystem::path path = directory / (name + ".json");
+        std::ofstream(path) << root.dump(2);
+        return loadBenchmarkManifest(path, false);
+    }
+
+    // Manifest content resolution: the manifest directory first, then the same
+    // relative location in the local asset library, with the escape check
+    // applied to whichever root matched.
+    bool testContentResolutionThroughLocalRoot() {
+        const std::filesystem::path base =
+            std::filesystem::temp_directory_path() /
+            ("iridium-benchmark-local-root-" + std::to_string(
+                std::chrono::steady_clock::now().time_since_epoch().count()));
+        const std::filesystem::path project = base / "project";
+        const std::filesystem::path library = base / "library";
+        const std::filesystem::path assets = project / "assets";
+        const auto write = [](const std::filesystem::path& path) {
+            std::filesystem::create_directories(path.parent_path());
+            std::ofstream(path, std::ios::binary) << "{}";
+        };
+        write(assets / "benchmarks" / "m9" / "fixture.gltf");
+        write(assets / "shared.gltf");
+        write(library / "shared.gltf");
+        write(library / "models" / "car" / "car.gltf");
+        write(library / "benchmarks" / "m9" / "local-only.gltf");
+        write(base / "outside.gltf");
+        std::ofstream(project / "iridium.local.json") <<
+            "{ \"localAssetRoot\": \"" + library.generic_string() + "\" }";
+        const ProjectAssetRoots roots =
+            ProjectAssetRoots::fromProjectRoot(project, std::nullopt);
+        const ProjectAssetRoots projectOnly =
+            ProjectAssetRoots::fromProjectRoot(base / "no-config", std::nullopt);
+        const auto canonical = [](const std::filesystem::path& path) {
+            return std::filesystem::weakly_canonical(path);
+        };
+        const auto rejected = [&](const std::filesystem::path& directory,
+            const std::filesystem::path& relative) {
+            try {
+                (void)resolveBenchmarkContentPath(directory, relative, roots);
+            }
+            catch (const std::exception&) {
+                return true;
+            }
+            return false;
+        };
+        bool passed = roots.localAssetRoot().has_value();
+        // Manifest-local content and project content win over the library.
+        passed = passed && resolveBenchmarkContentPath(assets / "benchmarks" / "m9",
+            "fixture.gltf", roots) == canonical(assets / "benchmarks/m9/fixture.gltf");
+        passed = passed && resolveBenchmarkContentPath(assets, "shared.gltf", roots) ==
+            canonical(assets / "shared.gltf");
+        // Missing in the project: the same relative location in the library.
+        passed = passed && resolveBenchmarkContentPath(assets, "models/car/car.gltf",
+            roots) == canonical(library / "models/car/car.gltf");
+        passed = passed && resolveBenchmarkContentPath(assets / "benchmarks" / "m9",
+            "local-only.gltf", roots) == canonical(library / "benchmarks/m9/local-only.gltf");
+        // Missing everywhere: the manifest-relative path, as before.
+        passed = passed && resolveBenchmarkContentPath(assets, "models/none.gltf",
+            roots) == canonical(assets / "models/none.gltf");
+        // Without a local root nothing changes.
+        passed = passed && resolveBenchmarkContentPath(assets, "models/car/car.gltf",
+            projectOnly) == canonical(assets / "models/car/car.gltf");
+        // A manifest outside the project asset root never maps into the library.
+        passed = passed && resolveBenchmarkContentPath(project / "tests",
+            "models/car/car.gltf", roots) == canonical(project / "tests/models/car/car.gltf");
+        // Escapes and absolute paths are rejected for either root.
+        passed = passed && rejected(assets, "../outside.gltf");
+        passed = passed && rejected(assets / "benchmarks", "../shared.gltf");
+        passed = passed && rejected(assets, library / "shared.gltf");
+        std::error_code ignored;
+        std::filesystem::remove_all(base, ignored);
+        return passed;
+    }
+
+    bool syntheticFactoryRejected(const std::string& name,
+        const nlohmann::json& factory) {
+        try {
+            (void)loadSyntheticFactory(name, factory);
+        }
+        catch (const std::exception&) {
+            return true;
+        }
+        return false;
+    }
+
+    bool testCompositionSchemaContract() {
+        const BenchmarkManifest manifest = loadSyntheticFactory("composition",
+            nlohmann::json::parse(R"json({
+                "kind": "composition",
+                "entities": [
+                    { "id": "static", "node": 0 },
+                    { "id": "placed", "node": 3, "transform": {
+                        "translation": [1.0, 2.0, 3.0],
+                        "rotation_degrees": [10.0, 20.0, 30.0],
+                        "scale": [2.0, 2.0, 2.0] },
+                      "motion": { "kind": "none" } },
+                    { "id": "slide", "node": 1, "transform": { "translation": [1.0, 0.0, 0.0] },
+                      "motion": { "kind": "linear", "velocity_per_frame": [0.5, 0.0, 0.0],
+                        "period_frames": 10 } },
+                    { "id": "spin", "node": 2, "transform": { "rotation_degrees": [0.0, 30.0, 0.0] },
+                      "motion": { "kind": "rotation", "axis": [0.0, 0.0, 2.0],
+                        "degrees_per_frame": 1.5 } },
+                    { "id": "jump", "node": 2,
+                      "motion": { "kind": "keyframes", "keyframes": [
+                        { "frame": 0, "translation": [0.0, 0.0, 0.0] },
+                        { "frame": 10, "translation": [10.0, 0.0, 0.0] },
+                        { "frame": 20, "translation": [-5.0, 0.0, 0.0], "teleport": true },
+                        { "frame": 30, "translation": [-5.0, 4.0, 0.0] } ] } }
+                ],
+                "camera_motion": { "path": {
+                    "keyframes": [
+                        { "frame": 0, "position": [0.0, 1.0, 5.0], "target": [0.0, 1.0, 0.0] },
+                        { "frame": 10, "position": [10.0, 1.0, 5.0], "target": [10.0, 1.0, 0.0] },
+                        { "frame": 20, "position": [0.0, 5.0, 9.0], "target": [0.0, 0.0, 0.0] },
+                        { "frame": 40, "position": [0.0, 9.0, 9.0], "target": [0.0, 0.0, 0.0] } ],
+                    "cuts": [20, 40] } }
+            })json"));
+        const BenchmarkFixture& fixture = manifest.fixtures.at(0);
+        const BenchmarkSceneFactory& factory = fixture.sceneFactory;
+        CHECK(factory.kind == BenchmarkSceneFactoryKind::Composition);
+        CHECK(factory.compositionEntities.size() == 5);
+        // Grid defaults are untouched by a composition factory.
+        CHECK(factory.instanceGrid == glm::uvec3(1u));
+        CHECK(!factory.animateInstances && !factory.cameraCutEnabled);
+
+        const BenchmarkCompositionEntity& still = factory.compositionEntities[0];
+        CHECK(still.id == "static" && still.sourceNode == 0u);
+        CHECK(still.motion.kind == BenchmarkEntityMotionKind::None);
+        CHECK(still.translation == glm::vec3(0.0f) && still.scale == glm::vec3(1.0f));
+        const BenchmarkCompositionEntity& placed = factory.compositionEntities[1];
+        CHECK(placed.sourceNode == 3u);
+        CHECK(placed.translation == glm::vec3(1.0f, 2.0f, 3.0f));
+        CHECK(placed.rotationDegrees == glm::vec3(10.0f, 20.0f, 30.0f));
+        CHECK(placed.scale == glm::vec3(2.0f));
+        const BenchmarkEntityPose placedPose =
+            evaluateBenchmarkCompositionEntity(placed, 1234);
+        CHECK(placedPose.translation == placed.translation);
+        CHECK(placedPose.rotationDegrees == placed.rotationDegrees);
+        CHECK(!placedPose.teleported);
+
+        const BenchmarkCompositionEntity& slide = factory.compositionEntities[2];
+        CHECK(slide.motion.kind == BenchmarkEntityMotionKind::Linear);
+        CHECK(slide.motion.velocityPerFrame == glm::vec3(0.5f, 0.0f, 0.0f));
+        CHECK(slide.motion.periodFrames == 10u);
+        CHECK(near(evaluateBenchmarkCompositionEntity(slide, 4).translation,
+            glm::vec3(3.0f, 0.0f, 0.0f)));
+        CHECK(!evaluateBenchmarkCompositionEntity(slide, 0).teleported);
+        CHECK(!evaluateBenchmarkCompositionEntity(slide, 9).teleported);
+        // The periodic wrap of a moving linear path is a teleport.
+        CHECK(evaluateBenchmarkCompositionEntity(slide, 10).teleported);
+        CHECK(near(evaluateBenchmarkCompositionEntity(slide, 10).translation,
+            glm::vec3(1.0f, 0.0f, 0.0f)));
+
+        const BenchmarkCompositionEntity& spin = factory.compositionEntities[3];
+        CHECK(spin.motion.kind == BenchmarkEntityMotionKind::Rotation);
+        CHECK(spin.motion.rotationAxis == glm::vec3(0.0f, 0.0f, 1.0f));
+        CHECK(spin.motion.rotationDegreesPerFrame == 1.5f);
+        for (const uint64_t frame : { 0ull, 1ull, 60ull, 119ull, 240ull, 1'000'001ull }) {
+            const BenchmarkEntityPose pose =
+                evaluateBenchmarkCompositionEntity(spin, frame);
+            const float degrees = static_cast<float>(
+                std::fmod(1.5 * static_cast<double>(frame), 360.0));
+            const glm::mat3 expected = glm::mat3(glm::rotate(glm::mat4(1.0f),
+                glm::radians(degrees), glm::vec3(0, 0, 1))) *
+                eulerZyxMatrix(spin.rotationDegrees);
+            CHECK(nearMatrix(eulerZyxMatrix(pose.rotationDegrees), expected));
+            CHECK(!pose.teleported);
+        }
+
+        const BenchmarkCompositionEntity& jump = factory.compositionEntities[4];
+        CHECK(jump.motion.kind == BenchmarkEntityMotionKind::Keyframes);
+        CHECK(jump.motion.keyframes.size() == 4);
+        CHECK(jump.motion.keyframes[2].teleport);
+        CHECK(near(evaluateBenchmarkCompositionEntity(jump, 5).translation,
+            glm::vec3(5.0f, 0.0f, 0.0f)));
+        // The teleport segment holds the previous keyframe, then jumps.
+        CHECK(evaluateBenchmarkCompositionEntity(jump, 19).translation ==
+            glm::vec3(10.0f, 0.0f, 0.0f));
+        CHECK(!evaluateBenchmarkCompositionEntity(jump, 19).teleported);
+        CHECK(evaluateBenchmarkCompositionEntity(jump, 20).translation ==
+            glm::vec3(-5.0f, 0.0f, 0.0f));
+        CHECK(evaluateBenchmarkCompositionEntity(jump, 20).teleported);
+        CHECK(!evaluateBenchmarkCompositionEntity(jump, 21).teleported);
+        CHECK(near(evaluateBenchmarkCompositionEntity(jump, 25).translation,
+            glm::vec3(-5.0f, 2.0f, 0.0f)));
+        CHECK(evaluateBenchmarkCompositionEntity(jump, 500).translation ==
+            glm::vec3(-5.0f, 4.0f, 0.0f));
+
+        CHECK(factory.cameraPathEnabled);
+        CHECK(factory.cameraPathKeyframes.size() == 4);
+        CHECK(factory.cameraPathCuts == std::vector<uint64_t>({ 20u, 40u }));
+        CHECK(factory.cameraPathPeriodFrames == 0u);
+        CHECK(near(evaluateBenchmarkCamera(fixture, 5).position,
+            glm::vec3(5.0f, 1.0f, 5.0f)));
+        CHECK(near(evaluateBenchmarkCamera(fixture, 5).target,
+            glm::vec3(5.0f, 1.0f, 0.0f)));
+        CHECK(evaluateBenchmarkCamera(fixture, 19).position ==
+            glm::vec3(10.0f, 1.0f, 5.0f));
+        CHECK(evaluateBenchmarkCamera(fixture, 20).position ==
+            glm::vec3(0.0f, 5.0f, 9.0f));
+        CHECK(evaluateBenchmarkCamera(fixture, 39).position ==
+            glm::vec3(0.0f, 5.0f, 9.0f));
+        CHECK(evaluateBenchmarkCamera(fixture, 100).position ==
+            glm::vec3(0.0f, 9.0f, 9.0f));
+        // Each cut bumps the history-reset revision to its ordinal.
+        CHECK(evaluateBenchmarkViewHistoryResetRevision(fixture, 0) == 0u);
+        CHECK(evaluateBenchmarkViewHistoryResetRevision(fixture, 19) == 0u);
+        CHECK(evaluateBenchmarkViewHistoryResetRevision(fixture, 20) == 1u);
+        CHECK(evaluateBenchmarkViewHistoryResetRevision(fixture, 39) == 1u);
+        CHECK(evaluateBenchmarkViewHistoryResetRevision(fixture, 40) == 2u);
+        CHECK(evaluateBenchmarkViewHistoryResetRevision(fixture, 9'999) == 2u);
+
+        // Determinism: repeated evaluation and a reload agree bit for bit.
+        const BenchmarkManifest again = loadSyntheticFactory("composition_again",
+            nlohmann::json::parse(R"json({
+                "kind": "composition",
+                "entities": [{ "id": "spin", "node": 2,
+                    "transform": { "rotation_degrees": [0.0, 30.0, 0.0] },
+                    "motion": { "kind": "rotation", "axis": [0.0, 0.0, 2.0],
+                        "degrees_per_frame": 1.5 } }]
+            })json"));
+        const BenchmarkEntityPose first = evaluateBenchmarkCompositionEntity(spin, 77);
+        const BenchmarkEntityPose second = evaluateBenchmarkCompositionEntity(
+            again.fixtures[0].sceneFactory.compositionEntities[0], 77);
+        CHECK(first.rotationDegrees == second.rotationDegrees);
+        return true;
+    }
+
+    bool testPeriodicCameraPathAndWrapContract() {
+        const BenchmarkManifest manifest = loadSyntheticFactory("periodic",
+            nlohmann::json::parse(R"json({
+                "kind": "instanced_grid",
+                "instance_grid": [1, 1, 1],
+                "instance_spacing": [0.0, 0.0, 0.0],
+                "camera_motion": { "path": {
+                    "period_frames": 100,
+                    "keyframes": [
+                        { "frame": 0, "position": [0.0, 1.0, 5.0], "target": [0.0, 1.0, 0.0] },
+                        { "frame": 50, "position": [5.0, 1.0, 5.0], "target": [0.0, 1.0, 0.0] },
+                        { "frame": 60, "position": [0.0, 3.0, 5.0], "target": [0.0, 1.0, 0.0] } ],
+                    "cuts": [0, 60] } }
+            })json"));
+        const BenchmarkFixture& fixture = manifest.fixtures.at(0);
+        // A camera path also applies to the instanced-grid factory.
+        CHECK(fixture.sceneFactory.kind == BenchmarkSceneFactoryKind::InstancedGrid);
+        CHECK(fixture.sceneFactory.cameraPathEnabled);
+        CHECK(fixture.sceneFactory.cameraPathPeriodFrames == 100u);
+        CHECK(evaluateBenchmarkCamera(fixture, 99).position ==
+            glm::vec3(0.0f, 3.0f, 5.0f));
+        CHECK(evaluateBenchmarkCamera(fixture, 100).position ==
+            glm::vec3(0.0f, 1.0f, 5.0f));
+        CHECK(near(evaluateBenchmarkCamera(fixture, 125).position,
+            glm::vec3(2.5f, 1.0f, 5.0f)));
+        // The frame-0 cut is the wrap: first at 100, never at absolute frame 0.
+        constexpr std::array<std::pair<uint64_t, uint64_t>, 8> revisions{ {
+            { 0, 0 }, { 59, 0 }, { 60, 1 }, { 99, 1 }, { 100, 2 }, { 159, 2 },
+            { 160, 3 }, { 1'000, 20 } } };
+        for (const auto& [frame, revision] : revisions) {
+            CHECK(evaluateBenchmarkViewHistoryResetRevision(fixture, frame) ==
+                revision);
+        }
+        return true;
+    }
+
+    bool testCompositionSchemaRejections() {
+        const auto composition = [](const char* entity) {
+            nlohmann::json factory = nlohmann::json::parse(
+                R"json({ "kind": "composition" })json");
+            factory["entities"] = nlohmann::json::array(
+                { nlohmann::json::parse(entity) });
+            return factory;
+        };
+        const auto cameraPath = [](const char* path) {
+            nlohmann::json factory = nlohmann::json::parse(R"json({
+                "kind": "composition", "entities": [{ "id": "a", "node": 0 }] })json");
+            factory["camera_motion"] = nlohmann::json::parse(path);
+            return factory;
+        };
+        CHECK(syntheticFactoryRejected("reject_kind",
+            nlohmann::json::parse(R"json({ "kind": "spiral" })json")));
+        CHECK(syntheticFactoryRejected("reject_empty",
+            nlohmann::json::parse(R"json({ "kind": "composition", "entities": [] })json")));
+        CHECK(syntheticFactoryRejected("reject_grid_key", nlohmann::json::parse(R"json({
+            "kind": "composition", "entities": [{ "id": "a", "node": 0 }],
+            "instance_grid": [1, 1, 1] })json")));
+        CHECK(syntheticFactoryRejected("reject_duplicate", nlohmann::json::parse(R"json({
+            "kind": "composition",
+            "entities": [{ "id": "a", "node": 0 }, { "id": "a", "node": 1 }] })json")));
+        CHECK(syntheticFactoryRejected("reject_source_asset", composition(
+            R"json({ "id": "a", "node": 0, "source_asset": "other.gltf" })json")));
+        CHECK(syntheticFactoryRejected("reject_entity_key", composition(
+            R"json({ "id": "a", "node": 0, "velocity": [1, 0, 0] })json")));
+        CHECK(syntheticFactoryRejected("reject_zero_scale", composition(
+            R"json({ "id": "a", "node": 0, "transform": { "scale": [1, 0, 1] } })json")));
+        CHECK(syntheticFactoryRejected("reject_motion_kind", composition(
+            R"json({ "id": "a", "node": 0, "motion": { "kind": "orbit" } })json")));
+        CHECK(syntheticFactoryRejected("reject_motion_key", composition(
+            R"json({ "id": "a", "node": 0, "motion": { "kind": "linear",
+                "velocity_per_frame": [1, 0, 0], "teleports": [3] } })json")));
+        CHECK(syntheticFactoryRejected("reject_zero_axis", composition(
+            R"json({ "id": "a", "node": 0, "motion": { "kind": "rotation",
+                "axis": [0, 0, 0], "degrees_per_frame": 1 } })json")));
+        CHECK(syntheticFactoryRejected("reject_first_keyframe", composition(
+            R"json({ "id": "a", "node": 0, "motion": { "kind": "keyframes", "keyframes": [
+                { "frame": 5, "translation": [0, 0, 0] } ] } })json")));
+        CHECK(syntheticFactoryRejected("reject_keyframe_order", composition(
+            R"json({ "id": "a", "node": 0, "motion": { "kind": "keyframes", "keyframes": [
+                { "frame": 0, "translation": [0, 0, 0] },
+                { "frame": 9, "translation": [1, 0, 0] },
+                { "frame": 9, "translation": [2, 0, 0] } ] } })json")));
+        CHECK(syntheticFactoryRejected("reject_wrap_teleport", composition(
+            R"json({ "id": "a", "node": 0, "motion": { "kind": "keyframes", "keyframes": [
+                { "frame": 0, "translation": [0, 0, 0], "teleport": true },
+                { "frame": 9, "translation": [1, 0, 0] } ] } })json")));
+        CHECK(syntheticFactoryRejected("reject_unflagged_wrap", composition(
+            R"json({ "id": "a", "node": 0, "motion": { "kind": "keyframes",
+                "period_frames": 20, "keyframes": [
+                { "frame": 0, "translation": [0, 0, 0] },
+                { "frame": 9, "translation": [1, 0, 0] } ] } })json")));
+        CHECK(syntheticFactoryRejected("reject_keyframe_past_period", composition(
+            R"json({ "id": "a", "node": 0, "motion": { "kind": "keyframes",
+                "period_frames": 5, "keyframes": [
+                { "frame": 0, "translation": [0, 0, 0] },
+                { "frame": 9, "translation": [0, 0, 0] } ] } })json")));
+        CHECK(syntheticFactoryRejected("reject_path_with_velocity", cameraPath(
+            R"json({ "velocity_per_frame": [1, 0, 0], "path": { "keyframes": [
+                { "frame": 0, "position": [0, 1, 5], "target": [0, 1, 0] } ] } })json")));
+        CHECK(syntheticFactoryRejected("reject_cut_off_keyframe", cameraPath(
+            R"json({ "path": { "cuts": [5], "keyframes": [
+                { "frame": 0, "position": [0, 1, 5], "target": [0, 1, 0] },
+                { "frame": 10, "position": [1, 1, 5], "target": [1, 1, 0] } ] } })json")));
+        CHECK(syntheticFactoryRejected("reject_cut_zero_aperiodic", cameraPath(
+            R"json({ "path": { "cuts": [0], "keyframes": [
+                { "frame": 0, "position": [0, 1, 5], "target": [0, 1, 0] } ] } })json")));
+        CHECK(syntheticFactoryRejected("reject_camera_wrap", cameraPath(
+            R"json({ "path": { "period_frames": 20, "keyframes": [
+                { "frame": 0, "position": [0, 1, 5], "target": [0, 1, 0] },
+                { "frame": 10, "position": [1, 1, 5], "target": [1, 1, 0] } ] } })json")));
+        CHECK(syntheticFactoryRejected("reject_degenerate_keyframe", cameraPath(
+            R"json({ "path": { "keyframes": [
+                { "frame": 0, "position": [0, 1, 0], "target": [0, 5, 0] } ] } })json")));
+        CHECK(syntheticFactoryRejected("reject_path_key", cameraPath(
+            R"json({ "path": { "cut": [10], "keyframes": [
+                { "frame": 0, "position": [0, 1, 5], "target": [0, 1, 0] } ] } })json")));
+        // Control: the same shapes are accepted when well formed.
+        CHECK(!syntheticFactoryRejected("accept_control", composition(
+            R"json({ "id": "a", "node": 0, "motion": { "kind": "keyframes",
+                "period_frames": 20, "keyframes": [
+                { "frame": 0, "translation": [0, 0, 0], "teleport": true },
+                { "frame": 9, "translation": [1, 0, 0] } ] } })json")));
+        return true;
+    }
+
+    // Every pre-M9 manifest keeps its parse: grid factory, no path, no
+    // composition, and the legacy single-cut history revision (0, then 1).
+    bool testLegacyManifestsParseUnchanged() {
+        const std::array manifests{
+            manifestPath(), m1ManifestPath(), m2MaterialGpuManifestPath(),
+            m6PyramidManifestPath(), m6Ordinary2RuntimeManifestPath(),
+            m7ThreeDenseManifestPath(), m7OcclusionTemporalManifestPath(),
+            m7OcclusionMotionManifestPath(), m7OcclusionSmallObjectManifestPath(),
+            m7OcclusionDepthContentManifestPath(),
+            m7OcclusionPerformanceManifestPath(), m7LodLitAdmissionManifestPath(),
+            m7DirectionalShadowGrazingManifestPath(),
+            m7DirectionalShadowLodManifestPath(), m7PointShadowLodManifestPath(),
+            m7SpotShadowLodManifestPath(),
+            m7HeterogeneousShadowAdmissionManifestPath(),
+            m7ProbeLodAdmissionManifestPath(),
+            m7ShadowLodWarmedAdmissionManifestPath(),
+            m7ShadowQualityClosureManifestPath(),
+        };
+        size_t fixtures = 0;
+        size_t cuts = 0;
+        for (const std::filesystem::path& path : manifests) {
+            for (const BenchmarkFixture& fixture :
+                loadBenchmarkManifest(path).fixtures) {
+                ++fixtures;
+                const BenchmarkSceneFactory& factory = fixture.sceneFactory;
+                CHECK(factory.kind == BenchmarkSceneFactoryKind::InstancedGrid);
+                CHECK(factory.compositionEntities.empty());
+                CHECK(!factory.cameraPathEnabled);
+                CHECK(factory.cameraPathKeyframes.empty());
+                CHECK(factory.cameraPathCuts.empty());
+                cuts += factory.cameraCutEnabled ? 1u : 0u;
+                const uint64_t cut = factory.cameraCutFrame;
+                for (const uint64_t frame : { uint64_t{ 0 }, cut > 0 ? cut - 1 : 0,
+                        cut, cut + 1, cut + 100'000 }) {
+                    const uint64_t legacy =
+                        factory.cameraCutEnabled && frame >= cut ? 1u : 0u;
+                    CHECK(evaluateBenchmarkViewHistoryResetRevision(fixture,
+                        frame) == legacy);
+                }
+            }
+        }
+        CHECK(fixtures >= 20);
+        CHECK(cuts >= 2);
+        return true;
+    }
+
+    bool testM9TemporalFixtureContract() {
+        const BenchmarkManifest manifest = loadBenchmarkManifest(
+            m9TemporalManifestPath());
+        constexpr std::array ids{
+            "m9_tf_thin_v1", "m9_tf_foliage_v1", "m9_tf_disocclude_v1",
+            "m9_tf_pan_v1", "m9_tf_emissive_v1", "m9_tf_glass_v1",
+            "m9_tf_specular_v1", "m9_tf_static_v1", "m9_tf_hdr_v1",
+            "m9_tf_teleport_v1", "m9_tf_reactive_v1" };
+        CHECK(manifest.fixtures.size() == ids.size());
+        std::set<std::filesystem::path> sources;
+        for (const char* id : ids) {
+            const BenchmarkFixture& fixture = findBenchmarkFixture(manifest, id);
+            CHECK(fixture.revision == 1);
+            CHECK(fixture.required);
+            CHECK(fixture.sceneFactory.kind ==
+                BenchmarkSceneFactoryKind::Composition);
+            CHECK(fixture.warmupFrames == 120u);
+            CHECK(fixture.measuredFrames == 600u);
+            CHECK(fixture.lights.size() == 1);
+            CHECK(fixture.lights[0].type == BenchmarkLightType::Directional);
+            CHECK(fixture.camera.verticalFovDegrees == 40.0f);
+            CHECK(!fixture.expectedBehavior.empty());
+            // Engine-authored source plus its sidecar, both hash-pinned.
+            CHECK(fixture.contentFiles.size() == 2);
+            for (const BenchmarkContentFile& content : fixture.contentFiles)
+                CHECK(sha256File(content.path) == content.sha256);
+            CHECK(fixture.contentFiles[1].path.string() ==
+                fixture.sourceAsset.string() + ".iridium.meta");
+            CHECK(sources.insert(fixture.sourceAsset).second);
+
+            // Each entity names an existing top-level node; every node is used.
+            const nlohmann::json gltf = loadJson(fixture.sourceAsset);
+            CHECK(gltf.at("asset").at("generator").get<std::string>().find(
+                "M9 G6b") != std::string::npos);
+            const size_t nodeCount = gltf.at("nodes").size();
+            CHECK(gltf.at("scenes").at(0).at("nodes").size() == nodeCount);
+            std::set<uint32_t> usedNodes;
+            for (const nlohmann::json& node : gltf.at("nodes")) {
+                CHECK(!node.contains("matrix") && !node.contains("translation") &&
+                    !node.contains("rotation") && !node.contains("scale") &&
+                    !node.contains("children"));
+            }
+            for (const BenchmarkCompositionEntity& entity :
+                fixture.sceneFactory.compositionEntities) {
+                CHECK(entity.sourceNode < nodeCount);
+                usedNodes.insert(entity.sourceNode);
+            }
+            CHECK(usedNodes.size() == nodeCount);
+            for (const nlohmann::json& buffer : gltf.at("buffers")) {
+                CHECK(buffer.at("uri").get<std::string>().starts_with(
+                    "data:application/octet-stream;base64,"));
+                CHECK(decodeDataUri(buffer.at("uri").get<std::string>()).size() ==
+                    buffer.at("byteLength").get<size_t>());
+            }
+            for (const nlohmann::json& image :
+                gltf.value("images", nlohmann::json::array())) {
+                const std::vector<std::byte> png = decodeDataUri(
+                    image.at("uri").get<std::string>());
+                CHECK(png.size() > 8 && std::to_integer<uint8_t>(png[1]) == 'P' &&
+                    std::to_integer<uint8_t>(png[2]) == 'N' &&
+                    std::to_integer<uint8_t>(png[3]) == 'G');
+            }
+        }
+
+        const BenchmarkFixture& thin = findBenchmarkFixture(manifest, "m9_tf_thin_v1");
+        CHECK(thin.sceneFactory.compositionEntities.size() == 3);
+        CHECK(thin.sceneFactory.cameraPathEnabled);
+        CHECK(thin.sceneFactory.cameraPathPeriodFrames == 480u);
+        CHECK(thin.sceneFactory.cameraPathCuts.empty());
+        CHECK(evaluateBenchmarkCamera(thin, 240).position ==
+            glm::vec3(0.8f, 1.6f, 6.0f));
+        CHECK(near(evaluateBenchmarkCamera(thin, 120).position,
+            glm::vec3(0.0f, 1.6f, 6.0f)));
+        CHECK(evaluateBenchmarkViewHistoryResetRevision(thin, 5'000) == 0u);
+
+        const BenchmarkFixture& foliage = findBenchmarkFixture(manifest,
+            "m9_tf_foliage_v1");
+        CHECK(foliage.sceneFactory.compositionEntities[1].motion.kind ==
+            BenchmarkEntityMotionKind::Rotation);
+        CHECK(foliage.sceneFactory.compositionEntities[2].motion.kind ==
+            BenchmarkEntityMotionKind::None);
+        CHECK(!foliage.sceneFactory.cameraPathEnabled);
+        const nlohmann::json foliageGltf = loadJson(foliage.sourceAsset);
+        bool maskedLeaf = false;
+        for (const nlohmann::json& material : foliageGltf.at("materials")) {
+            maskedLeaf = maskedLeaf || (material.value("alphaMode", "") == "MASK" &&
+                material.at("alphaCutoff") == 0.5 &&
+                material.at("pbrMetallicRoughness").contains("baseColorTexture"));
+        }
+        CHECK(maskedLeaf);
+
+        const BenchmarkFixture& disocclude = findBenchmarkFixture(manifest,
+            "m9_tf_disocclude_v1");
+        const BenchmarkCompositionEntity& occluder =
+            disocclude.sceneFactory.compositionEntities[3];
+        CHECK(occluder.id == "occluder");
+        CHECK(occluder.motion.periodFrames == 240u);
+        CHECK(evaluateBenchmarkCompositionEntity(occluder, 120).translation ==
+            glm::vec3(3.5f, 0.0f, 1.5f));
+        CHECK(near(evaluateBenchmarkCompositionEntity(occluder, 60).translation,
+            glm::vec3(0.0f, 0.0f, 1.5f)));
+        // A continuous back-and-forth wrap is not a teleport.
+        CHECK(!evaluateBenchmarkCompositionEntity(occluder, 240).teleported);
+
+        const BenchmarkFixture& pan = findBenchmarkFixture(manifest, "m9_tf_pan_v1");
+        CHECK(pan.sceneFactory.cameraPathCuts ==
+            std::vector<uint64_t>({ 0u, 90u, 180u }));
+        CHECK(pan.sceneFactory.cameraPathPeriodFrames == 240u);
+        CHECK(evaluateBenchmarkCamera(pan, 89).target ==
+            glm::vec3(6.0f, 1.2f, 0.0f));
+        CHECK(evaluateBenchmarkCamera(pan, 90).position ==
+            glm::vec3(6.0f, 2.5f, 5.0f));
+        CHECK(evaluateBenchmarkCamera(pan, 240).target ==
+            glm::vec3(-6.0f, 1.2f, 0.0f));
+        constexpr std::array<std::pair<uint64_t, uint64_t>, 9> panRevisions{ {
+            { 0, 0 }, { 89, 0 }, { 90, 1 }, { 179, 1 }, { 180, 2 }, { 239, 2 },
+            { 240, 3 }, { 330, 4 }, { 480, 6 } } };
+        for (const auto& [frame, revision] : panRevisions) {
+            CHECK(evaluateBenchmarkViewHistoryResetRevision(pan, frame) == revision);
+        }
+
+        const BenchmarkFixture& emissive = findBenchmarkFixture(manifest,
+            "m9_tf_emissive_v1");
+        const nlohmann::json emissiveGltf = loadJson(emissive.sourceAsset);
+        double strongest = 0.0;
+        for (const nlohmann::json& material : emissiveGltf.at("materials")) {
+            if (!material.contains("extensions")) continue;
+            strongest = std::max(strongest, material.at("extensions")
+                .at("KHR_materials_emissive_strength").at("emissiveStrength")
+                .get<double>());
+        }
+        CHECK(strongest == 40.0);
+
+        const BenchmarkFixture& glass = findBenchmarkFixture(manifest, "m9_tf_glass_v1");
+        const nlohmann::json glassGltf = loadJson(glass.sourceAsset);
+        const nlohmann::json glassMeta = loadJson(glass.contentFiles[1].path);
+        CHECK(glassMeta.at("settings").at("schemaVersion") == 2);
+        CHECK(glassMeta.at("settings").at("values")
+            .at("transparency_execution_mode") == "classified");
+        size_t glassMaterials = 0;
+        for (size_t index = 0; index < glassGltf.at("materials").size(); ++index) {
+            const nlohmann::json& material = glassGltf.at("materials").at(index);
+            if (material.value("alphaMode", "") != "BLEND") continue;
+            ++glassMaterials;
+            CHECK(material.at("extensions").at("KHR_materials_transmission")
+                .at("transmissionFactor") == 1.0);
+            std::string materialGuid;
+            for (const nlohmann::json& subasset : glassMeta.at("subassets")) {
+                if (subasset.at("sourceKey") == "materials/" + std::to_string(index))
+                    materialGuid = subasset.at("guid");
+            }
+            CHECK(glassMeta.at("settings").at("values").at("transparency_policies")
+                .at(materialGuid).at("class") == "thin_glass");
+        }
+        CHECK(glassMaterials == 1);
+
+        const BenchmarkFixture& specular = findBenchmarkFixture(manifest,
+            "m9_tf_specular_v1");
+        CHECK(specular.sceneFactory.cameraPathPeriodFrames == 1'440u);
+        CHECK(specular.sceneFactory.cameraPathKeyframes.size() == 37);
+        CHECK(near(evaluateBenchmarkCamera(specular, 1'440).position,
+            specular.camera.position));
+        CHECK(evaluateBenchmarkCamera(specular, 400).target ==
+            glm::vec3(0.0f, 1.0f, 0.0f));
+        const BenchmarkCompositionEntity& torus =
+            specular.sceneFactory.compositionEntities[2];
+        CHECK(torus.motion.kind == BenchmarkEntityMotionKind::Rotation);
+        const glm::vec3 axis = glm::normalize(glm::vec3(0.3f, 1.0f, 0.2f));
+        CHECK(near(torus.motion.rotationAxis, axis));
+        CHECK(nearMatrix(eulerZyxMatrix(
+                evaluateBenchmarkCompositionEntity(torus, 360).rotationDegrees),
+            glm::mat3(glm::rotate(glm::mat4(1.0f), glm::radians(90.0f), axis))));
+
+        const BenchmarkFixture& still = findBenchmarkFixture(manifest, "m9_tf_static_v1");
+        CHECK(!still.sceneFactory.cameraPathEnabled);
+        CHECK(std::ranges::all_of(still.sceneFactory.compositionEntities,
+            [](const BenchmarkCompositionEntity& entity) {
+                return entity.motion.kind == BenchmarkEntityMotionKind::None;
+            }));
+
+        const BenchmarkFixture& hdr = findBenchmarkFixture(manifest, "m9_tf_hdr_v1");
+        const BenchmarkCompositionEntity& highlights =
+            hdr.sceneFactory.compositionEntities[2];
+        CHECK(evaluateBenchmarkCompositionEntity(highlights, 120).translation ==
+            glm::vec3(0.04f, 1.0f, 0.0f));
+        const nlohmann::json hdrGltf = loadJson(hdr.sourceAsset);
+        strongest = 0.0;
+        for (const nlohmann::json& material : hdrGltf.at("materials")) {
+            if (!material.contains("extensions")) continue;
+            strongest = std::max(strongest, material.at("extensions")
+                .at("KHR_materials_emissive_strength").at("emissiveStrength")
+                .get<double>());
+        }
+        CHECK(strongest == 4096.0);
+
+        const BenchmarkFixture& teleport = findBenchmarkFixture(manifest,
+            "m9_tf_teleport_v1");
+        const BenchmarkCompositionEntity& cube =
+            teleport.sceneFactory.compositionEntities[2];
+        CHECK(cube.motion.kind == BenchmarkEntityMotionKind::Keyframes);
+        CHECK(cube.motion.periodFrames == 240u);
+        CHECK(near(evaluateBenchmarkCompositionEntity(cube, 30).translation,
+            glm::vec3(-2.0f, 0.6f, 0.8f)));
+        CHECK(evaluateBenchmarkCompositionEntity(cube, 60).translation ==
+            glm::vec3(-0.8f, 0.6f, 0.8f));
+        CHECK(evaluateBenchmarkCompositionEntity(cube, 61).translation ==
+            glm::vec3(1.6f, 0.6f, 0.8f));
+        CHECK(evaluateBenchmarkCompositionEntity(cube, 200).translation ==
+            glm::vec3(0.0f, 0.6f, 1.8f));
+        std::vector<uint64_t> teleports;
+        for (uint64_t frame = 0; frame < 600; ++frame) {
+            if (evaluateBenchmarkCompositionEntity(cube, frame).teleported)
+                teleports.push_back(frame);
+        }
+        CHECK(teleports == std::vector<uint64_t>(
+            { 61u, 121u, 240u, 301u, 361u, 480u, 541u }));
+
+        // M9.3: a still camera; tinted thin glass (active volume), an Auto
+        // (SortedSurface) card and an explicit WeightedOIT card, all moving.
+        const BenchmarkFixture& reactive = findBenchmarkFixture(manifest,
+            "m9_tf_reactive_v1");
+        CHECK(!reactive.sceneFactory.cameraPathEnabled);
+        CHECK(reactive.sceneFactory.compositionEntities.size() == 5);
+        for (size_t index = 2; index < 5; ++index)
+            CHECK(reactive.sceneFactory.compositionEntities[index].motion.kind ==
+                BenchmarkEntityMotionKind::Keyframes);
+        const nlohmann::json reactiveGltf = loadJson(reactive.sourceAsset);
+        const nlohmann::json reactiveMeta = loadJson(reactive.contentFiles[1].path);
+        std::map<std::string, std::string> reactiveClasses;
+        for (size_t index = 0; index < reactiveGltf.at("materials").size(); ++index) {
+            const nlohmann::json& material = reactiveGltf.at("materials").at(index);
+            if (material.value("alphaMode", "") != "BLEND") continue;
+            std::string materialClass = "auto";
+            for (const nlohmann::json& subasset : reactiveMeta.at("subassets")) {
+                if (subasset.at("sourceKey") != "materials/" + std::to_string(index)) continue;
+                const nlohmann::json& policies = reactiveMeta.at("settings").at("values")
+                    .at("transparency_policies");
+                if (policies.contains(subasset.at("guid").get<std::string>()))
+                    materialClass = policies.at(subasset.at("guid").get<std::string>())
+                        .at("class").get<std::string>();
+            }
+            reactiveClasses[material.at("name").get<std::string>()] = materialClass;
+            if (materialClass == "thin_glass")
+                CHECK(material.at("extensions").at("KHR_materials_volume")
+                    .at("thicknessFactor").get<double>() > 0.0);
+        }
+        CHECK(reactiveClasses.size() == 3);
+        CHECK(std::ranges::count_if(reactiveClasses, [](const auto& entry) {
+            return entry.second == "thin_glass"; }) == 1);
+        CHECK(std::ranges::count_if(reactiveClasses, [](const auto& entry) {
+            return entry.second == "auto"; }) == 1);
+        CHECK(std::ranges::count_if(reactiveClasses, [](const auto& entry) {
+            return entry.second == "weighted_oit"; }) == 1);
+        return true;
+    }
+
 } // namespace
 
 int main() {
@@ -1295,6 +2026,7 @@ int main() {
     constexpr TestCase tests[] = {
         { "SHA-256 known vector", testSha256KnownVector },
         { "manifest and content verification", testManifestAndContentVerification },
+        { "content resolution through the local asset root", testContentResolutionThroughLocalRoot },
         { "nested transparency fixture contract", testNestedTransparencyFixtureContract },
         { "opaque emissive range fixture contract", testOpaqueEmissiveRangeFixtureContract },
         { "M1 color-volume fixture contract", testM1ColorVolumeFixtureContract },
@@ -1336,6 +2068,12 @@ int main() {
             testM7ShadowLodWarmedAdmissionFixtureContract },
         { "M7 shadow-quality closure fixture contract",
             testM7ShadowQualityClosureFixtureContract },
+        { "composition schema contract", testCompositionSchemaContract },
+        { "periodic camera path and wrap contract",
+            testPeriodicCameraPathAndWrapContract },
+        { "composition schema rejections", testCompositionSchemaRejections },
+        { "legacy manifests parse unchanged", testLegacyManifestsParseUnchanged },
+        { "M9 temporal fixture contract", testM9TemporalFixtureContract },
         { "repeated loads are identical", testRepeatedLoadsAreIdentical },
         { "unknown fixture fails", testUnknownFixtureFails },
         { "instance count overflow is rejected", testInstanceCountOverflowIsRejected },

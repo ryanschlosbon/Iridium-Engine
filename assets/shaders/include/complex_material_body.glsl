@@ -11,17 +11,7 @@ layout(location = 3) in vec3 fragWorldPos;
 layout(location = 4) in vec4 fragTangent;
 layout(location = 5) in vec2 fragTexCoord1;
 
-layout(set = 0, binding = 0) uniform GlobalUBO {
-    mat4 model;
-    mat4 view;
-    mat4 proj;
-    mat4 inverseView;
-    mat4 inverseProjection;
-    vec4 cameraPosition;
-    vec4 depthRange;
-    uvec4 renderInfo;
-    vec4 worldUnits;
-} ubo;
+#include "include/view_uniforms.glsl"
 
 #if defined(IRIDIUM_INDEXED_MATERIAL_TEXTURES)
 #extension GL_EXT_nonuniform_qualifier : require
@@ -111,6 +101,46 @@ layout(set = 4, binding = 1) uniform usampler2D
 layout(location = 0) out vec4 outColor;
 #ifdef IRIDIUM_WEIGHTED_OIT
 layout(location = 1) out float outRevealage;
+#endif
+#if defined(IRIDIUM_WRITE_VELOCITY)
+// M9.1: forward-opaque writes velocity beside scene colour.
+#define IRIDIUM_MOTION_FRAGMENT 1
+#include "include/motion_vectors.glsl"
+layout(location = 1) out vec2 outVelocity;
+#endif
+#if defined(IRIDIUM_TRANSPARENT_REACTIVE)
+// M9.8e: the scene colour's alpha is the TAA reactive mask's revealage
+// (M9.3). A blended layer that moves with the opaque surface under it (a
+// clear-coat shell, a window in its frame, a decal) reprojects with that
+// surface's velocity, so it is not reactive; one that moves on its own is,
+// by its coverage. The second blend source carries that reactive coverage
+// to the alpha channel, so the colour blend is unchanged.
+#define IRIDIUM_MOTION_FRAGMENT 1
+#include "include/motion_vectors.glsl"
+layout(set = IRIDIUM_SCENE_SET, binding = 3) uniform sampler2D gVelocity;
+layout(location = 0, index = 1) out vec4 outReactive;
+
+float iridiumReactiveCoverage(float coverage) {
+    ivec2 pixel = ivec2(gl_FragCoord.xy);
+    vec2 size = vec2(textureSize(gVelocity, 0));
+    vec2 own = iridiumMotionVector();
+    vec2 under = texelFetch(gVelocity, pixel, 0).xy;
+    vec2 mismatch = own - under;
+    if (under == vec2(0.0)) {
+        // Background keeps zero velocity; its consumers reconstruct the
+        // camera motion of the far plane, so either may be what lies under.
+        vec2 uv = (vec2(pixel) + 0.5) / size;
+        vec4 view = ubo.inverseProjection * vec4(uv * 2.0 - 1.0, 1.0, 1.0);
+        vec4 world = ubo.inverseView * (view / view.w);
+        vec4 previous = ubo.previousViewProjection * world;
+        vec2 far = previous.w > 0.0
+            ? uv - (previous.xy / previous.w * 0.5 + 0.5) : vec2(IridiumMotionNoHistory);
+        if (length(own - far) < length(mismatch)) mismatch = own - far;
+    }
+    // Sub-pixel disagreement is reprojection noise; a pixel of it is motion.
+    float pixels = length(mismatch * size);
+    return clamp(coverage, 0.0, 1.0) * smoothstep(0.25, 1.0, pixels);
+}
 #endif
 
 layout(push_constant) uniform CanonicalPushConstants {
@@ -222,6 +252,15 @@ void iridiumWriteMaterialOutput(vec4 value, bool premultiplied) {
     outRevealage = coverage;
 #else
     outColor = value;
+#if defined(IRIDIUM_TRANSPARENT_REACTIVE)
+    outReactive = vec4(0.0, 0.0, 0.0, iridiumReactiveCoverage(value.a));
+#endif
+#if defined(IRIDIUM_WRITE_VELOCITY)
+    // M9.3: forward-opaque surfaces are opaque in the scene colour's alpha
+    // (the revealage the TAA reactive mask reads), like deferred lighting.
+    outColor.a = 1.0;
+    outVelocity = iridiumMotionVector();
+#endif
 #endif
 }
 
@@ -285,9 +324,9 @@ float iridiumLayeredOrdinary2PathMeters(float authoredMaximumMeters) {
     float exitDepth = texelFetch(layeredExitDepth, atlasPixel, 0).r;
     vec2 sceneUv = (vec2(scenePixel) + vec2(0.5)) / vec2(sceneExtent);
     vec3 entryView = iridiumReconstructViewPosition(sceneUv,
-        entryDepth, ubo.inverseProjection);
+        entryDepth, ubo.jitteredInverseProjection);
     vec3 exitView = iridiumReconstructViewPosition(sceneUv,
-        exitDepth, ubo.inverseProjection);
+        exitDepth, ubo.jitteredInverseProjection);
     float measuredChordMeters = length(exitView - entryView) *
         max(iridiumTransparencyFiniteOr(ubo.worldUnits.x, 1.0), 0.0);
     authoredMaximumMeters = max(iridiumTransparencyFiniteOr(
@@ -444,9 +483,9 @@ float iridiumLayeredDeepPathMeters(float authoredMaximumMeters) {
         return 0.0;
     vec2 sceneUv = (vec2(scenePixel) + vec2(0.5)) / vec2(sceneExtent);
     vec3 entryView = iridiumReconstructViewPosition(sceneUv,
-        entryDepth, ubo.inverseProjection);
+        entryDepth, ubo.jitteredInverseProjection);
     vec3 exitView = iridiumReconstructViewPosition(sceneUv,
-        exitDepth, ubo.inverseProjection);
+        exitDepth, ubo.jitteredInverseProjection);
     float measuredChordMeters = length(exitView - entryView) *
         max(iridiumTransparencyFiniteOr(ubo.worldUnits.x, 1.0), 0.0);
     authoredMaximumMeters = max(iridiumTransparencyFiniteOr(
@@ -1078,7 +1117,7 @@ void main() {
                         transmittedDirection, opticalPathMeters,
                         ubo.worldUnits.x, roughness, 1.0 /
                         max(transmissionIor, IRIDIUM_TRANSPARENCY_MIN_IOR),
-                        ubo.view, ubo.proj, refractionExtent, pyramidLevels);
+                        ubo.view, ubo.jitteredProjection, refractionExtent, pyramidLevels);
                 transparencyDebugPyramidState = 1u;
                 if (refraction.onScreen) {
                     float selectedLod = refraction.lod;

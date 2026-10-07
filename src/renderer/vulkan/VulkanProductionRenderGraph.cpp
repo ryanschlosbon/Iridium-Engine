@@ -1,14 +1,18 @@
 #include "renderer/vulkan/VulkanProductionRenderGraph.h"
 
 #include "renderer/vulkan/VulkanRenderGraphExecutor.h"
+#include "renderer/vulkan/VulkanBloomFeature.h"
+#include "renderer/vulkan/VulkanExposureFeature.h"
 #include "renderer/vulkan/VulkanGBufferLayout.h"
 #include "renderer/lighting/ClusteredLighting.h"
 #include "renderer/rhi/ShadowTypes.h"
+#include "renderer/rhi/DepthPyramid.h"
 
 #include <limits>
 #include <algorithm>
 #include <array>
 #include <string>
+#include <string_view>
 #include <sstream>
 #include <stdexcept>
 #include <utility>
@@ -119,12 +123,11 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(VkExtent2D extent,
     uint32_t spotShadowAtlasResolution,
     bool transparencyPyramids,
     VulkanLayeredGraphConfig layered,
-    bool legacyTransparency, bool depthPyramid, uint64_t virtualShadowWorkingSetBytes) {
+    VulkanProductionGraphFeatures features) {
     return buildVulkanProductionRenderGraph(extent, extent,
         swapchainFormat, outputFormat, hdr10Composition, gBufferLayout,
         clusterConfig, directionalShadowResolution,
-        spotShadowAtlasResolution, transparencyPyramids, layered,
-        legacyTransparency, depthPyramid, virtualShadowWorkingSetBytes);
+        spotShadowAtlasResolution, transparencyPyramids, layered, features);
 }
 
 RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
@@ -135,7 +138,10 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
     uint32_t spotShadowAtlasResolution,
     bool transparencyPyramids,
     VulkanLayeredGraphConfig layered,
-    bool legacyTransparency, bool depthPyramid, uint64_t virtualShadowWorkingSetBytes) {
+    VulkanProductionGraphFeatures features) {
+    const bool depthPyramid = features.depthPyramid;
+    const uint64_t virtualShadowWorkingSetBytes =
+        features.virtualShadowWorkingSetBytes;
     if (sceneExtent.width == 0 || sceneExtent.height == 0 ||
         presentationExtent.width == 0 || presentationExtent.height == 0) {
         throw std::invalid_argument("Production render graph requires a non-empty extent");
@@ -148,6 +154,15 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
     RenderGraph::RenderGraphBuilder graph;
     using RenderGraph::Access;
     using RenderGraph::LoadOp;
+    using RenderGraph::StoreOp;
+    using RenderGraph::ClearValue;
+    // M7R R4a: every clearing attachment declares the exact value its render
+    // pass clears with today (R4 design inventory), so the executor's
+    // dynamic-rendering plans clear bit-identically. Depth clears to 1.0.
+    const ClearValue opaqueBlack = ClearValue::color(0.0f, 0.0f, 0.0f, 1.0f);
+    const ClearValue transparentBlack = ClearValue::color(0.0f, 0.0f, 0.0f, 0.0f);
+    const ClearValue zeroUint = ClearValue::colorUint(0u);
+    const ClearValue farDepth = ClearValue::depthStencil(1.0f, 0u);
 
     if (clusterConfig.tileWidth == 0 || clusterConfig.tileHeight == 0 ||
         clusterConfig.depthSlices == 0) {
@@ -180,12 +195,15 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
             sizeof(uint32_t))));
     RenderGraph::ResourceHandle clusterDiagnostics = graph.createResource(
         kClusterDiagnosticResourceName, bufferDesc(64, 16));
-    RenderGraph::ResourceDesc clusterReadbackDesc = bufferDesc(64, 16);
-    clusterReadbackDesc.lifetime = RenderGraph::ResourceLifetime::External;
-    clusterReadbackDesc.imported = true;
-    clusterReadbackDesc.initialAccess = Access::TransferDestination;
-    RenderGraph::ResourceHandle clusterReadback = graph.createResource(
-        "lighting.cluster.diagnostics-readback", clusterReadbackDesc);
+    RenderGraph::ResourceHandle clusterReadback{};
+    if (features.clusterTelemetryReadback) {
+        RenderGraph::ResourceDesc clusterReadbackDesc = bufferDesc(64, 16);
+        clusterReadbackDesc.lifetime = RenderGraph::ResourceLifetime::External;
+        clusterReadbackDesc.imported = true;
+        clusterReadbackDesc.initialAccess = Access::TransferDestination;
+        clusterReadback = graph.createResource(
+            "lighting.cluster.diagnostics-readback", clusterReadbackDesc);
+    }
     RenderGraph::ResourceHandle clusterCounts = graph.createResource(
         kClusterCountResourceName,
         bufferDesc(checkedBufferBytes(clusterCount, sizeof(uint32_t))));
@@ -208,6 +226,10 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
         "gbuffer.f0-roughness", imageDesc(toGraphFormat(formats.f0Roughness), sceneExtent));
     RenderGraph::ResourceHandle materialFlags = graph.createResource(
         "gbuffer.material-flags", imageDesc(toGraphFormat(formats.materialFlags), sceneExtent));
+    // M9.1: per-pixel motion (current minus previous unjittered UV), written
+    // by every opaque depth writer (gbuffer, forward-opaque).
+    RenderGraph::ResourceHandle velocity = graph.createResource(
+        "gbuffer.velocity", imageDesc(toGraphFormat(VulkanVelocityFormat), sceneExtent));
     RenderGraph::ResourceDesc directionalShadowDesc = imageDesc(
         RenderGraph::Format::D32Float,
         { directionalShadowResolution, directionalShadowResolution },
@@ -227,10 +249,12 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
         "shadow.spot", spotShadowDesc);
     std::array<RenderGraph::ResourceHandle, 3> pointShadows{};
     constexpr std::array<uint32_t, 3> PointResolutions{ 256, 512, 1024 };
-    constexpr std::array<uint32_t, 3> PointCapacities{
-        kPointShadowPool256Capacity, kPointShadowPool512Capacity,
-        kPointShadowPool1024Capacity };
+    const std::array<uint32_t, 3>& PointCapacities =
+        features.pointShadowPoolCapacities;
     for (uint32_t tier = 0; tier < pointShadows.size(); ++tier) {
+        if (PointCapacities[tier] == 0u)
+            throw std::invalid_argument(
+                "Production render graph requires nonzero point-shadow pools");
         RenderGraph::ResourceDesc pointDesc = imageDesc(
             RenderGraph::Format::D32Float,
             { PointResolutions[tier], PointResolutions[tier] },
@@ -263,11 +287,6 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
         depthPyramid.image.mipLevels = colorPyramid.image.mipLevels;
         refractionDepth = graph.createResource("depth.refraction-nearest-pyramid",
             depthPyramid);
-    }
-    RenderGraph::ResourceHandle glassDepth{};
-    if (legacyTransparency) {
-        glassDepth = graph.createResource("depth.glass",
-            imageDesc(RenderGraph::Format::D32Float, sceneExtent));
     }
     RenderGraph::ResourceHandle layeredEntryDepth{};
     RenderGraph::ResourceHandle layeredEntryIdentity{};
@@ -380,31 +399,130 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
         const auto upload = graph.addPass("shadow.virtual.clip-upload");
         virtualWorking = graph.write(upload, virtualWorking, Access::TransferDestination);
     }
-    const RenderGraph::PassHandle directionalShadowPass = graph.addPass(
+    // M7R R3b.7: GPU-driven compaction producers. Each view's per-slot
+    // indirect command and count buffers are imported (owned by its culler,
+    // capacity grows, so variableSize); the compact pass writes them and the
+    // drawing pass reads them as indirect arguments, so the compute ->
+    // indirect dependency is an executor barrier. Host -> compute barriers stay
+    // inside the compact passes. Declared directly before their consumers so
+    // the compiled order keeps the previous order as a subsequence.
+    const auto indirectBuffer = [&](std::string name) {
+        RenderGraph::ResourceDesc desc = bufferDesc(sizeof(uint32_t));
+        desc.lifetime = RenderGraph::ResourceLifetime::External;
+        desc.imported = true;
+        desc.initialAccess = Access::IndirectRead;
+        desc.buffer.variableSize = true;
+        return graph.createResource(std::move(name), desc);
+    };
+    const auto addCompaction = [&](std::string view,
+        RenderGraph::PassHandle& consumerPass, const char* consumerName) {
+        RenderGraph::PassHandle compactPass{};
+        RenderGraph::ResourceHandle commands =
+            indirectBuffer(view + ".indirect-commands");
+        RenderGraph::ResourceHandle counts =
+            indirectBuffer(view + ".indirect-counts");
+        const RenderGraph::PassHandle compact = graph.addPass(view + ".compact",
+            RenderGraph::QueueClass::Compute);
+        commands = graph.write(compact, commands, Access::StorageReadWrite);
+        counts = graph.write(compact, counts, Access::StorageReadWrite);
+        consumerPass = graph.addPass(consumerName);
+        graph.read(consumerPass, commands, Access::IndirectRead);
+        graph.read(consumerPass, counts, Access::IndirectRead);
+        compactPass = compact;
+        return compactPass;
+    };
+
+    RenderGraph::PassHandle directionalShadowPass{};
+    addCompaction("shadow.directional", directionalShadowPass,
         "shadow.directional");
     directionalShadow = graph.write(directionalShadowPass,
-        directionalShadow, Access::DepthAttachmentWrite, LoadOp::Clear);
+        directionalShadow, Access::DepthAttachmentWrite, LoadOp::Clear,
+        StoreOp::Store, farDepth);
 
-    const RenderGraph::PassHandle spotShadowPass = graph.addPass(
-        "shadow.spot");
+    RenderGraph::PassHandle spotShadowPass{};
+    addCompaction("shadow.spot", spotShadowPass, "shadow.spot");
     spotShadow = graph.write(spotShadowPass, spotShadow,
         Access::DepthAttachmentWrite, LoadOp::Load);
 
-    const RenderGraph::PassHandle pointShadowPass = graph.addPass(
-        "shadow.point");
+    RenderGraph::PassHandle pointShadowPass{};
+    addCompaction("shadow.point", pointShadowPass, "shadow.point");
     for (RenderGraph::ResourceHandle& pointShadow : pointShadows)
         pointShadow = graph.write(pointShadowPass, pointShadow,
             Access::DepthAttachmentWrite, LoadOp::Load);
 
-    const RenderGraph::PassHandle gbuffer = graph.addPass("gbuffer");
-    normal = graph.write(gbuffer, normal, Access::ColorAttachment, LoadOp::Clear);
-    albedo = graph.write(gbuffer, albedo, Access::ColorAttachment, LoadOp::Clear);
-    emissive = graph.write(gbuffer, emissive, Access::ColorAttachment, LoadOp::Clear);
+    // M7R R3b.8: reflection-probe capture lights its faces with this frame's
+    // shadow maps. Its staging targets and per-face indirect buffers vary per
+    // capture, so they stay owner-managed (barriers inside the pass) rather
+    // than graph resources.
+    const RenderGraph::PassHandle probeCapture = graph.addPass("probe.capture");
+    graph.read(probeCapture, directionalShadow, Access::SampledRead);
+    graph.read(probeCapture, spotShadow, Access::SampledRead);
+    for (const RenderGraph::ResourceHandle pointShadow : pointShadows)
+        graph.read(probeCapture, pointShadow, Access::SampledRead);
+
+    // M7R R3b.9: the Hi-Z depth-pyramid history (one image per retained
+    // view, the current view's bound per frame) is an executor-owned global
+    // import. The opaque compaction samples last frame's pyramid, the build
+    // rewrites it (mip-to-mip barriers stay inside the pass) and the
+    // validation hook copies it, so the executor issues the begin (to GENERAL)
+    // and ready (to SHADER_READ_ONLY, now at the next reader) barriers.
+    RenderGraph::ResourceHandle depthHistory{};
+    if (depthPyramid) {
+        RenderGraph::ResourceDesc historyDesc = imageDesc(
+            RenderGraph::Format::R32Float, sceneExtent,
+            RenderGraph::ResourceLifetime::External);
+        historyDesc.image.mipLevels = static_cast<uint16_t>(depthPyramidMipCount(
+            { sceneExtent.width, sceneExtent.height }));
+        historyDesc.imported = true;
+        historyDesc.initialAccess = Access::SampledRead;
+        depthHistory = graph.createResource("depth.occlusion-pyramid.history",
+            historyDesc);
+    }
+
+    RenderGraph::PassHandle gbuffer{};
+    const RenderGraph::PassHandle opaqueCompact =
+        addCompaction("gpu-scene.opaque", gbuffer, "gbuffer");
+    if (depthPyramid)
+        graph.read(opaqueCompact, depthHistory, Access::SampledRead);
+    normal = graph.write(gbuffer, normal, Access::ColorAttachment, LoadOp::Clear,
+        StoreOp::Store, opaqueBlack);
+    albedo = graph.write(gbuffer, albedo, Access::ColorAttachment, LoadOp::Clear,
+        StoreOp::Store, opaqueBlack);
+    emissive = graph.write(gbuffer, emissive, Access::ColorAttachment, LoadOp::Clear,
+        StoreOp::Store, transparentBlack);
     f0Roughness = graph.write(gbuffer, f0Roughness,
-        Access::ColorAttachment, LoadOp::Clear);
+        Access::ColorAttachment, LoadOp::Clear, StoreOp::Store, opaqueBlack);
     materialFlags = graph.write(gbuffer, materialFlags,
-        Access::ColorAttachment, LoadOp::Clear);
-    depth = graph.write(gbuffer, depth, Access::DepthAttachmentWrite, LoadOp::Clear);
+        Access::ColorAttachment, LoadOp::Clear, StoreOp::Store, zeroUint);
+    // Appended after the surface targets: attachment 5. Background pixels keep
+    // zero (camera motion is reconstructed from depth by its consumers).
+    velocity = graph.write(gbuffer, velocity, Access::ColorAttachment, LoadOp::Clear,
+        StoreOp::Store, transparentBlack);
+    depth = graph.write(gbuffer, depth, Access::DepthAttachmentWrite, LoadOp::Clear,
+        StoreOp::Store, farDepth);
+
+    // Reflection-probe clustering (R3b.7): per-slot imported header/index
+    // buffers written by compute and read by every lit consumer through
+    // readClusterProduct; the compute -> fragment dependency is an executor
+    // barrier.
+    const auto probeClusterBuffer = [&](std::string name) {
+        RenderGraph::ResourceDesc desc = bufferDesc(sizeof(uint32_t));
+        desc.lifetime = RenderGraph::ResourceLifetime::External;
+        desc.imported = true;
+        desc.initialAccess = Access::StorageRead;
+        desc.buffer.variableSize = true;
+        return graph.createResource(std::move(name), desc);
+    };
+    RenderGraph::ResourceHandle probeClusterHeaders =
+        probeClusterBuffer("lighting.probe-cluster.headers");
+    RenderGraph::ResourceHandle probeClusterIndices =
+        probeClusterBuffer("lighting.probe-cluster.indices");
+    const RenderGraph::PassHandle probeCluster = graph.addPass(
+        "lighting.probe-cluster", RenderGraph::QueueClass::Compute);
+    probeClusterHeaders = graph.write(probeCluster, probeClusterHeaders,
+        Access::StorageWrite);
+    probeClusterIndices = graph.write(probeCluster, probeClusterIndices,
+        Access::StorageWrite);
 
     const RenderGraph::PassHandle clusterClear = graph.addPass(
         "lighting.cluster.clear", RenderGraph::QueueClass::Compute);
@@ -467,11 +585,14 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
     graph.read(clusterFinalize, clusterCounts, Access::StorageRead);
     graph.read(clusterFinalize, clusterIndirect, Access::IndirectRead);
 
-    const RenderGraph::PassHandle clusterReadbackPass = graph.addPass(
-        "lighting.cluster.readback", RenderGraph::QueueClass::Transfer);
-    graph.read(clusterReadbackPass, clusterDiagnostics, Access::TransferSource);
-    clusterReadback = graph.write(clusterReadbackPass, clusterReadback,
-        Access::TransferDestination);
+    if (features.clusterTelemetryReadback) {
+        const RenderGraph::PassHandle clusterReadbackPass = graph.addPass(
+            "lighting.cluster.readback", RenderGraph::QueueClass::Transfer);
+        graph.read(clusterReadbackPass, clusterDiagnostics,
+            Access::TransferSource);
+        clusterReadback = graph.write(clusterReadbackPass, clusterReadback,
+            Access::TransferDestination);
+    }
 
     const auto readClusterProduct = [&](RenderGraph::PassHandle pass) {
         graph.read(pass, directionalShadow, Access::SampledRead);
@@ -483,6 +604,8 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
         graph.read(pass, clusterIndices, Access::StorageRead);
         graph.read(pass, clusterFallback, Access::StorageRead);
         graph.read(pass, clusterDiagnostics, Access::StorageRead);
+        graph.read(pass, probeClusterHeaders, Access::StorageRead);
+        graph.read(pass, probeClusterIndices, Access::StorageRead);
     };
 
     const RenderGraph::PassHandle lighting = graph.addPass("lighting");
@@ -493,7 +616,8 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
     graph.read(lighting, materialFlags, Access::SampledRead);
     graph.read(lighting, depth, Access::SampledRead);
     readClusterProduct(lighting);
-    litScene = graph.write(lighting, litScene, Access::ColorAttachment, LoadOp::Clear);
+    litScene = graph.write(lighting, litScene, Access::ColorAttachment, LoadOp::Clear,
+        StoreOp::Store, opaqueBlack);
 
     const RenderGraph::PassHandle opaqueForward =
         graph.addPass("forward-opaque");
@@ -501,6 +625,8 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
     depth = graph.write(opaqueForward, depth,
         Access::DepthAttachmentWrite, LoadOp::Load);
     litScene = graph.write(opaqueForward, litScene,
+        Access::ColorAttachment, LoadOp::Load);
+    velocity = graph.write(opaqueForward, velocity,
         Access::ColorAttachment, LoadOp::Load);
 
     if (virtualShadowWorkingSetBytes) {
@@ -510,7 +636,8 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
         const auto readback = graph.addPass("shadow.virtual.request-readback", RenderGraph::QueueClass::Transfer);
         graph.read(readback, virtualWorking, Access::TransferSource);
         // Explicit qualification can copy the exact depth consumed above.
-        graph.read(readback, depth, Access::TransferSource);
+        if (features.hooks.virtualShadowDepthSnapshot)
+            graph.read(readback, depth, Access::TransferSource);
         graph.exportResource(virtualWorking, Access::TransferSource);
     }
     if (transparencyPyramids) {
@@ -523,17 +650,29 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
             Access::StorageReadWrite);
         refractionDepth = graph.write(pyramidBuild, refractionDepth,
             Access::StorageReadWrite);
+        // M7R R4b.5: the build writes every texel of mip 0 from scene colour
+        // and depth, then each mip from the one before it (all mips, in
+        // order), so nothing reads contents it did not write this frame.
+        // Their readers (compatibility forward, the layered local
+        // compositions) run only when the build runs (a non-empty
+        // compatibility queue).
+        graph.declareWholeResourceWrite(refractionColor);
+        graph.declareWholeResourceWrite(refractionDepth);
     }
 
     RenderGraph::PassHandle depthPyramidValidation{};
     if (depthPyramid) {
         const auto build = graph.addPass("depth.occlusion-pyramid.build", RenderGraph::QueueClass::Compute);
         graph.read(build, depth, Access::SampledRead);
-        depthPyramidValidation = graph.addPass(
-            "depth.occlusion-pyramid.validation-readback-hook",
-            RenderGraph::QueueClass::Transfer);
-        graph.read(depthPyramidValidation, depth, Access::TransferSource);
-        graph.addDependency(build, depthPyramidValidation);
+        depthHistory = graph.write(build, depthHistory, Access::StorageReadWrite);
+        if (features.hooks.depthPyramidValidation) {
+            depthPyramidValidation = graph.addPass(
+                "depth.occlusion-pyramid.validation-readback-hook",
+                RenderGraph::QueueClass::Transfer);
+            graph.read(depthPyramidValidation, depth, Access::TransferSource);
+            graph.read(depthPyramidValidation, depthHistory, Access::TransferSource);
+            graph.addDependency(build, depthPyramidValidation);
+        }
     }
 
     const RenderGraph::PassHandle sortedTransparency =
@@ -542,6 +681,8 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
         graph.addDependency(depthPyramidValidation, sortedTransparency);
     readClusterProduct(sortedTransparency);
     graph.read(sortedTransparency, depth, Access::DepthAttachmentRead);
+    // M9.8e: motion-aware reactive coverage reads the opaque velocity.
+    graph.read(sortedTransparency, velocity, Access::SampledRead);
     litScene = graph.write(sortedTransparency, litScene,
         Access::ColorAttachment, LoadOp::Load);
 
@@ -554,9 +695,10 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
         graph.read(entryCapture, depth, Access::SampledRead);
         graph.read(entryCapture, materialFlags, Access::SampledRead);
         layeredEntryDepth = graph.write(entryCapture, layeredEntryDepth,
-            Access::DepthAttachmentWrite, LoadOp::Clear);
+            Access::DepthAttachmentWrite, LoadOp::Clear, StoreOp::Store, farDepth);
         layeredEntryIdentity = graph.write(entryCapture,
-            layeredEntryIdentity, Access::ColorAttachment, LoadOp::Clear);
+            layeredEntryIdentity, Access::ColorAttachment, LoadOp::Clear,
+            StoreOp::Store, zeroUint);
 
         const RenderGraph::PassHandle exitCapture = graph.addPass(
             "transparent.layered.exit.capture");
@@ -564,9 +706,10 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
         graph.read(exitCapture, layeredEntryDepth, Access::SampledRead);
         graph.read(exitCapture, layeredEntryIdentity, Access::SampledRead);
         layeredExitDepth = graph.write(exitCapture, layeredExitDepth,
-            Access::DepthAttachmentWrite, LoadOp::Clear);
+            Access::DepthAttachmentWrite, LoadOp::Clear, StoreOp::Store, farDepth);
         layeredExitIdentity = graph.write(exitCapture,
-            layeredExitIdentity, Access::ColorAttachment, LoadOp::Clear);
+            layeredExitIdentity, Access::ColorAttachment, LoadOp::Clear,
+            StoreOp::Store, zeroUint);
 
         const RenderGraph::PassHandle localComposition = graph.addPass(
             "transparent.layered.local-compose");
@@ -585,23 +728,25 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
         graph.read(localComposition, layeredExitIdentity,
             Access::SampledRead);
         layeredLocalColor = graph.write(localComposition, layeredLocalColor,
-            Access::ColorAttachment, LoadOp::Clear);
+            Access::ColorAttachment, LoadOp::Clear, StoreOp::Store, transparentBlack);
 
         // The explicit one-shot diagnostic validates both paired interfaces and
         // their evaluated local AP1 result after composition has completed.
-        const RenderGraph::PassHandle validationReadback = graph.addPass(
-            "transparent.layered.validation-readback-hook",
-            RenderGraph::QueueClass::Transfer);
-        graph.read(validationReadback, layeredEntryDepth,
-            Access::TransferSource);
-        graph.read(validationReadback, layeredEntryIdentity,
-            Access::TransferSource);
-        graph.read(validationReadback, layeredExitDepth,
-            Access::TransferSource);
-        graph.read(validationReadback, layeredExitIdentity,
-            Access::TransferSource);
-        graph.read(validationReadback, layeredLocalColor,
-            Access::TransferSource);
+        if (features.hooks.layeredValidation) {
+            const RenderGraph::PassHandle validationReadback = graph.addPass(
+                "transparent.layered.validation-readback-hook",
+                RenderGraph::QueueClass::Transfer);
+            graph.read(validationReadback, layeredEntryDepth,
+                Access::TransferSource);
+            graph.read(validationReadback, layeredEntryIdentity,
+                Access::TransferSource);
+            graph.read(validationReadback, layeredExitDepth,
+                Access::TransferSource);
+            graph.read(validationReadback, layeredExitIdentity,
+                Access::TransferSource);
+            graph.read(validationReadback, layeredLocalColor,
+                Access::TransferSource);
+        }
 
         const RenderGraph::PassHandle compositionContract = graph.addPass(
             "transparent.layered.compose-hook");
@@ -639,10 +784,10 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
             }
             tier.depth[interfaceIndex] = graph.write(capture,
                 tier.depth[interfaceIndex], Access::DepthAttachmentWrite,
-                LoadOp::Clear);
+                LoadOp::Clear, StoreOp::Store, farDepth);
             tier.identity[interfaceIndex] = graph.write(capture,
                 tier.identity[interfaceIndex], Access::ColorAttachment,
-                LoadOp::Clear);
+                LoadOp::Clear, StoreOp::Store, zeroUint);
 
             if (deepLayeredTerminationInterface(interfaceIndex,
                     tier.interfaceCount)) {
@@ -655,6 +800,10 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
                 tier.tileTermination[interfaceIndex] = graph.write(
                     termination, tier.tileTermination[interfaceIndex],
                     Access::StorageWrite, LoadOp::DontCare);
+                // M7R R4b.5: one workgroup per 16x16 tile stores every
+                // texel of the tile mask (its extent is the dispatch).
+                graph.declareWholeResourceWrite(
+                    tier.tileTermination[interfaceIndex]);
             }
         }
 
@@ -672,8 +821,9 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
                 Access::SampledRead);
         }
         tier.localColor = graph.write(localComposition, tier.localColor,
-            Access::ColorAttachment, LoadOp::Clear);
+            Access::ColorAttachment, LoadOp::Clear, StoreOp::Store, transparentBlack);
 
+        if (!features.hooks.layeredValidation) return;
         const RenderGraph::PassHandle validationReadback = graph.addPass(
             "transparent.layered." + tier.name +
                 ".validation-readback-hook",
@@ -706,10 +856,19 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
                 : "transparent.layered.cinematic8.compose-hook";
         const RenderGraph::PassHandle composition = graph.addPass(
             compositionName);
+        // M7R R4b.5: with both tiers resident the shared resolve runs when
+        // either tier has draws, so it may read the other tier's products in
+        // a frame that skipped their writers. Those stay out of aliasing.
+        const bool bothTiers = hero4.interfaceCount != 0u &&
+            cinematic8.interfaceCount != 0u;
         const auto readTierResolveInputs = [&](const DeepLayeredTierResources& tier) {
             if (tier.interfaceCount == 0u) return;
             graph.read(composition, tier.localColor, Access::SampledRead);
             graph.read(composition, tier.identity[0], Access::SampledRead);
+            if (bothTiers) {
+                graph.excludeFromAliasing(tier.localColor);
+                graph.excludeFromAliasing(tier.identity[0]);
+            }
         };
         readTierResolveInputs(hero4);
         readTierResolveInputs(cinematic8);
@@ -718,61 +877,23 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
             Access::ColorAttachment, LoadOp::Load);
     }
 
-    if (legacyTransparency) {
-        const RenderGraph::PassHandle backgroundDepth =
-            graph.addPass("transparent.background.depth");
-        glassDepth = graph.write(backgroundDepth, glassDepth,
-            Access::DepthAttachmentWrite, LoadOp::Clear);
-
-        const RenderGraph::PassHandle backgroundForward =
-            graph.addPass("transparent.background.forward");
-        readClusterProduct(backgroundForward);
-        if (transparencyPyramids) {
-            graph.read(backgroundForward, refractionColor, Access::SampledRead);
-            graph.read(backgroundForward, refractionDepth, Access::SampledRead);
-        }
-        depth = graph.write(backgroundForward, depth,
-            Access::DepthAttachmentWrite, LoadOp::Load);
-        graph.read(backgroundForward, glassDepth, Access::SampledRead);
-        litScene = graph.write(backgroundForward, litScene,
-            Access::ColorAttachment, LoadOp::Load);
-
-        const RenderGraph::PassHandle foregroundDepth =
-            graph.addPass("transparent.foreground.depth");
-        glassDepth = graph.write(foregroundDepth, glassDepth,
-            Access::DepthAttachmentWrite, LoadOp::Clear);
-
-        const RenderGraph::PassHandle foregroundForward =
-            graph.addPass("transparent.foreground.forward");
-        readClusterProduct(foregroundForward);
-        if (transparencyPyramids) {
-            graph.read(foregroundForward, refractionColor, Access::SampledRead);
-            graph.read(foregroundForward, refractionDepth, Access::SampledRead);
-        }
-        depth = graph.write(foregroundForward, depth,
-            Access::DepthAttachmentWrite, LoadOp::Load);
-        graph.read(foregroundForward, glassDepth, Access::SampledRead);
-        litScene = graph.write(foregroundForward, litScene,
-            Access::ColorAttachment, LoadOp::Load);
+    // A classified packet which misses a bounded specialist path retains
+    // one local forward fallback. It never reconstructs the retired
+    // two-bucket glass-depth approximation.
+    const RenderGraph::PassHandle compatibilityForward =
+        graph.addPass("transparent.compatibility.forward");
+    readClusterProduct(compatibilityForward);
+    if (transparencyPyramids) {
+        graph.read(compatibilityForward, refractionColor,
+            Access::SampledRead);
+        graph.read(compatibilityForward, refractionDepth,
+            Access::SampledRead);
     }
-    else {
-        // A classified packet which misses a bounded specialist path retains
-        // one local forward fallback. It never reconstructs the retired
-        // two-bucket glass-depth approximation.
-        const RenderGraph::PassHandle compatibilityForward =
-            graph.addPass("transparent.compatibility.forward");
-        readClusterProduct(compatibilityForward);
-        if (transparencyPyramids) {
-            graph.read(compatibilityForward, refractionColor,
-                Access::SampledRead);
-            graph.read(compatibilityForward, refractionDepth,
-                Access::SampledRead);
-        }
-        depth = graph.write(compatibilityForward, depth,
-            Access::DepthAttachmentWrite, LoadOp::Load);
-        litScene = graph.write(compatibilityForward, litScene,
-            Access::ColorAttachment, LoadOp::Load);
-    }
+    graph.read(compatibilityForward, velocity, Access::SampledRead);
+    depth = graph.write(compatibilityForward, depth,
+        Access::DepthAttachmentWrite, LoadOp::Load);
+    litScene = graph.write(compatibilityForward, litScene,
+        Access::ColorAttachment, LoadOp::Load);
 
     if (layered.weightedOit) {
         // Explicit approximate work accumulates into independent FP16 color
@@ -784,9 +905,11 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
         readClusterProduct(accumulation);
         graph.read(accumulation, depth, Access::DepthAttachmentRead);
         weightedOitAccumulation = graph.write(accumulation,
-            weightedOitAccumulation, Access::ColorAttachment, LoadOp::Clear);
+            weightedOitAccumulation, Access::ColorAttachment, LoadOp::Clear,
+            StoreOp::Store, transparentBlack);
         weightedOitRevealage = graph.write(accumulation,
-            weightedOitRevealage, Access::ColorAttachment, LoadOp::Clear);
+            weightedOitRevealage, Access::ColorAttachment, LoadOp::Clear,
+            StoreOp::Store, ClearValue::color(1.0f, 0.0f, 0.0f, 0.0f));
 
         const RenderGraph::PassHandle resolve = graph.addPass(
             "transparent.oit.resolve");
@@ -796,41 +919,138 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
             Access::ColorAttachment, LoadOp::Load);
     }
 
-    const RenderGraph::PassHandle bloomHook = graph.addPass("bloom-hook");
-    graph.read(bloomHook, litScene, Access::SampledRead);
+    // Scene-linear capture copies (R3b.5) read the final scene colour after
+    // its last writer and before bloom; output-transform's begin returns it
+    // to SampledRead.
+    if (features.hooks.sceneColorCapture) {
+        const RenderGraph::PassHandle sceneCapture = graph.addPass(
+            "scene-color-capture-hook", RenderGraph::QueueClass::Transfer);
+        graph.read(sceneCapture, litScene, Access::TransferSource);
+    }
+
+    // M9.2: the post chain reads the resolved scene colour: the TAA history's
+    // current slot with TAA, otherwise scene.color (the M7R topology). The
+    // scene-linear capture above stays the single-frame (pre-TAA) domain.
+    RenderGraph::ResourceHandle resolved = litScene;
+    // M9.5: the adapted exposure state, a History buffer pair that survives
+    // view cuts. TAA pre-exposes with its previous half.
+    RenderGraph::RenderGraphBuilder::HistoryHandles exposure{};
+    if (features.autoExposure)
+        exposure = graph.createHistory("exposure", bufferDesc(ExposureStateBytes, 16),
+            RenderGraph::HistoryReset::SurviveCut);
+    if (features.temporalAntiAliasing) {
+        const auto taaHistory = graph.createHistory("taa.history",
+            imageDesc(RenderGraph::Format::Rgba16Float, sceneExtent));
+        const RenderGraph::PassHandle taa = graph.addPass(
+            "temporal.taa.resolve", RenderGraph::QueueClass::Compute);
+        graph.read(taa, litScene, Access::SampledRead);
+        graph.read(taa, depth, Access::SampledRead);
+        graph.read(taa, velocity, Access::SampledRead);
+        graph.read(taa, taaHistory.previous, Access::SampledRead);
+        if (features.autoExposure)
+            graph.read(taa, exposure.previous, Access::StorageRead);
+        resolved = graph.write(taa, taaHistory.current, Access::StorageWrite);
+    }
+
+    // M9.5: meter the resolved colour (one histogram row per 128x128 tile,
+    // every row written each frame) and adapt (one workgroup).
+    RenderGraph::ResourceHandle exposureState{};
+    RenderGraph::ResourceHandle exposureMetering{};
+    if (features.autoExposure) {
+        RenderGraph::ResourceHandle rows = graph.createResource("exposure.histogram-rows",
+            bufferDesc(checkedBufferBytes(exposureHistogramRowCount(sceneExtent.width,
+                sceneExtent.height), uint64_t{ ExposureHistogramBins } * 4u)));
+        exposureMetering = graph.createResource("exposure.metering",
+            bufferDesc(ExposureMeteringBytes, 16));
+        const RenderGraph::PassHandle histogram = graph.addPass(
+            "post.exposure.histogram", RenderGraph::QueueClass::Compute);
+        graph.read(histogram, resolved, Access::SampledRead);
+        rows = graph.write(histogram, rows, Access::StorageWrite);
+        const RenderGraph::PassHandle adapt = graph.addPass(
+            "post.exposure.adapt", RenderGraph::QueueClass::Compute);
+        graph.read(adapt, rows, Access::StorageRead);
+        graph.read(adapt, exposure.previous, Access::StorageRead);
+        exposureState = graph.write(adapt, exposure.current, Access::StorageWrite);
+        exposureMetering = graph.write(adapt, exposureMetering, Access::StorageWrite);
+    }
+
+    // M9.4: the bloom chain from the resolved colour. Off, the inactive hook
+    // keeps the M7R topology. On, every texel of every level is written
+    // before it is read (level-to-level barriers stay inside the pass), so
+    // the chain is a whole-resource write and aliases.
+    RenderGraph::ResourceHandle bloomChain{};
+    if (features.bloomLevels != 0u) {
+        RenderGraph::ResourceDesc chainDesc = imageDesc(RenderGraph::Format::Rgba16Float,
+            { bloomChainSize(sceneExtent.width), bloomChainSize(sceneExtent.height) });
+        chainDesc.image.mipLevels = static_cast<uint16_t>(bloomChainLevels(
+            sceneExtent.width, sceneExtent.height, features.bloomLevels));
+        bloomChain = graph.createResource("bloom.chain", chainDesc);
+        const RenderGraph::PassHandle bloom = graph.addPass(
+            "post.bloom", RenderGraph::QueueClass::Compute);
+        graph.read(bloom, resolved, Access::SampledRead);
+        // The adapted exposure puts the threshold in exposed units.
+        if (exposureState.isValid()) graph.read(bloom, exposureState, Access::StorageRead);
+        bloomChain = graph.write(bloom, bloomChain, Access::StorageReadWrite);
+        graph.declareWholeResourceWrite(bloomChain);
+    }
+    else {
+        const RenderGraph::PassHandle bloomHook = graph.addPass("bloom-hook");
+        graph.read(bloomHook, resolved, Access::SampledRead);
+    }
 
     const RenderGraph::PassHandle outputTransform =
         graph.addPass("output-transform");
-    graph.read(outputTransform, litScene, Access::SampledRead);
+    graph.read(outputTransform, resolved, Access::SampledRead);
     graph.read(outputTransform, emissive, Access::SampledRead);
     graph.read(outputTransform, depth, Access::SampledRead);
+    // M9.1: the motion-vector debug view.
+    graph.read(outputTransform, velocity, Access::SampledRead);
+    // M9.5: this frame's adapted exposure.
+    if (features.autoExposure)
+        graph.read(outputTransform, exposureState, Access::StorageRead);
+    // M9.4: the chain's level 0, composited before exposure.
+    if (bloomChain.isValid())
+        graph.read(outputTransform, bloomChain, Access::SampledRead);
     output = graph.write(outputTransform, output,
-        Access::ColorAttachment, LoadOp::Clear);
+        Access::ColorAttachment, LoadOp::Clear, StoreOp::Store, opaqueBlack);
 
     const RenderGraph::PassHandle finalCaptureHook =
         graph.addPass("final-capture-hook");
     graph.read(finalCaptureHook, litScene, Access::TransferSource);
+    // M9.2: the resolved scene colour (scene-resolved captures).
+    if (features.temporalAntiAliasing)
+        graph.read(finalCaptureHook, resolved, Access::TransferSource);
+    // M9.5: the exposure state and metering (qualification readback).
+    if (features.autoExposure) {
+        graph.read(finalCaptureHook, exposureState, Access::TransferSource);
+        graph.read(finalCaptureHook, exposureMetering, Access::TransferSource);
+    }
     graph.read(finalCaptureHook, output, Access::TransferSource);
 
     const RenderGraph::PassHandle ui = graph.addPass(
         hdr10Composition ? "ui-compose" : "ui-present");
     graph.read(ui, output, Access::SampledRead);
+    // M7R R4b.5 (design finding 5): the editor's glass-depth view samples
+    // depth.opaque (DEPTH_STENCIL_READ_ONLY_OPTIMAL) while the UI records.
+    if (features.hooks.editorDepthSample)
+        graph.read(ui, depth, Access::SampledRead);
     if (hdr10Composition) {
         uiComposition = graph.write(ui, uiComposition,
-            Access::ColorAttachment, LoadOp::Clear);
+            Access::ColorAttachment, LoadOp::Clear, StoreOp::Store, opaqueBlack);
         const RenderGraph::PassHandle encode = graph.addPass(
             "hdr10-encode-present");
         graph.read(encode, uiComposition, Access::SampledRead);
         swapchain = graph.write(encode, swapchain,
-            Access::ColorAttachment, LoadOp::Clear);
+            Access::ColorAttachment, LoadOp::Clear, StoreOp::Store, opaqueBlack);
     }
     else {
         swapchain = graph.write(ui, swapchain,
-            Access::ColorAttachment, LoadOp::Clear);
+            Access::ColorAttachment, LoadOp::Clear, StoreOp::Store, opaqueBlack);
     }
     graph.exportResource(swapchain, Access::Present);
 
-    RenderGraph::CompileResult result = graph.compile();
+    RenderGraph::CompileResult result = graph.compile(RenderGraph::CompileOptions{
+        .transientAliasing = features.transientAliasing });
     if (!result.succeeded()) {
         std::ostringstream message;
         message << "Production render graph failed to compile";
@@ -840,6 +1060,146 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
         throw std::runtime_error(message.str());
     }
     return std::move(*result.graph);
+}
+
+VulkanProductionGraphIds resolveVulkanProductionGraphIds(
+    const VulkanRenderGraphExecutor& graph) {
+    const auto pass = [&](std::string_view name) { return graph.findPass(name); };
+    const auto resource = [&](std::string_view name) {
+        return graph.findResource(name);
+    };
+    VulkanProductionGraphIds ids{};
+    const auto producer = [&](const std::string& view) {
+        return VulkanIndirectProducerGraphIds{ pass(view + ".compact"),
+            resource(view + ".indirect-commands"), resource(view + ".indirect-counts") };
+    };
+    ids.virtualShadowClipUpload = pass("shadow.virtual.clip-upload");
+    ids.directionalIndirect = producer("shadow.directional");
+    ids.shadowDirectional = pass("shadow.directional");
+    ids.spotIndirect = producer("shadow.spot");
+    ids.shadowSpot = pass("shadow.spot");
+    ids.pointIndirect = producer("shadow.point");
+    ids.shadowPoint = pass("shadow.point");
+    ids.probeCapture = pass("probe.capture");
+    ids.opaqueIndirect = producer("gpu-scene.opaque");
+    ids.gbuffer = pass("gbuffer");
+    ids.probeCluster = pass("lighting.probe-cluster");
+    ids.probeClusterHeaders = resource("lighting.probe-cluster.headers");
+    ids.probeClusterIndices = resource("lighting.probe-cluster.indices");
+    ids.cluster = {
+        .clear = pass("lighting.cluster.clear"),
+        .count = pass("lighting.cluster.count"),
+        .scan = pass("lighting.cluster.scan"),
+        .fill = pass("lighting.cluster.fill"),
+        .finalize = pass("lighting.cluster.finalize"),
+        .global = resource(kClusterGlobalResourceName),
+        .headers = resource(kClusterHeaderResourceName),
+        .indices = resource(kClusterIndexResourceName),
+        .fallback = resource(kClusterFallbackResourceName),
+        .diagnostics = resource(kClusterDiagnosticResourceName),
+        .counts = resource(kClusterCountResourceName),
+        .cursors = resource(kClusterCursorResourceName),
+        .scanScratch = resource(kClusterScanScratchResourceName),
+        .indirect = resource(kClusterIndirectResourceName),
+    };
+    ids.clusterReadback = pass("lighting.cluster.readback");
+    ids.lighting = pass("lighting");
+    ids.forwardOpaque = pass("forward-opaque");
+    ids.virtualShadowDepthMark = pass("shadow.virtual.depth-mark");
+    ids.virtualShadowRequestReadback = pass("shadow.virtual.request-readback");
+    ids.refractionPyramids = pass("transparent.refraction-pyramids");
+    ids.depthPyramidBuild = pass("depth.occlusion-pyramid.build");
+    ids.depthPyramidValidationHook =
+        pass("depth.occlusion-pyramid.validation-readback-hook");
+    ids.sortedForward = pass("transparent.sorted.forward");
+    ids.ordinary2EntryCapture = pass("transparent.layered.entry.capture");
+    ids.ordinary2ExitCapture = pass("transparent.layered.exit.capture");
+    ids.ordinary2LocalCompose = pass("transparent.layered.local-compose");
+    ids.ordinary2ValidationHook =
+        pass("transparent.layered.validation-readback-hook");
+    ids.ordinary2ComposeHook = pass("transparent.layered.compose-hook");
+    const auto deepTier = [&](std::string_view tier) {
+        VulkanDeepLayeredGraphIds result{};
+        const std::string prefix = "transparent.layered." + std::string(tier);
+        for (uint32_t index = 0u;
+            index < VulkanDeepLayeredGraphIds::MaximumInterfaces; ++index) {
+            const std::string interfaceName = std::string(tier) + ".interface." +
+                std::to_string(index);
+            const std::string passPrefix = prefix + ".interface." +
+                std::to_string(index);
+            result.interfaceCapture[index] = pass(passPrefix + ".capture");
+            result.terminateTiles[index] = pass(passPrefix + ".terminate-tiles");
+            result.interfaceDepth[index] = resource("depth.layered." + interfaceName);
+            result.interfaceIdentity[index] =
+                resource("identity.layered." + interfaceName);
+            result.tileTermination[index] =
+                resource("termination.layered." + interfaceName);
+        }
+        result.localCompose = pass(prefix + ".local-compose");
+        result.validationReadbackHook = pass(prefix + ".validation-readback-hook");
+        result.localColor = resource("scene.layered." + std::string(tier) +
+            ".local-color");
+        return result;
+    };
+    ids.hero4 = deepTier("hero4");
+    ids.cinematic8 = deepTier("cinematic8");
+    for (const std::string_view name : { "transparent.layered.deep.compose-hook",
+            "transparent.layered.hero4.compose-hook",
+            "transparent.layered.cinematic8.compose-hook" }) {
+        if (const RenderGraph::PassId id = pass(name); id.isValid())
+            ids.deepComposeHook = id;
+    }
+    ids.compatibilityForward = pass("transparent.compatibility.forward");
+    ids.oitAccumulate = pass("transparent.oit.accumulate");
+    ids.oitResolve = pass("transparent.oit.resolve");
+    ids.sceneColorCaptureHook = pass("scene-color-capture-hook");
+    ids.bloomHook = pass("bloom-hook");
+    ids.taaResolve = pass("temporal.taa.resolve");
+    ids.taaHistoryPrevious = resource("taa.history.previous");
+    ids.taaHistoryCurrent = resource("taa.history.current");
+    ids.resolvedSceneColor = ids.taaHistoryCurrent.isValid()
+        ? ids.taaHistoryCurrent : resource("scene.color");
+    ids.exposureHistogram = pass("post.exposure.histogram");
+    ids.exposureAdapt = pass("post.exposure.adapt");
+    ids.exposureHistogramRows = resource("exposure.histogram-rows");
+    ids.exposureMetering = resource("exposure.metering");
+    ids.exposurePrevious = resource("exposure.previous");
+    ids.exposureCurrent = resource("exposure.current");
+    ids.bloom = pass("post.bloom");
+    ids.bloomChain = resource("bloom.chain");
+    ids.outputTransform = pass("output-transform");
+    ids.finalCaptureHook = pass("final-capture-hook");
+    ids.ui = pass("ui-compose");
+    if (!ids.ui.isValid()) ids.ui = pass("ui-present");
+    ids.hdr10EncodePresent = pass("hdr10-encode-present");
+
+    ids.swapchain = resource("swapchain");
+    ids.shadowDirectionalMap = resource("shadow.directional");
+    ids.shadowSpotMap = resource("shadow.spot");
+    ids.shadowPointMaps = { resource("shadow.point.256"),
+        resource("shadow.point.512"), resource("shadow.point.1024") };
+    ids.virtualShadowWorkingSet = resource("shadow.virtual.working-set");
+    ids.depthPyramidHistory = resource("depth.occlusion-pyramid.history");
+    ids.gbufferNormal = resource("gbuffer.normal");
+    ids.gbufferAlbedo = resource("gbuffer.albedo");
+    ids.gbufferEmissive = resource("gbuffer.emissive");
+    ids.gbufferF0Roughness = resource("gbuffer.f0-roughness");
+    ids.gbufferMaterialFlags = resource("gbuffer.material-flags");
+    ids.gbufferVelocity = resource("gbuffer.velocity");
+    ids.depth = resource("depth.opaque");
+    ids.sceneColor = resource("scene.color");
+    ids.refractionColorPyramid = resource("scene.refraction-color-pyramid");
+    ids.refractionDepthPyramid = resource("depth.refraction-nearest-pyramid");
+    ids.ordinary2EntryDepth = resource("depth.layered.entry");
+    ids.ordinary2EntryIdentity = resource("identity.layered.entry");
+    ids.ordinary2ExitDepth = resource("depth.layered.exit");
+    ids.ordinary2ExitIdentity = resource("identity.layered.exit");
+    ids.ordinary2LocalColor = resource("scene.layered.local-color");
+    ids.oitAccumulation = resource("transparency.oit.accumulation");
+    ids.oitRevealage = resource("transparency.oit.revealage");
+    ids.output = resource("output.display");
+    ids.uiComposition = resource("output.ui-composition");
+    return ids;
 }
 
 } // namespace Iridium

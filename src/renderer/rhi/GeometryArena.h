@@ -1,7 +1,7 @@
 #pragma once
 
-#include "assets/AssetGuid.h"
-#include "renderer/rhi/RenderHandles.h"
+#include "core/types/AssetGuid.h"
+#include "core/types/RenderHandles.h"
 
 #include <algorithm>
 #include <cstdint>

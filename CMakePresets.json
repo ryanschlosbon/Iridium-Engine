@@ -44,6 +44,16 @@
         "CMAKE_BUILD_TYPE": "Release",
         "VULKAN_SDK": "$env{VULKAN_SDK}"
       }
+    },
+    {
+      "name": "x64-release-shipping",
+      "displayName": "x64 Release (shipping, no qualification)",
+      "description": "Target Windows x64 (Release) without the qualification harness, oracles, captures or their flags",
+      "inherits": "x64-release",
+      "binaryDir": "${sourceDir}/out/build/x64-release-shipping",
+      "cacheVariables": {
+        "IRIDIUM_QUALIFICATION": "OFF"
+      }
     }
   ]
 }

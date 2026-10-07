@@ -1,4 +1,4 @@
-#include "ecs/systems/TransformSystem.h"
+#include "scene/systems/TransformSystem.h"
 #include "renderer/lighting/LightExtractor.h"
 #include "renderer/rhi/LightUploadPlanner.h"
 #include "scene/components/LightComponent.h"
@@ -8,9 +8,7 @@
 #include <array>
 #include <bit>
 #include <cmath>
-#include <fstream>
 #include <iostream>
-#include <iterator>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -67,18 +65,8 @@ namespace {
         CHECK(offsetof(Iridium::PackedGpuLight, colorIntensity) == 32);
         CHECK(offsetof(Iridium::PackedGpuLight, shapeMetadata) == 48);
 
-        std::ifstream shader(std::string(PROJECT_ROOT_DIR) +
-            "/assets/shaders/include/lighting_records.glsl",
-            std::ios::binary);
-        const std::string shaderSource((std::istreambuf_iterator<char>(shader)),
-            std::istreambuf_iterator<char>());
-        CHECK(!shaderSource.empty());
-        const size_t position = shaderSource.find("vec4 positionRange;");
-        const size_t direction = shaderSource.find("vec4 directionOuterCos;");
-        const size_t color = shaderSource.find("vec4 colorIntensity;");
-        const size_t shaderMetadata = shaderSource.find("vec4 shapeMetadata;");
-        CHECK(position < direction && direction < color &&
-            color < shaderMetadata);
+        // The GLSL mirror is checked against compiled SPIR-V member offsets in
+        // ShaderAbiContractTests.
 
         Iridium::SceneWorld world;
         addLight(world, 3, LightType::Spot, 2);
@@ -191,6 +179,39 @@ namespace {
         return true;
     }
 
+    // Regression (M7R R4c.0): growing record capacity inside one extract must not
+    // invalidate the new-candidate pointers. Debug heaps poison freed memory, so a
+    // dangling pointer reads garbage owners and slots.
+    bool capacityGrowthKeepsNewCandidatesValid() {
+        Iridium::SceneWorld world;
+        addLight(world, 1, LightType::Point, 0);
+        addLight(world, 2, LightType::Point, 1);
+        updateTransforms(world);
+        Iridium::LightExtractor extractor({ .initialCapacity = 2,
+            .maximumCapacity = 16 });
+        const auto first = extractor.extract(world);
+        CHECK(first.stats.activeLightCount == 2);
+        for (uint32_t index = 3; index <= 14; ++index) {
+            const Entity entity = addLight(world, index, LightType::Point,
+                static_cast<int32_t>(index - 1));
+            world.registry().getComponent<LightComponent>(entity).priority =
+                static_cast<int32_t>(index);
+        }
+        updateTransforms(world);
+        const auto grown = extractor.extract(world);
+        CHECK(grown.stats.activeLightCount == 14);
+        CHECK(grown.stats.omittedLightCount == 0);
+        std::array<bool, 16> used{};
+        for (uint32_t index = 1; index <= 14; ++index) {
+            const auto slot = extractor.slotFor(uuid(index));
+            CHECK(slot.has_value());
+            CHECK(*slot < used.size());
+            CHECK(!used[*slot]);
+            used[*slot] = true;
+        }
+        return true;
+    }
+
     bool invalidCapacityAndWorldSwapAreDeterministic() {
         Iridium::SceneWorld world;
         const Entity area = addLight(world, 1, LightType::Area, 0);
@@ -282,6 +303,7 @@ int main() {
         std::pair{ "scale-independent hierarchy direction", hierarchyDirectionIgnoresNonuniformAndNegativeScale },
         std::pair{ "invalid capacity and swap", invalidCapacityAndWorldSwapAreDeterministic },
         std::pair{ "per-frame upload revisions", perFrameUploadPlanningIsRevisionExact },
+        std::pair{ "capacity growth keeps new candidates valid", capacityGrowthKeepsNewCandidatesValid },
     };
     for (const auto& [name, run] : tests) {
         if (!run()) { std::cerr << "[FAIL] " << name << '\n'; return 1; }

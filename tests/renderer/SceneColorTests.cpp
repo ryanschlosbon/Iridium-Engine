@@ -2,10 +2,7 @@
 
 #include <array>
 #include <cmath>
-#include <filesystem>
-#include <fstream>
 #include <iostream>
-#include <string>
 
 namespace {
 
@@ -117,75 +114,6 @@ namespace {
 		return true;
 	}
 
-    [[nodiscard]] std::string readText(const std::filesystem::path& path) {
-        std::ifstream input(path, std::ios::binary);
-        return { std::istreambuf_iterator<char>(input),
-            std::istreambuf_iterator<char>() };
-    }
-
-    bool testShaderColorBoundary() {
-        const std::filesystem::path shaders =
-            std::filesystem::path(PROJECT_ROOT_DIR) / "assets/shaders";
-        const std::string gbuffer = readText(
-            shaders / "include/canonical_gbuffer_body.glsl");
-        const std::string lighting = readText(
-            shaders / "include/canonical_lighting_body.glsl");
-        const std::string forward = readText(
-            shaders / "include/complex_material_body.glsl");
-        const std::string output = readText(shaders / "output.frag");
-        const std::string ui = readText(shaders / "imgui_color_managed.frag");
-        const std::string selectionMask = readText(shaders / "canonical_mask.frag");
-        const std::string shared = readText(shaders / "include/scene_color.glsl");
-        CHECK(gbuffer.find("linearSrgbToAcesCg") != std::string::npos);
-        CHECK(forward.find("linearSrgbToAcesCg") != std::string::npos);
-        CHECK(lighting.find("linearSrgbToAcesCg") == std::string::npos);
-        CHECK(lighting.find("include/environment_ibl.glsl") !=
-            std::string::npos);
-        CHECK(lighting.find("ACESFilm") == std::string::npos);
-        CHECK(forward.find("ACESFilm") == std::string::npos);
-        CHECK(ui.find("decodeSrgb(In.Color.rgb)") != std::string::npos);
-        CHECK(ui.find("decodeSrgb(sampled.rgb)") == std::string::npos);
-        CHECK(output.find("acesCgToLinearSrgb") != std::string::npos);
-        CHECK(output.find("2.51") != std::string::npos);
-        CHECK(output.find("if (!selectionActive())") != std::string::npos);
-        CHECK(output.find("selectionMask") != std::string::npos);
-        CHECK(output.find("selectionFeedbackAt(center) & 1u") != std::string::npos);
-        CHECK(output.find("selectionFeedbackAt(ivec2(gl_FragCoord.xy)) & 2u") != std::string::npos);
-        CHECK(output.find("mix(outputValue, feedbackColor, 0.18)") != std::string::npos);
-        CHECK(output.find("opaqueDepth") != std::string::npos);
-        CHECK(output.find("applyViewportGrid") != std::string::npos);
-        CHECK(shared.find("0.6130974024") != std::string::npos);
-        CHECK(shared.find("1.705050992697") != std::string::npos);
-        const std::string application = readText(
-            std::filesystem::path(PROJECT_ROOT_DIR) / "src/core/Application.cpp");
-        const std::string backend = readText(
-            std::filesystem::path(PROJECT_ROOT_DIR) /
-            "src/renderer/vulkan/VulkanVertexBackend.cpp");
-        const std::string settings = readText(
-            std::filesystem::path(PROJECT_ROOT_DIR) /
-            "src/editor/panels/windows/ProjectSettingsPanel.cpp");
-        CHECK(application.find("setOutputSettings") != std::string::npos);
-        CHECK(application.find("(previewHovered ? 2u : 0u)") != std::string::npos);
-        CHECK(backend.find("push.padding[0] = packet.selectionFeedback") != std::string::npos);
-        CHECK(backend.find("ImGui_ImplVulkan_SetDisplayColorConfiguration") !=
-            std::string::npos);
-        CHECK(settings.find("UI / paper white (nits)") != std::string::npos);
-        CHECK(settings.find("currently outputting SDR") != std::string::npos);
-        CHECK(selectionMask.find("outDiffuseAo = vec4(0.0);") != std::string::npos);
-        CHECK(selectionMask.find("outEmissive = vec4(0.0, 0.0, 0.0, -float(push.feedback))") !=
-            std::string::npos);
-        const size_t framePasses = application.find("// Pass 3:");
-        const size_t sceneCapture = application.find("captureCurrentFrame", framePasses);
-        const size_t outputPass = application.find("submitOutputPass", sceneCapture);
-        const size_t finalCapture = application.find("captureCurrentFrame", outputPass);
-        const size_t uiPass = application.find("submitUIPass", finalCapture);
-        CHECK(framePasses != std::string::npos);
-        CHECK(sceneCapture < outputPass);
-        CHECK(outputPass < finalCapture);
-        CHECK(finalCapture < uiPass);
-        return true;
-    }
-
 } // namespace
 
 int main() {
@@ -195,9 +123,10 @@ int main() {
     const bool half = testHalfFloatDecode();
 	const bool pq = testSt2084ReferenceVectors();
 	const bool scRgb = testScRgbAbsoluteLuminanceAndGamut();
-    const bool shaders = testShaderColorBoundary();
-    std::cout << (transfer + primaries + roundTrip + half + pq + scRgb + shaders)
-        << "/7 tests passed\n";
-    return transfer && primaries && roundTrip && half && pq && scRgb && shaders
-		? 0 : 1;
+    // The shader colour boundary (AP1 inputs, single output transform) is
+    // checked on compiled shaders by ShaderOwnershipTests and
+    // VulkanShaderParityTests.
+    std::cout << (transfer + primaries + roundTrip + half + pq + scRgb)
+        << "/6 tests passed\n";
+    return transfer && primaries && roundTrip && half && pq && scRgb ? 0 : 1;
 }

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <bit>
 #include <cmath>
+#include <cstring>
 #include <map>
 #include <set>
 
@@ -82,72 +83,177 @@ namespace {
         }
     }
 
+    uint64_t gpuSceneConsumerContentWatermark(const GpuScenePackedTables& scene,
+        std::span<const uint32_t> primitiveIndices) noexcept {
+        uint64_t watermark = 0;
+        for (const uint32_t primitiveIndex : primitiveIndices) {
+            if (primitiveIndex >= scene.primitives.size()) continue;
+            if (primitiveIndex < scene.primitiveRevisions.size())
+                watermark = (std::max)(watermark,
+                    scene.primitiveRevisions[primitiveIndex]);
+            const GpuScenePrimitiveRecord& primitive =
+                scene.primitives[primitiveIndex];
+            if (primitive.binding.x < scene.instances.size()) {
+                const uint32_t transform =
+                    scene.instances[primitive.binding.x].references.x;
+                if (transform < scene.transformRevisions.size())
+                    watermark = (std::max)(watermark,
+                        scene.transformRevisions[transform]);
+            }
+            if (primitive.binding.y < scene.geometryRevisions.size())
+                watermark = (std::max)(watermark,
+                    scene.geometryRevisions[primitive.binding.y]);
+        }
+        return watermark;
+    }
+
     void publishGpuSceneConsumerMembership(GpuScenePackedTables& scene) {
         collectGpuSceneConsumerPrimitiveIndices(scene, GpuSceneConsumerShadow,
             scene.shadowConsumerPrimitiveIndices);
         collectGpuSceneConsumerPrimitiveIndices(scene, GpuSceneConsumerProbe,
             scene.probeConsumerPrimitiveIndices);
+        collectGpuSceneConsumerPrimitiveIndices(scene, GpuSceneConsumerMainOpaque,
+            scene.mainOpaqueConsumerPrimitiveIndices);
 
-        const auto revisionFor = [&scene](uint32_t consumerMask,
-            std::span<const uint32_t> primitiveIndices) noexcept {
-            // FNV-1a over only data that can alter membership or the derived
-            // geometry/material bins. World transforms, bounds, and their
-            // revisions remain deliberately absent so movable instances keep
-            // a stable membership revision.
-            uint64_t hash = 1469598103934665603ull;
-            const auto mix = [&hash](uint64_t value) noexcept {
-                for (uint32_t byte = 0; byte < 8u; ++byte) {
-                    hash ^= (value >> (byte * 8u)) & 0xffu;
-                    hash *= 1099511628211ull;
-                }
-            };
-            mix(scene.sceneEpoch);
-            mix(consumerMask);
-            mix(primitiveIndices.size());
-            for (const uint32_t primitiveIndex : primitiveIndices) {
-                mix(primitiveIndex);
-                if (primitiveIndex >= scene.primitives.size()) continue;
-                const GpuScenePrimitiveRecord& primitive =
-                    scene.primitives[primitiveIndex];
-                mix(primitive.binding.x); mix(primitive.binding.y);
-                mix(primitive.binding.z); mix(primitive.binding.w);
-                mix(primitive.state.x); mix(primitive.state.y);
-                mix(primitive.state.w);
-                mix(primitive.revisions.x); mix(primitive.revisions.y);
-                mix(primitive.revisions.z); mix(primitive.revisions.w);
-                if (primitive.binding.x < scene.instances.size()) {
-                    const GpuSceneInstanceRecord& instance =
-                        scene.instances[primitive.binding.x];
-                    mix(instance.state.x);
-                    mix(instance.state.z);
-                    mix(instance.state.w);
-                }
-                uint32_t geometryIndex = primitive.binding.y;
-                for (uint32_t lod = 0; lod < MaximumGpuSceneLodLevels &&
-                    geometryIndex < scene.geometries.size(); ++lod) {
-                    const GpuSceneGeometryRecord& geometry =
-                        scene.geometries[geometryIndex];
-                    mix(geometryIndex);
-                    mix(geometry.draw.x); mix(geometry.draw.y);
-                    mix(geometry.draw.z); mix(geometry.draw.w);
-                    mix(geometry.storage.x); mix(geometry.storage.y);
-                    mix(geometry.storage.z); mix(geometry.storage.w);
-                    mix(geometry.state.x); mix(geometry.state.z);
-                    mix(geometry.state.w);
-                    if (geometryIndex < scene.geometryRevisions.size())
-                        mix(scene.geometryRevisions[geometryIndex]);
-                    if (geometry.state.z == InvalidGpuSceneIndex ||
-                        geometry.state.z == geometryIndex)
-                        break;
-                    geometryIndex = geometry.state.z;
-                }
+        // M7R R5c.5: until R5c.5 each revision was an FNV-1a hash, one byte at
+        // a time, over the epoch, the consumer mask, the list size and, per
+        // member, the fields compared below (about 38 ms at H-stress
+        // add_instances). The revision now advances exactly when that hash
+        // input changed: the previous publication's inputs are kept in the
+        // table's membership history and compared field by field.
+        GpuSceneMembershipHistory& history = scene.membershipHistory;
+        const bool comparable = history.valid &&
+            history.sceneEpoch == scene.sceneEpoch;
+        if (comparable) {
+            history.instanceMemo.assign(scene.instances.size(), 0u);
+            history.geometryMemo.assign(scene.geometries.size(), 0u);
+        }
+        const auto sameInstance = [&](uint32_t index) noexcept {
+            // A member's instance index is below both table sizes: the
+            // current list checks it and the equal previous record had it.
+            uint8_t& memo = history.instanceMemo[index];
+            if (memo == 0u) {
+                const GpuSceneUint4& current = scene.instances[index].state;
+                const GpuSceneUint4& previous = history.instanceStates[index];
+                memo = current.x == previous.x && current.z == previous.z &&
+                    current.w == previous.w ? 1u : 2u;
             }
-            return hash == 0u ? 1u : hash;
+            return memo == 1u;
         };
-        scene.shadowConsumerMembershipRevision = revisionFor(
-            GpuSceneConsumerShadow, scene.shadowConsumerPrimitiveIndices);
-        scene.probeConsumerMembershipRevision = revisionFor(
-            GpuSceneConsumerProbe, scene.probeConsumerPrimitiveIndices);
+        // The LOD chain walk of the retired hash, over both tables at once.
+        const auto sameChain = [&](uint32_t first) noexcept {
+            const bool memoized = first < history.geometryMemo.size();
+            if (memoized && history.geometryMemo[first] != 0u)
+                return history.geometryMemo[first] == 1u;
+            bool same = true;
+            uint32_t geometryIndex = first;
+            for (uint32_t lod = 0; lod < MaximumGpuSceneLodLevels; ++lod) {
+                const bool inCurrent = geometryIndex < scene.geometries.size();
+                const bool inPrevious =
+                    geometryIndex < history.geometries.size();
+                if (inCurrent != inPrevious) { same = false; break; }
+                if (!inCurrent) break;
+                const GpuSceneGeometryRecord& current =
+                    scene.geometries[geometryIndex];
+                const GpuSceneGeometryRecord& previous =
+                    history.geometries[geometryIndex];
+                const bool currentRevision =
+                    geometryIndex < scene.geometryRevisions.size();
+                const bool previousRevision =
+                    geometryIndex < history.geometryRevisions.size();
+                if (current.draw.x != previous.draw.x ||
+                    current.draw.y != previous.draw.y ||
+                    current.draw.z != previous.draw.z ||
+                    current.draw.w != previous.draw.w ||
+                    current.storage.x != previous.storage.x ||
+                    current.storage.y != previous.storage.y ||
+                    current.storage.z != previous.storage.z ||
+                    current.storage.w != previous.storage.w ||
+                    current.state.x != previous.state.x ||
+                    current.state.z != previous.state.z ||
+                    current.state.w != previous.state.w ||
+                    currentRevision != previousRevision ||
+                    (currentRevision && scene.geometryRevisions[geometryIndex] !=
+                        history.geometryRevisions[geometryIndex])) {
+                    same = false;
+                    break;
+                }
+                if (current.state.z == InvalidGpuSceneIndex ||
+                    current.state.z == geometryIndex)
+                    break;
+                geometryIndex = current.state.z;
+            }
+            if (memoized) history.geometryMemo[first] = same ? 1u : 2u;
+            return same;
+        };
+        const auto membershipChanged = [&](std::span<const uint32_t> members,
+            std::span<const uint32_t> previousMembers) noexcept {
+            if (!comparable || members.size() != previousMembers.size() ||
+                (!members.empty() && std::memcmp(members.data(),
+                    previousMembers.data(),
+                    members.size() * sizeof(uint32_t)) != 0))
+                return true;
+            for (const uint32_t primitiveIndex : members) {
+                const GpuScenePrimitiveRecord& current =
+                    scene.primitives[primitiveIndex];
+                const GpuScenePrimitiveRecord& previous =
+                    history.primitives[primitiveIndex];
+                if (current.binding.x != previous.binding.x ||
+                    current.binding.y != previous.binding.y ||
+                    current.binding.z != previous.binding.z ||
+                    current.binding.w != previous.binding.w ||
+                    current.state.x != previous.state.x ||
+                    current.state.y != previous.state.y ||
+                    current.state.w != previous.state.w ||
+                    current.revisions.x != previous.revisions.x ||
+                    current.revisions.y != previous.revisions.y ||
+                    current.revisions.z != previous.revisions.z ||
+                    current.revisions.w != previous.revisions.w ||
+                    !sameInstance(current.binding.x) ||
+                    !sameChain(current.binding.y))
+                    return true;
+            }
+            return false;
+        };
+        const bool shadowChanged = membershipChanged(
+            scene.shadowConsumerPrimitiveIndices, history.shadowMembers);
+        const bool probeChanged = membershipChanged(
+            scene.probeConsumerPrimitiveIndices, history.probeMembers);
+        const bool mainOpaqueChanged = membershipChanged(
+            scene.mainOpaqueConsumerPrimitiveIndices, history.mainOpaqueMembers);
+        if (shadowChanged)
+            scene.shadowConsumerMembershipRevision = history.nextRevision++;
+        if (probeChanged)
+            scene.probeConsumerMembershipRevision = history.nextRevision++;
+        if (mainOpaqueChanged)
+            scene.mainOpaqueConsumerMembershipRevision = history.nextRevision++;
+        // Unchanged lists compared equal on every input they read, so the
+        // stored inputs stay exact for them; refresh after any change.
+        if (shadowChanged || probeChanged || mainOpaqueChanged) {
+            history.valid = true;
+            history.sceneEpoch = scene.sceneEpoch;
+            history.shadowMembers = scene.shadowConsumerPrimitiveIndices;
+            history.probeMembers = scene.probeConsumerPrimitiveIndices;
+            history.mainOpaqueMembers = scene.mainOpaqueConsumerPrimitiveIndices;
+            history.primitives = scene.primitives;
+            history.instanceStates.resize(scene.instances.size());
+            for (size_t index = 0; index < scene.instances.size(); ++index)
+                history.instanceStates[index] = scene.instances[index].state;
+            history.geometries = scene.geometries;
+            history.geometryRevisions = scene.geometryRevisions;
+        }
+        refreshGpuSceneConsumerContentWatermarks(scene);
+    }
+
+    void refreshGpuSceneConsumerContentWatermarks(
+        GpuScenePackedTables& scene) noexcept {
+        scene.shadowConsumerContentWatermark = gpuSceneConsumerContentWatermark(
+            scene, scene.shadowConsumerPrimitiveIndices);
+        scene.probeConsumerContentWatermark = gpuSceneConsumerContentWatermark(
+            scene, scene.probeConsumerPrimitiveIndices);
+        scene.mainOpaqueConsumerContentWatermark =
+            gpuSceneConsumerContentWatermark(scene,
+                scene.mainOpaqueConsumerPrimitiveIndices);
     }
 
     GpuScenePackedTables packGpuSceneReference(

@@ -2,7 +2,7 @@
 #include "editor/EditorPropertyTransaction.h"
 #include "editor/EditorTransactionService.h"
 
-#include "assets/AssetGuid.h"
+#include "core/types/AssetGuid.h"
 #include "ecs/Entity.h"
 
 #include <glm/glm.hpp>

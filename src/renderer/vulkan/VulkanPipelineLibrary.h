@@ -4,6 +4,7 @@
 #include "renderer/rhi/ResourcePool.h"
 #include "renderer/rhi/GBufferLayout.h"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -13,10 +14,16 @@
 
 namespace Iridium {
 
+    inline constexpr uint32_t VulkanPipelineMaxColorTargets = 6;
+
+    // M7R R4a: a material pipeline target is its attachment formats and
+    // pipeline layout; pipelines chain VkPipelineRenderingCreateInfo and are
+    // recorded inside the passes' dynamic-rendering scopes.
     struct VulkanPipelineTarget {
-        VkRenderPass renderPass = VK_NULL_HANDLE;
-        VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
+        std::array<VkFormat, VulkanPipelineMaxColorTargets> colorFormats{};
         uint32_t colorAttachmentCount = 0;
+        VkFormat depthFormat = VK_FORMAT_UNDEFINED;
+        VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
     };
 
     struct VulkanPipelineRecord {
@@ -24,6 +31,9 @@ namespace Iridium {
         VkPipeline gpuSceneIndirectPipeline = VK_NULL_HANDLE;
         VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
         RenderPassClass renderPass = RenderPassClass::GBuffer;
+        // M9.1: forward-opaque pipelines also write velocity (2 targets);
+        // compatibility transparency keeps 1. Passes check it before drawing.
+        uint32_t colorAttachmentCount = 0;
     };
 
     struct PipelineStateDescHash {
@@ -58,8 +68,10 @@ namespace Iridium {
         VulkanPipelineLibrary(VulkanPipelineLibrary&&) = delete;
         VulkanPipelineLibrary& operator=(VulkanPipelineLibrary&&) = delete;
 
-        void init(VkDevice device, VulkanPipelineTarget gBufferTarget,
+        void init(VkDevice device, VkPipelineCache pipelineCache,
+            VulkanPipelineTarget gBufferTarget,
             VulkanPipelineTarget forwardTarget,
+            VulkanPipelineTarget forwardOpaqueTarget,
             VulkanPipelineTarget transparentTarget,
             GBufferLayout gBufferLayout);
         void cleanup() noexcept;
@@ -70,19 +82,24 @@ namespace Iridium {
 
     private:
         VkDevice device_ = VK_NULL_HANDLE;
+        VkPipelineCache pipelineCache_ = VK_NULL_HANDLE;
         VulkanPipelineTarget gBufferTarget_{};
         VulkanPipelineTarget forwardTarget_{};
+        VulkanPipelineTarget forwardOpaqueTarget_{};
         VulkanPipelineTarget transparentTarget_{};
         GBufferLayout gBufferLayout_ = GBufferLayout::CanonicalReference;
         ResourcePool<VulkanPipelineRecord, PipelineHandle> pipelineRecords_;
         std::unordered_map<PipelineStateDesc, PipelineHandle, PipelineStateDescHash> pipelineMap_;
 
+        // M9.1: G-buffer and forward-opaque direct draws use the motion
+        // vertex variant; transparency uses the plain one.
         VkPipeline createPipeline(const PipelineStateDesc& desc,
             const VulkanPipelineTarget& target,
-            const char* vertexShaderPath =
-                "assets/shaders/canonical_material_vert.spv");
+            const char* vertexShaderPath = nullptr);
         VkShaderModule createShaderModule(const std::vector<char>& code) const;
-        const VulkanPipelineTarget& getTarget(RenderPassClass renderPass) const;
+        // A Forward pipeline that writes depth is forward-opaque (velocity).
+        [[nodiscard]] static bool writesVelocity(const PipelineStateDesc& desc) noexcept;
+        const VulkanPipelineTarget& getTarget(const PipelineStateDesc& desc) const;
     };
 
 } // namespace Iridium

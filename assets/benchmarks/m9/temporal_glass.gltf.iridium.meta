@@ -1,0 +1,134 @@
+{
+  "schemaVersion": 1,
+  "assetGuid": "01a19000-0006-7000-8000-1056f49cfe11",
+  "assetType": "iridium.model",
+  "importer": {
+    "id": "iridium.gltf-model",
+    "version": 7
+  },
+  "settings": {
+    "schemaVersion": 2,
+    "values": {
+      "bake_node_transforms": true,
+      "generate_missing_tangents": true,
+      "import_scale": 1.0,
+      "preserve_rt_geometry": true,
+      "transparency_execution_mode": "classified",
+      "transparency_policies": {
+        "01a19000-0006-7008-8000-2ef5d16899f3": {
+          "schema_version": 1,
+          "class": "thin_glass",
+          "quality": "ordinary2",
+          "priority": 0,
+          "thin_sheet_thickness_m": 0.02
+        }
+      }
+    }
+  },
+  "subassets": [
+    {
+      "guid": "01a19000-0006-700a-8000-82a2bbd7aa17",
+      "assetType": "iridium.texture",
+      "sourceKey": "images/0"
+    },
+    {
+      "guid": "01a19000-0006-700b-8000-d2d80eab647a",
+      "assetType": "iridium.texture",
+      "sourceKey": "images/1"
+    },
+    {
+      "guid": "01a19000-0006-7001-8000-68f09a32b871",
+      "assetType": "iridium.material",
+      "sourceKey": "materials/0"
+    },
+    {
+      "guid": "01a19000-0006-7002-8000-7a662170bc11",
+      "assetType": "iridium.material",
+      "sourceKey": "materials/1"
+    },
+    {
+      "guid": "01a19000-0006-7003-8000-7b5b5ffda123",
+      "assetType": "iridium.material",
+      "sourceKey": "materials/2"
+    },
+    {
+      "guid": "01a19000-0006-7004-8000-c92c9cd95ceb",
+      "assetType": "iridium.material",
+      "sourceKey": "materials/3"
+    },
+    {
+      "guid": "01a19000-0006-7005-8000-f28c1ddc2a73",
+      "assetType": "iridium.material",
+      "sourceKey": "materials/4"
+    },
+    {
+      "guid": "01a19000-0006-7006-8000-2c1aa9550961",
+      "assetType": "iridium.material",
+      "sourceKey": "materials/5"
+    },
+    {
+      "guid": "01a19000-0006-7007-8000-7bf45b7bfbb1",
+      "assetType": "iridium.material",
+      "sourceKey": "materials/6"
+    },
+    {
+      "guid": "01a19000-0006-7008-8000-2ef5d16899f3",
+      "assetType": "iridium.material",
+      "sourceKey": "materials/7"
+    },
+    {
+      "guid": "01a19000-0006-7009-8000-4d4cfbe00aa7",
+      "assetType": "iridium.material",
+      "sourceKey": "materials/8"
+    },
+    {
+      "guid": "01a19000-0006-700c-8000-93714affadbd",
+      "assetType": "iridium.model-primitive",
+      "sourceKey": "nodes/0/meshes/0/primitives/0"
+    },
+    {
+      "guid": "01a19000-0006-700d-8000-33d009fb586e",
+      "assetType": "iridium.model-primitive",
+      "sourceKey": "nodes/1/meshes/1/primitives/0"
+    },
+    {
+      "guid": "01a19000-0006-700e-8000-cae4ed61f417",
+      "assetType": "iridium.model-primitive",
+      "sourceKey": "nodes/2/meshes/2/primitives/0"
+    },
+    {
+      "guid": "01a19000-0006-700f-8000-d556b137fe3e",
+      "assetType": "iridium.model-primitive",
+      "sourceKey": "nodes/2/meshes/2/primitives/1"
+    },
+    {
+      "guid": "01a19000-0006-7010-8000-9ffe87a4153b",
+      "assetType": "iridium.model-primitive",
+      "sourceKey": "nodes/2/meshes/2/primitives/2"
+    },
+    {
+      "guid": "01a19000-0006-7011-8000-df2a71a83fcb",
+      "assetType": "iridium.model-primitive",
+      "sourceKey": "nodes/2/meshes/2/primitives/3"
+    },
+    {
+      "guid": "01a19000-0006-7012-8000-01f0e465f6a7",
+      "assetType": "iridium.model-primitive",
+      "sourceKey": "nodes/2/meshes/2/primitives/4"
+    },
+    {
+      "guid": "01a19000-0006-7013-8000-24b4245d5d4c",
+      "assetType": "iridium.model-primitive",
+      "sourceKey": "nodes/3/meshes/3/primitives/0"
+    },
+    {
+      "guid": "01a19000-0006-7014-8000-0f4f0a287154",
+      "assetType": "iridium.model-primitive",
+      "sourceKey": "nodes/3/meshes/3/primitives/1"
+    }
+  ],
+  "tags": [
+    "m9-g6b-fixture",
+    "tracked"
+  ]
+}

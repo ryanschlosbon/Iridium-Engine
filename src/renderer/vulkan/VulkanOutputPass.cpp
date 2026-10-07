@@ -23,8 +23,11 @@ namespace Iridium {
             float paperWhiteNits = 203.0f;
             float peakNits = 1000.0f;
             uint32_t packedModes = 0;
+            // M9.4: x intensity, y 1 = additive (threshold) composite.
+            alignas(16) glm::vec4 bloom{};
         };
-        static_assert(sizeof(OutputPushConstants) == 128);
+        // 144 B: the backend requires 144 B of push constants (M9.1).
+        static_assert(sizeof(OutputPushConstants) == 144);
         static_assert(offsetof(OutputPushConstants, gridPlane) == 64);
         static_assert(offsetof(OutputPushConstants, manualExposureEv) == 112);
 
@@ -46,57 +49,24 @@ namespace Iridium {
         cleanup();
     }
 
-    void VulkanOutputPass::init(VkContext& context,
+    void VulkanOutputPass::init(VkContext& context, VkPipelineCache pipelineCache,
         ::DescriptorAllocator& allocator, VkFormat outputFormat) {
         if (device_ != VK_NULL_HANDLE || outputFormat == VK_FORMAT_UNDEFINED) {
             throw std::logic_error("Output pass initialized incorrectly.");
         }
         device_ = context.getDevice();
+        pipelineCache_ = pipelineCache;
         allocator_ = &allocator;
 
         try {
-            VkAttachmentDescription attachment{};
-            attachment.format = outputFormat;
-            attachment.samples = VK_SAMPLE_COUNT_1_BIT;
-            attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-            attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-            attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-            attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-            attachment.initialLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-            attachment.finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-            VkAttachmentReference attachmentRef{ 0,
-                VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL };
-            VkSubpassDescription subpass{};
-            subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-            subpass.colorAttachmentCount = 1;
-            subpass.pColorAttachments = &attachmentRef;
-            VkSubpassDependency dependency{};
-            dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
-            dependency.dstSubpass = 0;
-            dependency.srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
-                VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-            dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-            dependency.srcAccessMask = VK_ACCESS_SHADER_READ_BIT |
-                VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-            dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-            VkRenderPassCreateInfo renderPassInfo{
-                VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO };
-            renderPassInfo.attachmentCount = 1;
-            renderPassInfo.pAttachments = &attachment;
-            renderPassInfo.subpassCount = 1;
-            renderPassInfo.pSubpasses = &subpass;
-            renderPassInfo.dependencyCount = 1;
-            renderPassInfo.pDependencies = &dependency;
-            if (vkCreateRenderPass(device_, &renderPassInfo, nullptr,
-                &renderPass_) != VK_SUCCESS) {
-                throw std::runtime_error("Failed to create output render pass.");
-            }
-
-            std::array<VkDescriptorSetLayoutBinding, 4> bindings{};
+            // 0 scene, 1 ACES2 LUT, 2 selection mask, 3 depth, 4 velocity (M9.1),
+            // 5 exposure state (M9.5, storage buffer), 6 bloom chain (M9.4).
+            std::array<VkDescriptorSetLayoutBinding, 7> bindings{};
             for (uint32_t index = 0; index < bindings.size(); ++index) {
                 bindings[index].binding = index;
-                bindings[index].descriptorType =
-                    VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                bindings[index].descriptorType = index == 5
+                    ? VK_DESCRIPTOR_TYPE_STORAGE_BUFFER
+                    : VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
                 bindings[index].descriptorCount = 1;
                 bindings[index].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
             }
@@ -183,8 +153,14 @@ namespace Iridium {
                 pipelineInfo.pColorBlendState = &blending;
                 pipelineInfo.pDynamicState = &dynamic;
                 pipelineInfo.layout = pipelineLayout_;
-                pipelineInfo.renderPass = renderPass_;
-                if (vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1,
+                // R4a: recorded with dynamic rendering into the output target.
+                VkPipelineRenderingCreateInfo rendering{
+                    VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO };
+                rendering.colorAttachmentCount = 1;
+                rendering.pColorAttachmentFormats = &outputFormat;
+                pipelineInfo.pNext = &rendering;
+                pipelineInfo.renderPass = VK_NULL_HANDLE;
+                if (vkCreateGraphicsPipelines(device_, pipelineCache_, 1,
                     &pipelineInfo, nullptr, &pipeline_) != VK_SUCCESS) {
                     throw std::runtime_error("Failed to create output pipeline.");
                 }
@@ -227,7 +203,11 @@ namespace Iridium {
                     frameTargets.sampler(),
                     frameTargets.get(index).depth.view,
                     VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL };
-                std::array<VkWriteDescriptorSet, 4> writes{};
+                const VkDescriptorImageInfo velocity{
+                    frameTargets.sampler(),
+                    frameTargets.get(index).velocity.view,
+                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+                std::array<VkWriteDescriptorSet, 6> writes{};
                 writes[0] = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
                 writes[0].dstSet = set;
                 writes[0].dstBinding = 0;
@@ -249,18 +229,32 @@ namespace Iridium {
                 writes[2].descriptorType =
                     VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
                 writes[2].pImageInfo = &opaqueDepth;
-                uint32_t writeCount = 3;
+                writes[3] = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
+                writes[3].dstSet = set;
+                writes[3].dstBinding = 4;
+                writes[3].descriptorCount = 1;
+                writes[3].descriptorType =
+                    VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                writes[3].pImageInfo = &velocity;
+                // M9.4: without bloom binding 6 is never read; the scene
+                // colour is a valid image in the declared layout.
+                writes[4] = writes[0];
+                writes[4].dstBinding = 6;
+                uint32_t writeCount = 5;
                 if (lutView != VK_NULL_HANDLE && lutSampler != VK_NULL_HANDLE) {
-                    writes[3] = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
-                    writes[3].dstSet = set;
-                    writes[3].dstBinding = 1;
-                    writes[3].descriptorCount = 1;
-                    writes[3].descriptorType =
+                    writes[5] = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
+                    writes[5].dstSet = set;
+                    writes[5].dstBinding = 1;
+                    writes[5].descriptorCount = 1;
+                    writes[5].descriptorType =
                         VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                    writes[3].pImageInfo = &lut;
-                    writeCount = 4;
+                    writes[5].pImageInfo = &lut;
+                    writeCount = 6;
                 }
                 vkUpdateDescriptorSets(device_, writeCount, writes.data(), 0, nullptr);
+                // M9.5: the fallback until a frame binds its adapted state.
+                if (exposureFallback_ != VK_NULL_HANDLE)
+                    setExposureBuffer(static_cast<uint32_t>(index), exposureFallback_);
             }
         }
         catch (...) {
@@ -276,23 +270,46 @@ namespace Iridium {
         descriptorSets_.clear();
     }
 
-    void VulkanOutputPass::record(VkCommandBuffer commandBuffer, uint32_t frameIndex,
-        VkFramebuffer framebuffer, VkExtent2D extent,
-        float manualExposureEv, uint32_t outputOperator,
-        uint32_t outputTransport, float paperWhiteNits,
-        float peakNits, bool selectionActive,
-        const ViewportGridOverlay& gridOverlay) const {
+    void VulkanOutputPass::setSceneView(uint32_t frameIndex, VkImageView view,
+        VkSampler sampler, uint32_t binding) const {
         if (frameIndex >= descriptorSets_.size()) {
             throw std::out_of_range("Output descriptor frame index is out of range.");
         }
-        VkRenderPassBeginInfo begin{ VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
-        begin.renderPass = renderPass_;
-        begin.framebuffer = framebuffer;
-        begin.renderArea.extent = extent;
-        const VkClearValue clear{ { { 0.0f, 0.0f, 0.0f, 1.0f } } };
-        begin.clearValueCount = 1;
-        begin.pClearValues = &clear;
-        vkCmdBeginRenderPass(commandBuffer, &begin, VK_SUBPASS_CONTENTS_INLINE);
+        const VkDescriptorImageInfo image{ sampler, view,
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+        VkWriteDescriptorSet write{ VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
+        write.dstSet = descriptorSets_[frameIndex];
+        write.dstBinding = binding;
+        write.descriptorCount = 1;
+        write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        write.pImageInfo = &image;
+        vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
+    }
+
+    void VulkanOutputPass::setExposureBuffer(uint32_t frameIndex, VkBuffer buffer) const {
+        if (frameIndex >= descriptorSets_.size()) {
+            throw std::out_of_range("Output descriptor frame index is out of range.");
+        }
+        const VkDescriptorBufferInfo state{ buffer, 0, VK_WHOLE_SIZE };
+        VkWriteDescriptorSet write{ VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
+        write.dstSet = descriptorSets_[frameIndex];
+        write.dstBinding = 5;
+        write.descriptorCount = 1;
+        write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        write.pBufferInfo = &state;
+        vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
+    }
+
+    void VulkanOutputPass::record(VkCommandBuffer commandBuffer, uint32_t frameIndex,
+        VkExtent2D extent,
+        float manualExposureEv, uint32_t outputOperator,
+        uint32_t outputTransport, float paperWhiteNits,
+        float peakNits, bool selectionActive,
+        const ViewportGridOverlay& gridOverlay, bool motionVectorView,
+        bool autoExposure, const OutputBloom& bloom) const {
+        if (frameIndex >= descriptorSets_.size()) {
+            throw std::out_of_range("Output descriptor frame index is out of range.");
+        }
         vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_);
         vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
             pipelineLayout_, 0, 1, &descriptorSets_[frameIndex], 0, nullptr);
@@ -326,7 +343,11 @@ namespace Iridium {
         push.packedModes = (outputOperator & 0x3u) |
             ((outputTransport & 0x3u) << 2u) |
             (selectionActive ? 1u << 4u : 0u) |
-            (gridOverlay.visible ? 1u << 5u : 0u);
+            (gridOverlay.visible ? 1u << 5u : 0u) |
+            (motionVectorView ? 1u << 6u : 0u) |
+            (autoExposure ? 1u << 7u : 0u) |
+            (bloom.active ? 1u << 8u : 0u);
+        push.bloom = { bloom.intensity, bloom.additive ? 1.0f : 0.0f, 0.0f, 0.0f };
         vkCmdPushConstants(commandBuffer, pipelineLayout_,
             VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), &push);
         const VkViewport viewport{ 0.0f, 0.0f, static_cast<float>(extent.width),
@@ -335,7 +356,6 @@ namespace Iridium {
         vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
         vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
         vkCmdDraw(commandBuffer, 3, 1, 0, 0);
-        vkCmdEndRenderPass(commandBuffer);
     }
 
     void VulkanOutputPass::cleanup() {
@@ -348,14 +368,10 @@ namespace Iridium {
             if (descriptorSetLayout_ != VK_NULL_HANDLE) {
                 vkDestroyDescriptorSetLayout(device_, descriptorSetLayout_, nullptr);
             }
-            if (renderPass_ != VK_NULL_HANDLE) {
-                vkDestroyRenderPass(device_, renderPass_, nullptr);
-            }
         }
         pipeline_ = VK_NULL_HANDLE;
         pipelineLayout_ = VK_NULL_HANDLE;
         descriptorSetLayout_ = VK_NULL_HANDLE;
-        renderPass_ = VK_NULL_HANDLE;
         allocator_ = nullptr;
         device_ = VK_NULL_HANDLE;
     }

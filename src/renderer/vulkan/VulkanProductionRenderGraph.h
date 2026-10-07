@@ -1,10 +1,13 @@
 #pragma once
 
 #include "renderer/graph/RenderGraph.h"
+#include "renderer/vulkan/VulkanProductionGraphIds.h"
 #include "renderer/rhi/GBufferLayout.h"
+#include "renderer/rhi/ShadowSettings.h"
 #include "renderer/lighting/ClusteredLighting.h"
 #include "renderer/transparency/LayeredGlass.h"
 
+#include <array>
 #include <limits>
 #include <vulkan/vulkan.h>
 
@@ -89,6 +92,75 @@ namespace Iridium {
         return interfaceBytes + tileBytes;
     }
 
+    // Extension hook passes (M7R R2.7). A hook's only graph effect is its
+    // declared usages and lifetimes (skipPass records nothing), so declaring
+    // exactly these whenever their consumer is active keeps the graph
+    // identical. Defaults reproduce the pre-R2.7 graph. "final-capture-hook"
+    // is not optional: retained editor views also copy output through it.
+    struct VulkanGraphHooks {
+        // "depth.occlusion-pyramid.validation-readback-hook" (with depthPyramid).
+        bool depthPyramidValidation = true;
+        // "transparent.layered[.<tier>].validation-readback-hook" per
+        // resident layered tier.
+        bool layeredValidation = true;
+        // Scene depth as a transfer source of the VSM request readback so the
+        // depth qualification oracle can copy it.
+        bool virtualShadowDepthSnapshot = true;
+        // "scene-color-capture-hook" (M7R R3b.5): scene-linear capture copies
+        // read scene.color as a transfer source after the last scene writer;
+        // output-transform's begin returns it to SampledRead.
+        bool sceneColorCapture = true;
+        // M7R R4b.5 (design finding 5): the editor bridge samples
+        // depth.opaque in the UI pass (glass-depth view), so the UI pass
+        // declares that read and depth stays live (unaliased) until then.
+        // Not a hook pass; the attached editor bridge requests it.
+        bool editorDepthSample = false;
+
+        [[nodiscard]] static constexpr VulkanGraphHooks none() noexcept {
+            return { false, false, false, false, false };
+        }
+        [[nodiscard]] constexpr VulkanGraphHooks operator|(
+            const VulkanGraphHooks& other) const noexcept {
+            return { depthPyramidValidation || other.depthPyramidValidation,
+                layeredValidation || other.layeredValidation,
+                virtualShadowDepthSnapshot || other.virtualShadowDepthSnapshot,
+                sceneColorCapture || other.sceneColorCapture,
+                editorDepthSample || other.editorDepthSample };
+        }
+    };
+
+    // Optional production-graph features. Defaults reproduce the default graph.
+    struct VulkanProductionGraphFeatures {
+        // M7.6 scene-depth pyramid (Hi-Z history/occlusion).
+        bool depthPyramid = false;
+        // M7.8 virtual-shadow working-set bytes; zero omits the VSM passes.
+        uint64_t virtualShadowWorkingSetBytes = 0;
+        // Copies the 64-byte cluster diagnostics for CPU telemetry; only needed
+        // when frame counters are collected.
+        bool clusterTelemetryReadback = true;
+        VulkanGraphHooks hooks{};
+        // Cube capacity of the 256/512/1024 point-shadow pools; the imported
+        // pool images declare capacity x 6 layers (R3b.6 binds them).
+        std::array<uint32_t, 3> pointShadowPoolCapacities{
+            kPointShadowPool256Capacity, kPointShadowPool512Capacity,
+            kPointShadowPool1024Capacity };
+        // M7R R4b.4 (--render-graph-aliasing): compile with
+        // CompileOptions::transientAliasing, so the executor places the
+        // aliasing-eligible transient images in shared alias heaps.
+        bool transientAliasing = false;
+        // M9.2: native TAA. Declares temporal.taa.resolve and the taa.history
+        // pair; the post chain (bloom, output) then reads the resolved colour.
+        bool temporalAntiAliasing = false;
+        // M9.5: auto-exposure. Declares the "exposure" History buffer pair
+        // (SurviveCut) and post.exposure.{histogram,adapt} after the resolve;
+        // TAA and the output transform read the adapted state.
+        bool autoExposure = false;
+        // M9.4: bloom chain levels; 0 keeps the inactive "bloom-hook". Nonzero
+        // replaces it with post.bloom (the transient mipped "bloom.chain",
+        // a whole-resource write), which the output transform reads.
+        uint32_t bloomLevels = 0;
+    };
+
     [[nodiscard]] RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
         VkExtent2D extent, VkFormat swapchainFormat,
         VkFormat outputFormat = VK_FORMAT_B8G8R8A8_SRGB,
@@ -99,8 +171,7 @@ namespace Iridium {
         uint32_t spotShadowAtlasResolution = 8192,
         bool transparencyPyramids = true,
         VulkanLayeredGraphConfig layered = {},
-        bool legacyTransparency = false, bool depthPyramid = false,
-        uint64_t virtualShadowWorkingSetBytes = 0);
+        VulkanProductionGraphFeatures features = {});
     [[nodiscard]] RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
         VkExtent2D sceneExtent, VkExtent2D presentationExtent,
         VkFormat swapchainFormat,
@@ -112,7 +183,13 @@ namespace Iridium {
         uint32_t spotShadowAtlasResolution = 8192,
         bool transparencyPyramids = true,
         VulkanLayeredGraphConfig layered = {},
-        bool legacyTransparency = false, bool depthPyramid = false,
-        uint64_t virtualShadowWorkingSetBytes = 0);
+        VulkanProductionGraphFeatures features = {});
+
+    class VulkanRenderGraphExecutor;
+
+    // The ids of the production passes and resources in the executor's bound
+    // plan (R3b.4); undeclared ones are invalid. Call after every rebuild.
+    [[nodiscard]] VulkanProductionGraphIds resolveVulkanProductionGraphIds(
+        const VulkanRenderGraphExecutor& graph);
 
 } // namespace Iridium

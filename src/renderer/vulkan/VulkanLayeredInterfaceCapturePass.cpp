@@ -21,7 +21,7 @@ namespace {
 
 } // namespace
 
-void VulkanLayeredInterfaceCapturePass::init(VkDevice device,
+void VulkanLayeredInterfaceCapturePass::init(VkDevice device, VkPipelineCache pipelineCache,
     ::DescriptorAllocator& descriptors, VkDescriptorSetLayout globalLayout,
     VkDescriptorSetLayout materialLayout,
     VkDescriptorSetLayout samplerLayout) {
@@ -32,64 +32,9 @@ void VulkanLayeredInterfaceCapturePass::init(VkDevice device,
             "Invalid layered-interface capture-pass initialization");
     }
     device_ = device;
+    pipelineCache_ = pipelineCache;
     descriptors_ = &descriptors;
     try {
-        std::array<VkAttachmentDescription, 2> attachments{};
-        attachments[0].format = VK_FORMAT_R32_UINT;
-        attachments[0].samples = VK_SAMPLE_COUNT_1_BIT;
-        attachments[0].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-        attachments[0].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-        attachments[0].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-        attachments[0].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-        // Every interface is fully cleared on its capture. Undefined initial
-        // layout allows the render pass to discard either the prior frame's
-        // sampled state or a never-written target without contradicting the
-        // graph transition history.
-        attachments[0].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        attachments[0].finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-        attachments[1].format = VK_FORMAT_D32_SFLOAT;
-        attachments[1].samples = VK_SAMPLE_COUNT_1_BIT;
-        attachments[1].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-        attachments[1].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-        attachments[1].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-        attachments[1].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-        attachments[1].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        attachments[1].finalLayout =
-            VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-
-        const VkAttachmentReference color{
-            0u, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL };
-        const VkAttachmentReference depth{
-            1u, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL };
-        VkSubpassDescription subpass{};
-        subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-        subpass.colorAttachmentCount = 1u;
-        subpass.pColorAttachments = &color;
-        subpass.pDepthStencilAttachment = &depth;
-
-        VkSubpassDependency dependency{};
-        dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
-        dependency.dstSubpass = 0u;
-        dependency.srcStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
-        dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
-            VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
-            VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
-        dependency.srcAccessMask = 0u;
-        dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
-            VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-
-        VkRenderPassCreateInfo renderPassInfo{
-            VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO };
-        renderPassInfo.attachmentCount =
-            static_cast<uint32_t>(attachments.size());
-        renderPassInfo.pAttachments = attachments.data();
-        renderPassInfo.subpassCount = 1u;
-        renderPassInfo.pSubpasses = &subpass;
-        renderPassInfo.dependencyCount = 1u;
-        renderPassInfo.pDependencies = &dependency;
-        requireSuccess(vkCreateRenderPass(device_, &renderPassInfo, nullptr,
-            &renderPass_), "vkCreateRenderPass(layered interface capture)");
-
         std::array<VkDescriptorSetLayoutBinding, 4> bindings{};
         for (uint32_t binding = 0; binding < bindings.size(); ++binding) {
             bindings[binding].binding = binding;
@@ -161,7 +106,7 @@ void VulkanLayeredInterfaceCapturePass::init(VkDevice device,
             terminationStage, tileTerminationPipelineLayout_,
             VK_NULL_HANDLE, -1 };
         const VkResult terminationResult = vkCreateComputePipelines(device_,
-            VK_NULL_HANDLE, 1u, &terminationPipelineInfo, nullptr,
+            pipelineCache_, 1u, &terminationPipelineInfo, nullptr,
             &tileTerminationPipeline_);
         vkDestroyShaderModule(device_, terminationShader, nullptr);
         requireSuccess(terminationResult,
@@ -242,9 +187,17 @@ VkPipeline VulkanLayeredInterfaceCapturePass::createPipeline() const {
         pipelineInfo.pColorBlendState = &colorBlend;
         pipelineInfo.pDynamicState = &dynamicState;
         pipelineInfo.layout = pipelineLayout_;
-        pipelineInfo.renderPass = renderPass_;
+        // R4a: dynamic rendering into the R32_UINT identity + D32 depth pair.
+        constexpr VkFormat identityFormat = VK_FORMAT_R32_UINT;
+        VkPipelineRenderingCreateInfo rendering{
+            VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO };
+        rendering.colorAttachmentCount = 1u;
+        rendering.pColorAttachmentFormats = &identityFormat;
+        rendering.depthAttachmentFormat = VK_FORMAT_D32_SFLOAT;
+        pipelineInfo.pNext = &rendering;
+        pipelineInfo.renderPass = VK_NULL_HANDLE;
         VkPipeline pipeline = VK_NULL_HANDLE;
-        requireSuccess(vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1u,
+        requireSuccess(vkCreateGraphicsPipelines(device_, pipelineCache_, 1u,
             &pipelineInfo, nullptr, &pipeline),
             "vkCreateGraphicsPipelines(layered interface capture)");
         vkDestroyShaderModule(device_, fragment, nullptr);
@@ -563,11 +516,8 @@ void VulkanLayeredInterfaceCapturePass::cleanup() noexcept {
         vkDestroyPipelineLayout(device_, pipelineLayout_, nullptr);
     if (captureLayout_ != VK_NULL_HANDLE)
         vkDestroyDescriptorSetLayout(device_, captureLayout_, nullptr);
-    if (renderPass_ != VK_NULL_HANDLE)
-        vkDestroyRenderPass(device_, renderPass_, nullptr);
     device_ = VK_NULL_HANDLE;
     descriptors_ = nullptr;
-    renderPass_ = VK_NULL_HANDLE;
     captureLayout_ = VK_NULL_HANDLE;
     pipelineLayout_ = VK_NULL_HANDLE;
     pipeline_ = VK_NULL_HANDLE;

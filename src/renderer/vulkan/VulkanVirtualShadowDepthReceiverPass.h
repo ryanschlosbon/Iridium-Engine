@@ -12,7 +12,7 @@ public:
     ~VulkanVirtualShadowDepthReceiverPass() { cleanup(); }
     VulkanVirtualShadowDepthReceiverPass(const VulkanVirtualShadowDepthReceiverPass&) = delete;
     VulkanVirtualShadowDepthReceiverPass& operator=(const VulkanVirtualShadowDepthReceiverPass&) = delete;
-    void init(VkDevice device, std::span<const VkBuffer> workingSets,
+    void init(VkDevice device, VkPipelineCache pipelineCache, std::span<const VkBuffer> workingSets,
         const VirtualShadowGpuWorkingSetLayout& layout,
         const std::filesystem::path& shaderDirectory);
     // Caller waits for this slot's fence before changing its depth binding, and
@@ -25,6 +25,7 @@ public:
     void cleanup() noexcept;
 private:
     VkDevice device_{};
+    VkPipelineCache pipelineCache_ = VK_NULL_HANDLE;
     VkDescriptorPool pool_{};
     VkDescriptorSetLayout setLayout_{};
     VkPipelineLayout layout_{};

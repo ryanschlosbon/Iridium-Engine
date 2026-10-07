@@ -1,4 +1,5 @@
 #include "material/MaterialCompiler.h"
+#include "core/ProjectAssetRoots.h"
 #include "material/TransparencyDiagnostics.h"
 
 #include "renderer/color/SceneColor.h"
@@ -526,8 +527,8 @@ namespace {
     }
 
     bool testOptionalCarClassificationSnapshot() {
-        const std::filesystem::path path = std::filesystem::path(PROJECT_ROOT_DIR) /
-            "assets" / "models" / "alfa_romeo" / "scene.gltf";
+        const std::filesystem::path path = Iridium::resolveProjectAssetPath(
+            std::filesystem::path("models") / "alfa_romeo" / "scene.gltf");
         if (!std::filesystem::exists(path)) {
             std::cout << "  optional Alfa classification skipped: licensed asset absent\n";
             return true;

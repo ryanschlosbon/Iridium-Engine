@@ -1,6 +1,7 @@
 #include "renderer/rhi/GpuSceneIndirect.h"
 
 #include <iostream>
+#include <algorithm>
 #include <array>
 #include <bit>
 #include <vector>
@@ -112,6 +113,60 @@ int main() {
         buildGpuSceneIndirectPlan({}, supported(), plan);
         CHECK(!plan.usesIndirect());
         CHECK(plan.fallbackReason == GpuSceneIndirectFallbackReason::None);
+    }
+    {
+        // M7R R5c.4b: the record plan equals the packet plan of the parity
+        // packets those records produced, including every fallback reason
+        // and a direct packet in the queue.
+        std::vector<GpuScenePrimitiveRecord> primitives(3);
+        std::vector<GpuSceneGeometryRecord> geometries(3);
+        for (uint32_t index = 0; index < 3u; ++index) {
+            primitives[index].binding = { index, 2u - index, 5u, 6u };
+            geometries[index].draw = { 3u * index, 6u + index,
+                std::bit_cast<uint32_t>(static_cast<int32_t>(index) - 1), 1u };
+        }
+        const std::vector<uint32_t> order{ 2u, 0u, 1u };
+        std::vector<DrawPacket> packets;
+        for (const uint32_t primitive : order) {
+            DrawPacket value = packet(primitive,
+                geometries[primitives[primitive].binding.y].draw.x);
+            value.indexCount = geometries[primitives[primitive].binding.y].draw.y;
+            packets.push_back(value);
+        }
+        const auto same = [&](const GpuSceneIndirectPolicy& policy,
+                size_t directs) {
+            std::vector<DrawPacket> queue = packets;
+            for (size_t index = 0; index < directs; ++index)
+                queue.push_back(DrawPacket{ .indexCount = 3u });
+            GpuSceneIndirectPlan fromPackets, fromRecords;
+            buildGpuSceneIndirectPlan(queue, policy, fromPackets, primitives,
+                geometries);
+            buildGpuSceneIndirectPlan(order, directs, policy, fromRecords,
+                primitives, geometries);
+            return fromPackets.fallbackReason == fromRecords.fallbackReason &&
+                fromPackets.packetIndices == fromRecords.packetIndices &&
+                fromPackets.commands.size() == fromRecords.commands.size() &&
+                std::equal(fromPackets.commands.begin(), fromPackets.commands.end(),
+                    fromRecords.commands.begin(),
+                    [](const auto& a, const auto& b) {
+                        return std::bit_cast<std::array<uint32_t, 5>>(a) ==
+                            std::bit_cast<std::array<uint32_t, 5>>(b);
+                    });
+        };
+        CHECK(same(supported(), 0u));
+        CHECK(same(supported(), 1u));
+        CHECK(same(supported(4u), 0u));
+        CHECK(same(supported(4u), 1u));
+        auto policy = supported();
+        policy.forceDirectReference = true;
+        CHECK(same(policy, 0u));
+        policy = supported();
+        policy.multiDrawIndirect = false;
+        CHECK(same(policy, 0u));
+        policy = supported();
+        policy.maxDrawIndirectCount = 3u;
+        CHECK(same(policy, 0u));
+        CHECK(same(policy, 1u));
     }
     if (failures == 0) std::cout << "GpuSceneIndirectTests passed\n";
     return failures == 0 ? 0 : 1;

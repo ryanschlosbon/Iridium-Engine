@@ -152,57 +152,86 @@ namespace Iridium {
     ReflectionProbeFramePacket extractReflectionProbes(
         const SceneWorld& world, ReflectionProbeResidencyFn residency) {
         ReflectionProbeFramePacket result;
+        extractReflectionProbes(world, residency, result);
+        return result;
+    }
+
+    void extractReflectionProbes(const SceneWorld& world,
+        const ReflectionProbeResidencyFn& residency,
+        ReflectionProbeFramePacket& result) {
+        // Entries are assigned over the packet's existing elements (reusing
+        // their string capacity) and the vectors are trimmed at the end.
+        size_t candidateCount = 0;
+        size_t diagnosticCount = 0;
+        const auto diagnose = [&](ReflectionProbeExtractionDiagnosticCode code,
+            SceneEntityUuid owner, const char* propertyPath,
+            const char* message) {
+            if (diagnosticCount == result.diagnostics.size())
+                result.diagnostics.emplace_back();
+            ReflectionProbeExtractionDiagnostic& diagnostic =
+                result.diagnostics[diagnosticCount++];
+            diagnostic.code = code;
+            diagnostic.owner = owner;
+            diagnostic.propertyPath.assign(propertyPath);
+            diagnostic.message.assign(message);
+        };
+        const auto finish = [&] {
+            result.candidates.resize(candidateCount);
+            result.diagnostics.resize(diagnosticCount);
+        };
+        result.stats = {};
         const Registry& registry = world.registry();
         const auto* probes = registry.findPool<ReflectionProbeComponent>();
-        if (!probes) return result;
+        if (!probes) {
+            finish();
+            return;
+        }
         const auto* transforms = registry.findPool<TransformComponent>();
-        for (Entity entity : probes->entities) {
+        for (size_t index = 0; index < probes->entities.size(); ++index) {
+            const Entity entity = probes->entities[index];
             ++result.stats.sceneProbeCount;
             const auto owner = world.identities().persistentId(entity);
             if (!owner) {
-                result.diagnostics.push_back({
-                    .code = ReflectionProbeExtractionDiagnosticCode::MissingIdentity,
-                    .propertyPath = "/identity",
-                    .message = "Reflection probe owner has no persistent scene UUID",
-                });
+                diagnose(ReflectionProbeExtractionDiagnosticCode::MissingIdentity,
+                    {}, "/identity",
+                    "Reflection probe owner has no persistent scene UUID");
                 ++result.stats.omittedCount;
                 continue;
             }
             if (!transforms || !transforms->has(entity)) {
-                result.diagnostics.push_back({
-                    .code = ReflectionProbeExtractionDiagnosticCode::MissingTransform,
-                    .owner = *owner,
-                    .propertyPath = "/transform",
-                    .message = "Reflection probe owner has no Transform component",
-                });
+                diagnose(ReflectionProbeExtractionDiagnosticCode::MissingTransform,
+                    *owner, "/transform",
+                    "Reflection probe owner has no Transform component");
                 ++result.stats.omittedCount;
                 continue;
             }
-            const ReflectionProbeComponent& component = probes->get(entity);
+            const ReflectionProbeComponent& component =
+                probes->components[index];
             if (!validProbe(component)) {
-                result.diagnostics.push_back({
-                    .code = ReflectionProbeExtractionDiagnosticCode::InvalidProbe,
-                    .owner = *owner,
-                    .propertyPath = "/",
-                    .message = "Reflection probe settings are invalid",
-                });
+                diagnose(ReflectionProbeExtractionDiagnosticCode::InvalidProbe,
+                    *owner, "/", "Reflection probe settings are invalid");
                 ++result.stats.omittedCount;
                 continue;
             }
-            ReflectionProbeCandidate candidate;
+            glm::mat4 probeToWorld(1.0f);
+            glm::mat4 worldToProbe(1.0f);
+            if (!rigidProbeTransform(transforms->get(entity).worldMatrix,
+                    probeToWorld, worldToProbe)) {
+                diagnose(ReflectionProbeExtractionDiagnosticCode::InvalidTransform,
+                    *owner, "/transform",
+                    "Reflection probe world transform is invalid");
+                ++result.stats.omittedCount;
+                continue;
+            }
+            if (candidateCount == result.candidates.size())
+                result.candidates.emplace_back();
+            ReflectionProbeCandidate& candidate =
+                result.candidates[candidateCount++];
             candidate.owner = *owner;
             candidate.probe = component;
-            if (!rigidProbeTransform(transforms->get(entity).worldMatrix,
-                    candidate.probeToWorld, candidate.worldToProbe)) {
-                result.diagnostics.push_back({
-                    .code = ReflectionProbeExtractionDiagnosticCode::InvalidTransform,
-                    .owner = *owner,
-                    .propertyPath = "/transform",
-                    .message = "Reflection probe world transform is invalid",
-                });
-                ++result.stats.omittedCount;
-                continue;
-            }
+            candidate.worldToProbe = worldToProbe;
+            candidate.probeToWorld = probeToWorld;
+            candidate.runtimeEnvironmentSlot.reset();
             const AssetGuid requested =
                 !component.requestedEnvironmentAssetGuid.isNil()
                 ? component.requestedEnvironmentAssetGuid
@@ -212,8 +241,9 @@ namespace Iridium {
                 ? residency(requested)
                 : component.resolvedEnvironmentAssetGuid == requested);
             result.stats.residentCount += candidate.resident ? 1u : 0u;
-            result.candidates.push_back(std::move(candidate));
         }
+        finish();
+        // The same sort over the same sequence as the by-value extraction.
         std::ranges::sort(result.candidates,
             [](const ReflectionProbeCandidate& lhs,
                const ReflectionProbeCandidate& rhs) {
@@ -221,7 +251,6 @@ namespace Iridium {
             });
         result.stats.candidateCount = static_cast<uint32_t>(
             result.candidates.size());
-        return result;
     }
 
     ReflectionProbePublisher::ReflectionProbePublisher(
@@ -235,6 +264,8 @@ namespace Iridium {
         records_.resize(config_.initialCapacity);
         recordRevisions_.resize(config_.initialCapacity);
         selectionMetadata_.resize(config_.initialCapacity);
+        slotInputs_.resize(config_.initialCapacity);
+        slotPacked_.resize(config_.initialCapacity);
     }
 
     void ReflectionProbePublisher::advanceRevision(uint64_t& value) noexcept {
@@ -257,6 +288,8 @@ namespace Iridium {
         publishCandidates_.clear();
         newCandidates_.clear();
         removedOwners_.clear();
+        std::ranges::fill(slotPacked_, uint8_t{ 0 });
+        membershipChanged_ = true;
         nextRevision_ = 0;
         activeListRevision_ = 0;
         stats_ = {};
@@ -278,6 +311,8 @@ namespace Iridium {
         records_.resize(capacity);
         recordRevisions_.resize(capacity);
         selectionMetadata_.resize(capacity);
+        slotInputs_.resize(capacity);
+        slotPacked_.resize(capacity);
     }
 
     void ReflectionProbePublisher::writeRecord(uint32_t slot,
@@ -294,6 +329,44 @@ namespace Iridium {
 
     void ReflectionProbePublisher::clearRecord(uint32_t slot) {
         writeRecord(slot, PackedGpuReflectionProbe{});
+        slotPacked_[slot] = 0;
+    }
+
+    ReflectionProbePublisher::PackInputs ReflectionProbePublisher::packInputs(
+        const PublishCandidate& candidate) noexcept {
+        const ReflectionProbeCandidate& source = *candidate.source;
+        PackInputs inputs{};
+        inputs.owner = source.owner;
+        inputs.worldToProbe = source.worldToProbe;
+        inputs.position = glm::vec3(source.probeToWorld[3]);
+        inputs.sphereRadiusMeters = source.probe.sphereRadiusMeters;
+        inputs.boxExtentsMeters = source.probe.boxExtentsMeters;
+        inputs.blendDistanceMeters = source.probe.blendDistanceMeters;
+        inputs.intensity = source.probe.intensity;
+        inputs.shape = static_cast<uint32_t>(source.probe.shape);
+        inputs.parallaxMode = static_cast<uint32_t>(source.probe.parallaxMode);
+        inputs.priority = source.probe.priority;
+        inputs.environmentSlot = candidate.environmentSlot;
+        inputs.selectionRank = candidate.selectionRank;
+        return inputs;
+    }
+
+    // Packs the slot's record and selection metadata unless they were last
+    // packed from bit-identical inputs, in which case the full path's write
+    // would have compared equal and changed nothing.
+    void ReflectionProbePublisher::packSlot(uint32_t slot,
+        const PublishCandidate& candidate) {
+        const PackInputs inputs = packInputs(candidate);
+        if (slot < slotPacked_.size() && slotPacked_[slot] != 0 &&
+            std::memcmp(&slotInputs_[slot], &inputs, sizeof(PackInputs)) == 0)
+            return;
+        selectionMetadata_[slot] = { candidate.source->owner,
+            candidate.source->probe.priority,
+            candidate.influenceVolume };
+        writeRecord(slot, packedProbe(*candidate.source,
+            candidate.environmentSlot, candidate.selectionRank));
+        slotInputs_[slot] = inputs;
+        slotPacked_[slot] = 1;
     }
 
     void ReflectionProbePublisher::buildChangedRanges() {
@@ -372,6 +445,7 @@ namespace Iridium {
 
         newCandidates_.clear();
         newCandidates_.reserve(publishCandidates_.size());
+        size_t matchedOwners = 0;
         for (PublishCandidate& candidate : publishCandidates_) {
             const auto existing = slotsByOwner_.find(candidate.source->owner);
             if (existing == slotsByOwner_.end()) {
@@ -379,22 +453,25 @@ namespace Iridium {
                 continue;
             }
             const uint32_t slot = existing->second;
+            if (occupiedSlots_[slot] == 0) ++matchedOwners;
             occupiedSlots_[slot] = 1;
-            selectionMetadata_[slot] = { candidate.source->owner,
-                candidate.source->probe.priority,
-                candidate.influenceVolume };
-            writeRecord(slot, packedProbe(*candidate.source,
-                candidate.environmentSlot, candidate.selectionRank));
+            packSlot(slot, candidate);
         }
 
-        removedOwners_.clear();
-        for (const auto& [owner, slot] : slotsByOwner_) {
-            if (occupiedSlots_[slot] != 0) continue;
-            clearRecord(slot);
-            selectionMetadata_[slot] = {};
-            removedOwners_.push_back(owner);
+        // Every mapped owner whose slot no candidate claimed is removed; when
+        // all were claimed the walk would remove nothing.
+        if (matchedOwners != slotsByOwner_.size()) {
+            removedOwners_.clear();
+            for (const auto& [owner, slot] : slotsByOwner_) {
+                if (occupiedSlots_[slot] != 0) continue;
+                clearRecord(slot);
+                selectionMetadata_[slot] = {};
+                removedOwners_.push_back(owner);
+            }
+            for (SceneEntityUuid owner : removedOwners_)
+                slotsByOwner_.erase(owner);
+            if (!removedOwners_.empty()) membershipChanged_ = true;
         }
-        for (SceneEntityUuid owner : removedOwners_) slotsByOwner_.erase(owner);
 
         for (PublishCandidate* candidate : newCandidates_) {
             const auto free = std::ranges::find(occupiedSlots_, uint8_t{ 0 });
@@ -406,23 +483,25 @@ namespace Iridium {
                 std::distance(occupiedSlots_.begin(), free));
             *free = 1;
             slotsByOwner_.emplace(candidate->source->owner, slot);
-            selectionMetadata_[slot] = { candidate->source->owner,
-                candidate->source->probe.priority,
-                candidate->influenceVolume };
-            writeRecord(slot, packedProbe(*candidate->source,
-                candidate->environmentSlot, candidate->selectionRank));
+            packSlot(slot, *candidate);
+            membershipChanged_ = true;
         }
 
-        previousActiveSlots_ = activeSlots_;
-        activeSlots_.clear();
-        activeSlots_.reserve(slotsByOwner_.size());
-        for (const auto& [owner, slot] : slotsByOwner_) {
-            (void)owner;
-            activeSlots_.push_back(slot);
+        // The active list is the sorted slot set of slotsByOwner_; it can only
+        // differ after an insertion, a removal or a reset.
+        if (membershipChanged_) {
+            previousActiveSlots_ = activeSlots_;
+            activeSlots_.clear();
+            activeSlots_.reserve(slotsByOwner_.size());
+            for (const auto& [owner, slot] : slotsByOwner_) {
+                (void)owner;
+                activeSlots_.push_back(slot);
+            }
+            std::ranges::sort(activeSlots_);
+            if (activeSlots_ != previousActiveSlots_)
+                advanceRevision(activeListRevision_);
+            membershipChanged_ = false;
         }
-        std::ranges::sort(activeSlots_);
-        if (activeSlots_ != previousActiveSlots_)
-            advanceRevision(activeListRevision_);
         buildChangedRanges();
         stats_.activeProbeCount = static_cast<uint32_t>(activeSlots_.size());
         stats_.changedRecordCount = static_cast<uint32_t>(

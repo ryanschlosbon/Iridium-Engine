@@ -2,6 +2,7 @@
 
 #include "renderer/lighting/ClusteredLighting.h"
 #include "renderer/vulkan/DescriptorAllocator.h"
+#include "renderer/vulkan/VulkanProductionGraphIds.h"
 #include "renderer/vulkan/VulkanRenderGraphExecutor.h"
 
 #include <vulkan/vulkan.h>
@@ -22,16 +23,32 @@ namespace Iridium {
             const VulkanClusteredLightingPipeline&) = delete;
         ~VulkanClusteredLightingPipeline();
 
-        void init(VkDevice device, ::DescriptorAllocator& allocator);
+        void init(VkDevice device, VkPipelineCache pipelineCache, ::DescriptorAllocator& allocator);
         void rebuildDescriptors(const VulkanRenderGraphExecutor& graph,
+            const VulkanClusterGraphIds& ids,
             std::span<const VkDescriptorBufferInfo> lightRecords,
             std::span<const VkDescriptorBufferInfo> activeSlots,
             std::span<const VkDescriptorBufferInfo> fallbackCandidates,
             std::span<const VkDescriptorBufferInfo> parameters);
         void clearDescriptors();
-        [[nodiscard]] uint32_t record(VkCommandBuffer commandBuffer,
-            VulkanRenderGraphExecutor& graph, uint32_t frameIndex,
-            uint32_t clusterCount, uint32_t activeLightCount);
+        // M7R R4c.2: rewrites one retired slot's light-record and active-slot
+        // bindings in place (no-op before the sets exist).
+        void rewriteLightBuffers(uint32_t frameIndex,
+            const VkDescriptorBufferInfo& lightRecords,
+            const VkDescriptorBufferInfo& activeSlots);
+        // One stage per graph pass ("lighting.cluster.{clear,count,scan,fill,
+        // finalize}", R3c.1); the executor begins each pass. Each returns its
+        // dispatch count.
+        [[nodiscard]] uint32_t recordClear(VkCommandBuffer commandBuffer,
+            uint32_t frameIndex, uint32_t clusterCount);
+        [[nodiscard]] uint32_t recordCount(VkCommandBuffer commandBuffer,
+            uint32_t frameIndex, uint32_t activeLightCount);
+        [[nodiscard]] uint32_t recordScan(VkCommandBuffer commandBuffer,
+            uint32_t frameIndex, uint32_t clusterCount);
+        [[nodiscard]] uint32_t recordFill(VkCommandBuffer commandBuffer,
+            uint32_t frameIndex, uint32_t activeLightCount);
+        [[nodiscard]] uint32_t recordFinalize(VkCommandBuffer commandBuffer,
+            uint32_t frameIndex, VkBuffer indirect);
         void cleanup() noexcept;
 
     private:
@@ -48,6 +65,7 @@ namespace Iridium {
         static void computeBarrier(VkCommandBuffer commandBuffer);
 
         VkDevice device_ = VK_NULL_HANDLE;
+        VkPipelineCache pipelineCache_ = VK_NULL_HANDLE;
         ::DescriptorAllocator* allocator_ = nullptr;
         VkDescriptorSetLayout descriptorSetLayout_ = VK_NULL_HANDLE;
         VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;

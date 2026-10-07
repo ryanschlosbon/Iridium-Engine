@@ -59,8 +59,11 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(VkDebugUtilsMessageSeverityF
 
 // Constructor
 VkContext::VkContext(bool enableValidation, bool enableDebugUtils,
-	bool enablePipelineStatistics, GLFWwindow* window)
+	bool enablePipelineStatistics, GLFWwindow* window,
+	bool enableSynchronizationValidation)
 	: enableValidationLayers(enableValidation),
+	  synchronizationValidationRequested(
+		  enableValidation && enableSynchronizationValidation),
 	  requestDebugUtils(enableValidation || enableDebugUtils),
 	  pipelineStatisticsRequested(enablePipelineStatistics) {
 	// Initialize the library
@@ -164,9 +167,20 @@ void VkContext::createInstance() {
 	createInfo.ppEnabledExtensionNames = extensions.data();
 
 	// Layers
+	// Synchronization validation (M7R R3) is an explicit layer feature: it is
+	// expensive and only requested with --validation-sync.
+	const VkValidationFeatureEnableEXT synchronizationValidation =
+		VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT;
+	VkValidationFeaturesEXT validationFeatures{
+		VK_STRUCTURE_TYPE_VALIDATION_FEATURES_EXT };
+	validationFeatures.enabledValidationFeatureCount = 1;
+	validationFeatures.pEnabledValidationFeatures = &synchronizationValidation;
 	if (enableValidationLayers) {
 		createInfo.enabledLayerCount = static_cast<uint32_t>(validationLayers.size());
 		createInfo.ppEnabledLayerNames = validationLayers.data();
+		if (synchronizationValidationRequested) {
+			createInfo.pNext = &validationFeatures;
+		}
 	}
 	else {
 		createInfo.enabledLayerCount = 0;
@@ -298,6 +312,8 @@ bool VkContext::isDeviceSuitable(VkPhysicalDevice device) {
 		features.samplerAnisotropy == VK_TRUE &&
 		features.fillModeNonSolid == VK_TRUE &&
 		features.independentBlend == VK_TRUE &&
+		// M9.8e: transparency writes reactive coverage as a second blend source.
+		features.dualSrcBlend == VK_TRUE &&
 		features.imageCubeArray == VK_TRUE;
 }
 
@@ -365,10 +381,23 @@ void VkContext::createLogicalDevice() {
     // 1. Queue Family Logic
     QueueFamilyIndices indices = findQueueFamilies(physicalDevice);
 
+    // M7R R4d: the upload queue family (dedicated transfer, else graphics-free
+    // compute, else graphics).
+    {
+        uint32_t familyCount = 0;
+        vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &familyCount, nullptr);
+        std::vector<VkQueueFamilyProperties> families(familyCount);
+        vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &familyCount,
+            families.data());
+        transferQueueChoice = Iridium::selectVulkanTransferQueueFamily(families,
+            indices.graphicsFamily.value());
+    }
+
     std::vector<VkDeviceQueueCreateInfo> queueCreateInfos;
     std::set<uint32_t> uniqueQueueFamilies = {
        indices.graphicsFamily.value(),
-       indices.presentFamily.value()
+       indices.presentFamily.value(),
+       transferQueueChoice.family
     };
 
     float queuePriority = 1.0f;
@@ -387,6 +416,7 @@ void VkContext::createLogicalDevice() {
     deviceFeatures.samplerAnisotropy = VK_TRUE;
 	deviceFeatures.fillModeNonSolid = VK_TRUE;
 	deviceFeatures.independentBlend = VK_TRUE;
+	deviceFeatures.dualSrcBlend = VK_TRUE;
     deviceFeatures.imageCubeArray = VK_TRUE;
     VkPhysicalDeviceFeatures supportedFeatures{};
 	vkGetPhysicalDeviceFeatures(physicalDevice, &supportedFeatures);
@@ -403,8 +433,11 @@ void VkContext::createLogicalDevice() {
 		drawIndirectFirstInstanceEnabled ? VK_TRUE : VK_FALSE;
 	maxDrawIndirectCount = physicalDeviceProperties.limits.maxDrawIndirectCount;
 
+    VkPhysicalDeviceVulkan13Features supportedVulkan13{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES };
     VkPhysicalDeviceVulkan12Features supportedVulkan12{
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES };
+    supportedVulkan12.pNext = &supportedVulkan13;
     VkPhysicalDeviceFeatures2 supportedFeatures2{
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2 };
     supportedFeatures2.pNext = &supportedVulkan12;
@@ -442,6 +475,24 @@ void VkContext::createLogicalDevice() {
     }
 	if (drawIndirectCountEnabled)
 		enabledVulkan12.drawIndirectCount = VK_TRUE;
+	// M7R R4d: timeline semaphores (core in Vulkan 1.2) for the upload and
+	// graphics timelines; without them uploads stay legacy-blocking and frames
+	// keep their fences.
+	timelineSemaphoreEnabled = supportedVulkan12.timelineSemaphore == VK_TRUE;
+	if (timelineSemaphoreEnabled)
+		enabledVulkan12.timelineSemaphore = VK_TRUE;
+	// M7R R3: synchronization2 is enabled when available (core in Vulkan 1.3);
+	// barrier recording migrates to vkCmdPipelineBarrier2 incrementally.
+	synchronization2Enabled = supportedVulkan13.synchronization2 == VK_TRUE;
+	// M7R R4a: dynamic rendering (core in Vulkan 1.3) is enabled when
+	// available; passes migrate from render passes one at a time.
+	dynamicRenderingEnabled = supportedVulkan13.dynamicRendering == VK_TRUE;
+	VkPhysicalDeviceVulkan13Features enabledVulkan13{
+		VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES };
+	enabledVulkan13.synchronization2 = synchronization2Enabled ? VK_TRUE : VK_FALSE;
+	enabledVulkan13.dynamicRendering = dynamicRenderingEnabled ? VK_TRUE : VK_FALSE;
+	const bool vulkan13FeaturesEnabled = synchronization2Enabled || dynamicRenderingEnabled;
+	enabledVulkan12.pNext = vulkan13FeaturesEnabled ? &enabledVulkan13 : nullptr;
 
     // 3. Extensions Setup (THE MAC COMPATIBILITY FIX)
     // Start with the Swapchain extension, which is required on all platforms.
@@ -478,8 +529,8 @@ void VkContext::createLogicalDevice() {
     createInfo.pQueueCreateInfos = queueCreateInfos.data();
 
     createInfo.pEnabledFeatures = &deviceFeatures;
-    createInfo.pNext = descriptorIndexingEnabled || drawIndirectCountEnabled
-		? &enabledVulkan12 : nullptr;
+    createInfo.pNext = descriptorIndexingEnabled || drawIndirectCountEnabled ||
+		timelineSemaphoreEnabled || vulkan13FeaturesEnabled ? &enabledVulkan12 : nullptr;
 
     // Pass the dynamically created list of extensions
     createInfo.enabledExtensionCount = static_cast<uint32_t>(deviceExtensions.size());
@@ -498,6 +549,7 @@ void VkContext::createLogicalDevice() {
     // 5. Retrieve Queue Handles
     vkGetDeviceQueue(device, indices.graphicsFamily.value(), 0, &graphicsQueue);
     vkGetDeviceQueue(device, indices.presentFamily.value(), 0, &presentQueue);
+    vkGetDeviceQueue(device, transferQueueChoice.family, 0, &transferQueue);
 }
 
 SwapChainSupportDetails VkContext::querySwapChainSupport(VkPhysicalDevice device) {

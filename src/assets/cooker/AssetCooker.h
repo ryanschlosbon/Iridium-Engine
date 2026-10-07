@@ -52,5 +52,20 @@ namespace Iridium {
         DerivedDataCache& cache,
         std::shared_ptr<const PreparedAssetCook> prepared,
         std::stop_token stopToken = {});
+    // M7R R5b.2: as above, and calls onComplete with the result (inline for an
+    // invalid preparation). Task-system work continues through onComplete
+    // instead of blocking on the future.
+    [[nodiscard]] std::shared_future<DdcRequestResult> requestPreparedCook(
+        DerivedDataCache& cache,
+        std::shared_ptr<const PreparedAssetCook> prepared,
+        std::stop_token stopToken,
+        DdcCompletion onComplete);
+    // M7R R5b.2: the cook on the calling thread (DerivedDataCache::resolve):
+    // a cache read, else build and store. For a serial requester that would
+    // otherwise block a task on requestPreparedCook(...).get().
+    [[nodiscard]] DdcRequestResult resolvePreparedCook(
+        DerivedDataCache& cache,
+        std::shared_ptr<const PreparedAssetCook> prepared,
+        std::stop_token stopToken = {});
 
 } // namespace Iridium

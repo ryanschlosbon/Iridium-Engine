@@ -3,6 +3,7 @@
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
 #include <vulkan/vulkan.h>
+#include "VulkanQueueSelection.h"
 #include <vector>
 #include <optional>
 #include <string>
@@ -33,7 +34,8 @@ class VkContext {
 public:
 	// The Constructor takes the Window pointer so we can create the Surface
 	VkContext(bool enableValidation, bool enableDebugUtils,
-		bool enablePipelineStatistics, GLFWwindow* window);
+		bool enablePipelineStatistics, GLFWwindow* window,
+		bool enableSynchronizationValidation = false);
 	~VkContext();
 
 	// Getters: The rest of the engine will need these handles later.
@@ -45,6 +47,12 @@ public:
 	SwapChainSupportDetails querySwapChainSupport(VkPhysicalDevice device);
 	VkInstance getInstance() const { return instance; }
 	uint32_t getGraphicsQueueFamily() const { return graphicsQueueFamilyIndex; }
+	// M7R R4d: the upload queue (selectVulkanTransferQueueFamily). When the
+	// device has neither a dedicated transfer nor a graphics-free compute
+	// family it is the graphics queue itself.
+	VkQueue getTransferQueue() const { return transferQueue; }
+	uint32_t getTransferQueueFamily() const { return transferQueueChoice.family; }
+	Iridium::VulkanTransferQueueKind getTransferQueueKind() const { return transferQueueChoice.kind; }
 	double getTimestampPeriodNanoseconds() const { return timestampPeriodNanoseconds; }
 	uint32_t getTimestampValidBits() const { return timestampValidBits; }
 	bool hasMemoryBudget() const { return memoryBudgetEnabled; }
@@ -58,6 +66,12 @@ public:
 		return drawIndirectFirstInstanceEnabled;
 	}
 	bool hasDrawIndirectCount() const { return drawIndirectCountEnabled; }
+	// Vulkan 1.3 synchronization2 (vkCmdPipelineBarrier2); M7R R3 enables it.
+	bool hasSynchronization2() const { return synchronization2Enabled; }
+	// Vulkan 1.3 dynamic rendering (vkCmdBeginRendering); M7R R4a enables it.
+	bool hasDynamicRendering() const { return dynamicRenderingEnabled; }
+	// Vulkan 1.2 timeline semaphores; M7R R4d enables them when supported.
+	bool hasTimelineSemaphore() const { return timelineSemaphoreEnabled; }
 	uint32_t getMaxDrawIndirectCount() const { return maxDrawIndirectCount; }
 	uint32_t getMaxIndexedTextureViews() const { return maxIndexedTextureViews; }
 	uint32_t getMaxIndexedSamplers() const { return maxIndexedSamplers; }
@@ -96,6 +110,8 @@ private:
 	// The Command Ports
 	VkQueue graphicsQueue;
 	VkQueue presentQueue;
+	VkQueue transferQueue = VK_NULL_HANDLE;
+	Iridium::VulkanTransferQueueChoice transferQueueChoice{};
 
 	uint32_t graphicsQueueFamilyIndex;
 	double timestampPeriodNanoseconds = 0.0;
@@ -109,6 +125,10 @@ private:
 	bool multiDrawIndirectEnabled = false;
 	bool drawIndirectFirstInstanceEnabled = false;
 	bool drawIndirectCountEnabled = false;
+	bool synchronization2Enabled = false;
+	bool dynamicRenderingEnabled = false;
+	bool timelineSemaphoreEnabled = false;
+	bool synchronizationValidationRequested = false;
 	uint32_t maxDrawIndirectCount = 0;
 	uint32_t maxIndexedTextureViews = 0;
 	uint32_t maxIndexedSamplers = 0;

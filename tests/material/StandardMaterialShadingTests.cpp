@@ -6,10 +6,7 @@
 
 #include <array>
 #include <cmath>
-#include <filesystem>
-#include <fstream>
 #include <iostream>
-#include <sstream>
 #include <string>
 
 #include <glm/gtc/matrix_transform.hpp>
@@ -33,13 +30,6 @@ namespace {
     bool finite(glm::vec3 value) {
         return std::isfinite(value.x) && std::isfinite(value.y) &&
             std::isfinite(value.z);
-    }
-
-    std::string readText(const std::filesystem::path& path) {
-        std::ifstream stream(path, std::ios::binary);
-        std::ostringstream text;
-        text << stream.rdbuf();
-        return text.str();
     }
 
     bool testFresnelAndGgxBoundaries() {
@@ -318,50 +308,13 @@ namespace {
         return true;
     }
 
-    bool testRasterShadersUseSharedConventions() {
-        const std::filesystem::path shaderRoot =
-            std::filesystem::path(PROJECT_ROOT_DIR) / "assets" / "shaders";
-        const std::string deferred = readText(
-            shaderRoot / "include/canonical_lighting_body.glsl");
-        const std::string complex = readText(
-            shaderRoot / "include/complex_material_body.glsl");
-        const std::string gbuffer = readText(
-            shaderRoot / "include/canonical_gbuffer_body.glsl");
-        CHECK(deferred.find("include/material_bsdf.glsl") != std::string::npos);
-        CHECK(complex.find("include/material_complex.glsl") != std::string::npos);
-        CHECK(complex.find("include/material_normal.glsl") != std::string::npos);
-        CHECK(complex.find("include/transparency_transport.glsl") !=
-            std::string::npos);
-        CHECK(gbuffer.find("include/material_normal.glsl") != std::string::npos);
-        CHECK(deferred.find("materialEvaluateCanonicalBrdf") != std::string::npos);
-        CHECK(complex.find("materialEvaluateStandardBrdf") != std::string::npos);
-        CHECK(deferred.find("float DistributionGGX") == std::string::npos);
-        CHECK(deferred.find("vec3 FresnelSchlick") == std::string::npos);
-        CHECK(complex.find("vec3 FresnelSchlick") == std::string::npos);
-        CHECK(complex.find("materialEvaluateStandardBrdf") != std::string::npos);
-        CHECK(complex.find("MATERIAL_SCHEMA_VERSION") != std::string::npos);
-        CHECK(complex.find("binding = 21") != std::string::npos);
-        CHECK(complex.find("lobe.type == 0u") != std::string::npos);
-        CHECK(complex.find("lobe.type == 7u") != std::string::npos);
-        CHECK(complex.find("outputAlpha = max(alpha, transmission)") !=
-            std::string::npos);
-        CHECK(complex.find("classifiedLocalInterface") !=
-            std::string::npos);
-        CHECK(complex.find("iridiumThinGlassLocalCompositionWeights") !=
-            std::string::npos);
-        CHECK(complex.find("linearizeDepth") == std::string::npos);
-        CHECK(complex.find("measuredThickness") == std::string::npos);
-        CHECK(complex.find("opticalPathMeters") != std::string::npos);
-        CHECK(complex.find("iridiumDielectricFresnel") != std::string::npos);
-        CHECK(complex.find("iridiumBeerLambert") != std::string::npos);
-        CHECK(complex.find("refractionColorPyramid") !=
-            std::string::npos);
-        CHECK(complex.find("iridiumProjectTransparencyRay") !=
-            std::string::npos);
-        CHECK(complex.find("iridiumSampleTransmissionEnvironment") !=
-            std::string::npos);
-        CHECK(sizeof(ViewTransportRecord) == 320);
-        CHECK(sizeof(UniformBufferObject) == 384);
+    // Shader include ownership and the shared BSDF are checked on compiled
+    // shaders (ShaderOwnershipTests, VulkanShaderParityTests); the records
+    // shared with GLSL keep their frozen C++ sizes here.
+    bool testShaderSharedRecordSizes() {
+        // M9 G5b appended the temporal fields; earlier offsets are unchanged.
+        CHECK(sizeof(ViewTransportRecord) == 544);
+        CHECK(sizeof(UniformBufferObject) == 608);
         CHECK(offsetof(UniformBufferObject, inverseProjection) == 256);
         return true;
     }
@@ -421,7 +374,7 @@ int main() {
         { "active-camera depth reconstruction", testActiveCameraDepthReconstruction },
         { "projected transparency pyramid transport", testProjectedTransparencyPyramidTransport },
         { "generated tangent handedness", testGeneratedTangentsAndHandedness },
-        { "shared raster shader conventions", testRasterShadersUseSharedConventions },
+        { "shader-shared record sizes", testShaderSharedRecordSizes },
         { "complex lobe evaluation", testComplexLobesAreExplicitAndEffective },
     };
     for (const Test& test : tests) {

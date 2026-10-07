@@ -1,7 +1,7 @@
 #pragma once
 
 #include "ecs/Entity.h"
-#include "scene/SceneEntityUuid.h"
+#include "core/types/SceneEntityUuid.h"
 
 #include <optional>
 #include <string>

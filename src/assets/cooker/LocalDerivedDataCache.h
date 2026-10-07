@@ -2,17 +2,20 @@
 
 #include "assets/cooker/CookedArtifact.h"
 
-#include <condition_variable>
-#include <deque>
 #include <filesystem>
 #include <functional>
 #include <future>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <stop_token>
-#include <thread>
+#include <vector>
 
 namespace Iridium {
+
+    namespace Tasks {
+        class TaskSystem;
+    }
 
     enum class DdcLookupStatus : uint8_t {
         Miss,
@@ -46,6 +49,9 @@ namespace Iridium {
     };
 
     using DdcBuilder = std::function<CookedArtifactBlob(std::stop_token)>;
+    // Called once with the request's result, after its future is ready, on the
+    // task that finished the cook (M7R R5b.2). It must not block.
+    using DdcCompletion = std::function<void(const DdcRequestResult&)>;
 
     class DerivedDataCache {
     public:
@@ -60,11 +66,27 @@ namespace Iridium {
         [[nodiscard]] virtual std::shared_future<DdcRequestResult> request(
             std::string cookKey, std::stop_token stopToken,
             DdcBuilder builder) = 0;
+        // As above, and calls onComplete with the result when the cook (or
+        // the in-flight cook this request joined) finishes. Task-system work
+        // continues through onComplete instead of blocking on the future.
+        [[nodiscard]] virtual std::shared_future<DdcRequestResult> request(
+            std::string cookKey, std::stop_token stopToken,
+            DdcBuilder builder, DdcCompletion onComplete) = 0;
+        // Reads the entry, or builds and stores it, on the calling thread. It
+        // does not join a request in flight for the same key (both may build;
+        // the store keeps one). For a single serial requester that would
+        // otherwise block a task on request().get().
+        [[nodiscard]] virtual DdcRequestResult resolve(
+            std::string cookKey, std::stop_token stopToken,
+            DdcBuilder builder) = 0;
     };
 
+    // M7R R5b.2 (ADR-0015): each cook key in flight is a Background task on the
+    // engine task system (de-duplicated by key), not a job on a cache thread.
     class LocalDerivedDataCache final : public DerivedDataCache {
     public:
-        explicit LocalDerivedDataCache(std::filesystem::path root);
+        LocalDerivedDataCache(std::filesystem::path root, Tasks::TaskSystem& tasks);
+        // Waits for the cooks in flight.
         ~LocalDerivedDataCache() override;
 
         LocalDerivedDataCache(const LocalDerivedDataCache&) = delete;
@@ -84,8 +106,18 @@ namespace Iridium {
         [[nodiscard]] std::shared_future<DdcRequestResult> request(
             std::string cookKey, std::stop_token stopToken,
             DdcBuilder builder) override;
+        [[nodiscard]] std::shared_future<DdcRequestResult> request(
+            std::string cookKey, std::stop_token stopToken,
+            DdcBuilder builder, DdcCompletion onComplete) override;
+        [[nodiscard]] DdcRequestResult resolve(
+            std::string cookKey, std::stop_token stopToken,
+            DdcBuilder builder) override;
+        [[nodiscard]] Tasks::TaskSystem& taskSystem() const noexcept {
+            return m_tasks_system;
+        }
 
     private:
+        class CookTask;
         struct PendingJob {
             std::string cookKey;
             std::stop_token stopToken;
@@ -96,15 +128,13 @@ namespace Iridium {
         [[nodiscard]] bool validCookKey(std::string_view cookKey) const noexcept;
         void quarantine(const std::filesystem::path& path, std::string_view cookKey,
             std::vector<CookDiagnostic>& diagnostics);
-        void workerLoop(std::stop_token stopToken);
         [[nodiscard]] DdcRequestResult execute(PendingJob& job);
 
         std::filesystem::path m_root;
+        Tasks::TaskSystem& m_tasks_system;
         mutable std::mutex m_mutex;
-        std::condition_variable_any m_condition;
-        std::deque<PendingJob> m_jobs;
-        std::map<std::string, std::shared_future<DdcRequestResult>> m_inFlight;
-        std::jthread m_worker;
+        std::map<std::string, CookTask*> m_inFlight;
+        std::vector<std::unique_ptr<CookTask>> m_tasks;
     };
 
 } // namespace Iridium

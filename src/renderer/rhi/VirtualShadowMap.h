@@ -1,7 +1,7 @@
 #pragma once
 
 #include "renderer/rhi/VisibilityContracts.h"
-#include "scene/SceneEntityUuid.h"
+#include "core/types/SceneEntityUuid.h"
 
 #include <glm/mat4x4.hpp>
 #include <glm/vec3.hpp>

@@ -260,25 +260,66 @@ namespace Iridium {
         DerivedDataCache& cache,
         std::shared_ptr<const PreparedAssetCook> prepared,
         std::stop_token stopToken) {
-        if (!prepared || !prepared->valid()) {
-            std::promise<DdcRequestResult> promise;
-            DdcRequestResult result{
+        return requestPreparedCook(cache, std::move(prepared),
+            stopToken, DdcCompletion{});
+    }
+
+    namespace {
+
+        DdcRequestResult invalidPreparedCookResult(
+            const PreparedAssetCook* prepared) {
+            return {
                 .status = DdcRequestStatus::Failed,
                 .diagnostics = prepared
                     ? prepared->diagnostics
                     : std::vector<CookDiagnostic>{},
             };
-            promise.set_value(std::move(result));
-            return promise.get_future().share();
         }
-        const std::string cookKey = prepared->cookKey;
-        return cache.request(cookKey, stopToken,
-            [prepared = std::move(prepared), &cache](
+
+        DdcBuilder preparedCookBuilder(
+            std::shared_ptr<const PreparedAssetCook> prepared,
+            DerivedDataCache& cache) {
+            return [prepared = std::move(prepared), &cache](
                 std::stop_token token) {
                 if (token.stop_requested()) return CookedArtifactBlob{};
                 return buildPreparedArtifactWithCache(
                     *prepared, &cache, token);
-            });
+            };
+        }
+
+    } // namespace
+
+    std::shared_future<DdcRequestResult> requestPreparedCook(
+        DerivedDataCache& cache,
+        std::shared_ptr<const PreparedAssetCook> prepared,
+        std::stop_token stopToken,
+        DdcCompletion onComplete) {
+        if (!prepared || !prepared->valid()) {
+            std::promise<DdcRequestResult> promise;
+            promise.set_value(invalidPreparedCookResult(prepared.get()));
+            std::shared_future<DdcRequestResult> future =
+                promise.get_future().share();
+            if (onComplete) {
+                onComplete(future.get());
+            }
+            return future;
+        }
+        const std::string cookKey = prepared->cookKey;
+        return cache.request(cookKey, stopToken,
+            preparedCookBuilder(std::move(prepared), cache),
+            std::move(onComplete));
+    }
+
+    DdcRequestResult resolvePreparedCook(
+        DerivedDataCache& cache,
+        std::shared_ptr<const PreparedAssetCook> prepared,
+        std::stop_token stopToken) {
+        if (!prepared || !prepared->valid()) {
+            return invalidPreparedCookResult(prepared.get());
+        }
+        const std::string cookKey = prepared->cookKey;
+        return cache.resolve(cookKey, stopToken,
+            preparedCookBuilder(std::move(prepared), cache));
     }
 
 } // namespace Iridium

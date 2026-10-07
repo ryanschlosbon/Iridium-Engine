@@ -1,15 +1,17 @@
 #include "assets/runtime/AssetReimportScheduler.h"
 
+#include "core/tasks/TaskSystem.h"
+
 #include <algorithm>
 #include <stdexcept>
 #include <utility>
 
 namespace Iridium {
 
-    AssetReimportScheduler::AssetReimportScheduler()
-        : worker_([this](std::stop_token stopToken) {
-            workerLoop(stopToken);
-        }) {}
+    AssetReimportScheduler::AssetReimportScheduler(
+        Tasks::TaskSystem& tasks)
+        : strand_(std::make_unique<Tasks::FunctionStrand>(tasks,
+            Tasks::TaskPriority::Background, "asset.reimport.prepare")) {}
 
     AssetReimportScheduler::~AssetReimportScheduler() {
         shutdown();
@@ -23,7 +25,7 @@ namespace Iridium {
             throw std::invalid_argument(
                 "Asset reimport requires a stable GUID, request key, and prepare callback.");
         }
-        std::lock_guard lock(mutex_);
+        std::unique_lock lock(mutex_);
         if (shutdown_) {
             throw std::logic_error(
                 "Cannot enqueue work after asset reimport shutdown.");
@@ -60,6 +62,7 @@ namespace Iridium {
         }
         const uint64_t serial = ++serialCounter_;
         latestSerial_[request.assetGuid] = serial;
+        bool appended = false;
         if (queued != queued_.end()) {
             *queued = WorkItem{
                 .request = std::move(request),
@@ -72,9 +75,13 @@ namespace Iridium {
                 .serial = serial,
             });
             ++stats_.queued;
+            appended = true;
         }
         ++stats_.enqueued;
-        condition_.notify_all();
+        lock.unlock();
+        if (appended) {
+            schedule();
+        }
         return true;
     }
 
@@ -181,81 +188,75 @@ namespace Iridium {
                 activeStop_->request_stop();
             }
         }
-        worker_.request_stop();
-        condition_.notify_all();
-        if (worker_.joinable()) {
-            worker_.join();
-        }
+        // Waits for the active preparation; queued strand items find no work.
+        strand_->waitIdle();
         {
             std::lock_guard lock(mutex_);
             completed_.clear();
             stats_.completed = 0;
         }
+        condition_.notify_all();
     }
 
-    void AssetReimportScheduler::workerLoop(
-        std::stop_token stopToken) {
-        while (true) {
-            WorkItem item;
-            std::stop_source workStop;
-            {
-                std::unique_lock lock(mutex_);
-                condition_.wait(lock, stopToken,
-                    [this] {
-                        return shutdown_ ||
-                            !queued_.empty();
-                    });
-                if (shutdown_ ||
-                    stopToken.stop_requested()) {
-                    return;
-                }
-                item = std::move(queued_.front());
-                queued_.pop_front();
-                --stats_.queued;
-                activeAsset_ =
-                    item.request.assetGuid;
-                activeRequestKey_ =
-                    item.request.requestKey;
-                activeStop_ = workStop;
-                stats_.active = 1;
-            }
+    void AssetReimportScheduler::schedule() {
+        // One strand item per queued request; each runs the oldest one, so
+        // requests keep their dependency-first order (M7R R5b.2).
+        (void)strand_->post([this] { runNext(); });
+    }
 
-            AssetReimportCompletion completion{
-                .assetGuid = item.request.assetGuid,
-                .requestKey = item.request.requestKey,
-            };
-            try {
-                PreparedRuntimeAsset prepared =
-                    item.request.prepare(
-                        workStop.get_token());
-                if (prepared.cookKey.empty() ||
-                    !prepared.publish) {
-                    throw std::runtime_error(
-                        "Prepared runtime asset is missing its cook key or publish callback.");
-                }
-                completion.status =
-                    AssetReimportCompletionStatus::Ready;
-                completion.prepared =
-                    std::move(prepared);
-            } catch (const std::exception& exception) {
-                completion.diagnostic =
-                    exception.what();
-            } catch (...) {
-                completion.diagnostic =
-                    "Asset preparation threw an unknown exception.";
+    void AssetReimportScheduler::runNext() {
+        WorkItem item;
+        std::stop_source workStop;
+        {
+            std::lock_guard lock(mutex_);
+            if (shutdown_ || queued_.empty()) {
+                return;
             }
+            item = std::move(queued_.front());
+            queued_.pop_front();
+            --stats_.queued;
+            activeAsset_ =
+                item.request.assetGuid;
+            activeRequestKey_ =
+                item.request.requestKey;
+            activeStop_ = workStop;
+            stats_.active = 1;
+        }
 
-            {
-                std::lock_guard lock(mutex_);
-                activeAsset_.reset();
-                activeRequestKey_.clear();
-                activeStop_.reset();
-                stats_.active = 0;
-                const auto latest = latestSerial_.find(
-                    item.request.assetGuid);
-                if (shutdown_) {
-                    return;
-                }
+        AssetReimportCompletion completion{
+            .assetGuid = item.request.assetGuid,
+            .requestKey = item.request.requestKey,
+        };
+        try {
+            PreparedRuntimeAsset prepared =
+                item.request.prepare(
+                    workStop.get_token());
+            if (prepared.cookKey.empty() ||
+                !prepared.publish) {
+                throw std::runtime_error(
+                    "Prepared runtime asset is missing its cook key or publish callback.");
+            }
+            completion.status =
+                AssetReimportCompletionStatus::Ready;
+            completion.prepared =
+                std::move(prepared);
+        } catch (const std::exception& exception) {
+            completion.diagnostic =
+                exception.what();
+        } catch (...) {
+            completion.diagnostic =
+                "Asset preparation threw an unknown exception.";
+        }
+
+        {
+            std::lock_guard lock(mutex_);
+            activeAsset_.reset();
+            activeRequestKey_.clear();
+            activeStop_.reset();
+            stats_.active = 0;
+            const auto latest = latestSerial_.find(
+                item.request.assetGuid);
+            if (!shutdown_) {
                 if (latest == latestSerial_.end() ||
                     latest->second != item.serial) {
                     ++stats_.superseded;
@@ -273,8 +274,8 @@ namespace Iridium {
                             completed_.size());
                 }
             }
-            condition_.notify_all();
         }
+        condition_.notify_all();
     }
 
 } // namespace Iridium

@@ -1,6 +1,7 @@
 #include "assets/AssetCatalogService.h"
 #include "assets/SqliteAssetCatalog.h"
 #include "core/EngineLog.h"
+#include "core/tasks/TaskSystem.h"
 
 #include <chrono>
 #include <filesystem>
@@ -13,6 +14,9 @@
 namespace {
 
     using namespace Iridium;
+
+    // M7R R5b.2: the service runs on the engine task system (created in main).
+    Tasks::TaskSystem* testTasks = nullptr;
 
     #define CHECK(condition) \
         do { \
@@ -133,7 +137,7 @@ namespace {
                 "gltf_model_cooker_fixture.gltf",
             source);
         const auto catalog = createSqliteAssetCatalog(":memory:");
-        AssetCatalogService service(catalog.get(), {
+        AssetCatalogService service(*testTasks, catalog.get(), {
             AssetRoot{ "project", temporary.path },
         });
         (void)service.requestImport(source);
@@ -215,8 +219,7 @@ namespace {
         }
         const auto catalog = createSqliteAssetCatalog(":memory:");
         EngineLog log;
-        AssetCatalogService service(
-            catalog.get(), {
+        AssetCatalogService service(*testTasks, catalog.get(), {
                 AssetRoot{
                     "project", root.path },
             }, &log);
@@ -272,8 +275,7 @@ namespace {
             createSqliteAssetCatalog(
                 ":memory:");
         EngineLog log;
-        AssetCatalogService service(
-            catalog.get(), {
+        AssetCatalogService service(*testTasks, catalog.get(), {
                 AssetRoot{
                     "project",
                     temporary.path },
@@ -340,8 +342,7 @@ namespace {
             createSqliteAssetCatalog(
                 ":memory:");
         EngineLog log;
-        AssetCatalogService service(
-            catalog.get(), {
+        AssetCatalogService service(*testTasks, catalog.get(), {
                 AssetRoot{
                     "project", root.path },
             }, &log);
@@ -381,8 +382,7 @@ namespace {
             source);
         const auto catalog =
             createSqliteAssetCatalog(":memory:");
-        AssetCatalogService service(
-            catalog.get(), {
+        AssetCatalogService service(*testTasks, catalog.get(), {
                 AssetRoot{
                     "project",
                     temporary.path },
@@ -445,8 +445,7 @@ namespace {
             source);
         const auto catalog =
             createSqliteAssetCatalog(":memory:");
-        AssetCatalogService service(
-            catalog.get(), {
+        AssetCatalogService service(*testTasks, catalog.get(), {
                 AssetRoot{
                     "project",
                     temporary.path },
@@ -535,6 +534,9 @@ namespace {
 } // namespace
 
 int main() {
+    Iridium::Tasks::TaskSystem tasks(Iridium::Tasks::TaskSystemConfig{
+        .workerThreadCount = 4 });
+    testTasks = &tasks;
     struct Test {
         const char* name;
         bool (*function)();

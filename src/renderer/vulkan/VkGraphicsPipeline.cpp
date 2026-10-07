@@ -1,22 +1,25 @@
 #include "VkGraphicsPipeline.h"
 #include "renderer/rhi/Mesh.h"
+#include "VulkanGBufferLayout.h"
 #include "VulkanVertexUtils.h"
 #include <stdexcept>
 #include <iostream>
 #include <array>
 
-VkGraphicsPipeline::VkGraphicsPipeline(VkContext* context, VkSwapchain* swapchain, VkRenderPassWrapper* renderPass,
+VkGraphicsPipeline::VkGraphicsPipeline(VkContext* context,
+    VkPipelineCache pipelineCache, VkSwapchain* swapchain,
     VkPipelineLayout pipelineLayout, Iridium::GBufferLayout layout)
-	: context(context), pipelineLayout(pipelineLayout) {
-    
-    wireframePipeline = createPipeline(swapchain, renderPass, true, false,
-        layout);
-    outlinePipeline = createPipeline(swapchain, renderPass, false, true,
-        layout);
+	: context(context), pipelineCache(pipelineCache), pipelineLayout(pipelineLayout) {
+
+    wireframePipeline = createPipeline(swapchain, true, false, layout);
+    wireframeIndirectPipeline = createPipeline(swapchain, true, false, layout,
+        "assets/shaders/gpu_scene_material_vert.spv");
+    outlinePipeline = createPipeline(swapchain, false, true, layout);
 }
 
 VkGraphicsPipeline::~VkGraphicsPipeline() {
     vkDestroyPipeline(context->getDevice(), wireframePipeline, nullptr);
+    vkDestroyPipeline(context->getDevice(), wireframeIndirectPipeline, nullptr);
     vkDestroyPipeline(context->getDevice(), outlinePipeline, nullptr);
 }
 
@@ -32,13 +35,13 @@ VkShaderModule VkGraphicsPipeline::createShaderModule(const std::vector<char>& c
 	return shaderModule;
 }
 
-VkPipeline VkGraphicsPipeline::createPipeline(VkSwapchain* swapchain, VkRenderPassWrapper* renderPass, 
-    bool isWireframe, bool isOutline, Iridium::GBufferLayout layout) {
+VkPipeline VkGraphicsPipeline::createPipeline(VkSwapchain* swapchain,
+    bool isWireframe, bool isOutline, Iridium::GBufferLayout layout,
+    const char* vertexShader) {
     // -------------------------------------------------------------
     // 1. SHADER LOADING
     // -------------------------------------------------------------
-    auto vertCode = readFile(std::string(PROJECT_ROOT_DIR) +
-        "assets/shaders/canonical_material_vert.spv");
+    auto vertCode = readFile(std::string(PROJECT_ROOT_DIR) + vertexShader);
     const char* canonicalGBufferShader = nullptr;
     if (layout == Iridium::GBufferLayout::CanonicalReference) {
         canonicalGBufferShader =
@@ -50,9 +53,10 @@ VkPipeline VkGraphicsPipeline::createPipeline(VkSwapchain* swapchain, VkRenderPa
     auto fragCode = readFile(std::string(PROJECT_ROOT_DIR) + canonicalGBufferShader);
 
     if (isOutline) {
-        // This MUST be your standard 3D mesh vertex shader, not the select shader
+        // The standard mesh vertex shader, unjittered (M9 G5b): output reads
+        // the selection mask after temporal resolve.
         vertCode = readFile(std::string(PROJECT_ROOT_DIR) +
-            "assets/shaders/canonical_material_vert.spv");
+            "assets/shaders/canonical_material_unjittered_vert.spv");
         fragCode = readFile(std::string(PROJECT_ROOT_DIR) +
             "assets/shaders/canonical_mask_frag.spv");
     }
@@ -163,14 +167,16 @@ VkPipeline VkGraphicsPipeline::createPipeline(VkSwapchain* swapchain, VkRenderPa
     emissiveBlendAttachment.colorWriteMask = isOutline ? VK_COLOR_COMPONENT_A_BIT :
         (VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT);
 
-    std::array<VkPipelineColorBlendAttachmentState, 5> blendAttachments = {
+    // M9.1: the sixth attachment is velocity (the mask pass leaves it alone).
+    std::array<VkPipelineColorBlendAttachmentState,
+        Iridium::VulkanGBufferPassColorAttachmentCount> blendAttachments = {
         normalBlendAttachment, albedoBlendAttachment, emissiveBlendAttachment,
-        normalBlendAttachment, normalBlendAttachment
+        normalBlendAttachment, normalBlendAttachment, normalBlendAttachment
     };
 
     VkPipelineColorBlendStateCreateInfo colorBlending{ VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO };
     colorBlending.logicOpEnable = VK_FALSE;
-    colorBlending.attachmentCount = 5;
+    colorBlending.attachmentCount = static_cast<uint32_t>(blendAttachments.size());
     colorBlending.pAttachments = blendAttachments.data();
 
     // Dynamic State
@@ -199,12 +205,19 @@ VkPipeline VkGraphicsPipeline::createPipeline(VkSwapchain* swapchain, VkRenderPa
     // The layout is owned by VulkanMeshLayouts and borrowed by this fixed wrapper.
     pipelineInfo.layout = pipelineLayout;
 
-    pipelineInfo.renderPass = renderPass->getRenderPass();
+    const auto colorFormats =
+        Iridium::vulkanGBufferPassColorAttachmentFormats(layout);
+    VkPipelineRenderingCreateInfo rendering{ VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO };
+    rendering.colorAttachmentCount = static_cast<uint32_t>(colorFormats.size());
+    rendering.pColorAttachmentFormats = colorFormats.data();
+    rendering.depthAttachmentFormat = VK_FORMAT_D32_SFLOAT;
+    pipelineInfo.pNext = &rendering;
+    pipelineInfo.renderPass = VK_NULL_HANDLE;
     pipelineInfo.subpass = 0;
     pipelineInfo.pDynamicState = &dynamicState;
 
     VkPipeline newPipeline;
-    if (vkCreateGraphicsPipelines(context->getDevice(), VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &newPipeline) != VK_SUCCESS) {
+    if (vkCreateGraphicsPipelines(context->getDevice(), pipelineCache, 1, &pipelineInfo, nullptr, &newPipeline) != VK_SUCCESS) {
         throw std::runtime_error("failed to create graphics pipeline!");
     }
 

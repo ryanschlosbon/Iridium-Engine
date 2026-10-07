@@ -411,6 +411,81 @@ namespace {
         return true;
     }
 
+    // M9 G6c: writeCaptureImage + commitCaptureArtifact is writeCaptureArtifact
+    // byte for byte; the sidecar names the frame's jitter (null when unknown)
+    // and must describe the pending image; discard leaves nothing behind.
+    bool testTwoStageArtifactAndJitter() {
+        const std::filesystem::path root = testRoot();
+        std::filesystem::remove_all(root);
+        CaptureArtifactMetadata metadata{};
+        metadata.fixtureId = "fixture";
+        metadata.measuredFrameIndex = 3;
+        const FrameCapture capture = makeSceneLinearCapture();
+        const CaptureArtifactPaths direct =
+            writeCaptureArtifact(root / "direct", capture, metadata);
+        const PendingCaptureImage pending =
+            writeCaptureImage(root / "staged", capture, metadata);
+        CHECK(std::filesystem::exists(pending.temporaryImage));
+        CHECK(!std::filesystem::exists(pending.paths.image));
+        CHECK(!std::filesystem::exists(pending.paths.metadata));
+        CHECK(pending.paths.imageSha256 == direct.imageSha256);
+        const CaptureArtifactPaths staged = commitCaptureArtifact(pending, metadata);
+        CHECK(!std::filesystem::exists(pending.temporaryImage));
+        const auto bytes = [](const std::filesystem::path& path) {
+            std::ifstream input(path, std::ios::binary);
+            return std::string((std::istreambuf_iterator<char>(input)),
+                std::istreambuf_iterator<char>());
+        };
+        CHECK(bytes(staged.image) == bytes(direct.image));
+        CHECK(bytes(staged.metadata) == bytes(direct.metadata));
+        nlohmann::json document = nlohmann::json::parse(bytes(staged.metadata));
+        CHECK(document["render_configuration"]["temporal_jitter"].is_null());
+
+        // A sidecar for another frame does not commit; the image is removed.
+        const PendingCaptureImage mismatched =
+            writeCaptureImage(root / "mismatch", capture, metadata);
+        CaptureArtifactMetadata other = metadata;
+        other.measuredFrameIndex = 4;
+        bool rejected = false;
+        try {
+            (void)commitCaptureArtifact(mismatched, other);
+        }
+        catch (const std::logic_error&) {
+            rejected = true;
+        }
+        CHECK(rejected);
+        CHECK(std::filesystem::is_empty(root / "mismatch"));
+
+        const PendingCaptureImage discarded =
+            writeCaptureImage(root / "discard", capture, metadata);
+        discardCaptureImage(discarded);
+        CHECK(std::filesystem::is_empty(root / "discard"));
+
+        metadata.temporalJitter = CaptureTemporalJitter{
+            .enabled = true,
+            .sequenceLength = 16,
+            .sequenceIndex = 5,
+            .offsetPixels = { 0.25, -0.125 },
+            .offsetNdc = { 0.5 / 1024.0, -0.25 / 512.0 },
+            .turnsSinceCut = 21,
+            .historyReset = false,
+        };
+        metadata.measuredFrameIndex = 5;
+        const CaptureArtifactPaths jittered =
+            writeCaptureArtifact(root / "jitter", capture, metadata);
+        document = nlohmann::json::parse(bytes(jittered.metadata));
+        const nlohmann::json& jitter = document["render_configuration"]["temporal_jitter"];
+        CHECK(jitter["enabled"] == true);
+        CHECK(jitter["sequence_length"] == 16);
+        CHECK(jitter["sequence_index"] == 5);
+        CHECK(jitter["offset_pixels"][0] == 0.25 && jitter["offset_pixels"][1] == -0.125);
+        CHECK(jitter["offset_ndc"][0] == 0.5 / 1024.0);
+        CHECK(jitter["turns_since_cut"] == 21);
+        CHECK(jitter["history_reset"] == false);
+        std::filesystem::remove_all(root);
+        return true;
+    }
+
 } // namespace
 
 int main() {
@@ -428,6 +503,7 @@ int main() {
         { "Noncanonical TGA header rejection", testRejectsNoncanonicalTgaHeader },
         { "UNORM artifact metadata rejection", testRejectsUnormArtifactMetadata },
         { "RGB signal sanity, nonfinite rejection, and padding", testSignalSanityAndPadding },
+        { "Two-stage artifact and jitter metadata", testTwoStageArtifactAndJitter },
     };
 
     size_t failures = 0;

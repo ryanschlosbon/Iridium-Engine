@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <exception>
@@ -610,6 +611,118 @@ namespace {
             ["missing_frame_count"] == 0);
         CHECK(records[2]["cpu_ranges"]["cpu.renderer.frame_fence_wait"]["sample_count"] == 1);
         CHECK(records[2]["gpu_ranges"]["gpu.frame"]["sample_count"] == 1);
+        // Without a task system the profile has no worker keys (byte-stable).
+        CHECK(!records[1].contains("worker_events"));
+        CHECK(!records[1]["overflow"].contains("dropped_worker_events"));
+        CHECK(!records[2].contains("worker_ranges"));
+        return true;
+    }
+
+    // M7R R5b.1: per-worker scope streams.
+    bool testWorkerStreams() {
+        CpuProfiler profiler(true);
+        CHECK(!profiler.bindCurrentThreadToWorkerStream(1)); // not prepared
+        profiler.prepareWorkerStreams(3);
+        CHECK(profiler.workerStreamCount() == 3);
+        CHECK(!profiler.bindCurrentThreadToWorkerStream(0)); // the main thread's
+        CHECK(!profiler.bindCurrentThreadToWorkerStream(3));
+
+        std::atomic<int> phase{ 0 };
+        std::thread worker([&profiler, &phase]() {
+            if (!profiler.bindCurrentThreadToWorkerStream(1)) {
+                phase.store(-1);
+                return;
+            }
+            {
+                CpuScope outer(profiler, "worker.outer");
+                CpuScope inner(profiler, "worker.inner");
+            }
+            // A worker scope may stay open across endFrame without dropping it.
+            CpuScope spanning(profiler, "worker.spanning");
+            phase.store(1);
+            while (phase.load() != 2) {
+                std::this_thread::yield();
+            }
+        });
+
+        CHECK(profiler.beginFrame());
+        {
+            CpuScope main(profiler, "main.scope");
+        }
+        while (phase.load() == 0) {
+            std::this_thread::yield();
+        }
+        CHECK(phase.load() == 1);
+        CHECK(profiler.endFrame()); // worker.spanning is open: not dropped
+        CHECK(profiler.droppedFrameCount() == 0);
+        CHECK(profiler.beginFrame());
+        phase.store(2);
+        worker.join();
+        CHECK(profiler.endFrame());
+
+        const std::vector<CpuFrameProfile> frames = profiler.snapshotCompletedFrames();
+        CHECK(frames.size() == 2);
+        CHECK(frames[0].events.size() == 1); // main thread only
+        CHECK(frames[0].workerEvents.size() == 2);
+        const CpuProfileEvent* outer = nullptr;
+        const CpuProfileEvent* inner = nullptr;
+        for (const CpuProfileEvent& event : frames[0].workerEvents) {
+            CHECK(event.workerIndex == 1);
+            if (std::string(event.name) == "worker.outer") {
+                outer = &event;
+            }
+            if (std::string(event.name) == "worker.inner") {
+                inner = &event;
+            }
+        }
+        CHECK(outer != nullptr && inner != nullptr);
+        CHECK(inner->parentEventId == outer->eventId);
+        CHECK(outer->parentEventId == 0);
+        CHECK(frames[1].events.empty());
+        CHECK(frames[1].workerEvents.size() == 1);
+        CHECK(std::string(frames[1].workerEvents[0].name) == "worker.spanning");
+        CHECK(frames[1].workerEvents[0].startNanoseconds == 0); // began before frame 2
+        CHECK(frames[1].droppedWorkerEvents == 0);
+
+        const ProfileRunStatistics statistics = profiler.snapshotRunStatistics();
+        const ProfileRangeRunStatistics* outerRange =
+            findRunRange(statistics.workerRanges, "worker.outer");
+        CHECK(outerRange != nullptr && outerRange->statistics.sampleCount == 1);
+        CHECK(findRunRange(statistics.cpuRanges, "worker.outer") == nullptr);
+        CHECK(findRunRange(statistics.cpuRanges, "main.scope") != nullptr);
+
+        // A full stream drops and counts instead of blocking or allocating.
+        std::thread flood([&profiler]() {
+            (void)profiler.bindCurrentThreadToWorkerStream(2);
+            for (size_t index = 0; index < CpuProfiler::WorkerStreamCapacity + 5; ++index) {
+                CpuScope scope(profiler, "worker.flood");
+            }
+        });
+        flood.join();
+        CHECK(profiler.beginFrame());
+        CHECK(profiler.endFrame());
+        const CpuFrameProfile* flooded = profiler.latestCompletedFrame();
+        CHECK(flooded != nullptr);
+        CHECK(flooded->workerEvents.size() == CpuProfiler::MaxWorkerEventsPerFrame);
+        CHECK(flooded->droppedWorkerEvents == 5 +
+            (CpuProfiler::WorkerStreamCapacity - CpuProfiler::MaxWorkerEventsPerFrame));
+        CHECK(profiler.snapshotRunStatistics().workerDetailOverflowFrameCount == 1);
+
+        CpuProfileRunMetadata metadata;
+        std::ostringstream output;
+        writeCpuProfileJsonLines(output, profiler, metadata);
+        std::vector<nlohmann::json> records;
+        std::istringstream input(output.str());
+        for (std::string line; std::getline(input, line);) {
+            if (!line.empty()) {
+                records.push_back(nlohmann::json::parse(line));
+            }
+        }
+        CHECK(records.size() == 5);
+        CHECK(records[1]["worker_events"].size() == 2);
+        CHECK(records[1]["worker_events"][0]["worker_index"] == 1);
+        CHECK(records[1]["overflow"]["dropped_worker_events"] == 0);
+        CHECK(records[4]["worker_ranges"]["worker.outer"]["sample_count"] == 1);
         return true;
     }
 
@@ -641,6 +754,7 @@ int main() {
         { "GPU timestamp conversion", testGpuTimestampConversion },
         { "Memory profile accounting", testMemoryProfileAccounting },
         { "JSON Lines export", testJsonLinesExport },
+        { "Per-worker scope streams", testWorkerStreams },
     };
 
     size_t failures = 0;

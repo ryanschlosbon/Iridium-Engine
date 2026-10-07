@@ -1,5 +1,7 @@
 #include "assets/runtime/AssetReimportScheduler.h"
 
+#include "core/tasks/TaskSystem.h"
+
 #include <atomic>
 #include <future>
 #include <iostream>
@@ -9,6 +11,9 @@
 namespace {
 
     using namespace Iridium;
+
+    // M7R R5b.2: the scheduler runs on the engine task system (created in main).
+    Tasks::TaskSystem* testTasks = nullptr;
 
     #define CHECK(condition) \
         do { \
@@ -46,7 +51,7 @@ namespace {
             std::this_thread::get_id();
         std::thread::id prepareThread;
         std::thread::id publishThread;
-        AssetReimportScheduler scheduler;
+        AssetReimportScheduler scheduler(*testTasks);
         AssetRuntimePublisher publisher;
         CHECK(scheduler.enqueue({
             .assetGuid = asset,
@@ -96,7 +101,7 @@ namespace {
         std::atomic<bool> cancellationSeen = false;
         int oldPublishes = 0;
         int newPublishes = 0;
-        AssetReimportScheduler scheduler;
+        AssetReimportScheduler scheduler(*testTasks);
         AssetRuntimePublisher publisher;
         CHECK(scheduler.enqueue({
             .assetGuid = asset,
@@ -167,7 +172,7 @@ namespace {
         }));
         CHECK(publisher.tick(0).published == 1);
 
-        AssetReimportScheduler scheduler;
+        AssetReimportScheduler scheduler(*testTasks);
         CHECK(scheduler.enqueue({
             .assetGuid = asset,
             .requestKey = "broken-source",
@@ -204,7 +209,7 @@ namespace {
         std::promise<void> releasePromise;
         const std::shared_future<void> release =
             releasePromise.get_future().share();
-        AssetReimportScheduler scheduler;
+        AssetReimportScheduler scheduler(*testTasks);
         CHECK(scheduler.enqueue({
             .assetGuid = blocker,
             .requestKey = "blocker",
@@ -285,7 +290,7 @@ namespace {
             "019f9bce-85b8-7440-8203-040506070809");
         std::promise<void> started;
         std::promise<void> cancelled;
-        AssetReimportScheduler scheduler;
+        AssetReimportScheduler scheduler(*testTasks);
         CHECK(scheduler.enqueue({
             .assetGuid = asset,
             .requestKey = "shutdown",
@@ -313,7 +318,7 @@ namespace {
     bool cancelDropsQueuedAndCompletedWork() {
         const AssetGuid asset = guid(
             "019f9bce-85b8-7450-8203-040506070809");
-        AssetReimportScheduler scheduler;
+        AssetReimportScheduler scheduler(*testTasks);
         CHECK(scheduler.enqueue({
             .assetGuid = asset,
             .requestKey = "cancel",
@@ -345,7 +350,7 @@ namespace {
         std::promise<void> releasePromise;
         const std::shared_future<void> release =
             releasePromise.get_future().share();
-        AssetReimportScheduler scheduler;
+        AssetReimportScheduler scheduler(*testTasks);
         CHECK(scheduler.enqueue({
             .assetGuid = blocker,
             .requestKey = "blocker",
@@ -420,6 +425,9 @@ namespace {
 } // namespace
 
 int main() {
+    Iridium::Tasks::TaskSystem tasks(Iridium::Tasks::TaskSystemConfig{
+        .workerThreadCount = 4 });
+    testTasks = &tasks;
     struct TestCase {
         const char* name;
         bool (*run)();

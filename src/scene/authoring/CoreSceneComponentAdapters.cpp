@@ -1,6 +1,6 @@
 #include "scene/authoring/CoreSceneComponentAdapters.h"
 
-#include "assets/AssetGuid.h"
+#include "core/types/AssetGuid.h"
 #include "ecs/Registry.h"
 #include "renderer/rhi/Mesh.h"
 #include "scene/Components.h"

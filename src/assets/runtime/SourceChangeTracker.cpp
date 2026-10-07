@@ -163,6 +163,9 @@ namespace Iridium {
             });
         stats_.pending =
             static_cast<uint32_t>(pending_.size());
+        if (pollInFlight_) {
+            removedDuringPoll_.insert(assetGuid);
+        }
     }
 
     SourceChangeBatch SourceChangeTracker::poll(
@@ -173,7 +176,16 @@ namespace Iridium {
             throw std::invalid_argument(
                 "Source change polling requires a content hasher.");
         }
-        SourceChangeBatch result;
+        std::vector<DueSourceChange> due =
+            takeDue(nowNanoseconds);
+        hashDueSources(due, hasher);
+        return completePoll(due, dependencies);
+    }
+
+    std::vector<SourceChangeTracker::DueSourceChange>
+        SourceChangeTracker::takeDue(
+            uint64_t nowNanoseconds) {
+        std::vector<DueSourceChange> due;
         for (auto pending = pending_.begin();
             pending != pending_.end();) {
             const uint64_t eventTime =
@@ -184,32 +196,70 @@ namespace Iridium {
                 ++pending;
                 continue;
             }
-            const AssetGuid assetGuid =
-                pending->first.assetGuid;
-            const std::filesystem::path sourcePath =
-                pending->first.sourcePath;
-            const SourceKey sourceKey =
-                pending->first;
+            due.push_back({
+                .assetGuid = pending->first.assetGuid,
+                .sourcePath = pending->first.sourcePath,
+            });
             pending = pending_.erase(pending);
+        }
+        stats_.pending =
+            static_cast<uint32_t>(pending_.size());
+        pollInFlight_ = true;
+        removedDuringPoll_.clear();
+        return due;
+    }
 
-            std::string hash;
+    void SourceChangeTracker::hashDueSources(
+        std::span<DueSourceChange> due,
+        const ContentHasher& hasher) {
+        if (!hasher) {
+            throw std::invalid_argument(
+                "Source change polling requires a content hasher.");
+        }
+        for (DueSourceChange& source : due) {
             try {
-                hash = hasher(sourcePath);
+                std::string hash = hasher(source.sourcePath);
                 if (!validSha256(hash)) {
                     throw std::runtime_error(
                         "Content hasher returned an invalid SHA-256.");
                 }
+                source.contentHash = std::move(hash);
             } catch (const std::exception& exception) {
+                source.hashError = exception.what();
+                if (source.hashError.empty()) {
+                    source.hashError = "Content hashing failed.";
+                }
+            }
+        }
+    }
+
+    SourceChangeBatch SourceChangeTracker::completePoll(
+        std::span<const DueSourceChange> due,
+        const AssetDependencyGraph& dependencies) {
+        SourceChangeBatch result;
+        for (const DueSourceChange& source : due) {
+            // An asset untracked while its sources were hashed is gone.
+            if (removedDuringPoll_.contains(source.assetGuid)) {
+                continue;
+            }
+            const AssetGuid assetGuid = source.assetGuid;
+            const std::filesystem::path& sourcePath =
+                source.sourcePath;
+            if (!source.hashError.empty()) {
                 result.diagnostics.push_back({
                     .assetGuid = assetGuid,
                     .sourcePath = sourcePath,
                     .code = "ASSET_SOURCE_HASH_FAILED",
-                    .message = exception.what(),
+                    .message = source.hashError,
                 });
                 ++stats_.hashFailures;
                 continue;
             }
-
+            const SourceKey sourceKey{
+                assetGuid,
+                sourcePath,
+            };
+            std::string hash = source.contentHash;
             const auto known =
                 contentHashes_.find(sourceKey);
             if (known != contentHashes_.end() &&
@@ -235,6 +285,8 @@ namespace Iridium {
             });
             ++stats_.contentChanges;
         }
+        pollInFlight_ = false;
+        removedDuringPoll_.clear();
         stats_.pending =
             static_cast<uint32_t>(pending_.size());
         if (result.changedSources.empty()) {

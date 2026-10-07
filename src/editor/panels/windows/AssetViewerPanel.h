@@ -1,6 +1,6 @@
 #pragma once
 
-#include "assets/AssetGuid.h"
+#include "core/types/AssetGuid.h"
 #include "assets/AssetCatalog.h"
 #include "editor/EditorOrbitCamera.h"
 #include "editor/EditorPreviewLighting.h"

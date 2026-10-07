@@ -3,7 +3,7 @@
 #include <string>
 #include <type_traits>
 #include <glm/glm.hpp>
-#include "renderer/rhi/RenderHandles.h" 
+#include "core/types/RenderHandles.h" 
 #include "material/MaterialRuntime.h"
 
 namespace Iridium {

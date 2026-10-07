@@ -8,16 +8,13 @@
 #include <bit>
 #include <cctype>
 #include <cmath>
-#include <condition_variable>
 #include <cstring>
-#include <future>
 #include <limits>
 #include <mutex>
 #include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string>
-#include <thread>
 #include <vector>
 
 #if defined(_WIN32)
@@ -171,58 +168,34 @@ namespace Iridium {
             }
         };
 
+        // Keeps the process multithreaded apartment alive for the process
+        // lifetime (the usage is never released) and creates the WIC factory DirectXTex caches (M7R R5b.2,
+        // ADR-0015: replaces the parked MTA owner thread). CoIncrementMTAUsage
+        // holds the MTA without a thread, so the cached factory stays valid
+        // however task-system threads come and go; each decoding thread still
+        // joins the MTA through its thread-local ComApartment.
         class WicFactoryLifetime {
         public:
-            WicFactoryLifetime()
-                : ready_(promise_.get_future().share()) {
-                owner_ = std::jthread(
-                    [this](std::stop_token stopToken) {
-                        const HRESULT initialized =
-                            CoInitializeEx(
-                                nullptr,
-                                COINIT_MULTITHREADED);
-                        HRESULT result = initialized;
-                        if (SUCCEEDED(initialized) ||
-                            initialized ==
-                                RPC_E_CHANGED_MODE) {
-                            bool wic2 = false;
-                            if (!DirectX::GetWICFactory(
-                                    wic2)) {
-                                result = E_FAIL;
-                            }
-                        }
-                        promise_.set_value(result);
-                        {
-                            std::unique_lock lock(mutex_);
-                            condition_.wait(
-                                lock, stopToken,
-                                [] { return false; });
-                        }
-                        if (initialized == S_OK ||
-                            initialized == S_FALSE) {
-                            CoUninitialize();
-                        }
-                    });
-            }
-
-            ~WicFactoryLifetime() {
-                owner_.request_stop();
-                condition_.notify_all();
-                if (owner_.joinable()) {
-                    owner_.join();
+            WicFactoryLifetime() {
+                result_ = CoIncrementMTAUsage(&cookie_);
+                if (SUCCEEDED(result_)) {
+                    bool wic2 = false;
+                    if (!DirectX::GetWICFactory(wic2)) {
+                        result_ = E_FAIL;
+                    }
                 }
             }
 
+            WicFactoryLifetime(const WicFactoryLifetime&) = delete;
+            WicFactoryLifetime& operator=(const WicFactoryLifetime&) = delete;
+
             [[nodiscard]] HRESULT result() const {
-                return ready_.get();
+                return result_;
             }
 
         private:
-            std::promise<HRESULT> promise_;
-            std::shared_future<HRESULT> ready_;
-            std::mutex mutex_;
-            std::condition_variable_any condition_;
-            std::jthread owner_;
+            CO_MTA_USAGE_COOKIE cookie_ = nullptr;
+            HRESULT result_ = E_FAIL;
         };
 
         WicFactoryLifetime& wicFactoryLifetime() {

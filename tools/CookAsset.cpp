@@ -5,6 +5,7 @@
 #include "assets/environment/EnvironmentImporter.h"
 #include "assets/model/GltfModelImporter.h"
 #include "assets/texture/TextureImporter.h"
+#include "core/tasks/TaskSystem.h"
 
 #include <chrono>
 #include <filesystem>
@@ -94,6 +95,8 @@ namespace {
 } // namespace
 
 int main(int argc, char** argv) {
+    // M7R R5b.2: DDC cooks run as Background tasks on the engine task system.
+    Iridium::Tasks::TaskSystem tasks;
     const auto options = parseOptions(argc, argv);
     if (!options) {
         std::cerr
@@ -157,7 +160,7 @@ int main(int argc, char** argv) {
         registry.registerImporter(std::make_shared<TextureImporter>());
         registry.registerImporter(std::make_shared<EnvironmentImporter>());
         registerGltfModelImporters(registry);
-        LocalDerivedDataCache cache(options->ddc);
+        LocalDerivedDataCache cache(options->ddc, tasks);
         logProgress("prepare", 0, 1,
             "Resolving receipt or parsing source and dependencies");
         std::vector<CookDiagnostic> receiptDiagnostics;

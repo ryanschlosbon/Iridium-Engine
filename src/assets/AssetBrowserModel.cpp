@@ -127,6 +127,17 @@ namespace Iridium {
         return roots;
     }
 
+    std::vector<AssetBrowserFolder>
+        buildAssetBrowserFolders(
+            std::span<const AssetSourceDirectory> directories,
+            std::string_view assetRoot) {
+        std::vector<std::string> paths;
+        for (const AssetSourceDirectory& directory : directories) {
+            if (directory.assetRoot == assetRoot) paths.push_back(directory.path);
+        }
+        return buildAssetBrowserFolders(paths);
+    }
+
     std::optional<std::string> decodeAssetFolderDragPayload(
         std::string_view payloadType,
         std::span<const std::byte> bytes) noexcept {
@@ -211,6 +222,14 @@ namespace Iridium {
         dirty_ = true;
     }
 
+    void AssetBrowserModel::setAssetRoot(
+        std::optional<std::string> assetRoot) {
+        if (query_.assetRoot == assetRoot) return;
+        query_.assetRoot = std::move(assetRoot);
+        query_.offset = 0;
+        dirty_ = true;
+    }
+
     void AssetBrowserModel::setDirectory(
         std::optional<std::string> sourceDirectory) {
         if (query_.sourceDirectory == sourceDirectory) return;
@@ -263,6 +282,11 @@ namespace Iridium {
 
     const std::string& AssetBrowserModel::text() const noexcept {
         return query_.text;
+    }
+
+    const std::optional<std::string>&
+        AssetBrowserModel::assetRoot() const noexcept {
+        return query_.assetRoot;
     }
 
     const std::optional<std::string>&

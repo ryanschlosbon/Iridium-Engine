@@ -88,6 +88,11 @@ namespace Iridium {
     [[nodiscard]] std::vector<AssetBrowserFolder>
         buildAssetBrowserFolders(
             std::span<const std::string> directories);
+    // The folder tree of one asset root.
+    [[nodiscard]] std::vector<AssetBrowserFolder>
+        buildAssetBrowserFolders(
+            std::span<const AssetSourceDirectory> directories,
+            std::string_view assetRoot);
     [[nodiscard]] std::optional<std::string> decodeAssetFolderDragPayload(
         std::string_view payloadType,
         std::span<const std::byte> bytes) noexcept;
@@ -123,6 +128,8 @@ namespace Iridium {
 
         void setCatalog(const AssetCatalog* catalog) noexcept;
         void setText(std::string text);
+        // The asset root to browse ("project", "local"); unset: every root.
+        void setAssetRoot(std::optional<std::string> assetRoot);
         void setDirectory(
             std::optional<std::string> sourceDirectory);
         void setAssetType(std::optional<std::string> assetType);
@@ -132,6 +139,8 @@ namespace Iridium {
         void setLayout(AssetBrowserLayout layout) noexcept;
 
         [[nodiscard]] const std::string& text() const noexcept;
+        [[nodiscard]] const std::optional<std::string>&
+            assetRoot() const noexcept;
         [[nodiscard]] const std::optional<std::string>&
             directory() const noexcept;
         [[nodiscard]] const std::optional<std::string>& assetType() const noexcept;

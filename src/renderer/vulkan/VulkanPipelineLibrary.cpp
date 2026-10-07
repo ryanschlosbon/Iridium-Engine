@@ -1,5 +1,7 @@
 #include "VulkanPipelineLibrary.h"
 
+#include "VulkanGBufferLayout.h"
+
 #include "VulkanVertexUtils.h"
 #include "utils/File.h"
 
@@ -66,13 +68,20 @@ namespace Iridium {
             case BlendMode::Opaque:
                 attachment.blendEnable = VK_FALSE;
                 return;
+            // M9.3: blended surfaces leave the scene colour's alpha as the
+            // revealage of everything drawn over the opaque scene (opaque
+            // writes 1; each layer multiplies it by 1 - its reactive
+            // coverage). TAA reads 1 - alpha as its reactive mask. M9.8e:
+            // the reactive coverage is the shader's second blend source
+            // (zero where the layer moves with the surface under it), so
+            // the colour blend is unchanged.
             case BlendMode::AlphaBlend:
                 attachment.blendEnable = VK_TRUE;
                 attachment.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
                 attachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
                 attachment.colorBlendOp = VK_BLEND_OP_ADD;
-                attachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
-                attachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+                attachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+                attachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC1_ALPHA;
                 attachment.alphaBlendOp = VK_BLEND_OP_ADD;
                 return;
             case BlendMode::PremultipliedAlpha:
@@ -81,9 +90,9 @@ namespace Iridium {
                 attachment.dstColorBlendFactor =
                     VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
                 attachment.colorBlendOp = VK_BLEND_OP_ADD;
-                attachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+                attachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
                 attachment.dstAlphaBlendFactor =
-                    VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+                    VK_BLEND_FACTOR_ONE_MINUS_SRC1_ALPHA;
                 attachment.alphaBlendOp = VK_BLEND_OP_ADD;
                 return;
             case BlendMode::Additive:
@@ -112,30 +121,44 @@ namespace Iridium {
         }
     }
 
-    void VulkanPipelineLibrary::init(VkDevice device, VulkanPipelineTarget gBufferTarget,
+    void VulkanPipelineLibrary::init(VkDevice device, VkPipelineCache pipelineCache,
+        VulkanPipelineTarget gBufferTarget,
         VulkanPipelineTarget forwardTarget,
+        VulkanPipelineTarget forwardOpaqueTarget,
         VulkanPipelineTarget transparentTarget,
         GBufferLayout gBufferLayout) {
         if (device_ != VK_NULL_HANDLE) {
             throw std::logic_error("VulkanPipelineLibrary is already initialized");
         }
+        const auto hasAttachments = [](const VulkanPipelineTarget& target) {
+            if (target.colorAttachmentCount > target.colorFormats.size() ||
+                target.depthFormat == VK_FORMAT_UNDEFINED)
+                return false;
+            for (uint32_t index = 0; index < target.colorAttachmentCount; ++index)
+                if (target.colorFormats[index] == VK_FORMAT_UNDEFINED) return false;
+            return true;
+        };
         if (device == VK_NULL_HANDLE
-            || gBufferTarget.renderPass == VK_NULL_HANDLE
+            || !hasAttachments(gBufferTarget)
             || gBufferTarget.pipelineLayout == VK_NULL_HANDLE
-            || (gBufferTarget.colorAttachmentCount != 3 &&
-                gBufferTarget.colorAttachmentCount != 5)
-            || forwardTarget.renderPass == VK_NULL_HANDLE
+            || gBufferTarget.colorAttachmentCount != VulkanGBufferPassColorAttachmentCount
+            || !hasAttachments(forwardTarget)
             || forwardTarget.pipelineLayout == VK_NULL_HANDLE
             || forwardTarget.colorAttachmentCount != 1
-            || transparentTarget.renderPass == VK_NULL_HANDLE
+            || !hasAttachments(forwardOpaqueTarget)
+            || forwardOpaqueTarget.pipelineLayout == VK_NULL_HANDLE
+            || forwardOpaqueTarget.colorAttachmentCount != 2
+            || !hasAttachments(transparentTarget)
             || transparentTarget.pipelineLayout == VK_NULL_HANDLE
             || transparentTarget.colorAttachmentCount != 1) {
             throw std::invalid_argument("VulkanPipelineLibrary requires valid targets and device");
         }
 
         device_ = device;
+        pipelineCache_ = pipelineCache;
         gBufferTarget_ = gBufferTarget;
         forwardTarget_ = forwardTarget;
+        forwardOpaqueTarget_ = forwardOpaqueTarget;
         transparentTarget_ = transparentTarget;
         gBufferLayout_ = gBufferLayout;
     }
@@ -177,9 +200,10 @@ namespace Iridium {
             return it->second;
         }
 
-        const VulkanPipelineTarget& target = getTarget(desc.renderPass);
+        const VulkanPipelineTarget& target = getTarget(desc);
         VulkanPipelineRecord record{};
         record.pipeline = createPipeline(desc, target);
+        record.colorAttachmentCount = target.colorAttachmentCount;
         if (desc.renderPass == RenderPassClass::GBuffer) {
             try {
                 record.gpuSceneIndirectPipeline = createPipeline(desc, target,
@@ -214,6 +238,13 @@ namespace Iridium {
     VkPipeline VulkanPipelineLibrary::createPipeline(const PipelineStateDesc& desc,
         const VulkanPipelineTarget& target, const char* vertexShaderPath) {
         const char* fragmentShaderPath = nullptr;
+        const bool velocity = desc.renderPass == RenderPassClass::GBuffer ||
+            writesVelocity(desc);
+        // Every material pipeline emits motion: G-buffer and forward-opaque
+        // write velocity, and (M9.8e) blended forward surfaces compare their
+        // motion with the velocity under them (reactive coverage).
+        if (vertexShaderPath == nullptr)
+            vertexShaderPath = "assets/shaders/canonical_material_velocity_vert.spv";
         switch (desc.shaderProgram) {
         case ShaderProgram::CanonicalPbrGBuffer:
             if (gBufferLayout_ == GBufferLayout::CanonicalReference) {
@@ -226,8 +257,9 @@ namespace Iridium {
             }
             break;
         case ShaderProgram::CanonicalComplexOpaqueForward:
-            fragmentShaderPath =
-                "assets/shaders/complex_opaque_material_indexed_frag.spv";
+            fragmentShaderPath = velocity
+                ? "assets/shaders/complex_opaque_material_velocity_indexed_frag.spv"
+                : "assets/shaders/complex_opaque_material_indexed_frag.spv";
             break;
         case ShaderProgram::CanonicalComplexForward:
             fragmentShaderPath =
@@ -296,9 +328,16 @@ namespace Iridium {
 
             VkPipelineColorBlendAttachmentState blendAttachment{};
             configureBlendAttachment(blendAttachment, desc.blendMode, toVulkanColorWriteMask(desc.colorWriteMask));
-            std::array<VkPipelineColorBlendAttachmentState, 5> blendAttachments = {
-                blendAttachment, blendAttachment, blendAttachment,
-                blendAttachment, blendAttachment };
+            std::array<VkPipelineColorBlendAttachmentState, VulkanPipelineMaxColorTargets>
+                blendAttachments{};
+            blendAttachments.fill(blendAttachment);
+            if (writesVelocity(desc)) {
+                // Velocity is never blended.
+                VkPipelineColorBlendAttachmentState velocity{};
+                velocity.blendEnable = VK_FALSE;
+                velocity.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT;
+                blendAttachments[1] = velocity;
+            }
             VkPipelineColorBlendStateCreateInfo colorBlending{ VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO };
             colorBlending.logicOpEnable = VK_FALSE;
             colorBlending.attachmentCount = target.colorAttachmentCount;
@@ -316,11 +355,16 @@ namespace Iridium {
             pipelineInfo.pColorBlendState = &colorBlending;
             pipelineInfo.pDynamicState = &dynamicState;
             pipelineInfo.layout = target.pipelineLayout;
-            pipelineInfo.renderPass = target.renderPass;
+            VkPipelineRenderingCreateInfo rendering{ VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO };
+            rendering.colorAttachmentCount = target.colorAttachmentCount;
+            rendering.pColorAttachmentFormats = target.colorFormats.data();
+            rendering.depthAttachmentFormat = target.depthFormat;
+            pipelineInfo.pNext = &rendering;
+            pipelineInfo.renderPass = VK_NULL_HANDLE;
             pipelineInfo.subpass = 0;
 
             VkPipeline pipeline = VK_NULL_HANDLE;
-            if (vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &pipeline) != VK_SUCCESS) {
+            if (vkCreateGraphicsPipelines(device_, pipelineCache_, 1, &pipelineInfo, nullptr, &pipeline) != VK_SUCCESS) {
                 throw std::runtime_error("failed to create Vulkan graphics pipeline");
             }
 
@@ -350,10 +394,16 @@ namespace Iridium {
         return shaderModule;
     }
 
-    const VulkanPipelineTarget& VulkanPipelineLibrary::getTarget(RenderPassClass renderPass) const {
-        switch (renderPass) {
+    bool VulkanPipelineLibrary::writesVelocity(const PipelineStateDesc& desc) noexcept {
+        return desc.renderPass == RenderPassClass::Forward && desc.depthWrite;
+    }
+
+    const VulkanPipelineTarget& VulkanPipelineLibrary::getTarget(
+        const PipelineStateDesc& desc) const {
+        switch (desc.renderPass) {
         case RenderPassClass::GBuffer: return gBufferTarget_;
-        case RenderPassClass::Forward: return forwardTarget_;
+        case RenderPassClass::Forward:
+            return writesVelocity(desc) ? forwardOpaqueTarget_ : forwardTarget_;
         case RenderPassClass::Transparent: return transparentTarget_;
         }
         throw std::invalid_argument("unsupported render pass class");

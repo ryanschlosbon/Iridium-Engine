@@ -12,27 +12,22 @@ namespace Iridium {
 
     class VulkanFrameTargets;
 
-    // Owns the fixed WeightedOIT render passes, accumulation/resolve pipelines,
-    // and per-frame resolve descriptors. Frame-sized images and framebuffers
-    // remain graph/frame-target owned and are conditionally resident.
+    // Owns the WeightedOIT accumulation/resolve pipelines (dynamic rendering)
+    // and per-frame resolve descriptors. Frame-sized images remain
+    // graph/frame-target owned and are conditionally resident.
     class VulkanWeightedOitPass final {
     public:
         VulkanWeightedOitPass() = default;
         VulkanWeightedOitPass(const VulkanWeightedOitPass&) = delete;
         VulkanWeightedOitPass& operator=(const VulkanWeightedOitPass&) = delete;
 
-        void init(VkDevice device, ::DescriptorAllocator& descriptors,
+        void init(VkDevice device, VkPipelineCache pipelineCache,
+            ::DescriptorAllocator& descriptors,
             VkPipelineLayout forwardPipelineLayout);
         void rebuildDescriptors(const VulkanFrameTargets& frameTargets);
         void clearDescriptors() noexcept;
         void cleanup() noexcept;
 
-        [[nodiscard]] VkRenderPass accumulationRenderPass() const noexcept {
-            return accumulationRenderPass_;
-        }
-        [[nodiscard]] VkRenderPass resolveRenderPass() const noexcept {
-            return resolveRenderPass_;
-        }
         [[nodiscard]] VkPipeline accumulationPipeline() const noexcept {
             return accumulationPipeline_;
         }
@@ -53,16 +48,14 @@ namespace Iridium {
         }
 
     private:
-        void createRenderPasses();
         [[nodiscard]] VkPipeline createAccumulationPipeline() const;
         [[nodiscard]] VkPipeline createResolvePipeline() const;
         [[nodiscard]] VkShaderModule createShaderModule(
             const char* relativePath) const;
 
         VkDevice device_ = VK_NULL_HANDLE;
+        VkPipelineCache pipelineCache_ = VK_NULL_HANDLE;
         ::DescriptorAllocator* descriptors_ = nullptr;
-        VkRenderPass accumulationRenderPass_ = VK_NULL_HANDLE;
-        VkRenderPass resolveRenderPass_ = VK_NULL_HANDLE;
         VkPipelineLayout accumulationPipelineLayout_ = VK_NULL_HANDLE;
         VkDescriptorSetLayout resolveDescriptorLayout_ = VK_NULL_HANDLE;
         VkPipelineLayout resolvePipelineLayout_ = VK_NULL_HANDLE;

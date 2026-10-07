@@ -1,4 +1,5 @@
 #include "assets/model/AssetModelPreparationService.h"
+#include "core/tasks/TaskSystem.h"
 #include "assets/thumbnail/AssetThumbnail.h"
 #include "utils/Sha256.h"
 
@@ -11,6 +12,9 @@
 namespace {
 
     using namespace Iridium;
+
+    // M7R R5b.2: the services run on the engine task system (created in main).
+    Tasks::TaskSystem* testTasks = nullptr;
 
     #define CHECK(condition) \
         do { \
@@ -91,8 +95,7 @@ namespace {
                 "fixture.gltf.iridium.meta",
             .status = AssetCatalogStatus::Ready,
         };
-        AssetModelPreparationService service(
-            temporary.path,
+        AssetModelPreparationService service(*testTasks, temporary.path,
             temporary.path / "ddc",
             editorTarget());
         CHECK(service.request(record));
@@ -205,8 +208,7 @@ namespace {
                 "fixture.gltf.iridium.meta");
         const AssetGuid differentGuid =
             createAssetGuidV7();
-        AssetModelPreparationService service(
-            temporary.path,
+        AssetModelPreparationService service(*testTasks, temporary.path,
             temporary.path / "ddc",
             editorTarget());
         CHECK(service.request({
@@ -231,6 +233,9 @@ namespace {
 } // namespace
 
 int main() {
+    Iridium::Tasks::TaskSystem tasks(Iridium::Tasks::TaskSystemConfig{
+        .workerThreadCount = 4 });
+    testTasks = &tasks;
     struct Test {
         const char* name;
         bool (*function)();

@@ -13,7 +13,8 @@ namespace Iridium {
 
     class VulkanTransparencyPyramid final {
     public:
-        void init(VkDevice device, ::DescriptorAllocator& descriptors,
+        void init(VkDevice device, VkPipelineCache pipelineCache,
+            ::DescriptorAllocator& descriptors,
             VkDescriptorSetLayout globalLayout);
         void rebuild(const VulkanFrameTargets& targets);
         void clearDescriptors() noexcept;
@@ -25,6 +26,7 @@ namespace Iridium {
 
     private:
         VkDevice device_ = VK_NULL_HANDLE;
+        VkPipelineCache pipelineCache_ = VK_NULL_HANDLE;
         ::DescriptorAllocator* descriptors_ = nullptr;
         VkDescriptorSetLayout descriptorLayout_ = VK_NULL_HANDLE;
         VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;

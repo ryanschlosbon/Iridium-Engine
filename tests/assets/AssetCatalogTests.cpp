@@ -1,7 +1,8 @@
 #include "assets/AssetDiscovery.h"
-#include "assets/AssetGuid.h"
+#include "core/types/AssetGuid.h"
 #include "assets/AssetMetadata.h"
 #include "assets/SqliteAssetCatalog.h"
+#include "core/ProjectAssetRoots.h"
 
 #include <algorithm>
 #include <array>
@@ -336,6 +337,87 @@ namespace {
 
 } // namespace
 
+namespace {
+
+    // The engine's root list for a project with a local asset library: records
+    // under the library carry root id "local", folders keep their root, and a
+    // record resolves under its own root.
+    bool testLocalRootDiscovery() {
+        TemporaryDirectory temporary;
+        const std::filesystem::path project = temporary.path / "project";
+        const std::filesystem::path library = temporary.path / "library";
+        std::filesystem::create_directories(project / "assets" / "benchmarks");
+        std::filesystem::create_directories(library / "scenes");
+        std::ofstream(project / "iridium.local.json") <<
+            "{ \"localAssetRoot\": \"" + library.generic_string() + "\" }";
+        AssetMetadata local = sampleMetadata();
+        local.assetGuid = testGuid(500, 7);
+        local.subassets.clear();
+        const std::filesystem::path localSource =
+            library / "models" / "car" / "car.gltf";
+        writeSource(localSource);
+        std::string error;
+        CHECK(writeAssetMetadataAtomic(
+            assetMetadataSidecarPath(localSource), local, error));
+        AssetMetadata projectMetadata = sampleMetadata();
+        projectMetadata.assetGuid = testGuid(501, 9);
+        projectMetadata.subassets.clear();
+        const std::filesystem::path projectSource =
+            project / "assets" / "benchmarks" / "fixture.gltf";
+        writeSource(projectSource);
+        CHECK(writeAssetMetadataAtomic(
+            assetMetadataSidecarPath(projectSource), projectMetadata, error));
+
+        const ProjectAssetRoots configured =
+            ProjectAssetRoots::fromProjectRoot(project, std::nullopt);
+        std::vector<AssetRoot> roots;
+        for (const ProjectAssetRootEntry& entry : configured.roots()) {
+            roots.push_back({ entry.id, entry.path });
+        }
+        CHECK(roots.size() == 2);
+        CHECK(roots[1].id == "local");
+        const AssetDiscoveryResult discovery = discoverAssetRoots(roots);
+        CHECK(!discovery.hasErrors());
+        CHECK(discovery.records.size() == 2);
+        const auto localRecord = std::ranges::find_if(discovery.records,
+            [&local](const AssetCatalogRecord& record) {
+                return record.guid == local.assetGuid;
+            });
+        CHECK(localRecord != discovery.records.end());
+        CHECK(localRecord->assetRoot == "local");
+        CHECK(localRecord->sourcePath == "models/car/car.gltf");
+        CHECK(isProjectContentRoot(localRecord->assetRoot));
+        CHECK(assetRootPathFor(roots, *localRecord) == roots[1].path);
+        const auto projectRecord = std::ranges::find_if(discovery.records,
+            [&projectMetadata](const AssetCatalogRecord& record) {
+                return record.guid == projectMetadata.assetGuid;
+            });
+        CHECK(projectRecord != discovery.records.end());
+        CHECK(projectRecord->assetRoot == "project");
+        CHECK(std::ranges::find(discovery.sourceDirectories,
+            AssetSourceDirectory{ "local", "scenes" }) !=
+            discovery.sourceDirectories.end());
+        CHECK(std::ranges::find(discovery.sourceDirectories,
+            AssetSourceDirectory{ "project", "benchmarks" }) !=
+            discovery.sourceDirectories.end());
+
+        const auto catalog = createSqliteAssetCatalog(":memory:");
+        catalog->rebuild(discovery.records, discovery.sourceDirectories);
+        AssetCatalogQuery query;
+        query.assetRoot = "local";
+        const AssetCatalogQueryPage page = catalog->query(query);
+        CHECK(page.records.size() == 1);
+        CHECK(page.records[0].guid == local.assetGuid);
+        const AssetCatalogRecord unknown{ .assetRoot = "elsewhere" };
+        bool threw = false;
+        try { (void)assetRootPathFor(roots, unknown); }
+        catch (const std::exception&) { threw = true; }
+        CHECK(threw);
+        return true;
+    }
+
+} // namespace
+
 int main() {
     struct Test {
         const char* name;
@@ -347,6 +429,7 @@ int main() {
         { "subasset identity matching", testSubassetIdentityMatching },
         { "discovery moves, duplicates, and catalog", testDiscoveryMovesDuplicatesAndCatalog },
         { "tracked fixture sidecar", testTrackedFixtureSidecar },
+        { "local asset root discovery", testLocalRootDiscovery },
         { "concurrent rebuild is reader atomic",
             testConcurrentRebuildIsReaderAtomic },
     };
