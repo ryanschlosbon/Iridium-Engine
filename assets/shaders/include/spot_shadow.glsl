@@ -24,9 +24,14 @@ layout(std140, set = IRIDIUM_LIGHTING_SET, binding = 23) uniform
     uvec4 iridiumSpotShadowMetadata;
 };
 
+// Bilinear reconstruction of four depth comparisons, each against the receiver
+// plane at its own texel centre. The plane is evaluated once at the footprint's
+// first texel (receiverOffset is the sample's offset from the receiver in
+// texels) and stepped by the per-texel depth gradient, then each reference is
+// clamped to the correction allowance.
 float iridiumSpotShadowBilinearCompare(vec2 uv, vec2 minimumUv,
-    vec2 maximumUv, vec2 receiverUv, float referenceDepth,
-    vec2 depthGradient, float maximumPlaneCorrection) {
+    vec2 maximumUv, vec2 receiverOffset, float referenceDepth,
+    vec2 texelGradient, float maximumPlaneCorrection) {
     ivec2 size = ivec2(iridiumSpotShadowMetadata.x);
     vec2 pixel = uv * vec2(size) - vec2(0.5);
     ivec2 base = ivec2(floor(pixel));
@@ -37,23 +42,20 @@ float iridiumSpotShadowBilinearCompare(vec2 uv, vec2 minimumUv,
     ivec2 p10 = clamp(base + ivec2(1, 0), minimumPixel, maximumPixel);
     ivec2 p01 = clamp(base + ivec2(0, 1), minimumPixel, maximumPixel);
     ivec2 p11 = clamp(base + ivec2(1, 1), minimumPixel, maximumPixel);
-    vec2 inverseSize = 1.0 / vec2(size);
-    float v00 = iridiumShadowCompare(iridiumShadowReceiverPlaneReference(
-        referenceDepth, depthGradient,
-        (vec2(p00) + vec2(0.5)) * inverseSize - receiverUv,
-        maximumPlaneCorrection), texelFetch(iridiumSpotShadowAtlas, p00, 0).r);
-    float v10 = iridiumShadowCompare(iridiumShadowReceiverPlaneReference(
-        referenceDepth, depthGradient,
-        (vec2(p10) + vec2(0.5)) * inverseSize - receiverUv,
-        maximumPlaneCorrection), texelFetch(iridiumSpotShadowAtlas, p10, 0).r);
-    float v01 = iridiumShadowCompare(iridiumShadowReceiverPlaneReference(
-        referenceDepth, depthGradient,
-        (vec2(p01) + vec2(0.5)) * inverseSize - receiverUv,
-        maximumPlaneCorrection), texelFetch(iridiumSpotShadowAtlas, p01, 0).r);
-    float v11 = iridiumShadowCompare(iridiumShadowReceiverPlaneReference(
-        referenceDepth, depthGradient,
-        (vec2(p11) + vec2(0.5)) * inverseSize - receiverUv,
-        maximumPlaneCorrection), texelFetch(iridiumSpotShadowAtlas, p11, 0).r);
+    float reference00 = referenceDepth +
+        dot(texelGradient, receiverOffset - blend);
+    vec4 references = clamp(reference00 + vec4(0.0, texelGradient.x,
+        texelGradient.y, texelGradient.x + texelGradient.y),
+        referenceDepth - maximumPlaneCorrection,
+        referenceDepth + maximumPlaneCorrection);
+    float v00 = iridiumShadowCompare(references.x,
+        texelFetch(iridiumSpotShadowAtlas, p00, 0).r);
+    float v10 = iridiumShadowCompare(references.y,
+        texelFetch(iridiumSpotShadowAtlas, p10, 0).r);
+    float v01 = iridiumShadowCompare(references.z,
+        texelFetch(iridiumSpotShadowAtlas, p01, 0).r);
+    float v11 = iridiumShadowCompare(references.w,
+        texelFetch(iridiumSpotShadowAtlas, p11, 0).r);
     return mix(mix(v00, v10, blend.x), mix(v01, v11, blend.x), blend.y);
 }
 
@@ -61,17 +63,17 @@ float iridiumSpotShadowHardFilter(vec2 atlasUv, vec2 minimumUv,
     vec2 maximumUv, vec2 texel, float referenceDepth, vec2 depthGradient,
     float maximumPlaneCorrection) {
     const float tentWeights[3] = float[3](1.0, 2.0, 1.0);
+    vec2 texelGradient = depthGradient * texel;
     float visibility = 0.0;
     for (int y = -1; y <= 1; ++y)
         for (int x = -1; x <= 1; ++x)
             visibility += tentWeights[x + 1] * tentWeights[y + 1] *
                 iridiumSpotShadowBilinearCompare(
                     atlasUv + vec2(x, y) * texel, minimumUv, maximumUv,
-                    atlasUv, referenceDepth, depthGradient,
+                    vec2(x, y), referenceDepth, texelGradient,
                     maximumPlaneCorrection);
     return visibility / 16.0;
 }
-
 float iridiumSpotShadowVisibility(uint lightSlot, PackedGpuLight lightRecord,
     IridiumShadowReceiver receiver, vec3 surfaceToLight) {
     if ((floatBitsToUint(lightRecord.shapeMetadata.z) &
