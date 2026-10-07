@@ -723,6 +723,38 @@ None open. The two-car scene was never saved, so PC3 is the reference approximat
     may differ from before. They were already schedule-dependent there, and the image
     fallback is unchanged.
 
+- **2026-10-07 — M7.10.1b: culled-glass bookkeeping made O(owners) (refactor tier).**
+  - **Problem:** the owner-case timing found PC1-911-n16-off regressed from 0.692 to
+    0.869 ms wall time (non-wait CPU 0.26 → 0.77 ms). The cause was the M7.10.1
+    keep-alive: it touched all 4,320 culled keys, then sorted and merged them every
+    frame, serially and unscoped. Culled work was therefore not free.
+  - **Fix:**
+    - whole-model rejection records one owner entry
+      (`PreviousTransformCache::touchOwner`), and a key with no entry of its own
+      falls back to its owner's entry. This is exact, because every transparent
+      packet of an owner carries the owner's world transform
+      (`RenderExtractor.cpp:1146`);
+    - per-packet culls still touch per key, bounded by partially visible models;
+    - the block now has the scope `cpu.render.previous_transforms`;
+    - a never-seen key of an owner rejected last frame now reports the owner's
+      last-frame transform instead of its current one. That is consistent with M9
+      contract 3 for content swaps; no capture exercises it.
+  - **Evidence:**
+    - Debug and Release pass 120/120 tests, including the new owner-level tests
+      against a never-culling reference cache;
+    - frozen set `m7c-1011` with sync validation: 0 failures, zero messages;
+    - owner cases 50/50 identical to `m7c-p1-fixtures`;
+    - a scratch TF-glass re-entry (the panel keyframed off-screen and back; the whole
+      model rejected for about 57 frames; TAA on) matches the no-culling baseline
+      `1758e0d` on 16/16 `scene-resolved` frames.
+  - **Timing:** native 4K, A,B,B,A, product route, `m7c-owner-product-pc1b`:
+
+    | Route | Wall time | Non-wait CPU |
+    |---|---|---|
+    | n16-off | 0.692 → 0.699 ms (parity) | 0.261 → 0.235 ms |
+    | n16-half | 2.568 → 1.749 ms | 2.45 → 1.35 ms |
+    | n16-all | unchanged | unchanged |
+
 ## Completion report
 
 To be written at M7.12, following AGENTS.md:

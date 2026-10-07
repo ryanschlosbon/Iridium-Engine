@@ -16,6 +16,10 @@ namespace Iridium {
             return std::memcmp(lhs.primitiveGuid.bytes().data(),
                 rhs.primitiveGuid.bytes().data(), lhs.primitiveGuid.bytes().size()) < 0;
         }
+        bool ownerLess(const SceneEntityUuid& lhs, const SceneEntityUuid& rhs) noexcept {
+            return std::memcmp(lhs.bytes().data(), rhs.bytes().data(),
+                lhs.bytes().size()) < 0;
+        }
         bool keyEqual(const PreviousTransformCache::Key& lhs,
             const PreviousTransformCache::Key& rhs) noexcept {
             return !keyLess(lhs, rhs) && !keyLess(rhs, lhs);
@@ -25,6 +29,7 @@ namespace Iridium {
     void PreviousTransformCache::beginFrame() noexcept {
         current_.clear();
         touched_.clear();
+        touchedOwners_.clear();
     }
 
     glm::mat4 PreviousTransformCache::resolve(const Key& key, const glm::mat4& current) {
@@ -32,6 +37,13 @@ namespace Iridium {
         const auto found = std::lower_bound(previous_.begin(), previous_.end(), key,
             [](const Entry& entry, const Key& value) { return keyLess(entry.key, value); });
         if (found != previous_.end() && keyEqual(found->key, key)) return found->world;
+        // M7.10.1: a key of an owner rejected as a whole last frame.
+        const auto owner = std::lower_bound(previousOwners_.begin(), previousOwners_.end(),
+            key.owner, [](const OwnerEntry& entry, const SceneEntityUuid& value) {
+                return ownerLess(entry.owner, value);
+            });
+        if (owner != previousOwners_.end() && !ownerLess(key.owner, owner->owner))
+            return owner->world;
         return current;
     }
 
@@ -39,7 +51,24 @@ namespace Iridium {
         touched_.push_back({ key, current });
     }
 
+    void PreviousTransformCache::touchOwner(SceneEntityUuid owner,
+        const glm::mat4& current) {
+        touchedOwners_.push_back({ owner, current });
+    }
+
     void PreviousTransformCache::endFrame() {
+        // Owners rejected as a whole this frame (duplicates keep the first).
+        std::sort(touchedOwners_.begin(), touchedOwners_.end(),
+            [](const OwnerEntry& lhs, const OwnerEntry& rhs) {
+                return ownerLess(lhs.owner, rhs.owner);
+            });
+        touchedOwners_.erase(std::unique(touchedOwners_.begin(), touchedOwners_.end(),
+            [](const OwnerEntry& lhs, const OwnerEntry& rhs) {
+                return !ownerLess(lhs.owner, rhs.owner) && !ownerLess(rhs.owner, lhs.owner);
+            }), touchedOwners_.end());
+        previousOwners_.swap(touchedOwners_);
+        touchedOwners_.clear();
+
         const auto entryLess = [](const Entry& lhs, const Entry& rhs) {
             return keyLess(lhs.key, rhs.key);
         };
@@ -85,6 +114,8 @@ namespace Iridium {
         current_.clear();
         touched_.clear();
         merged_.clear();
+        previousOwners_.clear();
+        touchedOwners_.clear();
     }
 
 } // namespace Iridium

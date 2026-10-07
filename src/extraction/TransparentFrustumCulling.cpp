@@ -126,10 +126,9 @@ namespace Iridium {
         uint32_t demand = record.packetDemand;
         for (const TransparentCullRecord::Model& rejected : record.models) {
             const ModelAsset& model = *rejected.model;
+            cache.touchOwner(rejected.owner, rejected.world);
             for (const uint32_t subMeshIndex : rejected.submeshes) {
                 const SubMesh& subMesh = model.subMeshes[subMeshIndex];
-                cache.touch({ rejected.owner, subMesh.primitiveGuid },
-                    rejected.world);
                 demand |= transparentResidencyDemand(
                     model.transparencyExecutionMode, deterministicContent
                         ? subMesh.transparency

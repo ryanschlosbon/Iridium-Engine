@@ -115,11 +115,71 @@ namespace {
         cache.endFrame();
         CHECK(cache.trackedCount() == 0);
     }
+
+    // M7.10.1: an owner rejected as a whole keeps one owner entry; every key
+    // of that owner re-enters with the owner's transform from its last culled
+    // frame, exactly as a never-culled cache reports, and own entries win.
+    void touchedOwnersStandInForTheirKeys() {
+        const char* ownerId = "019fb73d-5a60-7000-8000-0000000000a0";
+        const auto a = key(ownerId, "019fb73d-5a60-7000-8000-0000000000a1");
+        const auto b = key(ownerId, "019fb73d-5a60-7000-8000-0000000000a2");
+        const auto other = key("019fb73d-5a60-7000-8000-0000000000b0",
+            "019fb73d-5a60-7000-8000-0000000000a1");
+        PreviousTransformCache culled;
+        PreviousTransformCache reference;   // never culls
+        const auto frame = [&](float t, bool cullOwner) {
+            culled.beginFrame();
+            reference.beginFrame();
+            const glm::mat4 aReference = reference.resolve(a, at(t));
+            const glm::mat4 bReference = reference.resolve(b, at(t));
+            CHECK(culled.resolve(other, at(50.0f + t)) ==
+                reference.resolve(other, at(50.0f + t)));
+            if (cullOwner) culled.touchOwner(a.owner, at(t));
+            else {
+                CHECK(culled.resolve(a, at(t)) == aReference);
+                CHECK(culled.resolve(b, at(t)) == bReference);
+            }
+            culled.endFrame();
+            reference.endFrame();
+        };
+        frame(1.0f, false);
+        frame(2.0f, true);    // moving while rejected as a whole
+        frame(3.0f, true);
+        frame(4.0f, false);   // re-enters: previous is frame 3's
+        frame(5.0f, true);
+        frame(6.0f, false);
+
+        // An own entry wins over the owner entry; owner entries age out.
+        PreviousTransformCache cache;
+        cache.beginFrame();
+        (void)cache.resolve(a, at(1.0f));
+        cache.endFrame();
+        cache.beginFrame();
+        CHECK(cache.resolve(a, at(2.0f)) == at(1.0f));
+        cache.touchOwner(a.owner, at(30.0f));
+        cache.touchOwner(a.owner, at(31.0f));   // duplicate keeps one entry
+        cache.endFrame();
+        CHECK(cache.trackedCount() == 2);
+        cache.beginFrame();
+        CHECK(cache.resolve(a, at(3.0f)) == at(2.0f));
+        const glm::mat4 bPrevious = cache.resolve(b, at(3.0f));
+        CHECK(bPrevious == at(30.0f) || bPrevious == at(31.0f));
+        cache.endFrame();
+        cache.beginFrame();
+        cache.endFrame();
+        CHECK(cache.trackedCount() == 0);
+        cache.beginFrame();
+        cache.touchOwner(a.owner, at(40.0f));
+        cache.endFrame();
+        cache.clear();
+        CHECK(cache.trackedCount() == 0);
+    }
 }
 
 int main() {
     previousIsLastFrame();
     touchedKeysStayTracked();
+    touchedOwnersStandInForTheirKeys();
     if (failures == 0) std::cout << "PreviousTransformCacheTests passed\n";
     return failures == 0 ? 0 : 1;
 }

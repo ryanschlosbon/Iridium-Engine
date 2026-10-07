@@ -1925,21 +1925,24 @@ namespace Iridium {
             : std::span<const DrawPacket>{};
         // M9 G4: last frame's transform for every opaque direct and
         // forward-opaque packet.
-        previousTransforms_.beginFrame();
-        resolvePreviousTransforms(opaqueQueue, opaqueDirectPrevious_);
-        resolvePreviousTransforms(forwardOpaqueQueue, forwardOpaquePrevious_);
-        resolvePreviousTransforms(sortedSurfaceQueue, sortedSurfacePrevious_);
-        resolvePreviousTransforms(transparentQueue, compatibilityPrevious_);
-        // M7.10.1: culled transparent keys stay tracked (this frame's
-        // transform), and the culled work's residency demand.
         uint32_t culledTransparentDemand = 0;
-        for (uint32_t chunk = 0; chunk < extractionChunkCount; ++chunk) {
-            culledTransparentDemand |= replayCulledTransparentWork(
-                extractionChunks_[chunk].transparentCull, previousTransforms_,
-                policy_.deterministicContent,
-                static_cast<unsigned>(view.layeredInterfaceOverride));
+        {
+            CpuScope previousScope(cpuProfiler_, "cpu.render.previous_transforms");
+            previousTransforms_.beginFrame();
+            resolvePreviousTransforms(opaqueQueue, opaqueDirectPrevious_);
+            resolvePreviousTransforms(forwardOpaqueQueue, forwardOpaquePrevious_);
+            resolvePreviousTransforms(sortedSurfaceQueue, sortedSurfacePrevious_);
+            resolvePreviousTransforms(transparentQueue, compatibilityPrevious_);
+            // M7.10.1: culled transparent keys stay tracked (this frame's
+            // transform), and the culled work's residency demand.
+            for (uint32_t chunk = 0; chunk < extractionChunkCount; ++chunk) {
+                culledTransparentDemand |= replayCulledTransparentWork(
+                    extractionChunks_[chunk].transparentCull, previousTransforms_,
+                    policy_.deterministicContent,
+                    static_cast<unsigned>(view.layeredInterfaceOverride));
+            }
+            previousTransforms_.endFrame();
         }
-        previousTransforms_.endFrame();
         renderFrame.opaque = {
             .order = opaqueOrder_,
             .directPackets = opaqueQueue,

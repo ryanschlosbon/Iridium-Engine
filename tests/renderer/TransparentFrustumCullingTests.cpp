@@ -246,7 +246,8 @@ namespace {
         cache.endFrame();
         CHECK(authored == (TransparentDemandCompatibilityQueue |
             TransparentDemandOrdinary2 | TransparentDemandWeightedOit));
-        CHECK(cache.trackedCount() == 3u);
+        // One packet key plus one owner entry for the rejected model.
+        CHECK(cache.trackedCount() == 2u);
         cache.beginFrame();
         // Every culled key re-enters with this frame's transform as previous.
         CHECK(cache.resolve({ other, model.subMeshes[1].primitiveGuid },
@@ -255,8 +256,12 @@ namespace {
             glm::mat4(1.0f)) == modelWorld);
         CHECK(cache.resolve({ owner, model.subMeshes[2].primitiveGuid },
             glm::mat4(1.0f)) == modelWorld);
-        // The unlisted submesh was never part of the owner's work.
+        // Any key of the rejected owner falls back to the owner's transform
+        // (its packets all carry it), as M9 contract 3 asks of content swaps.
         CHECK(cache.resolve({ owner, model.subMeshes[1].primitiveGuid },
+            glm::mat4(2.0f)) == modelWorld);
+        // A key of an owner that was not rejected has no history.
+        CHECK(cache.resolve({ other, model.subMeshes[0].primitiveGuid },
             glm::mat4(2.0f)) == glm::mat4(2.0f));
         // The editor's layered-interface override applies unless deterministic.
         const uint32_t overridden = replayCulledTransparentWork(record, cache,
