@@ -25,7 +25,9 @@ Claude Code took over from Codex on 2026-10-02.
 - **Cost** (five-process native 4K): TAA about 0.25 ms of its 0.40 ms row; post
   (bloom, exposure, output) about 0.22 ms of its 0.50 ms row. The heaviest timing
   route is 3.95 ms GPU with everything on.
-- **Next:** M7.9–M7.12, starting from the hand-off. Then M8, resumed M7.8 Virtual
+- **Next:** M7.9–M7.12 under one lead (`docs/milestones/M7-completion-task-lead-prompt.md`),
+  starting with the owner performance cases (many objects, close to glass, bright
+  point light), then M9c. Then M8, resumed M7.8 Virtual
   Shadow Maps, M10, **M9b** (DLSS/FSR/XeSS providers and dynamic resolution, before
   M11) and M11.
 - **Watch:** `VulkanVertexBackend.cpp` is at 2,474 of its 2,500-line cap, so move code

@@ -498,7 +498,10 @@ Acceptance gate: the sample car windows and headlights render predictably, norma
 
 ### M7 - GPU scene and indirect visibility
 
-Status: `In Progress` — **paused 2026-10-02 at the M7.8 checkpoint** for M7R
+Status: `In Progress` — **M7.9–M7.12 ready (2026-10-07)** under one lead
+(`docs/milestones/M7-completion-task-lead-prompt.md`; plan to be written as
+`docs/milestones/M7-completion.md`), starting with the owner performance cases below.
+Earlier: **paused 2026-10-02 at the M7.8 checkpoint** for M7R
 architecture consolidation and the M9 temporal/post pull-forward (see Program
 schedule). M7.0-M7.7 accepted; M7.8 Virtual Shadow Map work is retained default-off
 and resumes after M8 meshlets. M7.9-M7.12 resume after M9. Historical status:
