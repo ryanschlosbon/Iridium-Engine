@@ -582,6 +582,31 @@ oversized-model cases (FRAME_BUDGET "Import, cooking, and publication").
   - The owner asked for testing that does not consume unnecessary disk space; the
     retention proposal is pending approval.
 
+- **2026-10-07 — M7.10.0 code motion landed (refactor tier; timing pair pending).**
+  - `VulkanVertexBackend.cpp` went from 2,496 to 1,906 lines. What moved:
+    - runtime info, capabilities, telemetry and memory snapshot went to the new
+      `VulkanRuntimeInfo.cpp` (344 lines);
+    - TAA staging went to `VulkanTemporalAntiAliasingFeature::stageFrame`;
+    - cluster setup went to `VulkanClusterLightingFeature::recordFrame`, with the grid
+      computed once (a pure function of unchanged inputs);
+    - caster-revision observer forwarding went to
+      `VulkanExtensionHooks::observeCasterRevision`, still guarded by
+      `kQualificationBuild`;
+    - transparency topology change and preparation went to the layered owner, which
+      reaches the pyramid and WeightedOIT residencies and the frame-target
+      callbacks through plain function pointers.
+  - Profiler scope names, counters and the failure-restore path are unchanged.
+  - **Evidence:**
+    - Debug and Release each pass 118/118 tests;
+    - the shipping `iridium_vulkan` target compiles;
+    - frozen set `m7c-1000` against `m9-g8` with `-SyncValidation`: 22 of 24
+      byte-identical, F4-woit within its `woit-order` envelope, zero validation and
+      synchronization messages.
+  - **Still owed:** the matched native-4K timing pair, which needs the owner's
+    machine-state approval.
+  - The Release build was produced in `out/build/x64-release-m7c`, because the owner's
+    running editor locked `out/build/x64-release`.
+
 ## Completion report
 
 To be written at M7.12, following AGENTS.md:

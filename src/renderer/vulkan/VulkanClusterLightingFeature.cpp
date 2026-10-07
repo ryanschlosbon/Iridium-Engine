@@ -338,6 +338,17 @@ namespace Iridium {
         submittedClusterCounts_[frameIndex] = clusterCount;
     }
 
+    void VulkanClusterLightingFeature::recordFrame(uint32_t frameIndex,
+        const glm::mat4& view, const glm::mat4& projection, float nearPlane,
+        float farPlane, VkExtent2D sceneExtent, uint32_t activeLightCount) {
+        const ClusterGridDimensions dimensions = clusterGridDimensions(config_,
+            { sceneExtent.width, sceneExtent.height, nearPlane, farPlane,
+                view, projection });
+        recordProbeCluster(static_cast<uint32_t>(dimensions.clusterCount()));
+        recordClusters(frameIndex, static_cast<uint32_t>(dimensions.clusterCount()),
+            activeLightCount);
+    }
+
     bool VulkanClusterLightingFeature::probeClusterActive(void* owner,
         const VulkanFrameRecordContext&) {
         return static_cast<const VulkanClusterLightingFeature*>(owner)->

@@ -55,6 +55,7 @@ add_library(iridium_vulkan STATIC
         VulkanResourceAllocator.cpp
         VulkanResourceRegistry.cpp
         VulkanResourceState.cpp
+        VulkanRuntimeInfo.cpp
         VulkanSceneDescriptors.cpp
         VulkanShadowCasters.cpp
         VulkanShadowFeature.cpp
