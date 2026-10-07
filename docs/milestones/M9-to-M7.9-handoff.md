@@ -106,6 +106,14 @@ prefilter is Auto, so off with TAA. Measurement tools pin TAA off, Manual exposu
 
 ## 6. Notes for M7.9–M7.12
 
+- **First: the owner's performance cases (2026-10-07, ROADMAP M7).** Before other work, capture native-4K
+  fixtures for (1) many model instances, (2) the camera close to glass and (3) a very bright point light, and
+  report pass times, non-waiting CPU stages and requested/visible/recorded work. Known lead: sorted and
+  compatibility transparency is not frustum-culled (an out-of-view Porsche still records every transparent
+  packet and sorts 26,910 ambiguous intervals).
+- **Since this hand-off (M9.8d-e):** ADR-0017 keeps history across compatible rebuilds; transparent queues now
+  carry previous transforms and write motion-aware reactive coverage (dual-source alpha, `dualSrcBlend`
+  required); `VulkanVertexBackend.cpp` is at 2,496 / 2,500 lines.
 - **M7.9 (fine-grained cooking, progressive residency):** child streaming swaps must keep previous transforms
   (contract 3). Use the TF-teleport and TF-disocclude motion evaluation to check that no streaming swap
   ghosts.
