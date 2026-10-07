@@ -15,113 +15,18 @@
 #include <stdexcept>
 #include <array>
 #include <bit>
-#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <cmath>
 #include <limits>
-#include <iomanip>
 #include <iostream>
-#include <sstream>
 #include <string>
 #include <tuple>
 #include <utility>
 #include <vector>
 
 namespace Iridium {
-
-    namespace {
-        uint64_t swapchainRequestedBytes(const VkSwapchain& swapchain) noexcept {
-            uint64_t bytesPerTexel = 0;
-            switch (swapchain.getImageFormat()) {
-            case VK_FORMAT_R8G8B8A8_UNORM:
-            case VK_FORMAT_R8G8B8A8_SRGB:
-            case VK_FORMAT_B8G8R8A8_UNORM:
-            case VK_FORMAT_B8G8R8A8_SRGB:
-                bytesPerTexel = 4;
-                break;
-            default:
-                break;
-            }
-            const VkExtent2D extent = swapchain.getExtent();
-            return static_cast<uint64_t>(extent.width) * extent.height *
-                swapchain.getImageCount() * bytesPerTexel;
-        }
-
-        std::string versionString(uint32_t version) {
-            return std::to_string(VK_API_VERSION_MAJOR(version)) + "." +
-                std::to_string(VK_API_VERSION_MINOR(version)) + "." +
-                std::to_string(VK_API_VERSION_PATCH(version));
-        }
-
-        std::string uuidString(const uint8_t* uuid, size_t size) {
-            std::ostringstream output;
-            output << std::hex << std::setfill('0');
-            for (size_t index = 0; index < size; ++index) {
-                output << std::setw(2) << static_cast<unsigned>(uuid[index]);
-            }
-            return output.str();
-        }
-
-        std::string driverVersionString(uint32_t vendorId, uint32_t version) {
-            if (vendorId == 0x10de) {
-                return std::to_string((version >> 22) & 0x3ff) + "." +
-                    std::to_string((version >> 14) & 0xff) + "." +
-                    std::to_string((version >> 6) & 0xff) + "." +
-                    std::to_string(version & 0x3f);
-            }
-            return versionString(version);
-        }
-
-        const char* formatName(VkFormat format) noexcept {
-            switch (format) {
-            case VK_FORMAT_R8G8B8A8_UNORM: return "VK_FORMAT_R8G8B8A8_UNORM";
-            case VK_FORMAT_R8G8B8A8_SRGB: return "VK_FORMAT_R8G8B8A8_SRGB";
-            case VK_FORMAT_B8G8R8A8_UNORM: return "VK_FORMAT_B8G8R8A8_UNORM";
-            case VK_FORMAT_B8G8R8A8_SRGB: return "VK_FORMAT_B8G8R8A8_SRGB";
-			case VK_FORMAT_R16G16B16A16_SFLOAT:
-				return "VK_FORMAT_R16G16B16A16_SFLOAT";
-			case VK_FORMAT_A2B10G10R10_UNORM_PACK32:
-				return "VK_FORMAT_A2B10G10R10_UNORM_PACK32";
-			case VK_FORMAT_A2R10G10B10_UNORM_PACK32:
-				return "VK_FORMAT_A2R10G10B10_UNORM_PACK32";
-            default: return "VK_FORMAT_OTHER";
-            }
-        }
-
-        const char* colorSpaceName(VkColorSpaceKHR colorSpace) noexcept {
-            switch (colorSpace) {
-            case VK_COLOR_SPACE_SRGB_NONLINEAR_KHR:
-                return "VK_COLOR_SPACE_SRGB_NONLINEAR_KHR";
-			case VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT:
-				return "VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT";
-			case VK_COLOR_SPACE_HDR10_ST2084_EXT:
-				return "VK_COLOR_SPACE_HDR10_ST2084_EXT";
-            default: return "VK_COLOR_SPACE_OTHER";
-            }
-        }
-
-        const char* presentModeName(VkPresentModeKHR mode) noexcept {
-            switch (mode) {
-            case VK_PRESENT_MODE_IMMEDIATE_KHR: return "VK_PRESENT_MODE_IMMEDIATE_KHR";
-            case VK_PRESENT_MODE_MAILBOX_KHR: return "VK_PRESENT_MODE_MAILBOX_KHR";
-            case VK_PRESENT_MODE_FIFO_KHR: return "VK_PRESENT_MODE_FIFO_KHR";
-            case VK_PRESENT_MODE_FIFO_RELAXED_KHR: return "VK_PRESENT_MODE_FIFO_RELAXED_KHR";
-            default: return "VK_PRESENT_MODE_OTHER";
-            }
-        }
-
-		const char* outputTransportName(Color::OutputTransport transport) noexcept {
-			switch (transport) {
-			case Color::OutputTransport::SdrSrgb: return "sdr_srgb";
-			case Color::OutputTransport::ScRgb: return "scrgb_linear";
-			case Color::OutputTransport::Hdr10Pq: return "hdr10_pq";
-			case Color::OutputTransport::Automatic: return "auto";
-			}
-			return "unknown";
-		}
-    }
 
     // ==============================================================================
     // 1. SYSTEM LIFECYCLE
@@ -397,6 +302,15 @@ namespace Iridium {
         ui_.setEditorUi(editorUi());
         // R3c.9: the layered-glass owner (capture, composition, resolve).
         layered_.configure(lighting_.setLayout());
+        layered_.configureTopology({ &forward_.pyramidResidency(), &oit_, this,
+            [](void* owner) {
+                static_cast<VulkanVertexBackend*>(owner)->releaseFrameTargets();
+            },
+            [](void* owner) {
+                auto& self = *static_cast<VulkanVertexBackend*>(owner);
+                self.createFrameTargets();
+                self.registerEditorTargetTextures();
+            } });
         layered_.create(*featureContext_);
         // R3c.5: the shadow owners create their maps and cullers; the shared
         // 3-binding indirect set layout outlives every view culler.
@@ -696,31 +610,6 @@ namespace Iridium {
         featureContext_.reset();
     }
 
-    void VulkanVertexBackend::emitFrameCounters() {
-        if (!telemetry_.collecting() || cpuProfiler_ == nullptr) {
-            return;
-        }
-        const VulkanIndexedTextureTable& table = resources_.textureTable();
-        telemetry_.emit({
-            .weightedOitResident = oit_.residency().enabled(),
-            .weightedOitOrderSeed = oit_.orderSeed(),
-            .refractionPyramidsResident = forward_.pyramidResidency().enabled(),
-            .texturesResident = resources_.textures().activeCount() -
-                resources_.retiredTextureCount(),
-            .texturesRetired = resources_.retiredTextureCount(),
-            .samplersLive = resources_.liveSamplerCount(),
-            .samplersCached = resources_.cachedSamplerCount(),
-            .materialsResident = resources_.materials().activeCount(),
-            .materialTableCapacity = resources_.materialTableCapacity(),
-            .materialTableMaximumCapacity =
-                resources_.materialTableMaximumCapacity(),
-            .textureViewCapacity = table.frameCapacity(scheduler.currentFrameIndex()),
-            .textureSamplerCapacity = table.frameCapacity(scheduler.currentFrameIndex()),
-            .textureRequiredCapacity = table.requiredCapacity(),
-            .textureMaximumCapacity = table.maximumCapacity(),
-        });
-    }
-
     void VulkanVertexBackend::bindMaterialDescriptors(
         VkPipelineLayout layout) {
         resources_.bindMaterialDescriptors(currentCmd,
@@ -969,122 +858,6 @@ namespace Iridium {
             for (IVulkanFeature* feature : features()) {
                 feature->onGraphRebuilt(graphIds_);
                 feature->registerPasses(renderGraph_);
-            }
-        }
-    }
-
-    void VulkanVertexBackend::applyTransparencyPyramidTopologyChange(
-        std::optional<VkExtent2D> requestedOrdinary2AtlasExtent,
-        std::optional<VkExtent2D> requestedHero4AtlasExtent,
-        std::optional<VkExtent2D> requestedCinematic8AtlasExtent) {
-        const VkExtent2D previousOrdinary2AtlasExtent =
-            layered_.ordinary2Extent();
-        const VkExtent2D previousHero4AtlasExtent = layered_.hero4Extent();
-        const VkExtent2D previousCinematic8AtlasExtent =
-            layered_.cinematic8Extent();
-        const auto requestedExtent = [&](std::optional<VkExtent2D> explicitExtent,
-                const TransparencyPyramidResidency& residency,
-                TransparencyQuality quality) {
-            if (explicitExtent) return *explicitExtent;
-            if (!residency.requestedEnabled()) return VkExtent2D{};
-            const Ordinary2AtlasExtent capacity = layeredAtlasCapacityExtent(
-                sceneExtent_.width, sceneExtent_.height, quality);
-            return VkExtent2D{ capacity.width, capacity.height };
-        };
-        const VkExtent2D nextOrdinary2AtlasExtent = requestedExtent(
-            requestedOrdinary2AtlasExtent, layered_.ordinary2Residency(),
-            TransparencyQuality::Ordinary2);
-        const VkExtent2D nextHero4AtlasExtent = requestedExtent(
-            requestedHero4AtlasExtent, layered_.hero4Residency(),
-            TransparencyQuality::Hero4);
-        const VkExtent2D nextCinematic8AtlasExtent = requestedExtent(
-            requestedCinematic8AtlasExtent, layered_.cinematic8Residency(),
-            TransparencyQuality::Cinematic8);
-        const auto extentChanged = [](VkExtent2D lhs, VkExtent2D rhs) {
-            return lhs.width != rhs.width || lhs.height != rhs.height;
-        };
-        const bool ordinary2AtlasChange = extentChanged(
-            previousOrdinary2AtlasExtent, nextOrdinary2AtlasExtent);
-        const bool hero4AtlasChange = extentChanged(
-            previousHero4AtlasExtent, nextHero4AtlasExtent);
-        const bool cinematic8AtlasChange = extentChanged(
-            previousCinematic8AtlasExtent, nextCinematic8AtlasExtent);
-        if (!forward_.pyramidResidency().changePending() &&
-            !layered_.ordinary2Residency().changePending() &&
-            !layered_.hero4Residency().changePending() &&
-            !layered_.cinematic8Residency().changePending() &&
-            !oit_.residency().changePending() &&
-            !ordinary2AtlasChange && !hero4AtlasChange &&
-            !cinematic8AtlasChange)
-            return;
-
-        CpuScope topologyChangeScope(cpuProfiler_,
-            "cpu.renderer.transparency_topology_change");
-
-        const bool previousEnabled =
-            forward_.pyramidResidency().enabled();
-        const bool previousOrdinary2Enabled =
-            layered_.ordinary2Residency().enabled();
-        const bool previousHero4Enabled = layered_.hero4Residency().enabled();
-        const bool previousCinematic8Enabled =
-            layered_.cinematic8Residency().enabled();
-        const bool previousWeightedOitEnabled =
-            oit_.residency().enabled();
-        const auto releaseTargets = [&] { releaseFrameTargets(); };
-        const auto createTargets = [&] {
-            createFrameTargets();
-            registerEditorTargetTextures();
-        };
-
-        // This executes only between frames. All shared descriptor sets and
-        // scene targets must be unreferenced before the topology is retired.
-        {
-            CpuScope waitScope(cpuProfiler_,
-                "cpu.renderer.transparency_topology_wait");
-            scheduler.waitForAllFrames();
-        }
-        try {
-            CpuScope rebuildScope(cpuProfiler_,
-                "cpu.renderer.transparency_topology_rebuild");
-            releaseTargets();
-            forward_.pyramidResidency().publishRequested();
-            layered_.ordinary2Residency().publishRequested();
-            layered_.hero4Residency().publishRequested();
-            layered_.cinematic8Residency().publishRequested();
-            oit_.residency().publishRequested();
-            oit_.setInstanceCapacity(oit_.residency().enabled()
-                ? kWeightedOitMaximumInstanceCount : 0u);
-            layered_.ordinary2Extent() = nextOrdinary2AtlasExtent;
-            layered_.hero4Extent() = nextHero4AtlasExtent;
-            layered_.cinematic8Extent() = nextCinematic8AtlasExtent;
-            createTargets();
-            if (telemetry_.collecting())
-                ++telemetry_.counters().transparencyPyramidTopologyRebuilds;
-        }
-        catch (const std::exception& exception) {
-            if (telemetry_.collecting())
-                ++telemetry_.counters().transparencyPyramidTopologyRebuildFailures;
-            try {
-                CpuScope restoreScope(cpuProfiler_,
-                    "cpu.renderer.transparency_topology_restore");
-                releaseTargets();
-                forward_.pyramidResidency().restore(previousEnabled);
-                layered_.ordinary2Residency().restore(previousOrdinary2Enabled);
-                layered_.hero4Residency().restore(previousHero4Enabled);
-                layered_.cinematic8Residency().restore(previousCinematic8Enabled);
-                oit_.residency().restore(previousWeightedOitEnabled);
-                oit_.setInstanceCapacity(previousWeightedOitEnabled
-                    ? kWeightedOitMaximumInstanceCount : 0u);
-                layered_.ordinary2Extent() = previousOrdinary2AtlasExtent;
-                layered_.hero4Extent() = previousHero4AtlasExtent;
-                layered_.cinematic8Extent() = previousCinematic8AtlasExtent;
-                createTargets();
-            }
-            catch (const std::exception& restoreException) {
-                throw std::runtime_error(std::string(
-                    "Transparency topology rebuild failed: ") +
-                    exception.what() + "; restoring the previous topology "
-                    "failed: " + restoreException.what());
             }
         }
     }
@@ -1359,287 +1132,15 @@ namespace Iridium {
             diagnostic, "Exposure");
     }
 
-    RenderBackendCapabilities VulkanVertexBackend::getCapabilities() const {
-        if (!vkContext) {
-            return {};
-        }
-        const double period = vkContext->getTimestampPeriodNanoseconds();
-        const uint32_t validBits = vkContext->getTimestampValidBits();
-        return {
-            .gpuTimestampProfiling = period > 0.0 && validBits > 0 && validBits <= 64,
-            .gpuTimestampPeriodNanoseconds = period,
-            .gpuTimestampValidBits = validBits,
-            .engineAllocationTracking = true,
-            .driverMemoryBudget = vkContext->hasMemoryBudget(),
-            .transparentPipelineStatistics = vkContext->hasPipelineStatistics(),
-            .indexedTextureViews = vkContext->hasDescriptorIndexing(),
-            .separateTextureSamplers = vkContext->hasDescriptorIndexing(),
-            .descriptorUpdateAfterBind = vkContext->hasDescriptorIndexing(),
-            .gpuLightRecords = clusterLighting_.lightRecordCapacity() != 0,
-            .multiDrawIndirect = vkContext->hasMultiDrawIndirect(),
-            .drawIndirectFirstInstance =
-                vkContext->hasDrawIndirectFirstInstance(),
-            .drawIndirectCount = vkContext->hasDrawIndirectCount(),
-            .maxIndexedTextureViews = vkContext->getMaxIndexedTextureViews(),
-            .maxIndexedSamplers = vkContext->getMaxIndexedSamplers(),
-            .maxUpdateAfterBindDescriptors =
-                vkContext->getMaxUpdateAfterBindDescriptors(),
-            .maxGpuLightRecords = clusterLighting_.lightRecordMaximumCapacity(),
-            .maxDrawIndirectCount = vkContext->getMaxDrawIndirectCount(),
-        };
-    }
-
-    RenderBackendRuntimeInfo VulkanVertexBackend::getRuntimeInfo() const {
-        RenderBackendRuntimeInfo info{};
-        if (!vkContext || !vkSwapchain) {
-            return info;
-        }
-        const VkPhysicalDeviceProperties& properties =
-            vkContext->getPhysicalDeviceProperties();
-        const VkPhysicalDeviceIDProperties& idProperties =
-            vkContext->getPhysicalDeviceIdProperties();
-        const VkPhysicalDeviceDriverProperties& driverProperties =
-            vkContext->getPhysicalDeviceDriverProperties();
-        const VkExtent2D extent = sceneExtent_;
-
-        info.backendApi = "Vulkan";
-        info.gpuName = properties.deviceName;
-        info.gpuUuid = uuidString(idProperties.deviceUUID, VK_UUID_SIZE);
-        info.gpuVendorId = properties.vendorID;
-        info.gpuDeviceId = properties.deviceID;
-        info.driverName = driverProperties.driverName;
-        info.driverInfo = driverProperties.driverInfo;
-        info.driverVersion = driverVersionString(properties.vendorID,
-            properties.driverVersion);
-        info.vulkanDeviceApiVersion = versionString(properties.apiVersion);
-        info.vulkanLoaderApiVersion = versionString(vkContext->getLoaderApiVersion());
-        if (vkContext->enableValidationLayers) {
-            info.applicationEnabledLayers.emplace_back(
-                "VK_LAYER_KHRONOS_validation");
-        }
-        info.activeTools = vkContext->getActiveTools();
-        info.swapchainFormat = formatName(vkSwapchain->getImageFormat());
-        info.swapchainColorSpace = colorSpaceName(vkSwapchain->getColorSpace());
-        info.presentMode = presentModeName(vkSwapchain->getPresentMode());
-        info.swapchainImageCount = vkSwapchain->getImageCount();
-        info.gpuSceneTransformCapacity = gpuScene_.capacity().transforms;
-        info.gpuSceneInstanceCapacity = gpuScene_.capacity().instances;
-        info.gpuScenePrimitiveCapacity = gpuScene_.capacity().primitives;
-        info.gpuSceneGeometryCapacity = gpuScene_.capacity().geometries;
-        info.gpuSceneUploadBytes = gpuScene_.uploadTelemetry().bytes;
-        info.gpuSceneUploadRanges = gpuScene_.uploadTelemetry().ranges;
-		for (const Color::OutputTransport transport :
-			vkSwapchain->getSupportedOutputTransports()) {
-			info.supportedOutputTransports.emplace_back(outputTransportName(transport));
-		}
-		const VulkanOutputTransportSelection& transport =
-			vkSwapchain->getOutputTransportSelection();
-		info.requestedOutputTransportMode = transport.requested;
-		info.effectiveOutputTransportMode = transport.effective;
-		info.requestedOutputTransport = outputTransportName(transport.requested);
-		info.effectiveOutputTransport = outputTransportName(transport.effective);
-		info.outputTransportDiagnostic = transport.diagnostic;
-		for (const Color::OutputTransport supported :
-				vkSwapchain->getSupportedOutputTransports()) {
-			const size_t index = static_cast<size_t>(supported);
-			if (index < info.supportedOutputTransportModes.size()) {
-				info.supportedOutputTransportModes[index] = true;
-			}
-		}
-		info.swapchainColorspaceExtensionEnabled =
-			vkContext->hasSwapchainColorspace();
-		info.hdrMetadataExtensionEnabled = vkContext->hasHdrMetadata();
-        if (outputTransport_ == Color::OutputTransport::ScRgb) {
-            info.outputMode =
-                "scene_linear_acescg_to_aces2_p3d65_1000nit_scrgb_linear";
-        }
-        else if (outputTransport_ == Color::OutputTransport::Hdr10Pq) {
-            info.outputMode =
-                "scene_linear_acescg_to_aces2_p3d65_1000nit_rec2100_pq_hdr10";
-        }
-        else switch (output_.outputOperator()) {
-        case OutputTransformOperator::Aces2:
-            info.outputMode = "scene_linear_acescg_to_aces2_rec709_srgb_sdr";
-            break;
-        case OutputTransformOperator::AcesFittedLegacy:
-            info.outputMode = "scene_linear_acescg_to_aces_fitted_legacy_srgb_sdr";
-            break;
-        case OutputTransformOperator::IdentityClampDiagnostic:
-            info.outputMode = "scene_linear_acescg_to_identity_clamp_srgb_sdr";
-            break;
-        }
-        info.baseWidth = extent.width;
-        info.baseHeight = extent.height;
-        info.reconstructionMode = "none_native";
-        info.textureBindingMode =
-            "indexed_views_separate_samplers";
-        const VulkanGraphStats graphStats = renderGraph_.stats();
-        info.renderGraphEnabled = true;
-        info.renderGraphTopologyHash = graphStats.topologyHash;
-        info.renderGraphPassCount = graphStats.passCount;
-        info.renderGraphLogicalResourceCount = graphStats.logicalResourceCount;
-        info.renderGraphPhysicalSlotCount = graphStats.physicalSlotCount;
-        info.renderGraphBarrierCount = graphStats.barrierCount;
-        info.renderGraphFrameCount = graphStats.frameCount;
-        info.renderGraphRequestedBytes = graphStats.requestedBytes;
-        info.renderGraphCommittedBytes = graphStats.committedBytes;
-        info.renderGraphRebuildCount = graphStats.rebuildCount;
-        info.renderGraphCacheMissCount = graphStats.cacheMissCount;
-        info.renderGraphTransientAliasing = graphStats.transientAliasing;
-        info.renderGraphAliasHeapCount = graphStats.aliasHeapCount;
-        info.renderGraphAliasedResourceCount = graphStats.aliasedResourceCount;
-        info.renderGraphAliasedRequestedBytes = graphStats.aliasedRequestedBytes;
-        info.renderGraphAliasHeapCommittedBytes = graphStats.aliasHeapCommittedBytes;
-        info.refractionPyramidsResident =
-            forward_.pyramidResidency().enabled();
-        info.ordinary2AtlasResident = layered_.ordinary2Residency().enabled() &&
-            layered_.ordinary2Extent().width != 0u &&
-            layered_.ordinary2Extent().height != 0u;
-        info.ordinary2AtlasWidth = layered_.ordinary2Extent().width;
-        info.ordinary2AtlasHeight = layered_.ordinary2Extent().height;
-        info.hero4AtlasResident = layered_.hero4Residency().enabled() &&
-            layered_.hero4Extent().width != 0u && layered_.hero4Extent().height != 0u;
-        info.hero4AtlasWidth = layered_.hero4Extent().width;
-        info.hero4AtlasHeight = layered_.hero4Extent().height;
-        info.cinematic8AtlasResident = layered_.cinematic8Residency().enabled() &&
-            layered_.cinematic8Extent().width != 0u &&
-            layered_.cinematic8Extent().height != 0u;
-        info.cinematic8AtlasWidth = layered_.cinematic8Extent().width;
-        info.cinematic8AtlasHeight = layered_.cinematic8Extent().height;
-        info.weightedOitResident = oit_.residency().enabled();
-        info.frameTopologyPrewarmRequested =
-            frameTopologyPrewarm_.requested;
-        info.frameTopologyPrewarmChanged = frameTopologyPrewarm_.changed;
-        info.frameTopologyPrewarmNanoseconds =
-            frameTopologyPrewarm_.durationNanoseconds;
-        info.pipelineCacheState =
-            std::string(pipelineCacheStateName(pipelineCache_.stats().state));
-        info.pipelineCacheLoadedBytes = pipelineCache_.stats().loadedBytes;
-        const LightingUploadTelemetry lightUploads = clusterLighting_.uploadTelemetry();
-        info.gpuLightCapacity = lightUploads.capacity;
-        info.gpuLightActiveCount = lightUploads.activeLights;
-        info.gpuLightUploadBytes = lightUploads.bytes;
-        info.gpuLightUploadRanges = lightUploads.ranges;
-        info.uploads = uploadContext.telemetry();
-        switch (uploadContext.mode()) {
-        case UploadQueueMode::Auto: info.uploadQueueMode = "auto"; break;
-        case UploadQueueMode::Graphics: info.uploadQueueMode = "graphics"; break;
-        case UploadQueueMode::LegacyBlocking:
-            info.uploadQueueMode = "legacy-blocking";
-            break;
-        }
-        info.uploadQueueKind = uploadContext.usesTransferQueue()
-            ? vulkanTransferQueueKindName(vkContext->getTransferQueueKind())
-            : std::string_view("graphics");
-        info.uploadQueueFamily = uploadContext.usesTransferQueue()
-            ? uploadContext.transferQueueFamily() : vkContext->getGraphicsQueueFamily();
-        info.uploadStagingRingBytes = uploadContext.stagingRingBytes();
-        return info;
-    }
-
     FrameTopologyPreparation VulkanVertexBackend::prepareFrameTopology(
         const FrameTopologyRequirements& requirements) {
         if (frameOpen_) {
             throw std::logic_error(
                 "Frame topology preparation is only valid between frames");
         }
-
-        FrameTopologyPreparation result{
-            .requested = requirements.refractionPyramids ||
-                requirements.ordinary2LayeredInterfaces ||
-                requirements.hero4LayeredInterfaces ||
-                requirements.cinematic8LayeredInterfaces ||
-                requirements.weightedOit,
-        };
-        const bool previousPyramids =
-            forward_.pyramidResidency().enabled();
-        const VkExtent2D previousOrdinary2AtlasExtent =
-            layered_.ordinary2Extent();
-        const VkExtent2D previousHero4AtlasExtent = layered_.hero4Extent();
-        const VkExtent2D previousCinematic8AtlasExtent =
-            layered_.cinematic8Extent();
-        const bool previousWeightedOit = oit_.residency().enabled();
-        const bool requirePyramids = requirements.refractionPyramids ||
-            requirements.ordinary2LayeredInterfaces ||
-            requirements.hero4LayeredInterfaces ||
-            requirements.cinematic8LayeredInterfaces;
-        VkExtent2D requestedOrdinary2AtlasExtent = layered_.ordinary2Extent();
-        VkExtent2D requestedHero4AtlasExtent = layered_.hero4Extent();
-        VkExtent2D requestedCinematic8AtlasExtent = layered_.cinematic8Extent();
-        const auto requireTier = [&](bool required,
-                TransparencyQuality quality, VkExtent2D& requestedExtent,
-                const char* name) {
-            if (!required) return;
-            const Ordinary2AtlasExtent capacity = layeredAtlasCapacityExtent(
-                sceneExtent_.width, sceneExtent_.height, quality);
-            if (capacity.empty()) {
-                throw std::runtime_error(std::string(name) +
-                    " startup topology requires a tile-sized scene extent");
-            }
-            requestedExtent = { capacity.width, capacity.height };
-        };
-        requireTier(requirements.ordinary2LayeredInterfaces,
-            TransparencyQuality::Ordinary2, requestedOrdinary2AtlasExtent,
-            "Ordinary2");
-        requireTier(requirements.hero4LayeredInterfaces,
-            TransparencyQuality::Hero4, requestedHero4AtlasExtent, "Hero4");
-        requireTier(requirements.cinematic8LayeredInterfaces,
-            TransparencyQuality::Cinematic8,
-            requestedCinematic8AtlasExtent, "Cinematic8");
-        const auto extentChanged = [](VkExtent2D lhs, VkExtent2D rhs) {
-            return lhs.width != rhs.width || lhs.height != rhs.height;
-        };
-        const bool ordinary2Change = extentChanged(
-            requestedOrdinary2AtlasExtent, layered_.ordinary2Extent());
-        const bool hero4Change = extentChanged(
-            requestedHero4AtlasExtent, layered_.hero4Extent());
-        const bool cinematic8Change = extentChanged(
-            requestedCinematic8AtlasExtent, layered_.cinematic8Extent());
-        if (!requirePyramids && !requirements.weightedOit) {
-            frameTopologyPrewarm_ = result;
-            return result;
-        }
-
-        if (requirePyramids) {
-            forward_.pyramidResidency().observe(true);
-            layered_.ordinary2Residency().observe(
-                requirements.ordinary2LayeredInterfaces);
-            layered_.hero4Residency().observe(
-                requirements.hero4LayeredInterfaces);
-            layered_.cinematic8Residency().observe(
-                requirements.cinematic8LayeredInterfaces);
-        }
-        oit_.residency().observe(requirements.weightedOit);
-        if (!forward_.pyramidResidency().changePending() &&
-            !layered_.ordinary2Residency().changePending() &&
-            !layered_.hero4Residency().changePending() &&
-            !layered_.cinematic8Residency().changePending() &&
-            !oit_.residency().changePending() &&
-            !ordinary2Change && !hero4Change && !cinematic8Change) {
-            frameTopologyPrewarm_ = result;
-            return result;
-        }
-
-        const auto start = std::chrono::steady_clock::now();
-        applyTransparencyPyramidTopologyChange(
-            requestedOrdinary2AtlasExtent, requestedHero4AtlasExtent,
-            requestedCinematic8AtlasExtent);
-        result.durationNanoseconds = static_cast<uint64_t>(
-            std::chrono::duration_cast<std::chrono::nanoseconds>(
-                std::chrono::steady_clock::now() - start).count());
-        result.changed =
-            previousPyramids != forward_.pyramidResidency().enabled() ||
-            previousOrdinary2AtlasExtent.width != layered_.ordinary2Extent().width ||
-            previousOrdinary2AtlasExtent.height != layered_.ordinary2Extent().height ||
-            previousHero4AtlasExtent.width != layered_.hero4Extent().width ||
-            previousHero4AtlasExtent.height != layered_.hero4Extent().height ||
-            previousCinematic8AtlasExtent.width !=
-                layered_.cinematic8Extent().width ||
-            previousCinematic8AtlasExtent.height !=
-                layered_.cinematic8Extent().height ||
-            previousWeightedOit != oit_.residency().enabled();
-        frameTopologyPrewarm_ = result;
-        return result;
+        // M7.10.0: the layered owner prepares the transparency topology.
+        frameTopologyPrewarm_ = layered_.prepareTopology(requirements, sceneExtent_);
+        return frameTopologyPrewarm_;
     }
 
     // ==============================================================================
@@ -1765,7 +1266,7 @@ namespace Iridium {
         // M7R R4d.3: submitted without a CPU wait; this frame's submission
         // waits on the upload timelines instead (legacy-blocking flushes).
         uploadContext.submitAsync();
-        applyTransparencyPyramidTopologyChange();
+        layered_.applyTopologyChange(sceneExtent_);
         const uint32_t completedFrameIndex = scheduler.currentFrameIndex();
         const VulkanFrameBegin frame = scheduler.beginFrame(vkSwapchain->getSwapchain());
         const uint32_t frameSlot = scheduler.currentFrameIndex();
@@ -1865,19 +1366,12 @@ namespace Iridium {
             revision = casterRevisions_.casterRevision(scene, shadowCasters,
                 vulkanCasterMaterials(resources_));
         }
-        if constexpr (kQualificationBuild) {
-            if (IVulkanCasterRevisionObserver* observer =
-                    extensionHooks_.casterRevisionObserver()) {
-                observer->observeCasterRevision({
-                    .stream = VulkanCasterRevisionStream::Shadow,
-                    .frameSerial = scheduler.lastSubmittedSerial() + 1u,
-                    .scene = &scene,
-                    .resources = &resources_,
-                    .casters = &shadowCasters,
-                    .revisions = { &revision, 1u },
-                });
-            }
-        }
+        if constexpr (kQualificationBuild)
+            extensionHooks_.observeCasterRevision({
+                .stream = VulkanCasterRevisionStream::Shadow,
+                .frameSerial = scheduler.lastSubmittedSerial() + 1u,
+                .scene = &scene, .resources = &resources_,
+                .casters = &shadowCasters, .revisions = { &revision, 1u } });
         return revision;
     }
 
@@ -1894,21 +1388,13 @@ namespace Iridium {
             revisions = casterRevisions_.directionalRevisions(scene,
                 shadowCasters, vulkanCasterMaterials(resources_), plan);
         }
-        if constexpr (kQualificationBuild) {
-            if (IVulkanCasterRevisionObserver* observer =
-                    extensionHooks_.casterRevisionObserver()) {
-                observer->observeCasterRevision({
-                    .stream = VulkanCasterRevisionStream::DirectionalShadow,
-                    .ordinal = casterRevisions_.lastDirectionalOrdinal(),
-                    .frameSerial = scheduler.lastSubmittedSerial() + 1u,
-                    .scene = &scene,
-                    .resources = &resources_,
-                    .casters = &shadowCasters,
-                    .plan = &plan,
-                    .revisions = revisions,
-                });
-            }
-        }
+        if constexpr (kQualificationBuild)
+            extensionHooks_.observeCasterRevision({
+                .stream = VulkanCasterRevisionStream::DirectionalShadow,
+                .ordinal = casterRevisions_.lastDirectionalOrdinal(),
+                .frameSerial = scheduler.lastSubmittedSerial() + 1u,
+                .scene = &scene, .resources = &resources_,
+                .casters = &shadowCasters, .plan = &plan, .revisions = revisions });
         return revisions;
     }
 
@@ -1969,38 +1455,9 @@ namespace Iridium {
         exposure_.stage({ frame.viewDeltaSeconds, output_.manualExposure() });
         // M9.2: TAA pre-exposes with the output's manual EV, or (M9.5) with
         // last frame's adapted exposure; its pass drains with the output.
-        if (taa_.active()) {
-            const VulkanExposureFeature::PreviousState exposureState =
-                exposure_.previousState(scheduler.currentFrameIndex());
-            const glm::vec2 extent(static_cast<float>(sceneExtent_.width),
-                static_cast<float>(sceneExtent_.height));
-            const float exposure = std::exp2(frame.output.manualExposureEv);
-            taa_.stage({
-                .request = {
-                    .provider = TemporalResolveProvider::NativeTaa,
-                    .extents = { { sceneExtent_.width, sceneExtent_.height },
-                        { sceneExtent_.width, sceneExtent_.height } },
-                    .jitterPixels = glm::vec2(frame.view.jitter) * extent * 0.5f,
-                    .jitterSequenceLength = frame.view.temporalInfo.w,
-                    .exposure = exposure,
-                    .previousExposure = exposure,
-                    .resetHistory = (frame.view.temporalInfo.z & ViewTemporalHistoryReset) != 0u,
-                    .camera = { frame.view.depthRange.x, frame.view.depthRange.y,
-                        2.0f * std::atan(1.0f / frame.view.projection[1][1]),
-                        frame.viewDeltaSeconds },
-                    .nativeTaa = taaTuning_,
-                },
-                .globalSet = view_.globalSet(scheduler.currentFrameIndex()),
-                .exposureState = exposureState.buffer,
-                .exposureFromState = exposureState.valid,
-            });
-            // Temporal health (editor Profiler): 0 means history was discarded.
-            if (cpuProfiler_ && cpuProfiler_->isEnabled()) {
-                cpuProfiler_->recordCounter("temporal.taa.history_valid", taa_.historyWasValid() ? 1 : 0);
-                if (exposure_.mode() == ExposureMode::Auto)
-                    cpuProfiler_->recordCounter("exposure.history_valid", exposureState.valid ? 1 : 0);
-            }
-        }
+        taa_.stageFrame(frame.view, frame.output.manualExposureEv,
+            frame.viewDeltaSeconds, sceneExtent_, taaTuning_,
+            view_.globalSet(scheduler.currentFrameIndex()), exposure_);
         submitForwardQueues(frame.forwardOpaqueQueue,
             frame.forwardOpaquePreviousTransforms, frame.sortedSurfaceQueue,
             frame.compatibilityTransparentQueue, frame.instanceTransforms, frame);
@@ -2008,15 +1465,6 @@ namespace Iridium {
         submitOutputPass();
         stageComplete(RenderFrameStage::OutputComplete);
         submitUIPass();
-    }
-
-    RenderFrameTelemetry VulkanVertexBackend::frameTelemetry() const noexcept {
-        return {
-            .gpuSceneUpload = gpuScene_.uploadTelemetry(),
-            .probeCaptures = probes_.telemetry(),
-            .lightUploads = clusterLighting_.uploadTelemetry(),
-            .clusters = clusterLighting_.clusterTelemetry(),
-        };
     }
 
     void VulkanVertexBackend::submitDirectionalShadows(
@@ -2205,19 +1653,14 @@ namespace Iridium {
         casterRevisions_.publishScene(scene);
         opaque_.publishScene(scene);
         if constexpr (kQualificationBuild) {
-            if (IVulkanCasterRevisionObserver* observer =
-                    extensionHooks_.casterRevisionObserver()) {
-                const std::array<uint64_t, 3> membership{
-                    scene.shadowConsumerMembershipRevision,
-                    scene.probeConsumerMembershipRevision,
-                    scene.mainOpaqueConsumerMembershipRevision };
-                observer->observeCasterRevision({
-                    .stream = VulkanCasterRevisionStream::Membership,
-                    .frameSerial = scheduler.lastSubmittedSerial() + 1u,
-                    .tables = &scene,
-                    .revisions = membership,
-                });
-            }
+            const std::array<uint64_t, 3> membership{
+                scene.shadowConsumerMembershipRevision,
+                scene.probeConsumerMembershipRevision,
+                scene.mainOpaqueConsumerMembershipRevision };
+            extensionHooks_.observeCasterRevision({
+                .stream = VulkanCasterRevisionStream::Membership,
+                .frameSerial = scheduler.lastSubmittedSerial() + 1u,
+                .tables = &scene, .revisions = membership });
         }
         gpuScene_.publish(scene, scheduler.currentFrameIndex());
         if (cpuProfiler_ != nullptr) {
@@ -2246,20 +1689,10 @@ namespace Iridium {
             lights, sceneExtent_, lighting_.environmentSettings());
         probes_.uploadFrame(frameIndex, view, proj, nearPlane, farPlane,
             reflectionProbes, sceneExtent_);
-        const ClusterGridDimensions probeDimensions = clusterGridDimensions(
-            clusterConfig_, { sceneExtent_.width, sceneExtent_.height,
-                nearPlane, farPlane, view, proj });
         // R3c.1 drain points: "lighting.probe-cluster" and the cluster build
         // run here, where they were recorded imperatively.
-        clusterLighting_.recordProbeCluster(
-            static_cast<uint32_t>(probeDimensions.clusterCount()));
-        const ClusterGridDimensions dimensions = clusterGridDimensions(
-            clusterConfig_,
-            { sceneExtent_.width, sceneExtent_.height, nearPlane, farPlane,
-                view, proj });
-        clusterLighting_.recordClusters(frameIndex,
-            static_cast<uint32_t>(dimensions.clusterCount()),
-            lights.stats.activeLightCount);
+        clusterLighting_.recordFrame(frameIndex, view, proj, nearPlane, farPlane,
+            sceneExtent_, lights.stats.activeLightCount);
         // R3c.8 drain point: "lighting".
         lighting_.record({
             .cameraPosition = cameraPos,
@@ -2304,9 +1737,12 @@ namespace Iridium {
 
         // Residency demand (layered tiers, WeightedOIT), then the frame's
         // layered plans; the owners stage their inputs for the drains below.
-        layered_.observe(compatibilityTransparentQueue);
+        layered_.observe(compatibilityTransparentQueue,
+            frame.culledTransparentDemand);
         const VulkanWeightedOitFeature::FrameDecision weightedOit =
-            oit_.observe(sortedSurfaceQueue, instanceTransforms);
+            oit_.observe(sortedSurfaceQueue, instanceTransforms,
+                (frame.culledTransparentDemand &
+                    TransparentDemandWeightedOit) != 0u);
         const uint32_t frameIndex = scheduler.currentFrameIndex();
         const VkDescriptorSet globalSet = view_.globalSet(frameIndex);
         const VkDescriptorSet sceneSet = lighting_.sceneSet(frameIndex);
@@ -2335,7 +1771,9 @@ namespace Iridium {
         // R3c.5 drain point: VSM depth-demand marking and request readback.
         shadows_.recordVirtualShadowDemand();
         // R3c.9 drain point: "transparent.refraction-pyramids".
-        forward_.recordRefractionPyramids(!compatibilityTransparentQueue.empty());
+        forward_.recordRefractionPyramids(!compatibilityTransparentQueue.empty(),
+            (frame.culledTransparentDemand &
+                TransparentDemandCompatibilityQueue) != 0u);
         if (opaque_.depthPyramidEnabled()) {
             // R3c.7 drain point: "depth.occlusion-pyramid.build".
             opaque_.recordDepthPyramid();
@@ -2468,29 +1906,6 @@ namespace Iridium {
         }
         emitFrameCounters();
         return status;
-    }
-
-    FrameMemoryProfile VulkanVertexBackend::memorySnapshot() {
-        FrameMemoryProfile result = resourceAllocator.memorySnapshot();
-        const size_t categoryIndex = static_cast<size_t>(
-            ProfileMemoryCategory::ExternalSwapchain);
-        ProfileMemoryCategorySnapshot& external = result.categories[categoryIndex];
-        const uint64_t requestedBytes = vkSwapchain
-            ? swapchainRequestedBytes(*vkSwapchain)
-            : 0;
-        const uint64_t imageCount = vkSwapchain ? vkSwapchain->getImageCount() : 0;
-        externalSwapchainRequestedPeakBytes_ = std::max(
-            externalSwapchainRequestedPeakBytes_, requestedBytes);
-        externalSwapchainPeakImageCount_ = std::max(
-            externalSwapchainPeakImageCount_, imageCount);
-        external.requestedLiveBytes = requestedBytes;
-        external.requestedPeakBytes = externalSwapchainRequestedPeakBytes_;
-        external.liveAllocationCount = imageCount;
-        external.peakAllocationCount = externalSwapchainPeakImageCount_;
-        external.requestedBytesAvailable = requestedBytes != 0;
-        external.committedBytesAvailable = false;
-        external.engineOwned = false;
-        return result;
     }
 
 } // namespace Iridium

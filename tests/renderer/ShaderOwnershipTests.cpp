@@ -171,7 +171,12 @@ namespace {
                 IRIDIUM_CHECK_MSG(compiled.depfile.includes(include), name << ' ' << include);
             for (const char* function : { "iridiumSpotShadowVisibility",
                     "iridiumPointShadowVisibility",
-                    "iridiumDirectionalShadowVisibility" })
+                    "iridiumDirectionalShadowVisibility",
+                    // M7.10.6: one receiver contract (normal offset and
+                    // bounded receiver-plane correction) for every owner.
+                    "iridiumShadowNormalOffsetScale",
+                    "iridiumShadowReceiverPlaneGradient",
+                    "iridiumPointShadowReference" })
                 IRIDIUM_CHECK_MSG(compiled.module.callsFunction(function),
                     name << ' ' << function);
         }
@@ -185,6 +190,11 @@ namespace {
             "include/spot_shadow.glsl"));
         IRIDIUM_CHECK(definedOnlyIn("iridiumPointShadowVisibility",
             "include/point_shadow.glsl"));
+        for (const char* function : { "iridiumShadowNormalOffsetScale",
+                "iridiumShadowReceiverPlaneGradient",
+                "iridiumShadowReceiverPlaneReference" })
+            IRIDIUM_CHECK_MSG(definedOnlyIn(function,
+                "include/shadow_filter.glsl"), function);
         return true;
     }
 

@@ -23,6 +23,9 @@
 
 namespace Iridium {
 
+    struct ViewTransportRecord;
+    class VulkanExposureFeature;
+
     class VulkanTemporalAntiAliasingFeature final : public IVulkanFeature {
     public:
         // The frame's resolve request: the vendor-neutral contract every
@@ -55,6 +58,14 @@ namespace Iridium {
             staged_ = inputs;
             staged_.request.reactiveMaskAvailable = true;
         }
+        // submitFrame (M7.10.0: moved from the backend). When the resolve is
+        // declared: stages the view's request, pre-exposed with the manual
+        // EV, or (M9.5) with last frame's adapted exposure, then reports the
+        // temporal health counters. Its pass drains with the output.
+        void stageFrame(const ViewTransportRecord& view, float manualExposureEv,
+            float viewDeltaSeconds, VkExtent2D sceneExtent,
+            const TemporalAntiAliasingTuning& tuning, VkDescriptorSet globalSet,
+            const VulkanExposureFeature& exposure);
         [[nodiscard]] bool active() const noexcept { return resolvePass_.isValid(); }
         // Whether this frame's resolve found valid history (after it ran).
         [[nodiscard]] bool historyWasValid() const noexcept { return lastHistoryValid_; }

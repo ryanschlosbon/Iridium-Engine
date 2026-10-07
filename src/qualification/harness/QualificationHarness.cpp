@@ -101,6 +101,7 @@ namespace Iridium {
             checkPreconditions(context);
             return;
         case StartupPhase::TopologyReady:
+            prepareBenchmarkModelTopology(context);
             recordTopologyBaselines(context);
             return;
         case StartupPhase::SceneConstruction:

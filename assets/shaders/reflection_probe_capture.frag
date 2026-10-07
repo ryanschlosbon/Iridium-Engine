@@ -121,10 +121,13 @@ void main() {
     vec3 N = normalize(frame.normal);
     vec3 V = normalize(capture.capturePositionNear.xyz - fragWorldPos);
     vec3 direct = vec3(0.0);
-    IridiumDirectionalShadowReceiver shadowReceiver =
-        IridiumDirectionalShadowReceiver(fragWorldPos, N,
+    IridiumShadowReceiver shadowReceiver =
+        IridiumShadowReceiver(fragWorldPos, N,
             shadowGeometricNormal, dFdx(fragWorldPos), dFdy(fragWorldPos));
-    uint lightCount = min(capture.metadata.x, iridiumClusterInput.x);
+    // M7.10.5: metadata.x is the highest active slot + 1, so an active light
+    // in a slot beyond the active count (after a removal) is still evaluated;
+    // cleared slots carry no radiance and are skipped by the noL test.
+    uint lightCount = min(capture.metadata.x, uint(iridiumLights.length()));
     float viewDepth = length(capture.capturePositionNear.xyz - fragWorldPos);
     for (uint lightSlot = 0u; lightSlot < lightCount; ++lightSlot) {
         PackedGpuLight record = iridiumLights[lightSlot];
@@ -137,10 +140,10 @@ void main() {
         uint type = iridiumPackedLightType(record);
         if (type == IRIDIUM_LIGHT_TYPE_SPOT)
             visibility *= iridiumSpotShadowVisibility(lightSlot, record,
-                fragWorldPos, N, light.direction);
+                shadowReceiver, light.direction);
         else if (type == IRIDIUM_LIGHT_TYPE_POINT)
             visibility *= iridiumPointShadowVisibility(lightSlot, record,
-                fragWorldPos, N, light.direction);
+                shadowReceiver, light.direction);
         direct += materialEvaluateCanonicalBrdf(diffuse, f0, f90,
             roughness, N, V, light.direction) * light.radiance * noL *
             visibility;

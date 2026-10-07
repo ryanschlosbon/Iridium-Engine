@@ -2,6 +2,11 @@
 
 ## Header
 
+**2026-10-07 — M7 completion:** M7.9–M7.12 execute under the focused plan
+`docs/milestones/M7-completion.md` (branch `m7-completion`). It supersedes this plan's
+M7.9–M7.12 slice text and records the 2026-10-07 audit corrections. This plan keeps
+the candidate register, invariants, M7.0–M7.8 history and decision log.
+
 2026-09-05 owner-requested material authoring/viewer work is in progress alongside
 M7. See `docs/milestones/Material-authoring-and-asset-viewer.md` for the implemented
 sparse source-material overrides and primitive viewer slice, and the explicitly
@@ -1088,6 +1093,10 @@ survives snapped clipmap scrolling. See
   median.
 
 ### M7.9 — Fine-grained cooking and progressive residency
+
+> **Superseded 2026-10-07:** the M7.9–M7.12 slices below are the original
+> descriptions. `docs/milestones/M7-completion.md` is the authoritative execution plan
+> for them.
 
 **Work**
 

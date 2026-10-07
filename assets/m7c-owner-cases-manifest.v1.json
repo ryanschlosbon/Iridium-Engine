@@ -1,0 +1,2058 @@
+{
+  "schema_version": 1,
+  "generator": "Iridium Engine M7.P1 owner-case fixture generator v1",
+  "fixtures": [
+    {
+      "id": "m7c_pc1_911_n1_all_visible_v1",
+      "revision": 1,
+      "required": false,
+      "source_asset": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf",
+      "environment": {
+        "kind": "procedural_constant",
+        "constant_linear_rgb": [0.3, 0.35, 0.4]
+      },
+      "camera": {
+        "id": "m7c_pc1_911_n1_all_visible_camera_v1",
+        "position": [0.0, 1.2, 9.0],
+        "target": [0.0, 0.0, 0.0],
+        "up": [0.0, 1.0, 0.0],
+        "vertical_fov_degrees": 40.0,
+        "near": 0.05,
+        "far": 200.0
+      },
+      "scene_factory": {
+        "kind": "instanced_grid",
+        "instance_grid": [1, 1, 1],
+        "instance_spacing": [0.0, 0.0, 0.0]
+      },
+      "lights": [
+        {
+          "type": "directional",
+          "position": [0.0, 0.0, 0.0],
+          "rotation_degrees": [45.0, 210.0, 0.0],
+          "color_linear_rec709": [1.0, 0.96, 0.9],
+          "illuminance_lux": 10000.0,
+          "range_meters": 1.0,
+          "casts_shadows": false,
+          "shadow_quality": "high",
+          "priority": 1
+        }
+      ],
+      "output_label": "m7c_pc1_911_n1_all_visible",
+      "warmup_frames": 500,
+      "measured_frames": 2000,
+      "content_files": [
+        {
+          "path": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf",
+          "sha256": "65480c5fc8111d0abe7b04cb6d8f09c6172cc7c8504e6c924f8e1034b8ebb3de"
+        },
+        {
+          "path": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf.iridium.meta",
+          "sha256": "3b09ae1c183c9d7ebedea1be084c08a522bf5ce3fe6cf0c8334c2cf19e7a0736"
+        }
+      ],
+      "expected_behavior": [
+        "PC1 many objects: Porsche 911 Carrera 4S, 1 instance in a 1x1 grid; every instance inside the main-camera frustum.",
+        "One unshadowed directional light and a constant environment (as m7_porsche_transparency_oblique_v1)."
+      ]
+    },
+    {
+      "id": "m7c_pc1_911_n1_half_off_v1",
+      "revision": 1,
+      "required": false,
+      "source_asset": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf",
+      "environment": {
+        "kind": "procedural_constant",
+        "constant_linear_rgb": [0.3, 0.35, 0.4]
+      },
+      "camera": {
+        "id": "m7c_pc1_911_n1_half_off_camera_v1",
+        "position": [0.0, 1.2, 9.0],
+        "target": [5.8, 0.2, 0.0],
+        "up": [0.0, 1.0, 0.0],
+        "vertical_fov_degrees": 40.0,
+        "near": 0.05,
+        "far": 200.0
+      },
+      "scene_factory": {
+        "kind": "instanced_grid",
+        "instance_grid": [1, 1, 1],
+        "instance_spacing": [0.0, 0.0, 0.0]
+      },
+      "lights": [
+        {
+          "type": "directional",
+          "position": [0.0, 0.0, 0.0],
+          "rotation_degrees": [45.0, 210.0, 0.0],
+          "color_linear_rec709": [1.0, 0.96, 0.9],
+          "illuminance_lux": 10000.0,
+          "range_meters": 1.0,
+          "casts_shadows": false,
+          "shadow_quality": "high",
+          "priority": 1
+        }
+      ],
+      "output_label": "m7c_pc1_911_n1_half_off",
+      "warmup_frames": 500,
+      "measured_frames": 2000,
+      "content_files": [
+        {
+          "path": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf",
+          "sha256": "65480c5fc8111d0abe7b04cb6d8f09c6172cc7c8504e6c924f8e1034b8ebb3de"
+        },
+        {
+          "path": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf.iridium.meta",
+          "sha256": "3b09ae1c183c9d7ebedea1be084c08a522bf5ce3fe6cf0c8334c2cf19e7a0736"
+        }
+      ],
+      "expected_behavior": [
+        "PC1 many objects: Porsche 911 Carrera 4S, 1 instance in a 1x1 grid; the single instance straddles the left frustum edge (about half of it outside).",
+        "One unshadowed directional light and a constant environment (as m7_porsche_transparency_oblique_v1)."
+      ]
+    },
+    {
+      "id": "m7c_pc1_911_n1_all_off_v1",
+      "revision": 1,
+      "required": false,
+      "source_asset": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf",
+      "environment": {
+        "kind": "procedural_constant",
+        "constant_linear_rgb": [0.3, 0.35, 0.4]
+      },
+      "camera": {
+        "id": "m7c_pc1_911_n1_all_off_camera_v1",
+        "position": [0.0, 1.2, 9.0],
+        "target": [0.0, 1.2, 18.0],
+        "up": [0.0, 1.0, 0.0],
+        "vertical_fov_degrees": 40.0,
+        "near": 0.05,
+        "far": 200.0
+      },
+      "scene_factory": {
+        "kind": "instanced_grid",
+        "instance_grid": [1, 1, 1],
+        "instance_spacing": [0.0, 0.0, 0.0]
+      },
+      "lights": [
+        {
+          "type": "directional",
+          "position": [0.0, 0.0, 0.0],
+          "rotation_degrees": [45.0, 210.0, 0.0],
+          "color_linear_rec709": [1.0, 0.96, 0.9],
+          "illuminance_lux": 10000.0,
+          "range_meters": 1.0,
+          "casts_shadows": false,
+          "shadow_quality": "high",
+          "priority": 1
+        }
+      ],
+      "output_label": "m7c_pc1_911_n1_all_off",
+      "warmup_frames": 500,
+      "measured_frames": 2000,
+      "content_files": [
+        {
+          "path": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf",
+          "sha256": "65480c5fc8111d0abe7b04cb6d8f09c6172cc7c8504e6c924f8e1034b8ebb3de"
+        },
+        {
+          "path": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf.iridium.meta",
+          "sha256": "3b09ae1c183c9d7ebedea1be084c08a522bf5ce3fe6cf0c8334c2cf19e7a0736"
+        }
+      ],
+      "expected_behavior": [
+        "PC1 many objects: Porsche 911 Carrera 4S, 1 instance in a 1x1 grid; the camera turned away from the same position: every instance outside the main-camera frustum but inside the far plane.",
+        "One unshadowed directional light and a constant environment (as m7_porsche_transparency_oblique_v1)."
+      ]
+    },
+    {
+      "id": "m7c_pc1_911_n4_all_visible_v1",
+      "revision": 1,
+      "required": false,
+      "source_asset": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf",
+      "environment": {
+        "kind": "procedural_constant",
+        "constant_linear_rgb": [0.3, 0.35, 0.4]
+      },
+      "camera": {
+        "id": "m7c_pc1_911_n4_all_visible_camera_v1",
+        "position": [0.0, 4.0, 16.0],
+        "target": [0.0, 0.0, 0.0],
+        "up": [0.0, 1.0, 0.0],
+        "vertical_fov_degrees": 45.0,
+        "near": 0.05,
+        "far": 200.0
+      },
+      "scene_factory": {
+        "kind": "instanced_grid",
+        "instance_grid": [4, 1, 1],
+        "instance_spacing": [4.0, 0.0, 0.0]
+      },
+      "lights": [
+        {
+          "type": "directional",
+          "position": [0.0, 0.0, 0.0],
+          "rotation_degrees": [45.0, 210.0, 0.0],
+          "color_linear_rec709": [1.0, 0.96, 0.9],
+          "illuminance_lux": 10000.0,
+          "range_meters": 1.0,
+          "casts_shadows": false,
+          "shadow_quality": "high",
+          "priority": 1
+        }
+      ],
+      "output_label": "m7c_pc1_911_n4_all_visible",
+      "warmup_frames": 500,
+      "measured_frames": 2000,
+      "content_files": [
+        {
+          "path": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf",
+          "sha256": "65480c5fc8111d0abe7b04cb6d8f09c6172cc7c8504e6c924f8e1034b8ebb3de"
+        },
+        {
+          "path": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf.iridium.meta",
+          "sha256": "3b09ae1c183c9d7ebedea1be084c08a522bf5ce3fe6cf0c8334c2cf19e7a0736"
+        }
+      ],
+      "expected_behavior": [
+        "PC1 many objects: Porsche 911 Carrera 4S, 4 instances in a 4x1 grid; every instance inside the main-camera frustum.",
+        "One unshadowed directional light and a constant environment (as m7_porsche_transparency_oblique_v1)."
+      ]
+    },
+    {
+      "id": "m7c_pc1_911_n4_half_off_v1",
+      "revision": 1,
+      "required": false,
+      "source_asset": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf",
+      "environment": {
+        "kind": "procedural_constant",
+        "constant_linear_rgb": [0.3, 0.35, 0.4]
+      },
+      "camera": {
+        "id": "m7c_pc1_911_n4_half_off_camera_v1",
+        "position": [0.0, 4.0, 16.0],
+        "target": [11.8, 0.0, 0.0],
+        "up": [0.0, 1.0, 0.0],
+        "vertical_fov_degrees": 45.0,
+        "near": 0.05,
+        "far": 200.0
+      },
+      "scene_factory": {
+        "kind": "instanced_grid",
+        "instance_grid": [4, 1, 1],
+        "instance_spacing": [4.0, 0.0, 0.0]
+      },
+      "lights": [
+        {
+          "type": "directional",
+          "position": [0.0, 0.0, 0.0],
+          "rotation_degrees": [45.0, 210.0, 0.0],
+          "color_linear_rec709": [1.0, 0.96, 0.9],
+          "illuminance_lux": 10000.0,
+          "range_meters": 1.0,
+          "casts_shadows": false,
+          "shadow_quality": "high",
+          "priority": 1
+        }
+      ],
+      "output_label": "m7c_pc1_911_n4_half_off",
+      "warmup_frames": 500,
+      "measured_frames": 2000,
+      "content_files": [
+        {
+          "path": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf",
+          "sha256": "65480c5fc8111d0abe7b04cb6d8f09c6172cc7c8504e6c924f8e1034b8ebb3de"
+        },
+        {
+          "path": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf.iridium.meta",
+          "sha256": "3b09ae1c183c9d7ebedea1be084c08a522bf5ce3fe6cf0c8334c2cf19e7a0736"
+        }
+      ],
+      "expected_behavior": [
+        "PC1 many objects: Porsche 911 Carrera 4S, 4 instances in a 4x1 grid; about half of the instances outside the main-camera frustum.",
+        "One unshadowed directional light and a constant environment (as m7_porsche_transparency_oblique_v1)."
+      ]
+    },
+    {
+      "id": "m7c_pc1_911_n4_all_off_v1",
+      "revision": 1,
+      "required": false,
+      "source_asset": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf",
+      "environment": {
+        "kind": "procedural_constant",
+        "constant_linear_rgb": [0.3, 0.35, 0.4]
+      },
+      "camera": {
+        "id": "m7c_pc1_911_n4_all_off_camera_v1",
+        "position": [0.0, 4.0, 16.0],
+        "target": [0.0, 4.0, 32.0],
+        "up": [0.0, 1.0, 0.0],
+        "vertical_fov_degrees": 45.0,
+        "near": 0.05,
+        "far": 200.0
+      },
+      "scene_factory": {
+        "kind": "instanced_grid",
+        "instance_grid": [4, 1, 1],
+        "instance_spacing": [4.0, 0.0, 0.0]
+      },
+      "lights": [
+        {
+          "type": "directional",
+          "position": [0.0, 0.0, 0.0],
+          "rotation_degrees": [45.0, 210.0, 0.0],
+          "color_linear_rec709": [1.0, 0.96, 0.9],
+          "illuminance_lux": 10000.0,
+          "range_meters": 1.0,
+          "casts_shadows": false,
+          "shadow_quality": "high",
+          "priority": 1
+        }
+      ],
+      "output_label": "m7c_pc1_911_n4_all_off",
+      "warmup_frames": 500,
+      "measured_frames": 2000,
+      "content_files": [
+        {
+          "path": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf",
+          "sha256": "65480c5fc8111d0abe7b04cb6d8f09c6172cc7c8504e6c924f8e1034b8ebb3de"
+        },
+        {
+          "path": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf.iridium.meta",
+          "sha256": "3b09ae1c183c9d7ebedea1be084c08a522bf5ce3fe6cf0c8334c2cf19e7a0736"
+        }
+      ],
+      "expected_behavior": [
+        "PC1 many objects: Porsche 911 Carrera 4S, 4 instances in a 4x1 grid; the camera turned away from the same position: every instance outside the main-camera frustum but inside the far plane.",
+        "One unshadowed directional light and a constant environment (as m7_porsche_transparency_oblique_v1)."
+      ]
+    },
+    {
+      "id": "m7c_pc1_911_n16_all_visible_v1",
+      "revision": 1,
+      "required": false,
+      "source_asset": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf",
+      "environment": {
+        "kind": "procedural_constant",
+        "constant_linear_rgb": [0.3, 0.35, 0.4]
+      },
+      "camera": {
+        "id": "m7c_pc1_911_n16_all_visible_camera_v1",
+        "position": [0.0, 6.0, 26.0],
+        "target": [0.0, 0.0, 0.0],
+        "up": [0.0, 1.0, 0.0],
+        "vertical_fov_degrees": 45.0,
+        "near": 0.05,
+        "far": 200.0
+      },
+      "scene_factory": {
+        "kind": "instanced_grid",
+        "instance_grid": [4, 1, 4],
+        "instance_spacing": [4.0, 0.0, 7.0]
+      },
+      "lights": [
+        {
+          "type": "directional",
+          "position": [0.0, 0.0, 0.0],
+          "rotation_degrees": [45.0, 210.0, 0.0],
+          "color_linear_rec709": [1.0, 0.96, 0.9],
+          "illuminance_lux": 10000.0,
+          "range_meters": 1.0,
+          "casts_shadows": false,
+          "shadow_quality": "high",
+          "priority": 1
+        }
+      ],
+      "output_label": "m7c_pc1_911_n16_all_visible",
+      "warmup_frames": 500,
+      "measured_frames": 2000,
+      "content_files": [
+        {
+          "path": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf",
+          "sha256": "65480c5fc8111d0abe7b04cb6d8f09c6172cc7c8504e6c924f8e1034b8ebb3de"
+        },
+        {
+          "path": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf.iridium.meta",
+          "sha256": "3b09ae1c183c9d7ebedea1be084c08a522bf5ce3fe6cf0c8334c2cf19e7a0736"
+        }
+      ],
+      "expected_behavior": [
+        "PC1 many objects: Porsche 911 Carrera 4S, 16 instances in a 4x4 grid; every instance inside the main-camera frustum.",
+        "One unshadowed directional light and a constant environment (as m7_porsche_transparency_oblique_v1)."
+      ]
+    },
+    {
+      "id": "m7c_pc1_911_n16_half_off_v1",
+      "revision": 1,
+      "required": false,
+      "source_asset": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf",
+      "environment": {
+        "kind": "procedural_constant",
+        "constant_linear_rgb": [0.3, 0.35, 0.4]
+      },
+      "camera": {
+        "id": "m7c_pc1_911_n16_half_off_camera_v1",
+        "position": [0.0, 6.0, 26.0],
+        "target": [22.0, 0.0, 0.0],
+        "up": [0.0, 1.0, 0.0],
+        "vertical_fov_degrees": 45.0,
+        "near": 0.05,
+        "far": 200.0
+      },
+      "scene_factory": {
+        "kind": "instanced_grid",
+        "instance_grid": [4, 1, 4],
+        "instance_spacing": [4.0, 0.0, 7.0]
+      },
+      "lights": [
+        {
+          "type": "directional",
+          "position": [0.0, 0.0, 0.0],
+          "rotation_degrees": [45.0, 210.0, 0.0],
+          "color_linear_rec709": [1.0, 0.96, 0.9],
+          "illuminance_lux": 10000.0,
+          "range_meters": 1.0,
+          "casts_shadows": false,
+          "shadow_quality": "high",
+          "priority": 1
+        }
+      ],
+      "output_label": "m7c_pc1_911_n16_half_off",
+      "warmup_frames": 500,
+      "measured_frames": 2000,
+      "content_files": [
+        {
+          "path": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf",
+          "sha256": "65480c5fc8111d0abe7b04cb6d8f09c6172cc7c8504e6c924f8e1034b8ebb3de"
+        },
+        {
+          "path": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf.iridium.meta",
+          "sha256": "3b09ae1c183c9d7ebedea1be084c08a522bf5ce3fe6cf0c8334c2cf19e7a0736"
+        }
+      ],
+      "expected_behavior": [
+        "PC1 many objects: Porsche 911 Carrera 4S, 16 instances in a 4x4 grid; about half of the instances outside the main-camera frustum.",
+        "One unshadowed directional light and a constant environment (as m7_porsche_transparency_oblique_v1)."
+      ]
+    },
+    {
+      "id": "m7c_pc1_911_n16_all_off_v1",
+      "revision": 1,
+      "required": false,
+      "source_asset": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf",
+      "environment": {
+        "kind": "procedural_constant",
+        "constant_linear_rgb": [0.3, 0.35, 0.4]
+      },
+      "camera": {
+        "id": "m7c_pc1_911_n16_all_off_camera_v1",
+        "position": [0.0, 6.0, 26.0],
+        "target": [0.0, 6.0, 52.0],
+        "up": [0.0, 1.0, 0.0],
+        "vertical_fov_degrees": 45.0,
+        "near": 0.05,
+        "far": 200.0
+      },
+      "scene_factory": {
+        "kind": "instanced_grid",
+        "instance_grid": [4, 1, 4],
+        "instance_spacing": [4.0, 0.0, 7.0]
+      },
+      "lights": [
+        {
+          "type": "directional",
+          "position": [0.0, 0.0, 0.0],
+          "rotation_degrees": [45.0, 210.0, 0.0],
+          "color_linear_rec709": [1.0, 0.96, 0.9],
+          "illuminance_lux": 10000.0,
+          "range_meters": 1.0,
+          "casts_shadows": false,
+          "shadow_quality": "high",
+          "priority": 1
+        }
+      ],
+      "output_label": "m7c_pc1_911_n16_all_off",
+      "warmup_frames": 500,
+      "measured_frames": 2000,
+      "content_files": [
+        {
+          "path": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf",
+          "sha256": "65480c5fc8111d0abe7b04cb6d8f09c6172cc7c8504e6c924f8e1034b8ebb3de"
+        },
+        {
+          "path": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf.iridium.meta",
+          "sha256": "3b09ae1c183c9d7ebedea1be084c08a522bf5ce3fe6cf0c8334c2cf19e7a0736"
+        }
+      ],
+      "expected_behavior": [
+        "PC1 many objects: Porsche 911 Carrera 4S, 16 instances in a 4x4 grid; the camera turned away from the same position: every instance outside the main-camera frustum but inside the far plane.",
+        "One unshadowed directional light and a constant environment (as m7_porsche_transparency_oblique_v1)."
+      ]
+    },
+    {
+      "id": "m7c_pc1_alfa_n16_all_visible_v1",
+      "revision": 1,
+      "required": false,
+      "source_asset": "models/alfa_romeo/alfa_romeo.gltf",
+      "environment": {
+        "kind": "procedural_constant",
+        "constant_linear_rgb": [0.3, 0.35, 0.4]
+      },
+      "camera": {
+        "id": "m7c_pc1_alfa_n16_all_visible_camera_v1",
+        "position": [0.0, 12.0, 24.0],
+        "target": [0.0, 0.0, 0.0],
+        "up": [0.0, 1.0, 0.0],
+        "vertical_fov_degrees": 45.0,
+        "near": 0.05,
+        "far": 200.0
+      },
+      "scene_factory": {
+        "kind": "instanced_grid",
+        "instance_grid": [4, 1, 4],
+        "instance_spacing": [3.0, 0.0, 6.0]
+      },
+      "lights": [
+        {
+          "type": "directional",
+          "position": [0.0, 0.0, 0.0],
+          "rotation_degrees": [45.0, 210.0, 0.0],
+          "color_linear_rec709": [1.0, 0.96, 0.9],
+          "illuminance_lux": 10000.0,
+          "range_meters": 1.0,
+          "casts_shadows": false,
+          "shadow_quality": "high",
+          "priority": 1
+        }
+      ],
+      "output_label": "m7c_pc1_alfa_n16_all_visible",
+      "warmup_frames": 500,
+      "measured_frames": 2000,
+      "content_files": [
+        {
+          "path": "models/alfa_romeo/alfa_romeo.gltf",
+          "sha256": "96f80eb8b302219aaec343920431877386cebb0ea5bf1a4a6df6e97b38456816"
+        },
+        {
+          "path": "models/alfa_romeo/alfa_romeo.gltf.iridium.meta",
+          "sha256": "4102702841eb79a375961f1ed13683fbdb54cf1c2f90f60d79c59a572ec5d169"
+        }
+      ],
+      "expected_behavior": [
+        "PC1 many objects: Alfa Romeo, 16 instances in a 4x4 grid, all inside the main-camera frustum.",
+        "One unshadowed directional light and a constant environment."
+      ]
+    },
+    {
+      "id": "m7c_pc2_glass_far_v1",
+      "revision": 1,
+      "required": false,
+      "source_asset": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf",
+      "environment": {
+        "kind": "procedural_constant",
+        "constant_linear_rgb": [0.3, 0.35, 0.4]
+      },
+      "camera": {
+        "id": "m7c_pc2_glass_far_camera_v1",
+        "position": [2.2, 1.6, 5.0],
+        "target": [0.0, 0.35, 0.6],
+        "up": [0.0, 1.0, 0.0],
+        "vertical_fov_degrees": 40.0,
+        "near": 0.02,
+        "far": 200.0
+      },
+      "scene_factory": {
+        "kind": "instanced_grid",
+        "instance_grid": [1, 1, 1],
+        "instance_spacing": [0.0, 0.0, 0.0]
+      },
+      "lights": [
+        {
+          "type": "directional",
+          "position": [0.0, 0.0, 0.0],
+          "rotation_degrees": [45.0, 210.0, 0.0],
+          "color_linear_rec709": [1.0, 0.96, 0.9],
+          "illuminance_lux": 10000.0,
+          "range_meters": 1.0,
+          "casts_shadows": false,
+          "shadow_quality": "high",
+          "priority": 1
+        },
+        {
+          "type": "point",
+          "position": [1.2, 1.6, 1.8],
+          "rotation_degrees": [0.0, 0.0, 0.0],
+          "color_linear_rec709": [1.0, 0.9, 0.8],
+          "luminous_intensity_candela": 10000.0,
+          "range_meters": 10.0,
+          "source_radius_meters": 0.05,
+          "casts_shadows": true,
+          "shadow_quality": "high",
+          "priority": 2
+        }
+      ],
+      "output_label": "m7c_pc2_glass_far",
+      "warmup_frames": 500,
+      "measured_frames": 2000,
+      "content_files": [
+        {
+          "path": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf",
+          "sha256": "65480c5fc8111d0abe7b04cb6d8f09c6172cc7c8504e6c924f8e1034b8ebb3de"
+        },
+        {
+          "path": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf.iridium.meta",
+          "sha256": "3b09ae1c183c9d7ebedea1be084c08a522bf5ce3fe6cf0c8334c2cf19e7a0736"
+        }
+      ],
+      "expected_behavior": [
+        "PC2 close to glass: one Porsche 911 Carrera 4S; windshield/side glass covers 5% of the screen.",
+        "One unshadowed directional light plus one shadowed (High) point light, 1e4 cd, 10 m range.",
+        "Coverage is nominal; measure it with a separate --profile-transparent-overdraw run."
+      ]
+    },
+    {
+      "id": "m7c_pc2_glass_mid_v1",
+      "revision": 1,
+      "required": false,
+      "source_asset": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf",
+      "environment": {
+        "kind": "procedural_constant",
+        "constant_linear_rgb": [0.3, 0.35, 0.4]
+      },
+      "camera": {
+        "id": "m7c_pc2_glass_mid_camera_v1",
+        "position": [0.4, 1.25, 2.11],
+        "target": [0.0, 0.36, 0.55],
+        "up": [0.0, 1.0, 0.0],
+        "vertical_fov_degrees": 40.0,
+        "near": 0.02,
+        "far": 200.0
+      },
+      "scene_factory": {
+        "kind": "instanced_grid",
+        "instance_grid": [1, 1, 1],
+        "instance_spacing": [0.0, 0.0, 0.0]
+      },
+      "lights": [
+        {
+          "type": "directional",
+          "position": [0.0, 0.0, 0.0],
+          "rotation_degrees": [45.0, 210.0, 0.0],
+          "color_linear_rec709": [1.0, 0.96, 0.9],
+          "illuminance_lux": 10000.0,
+          "range_meters": 1.0,
+          "casts_shadows": false,
+          "shadow_quality": "high",
+          "priority": 1
+        },
+        {
+          "type": "point",
+          "position": [1.2, 1.6, 1.8],
+          "rotation_degrees": [0.0, 0.0, 0.0],
+          "color_linear_rec709": [1.0, 0.9, 0.8],
+          "luminous_intensity_candela": 10000.0,
+          "range_meters": 10.0,
+          "source_radius_meters": 0.05,
+          "casts_shadows": true,
+          "shadow_quality": "high",
+          "priority": 2
+        }
+      ],
+      "output_label": "m7c_pc2_glass_mid",
+      "warmup_frames": 500,
+      "measured_frames": 2000,
+      "content_files": [
+        {
+          "path": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf",
+          "sha256": "65480c5fc8111d0abe7b04cb6d8f09c6172cc7c8504e6c924f8e1034b8ebb3de"
+        },
+        {
+          "path": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf.iridium.meta",
+          "sha256": "3b09ae1c183c9d7ebedea1be084c08a522bf5ce3fe6cf0c8334c2cf19e7a0736"
+        }
+      ],
+      "expected_behavior": [
+        "PC2 close to glass: one Porsche 911 Carrera 4S; windshield/side glass covers 25% of the screen.",
+        "One unshadowed directional light plus one shadowed (High) point light, 1e4 cd, 10 m range.",
+        "Coverage is nominal; measure it with a separate --profile-transparent-overdraw run."
+      ]
+    },
+    {
+      "id": "m7c_pc2_glass_near_v1",
+      "revision": 1,
+      "required": false,
+      "source_asset": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf",
+      "environment": {
+        "kind": "procedural_constant",
+        "constant_linear_rgb": [0.3, 0.35, 0.4]
+      },
+      "camera": {
+        "id": "m7c_pc2_glass_near_camera_v1",
+        "position": [0.0, 1.1, 1.53],
+        "target": [0.0, 0.36, 0.55],
+        "up": [0.0, 1.0, 0.0],
+        "vertical_fov_degrees": 40.0,
+        "near": 0.02,
+        "far": 200.0
+      },
+      "scene_factory": {
+        "kind": "instanced_grid",
+        "instance_grid": [1, 1, 1],
+        "instance_spacing": [0.0, 0.0, 0.0]
+      },
+      "lights": [
+        {
+          "type": "directional",
+          "position": [0.0, 0.0, 0.0],
+          "rotation_degrees": [45.0, 210.0, 0.0],
+          "color_linear_rec709": [1.0, 0.96, 0.9],
+          "illuminance_lux": 10000.0,
+          "range_meters": 1.0,
+          "casts_shadows": false,
+          "shadow_quality": "high",
+          "priority": 1
+        },
+        {
+          "type": "point",
+          "position": [1.2, 1.6, 1.8],
+          "rotation_degrees": [0.0, 0.0, 0.0],
+          "color_linear_rec709": [1.0, 0.9, 0.8],
+          "luminous_intensity_candela": 10000.0,
+          "range_meters": 10.0,
+          "source_radius_meters": 0.05,
+          "casts_shadows": true,
+          "shadow_quality": "high",
+          "priority": 2
+        }
+      ],
+      "output_label": "m7c_pc2_glass_near",
+      "warmup_frames": 500,
+      "measured_frames": 2000,
+      "content_files": [
+        {
+          "path": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf",
+          "sha256": "65480c5fc8111d0abe7b04cb6d8f09c6172cc7c8504e6c924f8e1034b8ebb3de"
+        },
+        {
+          "path": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf.iridium.meta",
+          "sha256": "3b09ae1c183c9d7ebedea1be084c08a522bf5ce3fe6cf0c8334c2cf19e7a0736"
+        }
+      ],
+      "expected_behavior": [
+        "PC2 close to glass: one Porsche 911 Carrera 4S; windshield/side glass covers 60% of the screen.",
+        "One unshadowed directional light plus one shadowed (High) point light, 1e4 cd, 10 m range.",
+        "Coverage is nominal; measure it with a separate --profile-transparent-overdraw run."
+      ]
+    },
+    {
+      "id": "m7c_pc2_glass_fill_v1",
+      "revision": 1,
+      "required": false,
+      "source_asset": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf",
+      "environment": {
+        "kind": "procedural_constant",
+        "constant_linear_rgb": [0.3, 0.35, 0.4]
+      },
+      "camera": {
+        "id": "m7c_pc2_glass_fill_camera_v1",
+        "position": [0.0, 0.69, 0.99],
+        "target": [0.0, 0.36, 0.55],
+        "up": [0.0, 1.0, 0.0],
+        "vertical_fov_degrees": 40.0,
+        "near": 0.02,
+        "far": 200.0
+      },
+      "scene_factory": {
+        "kind": "instanced_grid",
+        "instance_grid": [1, 1, 1],
+        "instance_spacing": [0.0, 0.0, 0.0]
+      },
+      "lights": [
+        {
+          "type": "directional",
+          "position": [0.0, 0.0, 0.0],
+          "rotation_degrees": [45.0, 210.0, 0.0],
+          "color_linear_rec709": [1.0, 0.96, 0.9],
+          "illuminance_lux": 10000.0,
+          "range_meters": 1.0,
+          "casts_shadows": false,
+          "shadow_quality": "high",
+          "priority": 1
+        },
+        {
+          "type": "point",
+          "position": [1.2, 1.6, 1.8],
+          "rotation_degrees": [0.0, 0.0, 0.0],
+          "color_linear_rec709": [1.0, 0.9, 0.8],
+          "luminous_intensity_candela": 10000.0,
+          "range_meters": 10.0,
+          "source_radius_meters": 0.05,
+          "casts_shadows": true,
+          "shadow_quality": "high",
+          "priority": 2
+        }
+      ],
+      "output_label": "m7c_pc2_glass_fill",
+      "warmup_frames": 500,
+      "measured_frames": 2000,
+      "content_files": [
+        {
+          "path": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf",
+          "sha256": "65480c5fc8111d0abe7b04cb6d8f09c6172cc7c8504e6c924f8e1034b8ebb3de"
+        },
+        {
+          "path": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf.iridium.meta",
+          "sha256": "3b09ae1c183c9d7ebedea1be084c08a522bf5ce3fe6cf0c8334c2cf19e7a0736"
+        }
+      ],
+      "expected_behavior": [
+        "PC2 close to glass: one Porsche 911 Carrera 4S; windshield/side glass covers about 100% of the screen.",
+        "One unshadowed directional light plus one shadowed (High) point light, 1e4 cd, 10 m range.",
+        "Coverage is nominal; measure it with a separate --profile-transparent-overdraw run."
+      ]
+    },
+    {
+      "id": "m7c_pc3_nolight_v1",
+      "revision": 1,
+      "required": false,
+      "source_asset": "porsche911930t/porsche911930t.gltf",
+      "environment": {
+        "kind": "procedural_constant",
+        "constant_linear_rgb": [0.3, 0.35, 0.4]
+      },
+      "camera": {
+        "id": "m7c_pc3_between_cars_camera_v1",
+        "position": [0.0, 1.3, -3.4],
+        "target": [0.0, 0.8, 4.0],
+        "up": [0.0, 1.0, 0.0],
+        "vertical_fov_degrees": 60.0,
+        "near": 0.05,
+        "far": 200.0
+      },
+      "scene_factory": {
+        "kind": "composition",
+        "entities": [
+          {
+            "id": "porsche_930",
+            "transform": {
+              "translation": [-2.1, -0.095, 0.0]
+            }
+          },
+          {
+            "id": "porsche_911",
+            "source_asset": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf",
+            "transform": {
+              "translation": [1.9, 0.633, 0.0]
+            }
+          }
+        ]
+      },
+      "lights": [
+        {
+          "type": "directional",
+          "position": [0.0, 0.0, 0.0],
+          "rotation_degrees": [45.0, 210.0, 0.0],
+          "color_linear_rec709": [1.0, 0.96, 0.9],
+          "illuminance_lux": 10000.0,
+          "range_meters": 1.0,
+          "casts_shadows": false,
+          "shadow_quality": "high",
+          "priority": 1
+        }
+      ],
+      "output_label": "m7c_pc3_nolight",
+      "warmup_frames": 500,
+      "measured_frames": 2000,
+      "content_files": [
+        {
+          "path": "porsche911930t/porsche911930t.gltf",
+          "sha256": "638964e7beb4c504e69aca647080a1e7c28aa8c9d14a46fb468652a57943775f"
+        },
+        {
+          "path": "porsche911930t/porsche911930t.gltf.iridium.meta",
+          "sha256": "98939f1f05767ed7e3dbb650a28d619396ca4cc163dff406dec692585426afdc"
+        },
+        {
+          "path": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf",
+          "sha256": "65480c5fc8111d0abe7b04cb6d8f09c6172cc7c8504e6c924f8e1034b8ebb3de"
+        },
+        {
+          "path": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf.iridium.meta",
+          "sha256": "3b09ae1c183c9d7ebedea1be084c08a522bf5ce3fe6cf0c8334c2cf19e7a0736"
+        }
+      ],
+      "expected_behavior": [
+        "PC3 point-light cost: the 1975 Porsche 911 930 Turbo (-x) and the 911 Carrera 4S (+x) side by side, the camera between them behind the rear bumpers looking forward along the gap; no local light (the directional light only).",
+        "The local light sits 1.5 m up between the cars; the directional light is unshadowed."
+      ]
+    },
+    {
+      "id": "m7c_pc3_point_r5_v1",
+      "revision": 1,
+      "required": false,
+      "source_asset": "porsche911930t/porsche911930t.gltf",
+      "environment": {
+        "kind": "procedural_constant",
+        "constant_linear_rgb": [0.3, 0.35, 0.4]
+      },
+      "camera": {
+        "id": "m7c_pc3_between_cars_camera_v1",
+        "position": [0.0, 1.3, -3.4],
+        "target": [0.0, 0.8, 4.0],
+        "up": [0.0, 1.0, 0.0],
+        "vertical_fov_degrees": 60.0,
+        "near": 0.05,
+        "far": 200.0
+      },
+      "scene_factory": {
+        "kind": "composition",
+        "entities": [
+          {
+            "id": "porsche_930",
+            "transform": {
+              "translation": [-2.1, -0.095, 0.0]
+            }
+          },
+          {
+            "id": "porsche_911",
+            "source_asset": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf",
+            "transform": {
+              "translation": [1.9, 0.633, 0.0]
+            }
+          }
+        ]
+      },
+      "lights": [
+        {
+          "type": "directional",
+          "position": [0.0, 0.0, 0.0],
+          "rotation_degrees": [45.0, 210.0, 0.0],
+          "color_linear_rec709": [1.0, 0.96, 0.9],
+          "illuminance_lux": 10000.0,
+          "range_meters": 1.0,
+          "casts_shadows": false,
+          "shadow_quality": "high",
+          "priority": 1
+        },
+        {
+          "type": "point",
+          "position": [0.0, 1.5, 0.0],
+          "rotation_degrees": [0.0, 0.0, 0.0],
+          "color_linear_rec709": [1.0, 0.9, 0.8],
+          "luminous_intensity_candela": 10000.0,
+          "range_meters": 5.0,
+          "source_radius_meters": 0.05,
+          "casts_shadows": true,
+          "shadow_quality": "high",
+          "priority": 2
+        }
+      ],
+      "output_label": "m7c_pc3_point_r5",
+      "warmup_frames": 500,
+      "measured_frames": 2000,
+      "content_files": [
+        {
+          "path": "porsche911930t/porsche911930t.gltf",
+          "sha256": "638964e7beb4c504e69aca647080a1e7c28aa8c9d14a46fb468652a57943775f"
+        },
+        {
+          "path": "porsche911930t/porsche911930t.gltf.iridium.meta",
+          "sha256": "98939f1f05767ed7e3dbb650a28d619396ca4cc163dff406dec692585426afdc"
+        },
+        {
+          "path": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf",
+          "sha256": "65480c5fc8111d0abe7b04cb6d8f09c6172cc7c8504e6c924f8e1034b8ebb3de"
+        },
+        {
+          "path": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf.iridium.meta",
+          "sha256": "3b09ae1c183c9d7ebedea1be084c08a522bf5ce3fe6cf0c8334c2cf19e7a0736"
+        }
+      ],
+      "expected_behavior": [
+        "PC3 point-light cost: the 1975 Porsche 911 930 Turbo (-x) and the 911 Carrera 4S (+x) side by side, the camera between them behind the rear bumpers looking forward along the gap; one shadowed (High) point light, 1e4 cd, 5 m range.",
+        "The local light sits 1.5 m up between the cars; the directional light is unshadowed."
+      ]
+    },
+    {
+      "id": "m7c_pc3_point_r10_v1",
+      "revision": 1,
+      "required": false,
+      "source_asset": "porsche911930t/porsche911930t.gltf",
+      "environment": {
+        "kind": "procedural_constant",
+        "constant_linear_rgb": [0.3, 0.35, 0.4]
+      },
+      "camera": {
+        "id": "m7c_pc3_between_cars_camera_v1",
+        "position": [0.0, 1.3, -3.4],
+        "target": [0.0, 0.8, 4.0],
+        "up": [0.0, 1.0, 0.0],
+        "vertical_fov_degrees": 60.0,
+        "near": 0.05,
+        "far": 200.0
+      },
+      "scene_factory": {
+        "kind": "composition",
+        "entities": [
+          {
+            "id": "porsche_930",
+            "transform": {
+              "translation": [-2.1, -0.095, 0.0]
+            }
+          },
+          {
+            "id": "porsche_911",
+            "source_asset": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf",
+            "transform": {
+              "translation": [1.9, 0.633, 0.0]
+            }
+          }
+        ]
+      },
+      "lights": [
+        {
+          "type": "directional",
+          "position": [0.0, 0.0, 0.0],
+          "rotation_degrees": [45.0, 210.0, 0.0],
+          "color_linear_rec709": [1.0, 0.96, 0.9],
+          "illuminance_lux": 10000.0,
+          "range_meters": 1.0,
+          "casts_shadows": false,
+          "shadow_quality": "high",
+          "priority": 1
+        },
+        {
+          "type": "point",
+          "position": [0.0, 1.5, 0.0],
+          "rotation_degrees": [0.0, 0.0, 0.0],
+          "color_linear_rec709": [1.0, 0.9, 0.8],
+          "luminous_intensity_candela": 10000.0,
+          "range_meters": 10.0,
+          "source_radius_meters": 0.05,
+          "casts_shadows": true,
+          "shadow_quality": "high",
+          "priority": 2
+        }
+      ],
+      "output_label": "m7c_pc3_point_r10",
+      "warmup_frames": 500,
+      "measured_frames": 2000,
+      "content_files": [
+        {
+          "path": "porsche911930t/porsche911930t.gltf",
+          "sha256": "638964e7beb4c504e69aca647080a1e7c28aa8c9d14a46fb468652a57943775f"
+        },
+        {
+          "path": "porsche911930t/porsche911930t.gltf.iridium.meta",
+          "sha256": "98939f1f05767ed7e3dbb650a28d619396ca4cc163dff406dec692585426afdc"
+        },
+        {
+          "path": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf",
+          "sha256": "65480c5fc8111d0abe7b04cb6d8f09c6172cc7c8504e6c924f8e1034b8ebb3de"
+        },
+        {
+          "path": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf.iridium.meta",
+          "sha256": "3b09ae1c183c9d7ebedea1be084c08a522bf5ce3fe6cf0c8334c2cf19e7a0736"
+        }
+      ],
+      "expected_behavior": [
+        "PC3 point-light cost: the 1975 Porsche 911 930 Turbo (-x) and the 911 Carrera 4S (+x) side by side, the camera between them behind the rear bumpers looking forward along the gap; one shadowed (High) point light, 1e4 cd, 10 m range.",
+        "The local light sits 1.5 m up between the cars; the directional light is unshadowed."
+      ]
+    },
+    {
+      "id": "m7c_pc3_point_r20_v1",
+      "revision": 1,
+      "required": false,
+      "source_asset": "porsche911930t/porsche911930t.gltf",
+      "environment": {
+        "kind": "procedural_constant",
+        "constant_linear_rgb": [0.3, 0.35, 0.4]
+      },
+      "camera": {
+        "id": "m7c_pc3_between_cars_camera_v1",
+        "position": [0.0, 1.3, -3.4],
+        "target": [0.0, 0.8, 4.0],
+        "up": [0.0, 1.0, 0.0],
+        "vertical_fov_degrees": 60.0,
+        "near": 0.05,
+        "far": 200.0
+      },
+      "scene_factory": {
+        "kind": "composition",
+        "entities": [
+          {
+            "id": "porsche_930",
+            "transform": {
+              "translation": [-2.1, -0.095, 0.0]
+            }
+          },
+          {
+            "id": "porsche_911",
+            "source_asset": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf",
+            "transform": {
+              "translation": [1.9, 0.633, 0.0]
+            }
+          }
+        ]
+      },
+      "lights": [
+        {
+          "type": "directional",
+          "position": [0.0, 0.0, 0.0],
+          "rotation_degrees": [45.0, 210.0, 0.0],
+          "color_linear_rec709": [1.0, 0.96, 0.9],
+          "illuminance_lux": 10000.0,
+          "range_meters": 1.0,
+          "casts_shadows": false,
+          "shadow_quality": "high",
+          "priority": 1
+        },
+        {
+          "type": "point",
+          "position": [0.0, 1.5, 0.0],
+          "rotation_degrees": [0.0, 0.0, 0.0],
+          "color_linear_rec709": [1.0, 0.9, 0.8],
+          "luminous_intensity_candela": 10000.0,
+          "range_meters": 20.0,
+          "source_radius_meters": 0.05,
+          "casts_shadows": true,
+          "shadow_quality": "high",
+          "priority": 2
+        }
+      ],
+      "output_label": "m7c_pc3_point_r20",
+      "warmup_frames": 500,
+      "measured_frames": 2000,
+      "content_files": [
+        {
+          "path": "porsche911930t/porsche911930t.gltf",
+          "sha256": "638964e7beb4c504e69aca647080a1e7c28aa8c9d14a46fb468652a57943775f"
+        },
+        {
+          "path": "porsche911930t/porsche911930t.gltf.iridium.meta",
+          "sha256": "98939f1f05767ed7e3dbb650a28d619396ca4cc163dff406dec692585426afdc"
+        },
+        {
+          "path": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf",
+          "sha256": "65480c5fc8111d0abe7b04cb6d8f09c6172cc7c8504e6c924f8e1034b8ebb3de"
+        },
+        {
+          "path": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf.iridium.meta",
+          "sha256": "3b09ae1c183c9d7ebedea1be084c08a522bf5ce3fe6cf0c8334c2cf19e7a0736"
+        }
+      ],
+      "expected_behavior": [
+        "PC3 point-light cost: the 1975 Porsche 911 930 Turbo (-x) and the 911 Carrera 4S (+x) side by side, the camera between them behind the rear bumpers looking forward along the gap; one shadowed (High) point light, 1e4 cd, 20 m range.",
+        "The local light sits 1.5 m up between the cars; the directional light is unshadowed."
+      ]
+    },
+    {
+      "id": "m7c_pc3_point_r40_v1",
+      "revision": 1,
+      "required": false,
+      "source_asset": "porsche911930t/porsche911930t.gltf",
+      "environment": {
+        "kind": "procedural_constant",
+        "constant_linear_rgb": [0.3, 0.35, 0.4]
+      },
+      "camera": {
+        "id": "m7c_pc3_between_cars_camera_v1",
+        "position": [0.0, 1.3, -3.4],
+        "target": [0.0, 0.8, 4.0],
+        "up": [0.0, 1.0, 0.0],
+        "vertical_fov_degrees": 60.0,
+        "near": 0.05,
+        "far": 200.0
+      },
+      "scene_factory": {
+        "kind": "composition",
+        "entities": [
+          {
+            "id": "porsche_930",
+            "transform": {
+              "translation": [-2.1, -0.095, 0.0]
+            }
+          },
+          {
+            "id": "porsche_911",
+            "source_asset": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf",
+            "transform": {
+              "translation": [1.9, 0.633, 0.0]
+            }
+          }
+        ]
+      },
+      "lights": [
+        {
+          "type": "directional",
+          "position": [0.0, 0.0, 0.0],
+          "rotation_degrees": [45.0, 210.0, 0.0],
+          "color_linear_rec709": [1.0, 0.96, 0.9],
+          "illuminance_lux": 10000.0,
+          "range_meters": 1.0,
+          "casts_shadows": false,
+          "shadow_quality": "high",
+          "priority": 1
+        },
+        {
+          "type": "point",
+          "position": [0.0, 1.5, 0.0],
+          "rotation_degrees": [0.0, 0.0, 0.0],
+          "color_linear_rec709": [1.0, 0.9, 0.8],
+          "luminous_intensity_candela": 10000.0,
+          "range_meters": 40.0,
+          "source_radius_meters": 0.05,
+          "casts_shadows": true,
+          "shadow_quality": "high",
+          "priority": 2
+        }
+      ],
+      "output_label": "m7c_pc3_point_r40",
+      "warmup_frames": 500,
+      "measured_frames": 2000,
+      "content_files": [
+        {
+          "path": "porsche911930t/porsche911930t.gltf",
+          "sha256": "638964e7beb4c504e69aca647080a1e7c28aa8c9d14a46fb468652a57943775f"
+        },
+        {
+          "path": "porsche911930t/porsche911930t.gltf.iridium.meta",
+          "sha256": "98939f1f05767ed7e3dbb650a28d619396ca4cc163dff406dec692585426afdc"
+        },
+        {
+          "path": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf",
+          "sha256": "65480c5fc8111d0abe7b04cb6d8f09c6172cc7c8504e6c924f8e1034b8ebb3de"
+        },
+        {
+          "path": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf.iridium.meta",
+          "sha256": "3b09ae1c183c9d7ebedea1be084c08a522bf5ce3fe6cf0c8334c2cf19e7a0736"
+        }
+      ],
+      "expected_behavior": [
+        "PC3 point-light cost: the 1975 Porsche 911 930 Turbo (-x) and the 911 Carrera 4S (+x) side by side, the camera between them behind the rear bumpers looking forward along the gap; one shadowed (High) point light, 1e4 cd, 40 m range.",
+        "The local light sits 1.5 m up between the cars; the directional light is unshadowed."
+      ]
+    },
+    {
+      "id": "m7c_pc3_point_r10_unshadowed_v1",
+      "revision": 1,
+      "required": false,
+      "source_asset": "porsche911930t/porsche911930t.gltf",
+      "environment": {
+        "kind": "procedural_constant",
+        "constant_linear_rgb": [0.3, 0.35, 0.4]
+      },
+      "camera": {
+        "id": "m7c_pc3_between_cars_camera_v1",
+        "position": [0.0, 1.3, -3.4],
+        "target": [0.0, 0.8, 4.0],
+        "up": [0.0, 1.0, 0.0],
+        "vertical_fov_degrees": 60.0,
+        "near": 0.05,
+        "far": 200.0
+      },
+      "scene_factory": {
+        "kind": "composition",
+        "entities": [
+          {
+            "id": "porsche_930",
+            "transform": {
+              "translation": [-2.1, -0.095, 0.0]
+            }
+          },
+          {
+            "id": "porsche_911",
+            "source_asset": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf",
+            "transform": {
+              "translation": [1.9, 0.633, 0.0]
+            }
+          }
+        ]
+      },
+      "lights": [
+        {
+          "type": "directional",
+          "position": [0.0, 0.0, 0.0],
+          "rotation_degrees": [45.0, 210.0, 0.0],
+          "color_linear_rec709": [1.0, 0.96, 0.9],
+          "illuminance_lux": 10000.0,
+          "range_meters": 1.0,
+          "casts_shadows": false,
+          "shadow_quality": "high",
+          "priority": 1
+        },
+        {
+          "type": "point",
+          "position": [0.0, 1.5, 0.0],
+          "rotation_degrees": [0.0, 0.0, 0.0],
+          "color_linear_rec709": [1.0, 0.9, 0.8],
+          "luminous_intensity_candela": 10000.0,
+          "range_meters": 10.0,
+          "source_radius_meters": 0.05,
+          "casts_shadows": false,
+          "shadow_quality": "high",
+          "priority": 2
+        }
+      ],
+      "output_label": "m7c_pc3_point_r10_unshadowed",
+      "warmup_frames": 500,
+      "measured_frames": 2000,
+      "content_files": [
+        {
+          "path": "porsche911930t/porsche911930t.gltf",
+          "sha256": "638964e7beb4c504e69aca647080a1e7c28aa8c9d14a46fb468652a57943775f"
+        },
+        {
+          "path": "porsche911930t/porsche911930t.gltf.iridium.meta",
+          "sha256": "98939f1f05767ed7e3dbb650a28d619396ca4cc163dff406dec692585426afdc"
+        },
+        {
+          "path": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf",
+          "sha256": "65480c5fc8111d0abe7b04cb6d8f09c6172cc7c8504e6c924f8e1034b8ebb3de"
+        },
+        {
+          "path": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf.iridium.meta",
+          "sha256": "3b09ae1c183c9d7ebedea1be084c08a522bf5ce3fe6cf0c8334c2cf19e7a0736"
+        }
+      ],
+      "expected_behavior": [
+        "PC3 point-light cost: the 1975 Porsche 911 930 Turbo (-x) and the 911 Carrera 4S (+x) side by side, the camera between them behind the rear bumpers looking forward along the gap; one unshadowed point light, 1e4 cd, 10 m range.",
+        "The local light sits 1.5 m up between the cars; the directional light is unshadowed."
+      ]
+    },
+    {
+      "id": "m7c_pc3_point_r10_ultra_v1",
+      "revision": 1,
+      "required": false,
+      "source_asset": "porsche911930t/porsche911930t.gltf",
+      "environment": {
+        "kind": "procedural_constant",
+        "constant_linear_rgb": [0.3, 0.35, 0.4]
+      },
+      "camera": {
+        "id": "m7c_pc3_between_cars_camera_v1",
+        "position": [0.0, 1.3, -3.4],
+        "target": [0.0, 0.8, 4.0],
+        "up": [0.0, 1.0, 0.0],
+        "vertical_fov_degrees": 60.0,
+        "near": 0.05,
+        "far": 200.0
+      },
+      "scene_factory": {
+        "kind": "composition",
+        "entities": [
+          {
+            "id": "porsche_930",
+            "transform": {
+              "translation": [-2.1, -0.095, 0.0]
+            }
+          },
+          {
+            "id": "porsche_911",
+            "source_asset": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf",
+            "transform": {
+              "translation": [1.9, 0.633, 0.0]
+            }
+          }
+        ]
+      },
+      "lights": [
+        {
+          "type": "directional",
+          "position": [0.0, 0.0, 0.0],
+          "rotation_degrees": [45.0, 210.0, 0.0],
+          "color_linear_rec709": [1.0, 0.96, 0.9],
+          "illuminance_lux": 10000.0,
+          "range_meters": 1.0,
+          "casts_shadows": false,
+          "shadow_quality": "high",
+          "priority": 1
+        },
+        {
+          "type": "point",
+          "position": [0.0, 1.5, 0.0],
+          "rotation_degrees": [0.0, 0.0, 0.0],
+          "color_linear_rec709": [1.0, 0.9, 0.8],
+          "luminous_intensity_candela": 10000.0,
+          "range_meters": 10.0,
+          "source_radius_meters": 0.05,
+          "casts_shadows": true,
+          "shadow_quality": "ultra",
+          "priority": 2
+        }
+      ],
+      "output_label": "m7c_pc3_point_r10_ultra",
+      "warmup_frames": 500,
+      "measured_frames": 2000,
+      "content_files": [
+        {
+          "path": "porsche911930t/porsche911930t.gltf",
+          "sha256": "638964e7beb4c504e69aca647080a1e7c28aa8c9d14a46fb468652a57943775f"
+        },
+        {
+          "path": "porsche911930t/porsche911930t.gltf.iridium.meta",
+          "sha256": "98939f1f05767ed7e3dbb650a28d619396ca4cc163dff406dec692585426afdc"
+        },
+        {
+          "path": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf",
+          "sha256": "65480c5fc8111d0abe7b04cb6d8f09c6172cc7c8504e6c924f8e1034b8ebb3de"
+        },
+        {
+          "path": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf.iridium.meta",
+          "sha256": "3b09ae1c183c9d7ebedea1be084c08a522bf5ce3fe6cf0c8334c2cf19e7a0736"
+        }
+      ],
+      "expected_behavior": [
+        "PC3 point-light cost: the 1975 Porsche 911 930 Turbo (-x) and the 911 Carrera 4S (+x) side by side, the camera between them behind the rear bumpers looking forward along the gap; one shadowed (Ultra, PCSS) point light, 1e4 cd, 10 m range.",
+        "The local light sits 1.5 m up between the cars; the directional light is unshadowed."
+      ]
+    },
+    {
+      "id": "m7c_pc3_point_r10_1e3cd_v1",
+      "revision": 1,
+      "required": false,
+      "source_asset": "porsche911930t/porsche911930t.gltf",
+      "environment": {
+        "kind": "procedural_constant",
+        "constant_linear_rgb": [0.3, 0.35, 0.4]
+      },
+      "camera": {
+        "id": "m7c_pc3_between_cars_camera_v1",
+        "position": [0.0, 1.3, -3.4],
+        "target": [0.0, 0.8, 4.0],
+        "up": [0.0, 1.0, 0.0],
+        "vertical_fov_degrees": 60.0,
+        "near": 0.05,
+        "far": 200.0
+      },
+      "scene_factory": {
+        "kind": "composition",
+        "entities": [
+          {
+            "id": "porsche_930",
+            "transform": {
+              "translation": [-2.1, -0.095, 0.0]
+            }
+          },
+          {
+            "id": "porsche_911",
+            "source_asset": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf",
+            "transform": {
+              "translation": [1.9, 0.633, 0.0]
+            }
+          }
+        ]
+      },
+      "lights": [
+        {
+          "type": "directional",
+          "position": [0.0, 0.0, 0.0],
+          "rotation_degrees": [45.0, 210.0, 0.0],
+          "color_linear_rec709": [1.0, 0.96, 0.9],
+          "illuminance_lux": 10000.0,
+          "range_meters": 1.0,
+          "casts_shadows": false,
+          "shadow_quality": "high",
+          "priority": 1
+        },
+        {
+          "type": "point",
+          "position": [0.0, 1.5, 0.0],
+          "rotation_degrees": [0.0, 0.0, 0.0],
+          "color_linear_rec709": [1.0, 0.9, 0.8],
+          "luminous_intensity_candela": 1000.0,
+          "range_meters": 10.0,
+          "source_radius_meters": 0.05,
+          "casts_shadows": true,
+          "shadow_quality": "high",
+          "priority": 2
+        }
+      ],
+      "output_label": "m7c_pc3_point_r10_1e3cd",
+      "warmup_frames": 500,
+      "measured_frames": 2000,
+      "content_files": [
+        {
+          "path": "porsche911930t/porsche911930t.gltf",
+          "sha256": "638964e7beb4c504e69aca647080a1e7c28aa8c9d14a46fb468652a57943775f"
+        },
+        {
+          "path": "porsche911930t/porsche911930t.gltf.iridium.meta",
+          "sha256": "98939f1f05767ed7e3dbb650a28d619396ca4cc163dff406dec692585426afdc"
+        },
+        {
+          "path": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf",
+          "sha256": "65480c5fc8111d0abe7b04cb6d8f09c6172cc7c8504e6c924f8e1034b8ebb3de"
+        },
+        {
+          "path": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf.iridium.meta",
+          "sha256": "3b09ae1c183c9d7ebedea1be084c08a522bf5ce3fe6cf0c8334c2cf19e7a0736"
+        }
+      ],
+      "expected_behavior": [
+        "PC3 point-light cost: the 1975 Porsche 911 930 Turbo (-x) and the 911 Carrera 4S (+x) side by side, the camera between them behind the rear bumpers looking forward along the gap; one shadowed (High) point light, 1e3 cd, 10 m range.",
+        "The local light sits 1.5 m up between the cars; the directional light is unshadowed."
+      ]
+    },
+    {
+      "id": "m7c_pc3_point_r10_1e6cd_v1",
+      "revision": 1,
+      "required": false,
+      "source_asset": "porsche911930t/porsche911930t.gltf",
+      "environment": {
+        "kind": "procedural_constant",
+        "constant_linear_rgb": [0.3, 0.35, 0.4]
+      },
+      "camera": {
+        "id": "m7c_pc3_between_cars_camera_v1",
+        "position": [0.0, 1.3, -3.4],
+        "target": [0.0, 0.8, 4.0],
+        "up": [0.0, 1.0, 0.0],
+        "vertical_fov_degrees": 60.0,
+        "near": 0.05,
+        "far": 200.0
+      },
+      "scene_factory": {
+        "kind": "composition",
+        "entities": [
+          {
+            "id": "porsche_930",
+            "transform": {
+              "translation": [-2.1, -0.095, 0.0]
+            }
+          },
+          {
+            "id": "porsche_911",
+            "source_asset": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf",
+            "transform": {
+              "translation": [1.9, 0.633, 0.0]
+            }
+          }
+        ]
+      },
+      "lights": [
+        {
+          "type": "directional",
+          "position": [0.0, 0.0, 0.0],
+          "rotation_degrees": [45.0, 210.0, 0.0],
+          "color_linear_rec709": [1.0, 0.96, 0.9],
+          "illuminance_lux": 10000.0,
+          "range_meters": 1.0,
+          "casts_shadows": false,
+          "shadow_quality": "high",
+          "priority": 1
+        },
+        {
+          "type": "point",
+          "position": [0.0, 1.5, 0.0],
+          "rotation_degrees": [0.0, 0.0, 0.0],
+          "color_linear_rec709": [1.0, 0.9, 0.8],
+          "luminous_intensity_candela": 1000000.0,
+          "range_meters": 10.0,
+          "source_radius_meters": 0.05,
+          "casts_shadows": true,
+          "shadow_quality": "high",
+          "priority": 2
+        }
+      ],
+      "output_label": "m7c_pc3_point_r10_1e6cd",
+      "warmup_frames": 500,
+      "measured_frames": 2000,
+      "content_files": [
+        {
+          "path": "porsche911930t/porsche911930t.gltf",
+          "sha256": "638964e7beb4c504e69aca647080a1e7c28aa8c9d14a46fb468652a57943775f"
+        },
+        {
+          "path": "porsche911930t/porsche911930t.gltf.iridium.meta",
+          "sha256": "98939f1f05767ed7e3dbb650a28d619396ca4cc163dff406dec692585426afdc"
+        },
+        {
+          "path": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf",
+          "sha256": "65480c5fc8111d0abe7b04cb6d8f09c6172cc7c8504e6c924f8e1034b8ebb3de"
+        },
+        {
+          "path": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf.iridium.meta",
+          "sha256": "3b09ae1c183c9d7ebedea1be084c08a522bf5ce3fe6cf0c8334c2cf19e7a0736"
+        }
+      ],
+      "expected_behavior": [
+        "PC3 point-light cost: the 1975 Porsche 911 930 Turbo (-x) and the 911 Carrera 4S (+x) side by side, the camera between them behind the rear bumpers looking forward along the gap; one shadowed (High) point light, 1e6 cd, 10 m range.",
+        "The local light sits 1.5 m up between the cars; the directional light is unshadowed."
+      ]
+    },
+    {
+      "id": "m7c_pc3_spot_r10_v1",
+      "revision": 1,
+      "required": false,
+      "source_asset": "porsche911930t/porsche911930t.gltf",
+      "environment": {
+        "kind": "procedural_constant",
+        "constant_linear_rgb": [0.3, 0.35, 0.4]
+      },
+      "camera": {
+        "id": "m7c_pc3_between_cars_camera_v1",
+        "position": [0.0, 1.3, -3.4],
+        "target": [0.0, 0.8, 4.0],
+        "up": [0.0, 1.0, 0.0],
+        "vertical_fov_degrees": 60.0,
+        "near": 0.05,
+        "far": 200.0
+      },
+      "scene_factory": {
+        "kind": "composition",
+        "entities": [
+          {
+            "id": "porsche_930",
+            "transform": {
+              "translation": [-2.1, -0.095, 0.0]
+            }
+          },
+          {
+            "id": "porsche_911",
+            "source_asset": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf",
+            "transform": {
+              "translation": [1.9, 0.633, 0.0]
+            }
+          }
+        ]
+      },
+      "lights": [
+        {
+          "type": "directional",
+          "position": [0.0, 0.0, 0.0],
+          "rotation_degrees": [45.0, 210.0, 0.0],
+          "color_linear_rec709": [1.0, 0.96, 0.9],
+          "illuminance_lux": 10000.0,
+          "range_meters": 1.0,
+          "casts_shadows": false,
+          "shadow_quality": "high",
+          "priority": 1
+        },
+        {
+          "type": "spot",
+          "position": [0.0, 1.5, 0.0],
+          "rotation_degrees": [90.0, 0.0, 0.0],
+          "color_linear_rec709": [1.0, 0.9, 0.8],
+          "luminous_intensity_candela": 10000.0,
+          "range_meters": 10.0,
+          "source_radius_meters": 0.05,
+          "inner_cone_degrees": 50.0,
+          "outer_cone_degrees": 75.0,
+          "casts_shadows": true,
+          "shadow_quality": "high",
+          "priority": 2
+        }
+      ],
+      "output_label": "m7c_pc3_spot_r10",
+      "warmup_frames": 500,
+      "measured_frames": 2000,
+      "content_files": [
+        {
+          "path": "porsche911930t/porsche911930t.gltf",
+          "sha256": "638964e7beb4c504e69aca647080a1e7c28aa8c9d14a46fb468652a57943775f"
+        },
+        {
+          "path": "porsche911930t/porsche911930t.gltf.iridium.meta",
+          "sha256": "98939f1f05767ed7e3dbb650a28d619396ca4cc163dff406dec692585426afdc"
+        },
+        {
+          "path": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf",
+          "sha256": "65480c5fc8111d0abe7b04cb6d8f09c6172cc7c8504e6c924f8e1034b8ebb3de"
+        },
+        {
+          "path": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf.iridium.meta",
+          "sha256": "3b09ae1c183c9d7ebedea1be084c08a522bf5ce3fe6cf0c8334c2cf19e7a0736"
+        }
+      ],
+      "expected_behavior": [
+        "PC3 point-light cost: the 1975 Porsche 911 930 Turbo (-x) and the 911 Carrera 4S (+x) side by side, the camera between them behind the rear bumpers looking forward along the gap; one shadowed (High) spot light, 1e4 cd, 10 m range, aimed down, 50/75 degree cone.",
+        "The local light sits 1.5 m up between the cars; the directional light is unshadowed."
+      ]
+    },
+    {
+      "id": "m7c_pc4_graze_high_v1",
+      "revision": 1,
+      "required": false,
+      "source_asset": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf",
+      "environment": {
+        "kind": "procedural_constant",
+        "constant_linear_rgb": [0.3, 0.35, 0.4]
+      },
+      "camera": {
+        "id": "m7c_pc4_door_camera_v1",
+        "position": [2.7, 0.15, -0.45],
+        "target": [0.84, -0.1, -0.3],
+        "up": [0.0, 1.0, 0.0],
+        "vertical_fov_degrees": 40.0,
+        "near": 0.05,
+        "far": 200.0
+      },
+      "scene_factory": {
+        "kind": "instanced_grid",
+        "instance_grid": [1, 1, 1],
+        "instance_spacing": [0.0, 0.0, 0.0]
+      },
+      "lights": [
+        {
+          "type": "point",
+          "position": [1.3, 0.05, -1.7],
+          "rotation_degrees": [0.0, 0.0, 0.0],
+          "color_linear_rec709": [1.0, 0.9, 0.8],
+          "luminous_intensity_candela": 1000000.0,
+          "range_meters": 10.0,
+          "source_radius_meters": 0.05,
+          "casts_shadows": true,
+          "shadow_quality": "high",
+          "priority": 2
+        }
+      ],
+      "output_label": "m7c_pc4_graze_high",
+      "warmup_frames": 500,
+      "measured_frames": 2000,
+      "content_files": [
+        {
+          "path": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf",
+          "sha256": "65480c5fc8111d0abe7b04cb6d8f09c6172cc7c8504e6c924f8e1034b8ebb3de"
+        },
+        {
+          "path": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf.iridium.meta",
+          "sha256": "3b09ae1c183c9d7ebedea1be084c08a522bf5ce3fe6cf0c8334c2cf19e7a0736"
+        }
+      ],
+      "expected_behavior": [
+        "PC4 grazing local light: one Porsche 911 Carrera 4S, the camera about 1.9 m from its right door; one shadowed (High, 512 cube) point light, 1e6 cd, 10 m range just outside the rear fender, so the door is lit at grazing incidence (N.L about 0.14).",
+        "No directional light. Receiver self-shadowing shows as parallel stripes across the lit panel."
+      ]
+    },
+    {
+      "id": "m7c_pc4_graze_ultra_v1",
+      "revision": 1,
+      "required": false,
+      "source_asset": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf",
+      "environment": {
+        "kind": "procedural_constant",
+        "constant_linear_rgb": [0.3, 0.35, 0.4]
+      },
+      "camera": {
+        "id": "m7c_pc4_door_camera_v1",
+        "position": [2.7, 0.15, -0.45],
+        "target": [0.84, -0.1, -0.3],
+        "up": [0.0, 1.0, 0.0],
+        "vertical_fov_degrees": 40.0,
+        "near": 0.05,
+        "far": 200.0
+      },
+      "scene_factory": {
+        "kind": "instanced_grid",
+        "instance_grid": [1, 1, 1],
+        "instance_spacing": [0.0, 0.0, 0.0]
+      },
+      "lights": [
+        {
+          "type": "point",
+          "position": [1.3, 0.05, -1.7],
+          "rotation_degrees": [0.0, 0.0, 0.0],
+          "color_linear_rec709": [1.0, 0.9, 0.8],
+          "luminous_intensity_candela": 1000000.0,
+          "range_meters": 10.0,
+          "source_radius_meters": 0.05,
+          "casts_shadows": true,
+          "shadow_quality": "ultra",
+          "priority": 2
+        }
+      ],
+      "output_label": "m7c_pc4_graze_ultra",
+      "warmup_frames": 500,
+      "measured_frames": 2000,
+      "content_files": [
+        {
+          "path": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf",
+          "sha256": "65480c5fc8111d0abe7b04cb6d8f09c6172cc7c8504e6c924f8e1034b8ebb3de"
+        },
+        {
+          "path": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf.iridium.meta",
+          "sha256": "3b09ae1c183c9d7ebedea1be084c08a522bf5ce3fe6cf0c8334c2cf19e7a0736"
+        }
+      ],
+      "expected_behavior": [
+        "PC4 grazing local light: one Porsche 911 Carrera 4S, the camera about 1.9 m from its right door; one shadowed (Ultra, 1024 cube, PCSS) point light, 1e6 cd, 10 m range just outside the rear fender, so the door is lit at grazing incidence (N.L about 0.14).",
+        "No directional light. Receiver self-shadowing shows as parallel stripes across the lit panel."
+      ]
+    },
+    {
+      "id": "m7c_pc4_graze_spot_high_v1",
+      "revision": 1,
+      "required": false,
+      "source_asset": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf",
+      "environment": {
+        "kind": "procedural_constant",
+        "constant_linear_rgb": [0.3, 0.35, 0.4]
+      },
+      "camera": {
+        "id": "m7c_pc4_door_camera_v1",
+        "position": [2.7, 0.15, -0.45],
+        "target": [0.84, -0.1, -0.3],
+        "up": [0.0, 1.0, 0.0],
+        "vertical_fov_degrees": 40.0,
+        "near": 0.05,
+        "far": 200.0
+      },
+      "scene_factory": {
+        "kind": "instanced_grid",
+        "instance_grid": [1, 1, 1],
+        "instance_spacing": [0.0, 0.0, 0.0]
+      },
+      "lights": [
+        {
+          "type": "spot",
+          "position": [1.3, 0.05, -1.7],
+          "rotation_degrees": [5.461, -17.049, 0.0],
+          "color_linear_rec709": [1.0, 0.9, 0.8],
+          "luminous_intensity_candela": 1000000.0,
+          "range_meters": 10.0,
+          "source_radius_meters": 0.05,
+          "inner_cone_degrees": 40.0,
+          "outer_cone_degrees": 60.0,
+          "casts_shadows": true,
+          "shadow_quality": "high",
+          "priority": 2
+        }
+      ],
+      "output_label": "m7c_pc4_graze_spot_high",
+      "warmup_frames": 500,
+      "measured_frames": 2000,
+      "content_files": [
+        {
+          "path": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf",
+          "sha256": "65480c5fc8111d0abe7b04cb6d8f09c6172cc7c8504e6c924f8e1034b8ebb3de"
+        },
+        {
+          "path": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf.iridium.meta",
+          "sha256": "3b09ae1c183c9d7ebedea1be084c08a522bf5ce3fe6cf0c8334c2cf19e7a0736"
+        }
+      ],
+      "expected_behavior": [
+        "PC4 grazing local light: one Porsche 911 Carrera 4S, the camera about 1.9 m from its right door; one shadowed (High) spot light, 1e6 cd, 10 m range, 40/60 degree cone just outside the rear fender, so the door is lit at grazing incidence (N.L about 0.14).",
+        "No directional light. Receiver self-shadowing shows as parallel stripes across the lit panel."
+      ]
+    },
+    {
+      "id": "m7c_pc4_graze_spot_ultra_v1",
+      "revision": 1,
+      "required": false,
+      "source_asset": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf",
+      "environment": {
+        "kind": "procedural_constant",
+        "constant_linear_rgb": [0.3, 0.35, 0.4]
+      },
+      "camera": {
+        "id": "m7c_pc4_door_camera_v1",
+        "position": [2.7, 0.15, -0.45],
+        "target": [0.84, -0.1, -0.3],
+        "up": [0.0, 1.0, 0.0],
+        "vertical_fov_degrees": 40.0,
+        "near": 0.05,
+        "far": 200.0
+      },
+      "scene_factory": {
+        "kind": "instanced_grid",
+        "instance_grid": [1, 1, 1],
+        "instance_spacing": [0.0, 0.0, 0.0]
+      },
+      "lights": [
+        {
+          "type": "spot",
+          "position": [1.3, 0.05, -1.7],
+          "rotation_degrees": [5.461, -17.049, 0.0],
+          "color_linear_rec709": [1.0, 0.9, 0.8],
+          "luminous_intensity_candela": 1000000.0,
+          "range_meters": 10.0,
+          "source_radius_meters": 0.05,
+          "inner_cone_degrees": 40.0,
+          "outer_cone_degrees": 60.0,
+          "casts_shadows": true,
+          "shadow_quality": "ultra",
+          "priority": 2
+        }
+      ],
+      "output_label": "m7c_pc4_graze_spot_ultra",
+      "warmup_frames": 500,
+      "measured_frames": 2000,
+      "content_files": [
+        {
+          "path": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf",
+          "sha256": "65480c5fc8111d0abe7b04cb6d8f09c6172cc7c8504e6c924f8e1034b8ebb3de"
+        },
+        {
+          "path": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf.iridium.meta",
+          "sha256": "3b09ae1c183c9d7ebedea1be084c08a522bf5ce3fe6cf0c8334c2cf19e7a0736"
+        }
+      ],
+      "expected_behavior": [
+        "PC4 grazing local light: one Porsche 911 Carrera 4S, the camera about 1.9 m from its right door; one shadowed (Ultra, PCSS) spot light, 1e6 cd, 10 m range, 40/60 degree cone just outside the rear fender, so the door is lit at grazing incidence (N.L about 0.14).",
+        "No directional light. Receiver self-shadowing shows as parallel stripes across the lit panel."
+      ]
+    },
+    {
+      "id": "m7c_pc4_contact_high_v1",
+      "revision": 1,
+      "required": false,
+      "source_asset": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf",
+      "environment": {
+        "kind": "procedural_constant",
+        "constant_linear_rgb": [0.3, 0.35, 0.4]
+      },
+      "camera": {
+        "id": "m7c_pc4_contact_camera_v1",
+        "position": [4.2, 1.5, 2.9],
+        "target": [1.3, 0.1, 0.3],
+        "up": [0.0, 1.0, 0.0],
+        "vertical_fov_degrees": 40.0,
+        "near": 0.05,
+        "far": 200.0
+      },
+      "scene_factory": {
+        "kind": "composition",
+        "entities": [
+          {
+            "id": "porsche_911",
+            "source_asset": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf",
+            "transform": {
+              "translation": [0.0, 0.632, 0.0]
+            }
+          },
+          {
+            "id": "ground_and_blocker",
+            "source_asset": "benchmarks/m5/directional-shadow-contact.gltf",
+            "node": 0,
+            "transform": {
+              "translation": [2.0, 0.01, 0.0],
+              "rotation_degrees": [-90.0, 0.0, 0.0],
+              "scale": [1.0, 1.0, 0.01]
+            }
+          }
+        ]
+      },
+      "lights": [
+        {
+          "type": "point",
+          "position": [1.7, 1.6, 0.6],
+          "rotation_degrees": [0.0, 0.0, 0.0],
+          "color_linear_rec709": [1.0, 0.9, 0.8],
+          "luminous_intensity_candela": 100000.0,
+          "range_meters": 10.0,
+          "source_radius_meters": 0.05,
+          "casts_shadows": true,
+          "shadow_quality": "high",
+          "priority": 2
+        }
+      ],
+      "output_label": "m7c_pc4_contact_high",
+      "warmup_frames": 500,
+      "measured_frames": 2000,
+      "content_files": [
+        {
+          "path": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf",
+          "sha256": "65480c5fc8111d0abe7b04cb6d8f09c6172cc7c8504e6c924f8e1034b8ebb3de"
+        },
+        {
+          "path": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf.iridium.meta",
+          "sha256": "3b09ae1c183c9d7ebedea1be084c08a522bf5ce3fe6cf0c8334c2cf19e7a0736"
+        },
+        {
+          "path": "benchmarks/m5/directional-shadow-contact.gltf",
+          "sha256": "d1c8cb68508d8e2b43ab1bc6639d0fadffce7683429c8d2129d6c764faa9bc3e"
+        },
+        {
+          "path": "benchmarks/m5/directional-shadow-contact.gltf.iridium.meta",
+          "sha256": "89b750362a885b49f42434c64dbb756a9f46b8d3280dccac6290842a8a8dadfd"
+        }
+      ],
+      "expected_behavior": [
+        "PC4 contact check: the Porsche 911 Carrera 4S standing on a ground plane, a 1.6 m triangle blocker 1 cm above the plane beside its right side; one shadowed (High) point light, 1e5 cd, 10 m range, 1.6 m up between them.",
+        "No directional light. Over-biasing shows as light leaking at the tyre contacts and under the body, or a lit gap along the triangle shadow edges."
+      ]
+    },
+    {
+      "id": "m7c_pc4_contact_ultra_v1",
+      "revision": 1,
+      "required": false,
+      "source_asset": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf",
+      "environment": {
+        "kind": "procedural_constant",
+        "constant_linear_rgb": [0.3, 0.35, 0.4]
+      },
+      "camera": {
+        "id": "m7c_pc4_contact_camera_v1",
+        "position": [4.2, 1.5, 2.9],
+        "target": [1.3, 0.1, 0.3],
+        "up": [0.0, 1.0, 0.0],
+        "vertical_fov_degrees": 40.0,
+        "near": 0.05,
+        "far": 200.0
+      },
+      "scene_factory": {
+        "kind": "composition",
+        "entities": [
+          {
+            "id": "porsche_911",
+            "source_asset": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf",
+            "transform": {
+              "translation": [0.0, 0.632, 0.0]
+            }
+          },
+          {
+            "id": "ground_and_blocker",
+            "source_asset": "benchmarks/m5/directional-shadow-contact.gltf",
+            "node": 0,
+            "transform": {
+              "translation": [2.0, 0.01, 0.0],
+              "rotation_degrees": [-90.0, 0.0, 0.0],
+              "scale": [1.0, 1.0, 0.01]
+            }
+          }
+        ]
+      },
+      "lights": [
+        {
+          "type": "point",
+          "position": [1.7, 1.6, 0.6],
+          "rotation_degrees": [0.0, 0.0, 0.0],
+          "color_linear_rec709": [1.0, 0.9, 0.8],
+          "luminous_intensity_candela": 100000.0,
+          "range_meters": 10.0,
+          "source_radius_meters": 0.05,
+          "casts_shadows": true,
+          "shadow_quality": "ultra",
+          "priority": 2
+        }
+      ],
+      "output_label": "m7c_pc4_contact_ultra",
+      "warmup_frames": 500,
+      "measured_frames": 2000,
+      "content_files": [
+        {
+          "path": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf",
+          "sha256": "65480c5fc8111d0abe7b04cb6d8f09c6172cc7c8504e6c924f8e1034b8ebb3de"
+        },
+        {
+          "path": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf.iridium.meta",
+          "sha256": "3b09ae1c183c9d7ebedea1be084c08a522bf5ce3fe6cf0c8334c2cf19e7a0736"
+        },
+        {
+          "path": "benchmarks/m5/directional-shadow-contact.gltf",
+          "sha256": "d1c8cb68508d8e2b43ab1bc6639d0fadffce7683429c8d2129d6c764faa9bc3e"
+        },
+        {
+          "path": "benchmarks/m5/directional-shadow-contact.gltf.iridium.meta",
+          "sha256": "89b750362a885b49f42434c64dbb756a9f46b8d3280dccac6290842a8a8dadfd"
+        }
+      ],
+      "expected_behavior": [
+        "PC4 contact check: the Porsche 911 Carrera 4S standing on a ground plane, a 1.6 m triangle blocker 1 cm above the plane beside its right side; one shadowed (Ultra) point light, 1e5 cd, 10 m range, 1.6 m up between them.",
+        "No directional light. Over-biasing shows as light leaking at the tyre contacts and under the body, or a lit gap along the triangle shadow edges."
+      ]
+    }
+  ]
+}

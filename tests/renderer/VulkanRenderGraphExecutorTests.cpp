@@ -160,7 +160,8 @@ namespace {
         // (their ten indirect/cluster buffers are imported). R3b.8:
         // probe.capture follows the shadow passes.
         CHECK(graph.passes().size() == 26);
-        CHECK(graph.resources().size() == 37);   // M9.1: + gbuffer.velocity
+        // M9.1: + gbuffer.velocity; M7.10.2: + lighting.cluster.light-bounds
+        CHECK(graph.resources().size() == 38);
         CHECK(!graph.transitions().empty());
         CHECK(graph.passes().front().name == "shadow.directional.compact");
         CHECK(graph.passes().back().name == "ui-present");
@@ -357,7 +358,8 @@ namespace {
             { 3840, 2160 }, VK_FORMAT_A2B10G10R10_UNORM_PACK32,
             VK_FORMAT_R16G16B16A16_SFLOAT, true);
         CHECK(graph.passes().size() == 27);
-        CHECK(graph.resources().size() == 38);   // M9.1: + gbuffer.velocity
+        // M9.1: + gbuffer.velocity; M7.10.2: + lighting.cluster.light-bounds
+        CHECK(graph.resources().size() == 39);
         CHECK(graph.passes()[25].name == "ui-compose");
         CHECK(graph.passes().back().name == "hdr10-encode-present");
         const auto composition = std::find_if(graph.resources().begin(),
@@ -983,8 +985,9 @@ namespace {
         const VulkanGraphStats stats = executor.stats();
         CHECK(stats.enabled);
         CHECK(stats.passCount == 26);
-        CHECK(stats.logicalResourceCount == 37);   // M9.1: + gbuffer.velocity
-        CHECK(stats.physicalSlotCount == 20);   // M9.1: + gbuffer.velocity
+        // M9.1: + gbuffer.velocity; M7.10.2: + lighting.cluster.light-bounds
+        CHECK(stats.logicalResourceCount == 38);
+        CHECK(stats.physicalSlotCount == 21);
         CHECK(stats.barrierCount == transitionCount);
         CHECK(stats.frameCount == 2);
         CHECK(stats.rebuildCount == 1);

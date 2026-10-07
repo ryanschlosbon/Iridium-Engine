@@ -87,6 +87,11 @@ namespace {
             "m7-three-dense-assets-manifest.v1.json";
     }
 
+    std::filesystem::path m7cOwnerCasesManifestPath() {
+        return std::filesystem::path(PROJECT_ROOT_DIR) /
+            "assets" / "m7c-owner-cases-manifest.v1.json";
+    }
+
     std::filesystem::path m7FixtureMatrixPath() {
         return std::filesystem::path(PROJECT_ROOT_DIR) /
             "assets" / "benchmarks" / "m7" / "fixture-matrix.v1.json";
@@ -1652,7 +1657,8 @@ namespace {
         CHECK(syntheticFactoryRejected("reject_duplicate", nlohmann::json::parse(R"json({
             "kind": "composition",
             "entities": [{ "id": "a", "node": 0 }, { "id": "a", "node": 1 }] })json")));
-        CHECK(syntheticFactoryRejected("reject_source_asset", composition(
+        // M7C P1: a per-entity source must be a declared content file.
+        CHECK(syntheticFactoryRejected("reject_undeclared_source_asset", composition(
             R"json({ "id": "a", "node": 0, "source_asset": "other.gltf" })json")));
         CHECK(syntheticFactoryRejected("reject_entity_key", composition(
             R"json({ "id": "a", "node": 0, "velocity": [1, 0, 0] })json")));
@@ -1714,6 +1720,217 @@ namespace {
                 "period_frames": 20, "keyframes": [
                 { "frame": 0, "translation": [0, 0, 0], "teleport": true },
                 { "frame": 9, "translation": [1, 0, 0] } ] } })json")));
+        return true;
+    }
+
+    // M7C P1: a composition with two source assets. `factory` is the scene
+    // factory; `contentFiles` lists the declared files beside source.gltf.
+    BenchmarkManifest loadMultiSourceFactory(const std::string& name,
+        const nlohmann::json& factory,
+        const std::vector<std::string>& contentFiles) {
+        const std::filesystem::path directory =
+            std::filesystem::temp_directory_path() /
+            "iridium-benchmark-manifest-tests";
+        std::filesystem::create_directories(directory / "cars");
+        std::ofstream(directory / "source.gltf") << "{}";
+        std::ofstream(directory / "cars" / "other.gltf") << "{}";
+        nlohmann::json root = nlohmann::json::parse(R"json({
+            "schema_version": 1,
+            "fixtures": [{
+                "id": "synthetic_multi_v1",
+                "revision": 1,
+                "source_asset": "source.gltf",
+                "environment": { "kind": "procedural_constant",
+                    "constant_linear_rgb": [0.1, 0.1, 0.1] },
+                "camera": { "id": "synthetic_camera", "position": [0.0, 1.0, 5.0],
+                    "target": [0.0, 1.0, 0.0], "up": [0.0, 1.0, 0.0],
+                    "vertical_fov_degrees": 40.0, "near": 0.1, "far": 100.0 },
+                "output_label": "synthetic_multi",
+                "warmup_frames": 0,
+                "measured_frames": 1,
+                "content_files": []
+            }]
+        })json");
+        nlohmann::json& fixture = root["fixtures"][0];
+        fixture["scene_factory"] = factory;
+        for (const std::string& file : contentFiles) {
+            fixture["content_files"].push_back({ { "path", file },
+                { "sha256", std::string(64, '0') } });
+        }
+        const std::filesystem::path path = directory / (name + ".json");
+        std::ofstream(path) << root.dump(2);
+        return loadBenchmarkManifest(path, false);
+    }
+
+    bool testMultiSourceCompositionContract() {
+        const BenchmarkManifest manifest = loadMultiSourceFactory("multi_source",
+            nlohmann::json::parse(R"json({
+                "kind": "composition",
+                "entities": [
+                    { "id": "node", "node": 2 },
+                    { "id": "whole" },
+                    { "id": "other", "source_asset": "cars/other.gltf",
+                        "transform": { "translation": [2.0, 0.0, 0.0] } },
+                    { "id": "explicit_default", "source_asset": "source.gltf",
+                        "node": 1 },
+                    { "id": "other_again", "source_asset": "cars/./other.gltf" }
+                ]
+            })json"), { "source.gltf", "cars/other.gltf" });
+        const BenchmarkFixture& fixture = manifest.fixtures.at(0);
+        const std::vector<BenchmarkCompositionEntity>& entities =
+            fixture.sceneFactory.compositionEntities;
+        CHECK(entities.size() == 5);
+        const std::filesystem::path other = std::filesystem::weakly_canonical(
+            fixture.sourceAsset.parent_path() / "cars" / "other.gltf");
+        CHECK(entities[0].sourceAsset == fixture.sourceAsset);
+        CHECK(!entities[0].wholeModel && entities[0].sourceNode == 2);
+        CHECK(entities[1].sourceAsset == fixture.sourceAsset);
+        CHECK(entities[1].wholeModel);
+        CHECK(entities[2].sourceAsset == other && entities[2].wholeModel);
+        CHECK(entities[2].translation == glm::vec3(2.0f, 0.0f, 0.0f));
+        CHECK(entities[3].sourceAsset == fixture.sourceAsset);
+        CHECK(!entities[3].wholeModel && entities[3].sourceNode == 1);
+        CHECK(entities[4].sourceAsset == other);
+        // The fixture source first, then each further source once.
+        const std::vector<std::filesystem::path> sources =
+            benchmarkFixtureSourceAssets(fixture);
+        CHECK(sources.size() == 2);
+        CHECK(sources[0] == fixture.sourceAsset);
+        CHECK(sources[1] == other);
+
+        // Single-model fixtures name exactly their source_asset.
+        const BenchmarkManifest single = loadSyntheticFactory("single_source",
+            nlohmann::json::parse(R"json({
+                "kind": "composition", "entities": [{ "id": "a", "node": 0 }] })json"));
+        CHECK(benchmarkFixtureSourceAssets(single.fixtures.at(0)) ==
+            std::vector<std::filesystem::path>{ single.fixtures.at(0).sourceAsset });
+        const BenchmarkManifest grid = loadSyntheticFactory("single_grid",
+            nlohmann::json::parse(R"json({ "kind": "instanced_grid",
+                "instance_grid": [2, 1, 2], "instance_spacing": [5.0, 0.0, 5.0] })json"));
+        CHECK(benchmarkFixtureSourceAssets(grid.fixtures.at(0)).size() == 1);
+
+        const auto rejected = [](const std::string& name, const char* entity,
+            const std::vector<std::string>& files) {
+            nlohmann::json factory = nlohmann::json::parse(
+                R"json({ "kind": "composition" })json");
+            factory["entities"] = nlohmann::json::array(
+                { nlohmann::json::parse(entity) });
+            try {
+                (void)loadMultiSourceFactory(name, factory, files);
+            }
+            catch (const std::exception&) {
+                return true;
+            }
+            return false;
+        };
+        // Declared content only, inside the manifest directory, as a string.
+        CHECK(rejected("multi_undeclared",
+            R"json({ "id": "a", "source_asset": "cars/other.gltf" })json",
+            { "source.gltf" }));
+        CHECK(rejected("multi_escape",
+            R"json({ "id": "a", "source_asset": "../other.gltf" })json",
+            { "source.gltf", "cars/other.gltf" }));
+        CHECK(rejected("multi_not_string",
+            R"json({ "id": "a", "source_asset": 3 })json",
+            { "source.gltf", "cars/other.gltf" }));
+        CHECK(!rejected("multi_control",
+            R"json({ "id": "a", "source_asset": "cars/other.gltf" })json",
+            { "source.gltf", "cars/other.gltf" }));
+        return true;
+    }
+
+    // M7C P1 owner cases (local third-party content, verified by hash): PC1
+    // instance grids, PC2 glass camera series, PC3 two-model composition; and
+    // the M7.10.6 PC4 local-shadow receiver cases (local light only).
+    bool testM7cOwnerCasesFixtureContract() {
+        const BenchmarkManifest manifest = loadBenchmarkManifest(
+            m7cOwnerCasesManifestPath());
+        CHECK(manifest.fixtures.size() == 30);
+        for (const BenchmarkFixture& fixture : manifest.fixtures) {
+            CHECK(fixture.id.starts_with("m7c_"));
+            CHECK(fixture.warmupFrames == 500 && fixture.measuredFrames == 2000);
+            if (fixture.id.starts_with("m7c_pc4_")) {
+                CHECK(fixture.lights.size() == 1 &&
+                    fixture.lights[0].type != BenchmarkLightType::Directional &&
+                    fixture.lights[0].castsShadows);
+                continue;
+            }
+            CHECK(!fixture.lights.empty() &&
+                fixture.lights[0].type == BenchmarkLightType::Directional &&
+                !fixture.lights[0].castsShadows);
+        }
+        for (const char* count : { "1", "4", "16" }) {
+            for (const char* state : { "all_visible", "half_off", "all_off" }) {
+                const BenchmarkFixture& fixture = findBenchmarkFixture(manifest,
+                    std::string("m7c_pc1_911_n") + count + "_" + state + "_v1");
+                CHECK(benchmarkInstanceCount(fixture.sceneFactory.instanceGrid) ==
+                    std::stoull(count));
+                CHECK(fixture.lights.size() == 1);
+            }
+        }
+        const BenchmarkFixture& alfa = findBenchmarkFixture(manifest,
+            "m7c_pc1_alfa_n16_all_visible_v1");
+        CHECK(benchmarkInstanceCount(alfa.sceneFactory.instanceGrid) == 16);
+        for (const char* glass : { "far", "mid", "near", "fill" }) {
+            const BenchmarkFixture& fixture = findBenchmarkFixture(manifest,
+                std::string("m7c_pc2_glass_") + glass + "_v1");
+            CHECK(fixture.lights.size() == 2);
+            CHECK(fixture.lights[1].type == BenchmarkLightType::Point);
+            CHECK(fixture.lights[1].castsShadows);
+            CHECK(fixture.lights[1].shadowQuality == BenchmarkShadowQuality::High);
+        }
+        const BenchmarkFixture& unlit = findBenchmarkFixture(manifest,
+            "m7c_pc3_nolight_v1");
+        CHECK(unlit.lights.size() == 1);
+        const std::vector<std::filesystem::path> sources =
+            benchmarkFixtureSourceAssets(unlit);
+        CHECK(sources.size() == 2);
+        CHECK(unlit.sceneFactory.compositionEntities.size() == 2);
+        CHECK(std::ranges::all_of(unlit.sceneFactory.compositionEntities,
+            [](const BenchmarkCompositionEntity& entity) { return entity.wholeModel; }));
+        CHECK(unlit.sceneFactory.compositionEntities[0].sourceAsset == sources[0]);
+        CHECK(unlit.sceneFactory.compositionEntities[1].sourceAsset == sources[1]);
+        const auto localLight = [&manifest](const char* id) {
+            return findBenchmarkFixture(manifest, id).lights.at(1);
+        };
+        CHECK(localLight("m7c_pc3_point_r5_v1").rangeMeters == 5.0f);
+        CHECK(localLight("m7c_pc3_point_r40_v1").rangeMeters == 40.0f);
+        CHECK(!localLight("m7c_pc3_point_r10_unshadowed_v1").castsShadows);
+        CHECK(localLight("m7c_pc3_point_r10_ultra_v1").shadowQuality ==
+            BenchmarkShadowQuality::Ultra);
+        CHECK(localLight("m7c_pc3_point_r10_1e3cd_v1").luminousIntensityCandela ==
+            1'000.0f);
+        CHECK(localLight("m7c_pc3_point_r10_1e6cd_v1").luminousIntensityCandela ==
+            1'000'000.0f);
+        CHECK(localLight("m7c_pc3_spot_r10_v1").type == BenchmarkLightType::Spot);
+        // Every PC3 variant shares the scene and camera; only the light differs.
+        for (const BenchmarkFixture& fixture : manifest.fixtures) {
+            if (!fixture.id.starts_with("m7c_pc3_")) continue;
+            CHECK(fixture.camera.position == unlit.camera.position);
+            CHECK(fixture.camera.target == unlit.camera.target);
+            CHECK(benchmarkFixtureSourceAssets(fixture) == sources);
+        }
+        // PC4: grazing door cases share one camera and light position; the
+        // contact cases compose the Carrera with the project-owned M5 receiver.
+        const BenchmarkFixture& graze = findBenchmarkFixture(manifest,
+            "m7c_pc4_graze_high_v1");
+        CHECK(graze.lights[0].type == BenchmarkLightType::Point);
+        CHECK(graze.lights[0].shadowQuality == BenchmarkShadowQuality::High);
+        CHECK(findBenchmarkFixture(manifest, "m7c_pc4_graze_ultra_v1")
+            .lights[0].shadowQuality == BenchmarkShadowQuality::Ultra);
+        for (const char* id : { "m7c_pc4_graze_ultra_v1",
+                "m7c_pc4_graze_spot_high_v1", "m7c_pc4_graze_spot_ultra_v1" }) {
+            const BenchmarkFixture& fixture = findBenchmarkFixture(manifest, id);
+            CHECK(fixture.camera.position == graze.camera.position);
+            CHECK(fixture.lights[0].position == graze.lights[0].position);
+        }
+        CHECK(findBenchmarkFixture(manifest, "m7c_pc4_graze_spot_high_v1")
+            .lights[0].type == BenchmarkLightType::Spot);
+        const BenchmarkFixture& contact = findBenchmarkFixture(manifest,
+            "m7c_pc4_contact_high_v1");
+        CHECK(contact.sceneFactory.compositionEntities.size() == 2);
+        CHECK(!contact.sceneFactory.compositionEntities[1].wholeModel);
+        CHECK(benchmarkFixtureSourceAssets(contact).size() == 2);
         return true;
     }
 
@@ -2072,6 +2289,8 @@ int main() {
         { "periodic camera path and wrap contract",
             testPeriodicCameraPathAndWrapContract },
         { "composition schema rejections", testCompositionSchemaRejections },
+        { "multi-source composition contract", testMultiSourceCompositionContract },
+        { "M7C owner-case fixture contract", testM7cOwnerCasesFixtureContract },
         { "legacy manifests parse unchanged", testLegacyManifestsParseUnchanged },
         { "M9 temporal fixture contract", testM9TemporalFixtureContract },
         { "repeated loads are identical", testRepeatedLoadsAreIdentical },

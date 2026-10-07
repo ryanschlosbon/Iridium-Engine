@@ -22,8 +22,9 @@ namespace Iridium {
         glm::vec4 atlasScaleBias{};
         // Light slot, sampleable, tile resolution, stale age.
         glm::uvec4 metadata{};
-        // Receiver bias in shadow texels, reserved, reserved, reserved.
-        glm::vec4 biasParameters{ 1.0f, 0.0f, 0.0f, 0.0f };
+        // Receiver depth bias, receiver-plane correction clamp and normal
+        // offset in shadow texels (spot_shadow.glsl), reserved.
+        glm::vec4 biasParameters{ 1.0f, 2.0f, 0.5f, 0.0f };
         // Near/far planes, local source radius, tangent of the outer cone.
         glm::vec4 projectionParameters{};
         // Blocker samples, filter samples, contact hardening, max penumbra.

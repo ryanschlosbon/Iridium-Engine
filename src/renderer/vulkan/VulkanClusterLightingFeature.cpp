@@ -338,6 +338,17 @@ namespace Iridium {
         submittedClusterCounts_[frameIndex] = clusterCount;
     }
 
+    void VulkanClusterLightingFeature::recordFrame(uint32_t frameIndex,
+        const glm::mat4& view, const glm::mat4& projection, float nearPlane,
+        float farPlane, VkExtent2D sceneExtent, uint32_t activeLightCount) {
+        const ClusterGridDimensions dimensions = clusterGridDimensions(config_,
+            { sceneExtent.width, sceneExtent.height, nearPlane, farPlane,
+                view, projection });
+        recordProbeCluster(static_cast<uint32_t>(dimensions.clusterCount()));
+        recordClusters(frameIndex, static_cast<uint32_t>(dimensions.clusterCount()),
+            activeLightCount);
+    }
+
     bool VulkanClusterLightingFeature::probeClusterActive(void* owner,
         const VulkanFrameRecordContext&) {
         return static_cast<const VulkanClusterLightingFeature*>(owner)->
@@ -574,7 +585,9 @@ namespace Iridium {
             static_cast<uint64_t>(config_.maximumLightReferences) * 4u +
             static_cast<uint64_t>(config_.maximumFallbackLights) * 4u +
             64u + clusterCount * 4u + clusterCount * 4u +
-            clusterScanScratchElementCount(clusterCount) * 4u + 32u;
+            clusterScanScratchElementCount(clusterCount) * 4u + 32u +
+            static_cast<uint64_t>(kMaximumGpuLightCapacity) *
+                sizeof(PackedGpuClusterLightBounds);
         clusterTelemetry_ = {
             .bufferBytesPerFrame = bufferBytesPerFrame,
             .clusterCount = submittedClusterCounts_[frameIndex],

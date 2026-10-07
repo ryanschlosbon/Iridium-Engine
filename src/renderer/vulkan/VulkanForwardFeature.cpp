@@ -62,9 +62,10 @@ namespace Iridium {
             passes_[static_cast<size_t>(Queue::OpaqueForward)].pass);
     }
 
-    void VulkanForwardFeature::recordRefractionPyramids(bool required) {
+    void VulkanForwardFeature::recordRefractionPyramids(bool required,
+        bool culledDemand) {
         VulkanFrameTelemetry& telemetry = context_->telemetry;
-        pyramidResidency_.observe(required);
+        pyramidResidency_.observe(required || culledDemand);
         if (pyramidResidency_.requiresFallback(required) && telemetry.collecting()) {
             ++telemetry.counters().transparencyPyramidFallbackFrames;
         }

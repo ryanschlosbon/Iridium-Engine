@@ -1,5 +1,6 @@
 #pragma once
 
+#include "renderer/rhi/LightingTypes.h"
 #include "renderer/rhi/ReflectionProbeTypes.h"
 #include "core/types/SceneEntityUuid.h"
 #include "scene/SceneWorld.h"
@@ -194,5 +195,31 @@ namespace Iridium {
         const ReflectionProbeCandidate& candidate,
         glm::vec3 worldPosition,
         glm::vec3 worldReflectionDirection) noexcept;
+
+    // M7.10.5: true unless the light provably contributes nothing to a
+    // capture at capturePosition. Directional lights always reach it. The
+    // capture clips depth (no depth clamp), so it shades only points inside
+    // the cube of half-extent captureFarMeters around the capture position,
+    // and a local light contributes W(d,r) = 0 at d >= r; a light whose range
+    // sphere misses that cube (with a conservative margin) cannot reach it.
+    [[nodiscard]] bool lightCanReachReflectionProbeCapture(
+        const PackedGpuLight& light, glm::vec3 capturePosition,
+        float captureFarMeters) noexcept;
+
+    // M7.10.5: the light-record slots a probe capture evaluates: every slot
+    // below the highest active slot + 1 (cleared slots contribute nothing),
+    // so an active light in a high slot left by a removal is still lit.
+    [[nodiscard]] uint32_t reflectionProbeCaptureLightSlotBound(
+        const LightingFramePacket& lights) noexcept;
+
+    // M7.10.5: the lighting revision of one realtime probe capture. Hashes
+    // (slot, record revision, evaluated) for every active light that can
+    // reach the capture, so an edit to an out-of-reach light, or adding or
+    // removing one, leaves it unchanged, while an edit to a reaching light
+    // or a light entering or leaving reach changes it. Every active light
+    // lies inside the capture's slot bound. Allocation-free; never zero.
+    [[nodiscard]] uint64_t reflectionProbeCaptureLightingRevision(
+        const LightingFramePacket& lights, glm::vec3 capturePosition,
+        float captureFarMeters) noexcept;
 
 } // namespace Iridium

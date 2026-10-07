@@ -36,6 +36,13 @@ namespace Iridium {
             const noexcept {
             return casterRevisionObserver_;
         }
+        // M7.10.0: reports one caster-revision evaluation to that observer,
+        // if any. Callers guard the call with kQualificationBuild, so other
+        // builds neither build the sample nor make the call.
+        void observeCasterRevision(const VulkanCasterRevisionSample& sample) const {
+            if (casterRevisionObserver_ != nullptr)
+                casterRevisionObserver_->observeCasterRevision(sample);
+        }
         // Null without an attached editor bridge (headless and test hosts).
         [[nodiscard]] IVulkanEditorUi* editorUi() const noexcept {
             return editorUi_;

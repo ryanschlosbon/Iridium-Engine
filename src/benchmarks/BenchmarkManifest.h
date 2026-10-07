@@ -84,7 +84,8 @@ namespace Iridium {
         // One cooked model instanced over a grid (the M0-M7 factory).
         InstancedGrid,
         // M9 G6b: separately placed and animated entities, each drawing one
-        // top-level glTF node of the fixture's single source asset.
+        // top-level glTF node of the fixture's source asset. M7C P1: or the
+        // whole model, and of a per-entity source asset.
         Composition,
     };
 
@@ -122,10 +123,18 @@ namespace Iridium {
     struct BenchmarkCompositionEntity {
         // Unique within the fixture; seeds the entity's stable scene identity.
         std::string id;
-        // Top-level glTF node of the fixture source asset. Node transforms are
+        // M7C P1: the source asset this entity draws (`source_asset`, relative
+        // to the manifest and listed in content_files), resolved like the
+        // fixture's. Absent in the manifest: the fixture's source_asset. Each
+        // distinct source is backed by its own cooked model artifact.
+        std::filesystem::path sourceAsset;
+        // Top-level glTF node of the source asset. Node transforms are
         // baked at cook time, so the node's geometry is authored about the
         // entity pivot and `translation/rotation/scale` place it.
         uint32_t sourceNode = 0;
+        // M7C P1: no `node` in the manifest; the entity draws the whole source
+        // model (as an instanced-grid instance does) and sourceNode is unused.
+        bool wholeModel = false;
         glm::vec3 translation{ 0.0f };
         // TransformComponent convention: R = Rz * Ry * Rx, degrees.
         glm::vec3 rotationDegrees{ 0.0f };
@@ -242,6 +251,11 @@ namespace Iridium {
         const ProjectAssetRoots& roots);
     [[nodiscard]] const BenchmarkFixture& findBenchmarkFixture(
         const BenchmarkManifest& manifest, const std::string& id);
+    // The distinct source assets a fixture loads: its source_asset first, then
+    // each further composition-entity source in first-use order. One entry for
+    // every single-model fixture.
+    [[nodiscard]] std::vector<std::filesystem::path> benchmarkFixtureSourceAssets(
+        const BenchmarkFixture& fixture);
     [[nodiscard]] BenchmarkCameraPose evaluateBenchmarkCamera(
         const BenchmarkFixture& fixture, uint64_t frameIndex) noexcept;
     // 0 before any cut. A legacy single cut gives 1 from its frame on; a path

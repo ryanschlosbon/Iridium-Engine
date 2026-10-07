@@ -1,53 +1,32 @@
 #version 450
 #include "include/clustered_lighting.glsl"
 
+// M7.10.2: workgroup (light, chunk) counts every gl_NumWorkGroups.y-th
+// 64-cluster run of the light's AABB (grid-stride), so a large light spreads
+// over many workgroups. cluster_light_bounds evaluated the light and its
+// reservation; the per-cluster increments and their overflow checks are
+// unchanged.
 layout(local_size_x = 64) in;
-
-shared uvec3 sharedMinimum;
-shared uvec3 sharedSpan;
-shared uint sharedEnabled;
 
 void main() {
     uint activeIndex = gl_WorkGroupID.x;
-    uint lane = gl_LocalInvocationID.x;
-    if (lane == 0u) {
-        sharedEnabled = 0u;
-        if (activeIndex < clusterInput.x &&
-            clusterDiagnostics[IRIDIUM_DIAGNOSTIC_OVERFLOW] == 0u) {
-            uint slot = activeLightSlots[activeIndex];
-            PackedGpuLight light = lights[slot];
-            if (iridiumLightType(light) == IRIDIUM_LIGHT_TYPE_DIRECTIONAL) {
-                uint globalIndex = atomicAdd(
-                    clusterDiagnostics[IRIDIUM_DIAGNOSTIC_DIRECTIONAL], 1u);
-                if (globalIndex < clusterLimits.w)
-                    globalLightSlots[globalIndex] = slot;
-                else atomicMax(clusterDiagnostics[IRIDIUM_DIAGNOSTIC_OVERFLOW],
-                    IRIDIUM_CLUSTER_OVERFLOW_DIRECTIONAL);
-            }
-            else {
-                atomicAdd(clusterDiagnostics[IRIDIUM_DIAGNOSTIC_LOCAL], 1u);
-                IridiumClusterBounds bounds = iridiumLocalLightBounds(light);
-                if (bounds.valid) {
-                    sharedMinimum = bounds.minimum;
-                    sharedSpan = bounds.maximum - bounds.minimum + uvec3(1u);
-                    sharedEnabled = iridiumReserveReferences(
-                        sharedSpan.x * sharedSpan.y * sharedSpan.z) ? 1u : 0u;
-                }
-            }
-        }
-    }
-    barrier();
-    if (sharedEnabled == 0u) return;
+    if (activeIndex >= clusterInput.x) return;
+    ClusterLightBounds record = clusterLightBounds[activeIndex];
+    if ((record.spanFlags.w & IRIDIUM_CLUSTER_BOUNDS_COUNT) == 0u) return;
 
-    uint volume = sharedSpan.x * sharedSpan.y * sharedSpan.z;
-    uint plane = sharedSpan.x * sharedSpan.y;
-    for (uint linear = lane; linear < volume; linear += 64u) {
+    uvec3 minimum = record.minimumSlot.xyz;
+    uvec3 span = record.spanFlags.xyz;
+    uint volume = span.x * span.y * span.z;
+    uint plane = span.x * span.y;
+    uint stride = 64u * gl_NumWorkGroups.y;
+    for (uint linear = gl_WorkGroupID.y * 64u + gl_LocalInvocationID.x;
+        linear < volume; linear += stride) {
         if (clusterDiagnostics[IRIDIUM_DIAGNOSTIC_OVERFLOW] != 0u) return;
         uint z = linear / plane;
         uint remainder = linear - z * plane;
-        uint y = remainder / sharedSpan.x;
-        uint x = remainder - y * sharedSpan.x;
+        uint y = remainder / span.x;
+        uint x = remainder - y * span.x;
         iridiumSaturatingIncrementCount(iridiumClusterIndex(
-            sharedMinimum + uvec3(x, y, z)));
+            minimum + uvec3(x, y, z)));
     }
 }

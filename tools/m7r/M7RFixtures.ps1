@@ -14,6 +14,11 @@ $M7RModels = [ordered]@{
     'ordinary2' = @{ Source = 'benchmarks/m6/ordinary2_closed_tetrahedron.gltf' }
     'cine8'     = @{ Source = 'benchmarks/m6/cinematic8_nested_tetrahedra.gltf' }
     'woit'      = @{ Source = 'benchmarks/m6/weighted_oit_particles.gltf' }
+    # M7 completion owner cases (local-only third-party content; sidecars beside the
+    # sources). The 930 is the owner's editor import (porsche911930t, with its material
+    # overrides); models/free_1975_porsche_911_930_turbo has no sidecar and cannot cook.
+    'porsche911' = @{ Source = 'models/porsche_911_carrera4s/porsche_911_carrera4s.gltf' }
+    'porsche930' = @{ Source = 'porsche911930t/porsche911930t.gltf' }
     # Cooked environment (IBL) for the probe-capture fixture; local-only third-party HDRI.
     'belfast-env' = @{ Source = 'hdri/belfast_sunset_puresky_4k.hdr' }
 }
@@ -60,6 +65,61 @@ $M7RTimingRoutes = @(
     @{ Key = 'T-F5-hetero'; Id = 'm7_heterogeneous_shadow_warm_motion_v1'; Manifest = 'assets/m7-heterogeneous-shadow-admission-manifest.v1.json'; Model = $contact; Args = @() }
     @{ Key = 'T-F6-probecap'; Id = 'm7_probe_lod_reflection_motion_v1'; Manifest = 'assets/m7-probe-lod-admission-manifest.v1.json'; Model = $alfa; Environment = 'belfast-env'; Args = @('--validate-reflection-probes') }
 )
+
+# --- M7 completion owner cases (docs/milestones/M7-completion.md, M7.P1) -------------
+# Not part of the frozen set or the default timing routes. Model names one cooked model;
+# Models names several (a multi-model composition fixture): the first is the startup
+# model (--cooked-model-artifact), the others are passed as --benchmark-model-artifact
+# and the engine matches every artifact to its fixture source by asset identity.
+# Captures: Run-OwnerCaseCaptures.ps1. Timing: $M7CTimingRoutes (T-<Key>), selected by
+# name with Run-TimingPair.ps1 -Only or Run-FeatureAdmission.ps1 -Routes. The product
+# route adds -ExtraArgs "--anti-aliasing taa --exposure auto --bloom on".
+$m7c = 'assets/m7c-owner-cases-manifest.v1.json'
+$M7COwnerCases = @(
+    # PC1 many objects: the Carrera as 1, 4 and 16 instances, each all visible, about
+    # half off-frustum and all off-frustum (camera turned away, cars inside the far
+    # plane); the Alfa as 16; the existing 256-instance stress fixture for reference.
+    foreach ($n in @(1, 4, 16)) {
+        foreach ($state in @(@('all', 'all_visible'), @('half', 'half_off'), @('off', 'all_off'))) {
+            # All off: the capture is the constant environment by design (ConstantImage).
+            @{ Key = "PC1-911-n$n-$($state[0])"; Id = "m7c_pc1_911_n$($n)_$($state[1])_v1"; Manifest = $m7c; Model = 'porsche911'; Args = @(); ConstantImage = ($state[0] -eq 'off') }
+        }
+    }
+    @{ Key = 'PC1-alfa-n16-all'; Id = 'm7c_pc1_alfa_n16_all_visible_v1'; Manifest = $m7c; Model = $alfa; Args = @() }
+    @{ Key = 'PC1-stress256'; Id = 'm7_many_instance_stress_v1'; Manifest = $threeDense; Model = $alfa; Args = @() }
+    # PC2 close to glass: the Carrera with a directional and a shadowed point light; the
+    # camera puts glass at about 5, 25, 60 and 100% of the screen.
+    foreach ($glass in @('far', 'mid', 'near', 'fill')) {
+        @{ Key = "PC2-glass-$glass"; Id = "m7c_pc2_glass_$($glass)_v1"; Manifest = $m7c; Model = 'porsche911'; Args = @() }
+    }
+    # PC3 point-light cost: the 930 and the Carrera side by side, camera between them.
+    foreach ($variant in @('nolight', 'point_r5', 'point_r10', 'point_r20', 'point_r40',
+            'point_r10_unshadowed', 'point_r10_ultra', 'point_r10_1e3cd', 'point_r10_1e6cd', 'spot_r10')) {
+        @{ Key = "PC3-$($variant -replace '_', '-')"; Id = "m7c_pc3_$($variant)_v1"; Manifest = $m7c; Models = @('porsche930', 'porsche911'); Args = @() }
+    }
+    # PC4 local-shadow receiver bias (M7.10.6): the Carrera's door lit at grazing
+    # incidence by a shadowed point or spot light (High and Ultra), and a contact check
+    # (the Carrera on a ground plane with a 1 cm triangle blocker beside it, overhead
+    # point light) where over-biasing would leak light.
+    foreach ($variant in @('graze_high', 'graze_ultra', 'graze_spot_high', 'graze_spot_ultra')) {
+        @{ Key = "PC4-$($variant -replace '_', '-')"; Id = "m7c_pc4_$($variant)_v1"; Manifest = $m7c; Model = 'porsche911'; Args = @() }
+    }
+    foreach ($quality in @('high', 'ultra')) {
+        @{ Key = "PC4-contact-$quality"; Id = "m7c_pc4_contact_$($quality)_v1"; Manifest = $m7c; Models = @('porsche911', 'contact'); Args = @() }
+    }
+)
+$M7CTimingRoutes = @($M7COwnerCases | ForEach-Object {
+    $route = $_.Clone()
+    $route.Key = "T-$($_.Key)"
+    $route
+})
+
+# Timing routes by key: every M7R and M7C route; with no keys, the M7R routes (the
+# owner-case routes run only when named).
+function Select-M7RTimingRoutes([string[]] $keys) {
+    if (-not $keys -or $keys.Count -eq 0) { return @($M7RTimingRoutes) }
+    return @(@($M7RTimingRoutes) + @($M7CTimingRoutes) | Where-Object { $keys -contains $_.Key })
+}
 
 function Get-M7RRepoRoot { (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path }
 
@@ -203,4 +263,17 @@ function Get-M7RModelArtifact([string] $root, [string] $model) {
     $entry = $map.$model
     if (-not $entry) { throw "No cooked artifact for $model; rerun Cook-FrozenModels.ps1." }
     return $entry.artifact
+}
+
+# The cooked-model arguments of a fixture or route (absolute paths under $root): its
+# Model as --cooked-model-artifact, or for Models the first so and each further one as
+# --benchmark-model-artifact (the engine matches them to sources by asset identity).
+function Get-M7RModelArtifactArgs([string] $root, $entry) {
+    $models = @(if ($entry.Models) { $entry.Models } else { $entry.Model })
+    $arguments = @()
+    for ($i = 0; $i -lt $models.Count; $i++) {
+        $flag = if ($i -eq 0) { '--cooked-model-artifact' } else { '--benchmark-model-artifact' }
+        $arguments += @($flag, (Join-Path $root (Get-M7RModelArtifact $root $models[$i])))
+    }
+    return $arguments
 }

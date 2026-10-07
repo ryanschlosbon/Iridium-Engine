@@ -1,0 +1,41 @@
+#version 450
+#include "include/clustered_lighting.glsl"
+
+// M7.10.2: one invocation per active light evaluates, once, what lane 0 of
+// every count workgroup evaluated before: the global directional list, the
+// local-light diagnostic, the light's cluster AABB and its reference
+// reservation. The record it writes gates the chunked count and fill stages.
+layout(local_size_x = 64) in;
+
+void main() {
+    uint activeIndex = gl_GlobalInvocationID.x;
+    if (activeIndex >= clusterInput.x) return;
+    uint slot = activeLightSlots[activeIndex];
+    ClusterLightBounds record;
+    record.minimumSlot = uvec4(0u, 0u, 0u, slot);
+    record.spanFlags = uvec4(0u);
+    if (clusterDiagnostics[IRIDIUM_DIAGNOSTIC_OVERFLOW] == 0u) {
+        PackedGpuLight light = lights[slot];
+        if (iridiumLightType(light) == IRIDIUM_LIGHT_TYPE_DIRECTIONAL) {
+            uint globalIndex = atomicAdd(
+                clusterDiagnostics[IRIDIUM_DIAGNOSTIC_DIRECTIONAL], 1u);
+            if (globalIndex < clusterLimits.w)
+                globalLightSlots[globalIndex] = slot;
+            else atomicMax(clusterDiagnostics[IRIDIUM_DIAGNOSTIC_OVERFLOW],
+                IRIDIUM_CLUSTER_OVERFLOW_DIRECTIONAL);
+        }
+        else {
+            atomicAdd(clusterDiagnostics[IRIDIUM_DIAGNOSTIC_LOCAL], 1u);
+            IridiumClusterBounds bounds = iridiumLocalLightBounds(light);
+            if (bounds.valid) {
+                uvec3 span = bounds.maximum - bounds.minimum + uvec3(1u);
+                uint flags = IRIDIUM_CLUSTER_BOUNDS_FILL;
+                if (iridiumReserveReferences(span.x * span.y * span.z))
+                    flags |= IRIDIUM_CLUSTER_BOUNDS_COUNT;
+                record.minimumSlot.xyz = bounds.minimum;
+                record.spanFlags = uvec4(span, flags);
+            }
+        }
+    }
+    clusterLightBounds[activeIndex] = record;
+}

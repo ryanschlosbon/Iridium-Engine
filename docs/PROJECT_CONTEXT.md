@@ -74,6 +74,29 @@ every checkout reads it in place.
   `Get-IridiumLocalAssetRoot` over the same configuration. A worktree reuses the
   main checkout's cooked `out/m7r/ddc` and frozen-set baselines.
 
+## Evidence retention and disk use (owner decision, 2026-10-07)
+
+Qualification evidence under `out/` is gitignored working data, never the durable
+record. Accepted conclusions, numbers and hashes belong in `docs/` under git.
+
+- **While a slice is active**, its raw evidence (images, profile JSONL, logs, held
+  references) may live under `out/`.
+- **When a slice is accepted**, prune its evidence with `tools/Prune-Evidence.ps1
+  -Summarize <dirs> -Execute`. The tool keeps every `.md` and `.txt` and every small
+  `.json` (summaries, `runs.json`, `machine-state.json`, `hashes.json`, capture
+  sidecars) and deletes the payloads. It refuses to run on any link and never deletes
+  protected baselines, caches, builds or tools. Run it without `-Execute` first.
+- **Always kept:** the current frozen baseline (`out/m7r/captures/m9-g8` until a
+  successor is frozen), `out/build`, cook caches (`out/editor/model-ddc`,
+  `out/m7r/ddc`, `out/m9/ddc`, `out/ddc`), the pipeline cache and `out/tools`.
+- **64-sample temporal references** (`out/m9/motion/ref64`, about 6.4 GB each at 4K)
+  are deleted right after the evaluation that needed them.
+- **A/B baselines:** use at most one Release-only baseline worktree, created for the
+  comparison and removed afterwards (`git worktree remove`, after a link scan).
+  Never keep long-lived baseline worktrees; any commit can be rebuilt.
+- **On 2026-10-07** the first prune removed 152.7 GB of pre-M7-completion raw
+  evidence and four old baseline worktrees (11 GB), with owner approval.
+
 ## Why this document exists
 
 This is the compact handoff for new lead tasks. It records facts found during the post-RHI-refactor architecture review, accepted direction, and unresolved choices. It is not a substitute for reading current source, the roadmap, milestone plans, and ADRs.

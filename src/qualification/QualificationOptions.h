@@ -21,6 +21,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace Iridium {
 
@@ -55,6 +56,10 @@ namespace Iridium {
         // Benchmark fixtures.
         std::string benchmarkId;
         std::filesystem::path benchmarkManifest;
+        // M7C P1 --benchmark-model-artifact PATH (repeatable): cooked model
+        // artifacts beyond --cooked-model-artifact for a multi-model fixture.
+        // Each is matched to a fixture source by asset identity, not order.
+        std::vector<std::filesystem::path> benchmarkModelArtifacts;
         bool selectBenchmarkEntity = false;
         bool disableBenchmarkLocalShadows = false;
         uint64_t weightedOitOrderSeed = 0;

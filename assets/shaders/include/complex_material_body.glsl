@@ -15,6 +15,7 @@ layout(location = 5) in vec2 fragTexCoord1;
 
 #if defined(IRIDIUM_INDEXED_MATERIAL_TEXTURES)
 #extension GL_EXT_nonuniform_qualifier : require
+#extension GL_EXT_control_flow_attributes : require
 layout(std430, set = 1, binding = 0) readonly buffer MaterialTable {
     PackedMaterial materials[];
 };
@@ -778,7 +779,11 @@ void main() {
 
     // Resolve view-dependent layer attenuation and transmission parameters once.
     // Every direct light below then evaluates the same authored closure stack.
-    for (uint index = 0u; index < material.complexLobeCount; ++index) {
+    // M7.10.4: the lobe loops run to the constant capacity and stop at the
+    // material's count, so they unroll and the per-lobe arrays stay in
+    // registers instead of per-pixel local memory (identical arithmetic).
+    [[unroll]] for (uint index = 0u; index < 8u; ++index) {
+        if (index >= material.complexLobeCount) break;
         PackedComplexLobe lobe = material.complexLobes[index];
         directLobeTypes[index] = lobe.type;
         if (lobe.type == 0u) {
@@ -861,8 +866,8 @@ void main() {
         roughness, frame.normal, view, ao, fragWorldPos,
         IRIDIUM_MATERIAL_SCENE_PIXEL) * baseLayerAttenuation;
     vec3 iblLobes = vec3(0.0);
-    for (uint lobeIndex = 0u; lobeIndex < material.complexLobeCount;
-        ++lobeIndex) {
+    [[unroll]] for (uint lobeIndex = 0u; lobeIndex < 8u; ++lobeIndex) {
+        if (lobeIndex >= material.complexLobeCount) break;
         uint lobeType = directLobeTypes[lobeIndex];
         if (lobeType == 0u) {
             float factor = directLobeData[lobeIndex].x;
@@ -897,8 +902,8 @@ void main() {
     result += iblLobes;
     vec3 directContribution = vec3(0.0);
     float shadowVisibility = 1.0;
-    IridiumDirectionalShadowReceiver shadowReceiver =
-        IridiumDirectionalShadowReceiver(fragWorldPos, frame.normal,
+    IridiumShadowReceiver shadowReceiver =
+        IridiumShadowReceiver(fragWorldPos, frame.normal,
             shadowGeometricNormal, dFdx(fragWorldPos), dFdy(fragWorldPos));
 
     IridiumDirectLightRange lightRange = iridiumDirectLightRange(
@@ -916,11 +921,11 @@ void main() {
         if ((floatBitsToUint(lightRecord.shapeMetadata.z) & 3u) ==
             IRIDIUM_LIGHT_TYPE_SPOT)
             visibility *= iridiumSpotShadowVisibility(lightSlot,
-                lightRecord, fragWorldPos, frame.normal, light);
+                lightRecord, shadowReceiver, light);
         else if ((floatBitsToUint(lightRecord.shapeMetadata.z) & 3u) ==
             IRIDIUM_LIGHT_TYPE_POINT)
             visibility *= iridiumPointShadowVisibility(lightSlot,
-                lightRecord, fragWorldPos, frame.normal, light);
+                lightRecord, shadowReceiver, light);
         shadowVisibility = min(shadowVisibility, visibility);
         vec3 radiance = directLight.radiance * visibility;
         float noL = max(dot(frame.normal, light), 0.0);
@@ -932,8 +937,8 @@ void main() {
                 noL * baseLayerAttenuation;
         }
 
-        for (uint lobeIndex = 0u; lobeIndex < material.complexLobeCount;
-            ++lobeIndex) {
+        [[unroll]] for (uint lobeIndex = 0u; lobeIndex < 8u; ++lobeIndex) {
+            if (lobeIndex >= material.complexLobeCount) break;
             uint lobeType = directLobeTypes[lobeIndex];
             if (lobeType == 0u) {
                 float factor = directLobeData[lobeIndex].x;

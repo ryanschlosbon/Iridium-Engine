@@ -82,7 +82,10 @@ namespace Iridium {
         void stage(const FrameInputs& inputs) noexcept { staged_ = inputs; }
         void recordOpaque();
         // Observes the pyramids' residency demand, then records or skips them.
-        void recordRefractionPyramids(bool required);
+        // M7.10.1: `required` is this frame's need (compatibility work
+        // survived culling); culledDemand keeps the residency for culled
+        // compatibility work without building the pyramids.
+        void recordRefractionPyramids(bool required, bool culledDemand);
         void recordSorted();
         void recordCompatibility();
 

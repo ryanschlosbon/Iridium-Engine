@@ -1,14 +1,19 @@
 #include "renderer/vulkan/VulkanTemporalAntiAliasingFeature.h"
 
 #include "renderer/vulkan/DescriptorAllocator.h"
+#include "renderer/vulkan/VulkanExposureFeature.h"
+#include "renderer/vulkan/VulkanFrameScheduler.h"
 #include "renderer/vulkan/VulkanFrameTargets.h"
 #include "renderer/vulkan/VulkanFrameTelemetry.h"
 #include "renderer/vulkan/VulkanMeshLayouts.h"
 #include "renderer/vulkan/VulkanProductionGraphIds.h"
+#include "renderer/rhi/Mesh.h"
+#include "profiling/CpuProfiler.h"
 #include "utils/File.h"
 
 #include <glm/glm.hpp>
 
+#include <cmath>
 #include <stdexcept>
 #include <string>
 
@@ -130,6 +135,44 @@ void VulkanTemporalAntiAliasingFeature::registerPasses(VulkanRenderGraphExecutor
 
 void VulkanTemporalAntiAliasingFeature::onGraphReleased() {
     resolvePass_ = {};
+}
+
+void VulkanTemporalAntiAliasingFeature::stageFrame(const ViewTransportRecord& view,
+    float manualExposureEv, float viewDeltaSeconds, VkExtent2D sceneExtent,
+    const TemporalAntiAliasingTuning& tuning, VkDescriptorSet globalSet,
+    const VulkanExposureFeature& exposure) {
+    if (!active()) return;
+    const VulkanExposureFeature::PreviousState exposureState =
+        exposure.previousState(context_->scheduler.currentFrameIndex());
+    const glm::vec2 extent(static_cast<float>(sceneExtent.width),
+        static_cast<float>(sceneExtent.height));
+    const float exposureMultiplier = std::exp2(manualExposureEv);
+    stage({
+        .request = {
+            .provider = TemporalResolveProvider::NativeTaa,
+            .extents = { { sceneExtent.width, sceneExtent.height },
+                { sceneExtent.width, sceneExtent.height } },
+            .jitterPixels = glm::vec2(view.jitter) * extent * 0.5f,
+            .jitterSequenceLength = view.temporalInfo.w,
+            .exposure = exposureMultiplier,
+            .previousExposure = exposureMultiplier,
+            .resetHistory = (view.temporalInfo.z & ViewTemporalHistoryReset) != 0u,
+            .camera = { view.depthRange.x, view.depthRange.y,
+                2.0f * std::atan(1.0f / view.projection[1][1]),
+                viewDeltaSeconds },
+            .nativeTaa = tuning,
+        },
+        .globalSet = globalSet,
+        .exposureState = exposureState.buffer,
+        .exposureFromState = exposureState.valid,
+    });
+    // Temporal health (editor Profiler): 0 means history was discarded.
+    CpuProfiler* profiler = context_->profiler;
+    if (profiler && profiler->isEnabled()) {
+        profiler->recordCounter("temporal.taa.history_valid", historyWasValid() ? 1 : 0);
+        if (exposure.mode() == ExposureMode::Auto)
+            profiler->recordCounter("exposure.history_valid", exposureState.valid ? 1 : 0);
+    }
 }
 
 void VulkanTemporalAntiAliasingFeature::writeDescriptors(uint32_t frameIndex,
