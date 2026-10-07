@@ -555,9 +555,8 @@ oversized-model cases (FRAME_BUDGET "Import, cooking, and publication").
 
 ## Open questions for the owner
 
-1. **Which saved scene and camera reproduce the two-car point-light case?** The owner
-   is asked to save it, or the lead approximates it from the description.
-2. **Disk retention policy approval** (see the decision log, 2026-10-07).
+None open. The two-car scene was never saved, so PC3 is the reference approximation
+(owner, 2026-10-07).
 
 ## Decision log
 
@@ -668,6 +667,27 @@ oversized-model cases (FRAME_BUDGET "Import, cooking, and publication").
     - forward recording: 0.571 → 0.285 ms.
 
     These are single short runs, diagnostic only.
+
+- **2026-10-07 — Evidence retention policy (owner-approved).**
+  - Added `tools/Prune-Evidence.ps1` and the policy in PROJECT_CONTEXT "Evidence
+    retention and disk use" and AGENTS.md.
+  - The first prune removed 152.7 GB of raw pre-completion evidence (summaries kept)
+    and the four `out/m7r/worktrees` baselines (11 GB). C: free space went from 153 to
+    304 GB.
+  - This milestone's `m7c-*` labels stay until their slices are accepted. Each later
+    slice prunes its own evidence on acceptance.
+- **2026-10-07 — PC3 diagnostic attribution (single process; machine not verified
+  quiet).** One 10 m point light with the camera inside its sphere:
+  - `gpu.lighting.cluster` rises from 0.020 to 4.160 ms, with 138,720 of 195,840
+    clusters used;
+  - `gpu.transparency.sorted.forward` rises from 1.314 to 3.657 ms;
+  - deferred lighting rises from 0.200 to 0.398 ms.
+
+  The point cube is a cache hit, so shadow raster is not the cost. Root cause of the
+  cluster cost: `cluster_count`/`cluster_fill` run one 64-lane workgroup per light
+  over the light's whole cluster AABB, which serializes large lights. That is fixed
+  as M7.10.2 (parallel assignment, refactor tier). The sorted-forward increase is the
+  next PC3 attribution item.
 
 ## Completion report
 
