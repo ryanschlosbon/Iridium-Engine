@@ -3,7 +3,7 @@
 ## Header
 
 - **Milestone:** M7 — GPU Scene and Indirect Visibility, completion slices M7.9–M7.12
-- **Status:** Draft, awaiting owner approval (2026-10-07). No implementation slice has started.
+- **Status:** Approved by the owner 2026-10-07. Active slice: M7.10.0 (backend headroom).
 - **Lead:** one Claude Code lead session for all four slices
   (`docs/milestones/M7-completion-task-lead-prompt.md`)
 - **Branch / PR:** `m7-completion` from `main` (`8a9a601`); one PR into `main`
@@ -264,13 +264,31 @@ any byte-identity exception is explained.
     light. A camera series puts glass at about 5%, 25%, 60% and about 100% of the
     screen (windshield close-up). Coverage comes from a separate
     `--profile-transparent-overdraw` run, because that counter costs time.
-  - **PC3 bright point light:** Porsche with one shadowed point light.
-    - intensity sweep at fixed 10 m range: 1e3, 1e4, 1e5 and 1e6 cd;
-    - range sweep at 1e5 cd: 5, 10, 20, 40 and 80 m;
-    - High (hard) and Ultra (PCSS) shadow quality;
-    - an *editing* variant whose intensity changes every frame. This needs a small
-      qualification-only manifest extension, `lights[].intensity_ramp`, applied by
-      `BenchmarkScene` through the existing light component path.
+  - **PC3 point-light cost** (re-scoped from the owner's answer, 2026-10-07):
+    - **Owner observation:** the camera sits between the 930 and the 911 in the
+      editor. With no point light it runs at about 300 FPS (3.33 ms); adding one point
+      light drops it to about 220 FPS (4.55 ms), roughly +1.2 ms wall time,
+      **regardless of intensity**. Range scales the cost; source radius barely
+      matters. Spot and directional lights cost less.
+    - **Fixture:** the 930 and the 911 with the camera between them. This needs the
+      multi-model harness (below), pulled forward from M7.12.
+    - **Variants:**
+      - no light;
+      - one point light, with range 5, 10, 20 and 40 m;
+      - unshadowed, High (hard) and Ultra (PCSS);
+      - the same scene with one spot light and with one directional light, for the
+        relative cost;
+      - one intensity point at 1e3 and at 1e6 cd, confirming independence.
+    - **Attribution targets:**
+      - the point-cube shadow raster: is the cube re-rendered in steady frames, for
+        example by the global caster revision?
+      - shadow sampling taps in deferred and complex forward;
+      - cluster assignment against range;
+      - deferred and forward light-loop cost.
+  - **Multi-model harness (qualification-only, pulled forward from M7.12):** a
+    composition fixture may name several source assets, each with its own
+    `--cooked-model-artifact`. It lives in `src/qualification/harness/BenchmarkScene`
+    and the manifest parser; core interfaces are unchanged.
 - **Attribution:** product and measurement routes, single process, with the full
   counter and pass breakdown. Captures (`scene`, `scene-resolved`, `final-sdr`) of
   each fixture for visual reference, inspected by eye.
@@ -306,7 +324,10 @@ any byte-identity exception is explained.
 Candidates. The P1 baseline decides which proceed and in what order; anything
 unmotivated by measurement is dropped from phase 1.
 
-- **Bright light, invalidation (refactor tier):**
+- **Bright light, invalidation (refactor tier; low priority).** The owner's
+  steady-state case does not depend on intensity, so this item is not motivated by
+  that case. It removes real edit-time waste and is exact, so it is kept as an
+  optional cheap fix:
   - split the light record revision into a *shadow-geometry* revision (type,
     position, orientation, range, cone, source radius, shadow settings) and a
     radiometric revision. Local shadows go dirty only on the former;
@@ -319,12 +340,15 @@ unmotivated by measurement is dropped from phase 1.
   - a tighter sphere-vs-cluster-AABB test in count/fill;
   - per-pass cluster timestamps for attribution;
   - near-plane-crossing lights limited to their projected screen rect.
-- **Bright light, perceptual bound (feature tier, owner product decision):**
+- **Bright light, perceptual bound (feature tier).** Owner decision 2026-10-07: do it
+  only if measurement shows the "barely visible" part of the authored range is
+  substantial *and* costly. Otherwise it is not built.
   - an optional *Auto* range mode that bounds the effective culling radius where
     exposed luminance falls below a threshold, using manual EV or EV compensation
     (auto-exposure is GPU-resident; any readback lags 2–3 frames);
   - authored range stays authoritative unless the light opts in.
-  - See open question 2.
+  - It would be measured on PC3 as the fraction of the range sphere's shaded pixels
+    whose exposed contribution is below threshold.
 - **Glass:**
   - skip shadow evaluation for a light when every BSDF lobe for that light
     (reflection and transmission) is provably zero. Refactor tier only if exact,
@@ -468,9 +492,8 @@ oversized-model cases (FRAME_BUDGET "Import, cooking, and publication").
 
 #### M7.12 — Production qualification and hand-off
 
-- **Harness:** multi-model composition (a per-entity `source_asset` and several
-  `--cooked-model-artifact`, qualification-only), so the fixed native-4K
-  three-high-fidelity-asset scene can mix Porsche, Alfa and a third asset.
+- **Harness:** the multi-model composition built in M7.P1 lets the fixed native-4K
+  three-high-fidelity-asset scene mix Porsche, Alfa and a third asset.
 - **Acceptance gate:** run the roadmap M7 gate, covering:
   - static, moving, off-screen, occluded and LOD cases, with presentation wait
     separated;
@@ -533,20 +556,9 @@ oversized-model cases (FRAME_BUDGET "Import, cooking, and publication").
 
 ## Open questions for the owner
 
-1. **Bright light reproduction.**
-   - Was the cost seen *while dragging* the intensity slider, or in a steady frame
-     after setting it?
-   - Was range also raised?
-   - Was the light shadowed, and at which quality?
-   - Which scene was it?
-
-   The audit found that no range is derived from intensity, so this decides whether
-   the fix is invalidation scoping, range cost, or both.
-2. **Perceptual Auto range.** Is an opt-in per-light "Auto" range mode wanted? It
-   would bound the culling radius by an exposed-luminance threshold. The alternative
-   is to keep range purely authored and optimize its cost.
-3. **Old baseline worktrees** under `out/m7r/worktrees` (`m7r-final`, `m9-pre-g8`,
-   `m9-pre-m91`, `r0`) still occupy C:. Keep them as A/B baselines, or remove them?
+1. **Which saved scene and camera reproduce the two-car point-light case?** The owner
+   is asked to save it, or the lead approximates it from the description.
+2. **Disk retention policy approval** (see the decision log, 2026-10-07).
 
 ## Decision log
 
@@ -560,6 +572,15 @@ oversized-model cases (FRAME_BUDGET "Import, cooking, and publication").
 - **2026-10-07 — Slice order.** M7.10.0 backend headroom precedes the phase-1 fixes,
   because they touch `submitForwardQueues`. Phase 1 fixes are chosen by measured
   attribution, not by the candidate list.
+- **2026-10-07 — Owner answers (plan approved).**
+  - The point-light case is the steady cost of one point light, about +1.2 ms, in
+    the two-car editor scene. It is independent of intensity, scales with range and
+    barely depends on source radius; spot and directional lights cost less. PC3 is
+    re-scoped and the multi-model harness moves to phase 1.
+  - The perceptual Auto range is built only if measurement shows substantial cost
+    for barely visible contribution.
+  - The owner asked for testing that does not consume unnecessary disk space; the
+    retention proposal is pending approval.
 
 ## Completion report
 
