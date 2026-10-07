@@ -20,6 +20,7 @@
 #   powershell -ExecutionPolicy Bypass -File tools/m9/Run-FeatureAdmission.ps1 -Label taa-on `
 #       -ArgsB '--anti-aliasing taa' [-Routes T-F1-all,T-F5-hetero] [-RequireQuiet]
 #   ... -Label smoke -Routes T-F1-all -Warmup 5 -Frames 50
+#   ... -Label pc3 -Routes T-PC3-point-r10   (M7C owner-case routes run only when named)
 param(
     [Parameter(Mandatory)] [string] $Label,
     [string[]] $Routes = @(),
@@ -199,9 +200,10 @@ if (-not $OutRoot) { $OutRoot = Join-Path $root 'out/m9/timing' }
 $outDir = Join-Path $OutRoot $Label
 if (Test-Path $outDir) { throw "Output directory already exists: $outDir" }
 
-$selected = @($M7RTimingRoutes | Where-Object { $Routes.Count -eq 0 -or $Routes -contains $_.Key })
-$unknown = @($Routes | Where-Object { $r = $_; -not ($M7RTimingRoutes | Where-Object { $_.Key -eq $r }) })
-if ($unknown.Count -gt 0) { throw "Unknown route(s): $($unknown -join ', '). Known: $(($M7RTimingRoutes | ForEach-Object { $_.Key }) -join ', ')" }
+$selected = @(Select-M7RTimingRoutes $Routes)
+$known = @($M7RTimingRoutes) + @($M7CTimingRoutes)
+$unknown = @($Routes | Where-Object { $r = $_; -not ($known | Where-Object { $_.Key -eq $r }) })
+if ($unknown.Count -gt 0) { throw "Unknown route(s): $($unknown -join ', '). Known: $(($known | ForEach-Object { $_.Key }) -join ', ')" }
 if ($selected.Count -eq 0) { throw 'No routes selected.' }
 
 Write-Host "feature admission '$Label': $($selected.Count) route(s) x $($Order.Count) processes, warm-up $Warmup, measured $Frames"
@@ -248,7 +250,7 @@ function Save-Records($runs) {
 $runs = @()
 try {
     foreach ($route in $selected) {
-        $artifact = Join-Path $RepoDataRoot (Get-M7RModelArtifact $RepoDataRoot $route.Model)
+        $modelArgs = @(Get-M7RModelArtifactArgs $RepoDataRoot $route)
         $manifest = Join-Path $RepoDataRoot $route.Manifest
         $index = 0
         foreach ($side in $Order) {
@@ -258,8 +260,8 @@ try {
             $profile = Join-Path $outDir "$stem.jsonl"
             $log = Join-Path $outDir "$stem.log"
             $arguments = @(
-                '--benchmark', $route.Id, '--benchmark-manifest', $manifest,
-                '--cooked-model-artifact', $artifact,
+                '--benchmark', $route.Id, '--benchmark-manifest', $manifest
+            ) + $modelArgs + @(
                 '--window-size', '3840x2160', '--hidden-window', '--borderless-window',
                 '--output-transport', 'sdr', '--no-validation',
                 '--profile-cpu', '--profile-gpu', '--profile-cpu-output', $profile,

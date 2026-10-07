@@ -182,6 +182,14 @@ namespace Iridium {
             "--benchmark-manifest requires a path",
             [&q](std::string_view value) { q.benchmarkManifest = std::string(value); },
             true);
+        addValueOption(registry, owner, "--benchmark-model-artifact", "PATH",
+            "Load a further cooked model for a multi-model fixture (repeatable; "
+            "matched to its source by asset identity)",
+            "--benchmark-model-artifact requires a path",
+            [&q](std::string_view value) {
+                q.benchmarkModelArtifacts.emplace_back(std::string(value));
+            },
+            true);
         addValueOption(registry, owner, "--weighted-oit-order-seed", "N",
             "Deterministically permute OIT draws for qualification; 0 preserves production order",
             "--weighted-oit-order-seed requires an unsigned integer",
@@ -374,6 +382,10 @@ namespace Iridium {
             if (q.benchmarkHoldFrame && q.benchmarkId.empty()) {
                 throw std::invalid_argument(
                     "--benchmark-hold-frame requires --benchmark");
+            }
+            if (!q.benchmarkModelArtifacts.empty() && q.benchmarkId.empty()) {
+                throw std::invalid_argument(
+                    "--benchmark-model-artifact requires --benchmark");
             }
         }, AppCli::kValidateLightGenerators + 20);
     }

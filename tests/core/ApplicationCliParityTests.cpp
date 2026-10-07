@@ -222,6 +222,12 @@ namespace {
             : std::string("none"));
         field("benchmarkHoldFrame", c.benchmarkHoldFrame
             ? exact(*c.benchmarkHoldFrame) : std::string("none"));
+        {
+            std::string artifacts;
+            for (const std::filesystem::path& artifact : c.benchmarkModelArtifacts)
+                artifacts += artifact.generic_string() + ";";
+            field("benchmarkModelArtifacts", artifacts);
+        }
         flag("requireCaptureSignal", c.requireCaptureSignal);
         field("capturePoint", exact(enumValue(c.capturePoint)));
         field("captureDirectory", c.captureDirectory.generic_string());
@@ -716,6 +722,13 @@ namespace {
                 c.benchmarkHoldFrame = 130; c.benchmarkId = "m9_tf_pan_v1"; },
                 "--benchmark-hold-frame requires a benchmark frame index",
                 { { "x", "--benchmark-hold-frame requires an unsigned integer" } } },
+            // M7C P1; repeatable (see the accumulation check below).
+            { "--benchmark-model-artifact", Q, "out/b.irartifact", { "--benchmark", "m7c_pc3" },
+                [](C& c) {
+                    c.benchmarkModelArtifacts = { "out/b.irartifact" };
+                    c.benchmarkId = "m7c_pc3"; },
+                "--benchmark-model-artifact requires a path",
+                { { "", "--benchmark-model-artifact requires a path" } } },
             { "--capture-directory", Q, "out/cap", { "--capture-frame", "0" }, withCapture,
                 "--capture-directory requires a path",
                 { { "", "--capture-directory requires a path" } } },
@@ -751,8 +764,8 @@ namespace {
         Cli::CliOptionRegistry registry;
         registerEngineOptions(registry, scratch);
 
-        CHECK(table.size() == 106);
-        CHECK(registry.options().size() == 106);
+        CHECK(table.size() == 107);
+        CHECK(registry.options().size() == 107);
         std::set<std::string_view> names;
         std::map<std::string_view, size_t> ownerCounts;
         for (const FlagCase& row : table) {
@@ -815,6 +828,17 @@ namespace {
             error("--require-capture-signal requires a capture request"));
         CHECK(newOutcome({ "--benchmark-hold-frame", "5" }) ==
             error("--benchmark-hold-frame requires --benchmark"));
+        CHECK(newOutcome({ "--benchmark-model-artifact", "a.irartifact" }) ==
+            error("--benchmark-model-artifact requires --benchmark"));
+        {
+            // M7C P1: every value is kept, in order.
+            CombinedConfig models{};
+            models.benchmarkId = "m7c_pc3";
+            models.benchmarkModelArtifacts = { "a.irartifact", "b.irartifact" };
+            CHECK(newOutcome({ "--benchmark", "m7c_pc3", "--benchmark-model-artifact",
+                      "a.irartifact", "--benchmark-model-artifact", "b.irartifact" }) ==
+                "OK:" + describe(models));
+        }
         {
             // --upload-queue: every value, the last one wins.
             CombinedConfig legacy{};
@@ -837,7 +861,7 @@ namespace {
         CHECK(ownerCounts[R] == 14);
         CHECK(ownerCounts[E] == 4);
         CHECK(ownerCounts[G] == 40);
-        CHECK(ownerCounts[Q] == 48);
+        CHECK(ownerCounts[Q] == 49);
         std::cout << "  owners: runtime " << ownerCounts[R] << ", editor " << ownerCounts[E]
                   << ", renderer " << ownerCounts[G] << ", qualification "
                   << ownerCounts[Q] << '\n';
@@ -888,7 +912,7 @@ namespace {
     bool testUsageParity() {
         const std::string usage = engineUsage();
         CHECK(usage.starts_with("Usage: IridiumEngine [options]\n"));
-        CHECK(optionLines(usage).size() == 106);
+        CHECK(optionLines(usage).size() == 107);
         // Groups appear in owner order: runtime, editor, renderer, qualification.
         const size_t runtime = usage.find("runtime options:");
         const size_t editor = usage.find("editor options:");

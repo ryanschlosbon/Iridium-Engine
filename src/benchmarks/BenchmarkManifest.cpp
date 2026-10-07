@@ -262,7 +262,9 @@ namespace Iridium {
         }
 
         std::vector<BenchmarkCompositionEntity> readCompositionEntities(
-            const Json& factory, const std::string& fixtureId) {
+            const Json& factory, const std::string& fixtureId,
+            const std::filesystem::path& manifestRoot,
+            const std::filesystem::path& fixtureSourceAsset) {
             requireKnownKeys(factory, { "kind", "entities", "camera_motion" },
                 "composition scene_factory", fixtureId);
             const Json& entities = factory.at("entities");
@@ -276,15 +278,8 @@ namespace Iridium {
             result.reserve(entities.size());
             std::set<std::string> ids;
             for (const Json& source : entities) {
-                if (source.is_object() && source.contains("source_asset")) {
-                    // One --cooked-model-artifact backs a fixture; entities
-                    // select top-level nodes of the fixture's source_asset.
-                    throw std::runtime_error(
-                        "Composition entities select a 'node' of the fixture "
-                        "source_asset; per-entity source_asset is unsupported: " +
-                        fixtureId);
-                }
-                requireKnownKeys(source, { "id", "node", "transform", "motion" },
+                requireKnownKeys(source,
+                    { "id", "source_asset", "node", "transform", "motion" },
                     "composition entity", fixtureId);
                 BenchmarkCompositionEntity entity{};
                 entity.id = source.at("id").get<std::string>();
@@ -295,7 +290,18 @@ namespace Iridium {
                 }
                 const std::string context = "composition entity '" +
                     entity.id + "'";
-                entity.sourceNode = source.at("node").get<uint32_t>();
+                // M7C P1: a per-entity source asset is backed by its own
+                // cooked model artifact (content_files membership is checked
+                // with the fixture's content files).
+                entity.sourceAsset = source.contains("source_asset")
+                    ? resolveContentPath(manifestRoot,
+                        source.at("source_asset").get<std::string>())
+                    : fixtureSourceAsset;
+                // No node: the entity draws the whole source model.
+                entity.wholeModel = !source.contains("node");
+                if (!entity.wholeModel) {
+                    entity.sourceNode = source.at("node").get<uint32_t>();
+                }
                 if (source.contains("transform")) {
                     const Json& transform = source.at("transform");
                     requireKnownKeys(transform,
@@ -598,7 +604,8 @@ namespace Iridium {
                 fixture.sceneFactory.kind =
                     BenchmarkSceneFactoryKind::Composition;
                 fixture.sceneFactory.compositionEntities =
-                    readCompositionEntities(factory, fixture.id);
+                    readCompositionEntities(factory, fixture.id, manifestRoot,
+                        fixture.sourceAsset);
             }
             else if (factoryKind != "instanced_grid") {
                 throw std::runtime_error("Unsupported benchmark scene factory: " + fixture.id);
@@ -895,6 +902,17 @@ namespace Iridium {
             if (!sourceAssetDeclared) {
                 throw std::runtime_error("source_asset must appear in content_files: " + fixture.id);
             }
+            for (const BenchmarkCompositionEntity& entity :
+                fixture.sceneFactory.compositionEntities) {
+                if (std::ranges::none_of(fixture.contentFiles,
+                        [&entity](const BenchmarkContentFile& content) {
+                            return content.path == entity.sourceAsset;
+                        })) {
+                    throw std::runtime_error("Composition entity '" + entity.id +
+                        "' source_asset must appear in content_files: " +
+                        fixture.id);
+                }
+            }
             manifest.fixtures.push_back(std::move(fixture));
         }
         if (manifest.fixtures.empty()) {
@@ -931,6 +949,17 @@ namespace Iridium {
             throw std::runtime_error("Unknown benchmark fixture: " + id);
         }
         return *fixture;
+    }
+
+    std::vector<std::filesystem::path> benchmarkFixtureSourceAssets(
+        const BenchmarkFixture& fixture) {
+        std::vector<std::filesystem::path> sources{ fixture.sourceAsset };
+        for (const BenchmarkCompositionEntity& entity :
+            fixture.sceneFactory.compositionEntities) {
+            if (std::ranges::find(sources, entity.sourceAsset) == sources.end())
+                sources.push_back(entity.sourceAsset);
+        }
+        return sources;
     }
 
     BenchmarkCameraPose evaluateBenchmarkCamera(const BenchmarkFixture& fixture,

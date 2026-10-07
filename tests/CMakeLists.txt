@@ -148,6 +148,12 @@ if(TARGET iridium_qualification)
             SOURCES qualification/ScriptedChangesTests.cpp
             LIBS iridium_qualification
             NO_PCH)
+
+    # M7C P1 multi-model fixtures: cooked artifact to fixture source matching.
+    iridium_add_test(BenchmarkModelMatchingTests
+            SOURCES qualification/BenchmarkModelMatchingTests.cpp
+            LIBS iridium_qualification
+            NO_PCH)
 endif()
 
 iridium_add_test(TransformSystemTests

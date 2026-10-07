@@ -5,6 +5,7 @@
 target_sources(iridium_qualification PRIVATE
         QualificationHarness.cpp
         BenchmarkScene.cpp
+        BenchmarkModelMatching.cpp
         FrameValidators.cpp
         QualificationReport.cpp
         RunReportExport.cpp

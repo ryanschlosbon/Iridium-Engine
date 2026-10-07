@@ -12,6 +12,7 @@
 #include <chrono>
 #include <cmath>
 #include <filesystem>
+#include <iostream>
 #include <limits>
 #include <map>
 #include <span>
@@ -20,7 +21,9 @@
 
 #include "assets/AssetManager.h"
 #include "assets/cooker/CookTypes.h"
+#include "assets/cooker/CookedArtifact.h"
 #include "assets/environment/EnvironmentConvolution.h"
+#include "qualification/harness/BenchmarkModelMatching.h"
 #include "renderer/rhi/Mesh.h"
 #include "scene/SceneWorld.h"
 #include "scene/components/LightComponent.h"
@@ -65,7 +68,8 @@ namespace Iridium {
             throw std::invalid_argument(
                 "Benchmark runtime requires --cooked-model-artifact after the M3 production cutover.");
         }
-        (void)context.control.loadCookedStartupModel();
+        loadBenchmarkModels(context,
+            context.control.loadCookedStartupModel());
         context.timings.modelLoadNanoseconds = elapsedNanoseconds(importStart);
         const auto environmentStart = std::chrono::steady_clock::now();
         if (!config.cookedEnvironmentArtifact.empty()) {
@@ -111,6 +115,151 @@ namespace Iridium {
         if (!config.frameLimitSpecified) {
             config.frameLimit = benchmark_->measuredFrames;
         }
+    }
+
+    namespace {
+        // A cooked artifact path as the engine resolves --cooked-model-artifact.
+        std::filesystem::path resolveArtifactPath(
+            const std::filesystem::path& path) {
+            return (path.is_absolute() ? path
+                : std::filesystem::path(PROJECT_ROOT_DIR) / path)
+                .lexically_normal();
+        }
+
+        CookedArtifact readModelArtifact(const std::filesystem::path& path) {
+            const CookedArtifactBlob blob = readCookedArtifactBlobFile(path);
+            CookedArtifactReadResult decoded =
+                readCookedArtifact(blob.bytes, blob.artifactHash);
+            if (!decoded.valid()) {
+                std::string message = "Cooked model artifact " +
+                    path.generic_string() + " failed container validation";
+                for (const CookDiagnostic& diagnostic : decoded.diagnostics) {
+                    if (diagnostic.severity == CookDiagnosticSeverity::Error)
+                        message += ": " + diagnostic.code + " " +
+                            diagnostic.message;
+                }
+                throw std::runtime_error(message);
+            }
+            return std::move(*decoded.artifact);
+        }
+    }
+
+    // M7C P1: a fixture with several source assets (composition entities may
+    // name their own source_asset) gets one cooked artifact per source:
+    // --cooked-model-artifact plus each --benchmark-model-artifact, matched to
+    // the sources by asset identity (BenchmarkModelMatching.h), never by
+    // argument order. Single-model fixtures take none of this path.
+    void QualificationHarness::loadBenchmarkModels(AppStartupContext& context,
+        std::shared_ptr<ModelAsset> startupModel) {
+        const std::vector<std::filesystem::path> sourceAssets =
+            benchmarkFixtureSourceAssets(*benchmark_);
+        if (sourceAssets.size() == 1u &&
+            options_.benchmarkModelArtifacts.empty()) return;
+        if (!startupModel) {
+            throw std::logic_error(
+                "Multi-model benchmark requires a loaded startup model");
+        }
+        std::vector<BenchmarkModelSource> sources;
+        sources.reserve(sourceAssets.size());
+        for (const std::filesystem::path& sourceAsset : sourceAssets)
+            sources.push_back(readBenchmarkModelSource(sourceAsset));
+        // Entry 0 is the startup model (--cooked-model-artifact).
+        std::vector<CookedArtifact> cooked;
+        std::vector<BenchmarkModelArtifact> artifacts;
+        cooked.reserve(1u + options_.benchmarkModelArtifacts.size());
+        artifacts.reserve(cooked.capacity());
+        const auto addArtifact = [&](const std::filesystem::path& path) {
+            const std::filesystem::path resolved = resolveArtifactPath(path);
+            cooked.push_back(readModelArtifact(resolved));
+            artifacts.push_back({
+                .artifactPath = resolved,
+                .assetGuid = cooked.back().assetGuid,
+                .dependencies = cooked.back().dependencies,
+            });
+        };
+        addArtifact(context.config.cookedModelArtifact);
+        for (const std::filesystem::path& path : options_.benchmarkModelArtifacts)
+            addArtifact(path);
+        if (artifacts.front().assetGuid != startupModel->assetGuid) {
+            throw std::logic_error(
+                "The startup model does not match --cooked-model-artifact");
+        }
+        const std::vector<size_t> matches = matchBenchmarkModelArtifacts(
+            sources, artifacts, [](const std::filesystem::path& path)
+                -> std::optional<std::string> {
+                std::error_code error;
+                if (!std::filesystem::is_regular_file(path, error))
+                    return std::nullopt;
+                return sha256File(path);
+            });
+        // Sources are reported as their manifest content paths.
+        const auto manifestPath = [this](const std::filesystem::path& source) {
+            for (const BenchmarkContentFile& file : benchmark_->contentFiles) {
+                if (file.path == source) return file.relativePath.generic_string();
+            }
+            return source.generic_string();
+        };
+        benchmarkSourceModels_.reserve(sources.size());
+        std::cout << "IRIDIUM_BENCHMARK_MODELS {\"fixture\":\"" <<
+            benchmark_->id << "\",\"models\":[";
+        for (size_t index = 0; index < sources.size(); ++index) {
+            const size_t artifactIndex = matches[index];
+            std::shared_ptr<ModelAsset> model = startupModel;
+            if (artifactIndex != 0u) {
+                model = context.assets->loadSelfContainedModelFromCookedArtifact(
+                    cooked[artifactIndex]);
+                model->filePath = artifacts[artifactIndex].artifactPath.string();
+            }
+            std::cout << (index == 0u ? "" : ",") << "{\"source\":\"" <<
+                manifestPath(sources[index].sourceAsset) <<
+                "\",\"asset_guid\":\"" << model->assetGuid.toString() <<
+                "\",\"cook_key\":\"" << model->artifactCookKey <<
+                "\",\"startup_model\":" <<
+                (artifactIndex == 0u ? "true" : "false") << "}";
+            benchmarkSourceModels_.emplace_back(sources[index].sourceAsset,
+                std::move(model));
+        }
+        std::cout << "]}\n" << std::flush;
+    }
+
+    // The startup topology prewarm covers the startup model only; extend it
+    // to every fixture model (the request is additive).
+    void QualificationHarness::prepareBenchmarkModelTopology(
+        AppStartupContext& context) {
+        if (benchmarkSourceModels_.size() < 2u) return;
+        FrameTopologyRequirements combined{};
+        for (const auto& [source, model] : benchmarkSourceModels_) {
+            (void)source;
+            combined.refractionPyramids = combined.refractionPyramids ||
+                modelRequiresRefractionPyramids(*model);
+            combined.ordinary2LayeredInterfaces =
+                combined.ordinary2LayeredInterfaces ||
+                modelRequiresOrdinary2LayeredInterfaces(*model);
+            combined.hero4LayeredInterfaces = combined.hero4LayeredInterfaces ||
+                modelRequiresHero4LayeredInterfaces(*model);
+            combined.cinematic8LayeredInterfaces =
+                combined.cinematic8LayeredInterfaces ||
+                modelRequiresCinematic8LayeredInterfaces(*model);
+            combined.weightedOit = combined.weightedOit ||
+                modelRequiresWeightedOit(*model);
+        }
+        const FrameTopologyPreparation extended =
+            context.backend->prepareFrameTopology(combined);
+        context.topology.requested = context.topology.requested ||
+            extended.requested;
+        context.topology.changed = context.topology.changed || extended.changed;
+        context.topology.durationNanoseconds += extended.durationNanoseconds;
+    }
+
+    const std::shared_ptr<ModelAsset>& QualificationHarness::benchmarkSourceModel(
+        const std::filesystem::path& sourceAsset,
+        const AppStartupContext& context) const {
+        if (benchmarkSourceModels_.empty()) return context.mainModel;
+        for (const auto& [source, model] : benchmarkSourceModels_) {
+            if (source == sourceAsset) return model;
+        }
+        throw std::logic_error("No model loaded for benchmark source " +
+            sourceAsset.generic_string());
     }
 
     namespace {
@@ -188,15 +337,23 @@ namespace Iridium {
         Registry& registry = sceneWorld.registry();
         const std::vector<BenchmarkCompositionEntity>& entities =
             benchmark_->sceneFactory.compositionEntities;
-        std::map<uint32_t, std::shared_ptr<ModelAsset>> nodeViews;
+        std::map<std::pair<const ModelAsset*, uint32_t>,
+            std::shared_ptr<ModelAsset>> nodeViews;
         benchmarkInstances_.reserve(benchmarkInstances_.size() +
             entities.size());
         Entity firstEntity = NULL_ENTITY;
         for (uint32_t ordinal = 0; ordinal < entities.size(); ++ordinal) {
             const BenchmarkCompositionEntity& spec = entities[ordinal];
-            std::shared_ptr<ModelAsset>& view = nodeViews[spec.sourceNode];
-            if (!view) view = makeModelNodeView(*context.mainModel,
-                spec.sourceNode);
+            const std::shared_ptr<ModelAsset>& model =
+                benchmarkSourceModel(spec.sourceAsset, context);
+            std::shared_ptr<ModelAsset> view = model;
+            if (!spec.wholeModel) {
+                std::shared_ptr<ModelAsset>& nodeView =
+                    nodeViews[{ model.get(), spec.sourceNode }];
+                if (!nodeView) nodeView = makeModelNodeView(*model,
+                    spec.sourceNode);
+                view = nodeView;
+            }
             const Entity entity = sceneWorld.createEntity(
                 compositionEntityUuid(benchmark_->id, spec.id, ordinal));
             registry.addComponent<NameComponent>(entity).name =
@@ -211,9 +368,9 @@ namespace Iridium {
                 static_cast<int32_t>(ordinal);
             auto& mesh = registry.addComponent<MeshComponent>(entity);
             // No requestedAssetGuid: resolving it would replace the node view
-            // with the whole startup model.
-            mesh.model = view;
-            mesh.assetGuid = context.startupModelGuid;
+            // with the whole model.
+            mesh.model = std::move(view);
+            mesh.assetGuid = model->assetGuid;
             mesh.enabled = true;
             if (firstEntity == NULL_ENTITY) firstEntity = entity;
             benchmarkInstances_.push_back({ entity, pose.translation });
