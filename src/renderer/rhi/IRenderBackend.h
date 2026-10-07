@@ -93,6 +93,26 @@ namespace Iridium {
         // the swapchain. On failure the previous extent must remain active.
         [[nodiscard]] virtual bool resizeSceneRenderExtent(
             RenderExtent extent, std::string& diagnostic) = 0;
+        // Between frames: switches the anti-aliasing mode (a graph topology
+        // change; temporal history starts over). On failure the previous mode
+        // remains active.
+        [[nodiscard]] virtual bool setAntiAliasing(
+            AntiAliasingMode mode, std::string& diagnostic) = 0;
+        // Between frames (M9.4): applies bloom settings. Intensity and
+        // threshold take effect next frame; enabling, disabling or a new
+        // level count changes the graph topology. On failure the previous
+        // settings remain active.
+        [[nodiscard]] virtual bool setBloom(
+            const BloomSettings& settings, std::string& diagnostic) = 0;
+        // Between frames: applies the exposure mode and auto-exposure
+        // settings. Settings take effect next frame; a mode change declares
+        // or removes the exposure passes (graph topology). On failure the
+        // previous mode and settings remain active.
+        // Between frames: TAA tuning (history weights, clip, reconstruction);
+        // applies from the next frame without a graph change.
+        virtual void setTemporalAntiAliasingTuning(const TemporalAntiAliasingTuning& tuning) = 0;
+        [[nodiscard]] virtual bool setExposure(ExposureMode mode,
+            const AutoExposureSettings& settings, std::string& diagnostic) = 0;
         [[nodiscard]] virtual RenderBackendCapabilities getCapabilities() const = 0;
         [[nodiscard]] virtual RenderBackendRuntimeInfo getRuntimeInfo() const = 0;
         // May only be called between frames. Startup callers use this to move

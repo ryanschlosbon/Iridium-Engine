@@ -14,6 +14,7 @@
 #include "editor/EditorSceneDocumentService.h"
 #include "editor/EditorSceneCommandService.h"
 #include "editor/EditorTransactionService.h"
+#include "assets/AssetDiscovery.h"
 #include "assets/runtime/AssetRuntimeService.h"
 
 #include <vector>
@@ -131,7 +132,8 @@ void EditorSystem::init(GLFWwindow* window, Iridium::CpuProfiler* cpuProfiler,
         query.calculateTotalMatches = false;
         for (;;) {
             auto page = assetCatalog->query(query);
-            for (auto& record : page.records) if (record.assetRoot == "project") records.push_back(std::move(record));
+            for (auto& record : page.records)
+                if (Iridium::isProjectContentRoot(record.assetRoot)) records.push_back(std::move(record));
             if (page.records.size() < query.limit) break;
             query.offset += query.limit;
         }
@@ -168,6 +170,29 @@ void EditorSystem::setOutputTransportStatus(
     uiState.outputSettings.effectiveTransport = effective;
     uiState.outputSettings.supportedTransports = supported;
     uiState.outputSettings.transportDiagnostic = std::move(diagnostic);
+}
+
+void EditorSystem::setTemporalAntiAliasingTuning(const Iridium::TemporalAntiAliasingTuning& tuning) {
+    uiState.outputSettings.taaTuning = tuning;
+}
+
+void EditorSystem::setAntiAliasingStatus(Iridium::AntiAliasingMode active,
+    std::string diagnostic) {
+    uiState.outputSettings.antiAliasing = active;
+    uiState.outputSettings.antiAliasingDiagnostic = std::move(diagnostic);
+}
+
+void EditorSystem::setExposureStatus(Iridium::ExposureMode mode,
+    const Iridium::AutoExposureSettings& settings, std::string diagnostic) {
+    uiState.outputSettings.exposureMode = mode;
+    uiState.outputSettings.autoExposure = settings;
+    uiState.outputSettings.exposureDiagnostic = std::move(diagnostic);
+}
+
+void EditorSystem::setBloomStatus(const Iridium::BloomSettings& active,
+    std::string diagnostic) {
+    uiState.outputSettings.bloom = active;
+    uiState.outputSettings.bloomDiagnostic = std::move(diagnostic);
 }
 
 bool EditorSystem::consumeShadowSettings(

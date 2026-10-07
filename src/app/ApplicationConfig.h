@@ -48,6 +48,27 @@ namespace Iridium {
         // M7R R4b: --render-graph-aliasing on|off (on since R4b.6; the switch
         // is kept until R6).
         bool renderGraphAliasing = true;
+        // M9.8c: where the Project Settings window is persisted; empty for
+        // benchmark and capture runs (nothing is loaded or saved).
+        std::filesystem::path projectSettingsPath;
+        // M9.2: anti-aliasing (--anti-aliasing none|taa). Product default TAA
+        // since M9.7 admission; measurement tools pin none (M7R route).
+        AntiAliasingMode antiAliasing = AntiAliasingMode::Taa;
+        // M9 G5b: sub-pixel raster jitter; unset follows anti-aliasing (on
+        // with TAA).
+        std::optional<bool> temporalJitter;
+        // M9.2: TAA tuning for evidence runs (--taa-settings); unset fields
+        // keep the defaults.
+        std::optional<TemporalAntiAliasingTuning> taaTuning;
+        // M9.5: exposure (--exposure manual|auto) and its evidence-run tuning
+        // (--auto-exposure-settings). Auto since M9.7 (owner decision): the
+        // manual EV becomes exposure compensation.
+        ExposureMode exposureMode = ExposureMode::Auto;
+        std::optional<AutoExposureSettings> autoExposureSettings;
+        // M9.4: bloom (--bloom off|on) and its settings (--bloom-settings). On
+        // since M9.7 (owner decision: subtle, 4% scatter, no threshold).
+        BloomSettings bloom{ .enabled = true };
+        uint32_t temporalJitterSequenceLength = 8;
         // M7R R4d: --upload-queue auto|graphics|legacy-blocking.
         UploadQueueMode uploadQueue = UploadQueueMode::Auto;
         bool forceWireframe = false;

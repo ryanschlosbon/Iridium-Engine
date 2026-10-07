@@ -32,13 +32,19 @@ namespace Iridium {
     void VulkanOutputFeature::onGraphRebuilt(const VulkanProductionGraphIds& ids) {
         bloomHookPass_ = ids.bloomHook;
         outputTransformPass_ = ids.outputTransform;
+        resolvedScene_ = ids.resolvedSceneColor;
+        taaActive_ = ids.taaResolve.isValid();
+        exposureState_ = ids.exposureCurrent;
+        bloomChain_ = ids.bloomChain;
         hdr10EncodePass_ = ids.hdr10EncodePresent;
     }
 
     void VulkanOutputFeature::registerPasses(VulkanRenderGraphExecutor& graph) {
         // M1 exposes scene-linear color to a future bloom implementation
         // without paying for a disabled effect or changing resource versions.
-        graph.registerPass(bloomHookPass_, { this, &never, &executeNothing });
+        // M9.4: declared only without bloom (VulkanBloomFeature owns post.bloom).
+        if (bloomHookPass_.isValid())
+            graph.registerPass(bloomHookPass_, { this, &never, &executeNothing });
         // The transition range measures only output-transform's barriers;
         // the transform range opens inside the callback.
         // R4a: dynamic rendering; the executor's SampledRead/TransferSource
@@ -120,6 +126,22 @@ namespace Iridium {
         const uint32_t frameIndex = context.frame.frameIndex;
         VulkanGpuScope outputGpuScope(shared.scheduler, "gpu.output.transform");
         const VkExtent2D extent = shared.frameTargets.extent();
+        // M9.2: this frame's resolved scene colour (TAA history parity/view set).
+        if (self.taaActive_)
+            self.outputPass_.setSceneView(frameIndex,
+                context.graph.image(frameIndex, self.resolvedScene_).view,
+                shared.frameTargets.sampler());
+        // M9.5: this frame's adapted exposure (History parity/view set).
+        const bool autoExposure = self.exposureState_.isValid();
+        if (autoExposure)
+            self.outputPass_.setExposureBuffer(frameIndex,
+                context.graph.buffer(frameIndex, self.exposureState_).buffer);
+        // M9.4: this frame's bloom chain (level 0 through the lod-0 sampler).
+        const bool bloom = self.bloomChain_.isValid();
+        if (bloom)
+            self.outputPass_.setSceneView(frameIndex,
+                context.graph.image(frameIndex, self.bloomChain_).view,
+                shared.frameTargets.sampler(), 6);
         VulkanRenderingOverrides rendering{};
         rendering.renderArea = { { 0, 0 }, extent };
         context.beginRendering(rendering);
@@ -128,7 +150,9 @@ namespace Iridium {
             static_cast<uint32_t>(self.outputOperator_),
             static_cast<uint32_t>(self.staged_.transport),
             self.staged_.paperWhiteNits, self.staged_.peakNits,
-            self.staged_.selectionOutline, self.gridOverlay_);
+            self.staged_.selectionOutline, self.gridOverlay_,
+            self.staged_.motionVectorView, autoExposure,
+            { bloom, self.staged_.bloomIntensity, self.staged_.bloomAdditive });
         context.endRendering();
         if (shared.telemetry.collecting()) {
             shared.telemetry.recordPipelineBind(pipelineIdentity(

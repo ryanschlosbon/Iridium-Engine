@@ -23,8 +23,11 @@ namespace Iridium {
             float paperWhiteNits = 203.0f;
             float peakNits = 1000.0f;
             uint32_t packedModes = 0;
+            // M9.4: x intensity, y 1 = additive (threshold) composite.
+            alignas(16) glm::vec4 bloom{};
         };
-        static_assert(sizeof(OutputPushConstants) == 128);
+        // 144 B: the backend requires 144 B of push constants (M9.1).
+        static_assert(sizeof(OutputPushConstants) == 144);
         static_assert(offsetof(OutputPushConstants, gridPlane) == 64);
         static_assert(offsetof(OutputPushConstants, manualExposureEv) == 112);
 
@@ -56,11 +59,14 @@ namespace Iridium {
         allocator_ = &allocator;
 
         try {
-            std::array<VkDescriptorSetLayoutBinding, 4> bindings{};
+            // 0 scene, 1 ACES2 LUT, 2 selection mask, 3 depth, 4 velocity (M9.1),
+            // 5 exposure state (M9.5, storage buffer), 6 bloom chain (M9.4).
+            std::array<VkDescriptorSetLayoutBinding, 7> bindings{};
             for (uint32_t index = 0; index < bindings.size(); ++index) {
                 bindings[index].binding = index;
-                bindings[index].descriptorType =
-                    VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                bindings[index].descriptorType = index == 5
+                    ? VK_DESCRIPTOR_TYPE_STORAGE_BUFFER
+                    : VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
                 bindings[index].descriptorCount = 1;
                 bindings[index].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
             }
@@ -197,7 +203,11 @@ namespace Iridium {
                     frameTargets.sampler(),
                     frameTargets.get(index).depth.view,
                     VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL };
-                std::array<VkWriteDescriptorSet, 4> writes{};
+                const VkDescriptorImageInfo velocity{
+                    frameTargets.sampler(),
+                    frameTargets.get(index).velocity.view,
+                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+                std::array<VkWriteDescriptorSet, 6> writes{};
                 writes[0] = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
                 writes[0].dstSet = set;
                 writes[0].dstBinding = 0;
@@ -219,18 +229,32 @@ namespace Iridium {
                 writes[2].descriptorType =
                     VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
                 writes[2].pImageInfo = &opaqueDepth;
-                uint32_t writeCount = 3;
+                writes[3] = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
+                writes[3].dstSet = set;
+                writes[3].dstBinding = 4;
+                writes[3].descriptorCount = 1;
+                writes[3].descriptorType =
+                    VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                writes[3].pImageInfo = &velocity;
+                // M9.4: without bloom binding 6 is never read; the scene
+                // colour is a valid image in the declared layout.
+                writes[4] = writes[0];
+                writes[4].dstBinding = 6;
+                uint32_t writeCount = 5;
                 if (lutView != VK_NULL_HANDLE && lutSampler != VK_NULL_HANDLE) {
-                    writes[3] = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
-                    writes[3].dstSet = set;
-                    writes[3].dstBinding = 1;
-                    writes[3].descriptorCount = 1;
-                    writes[3].descriptorType =
+                    writes[5] = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
+                    writes[5].dstSet = set;
+                    writes[5].dstBinding = 1;
+                    writes[5].descriptorCount = 1;
+                    writes[5].descriptorType =
                         VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                    writes[3].pImageInfo = &lut;
-                    writeCount = 4;
+                    writes[5].pImageInfo = &lut;
+                    writeCount = 6;
                 }
                 vkUpdateDescriptorSets(device_, writeCount, writes.data(), 0, nullptr);
+                // M9.5: the fallback until a frame binds its adapted state.
+                if (exposureFallback_ != VK_NULL_HANDLE)
+                    setExposureBuffer(static_cast<uint32_t>(index), exposureFallback_);
             }
         }
         catch (...) {
@@ -246,12 +270,43 @@ namespace Iridium {
         descriptorSets_.clear();
     }
 
+    void VulkanOutputPass::setSceneView(uint32_t frameIndex, VkImageView view,
+        VkSampler sampler, uint32_t binding) const {
+        if (frameIndex >= descriptorSets_.size()) {
+            throw std::out_of_range("Output descriptor frame index is out of range.");
+        }
+        const VkDescriptorImageInfo image{ sampler, view,
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+        VkWriteDescriptorSet write{ VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
+        write.dstSet = descriptorSets_[frameIndex];
+        write.dstBinding = binding;
+        write.descriptorCount = 1;
+        write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        write.pImageInfo = &image;
+        vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
+    }
+
+    void VulkanOutputPass::setExposureBuffer(uint32_t frameIndex, VkBuffer buffer) const {
+        if (frameIndex >= descriptorSets_.size()) {
+            throw std::out_of_range("Output descriptor frame index is out of range.");
+        }
+        const VkDescriptorBufferInfo state{ buffer, 0, VK_WHOLE_SIZE };
+        VkWriteDescriptorSet write{ VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
+        write.dstSet = descriptorSets_[frameIndex];
+        write.dstBinding = 5;
+        write.descriptorCount = 1;
+        write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        write.pBufferInfo = &state;
+        vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
+    }
+
     void VulkanOutputPass::record(VkCommandBuffer commandBuffer, uint32_t frameIndex,
         VkExtent2D extent,
         float manualExposureEv, uint32_t outputOperator,
         uint32_t outputTransport, float paperWhiteNits,
         float peakNits, bool selectionActive,
-        const ViewportGridOverlay& gridOverlay) const {
+        const ViewportGridOverlay& gridOverlay, bool motionVectorView,
+        bool autoExposure, const OutputBloom& bloom) const {
         if (frameIndex >= descriptorSets_.size()) {
             throw std::out_of_range("Output descriptor frame index is out of range.");
         }
@@ -288,7 +343,11 @@ namespace Iridium {
         push.packedModes = (outputOperator & 0x3u) |
             ((outputTransport & 0x3u) << 2u) |
             (selectionActive ? 1u << 4u : 0u) |
-            (gridOverlay.visible ? 1u << 5u : 0u);
+            (gridOverlay.visible ? 1u << 5u : 0u) |
+            (motionVectorView ? 1u << 6u : 0u) |
+            (autoExposure ? 1u << 7u : 0u) |
+            (bloom.active ? 1u << 8u : 0u);
+        push.bloom = { bloom.intensity, bloom.additive ? 1.0f : 0.0f, 0.0f, 0.0f };
         vkCmdPushConstants(commandBuffer, pipelineLayout_,
             VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), &push);
         const VkViewport viewport{ 0.0f, 0.0f, static_cast<float>(extent.width),

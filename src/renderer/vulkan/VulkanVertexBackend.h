@@ -35,6 +35,9 @@
 #include "VulkanEditorUi.h"
 #include "VulkanClusterLightingFeature.h"
 #include "VulkanOutputFeature.h"
+#include "VulkanExposureFeature.h"
+#include "VulkanBloomFeature.h"
+#include "VulkanTemporalAntiAliasingFeature.h"
 #include "VulkanWeightedOitFeature.h"
 #include "VulkanHookPasses.h"
 #include "VulkanShadowFeature.h"
@@ -136,6 +139,9 @@ namespace Iridium {
 
         // R3c.2: output transform, HDR10 encode, LUT, exposure, grid overlay.
         VulkanOutputFeature output_;
+        VulkanTemporalAntiAliasingFeature taa_;   // M9.2
+        VulkanExposureFeature exposure_;   // M9.5
+        VulkanBloomFeature bloom_;   // M9.4
 
         // R3c.10: the UI pass (clear, the editor bridge's contribution,
         // present). The editor bridge (renderer/vulkan_imgui) is an attached
@@ -197,6 +203,8 @@ namespace Iridium {
         bool forceDirectShadowReference_ = false;
         // M7R R4b.4: compile the production graph with transient aliasing.
         bool renderGraphAliasing_ = true;
+        AntiAliasingMode antiAliasing_ = AntiAliasingMode::None;   // M9.2
+        TemporalAntiAliasingTuning taaTuning_{};
         // M7R R4d: --upload-queue.
         UploadQueueMode uploadQueueMode_ = UploadQueueMode::Auto;
         float experimentalShadowLodErrorTexels_ = 0.0f;
@@ -236,10 +244,10 @@ namespace Iridium {
         void collectIndirectViewValidations(uint32_t frameIndex);
 
         // Feature owners in registration (and graph) order.
-        [[nodiscard]] std::array<IVulkanFeature*, 12> features() noexcept {
+        [[nodiscard]] std::array<IVulkanFeature*, 15> features() noexcept {
             return { &shadows_, &localShadows_, &probes_, &opaque_,
-                &clusterLighting_, &lighting_, &forward_, &layered_, &output_,
-                &oit_, &hooks_, &ui_ };
+                &clusterLighting_, &lighting_, &forward_, &layered_, &taa_, &exposure_,
+                &bloom_, &output_, &oit_, &hooks_, &ui_ };
         }
         // Between frames, after every slot retired (resize, transport and
         // topology changes): release and recreate the graph, the frame
@@ -247,6 +255,9 @@ namespace Iridium {
         // target textures (the editor bridge's onFrameTargets* events).
         void releaseFrameTargets();
         void createFrameTargets();
+        // Graph topology switches (anti-aliasing, bloom, exposure mode).
+        template <class Restore>
+        bool rebuildFrameTargets(Restore&& restore, std::string& diagnostic, const char* what);
         void releaseEditorTargetTextures();
         void registerEditorTargetTextures();
         void initFrameTargets();
@@ -333,14 +344,15 @@ namespace Iridium {
         void submitOpaqueQueue(const OpaqueSubmission& opaque,
             std::span<const DrawPacket> selectionQueue, bool isWireframe);
         void submitLightingPass(const glm::vec3& cameraPos,
-            const glm::mat4& view, const glm::mat4& proj,
+            const glm::mat4& view, const glm::mat4& proj, const glm::mat4& rasterProj,
             float nearPlane, float farPlane,
             const LightingFramePacket& lights,
             const ReflectionProbeGpuFramePacket& reflectionProbes);
         void submitForwardQueues(std::span<const DrawPacket> opaqueForwardQueue,
+            std::span<const glm::mat4> opaqueForwardPreviousTransforms,
             std::span<const DrawPacket> sortedSurfaceQueue,
             std::span<const DrawPacket> compatibilityTransparentQueue,
-            std::span<const glm::mat4> instanceTransforms);
+            std::span<const glm::mat4> instanceTransforms, const RenderFrame& frame);
         void submitOutputPass();
         void submitUIPass();
 
@@ -360,6 +372,15 @@ namespace Iridium {
         [[nodiscard]] RenderExtent getRenderExtent() const override;
         [[nodiscard]] bool resizeSceneRenderExtent(
             RenderExtent extent, std::string& diagnostic) override;
+        [[nodiscard]] bool setAntiAliasing(
+            AntiAliasingMode mode, std::string& diagnostic) override;
+        void setTemporalAntiAliasingTuning(const TemporalAntiAliasingTuning& tuning) override {
+            taaTuning_ = tuning;
+        }
+        [[nodiscard]] bool setExposure(ExposureMode mode,
+            const AutoExposureSettings& settings, std::string& diagnostic) override;
+        [[nodiscard]] bool setBloom(
+            const BloomSettings& settings, std::string& diagnostic) override;
         [[nodiscard]] RenderBackendCapabilities getCapabilities() const override;
         [[nodiscard]] RenderBackendRuntimeInfo getRuntimeInfo() const override;
         [[nodiscard]] FrameTopologyPreparation prepareFrameTopology(

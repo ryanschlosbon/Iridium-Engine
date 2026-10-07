@@ -18,6 +18,8 @@ namespace Iridium {
             if (cull != VK_NULL_HANDLE) vkDestroyPipeline(device, cull, nullptr);
             if (fallback != VK_NULL_HANDLE)
                 vkDestroyPipeline(device, fallback, nullptr);
+            if (compactBins != VK_NULL_HANDLE)
+                vkDestroyPipeline(device, compactBins, nullptr);
             if (layout != VK_NULL_HANDLE)
                 vkDestroyPipelineLayout(device, layout, nullptr);
             if (setLayout != VK_NULL_HANDLE)
@@ -66,6 +68,9 @@ namespace Iridium {
             if (depthOcclusionRejection)
                 result.fallback = createComputePipeline(device, pipelineCache,
                     result.layout, baseShader, "GPU-scene cull");
+            result.compactBins = createComputePipeline(device, pipelineCache,
+                result.layout, "assets/shaders/gpu_scene_compact_bins_comp.spv",
+                "GPU-scene ordered bin compaction");
         }
         catch (...) {
             result.destroy(device);
@@ -703,8 +708,29 @@ namespace Iridium {
         const uint32_t groups = (parameters[0] + 63u) / 64u;
         commands.dispatch(commands.user, cmd, groups, 1u, 1u);
         tap.dispatch(groups, 1u, 1u);
-        commands.endGpuRange(commands.user, range);
         ++dispatches;
+        // M9 G8: the cull pass wrote one command slot per candidate; one
+        // workgroup per bin compacts them in candidate order and writes the
+        // bin counts (deterministic, no order-deciding atomics). The
+        // compute -> compute dependency is inside this compaction pass
+        // (ADR-0016 item 6).
+        if (!bins_.empty()) {
+            constexpr VkAccessFlags compactDst =
+                VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+            commands.memoryBarrier(commands.user, cmd,
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                VK_ACCESS_SHADER_WRITE_BIT, compactDst);
+            tap.barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT, compactDst);
+            commands.bindPipeline(commands.user, cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                pipelines_.compactBins);
+            tap.bindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, pipelines_.compactBins);
+            const uint32_t binGroups = static_cast<uint32_t>(bins_.size());
+            commands.dispatch(commands.user, cmd, binGroups, 1u, 1u);
+            tap.dispatch(binGroups, 1u, 1u);
+            ++dispatches;
+        }
+        commands.endGpuRange(commands.user, range);
 
         const uint32_t occlusionQueryCount =
             static_cast<uint32_t>(occlusionQueries_.size());

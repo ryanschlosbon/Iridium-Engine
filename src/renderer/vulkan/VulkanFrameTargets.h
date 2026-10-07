@@ -26,6 +26,7 @@ namespace Iridium {
         VulkanImageResource emissive;
         VulkanImageResource f0Roughness;
         VulkanImageResource materialFlags;
+        VulkanImageResource velocity;   // M9.1
         VulkanImageResource depth;
         VulkanImageResource litScene;
         VulkanImageResource refractionColorPyramid;

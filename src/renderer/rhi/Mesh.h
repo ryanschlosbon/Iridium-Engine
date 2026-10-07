@@ -7,6 +7,7 @@
 #include <glm/glm.hpp>
 #include "core/types/AssetGuid.h"
 #include "PipelineTypes.h"
+#include "renderer/graph/ViewHistory.h"
 
 namespace Iridium {
 
@@ -17,11 +18,9 @@ namespace Iridium {
 
     // CPU-side temporal ownership, deliberately separate from the shader UBO.
     // Callers change identity when switching views, and resetRevision on cuts.
-    struct ViewHistoryContext {
-        uint64_t identity = 1;
-        uint64_t resetRevision = 0;
-        auto operator<=>(const ViewHistoryContext&) const = default;
-    };
+    // One type with the render graph (M9 G1): identity 0 is "no view", so
+    // producers always set an explicit identity.
+    using ViewHistoryContext = RenderGraph::ViewHistoryContext;
 
     inline constexpr uint32_t ViewTransportRefractionPyramidsAvailable =
         1u << 0u;
@@ -41,9 +40,40 @@ namespace Iridium {
         alignas(16) glm::uvec4 renderInfo{ 1u, 1u,
             static_cast<uint32_t>(ViewProjectionKind::Perspective), 0u };
         alignas(16) glm::vec4 worldUnits{ 1.0f, 0.0f, 0.0f, 0.0f };
+        // M9 G5b temporal fields. `projection`/`inverseProjection` stay
+        // unjittered (culling, clustering, Hi-Z, LOD, shadows, probes and the
+        // CPU frustum classification read them). Raster vertex stages and
+        // depth reconstruction read the jittered pair, which equals the
+        // unjittered pair bit for bit when jitter is off.
+        alignas(16) glm::mat4 jitteredProjection{ 1.0f };
+        alignas(16) glm::mat4 jitteredInverseProjection{ 1.0f };
+        // This view's previous-turn unjittered view-projection (equals the
+        // current one on a cut or first turn).
+        alignas(16) glm::mat4 previousViewProjection{ 1.0f };
+        // xy = current jitter in NDC, zw = previous turn's jitter in NDC.
+        alignas(16) glm::vec4 jitter{ 0.0f };
+        // x = jitter sequence index, y = turns since cut, z = ViewTemporal*
+        // flags, w = jitter sequence length.
+        alignas(16) glm::uvec4 temporalInfo{ 0u };
     };
 
-    static_assert(sizeof(ViewTransportRecord) == 320);
+    inline constexpr uint32_t ViewTemporalJitterActive = 1u << 0u;
+    inline constexpr uint32_t ViewTemporalHistoryReset = 1u << 1u;
+
+    static_assert(sizeof(ViewTransportRecord) == 544);
+    static_assert(offsetof(ViewTransportRecord, view) == 0);
+    static_assert(offsetof(ViewTransportRecord, projection) == 64);
+    static_assert(offsetof(ViewTransportRecord, inverseView) == 128);
+    static_assert(offsetof(ViewTransportRecord, inverseProjection) == 192);
+    static_assert(offsetof(ViewTransportRecord, cameraPosition) == 256);
+    static_assert(offsetof(ViewTransportRecord, depthRange) == 272);
+    static_assert(offsetof(ViewTransportRecord, renderInfo) == 288);
+    static_assert(offsetof(ViewTransportRecord, worldUnits) == 304);
+    static_assert(offsetof(ViewTransportRecord, jitteredProjection) == 320);
+    static_assert(offsetof(ViewTransportRecord, jitteredInverseProjection) == 384);
+    static_assert(offsetof(ViewTransportRecord, previousViewProjection) == 448);
+    static_assert(offsetof(ViewTransportRecord, jitter) == 512);
+    static_assert(offsetof(ViewTransportRecord, temporalInfo) == 528);
 
     [[nodiscard]] inline ViewTransportRecord makeViewTransportRecord(
         const glm::mat4& view, const glm::mat4& projection,
@@ -51,16 +81,21 @@ namespace Iridium {
         glm::uvec2 renderExtent, ViewProjectionKind projectionKind =
             ViewProjectionKind::Perspective,
         float metresPerWorldUnit = 1.0f) noexcept {
+        const glm::mat4 inverseProjection = glm::inverse(projection);
         return {
             .view = view,
             .projection = projection,
             .inverseView = glm::inverse(view),
-            .inverseProjection = glm::inverse(projection),
+            .inverseProjection = inverseProjection,
             .cameraPosition = glm::vec4(cameraPosition, 1.0f),
             .depthRange = glm::vec4(nearPlane, farPlane, 0.0f, 0.0f),
             .renderInfo = glm::uvec4(renderExtent,
                 static_cast<uint32_t>(projectionKind), 0u),
             .worldUnits = glm::vec4(metresPerWorldUnit, 0.0f, 0.0f, 0.0f),
+            // No jitter and no history until the extractor supplies them.
+            .jitteredProjection = projection,
+            .jitteredInverseProjection = inverseProjection,
+            .previousViewProjection = projection * view,
         };
     }
 
@@ -134,6 +169,17 @@ namespace Iridium {
     static_assert(sizeof(CanonicalMeshPushConstants) == 80);
     static_assert(offsetof(CanonicalMeshPushConstants, materialIndex) == 64);
 
+    // M9.1: direct draws that write velocity (G-buffer, forward-opaque) also
+    // push last frame's world transform. Only the G-buffer and forward
+    // pipeline layouts carry the larger range; every other layout keeps 80 B.
+    struct CanonicalMotionPushConstants {
+        CanonicalMeshPushConstants mesh{};
+        alignas(16) glm::mat4 previousRenderMatrix{ 1.0f };
+    };
+
+    static_assert(sizeof(CanonicalMotionPushConstants) == 144);
+    static_assert(offsetof(CanonicalMotionPushConstants, previousRenderMatrix) == 80);
+
     struct UniformBufferObject {
         alignas(16) glm::mat4 model;
         alignas(16) glm::mat4 view;
@@ -144,11 +190,29 @@ namespace Iridium {
         alignas(16) glm::vec4 depthRange;
         alignas(16) glm::uvec4 renderInfo;
         alignas(16) glm::vec4 worldUnits;
+        alignas(16) glm::mat4 jitteredProjection;
+        alignas(16) glm::mat4 jitteredInverseProjection;
+        alignas(16) glm::mat4 previousViewProjection;
+        alignas(16) glm::vec4 jitter;
+        alignas(16) glm::uvec4 temporalInfo;
     };
 
-    static_assert(sizeof(UniformBufferObject) == 384);
+    // M9 G5a: every field is pinned; include/view_uniforms.glsl mirrors it.
+    static_assert(sizeof(UniformBufferObject) == 608);
+    static_assert(offsetof(UniformBufferObject, model) == 0);
+    static_assert(offsetof(UniformBufferObject, view) == 64);
+    static_assert(offsetof(UniformBufferObject, proj) == 128);
+    static_assert(offsetof(UniformBufferObject, inverseView) == 192);
     static_assert(offsetof(UniformBufferObject, inverseProjection) == 256);
+    static_assert(offsetof(UniformBufferObject, cameraPosition) == 320);
+    static_assert(offsetof(UniformBufferObject, depthRange) == 336);
+    static_assert(offsetof(UniformBufferObject, renderInfo) == 352);
     static_assert(offsetof(UniformBufferObject, worldUnits) == 368);
+    static_assert(offsetof(UniformBufferObject, jitteredProjection) == 384);
+    static_assert(offsetof(UniformBufferObject, jitteredInverseProjection) == 448);
+    static_assert(offsetof(UniformBufferObject, previousViewProjection) == 512);
+    static_assert(offsetof(UniformBufferObject, jitter) == 576);
+    static_assert(offsetof(UniformBufferObject, temporalInfo) == 592);
 
     enum class AlphaMode {
         Opaque,

@@ -1,0 +1,95 @@
+#version 450
+
+// M9 G8: deterministic opaque compaction, pass 2 of 2. One workgroup per bin
+// compacts the bin's commands in place, in candidate order: the cull pass
+// (gpu_scene_frustum_compact.comp) wrote each candidate's command into its own
+// slot (instanceCount 0 when culled). Visible commands keep their relative
+// order, the bin's count is written without atomics, and the tail is cleared,
+// so the opaque draw order is a pure function of the candidate order.
+//
+// Bins are contiguous runs of candidates with ascending bin indices, and a
+// candidate's command slot is its candidate index (commandBase is the bin's
+// first candidate).
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+struct Candidate {
+    uint primitiveIndex; uint binIndex; uint commandBase; uint commandCapacity;
+    uint maximumLod; uint historySlot; uint historyTokenLow; uint historyTokenHigh;
+};
+struct IndexedCommand {
+    uint indexCount; uint instanceCount; uint firstIndex;
+    int vertexOffset; uint firstInstance;
+};
+
+layout(std430, set = 2, binding = 0) readonly buffer Candidates {
+    Candidate values[];
+} candidates;
+layout(std430, set = 2, binding = 1) buffer Commands {
+    IndexedCommand values[];
+} commands;
+layout(std430, set = 2, binding = 2) buffer Counts {
+    uint values[];
+} counts;
+
+layout(push_constant) uniform Parameters {
+    uint candidateCount;
+} parameters;
+
+shared uint scan[256];
+shared uint binBegin;
+shared uint binCount;
+shared uint written;
+
+void main() {
+    const uint bin = gl_WorkGroupID.x;
+    const uint thread = gl_LocalInvocationIndex;
+    if (thread == 0u) {
+        // First candidate of this bin (bins ascend along the candidates).
+        uint low = 0u;
+        uint high = parameters.candidateCount;
+        while (low < high) {
+            uint middle = (low + high) / 2u;
+            if (candidates.values[middle].binIndex < bin) low = middle + 1u;
+            else high = middle;
+        }
+        bool found = low < parameters.candidateCount &&
+            candidates.values[low].binIndex == bin;
+        binBegin = found ? candidates.values[low].commandBase : 0u;
+        binCount = found ? candidates.values[low].commandCapacity : 0u;
+        written = 0u;
+    }
+    barrier();
+    const uint begin = binBegin;
+    const uint count = binCount;
+
+    for (uint chunk = 0u; chunk < count; chunk += 256u) {
+        const uint index = chunk + thread;
+        IndexedCommand command = IndexedCommand(0u, 0u, 0u, 0, 0u);
+        bool visibleCommand = false;
+        if (index < count) {
+            command = commands.values[begin + index];
+            visibleCommand = command.instanceCount != 0u;
+        }
+        // Inclusive prefix sum of the visibility flags (Hillis-Steele).
+        scan[thread] = visibleCommand ? 1u : 0u;
+        barrier();
+        for (uint offset = 1u; offset < 256u; offset <<= 1u) {
+            uint value = thread >= offset ? scan[thread - offset] : 0u;
+            barrier();
+            scan[thread] += value;
+            barrier();
+        }
+        // Every read of this chunk happened before the barriers above, and
+        // compacted writes only move commands to lower slots.
+        if (visibleCommand)
+            commands.values[begin + written + scan[thread] - 1u] = command;
+        barrier();
+        if (thread == 255u) written += scan[255];
+        barrier();
+    }
+    // Clear the tail so no stale command follows the compacted prefix.
+    for (uint index = written + thread; index < count; index += 256u)
+        commands.values[begin + index].instanceCount = 0u;
+    if (thread == 0u) counts.values[bin] = written;
+}

@@ -84,6 +84,9 @@ namespace Iridium {
         std::span<const uint32_t> order;
         // In draw order (their entries in `order` count up from 0).
         std::span<const DrawPacket> directPackets;
+        // M9 G4: last frame's world transform of each direct packet (parallel
+        // to directPackets). GPU-scene entries read theirs from the tables.
+        std::span<const glm::mat4> directPreviousTransforms;
         uint32_t gpuScenePrimitiveCount = 0;
         uint64_t membershipRevision = 0;
         // Per dense primitive: the CPU frustum classification of this view
@@ -156,6 +159,9 @@ namespace Iridium {
         // cameraPosition and depthRange).
         ViewTransportRecord view{};
         ViewHistoryContext history{};
+        // M9.5: seconds since this retained view's previous turn (0 on its
+        // first turn); auto-exposure adapts over it.
+        float viewDeltaSeconds = 0.0f;
         RenderDebugView debugView = RenderDebugView::Final;
         RenderFrameOutputSettings output{};
         // Not visible unless the editor supplies one.
@@ -178,8 +184,16 @@ namespace Iridium {
         std::span<const DrawPacket> selectionQueue{};
         bool wireframe = false;
         std::span<const DrawPacket> forwardOpaqueQueue{};
+        // M9 G4: last frame's world transform per forward-opaque packet
+        // (parallel to forwardOpaqueQueue).
+        std::span<const glm::mat4> forwardOpaquePreviousTransforms{};
         std::span<const DrawPacket> sortedSurfaceQueue{};
         std::span<const DrawPacket> compatibilityTransparentQueue{};
+        // M9.8e: the same for the sorted and compatibility queues. Blended
+        // surfaces write no velocity; they compare this motion with the
+        // opaque velocity under them (motion-aware reactive coverage).
+        std::span<const glm::mat4> sortedSurfacePreviousTransforms{};
+        std::span<const glm::mat4> compatibilityPreviousTransforms{};
         // Frame-local transforms referenced by DrawPacket instance ranges.
         std::span<const glm::mat4> instanceTransforms{};
 

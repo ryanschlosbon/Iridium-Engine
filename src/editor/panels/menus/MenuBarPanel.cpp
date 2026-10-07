@@ -1,4 +1,5 @@
 #include "MenuBarPanel.h"
+#include "core/ProjectAssetRoots.h"
 #include "platform/FileDialog.h"
 #include "editor/EditorSceneActions.h"
 #include "editor/EditorSceneCommandService.h"
@@ -43,9 +44,13 @@ void MenuBarPanel::OrphanScan::execute(Iridium::Tasks::TaskRange, uint32_t) {
 }
 
 namespace {
+    // Scene documents reference licensed third-party content, so with a local
+    // asset library configured they default to <local>/scenes (never committed);
+    // otherwise <repo>/assets/scenes as before.
     std::filesystem::path sceneDirectory() {
-        return std::filesystem::path(PROJECT_ROOT_DIR) /
-            "assets" / "scenes";
+        const Iridium::ProjectAssetRoots& roots = Iridium::ProjectAssetRoots::current();
+        if (roots.localAssetRoot()) return *roots.localAssetRoot() / "scenes";
+        return roots.projectAssetRoot() / "scenes";
     }
 }
 

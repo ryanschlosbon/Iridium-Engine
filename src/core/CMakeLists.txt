@@ -27,6 +27,7 @@ configure_file("${PROJECT_SOURCE_DIR}/cmake/BuildInfo.cpp.in"
 
 add_library(iridium_core STATIC
         EngineLog.cpp
+        ProjectAssetRoots.cpp
         cli/CliOptionRegistry.cpp
         types/AssetGuid.cpp
         types/SceneEntityUuid.cpp
@@ -36,6 +37,8 @@ add_library(iridium_core STATIC
 target_include_directories(iridium_core PUBLIC ${PROJECT_SOURCE_DIR}/src
         ${CMAKE_BINARY_DIR}/generated)
 target_link_libraries(iridium_core PUBLIC glm::glm Threads::Threads)
+# ProjectAssetRoots parses iridium.local.json (header-only JSON, never public).
+target_link_libraries(iridium_core PRIVATE nlohmann_json::nlohmann_json)
 if(WIN32)
     # AssetGuid/SceneEntityUuid generation and Sha256 use the CNG API.
     target_link_libraries(iridium_core PUBLIC Bcrypt)

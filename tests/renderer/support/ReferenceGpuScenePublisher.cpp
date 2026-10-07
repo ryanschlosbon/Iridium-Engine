@@ -120,6 +120,7 @@ namespace {
         (void)geometrySlots_.collect(completedSerial);
 
         if (cachedObservationsValid_ && sceneEpoch == sceneEpoch_ &&
+            !settlePending_ &&
             cachedCapacityFallbackInstances_ == 0u &&
             packed_.directFallbackInstances.empty() &&
             observationRevisionsEqual(observations, cachedObservations_)) {
@@ -133,6 +134,7 @@ namespace {
             return packed_;
         }
         fallbackOwners_.clear();
+        settlePending_ = false;
 
         if (sceneEpoch_ != 0 && sceneEpoch != sceneEpoch_) {
             for (const auto& [key, state] : instances_) {
@@ -155,6 +157,7 @@ namespace {
             geometries_.clear();
         }
         sceneEpoch_ = sceneEpoch;
+        ++pass_;
         for (auto& [key, state] : instances_) { (void)key; state.seen = false; }
         for (auto& [key, state] : primitives_) { (void)key; state.seen = false; }
         for (auto& [key, state] : geometries_) { (void)key; state.seen = false; }
@@ -264,8 +267,18 @@ namespace {
                 instance.currentTransformRevision = ++recordRevision_;
                 instance.flags &= ~GpuSceneInstanceHistoryReset;
                 instance.instanceRevision = ++recordRevision_;
+                instance.movedPass = pass_;
+                settlePending_ = true;
                 stats_.changedTransforms += 2;
                 ++stats_.changedInstances;
+            }
+            else if (instance.movedPass != 0u && instance.movedPass + 1u == pass_ &&
+                !bitsEqual(instance.previousWorld, instance.currentWorld)) {
+                // M9 G3: settle the frame after the transform stopped.
+                instance.previousWorld = instance.currentWorld;
+                instance.previousTransformRevision = ++recordRevision_;
+                ++stats_.changedTransforms;
+                ++stats_.settledTransforms;
             }
             const bool instanceDataChanged =
                 instance.identity != observation->identity ||

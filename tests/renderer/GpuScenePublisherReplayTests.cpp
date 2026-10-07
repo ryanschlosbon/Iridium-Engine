@@ -132,6 +132,7 @@ namespace {
         IRIDIUM_COMPARE(retiredGeometries)
         IRIDIUM_COMPARE(capacityFallbackInstances)
         IRIDIUM_COMPARE(unchangedFastPath)
+        IRIDIUM_COMPARE(settledTransforms)
         IRIDIUM_COMPARE(changedInstanceBytes)
         IRIDIUM_COMPARE(changedTransformBytes)
         IRIDIUM_COMPARE(changedPrimitiveBytes)

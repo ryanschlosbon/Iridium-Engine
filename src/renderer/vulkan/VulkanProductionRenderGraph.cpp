@@ -1,6 +1,8 @@
 #include "renderer/vulkan/VulkanProductionRenderGraph.h"
 
 #include "renderer/vulkan/VulkanRenderGraphExecutor.h"
+#include "renderer/vulkan/VulkanBloomFeature.h"
+#include "renderer/vulkan/VulkanExposureFeature.h"
 #include "renderer/vulkan/VulkanGBufferLayout.h"
 #include "renderer/lighting/ClusteredLighting.h"
 #include "renderer/rhi/ShadowTypes.h"
@@ -224,6 +226,10 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
         "gbuffer.f0-roughness", imageDesc(toGraphFormat(formats.f0Roughness), sceneExtent));
     RenderGraph::ResourceHandle materialFlags = graph.createResource(
         "gbuffer.material-flags", imageDesc(toGraphFormat(formats.materialFlags), sceneExtent));
+    // M9.1: per-pixel motion (current minus previous unjittered UV), written
+    // by every opaque depth writer (gbuffer, forward-opaque).
+    RenderGraph::ResourceHandle velocity = graph.createResource(
+        "gbuffer.velocity", imageDesc(toGraphFormat(VulkanVelocityFormat), sceneExtent));
     RenderGraph::ResourceDesc directionalShadowDesc = imageDesc(
         RenderGraph::Format::D32Float,
         { directionalShadowResolution, directionalShadowResolution },
@@ -488,6 +494,10 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
         Access::ColorAttachment, LoadOp::Clear, StoreOp::Store, opaqueBlack);
     materialFlags = graph.write(gbuffer, materialFlags,
         Access::ColorAttachment, LoadOp::Clear, StoreOp::Store, zeroUint);
+    // Appended after the surface targets: attachment 5. Background pixels keep
+    // zero (camera motion is reconstructed from depth by its consumers).
+    velocity = graph.write(gbuffer, velocity, Access::ColorAttachment, LoadOp::Clear,
+        StoreOp::Store, transparentBlack);
     depth = graph.write(gbuffer, depth, Access::DepthAttachmentWrite, LoadOp::Clear,
         StoreOp::Store, farDepth);
 
@@ -616,6 +626,8 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
         Access::DepthAttachmentWrite, LoadOp::Load);
     litScene = graph.write(opaqueForward, litScene,
         Access::ColorAttachment, LoadOp::Load);
+    velocity = graph.write(opaqueForward, velocity,
+        Access::ColorAttachment, LoadOp::Load);
 
     if (virtualShadowWorkingSetBytes) {
         const auto mark = graph.addPass("shadow.virtual.depth-mark", RenderGraph::QueueClass::Compute);
@@ -669,6 +681,8 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
         graph.addDependency(depthPyramidValidation, sortedTransparency);
     readClusterProduct(sortedTransparency);
     graph.read(sortedTransparency, depth, Access::DepthAttachmentRead);
+    // M9.8e: motion-aware reactive coverage reads the opaque velocity.
+    graph.read(sortedTransparency, velocity, Access::SampledRead);
     litScene = graph.write(sortedTransparency, litScene,
         Access::ColorAttachment, LoadOp::Load);
 
@@ -875,6 +889,7 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
         graph.read(compatibilityForward, refractionDepth,
             Access::SampledRead);
     }
+    graph.read(compatibilityForward, velocity, Access::SampledRead);
     depth = graph.write(compatibilityForward, depth,
         Access::DepthAttachmentWrite, LoadOp::Load);
     litScene = graph.write(compatibilityForward, litScene,
@@ -913,20 +928,103 @@ RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(
         graph.read(sceneCapture, litScene, Access::TransferSource);
     }
 
-    const RenderGraph::PassHandle bloomHook = graph.addPass("bloom-hook");
-    graph.read(bloomHook, litScene, Access::SampledRead);
+    // M9.2: the post chain reads the resolved scene colour: the TAA history's
+    // current slot with TAA, otherwise scene.color (the M7R topology). The
+    // scene-linear capture above stays the single-frame (pre-TAA) domain.
+    RenderGraph::ResourceHandle resolved = litScene;
+    // M9.5: the adapted exposure state, a History buffer pair that survives
+    // view cuts. TAA pre-exposes with its previous half.
+    RenderGraph::RenderGraphBuilder::HistoryHandles exposure{};
+    if (features.autoExposure)
+        exposure = graph.createHistory("exposure", bufferDesc(ExposureStateBytes, 16),
+            RenderGraph::HistoryReset::SurviveCut);
+    if (features.temporalAntiAliasing) {
+        const auto taaHistory = graph.createHistory("taa.history",
+            imageDesc(RenderGraph::Format::Rgba16Float, sceneExtent));
+        const RenderGraph::PassHandle taa = graph.addPass(
+            "temporal.taa.resolve", RenderGraph::QueueClass::Compute);
+        graph.read(taa, litScene, Access::SampledRead);
+        graph.read(taa, depth, Access::SampledRead);
+        graph.read(taa, velocity, Access::SampledRead);
+        graph.read(taa, taaHistory.previous, Access::SampledRead);
+        if (features.autoExposure)
+            graph.read(taa, exposure.previous, Access::StorageRead);
+        resolved = graph.write(taa, taaHistory.current, Access::StorageWrite);
+    }
+
+    // M9.5: meter the resolved colour (one histogram row per 128x128 tile,
+    // every row written each frame) and adapt (one workgroup).
+    RenderGraph::ResourceHandle exposureState{};
+    RenderGraph::ResourceHandle exposureMetering{};
+    if (features.autoExposure) {
+        RenderGraph::ResourceHandle rows = graph.createResource("exposure.histogram-rows",
+            bufferDesc(checkedBufferBytes(exposureHistogramRowCount(sceneExtent.width,
+                sceneExtent.height), uint64_t{ ExposureHistogramBins } * 4u)));
+        exposureMetering = graph.createResource("exposure.metering",
+            bufferDesc(ExposureMeteringBytes, 16));
+        const RenderGraph::PassHandle histogram = graph.addPass(
+            "post.exposure.histogram", RenderGraph::QueueClass::Compute);
+        graph.read(histogram, resolved, Access::SampledRead);
+        rows = graph.write(histogram, rows, Access::StorageWrite);
+        const RenderGraph::PassHandle adapt = graph.addPass(
+            "post.exposure.adapt", RenderGraph::QueueClass::Compute);
+        graph.read(adapt, rows, Access::StorageRead);
+        graph.read(adapt, exposure.previous, Access::StorageRead);
+        exposureState = graph.write(adapt, exposure.current, Access::StorageWrite);
+        exposureMetering = graph.write(adapt, exposureMetering, Access::StorageWrite);
+    }
+
+    // M9.4: the bloom chain from the resolved colour. Off, the inactive hook
+    // keeps the M7R topology. On, every texel of every level is written
+    // before it is read (level-to-level barriers stay inside the pass), so
+    // the chain is a whole-resource write and aliases.
+    RenderGraph::ResourceHandle bloomChain{};
+    if (features.bloomLevels != 0u) {
+        RenderGraph::ResourceDesc chainDesc = imageDesc(RenderGraph::Format::Rgba16Float,
+            { bloomChainSize(sceneExtent.width), bloomChainSize(sceneExtent.height) });
+        chainDesc.image.mipLevels = static_cast<uint16_t>(bloomChainLevels(
+            sceneExtent.width, sceneExtent.height, features.bloomLevels));
+        bloomChain = graph.createResource("bloom.chain", chainDesc);
+        const RenderGraph::PassHandle bloom = graph.addPass(
+            "post.bloom", RenderGraph::QueueClass::Compute);
+        graph.read(bloom, resolved, Access::SampledRead);
+        // The adapted exposure puts the threshold in exposed units.
+        if (exposureState.isValid()) graph.read(bloom, exposureState, Access::StorageRead);
+        bloomChain = graph.write(bloom, bloomChain, Access::StorageReadWrite);
+        graph.declareWholeResourceWrite(bloomChain);
+    }
+    else {
+        const RenderGraph::PassHandle bloomHook = graph.addPass("bloom-hook");
+        graph.read(bloomHook, resolved, Access::SampledRead);
+    }
 
     const RenderGraph::PassHandle outputTransform =
         graph.addPass("output-transform");
-    graph.read(outputTransform, litScene, Access::SampledRead);
+    graph.read(outputTransform, resolved, Access::SampledRead);
     graph.read(outputTransform, emissive, Access::SampledRead);
     graph.read(outputTransform, depth, Access::SampledRead);
+    // M9.1: the motion-vector debug view.
+    graph.read(outputTransform, velocity, Access::SampledRead);
+    // M9.5: this frame's adapted exposure.
+    if (features.autoExposure)
+        graph.read(outputTransform, exposureState, Access::StorageRead);
+    // M9.4: the chain's level 0, composited before exposure.
+    if (bloomChain.isValid())
+        graph.read(outputTransform, bloomChain, Access::SampledRead);
     output = graph.write(outputTransform, output,
         Access::ColorAttachment, LoadOp::Clear, StoreOp::Store, opaqueBlack);
 
     const RenderGraph::PassHandle finalCaptureHook =
         graph.addPass("final-capture-hook");
     graph.read(finalCaptureHook, litScene, Access::TransferSource);
+    // M9.2: the resolved scene colour (scene-resolved captures).
+    if (features.temporalAntiAliasing)
+        graph.read(finalCaptureHook, resolved, Access::TransferSource);
+    // M9.5: the exposure state and metering (qualification readback).
+    if (features.autoExposure) {
+        graph.read(finalCaptureHook, exposureState, Access::TransferSource);
+        graph.read(finalCaptureHook, exposureMetering, Access::TransferSource);
+    }
     graph.read(finalCaptureHook, output, Access::TransferSource);
 
     const RenderGraph::PassHandle ui = graph.addPass(
@@ -1056,6 +1154,19 @@ VulkanProductionGraphIds resolveVulkanProductionGraphIds(
     ids.oitResolve = pass("transparent.oit.resolve");
     ids.sceneColorCaptureHook = pass("scene-color-capture-hook");
     ids.bloomHook = pass("bloom-hook");
+    ids.taaResolve = pass("temporal.taa.resolve");
+    ids.taaHistoryPrevious = resource("taa.history.previous");
+    ids.taaHistoryCurrent = resource("taa.history.current");
+    ids.resolvedSceneColor = ids.taaHistoryCurrent.isValid()
+        ? ids.taaHistoryCurrent : resource("scene.color");
+    ids.exposureHistogram = pass("post.exposure.histogram");
+    ids.exposureAdapt = pass("post.exposure.adapt");
+    ids.exposureHistogramRows = resource("exposure.histogram-rows");
+    ids.exposureMetering = resource("exposure.metering");
+    ids.exposurePrevious = resource("exposure.previous");
+    ids.exposureCurrent = resource("exposure.current");
+    ids.bloom = pass("post.bloom");
+    ids.bloomChain = resource("bloom.chain");
     ids.outputTransform = pass("output-transform");
     ids.finalCaptureHook = pass("final-capture-hook");
     ids.ui = pass("ui-compose");
@@ -1074,6 +1185,7 @@ VulkanProductionGraphIds resolveVulkanProductionGraphIds(
     ids.gbufferEmissive = resource("gbuffer.emissive");
     ids.gbufferF0Roughness = resource("gbuffer.f0-roughness");
     ids.gbufferMaterialFlags = resource("gbuffer.material-flags");
+    ids.gbufferVelocity = resource("gbuffer.velocity");
     ids.depth = resource("depth.opaque");
     ids.sceneColor = resource("scene.color");
     ids.refractionColorPyramid = resource("scene.refraction-color-pyramid");

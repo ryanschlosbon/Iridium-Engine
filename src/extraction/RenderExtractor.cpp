@@ -233,6 +233,8 @@ namespace Iridium {
             stats.changedGeometries);
         cpuProfiler_.recordCounter("gpu_scene.publication.unchanged_fast_path",
             stats.unchangedFastPath);
+        cpuProfiler_.recordCounter("gpu_scene.transform.settled",
+            stats.settledTransforms);
         cpuProfiler_.recordCounter("gpu_scene.direct_fallback",
             gpuSceneDirectFallbackCount_ + stats.capacityFallbackInstances);
     }
@@ -935,7 +937,7 @@ namespace Iridium {
             projMatrix_[0][0] *= view.previewProjectionScale;
             projMatrix_[1][1] *= view.previewProjectionScale;
         }
-        const ViewTransportRecord viewTransport = makeViewTransportRecord(
+        ViewTransportRecord viewTransport = makeViewTransportRecord(
             viewMatrix_, projMatrix_, renderCameraPosition_,
             renderCameraNearPlane_, renderCameraFarPlane_,
             { inputs.renderExtent.width, inputs.renderExtent.height });
@@ -943,15 +945,49 @@ namespace Iridium {
         renderBackend->setEnvironmentLightingSettings(assetPreviewActive
             ? view.previewEnvironmentSettings : inputs.sceneEnvironmentSettings);
         const float viewExposure = assetPreviewActive ? view.previewExposureEv : inputs.manualExposureEv;
+        // M9 G2: the retained view's History context. Set 0 is the scene view
+        // (identity 1), set 1 the asset preview (identity sessionSerial + 2).
+        lastViewMotion_ = viewMotion_.update({
+            .historySet = assetPreviewActive ? 1u : 0u,
+            .identity = assetPreviewActive ? view.previewSessionSerial + 2u : 1u,
+            .requestedResetRevision = assetPreviewActive ? view.previewFramingRevision :
+                inputs.viewHistoryResetRevision.value_or(0u),
+            .view = viewMatrix_,
+            .projection = projMatrix_,
+            .projectionKind = viewTransport.renderInfo.z,
+            .extent = { inputs.renderExtent.width, inputs.renderExtent.height },
+            .metresPerWorldUnit = viewTransport.worldUnits.x,
+            .jitter = inputs.temporalJitter,
+            .jitterSequenceLength = inputs.temporalJitterSequenceLength,
+            .timeSeconds = inputs.timeSeconds,
+        });
+        // M9 G5b: temporal fields. Without jitter the jittered pair stays the
+        // unjittered pair (makeViewTransportRecord), bit for bit.
+        viewTransport.previousViewProjection = lastViewMotion_.previousViewProjection;
+        viewTransport.jitter = glm::vec4(lastViewMotion_.jitterNdc,
+            lastViewMotion_.previousJitterNdc);
+        uint32_t temporalFlags = 0;
+        if (lastViewMotion_.cut != ViewCutReason::None) temporalFlags |= ViewTemporalHistoryReset;
+        // Temporal health in profiles: a view cut and its reason (0 none, 1 first
+        // turn, 2 requested, 3 explicit, 4 projection, 5 translation, 6 rotation).
+        cpuProfiler_.recordCounter("view.cut", lastViewMotion_.cut != ViewCutReason::None ? 1 : 0);
+        cpuProfiler_.recordCounter("view.cut_reason", static_cast<uint64_t>(lastViewMotion_.cut));
+        if (lastViewMotion_.jitterNdc != glm::vec2(0.0f)) {
+            temporalFlags |= ViewTemporalJitterActive;
+            viewTransport.jitteredProjection =
+                jitterProjection(viewTransport.projection, lastViewMotion_.jitterNdc);
+            viewTransport.jitteredInverseProjection =
+                glm::inverse(viewTransport.jitteredProjection);
+        }
+        viewTransport.temporalInfo = glm::uvec4(lastViewMotion_.jitterIndex,
+            static_cast<uint32_t>(std::min<uint64_t>(lastViewMotion_.turnsSinceCut, UINT32_MAX)),
+            temporalFlags, inputs.temporalJitterSequenceLength);
         // M7R R3c.11: the frame is assembled from spans over this frame's
         // queues and packets and submitted once, after extraction.
         renderFrame_ = RenderFrame{
             .view = viewTransport,
-            .history = {
-                .identity = assetPreviewActive ? view.previewSessionSerial + 2u : 1u,
-                .resetRevision = assetPreviewActive ? view.previewFramingRevision :
-                    inputs.viewHistoryResetRevision.value_or(0u),
-            },
+            .history = lastViewMotion_.history,
+            .viewDeltaSeconds = lastViewMotion_.deltaSeconds,
             .debugView = debugView,
             .output = { viewExposure, static_cast<float>(inputs.paperWhiteNits),
                 static_cast<float>(inputs.peakNits) },
@@ -1849,9 +1885,18 @@ namespace Iridium {
             debugView == RenderDebugView::Final
             ? std::span<const DrawPacket>(selectionQueue.data(), selectionQueue.size())
             : std::span<const DrawPacket>{};
+        // M9 G4: last frame's transform for every opaque direct and
+        // forward-opaque packet.
+        previousTransforms_.beginFrame();
+        resolvePreviousTransforms(opaqueQueue, opaqueDirectPrevious_);
+        resolvePreviousTransforms(forwardOpaqueQueue, forwardOpaquePrevious_);
+        resolvePreviousTransforms(sortedSurfaceQueue, sortedSurfacePrevious_);
+        resolvePreviousTransforms(transparentQueue, compatibilityPrevious_);
+        previousTransforms_.endFrame();
         renderFrame.opaque = {
             .order = opaqueOrder_,
             .directPackets = opaqueQueue,
+            .directPreviousTransforms = opaqueDirectPrevious_,
             .gpuScenePrimitiveCount =
                 static_cast<uint32_t>(gpuSceneOpaquePrimitives.size()),
             .membershipRevision = !gpuSceneOpaquePrimitives.empty()
@@ -1863,13 +1908,41 @@ namespace Iridium {
         renderFrame.selectionQueue = activeSelectionQueue;
         renderFrame.wireframe = isWireframe;
         renderFrame.forwardOpaqueQueue = forwardOpaqueQueue;
+        renderFrame.forwardOpaquePreviousTransforms = forwardOpaquePrevious_;
         renderFrame.sortedSurfaceQueue = sortedSurfaceQueue;
         renderFrame.compatibilityTransparentQueue = transparentQueue;
+        renderFrame.sortedSurfacePreviousTransforms = sortedSurfacePrevious_;
+        renderFrame.compatibilityPreviousTransforms = compatibilityPrevious_;
         renderFrame.instanceTransforms = forwardInstanceTransforms_;
         renderFrame.lights = &lightingFrame;
         renderFrame.reflectionProbes = &publishedProbes;
         renderFrame.stageObserver = inputs.stageObserver;
         return renderFrame_;
+    }
+
+    glm::mat4 RenderExtractor::previousWorldFor(const DrawPacket& packet) {
+        // A GPU-scene primitive's previous transform is its instance's slot
+        // 2d + 1 (settled the frame after it stops, M9 G3).
+        if (hasGpuScenePrimitive(packet) && gpuSceneFrame_ != nullptr &&
+            packet.firstInstanceTransform < gpuSceneFrame_->primitives.size()) {
+            const GpuScenePackedTables& frame = *gpuSceneFrame_;
+            const GpuScenePrimitiveRecord& primitive =
+                frame.primitives[packet.firstInstanceTransform];
+            if (primitive.binding.x < frame.instances.size()) {
+                const uint32_t previous = frame.instances[primitive.binding.x].references.y;
+                if (previous < frame.transforms.size())
+                    return unpackGpuSceneAffine(frame.transforms[previous]);
+            }
+        }
+        return previousTransforms_.resolve({ packet.owner, packet.primitiveGuid },
+            packet.worldTransform);
+    }
+
+    void RenderExtractor::resolvePreviousTransforms(
+        std::span<const DrawPacket> packets, std::vector<glm::mat4>& previous) {
+        previous.resize(packets.size());
+        for (size_t index = 0; index < packets.size(); ++index)
+            previous[index] = previousWorldFor(packets[index]);
     }
 
     DrawPacket RenderExtractor::gpuSceneParityPacket(uint32_t primitiveIndex,

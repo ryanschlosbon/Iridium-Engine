@@ -62,6 +62,7 @@ namespace Iridium {
     class SceneWorld;
     struct LoadedEnvironmentAsset;
     struct ModelAsset;
+    struct RenderFrame;
 
     // Reference routes and qualification settings that change how the
     // Application drives the renderer. Only an observer selects them (the
@@ -227,6 +228,9 @@ namespace Iridium {
         std::optional<uint64_t> measuredFrameIndex;
         // onFrameEnd: an editor transport switch is queued for this frame.
         bool outputTransportPending = false;
+        // onFrameSubmit only: the frame being submitted (its view record
+        // carries this frame's jitter and history state). Null elsewhere.
+        const RenderFrame* renderFrame = nullptr;
     };
 
     // Identity of the published scene environment (retained after its GPU

@@ -801,7 +801,8 @@ namespace {
         culler.init(fakeServices(context), {}, {
             .setLayout = fake<VkDescriptorSetLayout>(0x40),
             .layout = fake<VkPipelineLayout>(0x41),
-            .cull = fake<VkPipeline>(0x42) });
+            .cull = fake<VkPipeline>(0x42),
+            .compactBins = fake<VkPipeline>(0x43) });
         culler.resize(64u, false);
         culler.allocateSet(0u);
         culler.allocateSet(1u);
@@ -856,11 +857,12 @@ namespace {
                 .sceneBuffersMapped = true, .assets = fakeAssets(), .view = &view }, 0u));
         }
 
+        // M9 G8: the cull pass, then the per-bin ordered compaction.
         CHECK(culler.recordCompaction(nullptr, 0u, {
             .globalSet = fake<VkDescriptorSet>(0x30),
-            .gpuSceneSet = fake<VkDescriptorSet>(0x31) }) == 1u);
+            .gpuSceneSet = fake<VkDescriptorSet>(0x31) }) == 2u);
         const auto& log = context.recorder.log;
-        CHECK(log.size() == 8u);
+        CHECK(log.size() == 11u);
         CHECK(log[0] == HostBarrier);
         CHECK(log[1] == "range gpu.gpu_scene.frustum_compact");
         CHECK(log[2] == "pipe 1 " + std::to_string(0x42));
@@ -868,10 +870,17 @@ namespace {
         CHECK(log[4] == pushLine(0x41, { 8, 10, 10, 10, 6, 0, 1, 0,
             std::bit_cast<uint32_t>(0.15f), 0, 0 }));
         CHECK(log[5] == "dispatch 1 1 1");
-        CHECK(log[6] == "end");
+        CHECK(log[6] == "barrier " +
+            std::to_string(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT) + "->" +
+            std::to_string(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT) + " " +
+            std::to_string(VK_ACCESS_SHADER_WRITE_BIT) + "->" +
+            std::to_string(VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT));
+        CHECK(log[7] == "pipe 1 " + std::to_string(0x43));
+        CHECK(log[8].starts_with("dispatch "));
+        CHECK(log[9] == "end");
         // R3b.7: only the compute -> host half stays in the pass; the graph
         // executor issues the compute -> indirect barrier at gbuffer.
-        CHECK(log[7] == "barrier " +
+        CHECK(log[10] == "barrier " +
             std::to_string(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT) + "->" +
             std::to_string(VK_PIPELINE_STAGE_HOST_BIT) + " " +
             std::to_string(VK_ACCESS_SHADER_WRITE_BIT) + "->" +

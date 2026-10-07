@@ -36,8 +36,18 @@ namespace Iridium {
         auto operator<=>(const AssetCatalogRecord&) const = default;
     };
 
+    // One source folder of one asset root (root-relative, generic separators).
+    struct AssetSourceDirectory {
+        std::string assetRoot;
+        std::string path;
+
+        auto operator<=>(const AssetSourceDirectory&) const = default;
+    };
+
     struct AssetCatalogQuery {
         std::string text;
+        // Restricts results to one asset root ("project", "local"); unset: all.
+        std::optional<std::string> assetRoot;
         std::optional<std::string> sourceDirectory;
         std::optional<std::string> assetType;
         std::optional<AssetCatalogStatus> status;
@@ -58,7 +68,7 @@ namespace Iridium {
 
         virtual void rebuild(
             std::span<const AssetCatalogRecord> records,
-            std::span<const std::string> sourceDirectories = {}) = 0;
+            std::span<const AssetSourceDirectory> sourceDirectories = {}) = 0;
         [[nodiscard]] virtual std::vector<AssetCatalogRecord> recordsForGuid(
             const AssetGuid& guid) const = 0;
         [[nodiscard]] virtual std::vector<AssetCatalogRecord>
@@ -67,7 +77,8 @@ namespace Iridium {
         [[nodiscard]] virtual AssetCatalogQueryPage query(
             const AssetCatalogQuery& query) const = 0;
         [[nodiscard]] virtual uint64_t recordCount() const = 0;
-        [[nodiscard]] virtual std::vector<std::string>
+        // Every folder of every root, sorted by root then path.
+        [[nodiscard]] virtual std::vector<AssetSourceDirectory>
             sourceDirectories() const = 0;
     };
 

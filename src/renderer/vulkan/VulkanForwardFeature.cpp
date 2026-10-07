@@ -17,12 +17,12 @@ namespace Iridium {
         pyramid_.init(context.device, context.pipelineCache, context.descriptors,
             context.meshLayouts.getGlobalSetLayout());
         passes_[static_cast<size_t>(Queue::OpaqueForward)] = { this, Queue::OpaqueForward,
-            {}, "gpu.forward.opaque", false, RenderPassClass::Forward, false, false };
+            {}, "gpu.forward.opaque", false, RenderPassClass::Forward, 2, false, false };
         passes_[static_cast<size_t>(Queue::Sorted)] = { this, Queue::Sorted,
-            {}, "gpu.transparency.sorted.forward", true, RenderPassClass::Transparent,
+            {}, "gpu.transparency.sorted.forward", true, RenderPassClass::Transparent, 1,
             false, true };
         passes_[static_cast<size_t>(Queue::Compatibility)] = { this, Queue::Compatibility,
-            {}, "gpu.transparency.compatibility.forward", false, RenderPassClass::Forward,
+            {}, "gpu.transparency.compatibility.forward", false, RenderPassClass::Forward, 1,
             true, false };
     }
 
@@ -162,7 +162,12 @@ namespace Iridium {
         const VkDescriptorSet sceneSet = staged_.sceneSet;
         const VkDescriptorSet globalSet = staged_.globalSet;
 
-        for (const DrawPacket& packet : queue) {
+        const std::span<const glm::mat4> previousTransforms =
+            pass.queue == Queue::OpaqueForward ? staged_.opaqueForwardPreviousTransforms
+            : pass.queue == Queue::Sorted ? staged_.sortedSurfacePreviousTransforms
+            : staged_.compatibilityPreviousTransforms;
+        for (size_t packetIndex = 0; packetIndex < queue.size(); ++packetIndex) {
+            const DrawPacket& packet = queue[packetIndex];
             if (skipped(pass, packet, queue)) continue;
             auto* geometry = resources.geometries().get(packet.geometry);
             auto* material = resources.materials().get(packet.material);
@@ -176,7 +181,8 @@ namespace Iridium {
             if (!geometry || !material || !record ||
                 record->pipeline == VK_NULL_HANDLE ||
                 record->pipelineLayout == VK_NULL_HANDLE ||
-                record->renderPass != pass.expectedPassClass) {
+                record->renderPass != pass.expectedPassClass ||
+                record->colorAttachmentCount != pass.expectedColorAttachments) {
                 continue;
             }
 
@@ -210,15 +216,19 @@ namespace Iridium {
                 lastBoundGeometry = packet.geometry;
             }
 
-            CanonicalMeshPushConstants push{};
-            push.renderMatrix = packet.worldTransform;
-            push.materialIndex = packet.material.getIndex();
-            push.padding[0] = static_cast<uint32_t>(staged_.debugView);
-            push.padding[1] = mirrored ? 1u : 0u;
+            CanonicalMotionPushConstants push{};
+            push.mesh.renderMatrix = packet.worldTransform;
+            push.mesh.materialIndex = packet.material.getIndex();
+            push.mesh.padding[0] = static_cast<uint32_t>(staged_.debugView);
+            push.mesh.padding[1] = mirrored ? 1u : 0u;
+            // M9.1: forward-opaque writes velocity from last frame's transform;
+            // M9.8e: transparency compares the same motion with the velocity.
+            push.previousRenderMatrix = packetIndex < previousTransforms.size()
+                ? previousTransforms[packetIndex] : packet.worldTransform;
             vkCmdPushConstants(cmd, activeLayout,
                 VK_SHADER_STAGE_VERTEX_BIT |
                     VK_SHADER_STAGE_FRAGMENT_BIT,
-                0, sizeof(push), &push);
+                0, sizeof(CanonicalMotionPushConstants), &push);
             vkCmdDrawIndexed(cmd, packet.indexCount, 1,
                 packet.firstIndex, 0, 0);
             telemetry.recordDraw(telemetry.counters().drawTransparentForward,

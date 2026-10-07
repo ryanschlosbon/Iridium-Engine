@@ -62,7 +62,7 @@ if (-not $NoRun) {
         $exePath = (Resolve-Path (Join-Path $repo $Exe) -ErrorAction SilentlyContinue)
         if (-not $exePath) { $exePath = Resolve-Path $Exe }
         $exePath = $exePath.Path
-        $cacheArgs = @(Get-M7RPipelineCacheArgs $exePath $PipelineCache)
+        $cacheArgs = @(Get-M7REngineBaseArgs $exePath $PipelineCache)
         $fixtures = @()
         foreach ($fixture in $digestSet) {
             if ($Only.Count -gt 0 -and $Only -notcontains $fixture.Key) { continue }

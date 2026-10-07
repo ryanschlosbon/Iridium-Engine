@@ -1,0 +1,139 @@
+#version 450
+
+// M9.4 bloom chain ("post.bloom"), one dispatch per chain step.
+//
+// Input: the resolved scene colour (scene-linear ACEScg/AP1, before
+// exposure). Output: the RGBA16F chain, level 0 at half resolution.
+// - Prefilter (mode 0): scene -> level 0 with the 13-tap downsample. Its five
+//   2x2 boxes are averaged with Karis weights 1 / (1 + luma) (anti-firefly;
+//   optional, on by default), non-finite input is dropped and the optional
+//   soft-knee threshold applied.
+// - Downsample (mode 1): level i-1 -> level i, the 13-tap filter (box weights
+//   0.5 centre and 0.125 per corner box).
+// - Upsample (mode 2): level i = level i * a + tent3x3(level i+1) * b, with
+//   the normalised level weights (radius^i), so level 0 ends as the weighted
+//   sum of the levels' blurs.
+// All filter weights sum to one, so every level carries the scene's energy.
+// The prefilter threshold works in exposed units (scene * exposure), and the
+// prefilter applies the tint.
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform sampler2D source;   // bilinear, clamp, explicit lod
+layout(set = 0, binding = 1, rgba16f) uniform image2D destination;
+// The adapted exposure (y: the output multiplier); read in Auto mode only.
+layout(set = 0, binding = 2, std430) readonly buffer ExposureState {
+    vec4 exposureState;
+};
+
+layout(push_constant) uniform BloomPush {
+    vec4 destination;   // xy size, zw 1 / size
+    vec4 source;        // xy 1 / size of the read level, z its lod
+    vec4 shaping;       // x threshold, y knee (exposed units); prefilter w manual multiplier; upsample z, w weights
+    uvec4 control;      // x mode, y 1 = Karis weights on the prefilter, z half(tint.rg), w half(tint.b, auto)
+} push;
+
+const uint ModePrefilter = 0u;
+const uint ModeDownsample = 1u;
+const uint ModeUpsample = 2u;
+const vec3 Ap1Luma = vec3(0.2722287, 0.6740818, 0.0536895);
+const float HalfMax = 65504.0;
+
+vec3 tap(vec2 uv, vec2 offset) {
+    return textureLod(source, uv + offset * push.source.xy, push.source.z).rgb;
+}
+
+// Scene input may hold NaN, Inf or negative values; none may spread.
+vec3 sanitize(vec3 color) {
+    color = mix(color, vec3(0.0), isnan(color));
+    return clamp(color, vec3(0.0), vec3(HalfMax));
+}
+
+vec3 karisAverage(vec3 a, vec3 b, vec3 c, vec3 d) {
+    return (a + b + c + d) * 0.25;
+}
+
+float karisWeight(vec3 box) {
+    return 1.0 / (1.0 + dot(box, Ap1Luma));
+}
+
+vec3 downsample13(vec2 uv, bool prefilter) {
+    vec3 a = tap(uv, vec2(-2.0, -2.0));
+    vec3 b = tap(uv, vec2( 0.0, -2.0));
+    vec3 c = tap(uv, vec2( 2.0, -2.0));
+    vec3 d = tap(uv, vec2(-2.0,  0.0));
+    vec3 e = tap(uv, vec2( 0.0,  0.0));
+    vec3 f = tap(uv, vec2( 2.0,  0.0));
+    vec3 g = tap(uv, vec2(-2.0,  2.0));
+    vec3 h = tap(uv, vec2( 0.0,  2.0));
+    vec3 i = tap(uv, vec2( 2.0,  2.0));
+    vec3 j = tap(uv, vec2(-1.0, -1.0));
+    vec3 k = tap(uv, vec2( 1.0, -1.0));
+    vec3 l = tap(uv, vec2(-1.0,  1.0));
+    vec3 m = tap(uv, vec2( 1.0,  1.0));
+    if (prefilter) {
+        a = sanitize(a); b = sanitize(b); c = sanitize(c); d = sanitize(d);
+        e = sanitize(e); f = sanitize(f); g = sanitize(g); h = sanitize(h);
+        i = sanitize(i); j = sanitize(j); k = sanitize(k); l = sanitize(l);
+        m = sanitize(m);
+    }
+    vec3 centre = karisAverage(j, k, l, m);
+    vec3 topLeft = karisAverage(a, b, d, e);
+    vec3 topRight = karisAverage(b, c, e, f);
+    vec3 bottomLeft = karisAverage(d, e, g, h);
+    vec3 bottomRight = karisAverage(e, f, h, i);
+    if (!prefilter || push.control.y == 0u) {
+        return centre * 0.5 + (topLeft + topRight + bottomLeft + bottomRight) * 0.125;
+    }
+    // Karis: each box's share scaled by 1 / (1 + luma), renormalised, so a
+    // lone sub-pixel highlight cannot dominate (and flicker in) the chain.
+    float wc = 0.5 * karisWeight(centre);
+    float w0 = 0.125 * karisWeight(topLeft);
+    float w1 = 0.125 * karisWeight(topRight);
+    float w2 = 0.125 * karisWeight(bottomLeft);
+    float w3 = 0.125 * karisWeight(bottomRight);
+    return (centre * wc + topLeft * w0 + topRight * w1 + bottomLeft * w2 +
+        bottomRight * w3) / (wc + w0 + w1 + w2 + w3);
+}
+
+// Soft-knee threshold on the maximum exposed channel (0 disables it).
+vec3 threshold(vec3 color) {
+    float limit = push.shaping.x;
+    if (limit <= 0.0) return color;
+    float knee = max(push.shaping.y, 0.0);
+    bool autoExposure = unpackHalf2x16(push.control.w).y > 0.5;
+    float exposure = autoExposure ? exposureState.y : push.shaping.w;
+    float brightness = max(color.r, max(color.g, color.b)) * exposure;
+    float soft = clamp(brightness - limit + knee, 0.0, 2.0 * knee);
+    soft = soft * soft / (4.0 * knee + 1.0e-5);
+    float contribution = max(soft, brightness - limit) / max(brightness, 1.0e-5);
+    return color * max(contribution, 0.0);
+}
+
+vec3 tent9(vec2 uv) {
+    vec3 sum = tap(uv, vec2(0.0, 0.0)) * 4.0;
+    sum += (tap(uv, vec2(-1.0, 0.0)) + tap(uv, vec2(1.0, 0.0)) +
+        tap(uv, vec2(0.0, -1.0)) + tap(uv, vec2(0.0, 1.0))) * 2.0;
+    sum += tap(uv, vec2(-1.0, -1.0)) + tap(uv, vec2(1.0, -1.0)) +
+        tap(uv, vec2(-1.0, 1.0)) + tap(uv, vec2(1.0, 1.0));
+    return sum * (1.0 / 16.0);
+}
+
+void main() {
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(vec2(pixel), push.destination.xy))) return;
+    vec2 uv = (vec2(pixel) + 0.5) * push.destination.zw;
+    uint mode = push.control.x;
+    vec3 result;
+    if (mode == ModeUpsample) {
+        result = imageLoad(destination, pixel).rgb * push.shaping.z + tent9(uv) * push.shaping.w;
+    }
+    else if (mode == ModePrefilter) {
+        vec3 tint = vec3(unpackHalf2x16(push.control.z), unpackHalf2x16(push.control.w).x);
+        result = threshold(downsample13(uv, true)) * tint;
+    }
+    else {
+        result = downsample13(uv, false);
+    }
+    imageStore(destination, pixel, vec4(result, 1.0));
+}

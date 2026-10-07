@@ -212,6 +212,17 @@ namespace Iridium {
             caster.pipeline.isValid();
     }
 
+    glm::mat4 resolveIndirectCasterPreviousTransform(const VulkanIndirectScene& scene,
+        uint32_t primitiveIndex, const glm::mat4& current) noexcept {
+        if (primitiveIndex >= scene.primitives.size()) return current;
+        const uint32_t instanceIndex = scene.primitives[primitiveIndex].binding.x;
+        if (instanceIndex >= scene.instances.size()) return current;
+        const uint32_t previous = scene.instances[instanceIndex].references.y;
+        if (previous >= scene.published.transforms || previous >= scene.transforms.size())
+            return current;
+        return unpackGpuSceneAffine(scene.transforms[previous]);
+    }
+
     GpuSceneIndirectFallbackReason evaluateIndirectPolicy(
         const GpuSceneIndirectPolicy& policy, size_t requested,
         uint32_t primitiveCapacity) noexcept {

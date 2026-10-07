@@ -148,6 +148,17 @@ namespace Iridium {
         // CompileOptions::transientAliasing, so the executor places the
         // aliasing-eligible transient images in shared alias heaps.
         bool transientAliasing = false;
+        // M9.2: native TAA. Declares temporal.taa.resolve and the taa.history
+        // pair; the post chain (bloom, output) then reads the resolved colour.
+        bool temporalAntiAliasing = false;
+        // M9.5: auto-exposure. Declares the "exposure" History buffer pair
+        // (SurviveCut) and post.exposure.{histogram,adapt} after the resolve;
+        // TAA and the output transform read the adapted state.
+        bool autoExposure = false;
+        // M9.4: bloom chain levels; 0 keeps the inactive "bloom-hook". Nonzero
+        // replaces it with post.bloom (the transient mipped "bloom.chain",
+        // a whole-resource write), which the output transform reads.
+        uint32_t bloomLevels = 0;
     };
 
     [[nodiscard]] RenderGraph::CompiledGraph buildVulkanProductionRenderGraph(

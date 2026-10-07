@@ -179,6 +179,8 @@ namespace Iridium {
                     ", beyond the frame limit");
             if (requiresInstances(event.action) &&
                 (!benchmark_ || !context.mainModel ||
+                    benchmark_->sceneFactory.kind !=
+                        BenchmarkSceneFactoryKind::InstancedGrid ||
                     benchmark_->sceneFactory.renderInstanceBatch))
                 throw std::invalid_argument(
                     "scripted changes: instance events require an instanced-grid "

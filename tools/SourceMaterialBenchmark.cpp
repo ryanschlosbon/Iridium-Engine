@@ -1,4 +1,5 @@
 #include "material/SourceMaterial.h"
+#include "core/ProjectAssetRoots.h"
 #include "profiling/CpuAllocationProfile.h"
 
 #include <nlohmann/json.hpp>
@@ -84,8 +85,8 @@ int main() {
         std::error_code error;
         std::filesystem::remove(factorPath, error);
 
-        const std::filesystem::path carPath = std::filesystem::path(PROJECT_ROOT_DIR) /
-            "assets" / "models" / "alfa_romeo" / "alfa_romeo.gltf";
+        const std::filesystem::path carPath = Iridium::resolveProjectAssetPath(
+            std::filesystem::path("models") / "alfa_romeo" / "alfa_romeo.gltf");
         if (std::filesystem::exists(carPath)) report["sample_car_87"] = summarize(measure(carPath, 87));
         else report["sample_car_87"] = { { "skipped", "licensed source absent" } };
         std::cout << report.dump(2) << '\n';

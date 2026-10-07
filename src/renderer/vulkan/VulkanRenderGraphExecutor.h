@@ -419,6 +419,9 @@ namespace Iridium {
         // identity, reset revision, extent, format, topology) invalidates.
         void beginFrameExecution(uint32_t frameIndex,
             const RenderGraph::ViewHistoryContext& view);
+        // M9 G1: re-keys History validity for the frame's view once the view
+        // is known (after extraction). Must precede the frame's first pass.
+        void beginViewExecution(const RenderGraph::ViewHistoryContext& view);
         // Whether `id`'s History pair holds valid previous contents this frame.
         // An invalid `previous` is transitioned from UNDEFINED on first use.
         [[nodiscard]] bool historyValid(RenderGraph::GraphResourceId id) const;
@@ -489,6 +492,14 @@ namespace Iridium {
         // beginPass of the frame supplies {commandBuffer, frameIndex}.
         void setFrameRecordContext(const VulkanFrameRecordContext& context);
         void cleanupAfterDeviceIdle() noexcept;
+        // ADR-0017: before a device-idle rebuild (cleanupAfterDeviceIdle, init,
+        // rebuild), keeps the bound plan's history. The next compiled plan
+        // adopts every pair with the same name, reset policy and slots (images,
+        // parity, tracked access and validity); the rest is destroyed then. A
+        // second call before that compile keeps the first retention.
+        void retainHistoryForRebuild();
+        // Destroys retained history no plan adopted (shutdown).
+        void discardRetainedHistory() noexcept;
 
         // nullptr restores the Vulkan command sink.
         void setBarrierSink(VulkanBarrierSink* sink) noexcept;
@@ -585,11 +596,17 @@ namespace Iridium {
         // History lifetime (R3b.10). Slots are global (not per frame slot);
         // their access state persists across frame slots.
         VulkanGraphResourceFactory* factory_ = nullptr;
+        // M9 G2: HistoryViewSetCount sets, set-major. Set 0 is created with
+        // the plan; later sets are created the first time a view selects them
+        // (ensureHistorySet) and retired with the plan.
         std::vector<VulkanGraphPhysicalResource> historyResources_;
-        std::vector<RenderGraph::Access> historyAccess_;
-        std::vector<uint8_t> historyParity_;        // slot most recently written
-        std::vector<uint8_t> historyWriterBegun_;   // this frame
-        std::vector<uint8_t> historyDiscarded_;     // invalid previous already UNDEFINED
+        std::vector<RenderGraph::Access> historyAccess_;   // per set and slot
+        std::vector<uint8_t> historyParity_;        // per set and pair: slot most recently written
+        std::vector<uint8_t> historyWriterBegun_;   // this frame, per pair
+        std::vector<uint8_t> historyDiscarded_;     // invalid previous already UNDEFINED, per pair
+        uint32_t historySlotsPerSet_ = 0;
+        uint32_t historyPairsPerSet_ = 0;
+        uint32_t activeHistorySet_ = 0;
         std::vector<uint32_t> passHistoryWrites_;   // pairs written, flat by pass
         std::vector<uint32_t> passHistoryWriteFirst_;   // passCount + 1 offsets
         struct RetiredHistory {
@@ -597,6 +614,21 @@ namespace Iridium {
             uint32_t pendingFrames = 0;   // bit per frame slot still to retire
         };
         std::vector<RetiredHistory> retiredHistory_;
+        // ADR-0017: history kept by retainHistoryForRebuild for the next plan,
+        // with a factory that outlives cleanupAfterDeviceIdle.
+        struct RetainedHistory {
+            std::optional<VulkanAllocatorGraphResourceFactory> ownedFactory;
+            VulkanGraphResourceFactory* factory = nullptr;
+            std::vector<RenderGraph::CompiledHistoryPair> pairs;
+            std::vector<RenderGraph::PhysicalResourceSlot> slots;   // one set
+            std::vector<VulkanGraphPhysicalResource> resources;     // set-major
+            std::vector<RenderGraph::Access> access;
+            std::vector<uint8_t> parity;
+            RenderGraph::HistoryValidityTracker validity;
+            // The one-argument beginFrameExecution re-keys with the last view.
+            RenderGraph::ViewHistoryContext lastView{};
+        };
+        std::optional<RetainedHistory> retainedHistory_;
         RenderGraph::HistoryValidityTracker historyValidity_;
         RenderGraph::ViewHistoryContext lastView_{};
         struct ExternalImageBinding {
@@ -641,6 +673,8 @@ namespace Iridium {
         void drainRegisteredAtCursor();
         void runRegisteredPass(uint32_t passOrder);
         [[nodiscard]] uint32_t historySlot(const RenderGraph::CompiledResource& resource) const noexcept;
+        void selectHistoryView(const RenderGraph::ViewHistoryContext& view);
+        void ensureHistorySet(uint32_t set);
         void queueHistoryUsage(const RenderGraph::CompiledResource& resource,
             RenderGraph::Access access, bool attachmentRebarrier = false);
         void queueExternalImageUsage(ExternalImageBinding& binding,

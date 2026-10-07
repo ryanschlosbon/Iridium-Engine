@@ -3,6 +3,7 @@
 #include "app/ApplicationConfig.h"
 #include "app/cli/CliValueParsers.h"
 
+#include <array>
 #include <charconv>
 #include <cmath>
 #include <stdexcept>
@@ -32,6 +33,26 @@ namespace Iridium::AppCli {
                 throw std::invalid_argument(std::string(option) + " requires 0..15");
             }
             return static_cast<uint32_t>(level);
+        }
+
+        // Exactly N finite comma-separated numbers (nothing before, between
+        // or after them), or `message`.
+        template <size_t N>
+        std::array<float, N> parseNumberList(std::string_view value, const char* message) {
+            std::array<float, N> numbers{};
+            for (size_t index = 0; index < N; ++index) {
+                const size_t comma = value.find(',');
+                if ((comma == std::string_view::npos) != (index + 1 == N))
+                    throw std::invalid_argument(message);
+                const std::string_view part = value.substr(0, comma);
+                const auto [end, error] = std::from_chars(part.data(),
+                    part.data() + part.size(), numbers[index]);
+                if (error != std::errc{} || end != part.data() + part.size() ||
+                    !std::isfinite(numbers[index]))
+                    throw std::invalid_argument(message);
+                if (comma != std::string_view::npos) value.remove_prefix(comma + 1);
+            }
+            return numbers;
         }
 
     } // namespace
@@ -318,6 +339,124 @@ namespace Iridium::AppCli {
                 if (value == "on") c.renderGraphAliasing = true;
                 else if (value == "off") c.renderGraphAliasing = false;
                 else throw std::invalid_argument("--render-graph-aliasing requires on or off");
+            });
+
+        addValueOption(registry, owner, "--anti-aliasing", "none|taa",
+            "Main-view anti-aliasing: none or native temporal AA (default taa)",
+            "--anti-aliasing requires none or taa",
+            [&c](std::string_view value) {
+                if (value == "none") c.antiAliasing = AntiAliasingMode::None;
+                else if (value == "taa") c.antiAliasing = AntiAliasingMode::Taa;
+                else throw std::invalid_argument("--anti-aliasing requires none or taa");
+            });
+
+        addValueOption(registry, owner, "--taa-settings", "MIN,MAX,MOTIONPX,GAMMA,SHARP,STATICGAMMA,STILLWEIGHT",
+            "TAA tuning for evidence runs: history weights, motion, clip, reconstruction",
+            "--taa-settings requires seven comma-separated numbers",
+            [&c](std::string_view value) {
+                std::array<float, 7> v{};
+                size_t index = 0;
+                while (index < v.size()) {
+                    const size_t comma = value.find(',');
+                    const std::string_view part = value.substr(0, comma);
+                    const auto [end, error] = std::from_chars(part.data(),
+                        part.data() + part.size(), v[index]);
+                    if (error != std::errc{} || end != part.data() + part.size() ||
+                        !std::isfinite(v[index]))
+                        throw std::invalid_argument(
+                            "--taa-settings requires seven comma-separated numbers");
+                    ++index;
+                    if (comma == std::string_view::npos) { value = {}; break; }
+                    value.remove_prefix(comma + 1);
+                }
+                // Exactly seven numbers: nothing may follow the seventh.
+                if (index != v.size() || !value.empty() ||
+                    v[0] < 0.0f || v[1] > 1.0f || v[0] > v[1])
+                    throw std::invalid_argument(
+                        "--taa-settings requires seven comma-separated numbers");
+                c.taaTuning = TemporalAntiAliasingTuning{ v[0], v[1], v[2], v[3], v[4], v[5], v[6] };
+            });
+
+        addValueOption(registry, owner, "--exposure", "manual|auto",
+            "Exposure: the manual EV, or GPU auto-exposure with it as compensation (default auto)",
+            "--exposure requires manual or auto",
+            [&c](std::string_view value) {
+                if (value == "manual") c.exposureMode = ExposureMode::Manual;
+                else if (value == "auto") c.exposureMode = ExposureMode::Auto;
+                else throw std::invalid_argument("--exposure requires manual or auto");
+            });
+
+        addValueOption(registry, owner, "--auto-exposure-settings",
+            "HMIN,HMAX,PLOW,PHIGH,EVMIN,EVMAX,UP,DOWN,CENTRE",
+            "Auto-exposure tuning for evidence runs: histogram EV100 range, percentiles, EV100 limits, EV/s speeds, centre weight",
+            "--auto-exposure-settings requires nine comma-separated numbers",
+            [&c](std::string_view value) {
+                constexpr const char* message =
+                    "--auto-exposure-settings requires nine comma-separated numbers";
+                const std::array<float, 9> v = parseNumberList<9>(value, message);
+                const AutoExposureSettings settings{ v[0], v[1], v[2], v[3], v[4], v[5],
+                    v[6], v[7], v[8] };
+                if (settings.histogramMinEv100 >= settings.histogramMaxEv100 ||
+                    settings.lowPercentile < 0.0f ||
+                    settings.lowPercentile >= settings.highPercentile ||
+                    settings.highPercentile > 1.0f ||
+                    settings.minimumEv100 > settings.maximumEv100 ||
+                    settings.speedUpEvPerSecond < 0.0f ||
+                    settings.speedDownEvPerSecond < 0.0f ||
+                    settings.centreWeight < 0.0f || settings.centreWeight > 1.0f)
+                    throw std::invalid_argument(message);
+                c.autoExposureSettings = settings;
+            });
+
+        addValueOption(registry, owner, "--bloom", "off|on",
+            "Bloom: energy-conserving scatter of the resolved colour (default on)",
+            "--bloom requires off or on",
+            [&c](std::string_view value) {
+                if (value == "on") c.bloom.enabled = true;
+                else if (value == "off") c.bloom.enabled = false;
+                else throw std::invalid_argument("--bloom requires off or on");
+            });
+
+        addValueOption(registry, owner, "--bloom-settings", "INTENSITY,THRESHOLD,KNEE,LEVELS,KARIS",
+            "Bloom tuning for evidence runs: scatter 0-1, scene-linear threshold and knee (0: none), 1-8 levels, Karis prefilter 0 off|1 on|2 auto (off with TAA)",
+            "--bloom-settings requires five comma-separated numbers",
+            [&c](std::string_view value) {
+                constexpr const char* message =
+                    "--bloom-settings requires five comma-separated numbers";
+                const std::array<float, 5> v = parseNumberList<5>(value, message);
+                if (v[0] < 0.0f || v[0] > 1.0f || v[1] < 0.0f || v[2] < 0.0f ||
+                    v[3] < 1.0f || v[3] > 8.0f || v[3] != std::floor(v[3]) ||
+                    (v[4] != 0.0f && v[4] != 1.0f && v[4] != 2.0f))
+                    throw std::invalid_argument(message);
+                c.bloom.intensity = v[0];
+                c.bloom.threshold = v[1];
+                c.bloom.knee = v[2];
+                c.bloom.levels = static_cast<uint32_t>(v[3]);
+                c.bloom.karis = v[4] == 2.0f ? BloomKarisMode::Auto
+                    : v[4] == 1.0f ? BloomKarisMode::On : BloomKarisMode::Off;
+            });
+
+        addValueOption(registry, owner, "--temporal-jitter", "on|off",
+            "Sub-pixel raster jitter (default: on with TAA, off otherwise)",
+            "--temporal-jitter requires on or off",
+            [&c](std::string_view value) {
+                if (value == "on") c.temporalJitter = true;
+                else if (value == "off") c.temporalJitter = false;
+                else throw std::invalid_argument("--temporal-jitter requires on or off");
+            });
+
+        addValueOption(registry, owner, "--temporal-jitter-sequence", "N",
+            "Jitter phases before the sequence repeats, 1-4096 (default 8)",
+            "--temporal-jitter-sequence requires a phase count from 1 to 4096",
+            [&c](std::string_view value) {
+                uint32_t parsed = 0;
+                const auto [end, error] = std::from_chars(value.data(),
+                    value.data() + value.size(), parsed);
+                if (error != std::errc{} || end != value.data() + value.size() ||
+                    parsed == 0 || parsed > 4096)
+                    throw std::invalid_argument(
+                        "--temporal-jitter-sequence requires a phase count from 1 to 4096");
+                c.temporalJitterSequenceLength = parsed;
             });
 
         addValueOption(registry, owner, "--upload-queue", "auto|graphics|legacy-blocking",

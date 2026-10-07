@@ -79,6 +79,11 @@ endif()
 iridium_add_test(CliOptionRegistryTests
         SOURCES core/CliOptionRegistryTests.cpp)
 
+# Local asset library root: iridium.local.json, worktree fallback, environment
+# override and resolution order.
+iridium_add_test(ProjectAssetRootsTests
+        SOURCES core/ProjectAssetRootsTests.cpp)
+
 # M7R R5b.0 spike: the enkiTS v1.12 properties ADR-0015 relies on, against the
 # library itself (priorities, pinned I/O thread, waits inside tasks, no allocation
 # after Initialize). enkiTS publishes ENKITS_TASK_PRIORITIES_NUM, so no shared PCH.
@@ -102,6 +107,11 @@ iridium_add_test(TaskSystemTests
 if(TARGET iridium_qualification)
     iridium_add_test(ApplicationConfigTests
             SOURCES core/ApplicationConfigTests.cpp
+            LIBS iridium_qualification)
+
+    # M9.8c: the persisted Project Settings file.
+    iridium_add_test(ProjectSettingsFileTests
+            SOURCES core/ProjectSettingsFileTests.cpp
             LIBS iridium_qualification)
 
     # R2.4 CLI contract: per-flag table written from the 6b000ad parser.
@@ -177,6 +187,12 @@ iridium_add_test(ImageComparisonTests
         SOURCES capture/ImageComparisonTests.cpp
         LIBS iridium_capture)
 
+# M9 G6d temporal metrics tool library; iridium_capture supplies the engine's PFM/TGA
+# writers and readers for the round-trip checks.
+iridium_add_test(TemporalMetricsTests
+        SOURCES tools/TemporalMetricsTests.cpp
+        LIBS iridium_temporal_metrics iridium_capture)
+
 iridium_add_test(BenchmarkManifestTests
         SOURCES benchmarks/BenchmarkManifestTests.cpp
         LIBS iridium_benchmarks)
@@ -249,6 +265,11 @@ iridium_add_test(GpuSceneObservationTests
         SOURCES renderer/GpuSceneObservationTests.cpp
         LIBS iridium_render_extraction)
 
+# M9 G4: previous transforms of packets without a GPU-scene record.
+iridium_add_test(PreviousTransformCacheTests
+        SOURCES renderer/PreviousTransformCacheTests.cpp
+        LIBS iridium_render_extraction)
+
 # M7R R5c.3: compact (key, index) queue sorts keep the packet sorts' permutation.
 iridium_add_test(CompactDrawSortTests
         SOURCES renderer/CompactDrawSortTests.cpp
@@ -275,6 +296,11 @@ iridium_add_test(GpuSceneLodTests
 
 iridium_add_test(DepthPyramidTests
         SOURCES renderer/DepthPyramidTests.cpp
+        LIBS iridium_rhi)
+
+# M9 G2: per-retained-view cut detection.
+iridium_add_test(ViewMotionTests
+        SOURCES renderer/ViewMotionTests.cpp
         LIBS iridium_rhi)
 
 iridium_add_test(GeometryArenaTests

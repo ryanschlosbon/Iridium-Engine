@@ -8,7 +8,11 @@
 #include "assets/AssetManager.h"
 #include "qualification/QualificationBackend.h"
 
+#include <algorithm>
+#include <array>
+#include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <optional>
 #include <span>
 #include <string>
@@ -54,6 +58,12 @@ namespace IridiumTest {
         void recreateSwapchain(GLFWwindow*) override {}
         void setOutputTransport(GLFWwindow*, Color::OutputTransport) override {}
         RenderExtent getRenderExtent() const override { return { 1280u, 720u }; }
+        bool setAntiAliasing(AntiAliasingMode, std::string&) override { return true; }
+        void setTemporalAntiAliasingTuning(const TemporalAntiAliasingTuning&) override {}
+        bool setBloom(const BloomSettings&, std::string&) override { return true; }
+        bool setExposure(ExposureMode, const AutoExposureSettings&, std::string&) override {
+            return true;
+        }
         bool resizeSceneRenderExtent(RenderExtent, std::string&) override {
             return true;
         }
@@ -174,6 +184,11 @@ namespace IridiumTest {
             FrameCapturePoint point) override {
             log_.record(BackendCall::Kind::ArmFrameCapture, captureId,
                 static_cast<uint32_t>(point));
+            if (produceCaptures) {
+                pendingCaptures_.push_back({ captureId, 0u });
+                maximumHeldCaptures = std::max(maximumHeldCaptures,
+                    pendingCaptures_.size());
+            }
         }
         void armOrdinary2CaptureValidation(uint64_t validationId) override {
             log_.record(BackendCall::Kind::ArmOrdinary2Validation, validationId);
@@ -186,8 +201,47 @@ namespace IridiumTest {
         void armDepthPyramidCaptureValidation(uint64_t validationId) override {
             log_.record(BackendCall::Kind::ArmDepthPyramidValidation, validationId);
         }
-        std::vector<FrameCapture> collectFrameCaptures(bool) override {
-            return {};
+        // With produceCaptures, each armed capture completes as a 2x2
+        // scene-linear readback `captureLatency` collections after it was
+        // armed (frames in flight), or at a waiting collection.
+        std::vector<FrameCapture> collectFrameCaptures(bool waitForPending) override {
+            std::vector<FrameCapture> completed;
+            size_t index = 0;
+            while (index < pendingCaptures_.size()) {
+                PendingCapture& pending = pendingCaptures_[index];
+                if (!waitForPending && ++pending.age < captureLatency) {
+                    ++index;
+                    continue;
+                }
+                completed.push_back(syntheticCapture(pending.captureId));
+                pendingCaptures_.erase(pendingCaptures_.begin() +
+                    static_cast<std::ptrdiff_t>(index));
+            }
+            // Slot order, not frame order, at a waiting collection.
+            if (waitForPending) std::ranges::reverse(completed);
+            return completed;
+        }
+
+        bool produceCaptures = false;
+        uint32_t captureLatency = 2;
+        // Most capture readbacks outstanding at once.
+        size_t maximumHeldCaptures = 0;
+
+        static FrameCapture syntheticCapture(uint64_t captureId) {
+            FrameCapture capture{};
+            capture.captureId = captureId;
+            capture.width = 2;
+            capture.height = 2;
+            capture.rowPitchBytes = 2 * 4 * sizeof(float);
+            capture.pixelFormat = FrameCapturePixelFormat::Rgba32Float;
+            capture.colorDomain = FrameCaptureColorDomain::SceneLinearAcesCg;
+            const float base = static_cast<float>(captureId);
+            const std::array<float, 16> pixels{
+                base, 0.0f, 0.5f, 1.0f, 1.0f, base, 0.25f, 1.0f,
+                0.0f, 1.0f, base, 1.0f, 2.0f, 4.0f, 8.0f, 1.0f };
+            capture.pixels.resize(sizeof(pixels));
+            std::memcpy(capture.pixels.data(), pixels.data(), sizeof(pixels));
+            return capture;
         }
         std::vector<Ordinary2CaptureValidationResult>
             collectOrdinary2CaptureValidations(bool) override { return {}; }
@@ -195,6 +249,13 @@ namespace IridiumTest {
             collectDeepLayeredCaptureValidations(bool) override { return {}; }
         std::vector<DepthPyramidCaptureValidationResult>
             collectDepthPyramidCaptureValidations(bool) override { return {}; }
+        uint32_t probeDrains = 0;
+        bool drainReflectionProbeCaptures() override { ++probeDrains; return false; }
+        uint32_t exposureReadbacksArmed = 0;
+        void armExposureReadback(uint64_t) override { ++exposureReadbacksArmed; }
+        std::vector<ExposureReadbackSample> collectExposureReadbacks(bool) override {
+            return {};
+        }
 
     private:
         class Extension final : public IRenderBackendExtension {
@@ -204,8 +265,14 @@ namespace IridiumTest {
             }
         };
 
+        struct PendingCapture {
+            uint64_t captureId = 0;
+            uint32_t age = 0;
+        };
+
         FakeRenderBackend& log_;
         Extension extension_;
+        std::vector<PendingCapture> pendingCaptures_;
     };
 
     // Records IAppControl requests; resizes always succeed.

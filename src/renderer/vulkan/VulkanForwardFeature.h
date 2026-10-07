@@ -35,8 +35,14 @@ namespace Iridium {
         // Per-frame inputs (submitForwardQueues), valid until the last drain.
         struct FrameInputs {
             std::span<const DrawPacket> opaqueForwardQueue{};
+            // M9.1: last frame's world transform per forward-opaque packet.
+            std::span<const glm::mat4> opaqueForwardPreviousTransforms{};
             std::span<const DrawPacket> sortedSurfaceQueue{};
             std::span<const DrawPacket> compatibilityTransparentQueue{};
+            // M9.8e: last frame's transform per sorted and compatibility
+            // packet (motion-aware reactive coverage).
+            std::span<const glm::mat4> sortedSurfacePreviousTransforms{};
+            std::span<const glm::mat4> compatibilityPreviousTransforms{};
             // The WeightedOIT owner draws the queue's WeightedOIT packets.
             bool skipWeightedOit = false;
             VkDescriptorSet globalSet = VK_NULL_HANDLE;
@@ -90,6 +96,8 @@ namespace Iridium {
             const char* gpuRange = nullptr;
             bool transparent = false;
             RenderPassClass expectedPassClass = RenderPassClass::Forward;
+            // M9.1: forward-opaque pipelines also write velocity.
+            uint32_t expectedColorAttachments = 1;
             bool skipResolvedLayered = false;
             bool skipWeightedOit = false;
         };

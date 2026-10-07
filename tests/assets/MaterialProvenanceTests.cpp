@@ -1,4 +1,5 @@
 #include "assets/MaterialProvenance.h"
+#include "core/ProjectAssetRoots.h"
 
 #include <cmath>
 #include <exception>
@@ -160,8 +161,8 @@ namespace {
     }
 
     bool testOptionalAlfaDiagnostic() {
-        const std::filesystem::path path = std::filesystem::path(PROJECT_ROOT_DIR) /
-            "assets" / "models" / "alfa_romeo" / "alfa_romeo.gltf";
+        const std::filesystem::path path = Iridium::resolveProjectAssetPath(
+            std::filesystem::path("models") / "alfa_romeo" / "alfa_romeo.gltf");
         if (!std::filesystem::exists(path)) {
             std::cout << "  optional Alfa diagnostic skipped: local licensed asset absent\n";
             return true;

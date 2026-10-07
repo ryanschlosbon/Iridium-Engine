@@ -241,7 +241,10 @@ namespace {
         (void)primitiveSlots_.collect(completedSerial);
         (void)geometrySlots_.collect(completedSerial);
 
+        // M9 G3: the pass after a transform change must run (not the
+        // unchanged fast path) so stopped instances settle.
         if (cachedObservationsValid_ && sceneEpoch == sceneEpoch_ &&
+            !settlePending_ &&
             cachedCapacityFallbackInstances_ == 0u &&
             packed_.directFallbackInstances.empty() &&
             observationRevisionsEqual(observations, cachedOwners_,
@@ -257,6 +260,7 @@ namespace {
         }
         fallbackOwners_.clear();
         ++pass_;
+        settlePending_ = false;
         passConflict_ = false;
         topologyChanged_ = false;
         bool fullScan = !coherent_;
@@ -334,6 +338,8 @@ namespace {
                 break;
             case ObservationKind::Clean:
                 instanceOrderScratch_.push_back(entry.existing);
+                if (settleStoppedTransform(instancePool_[entry.existing]))
+                    touchedInstanceScratch_.push_back(entry.existing);
                 break;
             case ObservationKind::Dirty: {
                 const size_t index = static_cast<size_t>(
@@ -396,6 +402,22 @@ namespace {
         cachedCapacityFallbackInstances_ = stats_.capacityFallbackInstances;
         cachedObservationsValid_ = true;
         return packed_;
+    }
+
+    bool GpuScenePublisher::settleStoppedTransform(InstanceState& instance) {
+        // M9 G3: "previous" means last frame's transform. The pass after an
+        // instance's transform changed (passes are not skipped while a settle
+        // is pending), an instance that did not move again gets previous =
+        // current. Only the previous slot (2d + 1) changes: the instance
+        // record, its flags and the current-transform revision that the
+        // shadow/probe watermarks read stay untouched.
+        if (instance.movedPass == 0u || instance.movedPass + 1u != pass_) return false;
+        if (bitsEqual(instance.previousWorld, instance.currentWorld)) return false;
+        instance.previousWorld = instance.currentWorld;
+        instance.previousTransformRevision = ++recordRevision_;
+        ++stats_.changedTransforms;
+        ++stats_.settledTransforms;
+        return true;
     }
 
     void GpuScenePublisher::retireAllForEpochChange(uint64_t retireAfterSerial) {
@@ -672,8 +694,13 @@ namespace {
                 instance.currentTransformRevision = ++recordRevision_;
                 instance.flags &= ~GpuSceneInstanceHistoryReset;
                 instance.instanceRevision = ++recordRevision_;
+                instance.movedPass = pass_;
+                settlePending_ = true;
                 stats_.changedTransforms += 2;
                 ++stats_.changedInstances;
+            }
+            else {
+                (void)settleStoppedTransform(instance);
             }
             const bool instanceDataChanged =
                 instance.identity != observation.identity ||

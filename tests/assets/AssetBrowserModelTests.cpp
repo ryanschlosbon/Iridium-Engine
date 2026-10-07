@@ -81,7 +81,7 @@ namespace {
         void rebuild(
             std::span<const
                 AssetCatalogRecord> records,
-            std::span<const std::string>
+            std::span<const AssetSourceDirectory>
                 directories = {}) override {
             inner_->rebuild(
                 records, directories);
@@ -111,7 +111,7 @@ namespace {
                 const override {
             return inner_->recordCount();
         }
-        std::vector<std::string>
+        std::vector<AssetSourceDirectory>
             sourceDirectories()
                 const override {
             return inner_->
@@ -409,18 +409,42 @@ namespace {
             .importerId = "iridium.gltf-model",
             .importerVersion = 3,
         });
-        catalog->rebuild(source);
-        const std::vector<std::string>
+        // A second (local library) root with its own folders and an empty one.
+        source.push_back({
+            .guid = guid(104, 5),
+            .assetType = "iridium.model",
+            .assetRoot = "local",
+            .sourcePath = "vehicles/truck.gltf",
+            .metadataPath = "vehicles/truck.gltf.iridium.meta",
+            .displayName = "Truck",
+            .importerId = "iridium.gltf-model",
+            .importerVersion = 3,
+        });
+        const std::array emptyFolders{
+            AssetSourceDirectory{ "local", "scenes" },
+        };
+        catalog->rebuild(source, emptyFolders);
+        const std::vector<AssetSourceDirectory>
             directories =
                 catalog->sourceDirectories();
         CHECK(directories ==
-            std::vector<std::string>({
-                "textures", "vehicles",
-                "vehicles/sports",
+            std::vector<AssetSourceDirectory>({
+                { "local", "scenes" },
+                { "local", "vehicles" },
+                { "project", "textures" },
+                { "project", "vehicles" },
+                { "project", "vehicles/sports" },
             }));
+        const auto localFolders =
+            buildAssetBrowserFolders(
+                directories, "local");
+        CHECK(localFolders.size() == 2);
+        CHECK(localFolders[0].name == "scenes");
+        CHECK(localFolders[1].path == "vehicles");
+        CHECK(localFolders[1].children.empty());
         const auto folders =
             buildAssetBrowserFolders(
-                directories);
+                directories, "project");
         CHECK(folders.size() == 2);
         CHECK(folders[0].name == "textures");
         CHECK(folders[1].name == "vehicles");
@@ -431,7 +455,16 @@ namespace {
 
         AssetBrowserModel model(
             catalog.get());
+        // Every root without a root filter; one root with it.
         model.setDirectory("vehicles");
+        CHECK(model.refresh().totalMatches == 2);
+        model.setAssetRoot("local");
+        const AssetBrowserPage trucks =
+            model.refresh();
+        CHECK(trucks.totalMatches == 1);
+        CHECK(trucks.items[0].record.assetRoot == "local");
+        model.setAssetRoot("project");
+        CHECK(model.assetRoot() == std::optional<std::string>("project"));
         const AssetBrowserPage vehicles =
             model.refresh();
         CHECK(vehicles.totalMatches == 1);
@@ -456,6 +489,8 @@ namespace {
             "iridium.texture");
         model.setDirectory(std::nullopt);
         CHECK(model.refresh().totalMatches == 3);
+        model.setAssetRoot(std::nullopt);
+        CHECK(model.refresh().totalMatches == 4);
         const auto sourceRecords =
             catalog->recordsForSourceRoot(
                 source[0].guid);

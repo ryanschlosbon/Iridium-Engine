@@ -43,7 +43,7 @@ $sideArgs = @{
 }
 . (Join-Path $PSScriptRoot 'M7RFixtures.ps1')
 $root = Get-M7RRepoRoot
-if (-not $ArtifactRoot) { $ArtifactRoot = $root }
+if (-not $ArtifactRoot) { $ArtifactRoot = Get-M7RArtifactRoot $root }
 $ArtifactRoot = (Resolve-Path $ArtifactRoot).Path
 if (-not $OutRoot) { $OutRoot = Join-Path $root 'out/m7r/hitch' }
 
@@ -89,7 +89,7 @@ foreach ($route in $M7RHitchRoutes) {
             '--cache-state', 'fresh-process-os-driver-cache-uncontrolled',
             '--warmup-frames', "$warmup", '--frame-limit', "$frames",
             '--qualification-scripted-changes', $scenarioPath
-        ) + @(Get-M7RPipelineCacheArgs $exe $PipelineCache) + $fixture.Args + $ExtraArgs + $sideArgs[$side]
+        ) + @(Get-M7REngineBaseArgs $exe $PipelineCache) + $fixture.Args + $ExtraArgs + $sideArgs[$side]
         if ($fixture.Environment) {
             $arguments += @('--cooked-environment-artifact', (Join-Path $ArtifactRoot (Get-M7RModelArtifact $ArtifactRoot $fixture.Environment)))
         }

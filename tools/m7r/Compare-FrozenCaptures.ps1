@@ -16,15 +16,27 @@ $ErrorActionPreference = 'Stop'
 $root = Get-M7RRepoRoot
 $tolerance = @{}; foreach ($f in $M7RFrozenSet) { $tolerance[$f.Key] = if ($f.Tolerance) { $f.Tolerance } else { 'exact' } }
 
+# A label's capture directory: this checkout's, else the main checkout's (a worktree
+# compares against baselines captured there).
+function Get-CaptureDir([string] $label) {
+    $own = Join-Path $root "out/m7r/captures/$label"
+    if (Test-Path (Join-Path $own 'hashes.json')) { return $own }
+    $main = Get-IridiumMainCheckout $root
+    if ($main) {
+        $shared = Join-Path $main "out/m7r/captures/$label"
+        if (Test-Path (Join-Path $shared 'hashes.json')) { return $shared }
+    }
+    return $own
+}
 function Read-Results([string] $label) {
-    $path = Join-Path $root "out/m7r/captures/$label/hashes.json"
+    $path = Join-Path (Get-CaptureDir $label) 'hashes.json'
     $map = @{}
     foreach ($r in (Get-Content $path -Raw | ConvertFrom-Json).results) { $map["$($r.key)|$($r.point)"] = $r }
     return $map
 }
 function Image-Path([string] $label, $r) {
     $extension = if ($r.point -eq 'scene') { 'pfm' } else { 'tga' }
-    Join-Path $root "out/m7r/captures/$label/$($r.key)/$($r.point)/$($r.stem).$extension"
+    Join-Path (Get-CaptureDir $label) "$($r.key)/$($r.point)/$($r.stem).$extension"
 }
 
 $base = Read-Results $Baseline

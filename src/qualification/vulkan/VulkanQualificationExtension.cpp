@@ -11,6 +11,8 @@
 #include "renderer/transparency/LayeredGlass.h"
 
 #include <algorithm>
+#include <array>
+#include <cstring>
 #include <iostream>
 #include <limits>
 #include <stdexcept>
@@ -108,6 +110,10 @@ namespace Iridium {
         indirectStreamDigestEnabled_ = config.indirectStreamDigest;
         casterRevisionOracleEnabled_ = config.casterRevisionOracle;
         aliasPoison_ = config.aliasPoison;
+        exposureTrace_ = config.exposureTrace;
+        // Room for every frame of a long evidence run: collecting at the end
+        // of the run keeps steady frames free of growth.
+        if (exposureTrace_) completedExposure_.reserve(16384);
         indirectStreamDigest_.setOutput(
             indirectStreamDigestEnabled_ ? &std::cout : nullptr);
         casterRevisionOracle_.setOutput(
@@ -179,7 +185,12 @@ namespace Iridium {
                 allocator.destroy(pending.readback);
             for (PendingDepthPyramidCaptureValidation& pending : pendingDepthPyramid_)
                 allocator.destroy(pending.readback);
+            for (ExposureReadbackSlot& slot : exposureSlots_)
+                allocator.destroy(slot.readback);
         }
+        exposureSlots_ = {};
+        exposureRequest_.reset();
+        completedExposure_.clear();
         pendingFrameCaptures_.clear();
         completedFrameCaptures_.clear();
         armedFrameCapture_.reset();
@@ -216,8 +227,9 @@ namespace Iridium {
             return armedFrameCapture_ &&
                 armedFrameCapture_->point == FrameCapturePoint::SceneLinear;
         case VulkanHookPoint::FinalCaptureHook:
-            return armedFrameCapture_ &&
-                armedFrameCapture_->point != FrameCapturePoint::SceneLinear;
+            return (armedFrameCapture_ &&
+                armedFrameCapture_->point != FrameCapturePoint::SceneLinear) ||
+                exposureRequest_.has_value();
         case VulkanHookPoint::DepthPyramidValidation:
             return depthPyramidRequest_.has_value();
         case VulkanHookPoint::Ordinary2Validation: {
@@ -254,10 +266,28 @@ namespace Iridium {
         case VulkanHookPoint::SceneColorComplete:
         case VulkanHookPoint::FinalCaptureHook: {
             const auto& payload = std::get<VulkanCaptureHookPayload>(context.payload);
+            if (context.point == VulkanHookPoint::FinalCaptureHook) {
+                // M9.5: the exposure readback shares the hook with captures.
+                if (exposureRequest_) {
+                    const uint64_t frameIndex = *exposureRequest_;
+                    exposureRequest_.reset();
+                    if (payload.exposureState != nullptr && payload.exposureMetering != nullptr)
+                        recordExposureReadback(frameIndex, context.cmd, context.slot, payload);
+                }
+                if (!armedFrameCapture_ ||
+                    armedFrameCapture_->point == FrameCapturePoint::SceneLinear)
+                    return;
+            }
             const ArmedFrameCapture armed = *armedFrameCapture_;
             armedFrameCapture_.reset();
             VulkanCaptureHookPayload source = payload;
             source.point = armed.point;
+            if (armed.point == FrameCapturePoint::SceneResolved) {
+                if (payload.sceneResolved == nullptr)
+                    throw std::logic_error("Scene-resolved capture has no resolved source.");
+                source.source = payload.sceneResolved;
+                source.format = payload.sceneResolvedFormat;
+            }
             recordFrameCapture(armed.captureId, context.cmd, context.slot, source);
             return;
         }
@@ -358,6 +388,101 @@ namespace Iridium {
         collectOrdinary2ValidationsForSlot(slot);
         collectDeepLayeredValidationsForSlot(slot);
         collectDepthPyramidValidationsForSlot(slot);
+        collectExposureReadbackForSlot(slot);
+    }
+
+    // --------------------------------------------------------------------
+    // Exposure readback (M9.5)
+    // --------------------------------------------------------------------
+
+    void VulkanQualificationExtension::armExposureReadback(
+        uint64_t applicationFrameIndex) {
+        exposureRequest_ = applicationFrameIndex;
+    }
+
+    void VulkanQualificationExtension::recordExposureReadback(
+        uint64_t applicationFrameIndex, VkCommandBuffer cmd, uint32_t slot,
+        const VulkanCaptureHookPayload& source) {
+        if (slot >= exposureSlots_.size())
+            throw std::logic_error("Exposure readback frame slot is out of range.");
+        ExposureReadbackSlot& target = exposureSlots_[slot];
+        const VkDeviceSize stateBytes = source.exposureState->size;
+        const VkDeviceSize meteringBytes = source.exposureMetering->size;
+        if (stateBytes != 16u || meteringBytes != 48u + 4u * 128u)
+            throw std::logic_error("Exposure readback sources have an unexpected layout.");
+        // Created once per slot; the slot's previous readback was collected
+        // when its fence retired.
+        if (!target.readback.isValid())
+            target.readback = createReadback(stateBytes + meteringBytes);
+        VulkanCommandList commandList(cmd);
+        commandList.transition(target.readback, ResourceState::CopyDestination);
+        // The final-capture hook's barriers left both sources TransferSource.
+        commandList.copyBuffer(*source.exposureState, target.readback, stateBytes);
+        commandList.copyBuffer(*source.exposureMetering, target.readback, meteringBytes,
+            0, stateBytes);
+        target.frameIndex = applicationFrameIndex;
+        target.pending = true;
+    }
+
+    void VulkanQualificationExtension::collectExposureReadbackForSlot(uint32_t frameIndex) {
+        if (frameIndex >= exposureSlots_.size()) return;
+        ExposureReadbackSlot& slot = exposureSlots_[frameIndex];
+        if (!slot.pending) return;
+        slot.pending = false;
+        if (slot.readback.mapped == nullptr)
+            throw std::runtime_error("A completed exposure readback is not mapped.");
+        const auto* bytes = static_cast<const std::byte*>(slot.readback.mapped);
+        std::array<float, 8> floats{};   // state xyzw, metering luminance xyzw
+        std::array<uint32_t, 4 + 128> words{};   // metering counts, then the bins
+        std::memcpy(floats.data(), bytes, sizeof(floats));
+        std::memcpy(words.data(), bytes + sizeof(floats), sizeof(words));
+        std::array<float, 4> adaptation{};   // delta seconds, previous valid, previous EV100
+        std::memcpy(adaptation.data(), bytes + sizeof(floats) + sizeof(words),
+            sizeof(adaptation));
+        ExposureReadbackSample sample{};
+        sample.frameIndex = slot.frameIndex;
+        sample.adaptedLog2Luminance = floats[0];
+        sample.multiplier = floats[1];
+        sample.ev100 = floats[2];
+        sample.meteredLog2Luminance = floats[4];
+        sample.targetEv100 = floats[5];
+        sample.lowPercentileLog2Luminance = floats[6];
+        sample.highPercentileLog2Luminance = floats[7];
+        sample.totalWeight = words[0];
+        sample.lowestBinWeight = words[1];
+        sample.highestBinWeight = words[2];
+        sample.histogramRows = words[3];
+        sample.deltaSeconds = adaptation[0];
+        sample.previousValid = adaptation[1] != 0.0f;
+        sample.previousEv100 = adaptation[2];
+        bool occupied = false;
+        for (uint32_t bin = 0; bin < 128u; ++bin) {
+            const uint32_t weight = words[4u + bin];
+            if (weight == 0u) continue;
+            if (!occupied) sample.firstOccupiedBin = bin;
+            occupied = true;
+            sample.lastOccupiedBin = bin;
+            if (weight > words[4u + sample.peakBin]) sample.peakBin = bin;
+        }
+        completedExposure_.push_back(sample);
+    }
+
+    std::vector<ExposureReadbackSample>
+    VulkanQualificationExtension::collectExposureReadbacks(bool waitForPending) {
+        if (waitForPending && attached() && std::ranges::any_of(exposureSlots_,
+                [](const ExposureReadbackSlot& slot) { return slot.pending; })) {
+            services_.scheduler->waitForAllFrames();
+            // Retirement order: oldest submission first.
+            std::array<uint32_t, VulkanFrameScheduler::FramesInFlight> order{};
+            for (uint32_t index = 0; index < order.size(); ++index) order[index] = index;
+            std::ranges::sort(order, [&](uint32_t left, uint32_t right) {
+                return exposureSlots_[left].frameIndex < exposureSlots_[right].frameIndex;
+            });
+            for (const uint32_t slot : order) collectExposureReadbackForSlot(slot);
+        }
+        std::vector<ExposureReadbackSample> result = std::move(completedExposure_);
+        completedExposure_.clear();
+        return result;
     }
 
     // --------------------------------------------------------------------
@@ -857,6 +982,15 @@ namespace Iridium {
                     .mipCount = pending.mipCount,
                 }, mappedBytes(pending.readback)));
             });
+    }
+
+    bool VulkanQualificationExtension::drainReflectionProbeCaptures() {
+        // Keyed on scheduler state (an unpromoted capture), not GPU timing.
+        if (services_.probeCaptureTargets == nullptr || services_.scheduler == nullptr ||
+            services_.probeCaptureTargets->capturesInFlight() == 0u)
+            return false;
+        services_.scheduler->waitForAllFrames();
+        return true;
     }
 
     std::vector<DepthPyramidCaptureValidationResult>

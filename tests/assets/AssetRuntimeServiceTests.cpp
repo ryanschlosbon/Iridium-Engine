@@ -1,4 +1,5 @@
 #include "assets/runtime/AssetRuntimeService.h"
+#include "core/ProjectAssetRoots.h"
 
 #include "assets/AssetMetadata.h"
 #include "assets/cooker/AssetCooker.h"
@@ -438,11 +439,11 @@ namespace {
             metadataPath);
         const std::filesystem::path texturePath =
             temporary.path / "texture.png";
+        // Licensed local content: the project or local asset library root.
         const std::filesystem::path carTextures =
-            std::filesystem::path(
-                PROJECT_ROOT_DIR) /
-                "assets" / "models" /
-                "alfa_romeo" / "textures";
+            Iridium::resolveProjectAssetPath(
+                std::filesystem::path("models") /
+                "alfa_romeo" / "textures");
         std::filesystem::copy_file(
             carTextures /
                 "ID04_plastic_textured_001_rtint_colors_001_diff_6_54_baseColor.png",

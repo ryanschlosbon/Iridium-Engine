@@ -1247,7 +1247,8 @@ namespace {
 
     // scene -> resolve (reads taa.previous, writes taa.current) -> post (copies
     // taa.current out, so the slot ends in TransferSource).
-    RenderGraph::CompiledGraph historyGraph(uint32_t width = 64) {
+    // `extraPass` adds an unrelated pass: a different topology, the same pair.
+    RenderGraph::CompiledGraph historyGraph(uint32_t width = 64, bool extraPass = false) {
         RenderGraph::RenderGraphBuilder builder;
         RenderGraph::ResourceDesc desc = imageDesc();
         desc.image.extent.width = width;
@@ -1265,6 +1266,14 @@ namespace {
         builder.read(post, current, Access::TransferSource);
         output = builder.write(post, output, Access::TransferDestination);
         builder.exportResource(output, Access::TransferDestination);
+        if (extraPass) {
+            const auto extra = builder.addPass("extra");
+            auto written = builder.createResource("extra", desc);
+            builder.read(extra, scene, Access::SampledRead);
+            written = builder.write(extra, written, Access::ColorAttachment,
+                RenderGraph::LoadOp::Clear);
+            builder.exportResource(written, Access::ColorAttachment);
+        }
         RenderGraph::CompileResult result = builder.compile();
         if (!result.succeeded()) throw std::runtime_error("history graph failed to compile");
         return std::move(*result.graph);
@@ -1285,6 +1294,16 @@ namespace {
         }
         void rebuild(uint32_t width) {
             executor.rebuild(historyGraph(width));
+            previous = executor.resourceId("taa.previous");
+            current = executor.resourceId("taa.current");
+        }
+        // ADR-0017: the production device-idle rebuild (retain, cleanup, init).
+        void rebuildRetained(uint32_t width, bool extraPass = false) {
+            executor.retainHistoryForRebuild();
+            executor.cleanupAfterDeviceIdle();
+            executor.init(factory, 2);
+            executor.setBarrierApi(VulkanBarrierApi::Synchronization2);
+            executor.rebuild(historyGraph(width, extraPass));
             previous = executor.resourceId("taa.previous");
             current = executor.resourceId("taa.current");
         }
@@ -1333,6 +1352,8 @@ namespace {
             executor.skipPass(executor.passId("resolve"));
             executor.skipPass(executor.passId("post"));
         }
+        if (executor.compiledGraph()->passes().size() > 3)
+            executor.beginPass(FakeCommandBuffer, executor.passId("extra"));
         executor.finishFrameExecution();
         return result;
     }
@@ -1432,6 +1453,144 @@ namespace {
         CHECK(!next({ 2, 1 }).valid);
         CHECK(next({ 2, 1 }).valid);
         executor.cleanupAfterDeviceIdle();
+        return true;
+    }
+
+    // M9 G1: production begins the frame before extraction, then supplies the
+    // view before the first pass. Validity follows the supplied view.
+    bool testHistoryViewSuppliedBeforeFirstPass() {
+        HistoryFixture fixture;
+        auto& executor = fixture.executor;
+        const auto frameWithLateView = [&](uint32_t frame,
+            RenderGraph::ViewHistoryContext view) {
+            const uint32_t slot = frame % 2;
+            executor.onFrameFenceCompleted(slot);
+            executor.beginFrameExecution(slot);
+            executor.beginViewExecution(view);
+            const bool valid = executor.historyValid(fixture.previous);
+            for (const char* pass : { "scene", "resolve", "post" })
+                executor.beginPass(FakeCommandBuffer, executor.passId(pass));
+            executor.finishFrameExecution();
+            return valid;
+        };
+        CHECK(!frameWithLateView(0, { 1, 0 }));
+        CHECK(frameWithLateView(1, { 1, 0 }));
+        CHECK(!frameWithLateView(2, { 3, 0 }));       // the late view re-keys
+        CHECK(frameWithLateView(3, { 3, 0 }));
+        CHECK(!frameWithLateView(4, { 3, 1 }));       // cut
+        // After the first pass the view can no longer change.
+        executor.onFrameFenceCompleted(1);
+        executor.beginFrameExecution(1);
+        executor.beginPass(FakeCommandBuffer, executor.passId("scene"));
+        CHECK(throws([&] { executor.beginViewExecution({ 3, 1 }); }));
+        for (const char* pass : { "resolve", "post" })
+            executor.beginPass(FakeCommandBuffer, executor.passId(pass));
+        executor.finishFrameExecution();
+        // Outside a frame it is rejected too.
+        CHECK(throws([&] { executor.beginViewExecution({ 3, 1 }); }));
+        executor.cleanupAfterDeviceIdle();
+        return true;
+    }
+
+    // M9 G2: a second retained view gets its own lazily created history set,
+    // and alternating views keep each set valid on its next turn.
+    bool testHistoryViewSets() {
+        HistoryFixture fixture;
+        auto& executor = fixture.executor;
+        CHECK(executor.stats().historySlotCount == 2);   // set 1 not created yet
+        const RenderGraph::ViewHistoryContext scene{ 1, 0, 0 };
+        const RenderGraph::ViewHistoryContext preview{ 7, 0, 1 };
+        uint32_t frame = 0;
+        const auto next = [&](RenderGraph::ViewHistoryContext view) {
+            return runHistoryFrame(fixture, frame++, view);
+        };
+        const HistoryFrame s0 = next(scene);
+        const HistoryFrame s1 = next(scene);
+        CHECK(!s0.valid && s1.valid);
+        const HistoryFrame p0 = next(preview);
+        CHECK(!p0.valid);
+        CHECK(executor.stats().historySlotCount == 4);   // created on first selection
+        // The preview's images are distinct from the scene set's.
+        CHECK(p0.previous != s1.previous && p0.previous != s1.current);
+        CHECK(p0.current != s1.previous && p0.current != s1.current);
+        CHECK(p0.previousBarriered && p0.previousBarrier.oldLayout == VK_IMAGE_LAYOUT_UNDEFINED);
+        const HistoryFrame s2 = next(scene);
+        CHECK(s2.valid);
+        CHECK(s2.previous == s1.current);                // the scene set kept its parity
+        const HistoryFrame p1 = next(preview);
+        CHECK(p1.valid);
+        CHECK(p1.previous == p0.current);
+        // A cut on the scene view leaves the preview's history alone.
+        CHECK(!next({ 1, 1, 0 }).valid);
+        CHECK(next(preview).valid);
+        CHECK(throws([&] {
+            executor.onFrameFenceCompleted(frame % 2);
+            executor.beginFrameExecution(frame % 2,
+                { 1, 1, RenderGraph::HistoryViewSetCount });
+        }));
+        // A rebuild retires every set; set 1 is created again on demand.
+        fixture.rebuild(64);
+        CHECK(executor.stats().historySlotCount == 2);
+        CHECK(!runHistoryFrame(fixture, 0, preview).valid);
+        CHECK(executor.stats().historySlotCount == 4);
+        executor.cleanupAfterDeviceIdle();
+        CHECK(fixture.factory.destroyCount == fixture.factory.createCount);
+        return true;
+    }
+
+    // ADR-0017: a device-idle rebuild keeps a pair with the same name, reset
+    // policy and slots (images, parity, validity in every view set), also
+    // across a topology change; a resize starts fresh, and retained history
+    // no plan adopts is destroyed.
+    bool testHistorySurvivesCompatibleRebuild() {
+        HistoryFixture fixture;
+        auto& executor = fixture.executor;
+        const RenderGraph::ViewHistoryContext scene{ 1, 0, 0 };
+        const RenderGraph::ViewHistoryContext preview{ 7, 0, 1 };
+        uint32_t frame = 0;
+        const auto next = [&](RenderGraph::ViewHistoryContext view) {
+            return runHistoryFrame(fixture, frame++, view);
+        };
+        (void)next(scene);
+        const HistoryFrame s1 = next(scene);
+        (void)next(preview);
+        const HistoryFrame p1 = next(preview);
+        CHECK(s1.valid && p1.valid);
+        const uint64_t topology = executor.compiledGraph()->topologyHash();
+        fixture.rebuildRetained(64, true);
+        CHECK(executor.compiledGraph()->topologyHash() != topology);
+        CHECK(executor.stats().historySlotCount == 4);   // both sets adopted
+        // Production order: the one-argument begin (the last view, carried
+        // across the rebuild), then the frame's view before the first pass.
+        VkImage carried = VK_NULL_HANDLE;
+        {
+            const uint32_t slot = frame % 2;
+            executor.onFrameFenceCompleted(slot);
+            executor.beginFrameExecution(slot);
+            executor.beginViewExecution(scene);
+            CHECK(executor.historyValid(fixture.previous));
+            CHECK(executor.image(slot, fixture.previous).image == s1.current);
+            carried = executor.image(slot, fixture.current).image;
+            for (const char* pass : { "scene", "resolve", "post", "extra" })
+                executor.beginPass(FakeCommandBuffer, executor.passId(pass));
+            executor.finishFrameExecution();
+            ++frame;
+        }
+        const HistoryFrame s2 = next(scene);
+        CHECK(s2.valid && s2.previous == carried);
+        const HistoryFrame p2 = next(preview);
+        CHECK(p2.valid && p2.previous == p1.current);
+        // Retained twice before one compile: the first retention stands.
+        executor.retainHistoryForRebuild();
+        fixture.rebuildRetained(64);
+        CHECK(next(scene).valid);
+        fixture.rebuildRetained(128);                 // resize
+        CHECK(!next(scene).valid);
+        CHECK(next(scene).valid);
+        executor.retainHistoryForRebuild();
+        executor.cleanupAfterDeviceIdle();
+        executor.discardRetainedHistory();
+        CHECK(fixture.factory.destroyCount == fixture.factory.createCount);
         return true;
     }
 
@@ -1834,7 +1993,10 @@ namespace {
             sink.clear();
             ranges.count = 0;
             executor.onFrameFenceCompleted(slot);
-            executor.beginFrameExecution(slot, { 3, 0 });
+            // M9 G2: two retained views alternate; each keeps its own set.
+            executor.beginFrameExecution(slot, index % 4 < 2
+                ? RenderGraph::ViewHistoryContext{ 3, 0, 0 }
+                : RenderGraph::ViewHistoryContext{ 9, 0, 1 });
             (void)executor.historyValid(previousId);
             (void)executor.image(slot, previousId);
             executor.beginPass(FakeCommandBuffer, scenePassId);
@@ -1855,6 +2017,83 @@ namespace {
         std::cout << "  36 steady frames: " << sample.allocationCount << " allocations, "
             << sample.requestedBytes << " bytes\n";
         CHECK(sample.allocationCount == 0);
+        executor.cleanupAfterDeviceIdle();
+        return true;
+    }
+
+    // M9.5: a SurviveCut History *buffer* pair, wired like auto-exposure:
+    // "taa" reads the previous state, "adapt" reads it and writes the current
+    // one, "output" reads the current one. The halves swap every turn, keep
+    // validity across a cut (not across an identity change), get buffer
+    // barriers, and steady frames allocate nothing.
+    bool testHistoryBufferPairSurvivesCut() {
+        RenderGraph::RenderGraphBuilder builder;
+        const auto state = builder.createHistory("exposure", bufferDesc(16),
+            RenderGraph::HistoryReset::SurviveCut);
+        auto scene = builder.createResource("scene", imageDesc());
+        const auto scenePass = builder.addPass("scene");
+        const auto taa = builder.addPass("taa", RenderGraph::QueueClass::Compute);
+        const auto adapt = builder.addPass("adapt", RenderGraph::QueueClass::Compute);
+        const auto output = builder.addPass("output");
+        scene = builder.write(scenePass, scene, Access::ColorAttachment, RenderGraph::LoadOp::Clear);
+        builder.read(taa, scene, Access::SampledRead);
+        builder.read(taa, state.previous, Access::StorageRead);
+        builder.read(adapt, state.previous, Access::StorageRead);
+        const auto current = builder.write(adapt, state.current, Access::StorageWrite);
+        builder.read(output, current, Access::StorageRead);
+        const auto compiled = builder.compile();
+        CHECK(compiled.succeeded());
+
+        FakeResourceFactory factory;
+        RecordingBarrierSink sink;
+        VulkanRenderGraphExecutor executor;
+        executor.setBarrierSink(&sink);
+        executor.init(factory, 2);
+        executor.setBarrierApi(VulkanBarrierApi::Synchronization2);
+        executor.rebuild(*compiled.graph);
+        const auto previousId = executor.resourceId("exposure.previous");
+        const auto currentId = executor.resourceId("exposure.current");
+        struct Turn { VkBuffer previous; VkBuffer current; bool valid; bool written; };
+        uint32_t unstableHalves = 0;
+        const auto turn = [&](uint32_t frame, RenderGraph::ViewHistoryContext view) {
+            const uint32_t slot = frame % 2;
+            executor.onFrameFenceCompleted(slot);
+            executor.beginFrameExecution(slot, view);
+            Turn result{ executor.buffer(slot, previousId).buffer,
+                executor.buffer(slot, currentId).buffer, executor.historyValid(previousId), false };
+            executor.beginPass(FakeCommandBuffer, executor.passId("scene"));
+            executor.beginPass(FakeCommandBuffer, executor.passId("taa"));
+            sink.clear();
+            executor.beginPass(FakeCommandBuffer, executor.passId("adapt"));
+            for (const RecordedBarrier& barrier : sink.recorded())
+                result.written |= !barrier.image &&
+                    barrier.handle == reinterpret_cast<uint64_t>(result.current) &&
+                    (barrier.dstAccess & VK_ACCESS_2_SHADER_WRITE_BIT) != 0;
+            // The writer's parity flip keeps this frame's halves stable.
+            if (executor.buffer(slot, previousId).buffer != result.previous ||
+                executor.buffer(slot, currentId).buffer != result.current)
+                ++unstableHalves;
+            executor.beginPass(FakeCommandBuffer, executor.passId("output"));
+            executor.finishFrameExecution();
+            return result;
+        };
+        const Turn first = turn(0, { 1, 0, 0 });
+        CHECK(!first.valid && first.written && first.previous != first.current);
+        const Turn second = turn(1, { 1, 0, 0 });
+        CHECK(second.valid && second.previous == first.current &&
+            second.current == first.previous);
+        const Turn cut = turn(2, { 1, 1, 0 });   // a cut: the state survives
+        CHECK(cut.valid && cut.previous == second.current);
+        const Turn other = turn(3, { 2, 1, 0 });   // another identity: it does not
+        CHECK(!other.valid);
+        for (uint32_t frame = 4; frame < 8; ++frame) (void)turn(frame, { 2, 1, 0 });
+        beginCpuAllocationFrame();
+        for (uint32_t frame = 8; frame < 40; ++frame)
+            (void)turn(frame, { 2, frame / 8u, 0 });   // cuts every 8 turns
+        const CpuAllocationFrameSample sample = endCpuAllocationFrame();
+        CHECK(sample.allocationCount == 0);
+        CHECK(sink.overflow == 0);
+        CHECK(unstableHalves == 0);
         executor.cleanupAfterDeviceIdle();
         return true;
     }
@@ -2041,12 +2280,16 @@ int main() {
         { "callback context and reentry", testCallbackContextAndReentry },
         { "History pair lifetime", testHistoryPairLifetime },
         { "History validity", testHistoryValidity },
+        { "History view supplied before first pass", testHistoryViewSuppliedBeforeFirstPass },
+        { "History view sets", testHistoryViewSets },
         { "History retirement", testHistoryRetirement },
+        { "History survives a compatible rebuild (ADR-0017)", testHistorySurvivesCompatibleRebuild },
         { "production declares no History", testProductionDeclaresNoHistory },
         { "external image policies", testExternalImagePolicies },
         { "production imported-image policies", testProductionImportedImagePolicies },
         { "variable-size imported buffer", testVariableSizeImportedBuffer },
         { "steady frames allocate nothing", testSteadyFramesAllocateNothing },
+        { "History buffer pair survives a cut (M9.5)", testHistoryBufferPairSurvivesCut },
         { "aliased first-use barriers and skip guard", testAliasedFirstUseBarriers },
         { "aliased steady frames allocate nothing", testAliasedSteadyFramesAllocateNothing },
     };

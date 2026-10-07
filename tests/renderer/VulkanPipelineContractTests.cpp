@@ -204,11 +204,16 @@ namespace {
                 GBufferLayout::CanonicalQuality, GBufferLayout::CanonicalCompact }) {
             ProductionLayouts layouts(gpu);
             VulkanPipelineLibrary library;
+            std::array<VkFormat, VulkanPipelineMaxColorTargets> gbufferFormats{};
+            const auto passFormats = vulkanGBufferPassColorAttachmentFormats(layout);
+            std::copy(passFormats.begin(), passFormats.end(), gbufferFormats.begin());
             library.init(gpu.device(), pipelineCache(),
-                { vulkanGBufferColorAttachmentFormats(layout),
-                    vulkanGBufferFormats(layout).colorAttachmentCount,
+                { gbufferFormats, VulkanGBufferPassColorAttachmentCount,
                     VK_FORMAT_D32_SFLOAT, layouts.meshes.getGBufferPipelineLayout() },
                 { { VulkanSceneColorFormat }, 1, VK_FORMAT_D32_SFLOAT,
+                    layouts.meshes.getForwardPipelineLayout() },
+                // M9.1: forward-opaque writes scene colour and velocity.
+                { { VulkanSceneColorFormat, VulkanVelocityFormat }, 2, VK_FORMAT_D32_SFLOAT,
                     layouts.meshes.getForwardPipelineLayout() },
                 { { VulkanSceneColorFormat }, 1, VK_FORMAT_D32_SFLOAT,
                     layouts.meshes.getForwardPipelineLayout() },
@@ -217,19 +222,31 @@ namespace {
             PipelineStateDesc forward{};
             forward.shaderProgram = ShaderProgram::CanonicalComplexOpaqueForward;
             forward.renderPass = RenderPassClass::Forward;
+            forward.depthWrite = true;
+            PipelineStateDesc compatibility{};
+            compatibility.shaderProgram = ShaderProgram::CanonicalComplexForward;
+            compatibility.renderPass = RenderPassClass::Forward;
+            compatibility.blendMode = BlendMode::AlphaBlend;
+            compatibility.depthWrite = false;
             PipelineStateDesc transparent{};
             transparent.shaderProgram = ShaderProgram::CanonicalComplexForward;
             transparent.renderPass = RenderPassClass::Transparent;
             transparent.blendMode = BlendMode::PremultipliedAlpha;
             transparent.depthWrite = false;
-            for (const PipelineStateDesc& desc : { gbuffer, forward, transparent }) {
+            for (const PipelineStateDesc& desc : { gbuffer, forward, compatibility, transparent }) {
                 const VulkanPipelineRecord* record =
                     library.get(library.getOrCreatePipeline(desc));
                 IRIDIUM_CHECK(record != nullptr && record->pipeline != VK_NULL_HANDLE);
                 IRIDIUM_CHECK((desc.renderPass == RenderPassClass::GBuffer) ==
                     (record->gpuSceneIndirectPipeline != VK_NULL_HANDLE));
+                // M9.1: G-buffer 6 targets (velocity last), forward-opaque 2,
+                // compatibility and sorted transparency 1.
+                const uint32_t expected = desc.renderPass == RenderPassClass::GBuffer
+                    ? VulkanGBufferPassColorAttachmentCount
+                    : (desc.renderPass == RenderPassClass::Forward && desc.depthWrite) ? 2u : 1u;
+                IRIDIUM_CHECK(record->colorAttachmentCount == expected);
             }
-            IRIDIUM_CHECK(library.pipelineCount() == 3u);
+            IRIDIUM_CHECK(library.pipelineCount() == 4u);
             IRIDIUM_CHECK(noValidationErrors("material pipeline library"));
             library.cleanup();
         }

@@ -209,7 +209,7 @@ ResourceHandle RenderGraphBuilder::createResource(std::string name,
 }
 
 RenderGraphBuilder::HistoryHandles RenderGraphBuilder::createHistory(
-    std::string name, const ResourceDesc& desc) {
+    std::string name, const ResourceDesc& desc, HistoryReset reset) {
     ResourceDesc history = desc;
     if (history.imported || history.lifetime == ResourceLifetime::External)
         throw GraphBuildError("History resources cannot be imported");
@@ -230,7 +230,7 @@ RenderGraphBuilder::HistoryHandles RenderGraphBuilder::createHistory(
     for (const HistoryRole role : { HistoryRole::Previous, HistoryRole::Current }) {
         const uint32_t logicalIndex = static_cast<uint32_t>(m_logicalResources.size());
         m_logicalResources.push_back({ name + (role == HistoryRole::Previous
-            ? ".previous" : ".current"), history, pair, role });
+            ? ".previous" : ".current"), history, pair, role, reset });
         const uint32_t versionIndex = static_cast<uint32_t>(m_resourceVersions.size());
         m_resourceVersions.push_back({ logicalIndex });
         (role == HistoryRole::Previous ? handles.previous : handles.current) =
@@ -737,6 +737,7 @@ struct CompilerAccess {
         for (const CompiledResource& resource : graph.m_resources) {
             if (resource.historyPair == InvalidIndex) continue;
             CompiledHistoryPair& pair = graph.m_historyPairs[resource.historyPair];
+            pair.reset = builder.m_logicalResources[resource.logicalResourceIndex].historyReset;
             if (resource.historyRole == HistoryRole::Previous) {
                 pair.previousLogical = resource.logicalResourceIndex;
                 constexpr std::string_view Suffix = ".previous";
@@ -777,6 +778,9 @@ struct CompilerAccess {
             if (resource.historyPair != InvalidIndex) {
                 hashValue(hash, resource.historyPair);
                 hashValue(hash, resource.historyRole);
+                // M9 G2: hashed only when not the default policy.
+                if (resource.historyReset != HistoryReset::OnCut)
+                    hashValue(hash, resource.historyReset);
             }
             // R4b.5: hashed only when declared.
             if (resource.aliasingExcluded) {
@@ -877,13 +881,16 @@ void HistoryValidityTracker::resetForGraph(const CompiledGraph& graph) {
     for (const HistoryResourceRecord& history : graph.historyResources()) {
         m_isHistory[history.logicalResourceIndex] = 1;
     }
-    m_pairs.assign(graph.historyPairs().size(), PairState{});
-    for (uint32_t pairIndex = 0; pairIndex < graph.historyPairs().size(); ++pairIndex) {
+    m_pairCount = static_cast<uint32_t>(graph.historyPairs().size());
+    m_activeSet = 0;
+    m_pairs.assign(static_cast<size_t>(m_pairCount) * HistoryViewSetCount, PairState{});
+    for (uint32_t pairIndex = 0; pairIndex < m_pairCount; ++pairIndex) {
         const CompiledHistoryPair& pair = graph.historyPairs()[pairIndex];
         m_pairOfLogical[pair.previousLogical] = pairIndex;
         m_pairOfLogical[pair.currentLogical] = pairIndex;
         const ResourceDesc& desc = graph.resources()[pair.currentLogical].desc;
-        PairState& state = m_pairs[pairIndex];
+        PairState state{};
+        state.reset = pair.reset;
         if (desc.type == ResourceType::Image) {
             state.extent = desc.image.extent;
             state.format = desc.image.format;
@@ -892,6 +899,8 @@ void HistoryValidityTracker::resetForGraph(const CompiledGraph& graph) {
             state.extent = { static_cast<uint32_t>(desc.buffer.size),
                 static_cast<uint32_t>(desc.buffer.size >> 32), 1 };
         }
+        for (uint32_t set = 0; set < HistoryViewSetCount; ++set)
+            m_pairs[static_cast<size_t>(set) * m_pairCount + pairIndex] = state;
     }
 }
 
@@ -900,7 +909,7 @@ void HistoryValidityTracker::invalidateAll() noexcept {
     for (PairState& pair : m_pairs) {
         pair.valid = false;
         pair.written = false;
-        pair.writtenLastFrame = false;
+        pair.writtenLastTurn = false;
     }
 }
 
@@ -911,8 +920,8 @@ void HistoryValidityTracker::setValid(uint32_t logicalResourceIndex, bool valid)
     }
     const uint32_t pair = m_pairOfLogical[logicalResourceIndex];
     if (pair != InvalidIndex) {
-        m_pairs[pair].valid = valid;
-        if (!valid) m_pairs[pair].writtenLastFrame = false;
+        active(pair).valid = valid;
+        if (!valid) active(pair).writtenLastTurn = false;
         return;
     }
     m_validity[logicalResourceIndex] = valid ? 1 : 0;
@@ -924,44 +933,68 @@ bool HistoryValidityTracker::isValid(uint32_t logicalResourceIndex) const noexce
         return false;
     }
     const uint32_t pair = m_pairOfLogical[logicalResourceIndex];
-    return pair != InvalidIndex ? m_pairs[pair].valid
+    return pair != InvalidIndex ? active(pair).valid
                                 : m_validity[logicalResourceIndex] != 0;
 }
 
 void HistoryValidityTracker::beginFrame(const ViewHistoryContext& view) {
-    for (PairState& pair : m_pairs) {
-        const HistoryValidityKey key{ view.identity, view.resetRevision,
+    if (view.historySet >= HistoryViewSetCount) {
+        throw GraphBuildError("History view set is out of range");
+    }
+    m_activeSet = view.historySet;
+    for (uint32_t index = 0; index < m_pairCount; ++index) {
+        PairState& pair = active(index);
+        const HistoryValidityKey key{ view.identity,
+            pair.reset == HistoryReset::OnCut ? view.resetRevision : 0u,
             pair.extent, pair.format, m_topologyHash };
-        pair.valid = pair.keyed && pair.key == key && pair.writtenLastFrame;
+        // Identity 0 is "no view": nothing is valid under it.
+        pair.valid = view.identity != 0 && pair.keyed && pair.key == key &&
+            pair.writtenLastTurn;
         pair.key = key;
         pair.keyed = true;
         pair.written = false;
     }
 }
 
+void HistoryValidityTracker::adoptPair(uint32_t pair,
+    const HistoryValidityTracker& previous, uint32_t previousPair) {
+    if (pair >= m_pairCount || previousPair >= previous.m_pairCount) {
+        throw GraphBuildError("History adoption targets an unknown pair");
+    }
+    for (uint32_t set = 0; set < HistoryViewSetCount; ++set) {
+        PairState state = previous.m_pairs[
+            static_cast<size_t>(set) * previous.m_pairCount + previousPair];
+        state.key.topologyHash = m_topologyHash;
+        state.valid = false;
+        state.written = false;
+        m_pairs[static_cast<size_t>(set) * m_pairCount + pair] = state;
+    }
+}
+
 void HistoryValidityTracker::markWritten(uint32_t pair) {
-    if (pair >= m_pairs.size()) {
+    if (pair >= m_pairCount) {
         throw GraphBuildError("History write targets an unknown pair");
     }
-    m_pairs[pair].written = true;
+    active(pair).written = true;
 }
 
 void HistoryValidityTracker::endFrame() noexcept {
-    for (PairState& pair : m_pairs) {
-        pair.writtenLastFrame = pair.written;
+    for (uint32_t index = 0; index < m_pairCount; ++index) {
+        PairState& pair = active(index);
+        pair.writtenLastTurn = pair.written;
         pair.written = false;
     }
 }
 
 bool HistoryValidityTracker::pairValid(uint32_t pair) const noexcept {
-    return pair < m_pairs.size() && m_pairs[pair].valid;
+    return pair < m_pairCount && active(pair).valid;
 }
 
 const HistoryValidityKey& HistoryValidityTracker::pairKey(uint32_t pair) const {
-    if (pair >= m_pairs.size()) {
+    if (pair >= m_pairCount) {
         throw GraphBuildError("History key requested for an unknown pair");
     }
-    return m_pairs[pair].key;
+    return active(pair).key;
 }
 
 } // namespace Iridium::RenderGraph

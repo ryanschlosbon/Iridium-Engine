@@ -25,6 +25,7 @@
 #include "ecs/Entity.h"
 #include "extraction/EditorViewState.h"
 #include "extraction/ParallelDrawSort.h"
+#include "extraction/PreviousTransformCache.h"
 #include "extraction/GpuSceneObservation.h"
 #include "renderer/lighting/DirectionalShadow.h"
 #include "renderer/lighting/LightExtractor.h"
@@ -39,6 +40,7 @@
 #include "renderer/rhi/ReflectionProbeSettings.h"
 #include "renderer/rhi/RenderFrame.h"
 #include "renderer/rhi/ShadowSettings.h"
+#include "renderer/rhi/ViewMotion.h"
 #include "renderer/rhi/ViewportGridOverlay.h"
 #include "renderer/scene/GpuScenePublisher.h"
 #include "scene/SceneWorld.h"
@@ -89,6 +91,12 @@ namespace Iridium {
         double peakNits = 1000.0;
         // Camera history reset revision for the scene view (observer request).
         std::optional<uint64_t> viewHistoryResetRevision;
+        // M9 G5b: apply the per-view sub-pixel jitter sequence.
+        bool temporalJitter = false;
+        uint32_t temporalJitterSequenceLength = 8;
+        // M9.5: the frame clock (seconds) the per-view time delta derives
+        // from (simulated time under deterministic content).
+        double timeSeconds = 0.0;
     };
 
     struct RenderExtractionInputs {
@@ -393,6 +401,19 @@ namespace Iridium {
         glm::mat4 projMatrix_{ 1.0f };
         const EditorViewState* view_ = nullptr;
         RenderFrame renderFrame_{};
+        // M9 G4: previous world transforms for direct and forward-opaque
+        // packets (parallel to their queues).
+        [[nodiscard]] glm::mat4 previousWorldFor(const DrawPacket& packet);
+        void resolvePreviousTransforms(std::span<const DrawPacket> packets,
+            std::vector<glm::mat4>& previous);
+        PreviousTransformCache previousTransforms_;
+        std::vector<glm::mat4> opaqueDirectPrevious_;
+        std::vector<glm::mat4> forwardOpaquePrevious_;
+        std::vector<glm::mat4> sortedSurfacePrevious_;
+        std::vector<glm::mat4> compatibilityPrevious_;
+        // M9 G2: per-retained-view cut detection and History context.
+        ViewMotionTracker viewMotion_{};
+        ViewMotionResult lastViewMotion_{};
 
         std::unique_ptr<GpuScenePublisher> gpuScenePublisher_;
         GpuSceneObservation gpuSceneObservation_;

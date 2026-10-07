@@ -1,0 +1,127 @@
+#version 450
+
+// M9.5 auto-exposure adaptation ("post.exposure.adapt", one workgroup).
+//
+// 1. Reduce the histogram pass's per-tile rows into 128 bins (fixed order).
+// 2. Meter: the mean log2 luminance of the bins between the low and high
+//    percentiles of the total weight (fractional bins count partially).
+// 3. Target EV100 = metered luminance in photometric units at ISO 100
+//    (K = 12.5), clamped to the EV100 limits.
+// 4. Adapt the previous EV100 toward the target over the view's time delta
+//    with the up (brighter scene) or down (darker scene) speed. Exponential:
+//    close 1 - e^(-speed * dt) of the gap (optionally at most max EV/s);
+//    Linear: move at most speed EV/s. Invalid history adapts instantly.
+// 5. The output multiplier maps the adapted luminance to middle grey (0.18),
+//    times 2^compensation (the manual EV).
+//
+// Everything after the reduction runs on one invocation in a fixed order, so
+// the result is a deterministic function of the histogram and the inputs.
+
+layout(local_size_x = 1024, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer HistogramRows {
+    uint rows[];
+};
+layout(set = 0, binding = 1, std430) readonly buffer PreviousState {
+    vec4 previousState;   // x log2 luminance, y multiplier, z EV100, w written
+};
+layout(set = 0, binding = 2, std430) writeonly buffer CurrentState {
+    vec4 currentState;
+};
+layout(set = 0, binding = 3, std430) writeonly buffer Metering {
+    vec4 meteringLuminance;   // x metered log2 luminance, y target EV100, z low, w high
+    uvec4 meteringCounts;     // x total weight, y lowest bin, z highest bin, w rows
+    uint meteringBins[128];
+    vec4 meteringAdaptation;  // x delta seconds, y 1 = previous valid, z previous EV100
+};
+
+layout(push_constant) uniform ExposureAdaptPush {
+    vec4 range;        // x histogram min log2 luminance, y log2 units per bin, z EV100 - log2 luminance, w max EV/s (0: none)
+    vec4 limits;       // x low percentile, y high percentile, z minimum EV100, w maximum EV100
+    vec4 adaptation;   // x up EV/s, y down EV/s, z delta seconds, w compensation EV
+    uvec4 control;     // x rows, y previous state valid, z 1 = linear adaptation
+} push;
+
+const uint BinCount = 128u;
+const uint Slices = 1024u / BinCount;
+const float MiddleGrey = 0.18;
+
+shared uint partial[Slices][BinCount];
+shared uint bins[BinCount];
+
+void main() {
+    uint bin = gl_LocalInvocationIndex % BinCount;
+    uint slice = gl_LocalInvocationIndex / BinCount;
+    uint sum = 0u;
+    for (uint row = slice; row < push.control.x; row += Slices)
+        sum += rows[row * BinCount + bin];
+    partial[slice][bin] = sum;
+    barrier();
+    if (slice == 0u) {
+        uint total = 0u;
+        for (uint index = 0u; index < Slices; ++index) total += partial[index][bin];
+        bins[bin] = total;
+        meteringBins[bin] = total;
+    }
+    barrier();
+    if (gl_LocalInvocationIndex != 0u) return;
+
+    float totalWeight = 0.0;
+    uint totalCount = 0u;
+    for (uint index = 0u; index < BinCount; ++index) {
+        totalCount += bins[index];
+        totalWeight += float(bins[index]);
+    }
+    float lowCount = totalWeight * push.limits.x;
+    float highCount = totalWeight * push.limits.y;
+    float cumulative = 0.0;
+    float weighted = 0.0;
+    float weight = 0.0;
+    float lowLuminance = push.range.x;
+    float highLuminance = push.range.x;
+    bool lowFound = false;
+    for (uint index = 0u; index < BinCount; ++index) {
+        float count = float(bins[index]);
+        float centre = push.range.x + (float(index) + 0.5) * push.range.y;
+        float inside = clamp(cumulative + count, lowCount, highCount) -
+            clamp(cumulative, lowCount, highCount);
+        if (inside > 0.0) {
+            if (!lowFound) { lowLuminance = centre; lowFound = true; }
+            highLuminance = centre;
+        }
+        weighted += inside * centre;
+        weight += inside;
+        cumulative += count;
+    }
+
+    bool previousValid = push.control.y != 0u;
+    float metered = weight > 0.0 ? weighted / weight : push.range.x;
+    float target = weight > 0.0 ? metered + push.range.z
+        : (previousValid ? previousState.z : 0.0);
+    target = clamp(target, push.limits.z, push.limits.w);
+
+    float adapted = target;
+    if (previousValid) {
+        float previous = previousState.z;
+        float delta = target - previous;
+        float seconds = clamp(push.adaptation.z, 0.0, 1.0);
+        float speed = delta > 0.0 ? push.adaptation.x : push.adaptation.y;
+        float step;
+        if (push.control.z != 0u) {
+            step = clamp(delta, -speed * seconds, speed * seconds);
+        }
+        else {
+            step = delta * (1.0 - exp(-max(speed, 0.0) * seconds));
+            if (push.range.w > 0.0)
+                step = clamp(step, -push.range.w * seconds, push.range.w * seconds);
+        }
+        adapted = previous + step;
+    }
+    float adaptedLuminance = adapted - push.range.z;
+    currentState = vec4(adaptedLuminance,
+        exp2(log2(MiddleGrey) - adaptedLuminance + push.adaptation.w), adapted, 1.0);
+    meteringLuminance = vec4(metered, target, lowLuminance, highLuminance);
+    meteringCounts = uvec4(totalCount, bins[0], bins[BinCount - 1u], push.control.x);
+    meteringAdaptation = vec4(push.adaptation.z, previousValid ? 1.0 : 0.0,
+        previousState.z, 0.0);
+}

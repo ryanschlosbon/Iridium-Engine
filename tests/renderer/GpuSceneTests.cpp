@@ -286,6 +286,74 @@ namespace {
         return result;
     }
 
+    // M9 G3: "previous" is last frame's transform. The pass after a move,
+    // a stopped instance's previous slot is set to current (2d + 1 only), and
+    // the steady frame after that takes the unchanged fast path again.
+    bool publisherSettlesStoppedTransforms() {
+        GpuSceneCapacity capacity{ 8, 16, 8, 16 };
+        GpuScenePublisher publisher(capacity);
+        std::array<GpuSceneObservedInstance, 2> inputs{
+            observed("019fb73d-5a60-7000-8000-000000000060",
+                "019fb73d-5a60-7000-8000-000000000061"),
+            observed("019fb73d-5a60-7000-8000-000000000062",
+                "019fb73d-5a60-7000-8000-000000000063") };
+        const auto sync = [&](uint64_t serial) -> const GpuScenePackedTables& {
+            return publisher.synchronize(1, std::span(inputs), serial, 0);
+        };
+        (void)sync(1);
+        (void)sync(2);
+        CHECK(publisher.stats().unchangedFastPath == 1);
+
+        // Frame 3: instance 0 moves; previous = the old transform.
+        inputs[0].worldTransform = glm::translate(glm::mat4(1.0f), { 2.0f, 0.0f, 0.0f });
+        ++inputs[0].observationRevision;
+        const GpuScenePackedTables& moved = sync(3);
+        CHECK(publisher.stats().settledTransforms == 0);
+        const uint32_t current = moved.instances[0].references.x;
+        const uint32_t previous = moved.instances[0].references.y;
+        CHECK(transformGpuScenePoint(moved.transforms[current], {}).x == 2.0f);
+        CHECK(transformGpuScenePoint(moved.transforms[previous], {}).x == 0.0f);
+        const auto movedRevisions = moved.transformRevisions;
+        const auto movedInstanceRevisions = moved.instanceRevisions;
+
+        // Frame 4: nothing moves. Not the fast path: instance 0 settles.
+        const GpuScenePackedTables& settled = sync(4);
+        CHECK(publisher.stats().unchangedFastPath == 0);
+        CHECK(publisher.stats().settledTransforms == 1);
+        CHECK(publisher.stats().changedTransforms == 1);
+        CHECK(publisher.stats().changedInstances == 0);
+        CHECK(transformGpuScenePoint(settled.transforms[previous], {}).x == 2.0f);
+        CHECK(std::memcmp(&settled.transforms[previous], &settled.transforms[current],
+            sizeof(GpuSceneAffineTransform)) == 0);
+        // Only the previous slot's revision moved; the current slot (which
+        // the shadow/probe watermarks read) and every instance record did not.
+        CHECK(settled.transformRevisions[current] == movedRevisions[current]);
+        CHECK(settled.transformRevisions[previous] != movedRevisions[previous]);
+        for (size_t index = 0; index < movedRevisions.size(); ++index)
+            if (index != previous)
+                CHECK(settled.transformRevisions[index] == movedRevisions[index]);
+        CHECK(settled.instanceRevisions == movedInstanceRevisions);
+
+        // Frame 5: steady again.
+        (void)sync(5);
+        CHECK(publisher.stats().unchangedFastPath == 1);
+        CHECK(publisher.stats().settledTransforms == 0);
+
+        // Continuous motion never settles; it settles once it stops.
+        for (uint64_t frame = 6; frame < 10; ++frame) {
+            inputs[1].worldTransform = glm::translate(glm::mat4(1.0f),
+                { 0.0f, static_cast<float>(frame), 0.0f });
+            ++inputs[1].observationRevision;
+            (void)sync(frame);
+            CHECK(publisher.stats().settledTransforms == 0);
+        }
+        (void)sync(10);
+        CHECK(publisher.stats().settledTransforms == 1);
+        (void)sync(11);
+        CHECK(publisher.stats().unchangedFastPath == 1);
+        return true;
+    }
+
     bool publisherIsSparseAndRevisionIsolated() {
         GpuSceneCapacity capacity{ 8, 16, 8, 16 };
         GpuScenePublisher publisher(capacity);
@@ -330,7 +398,10 @@ namespace {
         ++input.observationRevision;
         const auto& materialEdited = publisher.synchronize(
             1, std::span(&input, 1), 6, 0);
-        CHECK(publisher.stats().changedTransforms == 0);
+        // M9 G3: the pass after the move settles the stopped instance's
+        // previous transform (one transform record).
+        CHECK(publisher.stats().changedTransforms == 1);
+        CHECK(publisher.stats().settledTransforms == 1);
         CHECK(publisher.stats().changedGeometries == 0);
         CHECK(publisher.stats().changedPrimitives == 1);
         CHECK(materialEdited.geometryRevisions == geometryRevisions);
@@ -762,6 +833,7 @@ int main() {
         { "uncertainty and overflow fail to direct path", uncertaintyAndOverflowFailToDirectPath },
         { "publisher is sparse and revision isolated",
             publisherIsSparseAndRevisionIsolated },
+        { "publisher settles stopped transforms", publisherSettlesStoppedTransforms },
         { "publisher retirement prevents ABA", publisherRetirementPreventsAba },
         { "publisher shares and safely revises LOD geometry", publisherLodGeometryIsSharedAndRevisionSafe },
         { "publisher revises relocated dense references",

@@ -53,9 +53,10 @@ VkPipeline VkGraphicsPipeline::createPipeline(VkSwapchain* swapchain,
     auto fragCode = readFile(std::string(PROJECT_ROOT_DIR) + canonicalGBufferShader);
 
     if (isOutline) {
-        // This MUST be your standard 3D mesh vertex shader, not the select shader
+        // The standard mesh vertex shader, unjittered (M9 G5b): output reads
+        // the selection mask after temporal resolve.
         vertCode = readFile(std::string(PROJECT_ROOT_DIR) +
-            "assets/shaders/canonical_material_vert.spv");
+            "assets/shaders/canonical_material_unjittered_vert.spv");
         fragCode = readFile(std::string(PROJECT_ROOT_DIR) +
             "assets/shaders/canonical_mask_frag.spv");
     }
@@ -166,14 +167,16 @@ VkPipeline VkGraphicsPipeline::createPipeline(VkSwapchain* swapchain,
     emissiveBlendAttachment.colorWriteMask = isOutline ? VK_COLOR_COMPONENT_A_BIT :
         (VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT);
 
-    std::array<VkPipelineColorBlendAttachmentState, 5> blendAttachments = {
+    // M9.1: the sixth attachment is velocity (the mask pass leaves it alone).
+    std::array<VkPipelineColorBlendAttachmentState,
+        Iridium::VulkanGBufferPassColorAttachmentCount> blendAttachments = {
         normalBlendAttachment, albedoBlendAttachment, emissiveBlendAttachment,
-        normalBlendAttachment, normalBlendAttachment
+        normalBlendAttachment, normalBlendAttachment, normalBlendAttachment
     };
 
     VkPipelineColorBlendStateCreateInfo colorBlending{ VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO };
     colorBlending.logicOpEnable = VK_FALSE;
-    colorBlending.attachmentCount = 5;
+    colorBlending.attachmentCount = static_cast<uint32_t>(blendAttachments.size());
     colorBlending.pAttachments = blendAttachments.data();
 
     // Dynamic State
@@ -202,8 +205,8 @@ VkPipeline VkGraphicsPipeline::createPipeline(VkSwapchain* swapchain,
     // The layout is owned by VulkanMeshLayouts and borrowed by this fixed wrapper.
     pipelineInfo.layout = pipelineLayout;
 
-    const std::array<VkFormat, 5> colorFormats =
-        Iridium::vulkanGBufferColorAttachmentFormats(layout);
+    const auto colorFormats =
+        Iridium::vulkanGBufferPassColorAttachmentFormats(layout);
     VkPipelineRenderingCreateInfo rendering{ VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO };
     rendering.colorAttachmentCount = static_cast<uint32_t>(colorFormats.size());
     rendering.pColorAttachmentFormats = colorFormats.data();

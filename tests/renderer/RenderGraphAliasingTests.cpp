@@ -656,18 +656,20 @@ namespace {
         size_t slotCount;
         uint64_t digest;
     };
+    // M9.1 (2026-10-05): regenerated; every topology gains the gbuffer.velocity
+    // slot (alias-eligible, cleared in gbuffer, read by output-transform).
     constexpr GoldenSlots R4b3Golden[] = {
-        { "base SDR", 19, 0x405c75f21083a709ull },
-        { "base SDR, no pyramids, no telemetry", 17, 0x464038df89c75c57ull },
-        { "HDR10", 18, 0x6f3bfb1bdb7e15a8ull },
-        { "VSM", 19, 0x78b7d858b6e77defull },
-        { "Hi-Z", 19, 0x2bb6b9346e6b2122ull },
-        { "Ordinary2", 24, 0x3ef8f2d873f55f03ull },
-        { "Hero4", 29, 0x58ff930ffb8095a0ull },
-        { "Cinematic8", 39, 0x6f7b9eb05ae062c7ull },
-        { "OIT", 20, 0xc6645749a45bb283ull },
-        { "all features", 54, 0x0e61d50272c03ec2ull },
-        { "all features, no hooks", 53, 0x570e27e8b48f0ef0ull },
+        { "base SDR", 20, 0x984eb71199662283ull },
+        { "base SDR, no pyramids, no telemetry", 18, 0x497c7f89c8c198eull },
+        { "HDR10", 19, 0x3174a76a3b1591bdull },
+        { "VSM", 20, 0x759b149059f4e446ull },
+        { "Hi-Z", 20, 0x9123b733e20d4aeeull },
+        { "Ordinary2", 25, 0xab7907fc8494e17dull },
+        { "Hero4", 30, 0x21510e075d4d31e4ull },
+        { "Cinematic8", 40, 0x28d0cdc4ec669a47ull },
+        { "OIT", 21, 0xcf8577d59eee8467ull },
+        { "all features", 55, 0xfb72304900703127ull },
+        { "all features, no hooks", 54, 0xc03d8175267e9299ull },
     };
 
     // Rebuilds a compiled graph through the builder in compiled order. The
@@ -764,12 +766,25 @@ namespace {
     bool testAliasingOffReproducesGoldenSlots() {
         const std::vector<NamedTopology> topologies = productionTopologies();
         CHECK(topologies.size() == std::size(R4b3Golden));
+        // On a mismatch, print every topology's actual values (regenerating
+        // the golden needs an explanation in the milestone log).
+        bool mismatch = false;
+        for (size_t index = 0; index < topologies.size(); ++index)
+            mismatch = mismatch ||
+                topologies[index].graph.physicalSlots().size() != R4b3Golden[index].slotCount ||
+                slotDigest(topologies[index].graph) != R4b3Golden[index].digest;
+        if (mismatch)
+            for (const NamedTopology& topology : topologies)
+                std::cerr << "    { \"" << topology.name << "\", "
+                    << topology.graph.physicalSlots().size() << ", 0x" << std::hex
+                    << slotDigest(topology.graph) << std::dec << "ull },\n";
         for (size_t index = 0; index < topologies.size(); ++index) {
             const NamedTopology& topology = topologies[index];
             CHECK_MSG(topology.name == R4b3Golden[index].name, topology.name);
             CHECK_MSG(topology.graph.physicalSlots().size() == R4b3Golden[index].slotCount,
-                topology.name);
-            CHECK_MSG(slotDigest(topology.graph) == R4b3Golden[index].digest, topology.name);
+                topology.name << " slots " << topology.graph.physicalSlots().size());
+            CHECK_MSG(slotDigest(topology.graph) == R4b3Golden[index].digest,
+                topology.name << " digest 0x" << std::hex << slotDigest(topology.graph) << std::dec);
             for (const PhysicalResourceSlot& slot : topology.graph.physicalSlots())
                 CHECK(!slot.aliased);
 
@@ -906,11 +921,13 @@ namespace {
         report("aliasing compile", *projected.graph, full, projectedDedicated);
 
         // The design's estimate: ~564 MB requested, ~398 MB peak (at lighting),
-        // and the greedy plan reaches the peak.
+        // and the greedy plan reaches the peak. M9.1 adds the 4K RG16F velocity
+        // target (33.2 MB, live from gbuffer through lighting): ~597.6 MB
+        // requested, ~431.6 MB peak.
         CHECK(projectedDedicated == 0);
         CHECK(full.requestedBytes == transientImageBytes);
-        CHECK(transientImageBytes > 563'000'000ull && transientImageBytes < 565'000'000ull);
-        CHECK(full.peakLiveBytes > 397'000'000ull && full.peakLiveBytes < 399'000'000ull);
+        CHECK(transientImageBytes > 597'000'000ull && transientImageBytes < 599'000'000ull);
+        CHECK(full.peakLiveBytes > 431'000'000ull && full.peakLiveBytes < 433'000'000ull);
         CHECK(projected.graph->passes()[full.peakLivePass].name == "lighting");
         CHECK(full.committedBytes == full.peakLiveBytes);
         CHECK(declared.committedBytes == declared.peakLiveBytes);

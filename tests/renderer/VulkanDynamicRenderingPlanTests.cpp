@@ -316,15 +316,22 @@ namespace {
                 { .depthPyramid = true }));
             const VulkanProductionGraphIds ids = resolveVulkanProductionGraphIds(executor);
             const VulkanPassRenderingPlan& gbuffer = executor.renderingPlan(ids.gbuffer);
-            CHECK(gbuffer.valid && gbuffer.colorCount == 5 && gbuffer.hasDepth());
+            // M9.1: velocity is appended as attachment 5.
+            CHECK(gbuffer.valid && gbuffer.colorCount == 6 && gbuffer.hasDepth());
             const std::array order{ ids.gbufferNormal, ids.gbufferAlbedo, ids.gbufferEmissive,
-                ids.gbufferF0Roughness, ids.gbufferMaterialFlags };
+                ids.gbufferF0Roughness, ids.gbufferMaterialFlags, ids.gbufferVelocity };
             for (uint32_t index = 0; index < order.size(); ++index)
                 CHECK(gbuffer.color[index].logicalResourceIndex == order[index].logical);
             const ClearValue black = ClearValue::color(0.0f, 0.0f, 0.0f, 1.0f);
             CHECK(sameClear(gbuffer.color[0].clearValue, black, false));
             CHECK(sameClear(gbuffer.color[2].clearValue, ClearValue::color(0, 0, 0, 0), false));
             CHECK(sameClear(gbuffer.color[4].clearValue, ClearValue::colorUint(0u), false));
+            CHECK(sameClear(gbuffer.color[5].clearValue, ClearValue::color(0, 0, 0, 0), false));
+            // Forward-opaque loads scene colour and velocity.
+            const VulkanPassRenderingPlan& forwardOpaque = executor.renderingPlan(ids.forwardOpaque);
+            CHECK(forwardOpaque.valid && forwardOpaque.colorCount == 2 && forwardOpaque.hasDepth());
+            CHECK(forwardOpaque.color[0].logicalResourceIndex == ids.sceneColor.logical);
+            CHECK(forwardOpaque.color[1].logicalResourceIndex == ids.gbufferVelocity.logical);
             CHECK(sameClear(gbuffer.depth[0].clearValue, ClearValue::depthStencil(1.0f), true));
             CHECK(gbuffer.renderExtent().width == Scene.width &&
                 gbuffer.renderExtent().height == Scene.height);
@@ -335,7 +342,8 @@ namespace {
                 lighting.color[0].loadOp == VK_ATTACHMENT_LOAD_OP_CLEAR &&
                 sameClear(lighting.color[0].clearValue, black, false));
             const VulkanPassRenderingPlan& opaque = executor.renderingPlan(ids.forwardOpaque);
-            CHECK(opaque.colorCount == 1 && opaque.hasDepth() &&
+            // M9.1: scene colour + velocity.
+            CHECK(opaque.colorCount == 2 && opaque.hasDepth() &&
                 opaque.depth[0].loadOp == VK_ATTACHMENT_LOAD_OP_LOAD &&
                 opaque.depth[0].storeOp == VK_ATTACHMENT_STORE_OP_STORE);
             for (const RenderGraph::PassId pass : { ids.sortedForward, ids.ordinary2ComposeHook,

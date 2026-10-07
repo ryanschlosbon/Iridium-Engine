@@ -120,6 +120,7 @@ namespace Iridium {
                 target.emissive = image(ids.gbufferEmissive);
                 target.f0Roughness = image(ids.gbufferF0Roughness);
                 target.materialFlags = image(ids.gbufferMaterialFlags);
+                target.velocity = image(ids.gbufferVelocity);
                 target.depth = image(ids.depth);
                 target.litScene = image(ids.sceneColor);
                 if (transparencyPyramids) {

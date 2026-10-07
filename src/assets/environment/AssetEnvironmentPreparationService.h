@@ -1,6 +1,7 @@
 #pragma once
 
 #include "assets/AssetCatalog.h"
+#include "assets/AssetDiscovery.h"
 #include "assets/AssetImport.h"
 #include "assets/cooker/LocalDerivedDataCache.h"
 #include "assets/environment/EnvironmentProduct.h"
@@ -41,6 +42,13 @@ namespace Iridium {
             std::shared_ptr<LocalDerivedDataCache> cache,
             CookTarget target,
             EngineLog* log = nullptr);
+        // Multi-root form: each record resolves under its own assetRoot.
+        AssetEnvironmentPreparationService(
+            Tasks::TaskSystem& tasks,
+            std::vector<AssetRoot> roots,
+            std::shared_ptr<LocalDerivedDataCache> cache,
+            CookTarget target,
+            EngineLog* log = nullptr);
         ~AssetEnvironmentPreparationService();
 
         AssetEnvironmentPreparationService(
@@ -66,7 +74,7 @@ namespace Iridium {
         // completes it through a continuation.
         void runNext();
 
-        std::filesystem::path assetRoot_;
+        std::vector<AssetRoot> roots_;
         std::shared_ptr<LocalDerivedDataCache> cache_;
         CookTarget target_;
         ImporterRegistry importers_;

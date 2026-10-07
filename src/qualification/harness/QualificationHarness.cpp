@@ -1,19 +1,24 @@
 #include "qualification/harness/QualificationHarness.h"
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <iostream>
 #include <stdexcept>
+#include <string>
 #include <utility>
 
 #include "assets/AssetManager.h"
+#include "core/ProjectAssetRoots.h"
 #include "platform/SystemProfile.h"
 #include "profiling/CpuProfiler.h"
 #include "qualification/harness/HarnessDetail.h"
 #include "qualification/harness/StarvationLoad.h"
 #include "qualification/vulkan/VulkanQualificationExtension.h"
 #include "renderer/rhi/Mesh.h"
+#include "renderer/rhi/RenderFrame.h"
 #include "renderer/rhi/TransparencyQualityOverride.h"
+#include "renderer/rhi/ViewMotion.h"
 
 namespace Iridium {
 
@@ -51,6 +56,7 @@ namespace Iridium {
             .casterRevisionOracle = options.casterRevisionOracle,
             .aliasPoison = options.aliasPoison,
             .validateProbeCaptureTargets = options.validateReflectionProbes,
+            .exposureTrace = options.exposureTrace,
         };
     }
 
@@ -142,8 +148,12 @@ namespace Iridium {
                 static_cast<size_t>(frames)));
         }
         if (!options_.backgroundCookSource.empty()) {
+            // A relative source resolves under the project asset root, else the
+            // local asset library (licensed third-party content); the cook key
+            // is root-relative either way.
             backgroundCook_.reset(new BackgroundCookLoad(*tasks,
-                std::filesystem::path(PROJECT_ROOT_DIR) / "assets",
+                ProjectAssetRoots::current().resolveRoot(
+                    options_.backgroundCookSource).path,
                 options_.backgroundCookSource));
             backgroundCook_->start();
         }
@@ -246,17 +256,26 @@ namespace Iridium {
         const ApplicationConfig& config = context.config;
         const std::shared_ptr<ModelAsset>& mainModel = context.mainModel;
         const RenderExtent renderExtent = context.renderExtent;
-        if (options_.captureFrameIndex) {
+        if (capturesFrames(options_)) {
             if (!benchmark_ && !config.editorAssetViewerGuid) {
                 throw std::invalid_argument(
                     "Deterministic frame capture requires --benchmark or "
                     "--open-asset-viewer.");
             }
-            if (config.frameLimit != 0 &&
+            if (options_.captureFrameIndex && config.frameLimit != 0 &&
                 *options_.captureFrameIndex >= config.frameLimit) {
                 throw std::invalid_argument(
                     "--capture-frame must be lower than the measured frame limit.");
             }
+            if (options_.captureFrameRange && config.frameLimit != 0 &&
+                options_.captureFrameRange->last >= config.frameLimit) {
+                throw std::invalid_argument(
+                    "--capture-frames must end below the measured frame limit.");
+            }
+        }
+        if (options_.benchmarkHoldFrame && !benchmark_) {
+            throw std::invalid_argument(
+                "--benchmark-hold-frame requires --benchmark.");
         }
         if (options_.validateDepthPyramidCapture && config.frameLimit == 0u) {
             throw std::invalid_argument(
@@ -452,12 +471,22 @@ namespace Iridium {
                     context.measuredFrameIndex.has_value(),
                     context.measuredFrameIndex.value_or(0u));
             }
+            // Between frames: write the sequence captures whose slots have
+            // retired, so at most the frames in flight hold capture pixels.
+            if (options_.captureFrameRange) {
+                streamCompletedCaptures(context.config, false);
+            }
             updateScriptedChanges(context);
             updateBenchmarkState(context);
             return;
         case FrameBeginPhase::PostSceneUpdate: {
             const bool isMeasuredFrame = context.measuredFrameIndex.has_value();
             const uint64_t measured = context.measuredFrameIndex.value_or(0u);
+            // M9 G7: before this frame's probe-capture finalize.
+            if (options_.probeFinalizeDrain) {
+                CpuScope drainScope(context.profiler, "cpu.qualification.probe_drain");
+                (void)backend_->drainReflectionProbeCaptures();
+            }
             if (frameTaskProbe_) {
                 CpuScope probeScope(context.profiler, "cpu.task.probe");
                 frameTaskProbe_->runFrame(isMeasuredFrame);
@@ -477,8 +506,8 @@ namespace Iridium {
 
             frame_ = {};
             frame_.captureId = isMeasuredFrame &&
-                    options_.captureFrameIndex == measured
-                ? options_.captureFrameIndex
+                    captureSelectsFrame(options_, measured)
+                ? std::optional<uint64_t>(measured)
                 : std::nullopt;
             frame_.ordinary2Validation = isMeasuredFrame &&
                 ((options_.validateOrdinary2Capture && measured == 0u) ||
@@ -510,13 +539,95 @@ namespace Iridium {
             if (frame_.depthPyramidValidation) {
                 backend_->armDepthPyramidCaptureValidation(0u);
             }
+            // M9.5: every frame, warmup included (the adaptation starts at
+            // the view's first turn).
+            if (options_.exposureTrace) {
+                backend_->armExposureReadback(context.applicationFrameIndex);
+            }
             if (frame_.captureId) {
                 backend_->armFrameCapture(*frame_.captureId,
                     options_.capturePoint);
-                capturedApplicationFrameIndex_ = context.applicationFrameIndex;
+                captureFrames_.push_back(CaptureFrameRecord{
+                    .captureId = *frame_.captureId,
+                    .applicationFrameIndex = context.applicationFrameIndex,
+                });
             }
             return;
         }
+    }
+
+    void QualificationHarness::onFrameSubmit(FrameSubmitPoint,
+        AppFrameContext& context) {
+        // The captured frame's own view record (built after
+        // BackendFrameOpened, so read here, during its submission).
+        if (!frame_.captureId || context.renderFrame == nullptr ||
+            captureFrames_.empty()) return;
+        CaptureFrameRecord& record = captureFrames_.back();
+        if (record.captureId != *frame_.captureId || record.jitter) return;
+        const ViewTransportRecord& view = context.renderFrame->view;
+        const uint32_t flags = view.temporalInfo.z;
+        record.jitter = CaptureTemporalJitter{
+            .enabled = (flags & ViewTemporalJitterActive) != 0u,
+            .sequenceLength = std::clamp(
+                context.config.temporalJitterSequenceLength, 1u,
+                MaximumTemporalJitterSequenceLength),
+            .sequenceIndex = view.temporalInfo.x,
+            .offsetPixels = {
+                static_cast<double>(view.jitter.x) * view.renderInfo.x / 2.0,
+                static_cast<double>(view.jitter.y) * view.renderInfo.y / 2.0 },
+            .offsetNdc = { view.jitter.x, view.jitter.y },
+            .turnsSinceCut = view.temporalInfo.y,
+            .historyReset = (flags & ViewTemporalHistoryReset) != 0u,
+        };
+    }
+
+    void QualificationHarness::streamCompletedCaptures(
+        const ApplicationConfig& config, bool waitForPending) {
+        std::vector<FrameCapture> captures =
+            backend_->collectFrameCaptures(waitForPending);
+        // Slots drain in slot order at the final wait; write in frame order.
+        std::ranges::sort(captures, {}, &FrameCapture::captureId);
+        for (FrameCapture& capture : captures) {
+            if (!streamedCaptures_.empty() &&
+                capture.captureId <= streamedCaptures_.back().captureId) {
+                throw std::runtime_error(
+                    "Capture sequence readbacks completed out of order.");
+            }
+            CaptureArtifactMetadata naming{};
+            naming.requireSpatialSignal = options_.requireCaptureSignal;
+            setCaptureNaming(naming, config, capture.captureId);
+            PendingCaptureImage image = writeCaptureImage(
+                options_.captureDirectory, capture, naming);
+            capture.pixels = {};
+            try {
+                streamedCaptures_.push_back(std::move(image));
+            }
+            catch (...) {
+                discardCaptureImage(image);
+                throw;
+            }
+        }
+    }
+
+    void QualificationHarness::verifyCaptureSequence() const {
+        const CaptureFrameRange& range = *options_.captureFrameRange;
+        bool exact = streamedCaptures_.size() == range.count();
+        for (uint64_t index = 0; exact && index < streamedCaptures_.size(); ++index) {
+            exact = streamedCaptures_[index].captureId == range.frame(index);
+        }
+        if (!exact) {
+            throw std::runtime_error("The requested measured frames did not produce "
+                "exactly " + std::to_string(range.count()) +
+                " captures in order (got " +
+                std::to_string(streamedCaptures_.size()) + ").");
+        }
+    }
+
+    void QualificationHarness::discardStreamedCaptures() noexcept {
+        for (const PendingCaptureImage& image : streamedCaptures_) {
+            discardCaptureImage(image);
+        }
+        streamedCaptures_.clear();
     }
 
     void QualificationHarness::onFrameEnd(AppFrameContext& context) {
@@ -545,14 +656,17 @@ namespace Iridium {
             allocationTrace_.reset();
             releaseScriptedChangeResources(context);
             releaseProbeResources(context);
+            // A failed run commits no sequence sidecar; its images go too.
+            if (!context.completed) discardStreamedCaptures();
             return;
         case ShutdownPhase::Finalize: {
-            if (!completedCapture_ && options_.cpuProfileOutput.empty())
+            if (!completedCapture_ && streamedCaptures_.empty() &&
+                options_.cpuProfileOutput.empty())
                 return;
             const SystemProfile systemProfile = querySystemProfile();
-            const std::optional<CaptureArtifactPaths> captureArtifact =
-                exportCaptureArtifact(context, systemProfile);
-            exportCpuProfile(context, systemProfile, captureArtifact);
+            const std::vector<CaptureArtifactPaths> captureArtifacts =
+                exportCaptureArtifacts(context, systemProfile);
+            exportCpuProfile(context, systemProfile, captureArtifacts);
             return;
         }
         }

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "assets/AssetCatalog.h"
+#include "assets/AssetDiscovery.h"
 #include "assets/AssetImport.h"
 #include "assets/cooker/LocalDerivedDataCache.h"
 #include "assets/thumbnail/AssetThumbnail.h"
@@ -111,6 +112,13 @@ namespace Iridium {
             std::shared_ptr<LocalDerivedDataCache> cache,
             CookTarget target,
             EngineLog* log = nullptr);
+        // Multi-root form: each record resolves under its own assetRoot.
+        AssetThumbnailService(
+            Tasks::TaskSystem& tasks,
+            std::vector<AssetRoot> roots,
+            std::shared_ptr<LocalDerivedDataCache> cache,
+            CookTarget target,
+            EngineLog* log = nullptr);
         ~AssetThumbnailService();
 
         AssetThumbnailService(
@@ -199,7 +207,7 @@ namespace Iridium {
             AssetThumbnailService& service_;
         };
 
-        std::filesystem::path assetRoot_;
+        std::vector<AssetRoot> roots_;
         std::shared_ptr<LocalDerivedDataCache>
             cache_;
         CookTarget target_;

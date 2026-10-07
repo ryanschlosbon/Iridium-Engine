@@ -114,6 +114,32 @@ namespace {
         flag("casterRevisionOracle", c.casterRevisionOracle);
         flag("extractionVerifier", c.extractionVerifier);
         flag("renderGraphAliasing", c.renderGraphAliasing);
+        field("temporalJitter", c.temporalJitter ? (*c.temporalJitter ? "on" : "off") : "auto");
+        field("antiAliasing", exact(enumValue(c.antiAliasing)));
+        field("taaTuning", c.taaTuning ? std::to_string(c.taaTuning->minimumHistoryWeight) + "/" +
+            std::to_string(c.taaTuning->maximumHistoryWeight) + "/" +
+            std::to_string(c.taaTuning->motionPixelsForMinimum) + "/" +
+            std::to_string(c.taaTuning->varianceGamma) + "/" +
+            std::to_string(c.taaTuning->reconstructionSharpness) + "/" +
+            std::to_string(c.taaTuning->staticVarianceGamma) + "/" +
+            std::to_string(c.taaTuning->stillHistoryWeight) : std::string("default"));
+        field("temporalJitterSequenceLength", std::to_string(c.temporalJitterSequenceLength));
+        field("exposureMode", exact(enumValue(c.exposureMode)));
+        field("autoExposureSettings", c.autoExposureSettings
+            ? std::to_string(c.autoExposureSettings->histogramMinEv100) + "/" +
+                std::to_string(c.autoExposureSettings->histogramMaxEv100) + "/" +
+                std::to_string(c.autoExposureSettings->lowPercentile) + "/" +
+                std::to_string(c.autoExposureSettings->highPercentile) + "/" +
+                std::to_string(c.autoExposureSettings->minimumEv100) + "/" +
+                std::to_string(c.autoExposureSettings->maximumEv100) + "/" +
+                std::to_string(c.autoExposureSettings->speedUpEvPerSecond) + "/" +
+                std::to_string(c.autoExposureSettings->speedDownEvPerSecond) + "/" +
+                std::to_string(c.autoExposureSettings->centreWeight)
+            : std::string("default"));
+        flag("bloom.enabled", c.bloom.enabled);
+        field("bloom.settings", exact(c.bloom.intensity) + "/" + exact(c.bloom.threshold) +
+            "/" + exact(c.bloom.knee) + "/" + exact(c.bloom.levels) + "/" +
+            exact(static_cast<int>(c.bloom.karis)));
         field("uploadQueue", exact(enumValue(c.uploadQueue)));
         flag("aliasPoison", c.aliasPoison);
         flag("validateDepthPyramidCapture", c.validateDepthPyramidCapture);
@@ -189,6 +215,13 @@ namespace {
             ? c.editorAssetViewerGuid->toString() : std::string("none"));
         field("captureFrameIndex", c.captureFrameIndex
             ? exact(*c.captureFrameIndex) : std::string("none"));
+        field("captureFrameRange", c.captureFrameRange
+            ? exact(c.captureFrameRange->first) + ":" +
+                exact(c.captureFrameRange->last) + ":" +
+                exact(c.captureFrameRange->step)
+            : std::string("none"));
+        field("benchmarkHoldFrame", c.benchmarkHoldFrame
+            ? exact(*c.benchmarkHoldFrame) : std::string("none"));
         flag("requireCaptureSignal", c.requireCaptureSignal);
         field("capturePoint", exact(enumValue(c.capturePoint)));
         field("captureDirectory", c.captureDirectory.generic_string());
@@ -197,6 +230,8 @@ namespace {
         field("backgroundCookSource", c.backgroundCookSource.generic_string());
         flag("frameTaskProbe", c.frameTaskProbe);
         flag("allocationTrace", c.allocationTrace);
+        flag("probeFinalizeDrain", c.probeFinalizeDrain);
+        flag("exposureTrace", c.exposureTrace);
         return s.str();
     }
 
@@ -272,6 +307,10 @@ namespace {
         std::string_view missingMessage;  // empty for a switch
         std::vector<InvalidValue> invalid;
     };
+
+    constexpr std::string_view kCaptureFramesMessage =
+        "--capture-frames requires FIRST:LAST[:STEP] measured-frame indices "
+        "with FIRST <= LAST and STEP >= 1";
 
     constexpr std::string_view R = "runtime";
     constexpr std::string_view E = "editor";
@@ -470,13 +509,79 @@ namespace {
                 "--render-graph-aliasing requires on or off",
                 { { "yes", "--render-graph-aliasing requires on or off" },
                   { "", "--render-graph-aliasing requires on or off" } } },
+            // M9 G5b; off by default.
+            // M9.2; TAA by default since M9.7, so the row selects none.
+            { "--anti-aliasing", G, "none", {}, [](C& c) {
+                c.antiAliasing = AntiAliasingMode::None; },
+                "--anti-aliasing requires none or taa",
+                { { "fxaa", "--anti-aliasing requires none or taa" },
+                  { "", "--anti-aliasing requires none or taa" } } },
+            { "--taa-settings", G, "0.8,0.95,16,1.25,2,1.5,0.97", {}, [](C& c) {
+                c.taaTuning = TemporalAntiAliasingTuning{ 0.8f, 0.95f, 16.0f, 1.25f, 2.0f, 1.5f, 0.97f }; },
+                "--taa-settings requires seven comma-separated numbers",
+                { { "1,2", "--taa-settings requires seven comma-separated numbers" },
+                  { "0.8,0.95,16,1.25,2,1.5,0.97,7", "--taa-settings requires seven comma-separated numbers" },
+                  { "", "--taa-settings requires seven comma-separated numbers" } } },
+            // M9.5; auto by default since M9.7, so the row selects manual.
+            { "--exposure", G, "manual", {}, [](C& c) {
+                c.exposureMode = ExposureMode::Manual; },
+                "--exposure requires manual or auto",
+                { { "automatic", "--exposure requires manual or auto" },
+                  { "", "--exposure requires manual or auto" } } },
+            { "--auto-exposure-settings", G, "-8,16,0.05,0.95,-2,18,2.5,1.5,0.5", {}, [](C& c) {
+                c.autoExposureSettings = AutoExposureSettings{ -8.0f, 16.0f, 0.05f, 0.95f,
+                    -2.0f, 18.0f, 2.5f, 1.5f, 0.5f }; },
+                "--auto-exposure-settings requires nine comma-separated numbers",
+                { { "1,2", "--auto-exposure-settings requires nine comma-separated numbers" },
+                  { "-8,16,0.05,0.95,-2,18,2.5,1.5,0.5,1",
+                    "--auto-exposure-settings requires nine comma-separated numbers" },
+                  { "-8,16,0.05,0.95,-2,18,2.5,1.5,", "--auto-exposure-settings requires nine comma-separated numbers" },
+                  { "16,-8,0.05,0.95,-2,18,2.5,1.5,0.5",
+                    "--auto-exposure-settings requires nine comma-separated numbers" },
+                  { "-8,16,0.9,0.1,-2,18,2.5,1.5,0.5",
+                    "--auto-exposure-settings requires nine comma-separated numbers" },
+                  { "-8,16,0.05,0.95,-2,18,2.5,1.5,2",
+                    "--auto-exposure-settings requires nine comma-separated numbers" },
+                  { "", "--auto-exposure-settings requires nine comma-separated numbers" } } },
+            // M9.4; on (subtle) by default since M9.7, so the row selects off.
+            { "--bloom", G, "off", {}, [](C& c) { c.bloom.enabled = false; },
+                "--bloom requires off or on",
+                { { "yes", "--bloom requires off or on" },
+                  { "", "--bloom requires off or on" } } },
+            { "--bloom-settings", G, "0.1,2,0.5,5,0", {}, [](C& c) {
+                c.bloom.intensity = 0.1f; c.bloom.threshold = 2.0f; c.bloom.knee = 0.5f;
+                c.bloom.levels = 5u; c.bloom.karis = BloomKarisMode::Off; },
+                "--bloom-settings requires five comma-separated numbers",
+                { { "0.1,2,0.5,5", "--bloom-settings requires five comma-separated numbers" },
+                  { "0.1,2,0.5,5,1,1", "--bloom-settings requires five comma-separated numbers" },
+                  { "0.1,2,0.5,5,3", "--bloom-settings requires five comma-separated numbers" },
+                  { "0.1,2,0.5,5,", "--bloom-settings requires five comma-separated numbers" },
+                  { "1.5,0,0,6,1", "--bloom-settings requires five comma-separated numbers" },
+                  { "0.04,-1,0,6,1", "--bloom-settings requires five comma-separated numbers" },
+                  { "0.04,0,0,9,1", "--bloom-settings requires five comma-separated numbers" },
+                  { "0.04,0,0,2.5,1", "--bloom-settings requires five comma-separated numbers" },
+                  { "0.04,0,0,0,1", "--bloom-settings requires five comma-separated numbers" },
+                  { "0.04,0,0,6,0.5", "--bloom-settings requires five comma-separated numbers" },
+                  { "", "--bloom-settings requires five comma-separated numbers" } } },
+            { "--temporal-jitter", G, "on", {}, [](C& c) {
+                c.temporalJitter = true; },
+                "--temporal-jitter requires on or off",
+                { { "yes", "--temporal-jitter requires on or off" },
+                  { "", "--temporal-jitter requires on or off" } } },
+            // M9 G6c; 8 by default.
+            { "--temporal-jitter-sequence", G, "64", {}, [](C& c) {
+                c.temporalJitterSequenceLength = 64; },
+                "--temporal-jitter-sequence requires a phase count from 1 to 4096",
+                { { "0", "--temporal-jitter-sequence requires a phase count from 1 to 4096" },
+                  { "4097", "--temporal-jitter-sequence requires a phase count from 1 to 4096" },
+                  { "", "--temporal-jitter-sequence requires a phase count from 1 to 4096" } } },
             // M7R R4d.1 (not in the 6b000ad parser); auto by default.
             { "--upload-queue", G, "graphics", {}, [](C& c) {
                 c.uploadQueue = UploadQueueMode::Graphics; },
                 "--upload-queue requires auto, graphics or legacy-blocking",
                 { { "transfer", "--upload-queue requires auto, graphics or legacy-blocking" },
                   { "", "--upload-queue requires auto, graphics or legacy-blocking" } } },
-            // --- qualification (43) ---
+            // --- qualification (46) ---
             { "--validate-texture-residency-churn", Q, {}, {}, [](C& c) {
                 c.validateTextureResidencyChurn = true; }, {}, {} },
             { "--validate-reflection-probes", Q, {}, {}, [](C& c) {
@@ -578,6 +683,12 @@ namespace {
             // M7R R5c.8 allocation trace (not in 6b000ad).
             { "--qualification-allocation-trace", Q, {}, {}, [](C& c) {
                 c.allocationTrace = true; c.enableCpuProfiling = true; }, {}, {} },
+            // M9 G7.
+            { "--qualification-probe-finalize-drain", Q, {}, {}, [](C& c) {
+                c.probeFinalizeDrain = true; }, {}, {} },
+            // M9.5.
+            { "--qualification-exposure-trace", Q, {}, {}, [](C& c) {
+                c.exposureTrace = true; }, {}, {} },
             { "--validate-depth-pyramid-capture", Q, {}, {}, [](C& c) {
                 c.experimentalDepthPyramid = true; c.validateDepthPyramidCapture = true; },
                 {}, {} },
@@ -592,13 +703,26 @@ namespace {
                 c.captureFrameIndex = 7; c.captureDirectory = "out/cap"; },
                 "--capture-frame requires a measured-frame index",
                 { { "x", "--capture-frame requires an unsigned integer" } } },
+            // M9 G6c capture sequences and benchmark time hold.
+            { "--capture-frames", Q, "4:9:2", { "--capture-directory", "out/cap" }, [](C& c) {
+                c.captureFrameRange = CaptureFrameRange{ 4, 9, 2 };
+                c.captureDirectory = "out/cap"; },
+                "--capture-frames requires a measured-frame range",
+                { { "9:4", kCaptureFramesMessage }, { "4", kCaptureFramesMessage },
+                  { "4:9:0", kCaptureFramesMessage }, { "a:9", kCaptureFramesMessage },
+                  { "4:9:2:1", kCaptureFramesMessage }, { "-1:9", kCaptureFramesMessage },
+                  { "", kCaptureFramesMessage } } },
+            { "--benchmark-hold-frame", Q, "130", { "--benchmark", "m9_tf_pan_v1" }, [](C& c) {
+                c.benchmarkHoldFrame = 130; c.benchmarkId = "m9_tf_pan_v1"; },
+                "--benchmark-hold-frame requires a benchmark frame index",
+                { { "x", "--benchmark-hold-frame requires an unsigned integer" } } },
             { "--capture-directory", Q, "out/cap", { "--capture-frame", "0" }, withCapture,
                 "--capture-directory requires a path",
                 { { "", "--capture-directory requires a path" } } },
             { "--capture-point", Q, "final-output", {}, [](C& c) {
                 c.capturePoint = FrameCapturePoint::FinalOutput; },
-                "--capture-point requires scene, final-sdr, or final-output",
-                { { "swapchain", "--capture-point requires scene, final-sdr, or final-output" } } },
+                "--capture-point requires scene, scene-resolved, final-sdr, or final-output",
+                { { "swapchain", "--capture-point requires scene, scene-resolved, final-sdr, or final-output" } } },
             { "--require-capture-signal", Q, {}, captureContext, [withCapture](C& c) {
                 withCapture(c); c.requireCaptureSignal = true; }, {}, {} },
             { "--profile-cpu-output", Q, "profiles/run.jsonl", {}, [](C& c) {
@@ -627,8 +751,8 @@ namespace {
         Cli::CliOptionRegistry registry;
         registerEngineOptions(registry, scratch);
 
-        CHECK(table.size() == 94);
-        CHECK(registry.options().size() == 94);
+        CHECK(table.size() == 106);
+        CHECK(registry.options().size() == 106);
         std::set<std::string_view> names;
         std::map<std::string_view, size_t> ownerCounts;
         for (const FlagCase& row : table) {
@@ -670,6 +794,27 @@ namespace {
         }
         CHECK(newOutcome({ "--qualification-scripted-changes", "hitch.json" }) ==
             error("--qualification-scripted-changes requires --profile-cpu-output"));
+        // M9 G6c: one capture mode at a time, each paired with a directory;
+        // the hold frame needs a benchmark.
+        CHECK(newOutcome({ "--capture-frame", "1", "--capture-frames", "1:2",
+                  "--capture-directory", "out/cap" }) ==
+            error("--capture-frame and --capture-frames are mutually exclusive"));
+        CHECK(newOutcome({ "--capture-frames", "1:2" }) ==
+            error("--capture-frames and --capture-directory must be specified together"));
+        CHECK(newOutcome({ "--capture-directory", "out/cap" }) ==
+            error("--capture-frame and --capture-directory must be specified together"));
+        {
+            CombinedConfig sequence{};
+            sequence.captureFrameRange = CaptureFrameRange{ 0, 3, 1 };
+            sequence.captureDirectory = "out/cap";
+            sequence.requireCaptureSignal = true;
+            CHECK(newOutcome({ "--capture-frames", "0:3", "--capture-directory", "out/cap",
+                      "--require-capture-signal" }) == "OK:" + describe(sequence));
+        }
+        CHECK(newOutcome({ "--require-capture-signal" }) ==
+            error("--require-capture-signal requires a capture request"));
+        CHECK(newOutcome({ "--benchmark-hold-frame", "5" }) ==
+            error("--benchmark-hold-frame requires --benchmark"));
         {
             // --upload-queue: every value, the last one wins.
             CombinedConfig legacy{};
@@ -691,8 +836,8 @@ namespace {
         }
         CHECK(ownerCounts[R] == 14);
         CHECK(ownerCounts[E] == 4);
-        CHECK(ownerCounts[G] == 32);
-        CHECK(ownerCounts[Q] == 44);
+        CHECK(ownerCounts[G] == 40);
+        CHECK(ownerCounts[Q] == 48);
         std::cout << "  owners: runtime " << ownerCounts[R] << ", editor " << ownerCounts[E]
                   << ", renderer " << ownerCounts[G] << ", qualification "
                   << ownerCounts[Q] << '\n';
@@ -743,7 +888,7 @@ namespace {
     bool testUsageParity() {
         const std::string usage = engineUsage();
         CHECK(usage.starts_with("Usage: IridiumEngine [options]\n"));
-        CHECK(optionLines(usage).size() == 94);
+        CHECK(optionLines(usage).size() == 106);
         // Groups appear in owner order: runtime, editor, renderer, qualification.
         const size_t runtime = usage.find("runtime options:");
         const size_t editor = usage.find("editor options:");
@@ -762,7 +907,7 @@ namespace {
         AppCli::registerRuntimeOptions(registry, config);
         AppCli::registerEditorOptions(registry, config);
         AppCli::registerRendererOptions(registry, config);
-        CHECK(registry.options().size() == 50);
+        CHECK(registry.options().size() == 58);
         try {
             registry.parse(Args{ "--benchmark", "material_lab_v1" });
             CHECK(false);

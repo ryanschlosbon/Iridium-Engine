@@ -153,6 +153,10 @@ namespace Iridium {
         forceDirectGBufferReference_ = config.forceDirectGBufferReference;
         forceDirectShadowReference_ = config.forceDirectShadowReference;
         renderGraphAliasing_ = config.renderGraphAliasing;
+        antiAliasing_ = config.antiAliasing;
+        taaTuning_ = config.taaTuning;
+        exposure_.configure(config.exposureMode, config.autoExposure);   // M9.5
+        bloom_.configure(config.bloom);   // M9.4
         uploadQueueMode_ = config.uploadQueue;
         experimentalShadowLodErrorTexels_ =
             config.experimentalShadowLodErrorTexels;
@@ -366,7 +370,12 @@ namespace Iridium {
         // R3c.9: the forward owner (render passes, refraction pyramids).
         forward_.configure(layered_);
         forward_.create(*featureContext_);
+        exposure_.create(*featureContext_);   // M9.5 (before its consumers)
+        taa_.create(*featureContext_);   // M9.2
+        bloom_.create(*featureContext_);   // M9.4
+        bloom_.setExposureSource(&exposure_);   // exposed-unit threshold
         output_.create(*featureContext_);
+        output_.setExposureFallback(exposure_.fallbackState());
         output_.createPipelines(outputTargetFormat_,
             outputTransport_ == Color::OutputTransport::Hdr10Pq,
             vkSwapchain->getImageFormat());
@@ -407,12 +416,25 @@ namespace Iridium {
         opaque_.setCullerServices(cullerServices());
         opaque_.create(*featureContext_);
 
+        // M9.1: velocity-writing direct draws push 144 B (Vulkan guarantees
+        // 128; every supported desktop GPU exposes 256).
+        if (vkContext->getPhysicalDeviceProperties().limits.maxPushConstantsSize <
+                sizeof(CanonicalMotionPushConstants))
+            throw std::runtime_error(
+                "Iridium requires at least 144 bytes of push constants");
         // R4a: material pipelines use dynamic rendering (formats + layout).
         pipelineLibrary.init(vkContext->getDevice(), pipelineCache_.handle(),
-            { vulkanGBufferColorAttachmentFormats(gBufferLayout_),
-                vulkanGBufferFormats(gBufferLayout_).colorAttachmentCount,
+            { [&] {
+                std::array<VkFormat, VulkanPipelineMaxColorTargets> formats{};
+                const auto pass = vulkanGBufferPassColorAttachmentFormats(gBufferLayout_);
+                std::copy(pass.begin(), pass.end(), formats.begin());
+                return formats;
+              }(), VulkanGBufferPassColorAttachmentCount,
                 VK_FORMAT_D32_SFLOAT, meshLayouts.getGBufferPipelineLayout() },
             { { VulkanSceneColorFormat }, 1, VK_FORMAT_D32_SFLOAT,
+                meshLayouts.getForwardPipelineLayout() },
+            // M9.1: forward-opaque writes scene colour and velocity.
+            { { VulkanSceneColorFormat, VulkanVelocityFormat }, 2, VK_FORMAT_D32_SFLOAT,
                 meshLayouts.getForwardPipelineLayout() },
             { { VulkanSceneColorFormat }, 1, VK_FORMAT_D32_SFLOAT,
                 meshLayouts.getForwardPipelineLayout() },
@@ -607,6 +629,7 @@ namespace Iridium {
         layered_.clearDescriptors();
         oit_.clearDescriptors();
         frameTargets.cleanup();
+        renderGraph_.discardRetainedHistory();
         renderGraph_.cleanupAfterDeviceIdle();
         shadows_.destroy();
         localShadows_.destroy();
@@ -629,6 +652,9 @@ namespace Iridium {
 
         ui_.destroy();
         output_.destroy();
+        taa_.destroy();
+        bloom_.destroy();
+        exposure_.destroy();
 
         forward_.destroy();
         layered_.destroy();
@@ -713,6 +739,9 @@ namespace Iridium {
             .hooks = extensionHooks_.graphHooks(),
             .pointShadowPoolCapacities = pointShadowCapacities_,
             .transientAliasing = renderGraphAliasing_,
+            .temporalAntiAliasing = antiAliasing_ == AntiAliasingMode::Taa,
+            .autoExposure = exposure_.mode() == ExposureMode::Auto,
+            .bloomLevels = bloom_.graphLevels(),
         };
     }
 
@@ -906,6 +935,8 @@ namespace Iridium {
     }
 
     void VulkanVertexBackend::rebuildRenderGraphAfterDeviceIdle() {
+        // Temporal history survives only compatible rebuilds (ADR-0017).
+        if (cpuProfiler_ && cpuProfiler_->isEnabled()) cpuProfiler_->recordCounter("render_graph.rebuilds", 1);
         renderGraph_.cleanupAfterDeviceIdle();
         renderGraph_.init(resourceAllocator,
             VulkanFrameScheduler::FramesInFlight,
@@ -1257,6 +1288,75 @@ namespace Iridium {
             }
             return false;
         }
+    }
+
+    // A graph topology change between frames, like a resize: retire every
+    // slot, rebuild the graph and targets (temporal history starts over); on
+    // failure restore the previous state and rebuild again.
+    template <class Restore>
+    bool VulkanVertexBackend::rebuildFrameTargets(Restore&& restore,
+        std::string& diagnostic, const char* what) {
+        scheduler.waitForAllFrames();
+        releaseFrameTargets();
+        try {
+            createFrameTargets();
+            registerEditorTargetTextures();
+            return true;
+        }
+        catch (const std::exception& exception) {
+            diagnostic = std::string(what) + " switch failed: " + exception.what();
+            releaseFrameTargets();
+            restore();
+            createFrameTargets();
+            registerEditorTargetTextures();
+            return false;
+        }
+    }
+
+    bool VulkanVertexBackend::setAntiAliasing(AntiAliasingMode mode,
+        std::string& diagnostic) {
+        diagnostic.clear();
+        if (!initialized_ || frameOpen_) {
+            diagnostic = "Anti-aliasing can only change between frames of an initialized backend";
+            return false;
+        }
+        if (mode == antiAliasing_) return true;
+        const AntiAliasingMode previous = antiAliasing_;
+        antiAliasing_ = mode;
+        return rebuildFrameTargets([&] { antiAliasing_ = previous; }, diagnostic, "Anti-aliasing");
+    }
+
+    bool VulkanVertexBackend::setBloom(const BloomSettings& settings,
+        std::string& diagnostic) {
+        diagnostic.clear();
+        if (!initialized_ || frameOpen_) {
+            diagnostic = "Bloom can only change between frames of an initialized backend";
+            return false;
+        }
+        // Intensity and shaping apply from the next frame; turning bloom on
+        // or off (or a new level count) changes the graph.
+        const BloomSettings previous = bloom_.settings();
+        const uint32_t previousLevels = bloom_.graphLevels();
+        bloom_.configure(settings);
+        if (bloom_.graphLevels() == previousLevels) return true;
+        return rebuildFrameTargets([&] { bloom_.configure(previous); }, diagnostic, "Bloom");
+    }
+
+    bool VulkanVertexBackend::setExposure(ExposureMode mode,
+        const AutoExposureSettings& settings, std::string& diagnostic) {
+        diagnostic.clear();
+        if (!initialized_ || frameOpen_) {
+            diagnostic = "Exposure can only change between frames of an initialized backend";
+            return false;
+        }
+        // Settings apply from the next frame; the mode declares or removes
+        // the exposure passes (a graph change).
+        const ExposureMode previousMode = exposure_.mode();
+        const AutoExposureSettings previous = exposure_.settings();
+        exposure_.configure(mode, settings);
+        if (mode == previousMode) return true;
+        return rebuildFrameTargets([&] { exposure_.configure(previousMode, previous); },
+            diagnostic, "Exposure");
     }
 
     RenderBackendCapabilities VulkanVertexBackend::getCapabilities() const {
@@ -1618,6 +1718,8 @@ namespace Iridium {
         layered_.clearDescriptors();
         oit_.clearDescriptors();
         frameTargets.cleanup();
+        // ADR-0017: the rebuilt plan adopts compatible history (TAA, exposure).
+        renderGraph_.retainHistoryForRebuild();
         renderGraph_.cleanupAfterDeviceIdle();
     }
 
@@ -1833,6 +1935,8 @@ namespace Iridium {
         // view), as the separate setters were called before extraction.
         applyOutputSettings(frame.output);
         debugView_ = frame.debugView;
+        // M9 G1: History is keyed by this frame's view before any pass runs.
+        renderGraph_.beginViewExecution(frame.history);
         updateCamera(frame.view, frame.history);
         output_.setGridOverlay(frame.gridOverlay);
 
@@ -1857,11 +1961,49 @@ namespace Iridium {
         // The camera position, matrices and planes are the view record's
         // (bit-identical to the former submitLightingPass arguments).
         submitLightingPass(glm::vec3(frame.view.cameraPosition), frame.view.view,
-            frame.view.projection, frame.view.depthRange.x,
+            frame.view.projection, frame.view.jitteredProjection, frame.view.depthRange.x,
             frame.view.depthRange.y, *frame.lights, *frame.reflectionProbes);
         stageComplete(RenderFrameStage::Lighting);
-        submitForwardQueues(frame.forwardOpaqueQueue, frame.sortedSurfaceQueue,
-            frame.compatibilityTransparentQueue, frame.instanceTransforms);
+        // M9.5: auto-exposure adapts over the view's time, with the manual EV
+        // as compensation; its passes drain with the output transform.
+        exposure_.stage({ frame.viewDeltaSeconds, output_.manualExposure() });
+        // M9.2: TAA pre-exposes with the output's manual EV, or (M9.5) with
+        // last frame's adapted exposure; its pass drains with the output.
+        if (taa_.active()) {
+            const VulkanExposureFeature::PreviousState exposureState =
+                exposure_.previousState(scheduler.currentFrameIndex());
+            const glm::vec2 extent(static_cast<float>(sceneExtent_.width),
+                static_cast<float>(sceneExtent_.height));
+            const float exposure = std::exp2(frame.output.manualExposureEv);
+            taa_.stage({
+                .request = {
+                    .provider = TemporalResolveProvider::NativeTaa,
+                    .extents = { { sceneExtent_.width, sceneExtent_.height },
+                        { sceneExtent_.width, sceneExtent_.height } },
+                    .jitterPixels = glm::vec2(frame.view.jitter) * extent * 0.5f,
+                    .jitterSequenceLength = frame.view.temporalInfo.w,
+                    .exposure = exposure,
+                    .previousExposure = exposure,
+                    .resetHistory = (frame.view.temporalInfo.z & ViewTemporalHistoryReset) != 0u,
+                    .camera = { frame.view.depthRange.x, frame.view.depthRange.y,
+                        2.0f * std::atan(1.0f / frame.view.projection[1][1]),
+                        frame.viewDeltaSeconds },
+                    .nativeTaa = taaTuning_,
+                },
+                .globalSet = view_.globalSet(scheduler.currentFrameIndex()),
+                .exposureState = exposureState.buffer,
+                .exposureFromState = exposureState.valid,
+            });
+            // Temporal health (editor Profiler): 0 means history was discarded.
+            if (cpuProfiler_ && cpuProfiler_->isEnabled()) {
+                cpuProfiler_->recordCounter("temporal.taa.history_valid", taa_.historyWasValid() ? 1 : 0);
+                if (exposure_.mode() == ExposureMode::Auto)
+                    cpuProfiler_->recordCounter("exposure.history_valid", exposureState.valid ? 1 : 0);
+            }
+        }
+        submitForwardQueues(frame.forwardOpaqueQueue,
+            frame.forwardOpaquePreviousTransforms, frame.sortedSurfaceQueue,
+            frame.compatibilityTransparentQueue, frame.instanceTransforms, frame);
         stageComplete(RenderFrameStage::SceneLinearComplete);
         submitOutputPass();
         stageComplete(RenderFrameStage::OutputComplete);
@@ -2093,7 +2235,7 @@ namespace Iridium {
     }
 
     void VulkanVertexBackend::submitLightingPass(const glm::vec3& cameraPos,
-        const glm::mat4& view, const glm::mat4& proj,
+        const glm::mat4& view, const glm::mat4& proj, const glm::mat4& rasterProj,
         float nearPlane, float farPlane,
         const LightingFramePacket& lights,
         const ReflectionProbeGpuFramePacket& reflectionProbes) {
@@ -2122,7 +2264,9 @@ namespace Iridium {
         lighting_.record({
             .cameraPosition = cameraPos,
             .view = view,
-            .projection = proj,
+            // M9 G5b: reconstruction from (jittered) depth uses the raster
+            // projection; equal to `proj` when jitter is off.
+            .projection = rasterProj,
             .debugView = debugView_,
         });
     }
@@ -2141,9 +2285,10 @@ namespace Iridium {
 
     void VulkanVertexBackend::submitForwardQueues(
         std::span<const DrawPacket> opaqueForwardQueue,
+        std::span<const glm::mat4> opaqueForwardPreviousTransforms,
         std::span<const DrawPacket> sortedSurfaceQueue,
         std::span<const DrawPacket> compatibilityTransparentQueue,
-        std::span<const glm::mat4> instanceTransforms) {
+        std::span<const glm::mat4> instanceTransforms, const RenderFrame& frame) {
         if (!opaqueForwardQueue.empty()) {
             telemetry_.counters().opaqueIndirectFallbackPackets +=
                 opaqueForwardQueue.size();
@@ -2174,8 +2319,11 @@ namespace Iridium {
         });
         forward_.stage({
             .opaqueForwardQueue = opaqueForwardQueue,
+            .opaqueForwardPreviousTransforms = opaqueForwardPreviousTransforms,
             .sortedSurfaceQueue = sortedSurfaceQueue,
             .compatibilityTransparentQueue = compatibilityTransparentQueue,
+            .sortedSurfacePreviousTransforms = frame.sortedSurfacePreviousTransforms,
+            .compatibilityPreviousTransforms = frame.compatibilityPreviousTransforms,
             .skipWeightedOit = weightedOit.executionEnabled,
             .globalSet = globalSet,
             .sceneSet = sceneSet,
@@ -2277,12 +2425,26 @@ namespace Iridium {
             .paperWhiteNits = paperWhiteNits_,
             .peakNits = peakNits_,
             .selectionOutline = selectionOutlineActive_,
+            .motionVectorView = debugView_ == RenderDebugView::MotionVectors,
+            .bloomIntensity = bloom_.composite().intensity,
+            .bloomAdditive = bloom_.composite().additive,
         });
         // R3c.4 drain point: final-output captures and the retained views.
         const IVulkanEditorUi* editor = editorUi();
-        hooks_.runFinalCapture(currentCmd,
+        VulkanCaptureHookPayload finalSource =
             captureSource(outputTransport_ == Color::OutputTransport::SdrSrgb
-                ? FrameCapturePoint::FinalSdr : FrameCapturePoint::FinalOutput),
+                ? FrameCapturePoint::FinalSdr : FrameCapturePoint::FinalOutput);
+        // M9.2: the post chain's scene colour (TAA history slot or scene.color).
+        finalSource.sceneResolved = &renderGraph_.image(scheduler.currentFrameIndex(),
+            graphIds_.resolvedSceneColor);
+        finalSource.sceneResolvedFormat = frameTargets.format();
+        if (graphIds_.exposureCurrent.isValid()) {   // M9.5
+            finalSource.exposureState = &renderGraph_.buffer(scheduler.currentFrameIndex(),
+                graphIds_.exposureCurrent);
+            finalSource.exposureMetering = &renderGraph_.buffer(
+                scheduler.currentFrameIndex(), graphIds_.exposureMetering);
+        }
+        hooks_.runFinalCapture(currentCmd, finalSource,
             editor != nullptr && editor->retainedViewsEnabled());
     }
 

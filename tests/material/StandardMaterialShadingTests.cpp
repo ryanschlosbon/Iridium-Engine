@@ -312,8 +312,9 @@ namespace {
     // shaders (ShaderOwnershipTests, VulkanShaderParityTests); the records
     // shared with GLSL keep their frozen C++ sizes here.
     bool testShaderSharedRecordSizes() {
-        CHECK(sizeof(ViewTransportRecord) == 320);
-        CHECK(sizeof(UniformBufferObject) == 384);
+        // M9 G5b appended the temporal fields; earlier offsets are unchanged.
+        CHECK(sizeof(ViewTransportRecord) == 544);
+        CHECK(sizeof(UniformBufferObject) == 608);
         CHECK(offsetof(UniformBufferObject, inverseProjection) == 256);
         return true;
     }

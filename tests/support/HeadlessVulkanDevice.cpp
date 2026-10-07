@@ -105,6 +105,7 @@ HeadlessVulkanDevice::HeadlessVulkanDevice(const Options& options) {
     features.samplerAnisotropy = VK_TRUE;
     features.fillModeNonSolid = VK_TRUE;
     features.independentBlend = VK_TRUE;
+    features.dualSrcBlend = VK_TRUE;   // M9.8e reactive coverage
     features.imageCubeArray = VK_TRUE;
     features.multiDrawIndirect = supported.multiDrawIndirect;
     features.drawIndirectFirstInstance = supported.drawIndirectFirstInstance;

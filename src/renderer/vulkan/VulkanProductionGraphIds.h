@@ -91,7 +91,23 @@ namespace Iridium {
         RenderGraph::PassId oitAccumulate;
         RenderGraph::PassId oitResolve;
         RenderGraph::PassId sceneColorCaptureHook;
-        RenderGraph::PassId bloomHook;
+        RenderGraph::PassId bloomHook;   // without bloom (the M7R topology)
+        // M9.2 (invalid without TAA).
+        RenderGraph::PassId taaResolve;
+        RenderGraph::GraphResourceId taaHistoryPrevious;
+        RenderGraph::GraphResourceId taaHistoryCurrent;
+        // The scene colour the post chain reads (TAA current or scene.color).
+        RenderGraph::GraphResourceId resolvedSceneColor;
+        // M9.5 auto-exposure (invalid with ExposureMode::Manual).
+        RenderGraph::PassId exposureHistogram;
+        RenderGraph::PassId exposureAdapt;
+        RenderGraph::GraphResourceId exposureHistogramRows;
+        RenderGraph::GraphResourceId exposureMetering;
+        RenderGraph::GraphResourceId exposurePrevious;
+        RenderGraph::GraphResourceId exposureCurrent;
+        // M9.4 bloom (invalid when off; bloomHook is declared instead).
+        RenderGraph::PassId bloom;
+        RenderGraph::GraphResourceId bloomChain;
         RenderGraph::PassId outputTransform;
         RenderGraph::PassId finalCaptureHook;
         // "ui-compose" (HDR10 composition) or "ui-present".
@@ -111,6 +127,7 @@ namespace Iridium {
         RenderGraph::GraphResourceId gbufferEmissive;
         RenderGraph::GraphResourceId gbufferF0Roughness;
         RenderGraph::GraphResourceId gbufferMaterialFlags;
+        RenderGraph::GraphResourceId gbufferVelocity;   // M9.1
         RenderGraph::GraphResourceId depth;
         RenderGraph::GraphResourceId sceneColor;
         RenderGraph::GraphResourceId refractionColorPyramid;

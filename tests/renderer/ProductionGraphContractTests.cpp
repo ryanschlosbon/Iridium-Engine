@@ -10,6 +10,7 @@
 #include "TestHarness.h"
 
 #include "renderer/lighting/ClusteredLighting.h"
+#include "renderer/vulkan/VulkanBloomFeature.h"
 #include "renderer/vulkan/VulkanProductionRenderGraph.h"
 
 #include <algorithm>
@@ -400,6 +401,10 @@ namespace {
     constexpr std::array<std::string_view, 6> DeclaredSinceR3b6{
         "shadow.directional.compact", "shadow.spot.compact", "shadow.point.compact",
         "gpu-scene.opaque.compact", "lighting.probe-cluster", "probe.capture" };
+    // Transient resources added after R3b.6 (M9.1). They are left out of the
+    // slot comparison, so the golden still pins every earlier resource's slot
+    // membership; slots that held only these resources are dropped.
+    constexpr std::array<std::string_view, 1> ResourcesSinceR3b6{ "gbuffer.velocity" };
 
     bool testDeclaredWorkKeepsOrderAndSlots() {
         const VulkanLayeredGraphConfig all{ Ordinary2Atlas, Hero4Atlas, Cinematic8Atlas, true };
@@ -429,13 +434,19 @@ namespace {
                     DeclaredSinceR3b6.end())
                     previous.push_back(pass.name);
             IRIDIUM_CHECK_MSG(previous == golden.passes, name);
-            IRIDIUM_CHECK_MSG(compiled.physicalSlots().size() == golden.slots.size(), name);
-            for (size_t slot = 0; slot < golden.slots.size(); ++slot) {
+            std::vector<std::vector<std::string_view>> slots;
+            for (const RenderGraph::PhysicalResourceSlot& slot : compiled.physicalSlots()) {
                 std::vector<std::string_view> members;
-                for (const uint32_t logical : compiled.physicalSlots()[slot].logicalResources)
-                    members.push_back(compiled.resources()[logical].name);
-                IRIDIUM_CHECK_MSG(members == golden.slots[slot], name << " slot " << slot);
+                for (const uint32_t logical : slot.logicalResources) {
+                    const std::string_view member = compiled.resources()[logical].name;
+                    if (std::ranges::find(ResourcesSinceR3b6, member) == ResourcesSinceR3b6.end())
+                        members.push_back(member);
+                }
+                if (!members.empty()) slots.push_back(std::move(members));
             }
+            IRIDIUM_CHECK_MSG(slots.size() == golden.slots.size(), name);
+            for (size_t slot = 0; slot < golden.slots.size() && slot < slots.size(); ++slot)
+                IRIDIUM_CHECK_MSG(slots[slot] == golden.slots[slot], name << " slot " << slot);
 
             // Producers run directly before their consumers (shadows, gbuffer).
             const GraphQuery graph(compiled);
@@ -561,6 +572,8 @@ namespace {
             IRIDIUM_CHECK(clears("transparent.oit.accumulate", "transparency.oit.revealage",
                 ClearValue::color(1.0f, 0.0f, 0.0f, 0.0f)));
             IRIDIUM_CHECK(clears("output-transform", "output.display", opaqueBlack));
+            // M9.1: velocity is cleared to zero motion.
+            IRIDIUM_CHECK(clears("gbuffer", "gbuffer.velocity", transparentBlack));
             if (hdr10) {
                 IRIDIUM_CHECK(clears("ui-compose", "output.ui-composition", opaqueBlack));
                 IRIDIUM_CHECK(clears("hdr10-encode-present", "swapchain", opaqueBlack));
@@ -594,6 +607,162 @@ namespace {
         return true;
     }
 
+    // M9.5: auto-exposure is declared only in Auto mode. Manual keeps the
+    // graph exactly (no exposure pass, resource or History pair); Auto meters
+    // the resolved colour after TAA and before bloom and the output, writes a
+    // SurviveCut History buffer pair, and its state reaches TAA (previous)
+    // and the output transform (current) as declared storage reads.
+    bool testAutoExposureDeclaration() {
+        for (const bool taa : { false, true }) {
+            VulkanProductionGraphFeatures manualFeatures{};
+            manualFeatures.temporalAntiAliasing = taa;
+            const RenderGraph::CompiledGraph manual = layeredGraph({}, manualFeatures);
+            const GraphQuery manualGraph(manual);
+            IRIDIUM_CHECK(!manualGraph.hasPass("post.exposure.histogram"));
+            IRIDIUM_CHECK(!manualGraph.hasPass("post.exposure.adapt"));
+            for (const auto& resource : manual.resources())
+                IRIDIUM_CHECK_MSG(resource.name.rfind("exposure", 0) != 0, resource.name);
+            IRIDIUM_CHECK(manual.historyPairs().size() == (taa ? 1u : 0u));
+            IRIDIUM_CHECK(manual.topologyHash() == layeredGraph({}, manualFeatures).topologyHash());
+
+            VulkanProductionGraphFeatures autoFeatures = manualFeatures;
+            autoFeatures.autoExposure = true;
+            const RenderGraph::CompiledGraph compiled = layeredGraph({}, autoFeatures);
+            const GraphQuery graph(compiled);
+            IRIDIUM_CHECK(compiled.topologyHash() != manual.topologyHash());
+            const std::string_view resolved = taa ? "taa.history.current" : "scene.color";
+            IRIDIUM_CHECK(graph.pass("post.exposure.histogram")->queue ==
+                RenderGraph::QueueClass::Compute);
+            IRIDIUM_CHECK(graph.reads("post.exposure.histogram", resolved, Access::SampledRead));
+            IRIDIUM_CHECK(graph.writes("post.exposure.histogram", "exposure.histogram-rows",
+                Access::StorageWrite));
+            IRIDIUM_CHECK(graph.reads("post.exposure.adapt", "exposure.histogram-rows",
+                Access::StorageRead));
+            IRIDIUM_CHECK(graph.reads("post.exposure.adapt", "exposure.previous",
+                Access::StorageRead));
+            IRIDIUM_CHECK(graph.writes("post.exposure.adapt", "exposure.current",
+                Access::StorageWrite));
+            IRIDIUM_CHECK(graph.writers("exposure.current").size() == 1u);
+            IRIDIUM_CHECK(graph.reads("output-transform", "exposure.current", Access::StorageRead));
+            IRIDIUM_CHECK(graph.reads("final-capture-hook", "exposure.current",
+                Access::TransferSource));
+            IRIDIUM_CHECK(graph.reads("final-capture-hook", "exposure.metering",
+                Access::TransferSource));
+            IRIDIUM_CHECK(graph.ordered({ "scene-color-capture-hook", "post.exposure.histogram",
+                "post.exposure.adapt", "bloom-hook", "output-transform", "final-capture-hook" }));
+            if (taa) {
+                IRIDIUM_CHECK(graph.ordered({ "temporal.taa.resolve", "post.exposure.histogram" }));
+                IRIDIUM_CHECK(graph.reads("temporal.taa.resolve", "exposure.previous",
+                    Access::StorageRead));
+            }
+            // A 1920x1080 view meters 15x9 tiles of 128 bins.
+            const auto* rows = graph.resource("exposure.histogram-rows");
+            IRIDIUM_CHECK(rows != nullptr && rows->desc.buffer.size == 15u * 9u * 128u * 4u &&
+                rows->desc.lifetime == RenderGraph::ResourceLifetime::Transient);
+            const auto* previous = graph.resource("exposure.previous");
+            IRIDIUM_CHECK(previous != nullptr &&
+                previous->desc.type == RenderGraph::ResourceType::Buffer &&
+                previous->desc.buffer.size == 16u &&
+                previous->historyRole == RenderGraph::HistoryRole::Previous);
+            IRIDIUM_CHECK(compiled.historyPairs().size() == (taa ? 2u : 1u));
+            const uint32_t exposurePair = previous->historyPair;
+            IRIDIUM_CHECK(compiled.historyPairs()[exposurePair].name == "exposure" &&
+                compiled.historyPairs()[exposurePair].reset == RenderGraph::HistoryReset::SurviveCut);
+
+            // The adapted state survives a view cut; TAA history does not.
+            RenderGraph::HistoryValidityTracker tracker;
+            tracker.resetForGraph(compiled);
+            const uint32_t taaPair = taa
+                ? graph.resource("taa.history.previous")->historyPair : RenderGraph::InvalidIndex;
+            struct Validity { bool exposure; bool taa; };
+            // One rendered turn of view `identity`: validity at its start,
+            // then every writer runs.
+            const auto turn = [&](uint64_t identity, uint64_t resetRevision) {
+                tracker.beginFrame({ identity, resetRevision, 0 });
+                const Validity validity{ tracker.pairValid(exposurePair),
+                    taa && tracker.pairValid(taaPair) };
+                for (uint32_t pair = 0; pair < tracker.pairCount(); ++pair)
+                    tracker.markWritten(pair);
+                tracker.endFrame();
+                return validity;
+            };
+            Validity validity = turn(1, 0);
+            IRIDIUM_CHECK(!validity.exposure && !validity.taa);   // first turn
+            validity = turn(1, 0);
+            IRIDIUM_CHECK(validity.exposure && validity.taa == taa);
+            validity = turn(1, 1);   // a cut
+            IRIDIUM_CHECK(validity.exposure && !validity.taa);
+            validity = turn(2, 1);   // another view identity
+            IRIDIUM_CHECK(!validity.exposure && !validity.taa);
+        }
+        return true;
+    }
+
+    // M9.4: bloom replaces the inactive bloom-hook only when enabled. Off, the
+    // graph is exactly the M7R/M9 topology (hook present, no chain); on,
+    // post.bloom reads the resolved colour after TAA and exposure, writes the
+    // transient mipped chain as a whole-resource write (alias-eligible), and
+    // the output transform samples it.
+    bool testBloomDeclaration() {
+        for (const bool taa : { false, true }) {
+            for (const bool aliasing : { false, true }) {
+                VulkanProductionGraphFeatures offFeatures{};
+                offFeatures.temporalAntiAliasing = taa;
+                offFeatures.autoExposure = true;
+                offFeatures.transientAliasing = aliasing;
+                const RenderGraph::CompiledGraph off = layeredGraph({}, offFeatures);
+                const GraphQuery offGraph(off);
+                IRIDIUM_CHECK(offGraph.hasPass("bloom-hook"));
+                IRIDIUM_CHECK(!offGraph.hasPass("post.bloom"));
+                IRIDIUM_CHECK(offGraph.resource("bloom.chain") == nullptr);
+
+                VulkanProductionGraphFeatures onFeatures = offFeatures;
+                onFeatures.bloomLevels = 6;
+                const RenderGraph::CompiledGraph on = layeredGraph({}, onFeatures);
+                const GraphQuery graph(on);
+                IRIDIUM_CHECK(on.topologyHash() != off.topologyHash());
+                IRIDIUM_CHECK(!graph.hasPass("bloom-hook"));
+                IRIDIUM_CHECK(graph.pass("post.bloom")->queue == RenderGraph::QueueClass::Compute);
+                const std::string_view resolved = taa ? "taa.history.current" : "scene.color";
+                IRIDIUM_CHECK(graph.reads("post.bloom", resolved, Access::SampledRead));
+                IRIDIUM_CHECK(graph.writes("post.bloom", "bloom.chain",
+                    Access::StorageReadWrite, LoadOp::DontCare));
+                IRIDIUM_CHECK(graph.writers("bloom.chain").size() == 1u);
+                IRIDIUM_CHECK(graph.reads("output-transform", "bloom.chain", Access::SampledRead));
+                IRIDIUM_CHECK((graph.users("bloom.chain") ==
+                    std::vector<std::string_view>{ "post.bloom", "output-transform" }));
+                IRIDIUM_CHECK(graph.ordered({ "scene-color-capture-hook", "post.exposure.adapt",
+                    "post.bloom", "output-transform", "final-capture-hook" }));
+                if (taa)
+                    IRIDIUM_CHECK(graph.ordered({ "temporal.taa.resolve", "post.bloom" }));
+                // Half the 1920x1080 scene, six levels down to 30x16, transient
+                // and alias-eligible (its first use writes every texel).
+                const auto* chain = graph.resource("bloom.chain");
+                IRIDIUM_CHECK(chain != nullptr);
+                IRIDIUM_CHECK(chain->desc.lifetime == RenderGraph::ResourceLifetime::Transient);
+                IRIDIUM_CHECK(chain->desc.image.format == RenderGraph::Format::Rgba16Float);
+                IRIDIUM_CHECK(chain->desc.image.extent.width == 960u &&
+                    chain->desc.image.extent.height == 540u);
+                IRIDIUM_CHECK(chain->desc.image.mipLevels == 6u);
+                IRIDIUM_CHECK(chain->aliasEligibility == RenderGraph::AliasEligibility::Eligible);
+                IRIDIUM_CHECK(on.historyPairs().size() == off.historyPairs().size());
+                if (aliasing) {
+                    const auto& slots = on.physicalSlots();
+                    IRIDIUM_CHECK(chain->physicalSlot < slots.size() &&
+                        slots[chain->physicalSlot].aliased);
+                }
+            }
+        }
+        // The level count follows the extent: a 40x20 scene has a 20x10 chain
+        // with 5 levels (20, 10, 5, 2, 1).
+        IRIDIUM_CHECK(bloomChainLevels(40, 20, 6) == 5u);
+        IRIDIUM_CHECK(bloomChainLevels(3840, 2160, 6) == 6u);
+        IRIDIUM_CHECK(bloomChainLevels(3840, 2160, 0) == 1u);
+        IRIDIUM_CHECK(bloomChainLevels(3840, 2160, 12) == BloomMaximumLevels);
+        IRIDIUM_CHECK(bloomChainSize(3839) == 1920u && bloomChainSize(1) == 1u);
+        return true;
+    }
+
 } // namespace
 
 int main() {
@@ -609,6 +778,8 @@ int main() {
             testNullExtensionGraphDiffersOnlyByHooks },
         { "declared work keeps the R3b.6 order and slots",
             testDeclaredWorkKeepsOrderAndSlots },
+        { "auto-exposure declaration (M9.5)", testAutoExposureDeclaration },
+        { "bloom declaration (M9.4)", testBloomDeclaration },
     };
     return Iridium::Test::runTests(tests);
 }

@@ -1,4 +1,5 @@
 #include "material/MaterialCompiler.h"
+#include "core/ProjectAssetRoots.h"
 #include "profiling/CpuAllocationProfile.h"
 
 #include <nlohmann/json.hpp>
@@ -121,8 +122,8 @@ int main() {
         Json report;
         report["mixed_10000"] = measure(sources);
 
-        const std::filesystem::path carPath = std::filesystem::path(PROJECT_ROOT_DIR) /
-            "assets" / "models" / "alfa_romeo" / "alfa_romeo.gltf";
+        const std::filesystem::path carPath = Iridium::resolveProjectAssetPath(
+            std::filesystem::path("models") / "alfa_romeo" / "alfa_romeo.gltf");
         if (std::filesystem::exists(carPath)) {
             const SourceMaterialDocument document = importGltfSourceMaterials(carPath);
             std::vector<SourceMaterial> car(document.materials().begin(), document.materials().end());

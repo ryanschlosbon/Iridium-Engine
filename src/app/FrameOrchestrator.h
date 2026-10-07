@@ -14,6 +14,7 @@
 #include <glm/glm.hpp>
 
 #include <cstdint>
+#include <chrono>
 #include <optional>
 #include <string>
 #include <vector>
@@ -72,6 +73,9 @@ namespace Iridium {
         void adoptBackend(IRenderBackend& backend);
         // Reads the backend's output-transport state and shows it in the editor.
         void refreshOutputTransportStatus();
+        // M9.8c: writes the Project Settings file once edits have settled
+        // (force: now, e.g. at shutdown). No-op without a settings path.
+        void flushProjectSettings(bool force);
         // The ACES output LUT for the effective output transport.
         void initializeOutputTransformLut();
 
@@ -115,6 +119,12 @@ namespace Iridium {
         void recreateSwapchain();
         void replaceOutputTransformLut(Color::OutputTransport effectiveTransport);
         void publishOutputTransportStatus();
+        // M9.2c: between frames, from an editor request.
+        void switchAntiAliasing(AntiAliasingMode requested);
+        // M9.4: between frames; true when the graph was rebuilt.
+        bool switchBloom(const BloomSettings& requested);
+        // Applies an editor exposure request; returns whether the graph changed.
+        bool switchExposure(ExposureMode mode, const AutoExposureSettings& settings);
 
         // IRenderFrameStageObserver
         void onRenderFrameStage(RenderFrameStage stage) override;
@@ -147,6 +157,14 @@ namespace Iridium {
         Color::OutputTransport outputTransformLutTransport_ =
             Color::OutputTransport::SdrSrgb;
         std::optional<Color::OutputTransport> pendingOutputTransport_;
+        std::optional<AntiAliasingMode> pendingAntiAliasing_;
+        std::optional<BloomSettings> pendingBloom_;
+        std::optional<std::chrono::steady_clock::time_point> settingsChangedAt_;
+        struct PendingExposure {
+            ExposureMode mode = ExposureMode::Auto;
+            AutoExposureSettings settings{};
+        };
+        std::optional<PendingExposure> pendingExposure_;
         uint64_t outputTransportSwitchCount_ = 0;
         RenderBackendRuntimeInfo renderRuntimeInfo_{};
         RenderExtent renderExtent_{};

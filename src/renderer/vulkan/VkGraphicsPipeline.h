@@ -35,5 +35,5 @@ private:
     VkShaderModule createShaderModule(const std::vector<char>& code);
 	VkPipeline createPipeline(VkSwapchain* swapchain,
         bool isWireframe, bool isOutline, Iridium::GBufferLayout layout,
-        const char* vertexShader = "assets/shaders/canonical_material_vert.spv");
+        const char* vertexShader = "assets/shaders/canonical_material_velocity_vert.spv");
 };

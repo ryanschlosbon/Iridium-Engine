@@ -128,6 +128,8 @@ namespace Iridium {
             sceneEnvironmentSettings() const noexcept {
             return sceneEnvironmentSettings_;
         }
+        // The scene document's open revision (a view-history cut, M9.6).
+        [[nodiscard]] uint64_t sceneOpenRevision() const noexcept;
         [[nodiscard]] const std::map<AssetGuid, LoadedEnvironmentAsset>&
             loadedEnvironments() const noexcept {
             return loadedEnvironments_;

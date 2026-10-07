@@ -6,6 +6,7 @@
 #include "core/tasks/TaskSystem.h"
 #include "renderer/rhi/Mesh.h"
 
+#include <algorithm>
 #include <chrono>
 #include <stdexcept>
 
@@ -97,12 +98,31 @@ namespace Iridium {
         std::shared_ptr<LocalDerivedDataCache> cache,
         CookTarget target,
         EngineLog* log)
-        : assetRoot_(std::move(assetRoot)),
+        : AssetModelPreparationService(
+            tasks,
+            std::vector<AssetRoot>{
+                AssetRoot{ "project", std::move(assetRoot) },
+            },
+            std::move(cache),
+            std::move(target),
+            log) {}
+
+    AssetModelPreparationService::AssetModelPreparationService(
+        Tasks::TaskSystem& tasks,
+        std::vector<AssetRoot> roots,
+        std::shared_ptr<LocalDerivedDataCache> cache,
+        CookTarget target,
+        EngineLog* log)
+        : roots_(std::move(roots)),
           cache_(std::move(cache)),
           target_(std::move(target)),
           importers_(createStandardAssetImporterRegistry()),
           log_(log) {
-        if (assetRoot_.empty() || !cache_) {
+        if (roots_.empty() ||
+            std::ranges::any_of(roots_, [](const AssetRoot& root) {
+                return root.path.empty();
+            }) ||
+            !cache_) {
             throw std::invalid_argument(
                 "Catalog model preparation requires an asset root and DDC.");
         }
@@ -186,18 +206,20 @@ namespace Iridium {
             std::stop_token stopToken,
             PreparedCatalogModel& result) {
         try {
+            const std::filesystem::path& recordRoot =
+                assetRootPathFor(roots_, record);
             const std::filesystem::path
                 sourcePath =
-                    assetRoot_ /
+                    recordRoot /
                     record.sourcePath;
             const std::filesystem::path
                 metadataPath =
-                    assetRoot_ /
+                    recordRoot /
                     record.metadataPath;
             if (!isInsideRoot(
-                    assetRoot_, sourcePath) ||
+                    recordRoot, sourcePath) ||
                 !isInsideRoot(
-                    assetRoot_, metadataPath)) {
+                    recordRoot, metadataPath)) {
                 throw std::runtime_error(
                     "Catalog model paths escape the registered asset root.");
             }
@@ -213,7 +235,7 @@ namespace Iridium {
             std::optional<PreparedAssetCook>
                 warmPrepared =
                     tryPrepareAssetCookFromReceipt(
-                        importers_, *cache_, assetRoot_,
+                        importers_, *cache_, recordRoot,
                         record.sourcePath,
                         *metadata.metadata, target_,
                         "m3.6-browser-model-v4",
@@ -235,7 +257,7 @@ namespace Iridium {
                 usedReceipt
                 ? std::move(*warmPrepared)
                 : prepareAssetCook(
-                    importers_, assetRoot_,
+                    importers_, recordRoot,
                     record.sourcePath,
                     *metadata.metadata, target_,
                     "m3.6-browser-model-v4",

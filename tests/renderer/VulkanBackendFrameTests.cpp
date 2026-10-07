@@ -162,7 +162,10 @@ namespace {
         RenderFrame frame{
             .view = makeViewTransportRecord(view, projection, eye, 0.1f, 100.0f,
                 { extent.width, extent.height }),
-            .history = { .identity = 1u },
+            // Retained views keep their own History set, as extraction gives
+            // the scene view and the asset preview (M9 G2).
+            .history = { .identity = 1u + (retainedViews ? renderView : 0u),
+                .historySet = retainedViews ? renderView : 0u },
             .output = output,
         };
         frame.submitReflectionProbeCaptures = true;
@@ -260,6 +263,65 @@ namespace {
             backend->setOutputTransport(window.get(), Color::OutputTransport::SdrSrgb);
             for (uint32_t frame = 0; frame < 4; ++frame)
                 (void)renderFrame(*backend, bridge.get(), window.get(), frame >= 2u, 0);
+            CHECK(bridge->sceneTextureId() != nullptr);
+            // M9.2c: a live anti-aliasing switch rebuilds the graph and the
+            // editor targets, both ways; the same mode is a no-op.
+            CHECK(backend->setAntiAliasing(AntiAliasingMode::Taa, diagnostic));
+            CHECK(diagnostic.empty());
+            CHECK(bridge->sceneTextureId() != nullptr);
+            for (uint32_t frame = 0; frame < 4; ++frame)
+                (void)renderFrame(*backend, bridge.get(), window.get(), frame >= 2u, 0);
+            // M9.6: alternating retained views with TAA: each view's TAA
+            // history lives in its own set (set 1 is created on first use).
+            for (uint32_t frame = 0; frame < 6; ++frame)
+                (void)renderFrame(*backend, bridge.get(), window.get(), true, frame % 2u);
+            CHECK(bridge->retainedViewTextureId(0) != bridge->retainedViewTextureId(1));
+            // M9.6: a scene resize with TAA on rebuilds every history.
+            CHECK(backend->resizeSceneRenderExtent({ 256, 144 }, diagnostic));
+            for (uint32_t frame = 0; frame < 2; ++frame)
+                (void)renderFrame(*backend, bridge.get(), window.get(), true, frame % 2u);
+            CHECK(backend->setAntiAliasing(AntiAliasingMode::Taa, diagnostic));
+            CHECK(backend->setAntiAliasing(AntiAliasingMode::None, diagnostic));
+            for (uint32_t frame = 0; frame < 2; ++frame)
+                (void)renderFrame(*backend, bridge.get(), window.get(), false, 0);
+            CHECK(bridge->sceneTextureId() != nullptr);
+            // M9.4: bloom on rebuilds the graph (post.bloom and its chain),
+            // with and without TAA; an intensity or threshold change applies
+            // without a rebuild; off restores the hook topology.
+            BloomSettings bloom{};
+            bloom.enabled = true;
+            CHECK(backend->setBloom(bloom, diagnostic));
+            CHECK(diagnostic.empty());
+            CHECK(bridge->sceneTextureId() != nullptr);
+            for (uint32_t frame = 0; frame < 3; ++frame)
+                (void)renderFrame(*backend, bridge.get(), window.get(), frame >= 1u, 0);
+            bloom.intensity = 0.2f;
+            bloom.threshold = 1.0f;
+            bloom.knee = 0.5f;
+            bloom.radius = 0.5f;
+            bloom.tint = { 1.0f, 0.9f, 0.8f };
+            CHECK(backend->setBloom(bloom, diagnostic));
+            CHECK(backend->setAntiAliasing(AntiAliasingMode::Taa, diagnostic));
+            for (uint32_t frame = 0; frame < 3; ++frame)
+                (void)renderFrame(*backend, bridge.get(), window.get(), false, 0);
+            // Live auto-exposure: Manual -> Auto declares the exposure passes
+            // (the bloom threshold then reads the adapted state), a settings
+            // change applies without a rebuild, and Auto -> Manual removes them.
+            AutoExposureSettings autoExposure{};
+            CHECK(backend->setExposure(ExposureMode::Auto, autoExposure, diagnostic));
+            CHECK(diagnostic.empty());
+            for (uint32_t frame = 0; frame < 3; ++frame)
+                (void)renderFrame(*backend, bridge.get(), window.get(), false, 0);
+            autoExposure.adaptation = ExposureAdaptation::Linear;
+            autoExposure.speedUpEvPerSecond = 0.5f;
+            CHECK(backend->setExposure(ExposureMode::Auto, autoExposure, diagnostic));
+            (void)renderFrame(*backend, bridge.get(), window.get(), false, 0);
+            CHECK(backend->setExposure(ExposureMode::Manual, autoExposure, diagnostic));
+            (void)renderFrame(*backend, bridge.get(), window.get(), false, 0);
+            CHECK(backend->setAntiAliasing(AntiAliasingMode::None, diagnostic));
+            bloom.enabled = false;
+            CHECK(backend->setBloom(bloom, diagnostic));
+            (void)renderFrame(*backend, bridge.get(), window.get(), false, 0);
             CHECK(bridge->sceneTextureId() != nullptr);
             // Live output settings reach the bridge's display colour.
             (void)renderFrame(*backend, bridge.get(), window.get(), false, 0, nullptr,

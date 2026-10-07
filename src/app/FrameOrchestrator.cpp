@@ -18,6 +18,7 @@
 #include <utility>
 
 #include "app/AssetIntegration.h"
+#include "app/ProjectSettingsFile.h"
 #include "core/EngineLog.h"
 #include "editor/EditorHost.h"
 #include "extraction/RenderExtractor.h"
@@ -60,6 +61,12 @@ namespace Iridium {
     void FrameOrchestrator::refreshOutputTransportStatus() {
         renderRuntimeInfo_ = renderBackend->getRuntimeInfo();
         publishOutputTransportStatus();
+        editorHost_.setAntiAliasingStatus(config_.antiAliasing, {});
+        editorHost_.setTemporalAntiAliasingTuning(
+            config_.taaTuning.value_or(TemporalAntiAliasingTuning{}));
+        editorHost_.setBloomStatus(config_.bloom, {});
+        editorHost_.setExposureStatus(config_.exposureMode,
+            config_.autoExposureSettings.value_or(AutoExposureSettings{}), {});
     }
 
     void FrameOrchestrator::initializeOutputTransformLut() {
@@ -252,6 +259,20 @@ namespace Iridium {
                 config_.outputTransport = outputSettings.transport;
                 pendingOutputTransport_ = outputSettings.transport;
             }
+            if (outputSettings.antiAliasing != config_.antiAliasing)
+                pendingAntiAliasing_ = outputSettings.antiAliasing;
+            if (outputSettings.taaTuning !=
+                    config_.taaTuning.value_or(TemporalAntiAliasingTuning{})) {
+                config_.taaTuning = outputSettings.taaTuning;
+                renderBackend->setTemporalAntiAliasingTuning(outputSettings.taaTuning);
+            }
+            if (outputSettings.bloom != config_.bloom)
+                pendingBloom_ = outputSettings.bloom;
+            if (outputSettings.exposureMode != config_.exposureMode ||
+                outputSettings.autoExposure !=
+                    config_.autoExposureSettings.value_or(AutoExposureSettings{}))
+                pendingExposure_ = PendingExposure{ outputSettings.exposureMode,
+                    outputSettings.autoExposure };
             config_.manualExposureEv = outputSettings.manualExposureEv;
             config_.paperWhiteNits = outputSettings.paperWhiteNits;
             config_.peakNits = outputSettings.peakNits;
@@ -280,6 +301,25 @@ namespace Iridium {
             renderBackend->configureReflectionProbeCaptures(
                 probeSettings);
         }
+        // M9.8c: persist after the edits settle (switches apply at the frame end).
+        if (!config_.projectSettingsPath.empty() &&
+            (requests.output || requests.shadows || requests.probes))
+            settingsChangedAt_ = std::chrono::steady_clock::now();
+    }
+
+    void FrameOrchestrator::flushProjectSettings(bool force) {
+        // At shutdown an interactive project without the file gets one, so the
+        // project's settings are always on disk (and can be committed).
+        const bool create = force && !config_.projectSettingsPath.empty() &&
+            !std::filesystem::exists(config_.projectSettingsPath);
+        if (!settingsChangedAt_ && !create) return;
+        if (!force && std::chrono::steady_clock::now() - *settingsChangedAt_ <
+                std::chrono::milliseconds(500))
+            return;
+        settingsChangedAt_.reset();
+        std::string diagnostic;
+        if (!saveProjectSettings(config_.projectSettingsPath, config_, diagnostic))
+            std::cerr << "Project settings not saved: " << diagnostic << '\n';
     }
 
     void FrameOrchestrator::drawFrame(AppFrameContext& frame) {
@@ -380,7 +420,17 @@ namespace Iridium {
             .manualExposureEv = config_.manualExposureEv,
             .paperWhiteNits = config_.paperWhiteNits,
             .peakNits = config_.peakNits,
-            .viewHistoryResetRevision = frameRequests_.viewHistoryResetRevision,
+            // A benchmark's cut schedule, plus one revision per scene opened.
+            .viewHistoryResetRevision = frameRequests_.viewHistoryResetRevision.value_or(0u) +
+                assets_.sceneOpenRevision(),
+            .temporalJitter = config_.temporalJitter.value_or(
+                config_.antiAliasing == AntiAliasingMode::Taa),
+            .temporalJitterSequenceLength = config_.temporalJitterSequenceLength,
+            // M9.5: auto-exposure adapts over view time; deterministic content
+            // (benchmarks, captures) advances a simulated 60 Hz clock instead
+            // of wall time, so captures are reproducible.
+            .timeSeconds = policy_.deterministicContent
+                ? static_cast<double>(applicationFrameIndex) / 60.0 : glfwGetTime(),
         });
         if (!frameRequests_.suppressGridOverlay && !view.assetPreviewActive) {
             extractor_.setGridOverlay(editorHost_.viewportGridOverlay(
@@ -396,12 +446,14 @@ namespace Iridium {
             .stageObserver = this,
         });
         stageFrame_ = &frame;
+        frame.renderFrame = &renderFrame;
 
 
         // Shadows, probe captures, G-buffer, lighting, forward and
         // transparency, output and UI. The observer's scene-linear and
         // output submit points are reported from the stage boundaries.
         renderBackend->submitFrame(renderFrame);
+        frame.renderFrame = nullptr;
         stageFrame_ = nullptr;
         extractor_.releaseFrame();
 
@@ -417,11 +469,27 @@ namespace Iridium {
             observer_->onFrameEnd(frame);
             if (outputTransportSwitchCount_ != switchesBefore) return;
         }
+        flushProjectSettings(false);
         if (pendingOutputTransport_) {
             const Color::OutputTransport requested = *pendingOutputTransport_;
             pendingOutputTransport_.reset();
             (void)switchOutputTransport(requested);
             return;
+        }
+        if (pendingAntiAliasing_) {
+            switchAntiAliasing(*pendingAntiAliasing_);
+            pendingAntiAliasing_.reset();
+            return;
+        }
+        if (pendingBloom_) {
+            const BloomSettings requested = *pendingBloom_;
+            pendingBloom_.reset();
+            if (switchBloom(requested)) return;
+        }
+        if (pendingExposure_) {
+            const PendingExposure requested = *pendingExposure_;
+            pendingExposure_.reset();
+            if (switchExposure(requested.mode, requested.settings)) return;
         }
         if (!policy_.fullscreenScenePresentation && config_.windowVisible) {
             const RenderExtent requested =
@@ -665,6 +733,43 @@ namespace Iridium {
             .diagnostic = renderRuntimeInfo_.outputTransportDiagnostic,
             .durationNanoseconds = switchNanoseconds,
         };
+    }
+
+    void FrameOrchestrator::switchAntiAliasing(AntiAliasingMode requested) {
+        // Jitter follows the mode unless --temporal-jitter pinned it.
+        std::string diagnostic;
+        if (renderBackend->setAntiAliasing(requested, diagnostic))
+            config_.antiAliasing = requested;
+        else
+            std::cerr << "Anti-aliasing switch failed: " << diagnostic << '\n';
+        editorHost_.setAntiAliasingStatus(config_.antiAliasing, std::move(diagnostic));
+    }
+
+    bool FrameOrchestrator::switchBloom(const BloomSettings& requested) {
+        const bool topology = requested.enabled != config_.bloom.enabled ||
+            (requested.enabled && requested.levels != config_.bloom.levels);
+        std::string diagnostic;
+        if (renderBackend->setBloom(requested, diagnostic))
+            config_.bloom = requested;
+        else
+            std::cerr << "Bloom switch failed: " << diagnostic << '\n';
+        editorHost_.setBloomStatus(config_.bloom, std::move(diagnostic));
+        return topology;
+    }
+
+    bool FrameOrchestrator::switchExposure(ExposureMode mode,
+        const AutoExposureSettings& settings) {
+        const bool topology = mode != config_.exposureMode;
+        std::string diagnostic;
+        if (renderBackend->setExposure(mode, settings, diagnostic)) {
+            config_.exposureMode = mode;
+            config_.autoExposureSettings = settings;
+        }
+        else
+            std::cerr << "Exposure switch failed: " << diagnostic << '\n';
+        editorHost_.setExposureStatus(config_.exposureMode,
+            config_.autoExposureSettings.value_or(AutoExposureSettings{}), std::move(diagnostic));
+        return topology;
     }
 
     bool FrameOrchestrator::resizeSceneExtent(RenderExtent requested,

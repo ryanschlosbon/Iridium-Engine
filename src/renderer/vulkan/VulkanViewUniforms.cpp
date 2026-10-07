@@ -55,6 +55,11 @@ namespace Iridium {
         ubo.renderInfo.w |= (static_cast<uint32_t>(debugView) <<
             ViewTransportDebugViewShift) & ViewTransportDebugViewMask;
         ubo.worldUnits = view.worldUnits;
+        ubo.jitteredProjection = view.jitteredProjection;
+        ubo.jitteredInverseProjection = view.jitteredInverseProjection;
+        ubo.previousViewProjection = view.previousViewProjection;
+        ubo.jitter = view.jitter;
+        ubo.temporalInfo = view.temporalInfo;
         std::memcpy(buffers_[frame].mapped, &ubo, sizeof(ubo));
     }
 

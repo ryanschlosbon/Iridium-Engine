@@ -125,7 +125,8 @@ VkPipeline VulkanLayeredSceneResolvePass::createPipeline() const {
         blend.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
         blend.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
         blend.colorBlendOp = VK_BLEND_OP_ADD;
-        blend.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+        // M9.3: scene alpha keeps the revealage (the TAA reactive mask).
+        blend.srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
         blend.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
         blend.alphaBlendOp = VK_BLEND_OP_ADD;
         blend.colorWriteMask = VK_COLOR_COMPONENT_R_BIT |

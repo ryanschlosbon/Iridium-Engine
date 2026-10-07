@@ -34,6 +34,11 @@ assets/shaders/*.spv
 /assets/scenes/*
 !/assets/scenes/test_scene.json
 
+# Per-machine configuration: the local asset library root (licensed third-party
+# test content lives there, outside the repository). iridium.local.example.json
+# shows the format.
+/iridium.local.json
+
 # Common third-party content formats anywhere outside the allowlist above
 *.hdr
 *.exr

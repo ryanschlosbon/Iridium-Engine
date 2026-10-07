@@ -6,6 +6,7 @@
 #include "renderer/rhi/ReflectionProbeSettings.h"
 #include "renderer/rhi/VirtualShadowMap.h"
 
+#include <array>
 #include <cstdint>
 #include <filesystem>
 
@@ -25,6 +26,119 @@ namespace Iridium {
         Auto,
         Graphics,
         LegacyBlocking,
+    };
+
+    // M9.2 anti-aliasing of the main view. None keeps the M7R single-frame
+    // image (the frozen-set route); Taa resolves native temporal AA (1:1).
+    enum class AntiAliasingMode : uint8_t {
+        None,
+        Taa,
+    };
+
+    // M9.2 native TAA parameters (taa_resolve.comp). Defaults are the best
+    // measured against the 64-sample references, held and in motion (M9 plan,
+    // TAA tuning s2-s8 and the motion sweeps).
+    struct TemporalAntiAliasingTuning {
+        float minimumHistoryWeight = 0.70f;
+        float maximumHistoryWeight = 0.97f;
+        float motionPixelsForMinimum = 2.0f;
+        float varianceGamma = 1.0f;
+        float reconstructionSharpness = 6.0f;
+        // Clip half-width for still pixels (blended toward varianceGamma
+        // as motion grows to one pixel).
+        float staticVarianceGamma = 3.0f;
+        // History weight of still pixels (0: the moving-content rule).
+        float stillHistoryWeight = 0.97f;
+        // M9.3: the lowest history weight of fully reactive pixels (covered
+        // by transparency; see the reactive mask in TemporalUpscaleInputs.h):
+        // the floor of their luma rule and the cap where coverage changed.
+        // Not part of --taa-settings: its seven numbers keep this default.
+        float reactiveHistoryWeight = 0.2f;
+
+        friend bool operator==(const TemporalAntiAliasingTuning&,
+            const TemporalAntiAliasingTuning&) = default;
+    };
+
+    // M9.5 exposure of the main view. Manual keeps today's output (the
+    // manual EV; the frozen-set and fixture route); Auto meters the resolved
+    // scene colour on the GPU and adapts, with the manual EV as compensation.
+    enum class ExposureMode : uint8_t {
+        Manual,
+        Auto,
+    };
+
+    // M9.5 auto-exposure parameters (exposure_histogram.comp,
+    // exposure_adapt.comp). EV100 is scene luminance in photometric units
+    // (scene-linear / PhotometricToSceneScale) at ISO 100, K = 12.5.
+    // How the adapted exposure approaches the metered target.
+    // Exponential: each second closes 1 - e^(-speed) of the remaining gap in
+    // EV (fast for large changes, easing in near the target; Unreal-like).
+    // Linear: moves at most `speed` EV per second, then stops (M9.5).
+    enum class ExposureAdaptation : uint8_t { Exponential, Linear };
+
+    struct AutoExposureSettings {
+        // The 128 log2-luminance histogram bins span this range.
+        float histogramMinEv100 = -10.0f;
+        float histogramMaxEv100 = 20.0f;
+        // The metered luminance is the mean of the bins between these
+        // fractions of the (weighted) pixel count.
+        float lowPercentile = 0.10f;
+        float highPercentile = 0.90f;
+        // The adapted EV100 never leaves [minimumEv100, maximumEv100].
+        float minimumEv100 = -10.0f;
+        float maximumEv100 = 20.0f;
+        // Toward a brighter scene (up) and a darker one (down), over the view's
+        // own time: per-second rates (Exponential) or EV per second (Linear).
+        float speedUpEvPerSecond = 2.0f;
+        float speedDownEvPerSecond = 1.0f;
+        // 0 meters every pixel equally; 1 weights the centre up to 16x.
+        float centreWeight = 0.0f;
+        ExposureAdaptation adaptation = ExposureAdaptation::Exponential;
+        // Exponential only: the fastest EV per second (0: no limit).
+        float maximumEvPerSecond = 0.0f;
+
+        friend bool operator==(const AutoExposureSettings&,
+            const AutoExposureSettings&) = default;
+    };
+
+    // M9.4 bloom (bloom.comp, output.frag). A dual-filter chain over the
+    // resolved scene colour from half resolution down, composited before
+    // exposure and the output transform. With no threshold the composite is
+    // energy-conserving: colour = lerp(scene, bloom, intensity), so bloom
+    // only redistributes light. A threshold selects the energy above it
+    // (soft knee) and adds it: colour = scene + intensity * bloom.
+    enum class BloomKarisMode : uint8_t { Auto, Off, On };
+
+    struct BloomSettings {
+        // Off in the backend; the application default is on (M9.7).
+        bool enabled = false;
+        // The share of light scattered into the bloom (0..1).
+        float intensity = 0.04f;
+        // Threshold in *exposed* units (after exposure, before the output
+        // transform; 1 is roughly diffuse white), so one value means the
+        // same visible brightness with auto-exposure. 0 disables it.
+        float threshold = 0.0f;
+        // Soft-knee half-width around the threshold (exposed units).
+        float knee = 0.0f;
+        // Falloff from the finest chain level to the coarsest: level i
+        // weighs radius^i (normalised, energy-conserving). 1 weighs every
+        // level equally (a wide haze); lower values give a tight core with a
+        // falling tail, like a lens point-spread function.
+        float radius = 0.6f;
+        // Linear AP1 tint of the scattered light.
+        std::array<float, 3> tint{ 1.0f, 1.0f, 1.0f };
+        // Chain levels from half resolution (1..8; clamped to the extent).
+        uint32_t levels = 6u;
+        // Karis (1 / (1 + luma)) box weights on the first downsample. They
+        // keep aliased sub-pixel highlights from flickering in the chain but
+        // remove part of their energy. Measured share of the scene's energy
+        // the chain keeps (M9.4): TF-hdr 63% with them, 99.9% without;
+        // TF-static and TF-emissive 99.0% with, 99.7-99.8% without. Auto
+        // (owner decision, 2026-10-06): off with TAA, which already stabilises
+        // sub-pixel highlights, so bloom keeps their energy; on without it.
+        BloomKarisMode karis = BloomKarisMode::Auto;
+
+        friend bool operator==(const BloomSettings&, const BloomSettings&) = default;
     };
 
     struct RenderBackendConfig {
@@ -48,6 +162,13 @@ namespace Iridium {
         // switch is kept until R6).
         bool renderGraphAliasing = true;
         UploadQueueMode uploadQueue = UploadQueueMode::Auto;
+        AntiAliasingMode antiAliasing = AntiAliasingMode::None;
+        TemporalAntiAliasingTuning taaTuning{};
+        // M9.5: Manual until admission (M9.7); Auto adds the exposure passes.
+        ExposureMode exposureMode = ExposureMode::Manual;
+        AutoExposureSettings autoExposure{};
+        // M9.4: off until admission; enabled adds post.bloom.
+        BloomSettings bloom{};
         CpuProfiler* cpuProfiler = nullptr;
         bool enableGpuProfiling = false;
         bool enableTransparentPipelineStatistics = false;

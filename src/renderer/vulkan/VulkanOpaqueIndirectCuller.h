@@ -52,6 +52,8 @@ namespace Iridium {
         VkPipelineLayout layout = VK_NULL_HANDLE;
         VkPipeline cull = VK_NULL_HANDLE;
         VkPipeline fallback = VK_NULL_HANDLE; // fused-occlusion runs only
+        // M9 G8: per-bin ordered compaction (deterministic draw order).
+        VkPipeline compactBins = VK_NULL_HANDLE;
         void destroy(VkDevice device) noexcept;
     };
 

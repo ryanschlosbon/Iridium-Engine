@@ -312,6 +312,8 @@ bool VkContext::isDeviceSuitable(VkPhysicalDevice device) {
 		features.samplerAnisotropy == VK_TRUE &&
 		features.fillModeNonSolid == VK_TRUE &&
 		features.independentBlend == VK_TRUE &&
+		// M9.8e: transparency writes reactive coverage as a second blend source.
+		features.dualSrcBlend == VK_TRUE &&
 		features.imageCubeArray == VK_TRUE;
 }
 
@@ -414,6 +416,7 @@ void VkContext::createLogicalDevice() {
     deviceFeatures.samplerAnisotropy = VK_TRUE;
 	deviceFeatures.fillModeNonSolid = VK_TRUE;
 	deviceFeatures.independentBlend = VK_TRUE;
+	deviceFeatures.dualSrcBlend = VK_TRUE;
     deviceFeatures.imageCubeArray = VK_TRUE;
     VkPhysicalDeviceFeatures supportedFeatures{};
 	vkGetPhysicalDeviceFeatures(physicalDevice, &supportedFeatures);

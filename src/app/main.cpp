@@ -1,5 +1,6 @@
 #include "app/Application.h"
 #include "app/ApplicationConfig.h"
+#include "app/ProjectSettingsFile.h"
 #include "app/cli/ApplicationCliOptions.h"
 #include "core/BuildFeatures.h"
 #include "core/cli/CliOptionRegistry.h"
@@ -10,6 +11,7 @@
 #include "qualification/harness/QualificationHarness.h"
 #endif
 #include <cstdlib>
+#include <filesystem>
 #include <iostream>
 #include <memory>
 #include <stdexcept>
@@ -38,6 +40,36 @@ int main(int argc, char** argv) {
         if (config.showHelp) {
             std::cout << Iridium::applicationUsage(registry);
             return EXIT_SUCCESS;
+        }
+
+        // M9.8c: interactive runs start from the persisted Project Settings,
+        // then apply the command line again so flags still win. Benchmark and
+        // capture runs never read the file (measurement routes stay pinned).
+        bool measurementRun = false;
+#if IRIDIUM_QUALIFICATION
+        measurementRun = !qualification.benchmarkId.empty() ||
+            Iridium::capturesFrames(qualification);
+#endif
+        if (!measurementRun) {
+            Iridium::ApplicationConfig persisted{};
+            std::string diagnostic;
+            const std::filesystem::path settingsPath = Iridium::defaultProjectSettingsPath();
+            if (std::filesystem::exists(settingsPath))
+                std::cout << "Project settings: " << settingsPath.generic_string() << std::endl;
+            if (!Iridium::loadProjectSettings(settingsPath, persisted, diagnostic))
+                std::cerr << diagnostic << '\n';
+            Iridium::Cli::CliOptionRegistry overrides;
+            Iridium::AppCli::registerApplicationOptions(overrides, persisted);
+#if IRIDIUM_QUALIFICATION
+            Iridium::QualificationOptions reparsed{};
+            Iridium::registerQualificationOptions(overrides, reparsed, persisted);
+#endif
+            overrides.parse(arguments);
+            persisted.projectSettingsPath = settingsPath;
+            config = std::move(persisted);
+#if IRIDIUM_QUALIFICATION
+            qualification = std::move(reparsed);
+#endif
         }
 
         // Qualification builds attach the harness to every run. Without
