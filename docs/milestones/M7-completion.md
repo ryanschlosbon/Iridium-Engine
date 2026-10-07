@@ -807,6 +807,40 @@ None open. The two-car scene was never saved, so PC3 is the reference approximat
   - **Evidence:** the accepted slices' raw evidence was pruned to summaries (retention policy).
     The baseline worktrees `base-main` and `base-p1` were removed after their comparisons.
 
+- **2026-10-07 — M7.10.4: complex-material lobe arrays stay in registers (refactor tier;
+  close-to-glass).**
+  - **Diagnosis:**
+    - An Nsight GPU Trace of PC2-glass-fill (owner UAC; `out/ngfx/m7c-glass`) showed the
+      sorted pass at 90% L2 throughput and 46% DRAM write throughput, against 39% and 4%
+      for deferred.
+    - The colour ROP was nearly idle (1.4%), so the writes are shader local memory.
+    - The cause: `directLobeTypes`, `directLobeData` and `directLobeNormals`, up to 8 lobes
+      each, are dynamically indexed in loops bounded by `material.complexLobeCount`. That is
+      256 bytes of per-pixel local memory, re-read by the IBL and per-light lobe loops.
+    - The earlier knockout experiments were invalid: SortedSurface glass draws with
+      `complex_opaque_material_indexed.frag`, not `complex_material_indexed.frag`, so the
+      variants never reached the windshield. A discard capture with an unchanged hash
+      proved it.
+  - **Fix:** the three lobe loops run to the constant capacity 8, with a `break` at the
+    material's count and `[[unroll]]` (`GL_EXT_control_flow_attributes`), so indices are
+    constants. Arithmetic is identical.
+  - **Evidence:**
+    - owner cases 50/50 byte-identical;
+    - frozen set `m7c-1040` with sync validation: 0 failures, F4-woit within its envelope,
+      zero messages.
+  - **Diagnostic timing (single process):** PC2-glass-fill sorted pass 2.48 → 1.77 ms; GPU
+    frame 4.28 → 3.56 ms. The matched pair is pending.
+  - **Remaining:** 1.77 ms for one full-screen glass layer is still above the transparency
+    row. A second trace will check for remaining spills.
+- **2026-10-07 — Watch item escalated: device loss on PC2-glass-fill with profiling.**
+  - **Reproduced on HEAD:** 2/2 profiled runs of the unmodified shader, at 16:07:53 and
+    16:09:38, each with nvlddmkm event 153. Ten un-profiled runs were clean, and so were the
+    reduced shader variants.
+  - **Ruled out:** GPU-assisted validation (descriptor and buffer bounds) reports nothing.
+    Memory clock and power limit are stock; Alienware Command Center is present.
+  - **Hypothesis:** the heavy local-memory traffic of the old shader is implicated. To be
+    re-tested with M7.10.4 in place. Owner informed.
+
 ## Completion report
 
 To be written at M7.12, following AGENTS.md:
