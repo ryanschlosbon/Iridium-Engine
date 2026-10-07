@@ -124,7 +124,10 @@ void main() {
     IridiumDirectionalShadowReceiver shadowReceiver =
         IridiumDirectionalShadowReceiver(fragWorldPos, N,
             shadowGeometricNormal, dFdx(fragWorldPos), dFdy(fragWorldPos));
-    uint lightCount = min(capture.metadata.x, iridiumClusterInput.x);
+    // M7.10.5: metadata.x is the highest active slot + 1, so an active light
+    // in a slot beyond the active count (after a removal) is still evaluated;
+    // cleared slots carry no radiance and are skipped by the noL test.
+    uint lightCount = min(capture.metadata.x, uint(iridiumLights.length()));
     float viewDepth = length(capture.capturePositionNear.xyz - fragWorldPos);
     for (uint lightSlot = 0u; lightSlot < lightCount; ++lightSlot) {
         PackedGpuLight record = iridiumLights[lightSlot];

@@ -684,10 +684,9 @@ namespace Iridium {
                 hash *= 1099511628211ull;
             }
         };
-        // The capture shader evaluates raw slots [0, activeLightCount), not
-        // the active list; with slot holes an active light can lie outside
-        // that window, so its membership is part of the revision.
-        const uint32_t evaluatedSlots = lights.stats.activeLightCount;
+        // The capture shader evaluates raw slots below this bound; every
+        // active light lies inside it, so the flag records that invariant.
+        const uint32_t evaluatedSlots = reflectionProbeCaptureLightSlotBound(lights);
         for (uint32_t slot : lights.activeSlots) {
             if (slot >= lights.records.size() ||
                 slot >= lights.recordRevisions.size()) continue;
@@ -698,6 +697,14 @@ namespace Iridium {
             append(slot < evaluatedSlots ? 1u : 0u);
         }
         return hash == 0u ? 1u : hash;
+    }
+
+    uint32_t reflectionProbeCaptureLightSlotBound(
+        const LightingFramePacket& lights) noexcept {
+        uint32_t bound = 0;
+        for (uint32_t slot : lights.activeSlots)
+            bound = std::max(bound, slot + 1u);
+        return bound;
     }
 
 } // namespace Iridium

@@ -860,10 +860,15 @@ None open. The two-car scene was never saved, so PC3 is the reference approximat
     - frozen set `m7c-1050` with sync validation: 0 failures;
     - owner cases 50/50 identical.
     - There was no live drag measurement: the harness has no light-parameter animation.
-  - **Found, not fixed (pre-existing, shader):** `reflection_probe_capture.frag` loops raw
-    slots `0..activeLightCount-1`, so after a light is removed, active lights in higher slots
-    are not evaluated in captures. Queued as a follow-up after the M7.10.6 shader lane
-    merges.
+  - **Follow-up fixed (M7.10.5b, pre-existing, behaviour fix):**
+    `reflection_probe_capture.frag` looped raw slots `0..activeLightCount-1`, so after a
+    light was removed, active lights in higher slots were never lit in captures. The capture
+    now receives `reflectionProbeCaptureLightSlotBound` (highest active slot + 1) and clamps
+    to the record table length; cleared slots carry no radiance and fail the `noL` test.
+    - It changes images only when the slot table has holes, so the frozen set `m7c-1051`
+      (sync validation) is byte-identical.
+    - The per-probe revision models the new bound, and the test was updated.
+    - Debug and Release pass 120/120 tests.
 
 ## Completion report
 

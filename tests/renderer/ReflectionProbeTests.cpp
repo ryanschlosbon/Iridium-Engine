@@ -168,14 +168,19 @@ namespace {
         remove(5);
         CHECK(revision() == directional);
 
-        // Slot window: with a hole at slot 5, a reaching light in slot 6 is
-        // outside [0, activeLightCount) until an out-of-reach light fills
-        // the hole, which then changes the revision.
+        // Slot bound: with a hole at slot 5, a reaching light in slot 6 is
+        // still inside the capture's slot bound (highest active slot + 1), so
+        // filling the hole with an out-of-reach light changes nothing.
         place(6, packedLight(Type::Point, { 1.0f, 1.0f, 1.0f }, 1.0f));
-        const uint64_t outsideWindow = revision();
-        CHECK(outsideWindow != directional);
+        const uint64_t highSlot = revision();
+        CHECK(highSlot != directional);
+        {
+            const LightingFramePacket packet{ .records = records,
+                .recordRevisions = revisions, .activeSlots = active };
+            CHECK(reflectionProbeCaptureLightSlotBound(packet) == 7u);
+        }
         place(5, packedLight(Type::Point, { 90.0f, 0.0f, 0.0f }, 1.0f));
-        CHECK(revision() != outsideWindow);
+        CHECK(revision() == highSlot);
         return true;
     }
 
