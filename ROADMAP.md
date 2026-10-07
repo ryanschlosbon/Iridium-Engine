@@ -1336,6 +1336,9 @@ deferred until after M7R/M9. Previously the order was M6 through M11. M12 materi
 graph work are intentionally placed afterward and must not expand active renderer
 milestones.
 
+- **Branching (owner decision 2026-10-07):** `main` is the integration branch. Each milestone or
+  follow-up branches from `main` and opens its PR against `main`; `Render-Refactor-for-Modularity` was
+  merged into `main` (PR #9) and is retired.
 - Do not start a milestone before its dependencies and acceptance criteria are understood.
 - Every milestone begins with a checked-in execution plan following `PLANS.md`.
 - Architectural changes require an ADR or explicit update to an existing proposed ADR.
