@@ -27,6 +27,7 @@
 #include "extraction/ParallelDrawSort.h"
 #include "extraction/PreviousTransformCache.h"
 #include "extraction/GpuSceneObservation.h"
+#include "extraction/TransparentFrustumCulling.h"
 #include "renderer/lighting/DirectionalShadow.h"
 #include "renderer/lighting/LightExtractor.h"
 #include "renderer/lighting/LocalShadow.h"
@@ -220,6 +221,9 @@ namespace Iridium {
             // geometry.triangle.source_requested count all submeshes).
             uint64_t sourceTriangles = 0;
             uint64_t usedFrame = 0;
+            // M7.10.1: the union of the listed submeshes' local bounds,
+            // recomputed on the list's first use in every frame.
+            TransparentLocalBounds localBounds;
         };
         // The index of the model's list in transparentSubmeshLists_,
         // revalidated on its first use in a frame.
@@ -253,6 +257,11 @@ namespace Iridium {
             uint64_t lodWithheldRanges = 0;
             uint64_t lodWithheldIndexBytes = 0;
             uint64_t transparentCulled = 0;
+            // M7.10.1: transparent packets before any cull, those the frustum
+            // rejected (whole models included) and the rejected models.
+            uint64_t transparentRequested = 0;
+            uint64_t transparentFrustumRejected = 0;
+            uint64_t transparentModelsRejected = 0;
             uint32_t maximumLodResidentBase = 0;
         };
         // One mesh entity accepted by the serial pre-pass.
@@ -273,6 +282,8 @@ namespace Iridium {
             std::vector<DrawPacket> selection;
             // Instance-batch transforms; packets index them chunk-locally.
             std::vector<glm::mat4> instanceTransforms;
+            // M7.10.1: the transparent work this chunk culled.
+            TransparentCullRecord transparentCull;
             ExtractionCounters counters;
             std::exception_ptr failure;
             // Destination offsets (mergeExtractionChunks).

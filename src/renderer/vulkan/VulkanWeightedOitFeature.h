@@ -80,9 +80,10 @@ namespace Iridium {
         }
         // Per frame (submitForwardQueues): validates the sorted queue's
         // WeightedOIT packets, observes the residency demand and records the
-        // fallback counters.
+        // fallback counters. M7.10.1: culledDemand is true when extraction
+        // culled WeightedOIT work this frame (it keeps the residency).
         [[nodiscard]] FrameDecision observe(std::span<const DrawPacket> sortedSurfaceQueue,
-            std::span<const glm::mat4> instanceTransforms);
+            std::span<const glm::mat4> instanceTransforms, bool culledDemand);
 
         // Drain point: prepares the slot's instance stream when executing,
         // then runs accumulate and resolve (both skipped otherwise).

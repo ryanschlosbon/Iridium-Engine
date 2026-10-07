@@ -276,6 +276,12 @@ iridium_add_test(PreviousTransformCacheTests
         SOURCES renderer/PreviousTransformCacheTests.cpp
         LIBS iridium_render_extraction)
 
+# M7.10.1: conservative transparent frustum culling (whole-owner bound,
+# instance batches, culled previous-transform keys, residency demand).
+iridium_add_test(TransparentFrustumCullingTests
+        SOURCES renderer/TransparentFrustumCullingTests.cpp
+        LIBS iridium_render_extraction)
+
 # M7R R5c.3: compact (key, index) queue sorts keep the packet sorts' permutation.
 iridium_add_test(CompactDrawSortTests
         SOURCES renderer/CompactDrawSortTests.cpp

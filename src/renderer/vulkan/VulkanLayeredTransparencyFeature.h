@@ -144,7 +144,11 @@ namespace Iridium {
             viewProjection_ = viewProjection;
             viewProjectionValid_ = true;
         }
-        void observe(std::span<const DrawPacket> compatibilityTransparentQueue);
+        // M7.10.1: culledDemand holds the TransparentResidencyDemand bits of
+        // the work extraction culled; it keeps the tiers' residency as the
+        // unculled queue would.
+        void observe(std::span<const DrawPacket> compatibilityTransparentQueue,
+            uint32_t culledDemand);
         void prepare(const FrameInputs& inputs);
         // A packet the frame's layered tiers resolve (the compatibility
         // forward pass skips it).

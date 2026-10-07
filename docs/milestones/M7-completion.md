@@ -632,6 +632,43 @@ oversized-model cases (FRAME_BUDGET "Import, cooking, and publication").
   - **Note:** the all-off PC1 states are constant images, verified as uniform instead
     of passing `--require-capture-signal`.
 
+- **2026-10-07 — M7.10.1 transparent frustum culling landed (refactor tier; timing
+  pair and the both-route PC1 before/after pending).**
+  - **Culling:** one unjittered frustum per `extract`, shared with main-view
+    classification. Per-packet AABB rejection uses the new public helper
+    `gpuSceneFrustumRejectsAabb`, plus the depth-interval cull, now applied in every
+    execution mode. Invalid bounds fail visible. Whole-model rejection tests a
+    cached local union in `TransparentSubmeshList` (instance batches use the union of
+    their per-instance bounds), in `src/extraction/TransparentFrustumCulling.*`.
+  - **Previous transforms:** `PreviousTransformCache::touch` keeps culled keys alive
+    with their current transform, so re-entering glass keeps exact motion. Visible
+    packets keep the original path byte for byte.
+  - **Lead decision, residency:** the refraction-pyramid, layered-tier and
+    WeightedOIT residency observe the demand of culled work through
+    `RenderFrame::culledTransparentDemand`, so turning away from glass does not
+    release and rebuild targets after 120 frames. The pyramid *build* still runs only
+    for surviving compatibility work. As a consequence, Classified depth-culled work
+    now also keeps residency and motion history; before, it dropped out.
+  - **Counters:** `transparent.work.{requested,visible,frustum_rejected}` and
+    `transparent.model.frustum_rejected`.
+  - **Evidence:**
+    - Debug and Release pass 120/120 tests;
+    - frozen set `m7c-1010` with sync validation: 22 of 24 byte-identical, F4-woit
+      within its envelope, zero messages;
+    - owner cases 50/50 identical;
+    - TAA-on composition set 88/88 identical;
+    - a scratch TF-glass that leaves and re-enters the frustum: 30/30 frames
+      identical. With touches disabled it diverges, which proves the check is
+      sensitive.
+  - **Diagnostic counters on PC1-911-n16-half:**
+    - recorded transparent draws: 4,376 → 1,967;
+    - ambiguous intervals: 146,536 → 34,429;
+    - transparent sort: 0.241 → 0.129 ms;
+    - intervals: 0.326 → 0.167 ms;
+    - forward recording: 0.571 → 0.285 ms.
+
+    These are single short runs, diagnostic only.
+
 ## Completion report
 
 To be written at M7.12, following AGENTS.md:

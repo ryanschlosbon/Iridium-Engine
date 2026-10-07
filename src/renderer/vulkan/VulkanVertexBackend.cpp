@@ -1737,9 +1737,12 @@ namespace Iridium {
 
         // Residency demand (layered tiers, WeightedOIT), then the frame's
         // layered plans; the owners stage their inputs for the drains below.
-        layered_.observe(compatibilityTransparentQueue);
+        layered_.observe(compatibilityTransparentQueue,
+            frame.culledTransparentDemand);
         const VulkanWeightedOitFeature::FrameDecision weightedOit =
-            oit_.observe(sortedSurfaceQueue, instanceTransforms);
+            oit_.observe(sortedSurfaceQueue, instanceTransforms,
+                (frame.culledTransparentDemand &
+                    TransparentDemandWeightedOit) != 0u);
         const uint32_t frameIndex = scheduler.currentFrameIndex();
         const VkDescriptorSet globalSet = view_.globalSet(frameIndex);
         const VkDescriptorSet sceneSet = lighting_.sceneSet(frameIndex);
@@ -1768,7 +1771,9 @@ namespace Iridium {
         // R3c.5 drain point: VSM depth-demand marking and request readback.
         shadows_.recordVirtualShadowDemand();
         // R3c.9 drain point: "transparent.refraction-pyramids".
-        forward_.recordRefractionPyramids(!compatibilityTransparentQueue.empty());
+        forward_.recordRefractionPyramids(!compatibilityTransparentQueue.empty(),
+            (frame.culledTransparentDemand &
+                TransparentDemandCompatibilityQueue) != 0u);
         if (opaque_.depthPyramidEnabled()) {
             // R3c.7 drain point: "depth.occlusion-pyramid.build".
             opaque_.recordDepthPyramid();

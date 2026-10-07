@@ -65,6 +65,12 @@ namespace {
 
 } // namespace
 
+    bool gpuSceneFrustumRejectsAabb(const GpuSceneFrustum& frustum,
+        const glm::vec3& minimum, const glm::vec3& maximum) noexcept {
+        return frustum.valid && validBounds(minimum, maximum) &&
+            rejected(frustum, minimum, maximum);
+    }
+
     GpuSceneFrustum makeGpuSceneFrustum(
         const glm::mat4& clipFromWorld) noexcept {
         GpuSceneFrustum result;

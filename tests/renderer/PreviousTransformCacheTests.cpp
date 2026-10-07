@@ -55,10 +55,71 @@ namespace {
         cache.clear();
         CHECK(cache.trackedCount() == 0);
     }
+
+    // M7.10.1: a key culled for some frames (touched with its current
+    // transform) re-enters with exactly the previous transform it would have
+    // had without culling; resolved entries win over touched ones.
+    void touchedKeysStayTracked() {
+        const auto a = key("019fb73d-5a60-7000-8000-0000000000a0",
+            "019fb73d-5a60-7000-8000-0000000000a1");
+        const auto b = key("019fb73d-5a60-7000-8000-0000000000b0",
+            "019fb73d-5a60-7000-8000-0000000000a1");
+        const auto c = key("019fb73d-5a60-7000-8000-0000000000c0",
+            "019fb73d-5a60-7000-8000-0000000000a1");
+        PreviousTransformCache culled;
+        PreviousTransformCache reference;   // never culls
+        const auto frame = [&](float t, bool cullA) {
+            culled.beginFrame();
+            reference.beginFrame();
+            const glm::mat4 bCulled = culled.resolve(b, at(100.0f + t));
+            CHECK(bCulled == reference.resolve(b, at(100.0f + t)));
+            const glm::mat4 aReference = reference.resolve(a, at(t));
+            if (cullA) {
+                culled.touch(a, at(t));
+            }
+            else {
+                CHECK(culled.resolve(a, at(t)) == aReference);
+            }
+            culled.endFrame();
+            reference.endFrame();
+        };
+        frame(1.0f, false);
+        frame(2.0f, true);    // moving while culled
+        frame(3.0f, true);
+        frame(4.0f, false);   // re-enters: previous is frame 3's
+        frame(5.0f, true);
+        frame(6.0f, false);
+        CHECK(culled.trackedCount() == reference.trackedCount());
+
+        // Touched before ever resolved: still the previous transform.
+        PreviousTransformCache cache;
+        cache.beginFrame();
+        cache.touch(c, at(7.0f));
+        cache.endFrame();
+        CHECK(cache.trackedCount() == 1);
+        cache.beginFrame();
+        CHECK(cache.resolve(c, at(8.0f)) == at(7.0f));
+        // Resolved and touched in one frame: the resolved entry wins.
+        cache.touch(c, at(50.0f));
+        cache.touch(a, at(9.0f));
+        cache.touch(a, at(10.0f));   // duplicate touch keeps one entry
+        cache.endFrame();
+        CHECK(cache.trackedCount() == 2);
+        cache.beginFrame();
+        CHECK(cache.resolve(c, at(9.0f)) == at(8.0f));
+        const glm::mat4 aPrevious = cache.resolve(a, at(11.0f));
+        CHECK(aPrevious == at(9.0f) || aPrevious == at(10.0f));
+        cache.endFrame();
+        // Untouched and unresolved keys age out as before.
+        cache.beginFrame();
+        cache.endFrame();
+        CHECK(cache.trackedCount() == 0);
+    }
 }
 
 int main() {
     previousIsLastFrame();
+    touchedKeysStayTracked();
     if (failures == 0) std::cout << "PreviousTransformCacheTests passed\n";
     return failures == 0 ? 0 : 1;
 }

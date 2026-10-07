@@ -20,6 +20,13 @@ namespace Iridium {
     // previous transform, or the current one for a key not seen last frame),
     // then endFrame(). The storage grows only when the packet count grows;
     // steady frames allocate nothing.
+    //
+    // M7.10.1: touch() records the current transform of a packet that was
+    // culled this frame (it needs no previous transform), so the key stays
+    // tracked and a packet that re-enters view next frame resolves exactly
+    // the previous transform it would have resolved had it never been
+    // culled. A key both resolved and touched in one frame keeps the resolved
+    // entry; a frame without touches ends exactly as before.
     class PreviousTransformCache {
     public:
         struct Key {
@@ -29,6 +36,7 @@ namespace Iridium {
 
         void beginFrame() noexcept;
         [[nodiscard]] glm::mat4 resolve(const Key& key, const glm::mat4& current);
+        void touch(const Key& key, const glm::mat4& current);
         void endFrame();
         void clear() noexcept;
 
@@ -42,6 +50,8 @@ namespace Iridium {
 
         std::vector<Entry> previous_;   // sorted by key
         std::vector<Entry> current_;    // this frame, sorted at endFrame
+        std::vector<Entry> touched_;    // this frame's culled keys
+        std::vector<Entry> merged_;     // endFrame scratch (keeps capacity)
     };
 
 } // namespace Iridium

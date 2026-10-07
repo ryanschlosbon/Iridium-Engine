@@ -11,6 +11,7 @@
 #include "profiling/CpuProfiler.h"
 #include "renderer/rhi/IRenderBackend.h"
 #include "renderer/rhi/Mesh.h"
+#include "renderer/rhi/RenderFrame.h"
 #include "renderer/transparency/LayeredGlass.h"
 #include "renderer/transparency/WeightedOit.h"
 
@@ -186,20 +187,27 @@ namespace Iridium {
     }
 
     void VulkanLayeredTransparencyFeature::observe(
-        std::span<const DrawPacket> compatibilityTransparentQueue) {
-        const bool requiresOrdinary2Atlas = std::ranges::any_of(
-            compatibilityTransparentQueue, isOrdinary2LayeredGlassPacket);
+        std::span<const DrawPacket> compatibilityTransparentQueue,
+        uint32_t culledDemand) {
+        const bool requiresOrdinary2Atlas =
+            (culledDemand & TransparentDemandOrdinary2) != 0u ||
+            std::ranges::any_of(
+                compatibilityTransparentQueue, isOrdinary2LayeredGlassPacket);
         ordinary2Residency_.observe(requiresOrdinary2Atlas);
-        const bool requiresHero4Atlas = std::ranges::any_of(
-            compatibilityTransparentQueue, [](const DrawPacket& packet) {
-                return isLayeredGlassPacket(packet,
-                    TransparencyQuality::Hero4);
-            });
-        const bool requiresCinematic8Atlas = std::ranges::any_of(
-            compatibilityTransparentQueue, [](const DrawPacket& packet) {
-                return isLayeredGlassPacket(packet,
-                    TransparencyQuality::Cinematic8);
-            });
+        const bool requiresHero4Atlas =
+            (culledDemand & TransparentDemandHero4) != 0u ||
+            std::ranges::any_of(
+                compatibilityTransparentQueue, [](const DrawPacket& packet) {
+                    return isLayeredGlassPacket(packet,
+                        TransparencyQuality::Hero4);
+                });
+        const bool requiresCinematic8Atlas =
+            (culledDemand & TransparentDemandCinematic8) != 0u ||
+            std::ranges::any_of(
+                compatibilityTransparentQueue, [](const DrawPacket& packet) {
+                    return isLayeredGlassPacket(packet,
+                        TransparencyQuality::Cinematic8);
+                });
         hero4Residency_.observe(requiresHero4Atlas);
         cinematic8Residency_.observe(requiresCinematic8Atlas);
     }
