@@ -360,7 +360,7 @@ unmotivated by measurement is dropped from phase 1.
   - measure the refraction pyramid against coverage.
 - **Many objects beyond transparency:** extraction per entity, opaque CPU
   classification (R5c.4e), GBuffer recording (parallel recording is M7.10.6; it is
-  pulled forward if attribution shows it dominating), shadow caster and probe
+  pulled forward if attribution shows it dominating; renumbered M7.10.8), shadow caster and probe
   membership.
 
 #### Owner checkpoint (stop)
@@ -376,12 +376,13 @@ the owner replies.
 
 ### Phase 2
 
-Order: M7.10 remainder → M7.9 → M7.11 → M7.12. M7.10 comes first because parallel
+Order: M7.10 remainder → M7.9 → M7.11 → M7.12. (2026-10-07: slices renumbered after
+phase 1 used M7.10.0–M7.10.6.) M7.10 comes first because parallel
 recording and per-view caching change frame structure that M7.11's resolve passes
 then build on. M7.9 is mostly asset-pipeline work, so it can overlap with M7.10
 kernel benchmarks run as isolated subagent lanes.
 
-#### M7.10.5 — Per-view derived math (refactor tier)
+#### M7.10.7 — Per-view derived math (refactor tier)
 
 - Add `ViewDerived` to the per-view record, computed once in `finalizeView`. It holds
   unjittered `viewProjection`, both inverses, frustum planes and cluster-grid
@@ -389,7 +390,7 @@ kernel benchmarks run as isolated subagent lanes.
 - Replace the six recomputation sites.
 - Evidence: byte-identical frozen set and one timing pair.
 
-#### M7.10.6 — Parallel command recording (refactor tier)
+#### M7.10.8 — Parallel command recording (refactor tier)
 
 - Record GBuffer bins (then shadows and forward, if measured) into secondary command
   buffers. Use per-worker, per-frame-slot pools on `FrameCritical` tasks, with no
@@ -399,18 +400,18 @@ kernel benchmarks run as isolated subagent lanes.
 - Gate it on the H-stress and T-F7 CPU wins against the serial path, with a
   tiny-workload serial fallback.
 
-#### M7.10.7 — Cluster assignment reprofile (tier per change)
+#### M7.10.9 — Cluster assignment reprofile (tier per change)
 
 - Per-pass timestamps on current workloads (PC3, T-F5, a cluster-stress route).
 - Reduce only the passes evidence identifies. Keep one shared product for deferred
   and forward.
 
-#### M7.10.8 — R5c.4e revisit
+#### M7.10.10 — R5c.4e revisit
 
 - Once GPU counters cover visibility, move the CPU classification into the
   qualification oracle; otherwise re-record the decision with current numbers.
 
-#### M7.10.9 — Benchmark-gated candidates
+#### M7.10.11 — Benchmark-gated candidates
 
 Each candidate gets an experiment record using the contract template, and is
 classified production, workload-selectable, experimental or rejected:
@@ -869,6 +870,38 @@ None open. The two-car scene was never saved, so PC3 is the reference approximat
       (sync validation) is byte-identical.
     - The per-probe revision models the new bound, and the test was updated.
     - Debug and Release pass 120/120 tests.
+
+- **2026-10-07 — M7.10.6: local-shadow receiver bias (feature tier; owner-reported
+  banding).**
+  - **Problem:** at the checkpoint the owner saw stripes on car panels under a bright point
+    light at grazing angles, finer at Ultra. The cause was point-shadow acne: every filter
+    tap was compared against one receiver depth with a fixed bias of at most 2 texels, so
+    on sloped receivers the disk sampled the surface's own farther depth. Spot shadows had a
+    fainter version.
+  - **Fix:** a worktree lane, integrated as `3768f52`, `acb180a` and `b047bbd` (cherry-picked):
+    - shared helpers in `shadow_filter.glsl`: an `IridiumShadowReceiver` struct, a normal
+      offset that is front-facing only and fades with geometric N·L, and the receiver-plane
+      gradient and reference moved from directional;
+    - point shadows offset the receiver 0.5 cube texels along the geometric normal and apply
+      a tangent-space receiver-plane depth gradient, clamped to ±2 world texels, on every
+      hard, blocker-search and PCSS tap;
+    - spot shadows step the plane per bilinear texel and per PCSS tap;
+    - directional images are byte-identical, and ADR-0010 decision 4 is now applied to every
+      local light.
+  - **Fixtures:** `PC4-graze-{high,ultra,spot-high,spot-ultra}` and `PC4-contact-{high,ultra}`.
+    The bands are removed and there is no contact leak (crops in the lane's
+    `out/m7r/evidence/m7c-1060`).
+  - **Frozen set `m7c-1060`** with sync validation: only F5-point (12.05% of pixels, max 5/255)
+    and F5-hetero (1.97%, max 8/255) change, both acne removal. Everything else is
+    byte-identical, with zero messages.
+  - **Owner cases:** only the shadowed point/spot cases change. PC3-point-r10-1e6cd changes
+    7.7% (the 930 fender acne).
+  - **Diagnostic timing:** point shadows got cheaper (PC4-graze-ultra frame 7.98 → 7.62 ms;
+    PC3-point-r10 3.77 → 3.61 ms). Spot shadows cost slightly more (PC3-spot-r10 frame
+    +0.08 ms; graze-spot-ultra +0.23 ms).
+  - **Pending:** owner eye check; five-process admission (PC3-point-r10, PC3-spot-r10,
+    PC4-graze-ultra, T-F5-hetero); a new frozen baseline for F5 after admission. The new
+    point/spot bias constants are not yet Project Settings, unlike the directional ones.
 
 ## Completion report
 
