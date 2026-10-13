@@ -312,6 +312,13 @@ namespace Iridium {
         addSwitch(registry, owner, "--qualification-exposure-trace",
             "Read back each frame's adapted exposure and histogram summary (auto-exposure); print IRIDIUM_EXPOSURE lines",
             [&q] { q.exposureTrace = true; });
+        addValueOption(registry, owner, "--qualification-simulate-device-lost-report", "N",
+            "Write a device-loss report (IRIDIUM_DEVICE_LOST) for a fabricated VK_ERROR_DEVICE_LOST at backend frame N; the device is not lost and the run continues",
+            "--qualification-simulate-device-lost-report requires a frame index",
+            [&q](std::string_view value) {
+                q.simulateDeviceLostReportFrame = parseUnsigned(value,
+                    "--qualification-simulate-device-lost-report");
+            });
         addSwitch(registry, owner, "--validate-depth-pyramid-capture",
             "Read back live depth and verify every pyramid mip",
             [&q, &c] {

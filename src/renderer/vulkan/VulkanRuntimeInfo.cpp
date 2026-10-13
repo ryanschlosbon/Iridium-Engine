@@ -281,6 +281,8 @@ namespace Iridium {
         info.uploadQueueFamily = uploadContext.usesTransferQueue()
             ? uploadContext.transferQueueFamily() : vkContext->getGraphicsQueueFamily();
         info.uploadStagingRingBytes = uploadContext.stagingRingBytes();
+        info.gpuDeviceFault = deviceLoss_.deviceFaultEnabled();
+        info.gpuCrashCheckpoints = deviceLoss_.checkpointsEnabled();
         return info;
     }
 

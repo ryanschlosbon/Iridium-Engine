@@ -3,6 +3,7 @@
 #include "qualification/vulkan/VulkanReadbackAnalysis.h"
 #include "renderer/vulkan/VulkanCommandList.h"
 #include "renderer/vulkan/VulkanDepthPyramid.h"
+#include "renderer/vulkan/VulkanDeviceLossDiagnostics.h"
 #include "renderer/vulkan/VulkanFrameScheduler.h"
 #include "renderer/vulkan/VulkanFrameTargets.h"
 #include "renderer/vulkan/VulkanReflectionProbeCaptureTargets.h"
@@ -110,6 +111,7 @@ namespace Iridium {
         indirectStreamDigestEnabled_ = config.indirectStreamDigest;
         casterRevisionOracleEnabled_ = config.casterRevisionOracle;
         aliasPoison_ = config.aliasPoison;
+        simulateDeviceLostReportFrame_ = config.simulateDeviceLostReportFrame;
         exposureTrace_ = config.exposureTrace;
         // Room for every frame of a long evidence run: collecting at the end
         // of the run keeps steady frames free of growth.
@@ -384,6 +386,16 @@ namespace Iridium {
 
     void VulkanQualificationExtension::onFrameSlotRetired(uint32_t slot) {
         if (!attached()) return;
+        // M7.10.D: one call per backend beginFrame, so the count is the
+        // 0-based index of the frame now beginning. The report path runs
+        // exactly as on a real loss, minus the throw.
+        if (simulateDeviceLostReportFrame_ &&
+            retiredFrameCount_ == *simulateDeviceLostReportFrame_ &&
+            services_.deviceLoss != nullptr) {
+            (void)services_.deviceLoss->report(VK_ERROR_DEVICE_LOST,
+                "qualification-simulated (beginFrame)", true);
+        }
+        ++retiredFrameCount_;
         collectFrameCapturesForSlot(slot);
         collectOrdinary2ValidationsForSlot(slot);
         collectDeepLayeredValidationsForSlot(slot);

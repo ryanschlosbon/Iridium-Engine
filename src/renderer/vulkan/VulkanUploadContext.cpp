@@ -1,6 +1,7 @@
 #include "VulkanUploadContext.h"
 
 #include "VulkanCommandList.h"
+#include "VulkanDeviceLossDiagnostics.h"
 #include "VulkanResourceState.h"
 #include "profiling/CpuProfiler.h"
 
@@ -27,6 +28,8 @@ namespace Iridium {
         }
 
         [[noreturn]] void throwVkError(const char* operation, VkResult result) {
+            // M7.10.D: a device loss is reported before the throw.
+            noteVulkanDeviceLoss(result, operation);
             throw std::runtime_error(std::string(operation) + " failed with VkResult " +
                 std::to_string(static_cast<int>(result)) + ".");
         }
@@ -306,6 +309,9 @@ namespace Iridium {
         VkCommandBufferBeginInfo beginInfo{ VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
         beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
         check(vkBeginCommandBuffer(commands, &beginInfo), "vkBeginCommandBuffer(upload lane)");
+        if (deviceLoss_ != nullptr)
+            deviceLoss_->markUpload(commands, static_cast<uint32_t>(&lane - lanes_.data()),
+                lane.lastSignaled + 1, false);
         lane.open = index;
         lane.nextCommand = (index + 1) % LaneCommandBufferCount;
         return commands;
@@ -317,8 +323,11 @@ namespace Iridium {
         VkCommandBuffer commands = lane.commands[lane.open];
         const uint32_t index = lane.open;
         lane.open = UINT32_MAX;
-        check(vkEndCommandBuffer(commands), "vkEndCommandBuffer(upload lane)");
         const uint64_t value = lane.lastSignaled + 1;
+        if (deviceLoss_ != nullptr)
+            deviceLoss_->markUpload(commands, static_cast<uint32_t>(&lane - lanes_.data()),
+                value, true);
+        check(vkEndCommandBuffer(commands), "vkEndCommandBuffer(upload lane)");
         if (synchronization2_) {
             VkCommandBufferSubmitInfo commandInfo{ VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO };
             commandInfo.commandBuffer = commands;
@@ -784,6 +793,7 @@ namespace Iridium {
             submitInfo.pCommandBuffers = &commandBuffer_;
             result = vkQueueSubmit(graphicsQueue_, 1, &submitInfo, fence_);
             if (result != VK_SUCCESS) {
+                noteVulkanDeviceLoss(result, "vkQueueSubmit(upload)");
                 discardPending();
                 const VkResult resetResult = resetCommandPoolAfterFailure();
                 if (resetResult != VK_SUCCESS) {
@@ -794,6 +804,7 @@ namespace Iridium {
 
             result = vkWaitForFences(device_, 1, &fence_, VK_TRUE, std::numeric_limits<uint64_t>::max());
             if (result != VK_SUCCESS) {
+                noteVulkanDeviceLoss(result, "vkWaitForFences(upload)");
                 discardPending();
                 const VkResult resetResult = resetCommandPoolAfterFailure();
                 if (resetResult != VK_SUCCESS) {

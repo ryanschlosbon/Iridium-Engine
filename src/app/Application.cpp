@@ -187,6 +187,8 @@ namespace Iridium {
                 config_.experimentalDepthOcclusionRejection,
             .renderGraphAliasing = config_.renderGraphAliasing,
             .uploadQueue = config_.uploadQueue,
+            .gpuCrashCheckpoints = config_.gpuCrashCheckpoints,
+            .deviceLostReportDirectory = userCacheDirectory("DeviceLost"),
             .antiAliasing = config_.antiAliasing,
             .taaTuning = config_.taaTuning.value_or(TemporalAntiAliasingTuning{}),
             .exposureMode = config_.exposureMode,

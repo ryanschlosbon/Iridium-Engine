@@ -1696,6 +1696,11 @@ void VulkanRenderGraphExecutor::runRegisteredPass(uint32_t passOrder) {
             callbacks.active(callbacks.owner, recordContext_);
         const uint32_t group = passGroup_[passOrder];
         if (active) {
+            // M7.10.D: the breadcrumb precedes the pass's group range,
+            // barriers and callback.
+            if (checkpointSink_.mark != nullptr)
+                checkpointSink_.mark(checkpointSink_.owner,
+                    recordContext_.commandBuffer, passOrder, false);
             if (group != RenderGraph::InvalidIndex && openGroup_ != group &&
                 rangeSink_.enabled()) {
                 groupToken_ = rangeSink_.begin(rangeSink_.owner, rangeGroups_[group].name);
@@ -1722,6 +1727,9 @@ void VulkanRenderGraphExecutor::runRegisteredPass(uint32_t passOrder) {
                 throw std::logic_error(
                     "Render-graph pass callback returned with dynamic rendering open");
             if (ranged && !aroundBarriers) rangeSink_.end(rangeSink_.owner, token);
+            if (checkpointSink_.mark != nullptr)
+                checkpointSink_.mark(checkpointSink_.owner,
+                    recordContext_.commandBuffer, passOrder, true);
         }
         else {
             ++nextPass_;
@@ -1769,6 +1777,9 @@ void VulkanRenderGraphExecutor::beginPass(VkCommandBuffer commandBuffer,
     noteCommandBuffer(commandBuffer);
     if (registeredCount_ != 0) drainRegisteredBefore(pass.order);
     requireCursorAt(pass.order, "Render-graph pass order does not match the compiled plan");
+    // Imperative passes have no end point: only their start is marked.
+    if (checkpointSink_.mark != nullptr)
+        checkpointSink_.mark(checkpointSink_.owner, commandBuffer, pass.order, false);
     beginPassAt(commandBuffer, pass.order);
 }
 

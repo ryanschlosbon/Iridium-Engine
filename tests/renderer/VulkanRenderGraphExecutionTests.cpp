@@ -4,6 +4,7 @@
 
 #include "profiling/CpuAllocationProfile.h"
 #include "renderer/vulkan/VulkanProductionRenderGraph.h"
+#include "renderer/vulkan/VulkanDeviceLossDiagnostics.h"
 #include "renderer/vulkan/VulkanRenderGraphExecutor.h"
 
 #include <algorithm>
@@ -16,6 +17,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -1162,6 +1164,71 @@ namespace {
         return true;
     }
 
+    // M7.10.D: executed passes are marked at their start (before their group
+    // range and barriers) and end (after their callback); skipped passes are
+    // not; imperative passes mark their start only. Markers round-trip.
+    bool testPassCheckpointSink() {
+        struct Marks {
+            EventLog* log = nullptr;
+            std::array<std::pair<uint32_t, bool>, 16> marks{};
+            uint32_t count = 0;
+            std::array<size_t, 16> logPosition{};
+        } marks;
+        ChainFixture fixture;
+        marks.log = &fixture.log;
+        auto& executor = fixture.executor;
+        executor.registerPass(ChainFixture::pass(1), testCallbacks(fixture.owner, 1, "gpu.p1"));
+        executor.registerPass(ChainFixture::pass(2), testCallbacks(fixture.owner, 2));
+        executor.registerPass(ChainFixture::pass(3), testCallbacks(fixture.owner, 3));
+        executor.registerRangeGroup({ "gpu.group", ChainFixture::pass(1), ChainFixture::pass(2) });
+        fixture.owner.active[2] = false;
+        executor.setPassCheckpointSink({ &marks,
+            [](void* owner, VkCommandBuffer commandBuffer, uint32_t pass, bool end) noexcept {
+                auto& self = *static_cast<Marks*>(owner);
+                if (commandBuffer != FakeCommandBuffer || self.count == self.marks.size()) return;
+                self.logPosition[self.count] = self.log->count;
+                self.marks[self.count++] = { pass, end };
+            } });
+        executor.beginFrameExecution(0);
+        executor.beginPass(FakeCommandBuffer, ChainFixture::pass(0));
+        executor.beginPass(FakeCommandBuffer, ChainFixture::pass(4));
+        executor.finishFrameExecution();
+        const std::pair<uint32_t, bool> expected[] = {
+            { 0, false }, { 1, false }, { 1, true }, { 3, false }, { 3, true }, { 4, false } };
+        CHECK(marks.count == std::size(expected));
+        for (uint32_t index = 0; index < marks.count && index < std::size(expected); ++index)
+            CHECK(marks.marks[index] == expected[index]);
+        // p1's start mark precedes its group range (the first event of p1
+        // after its Active query); its end mark follows its execute.
+        const auto events = fixture.log.recorded();
+        CHECK(events[marks.logPosition[1]].kind == EventKind::RangeBegin);
+        CHECK(events[marks.logPosition[2] - 1].kind == EventKind::RangeEnd ||
+            events[marks.logPosition[2] - 1].kind == EventKind::Execute);
+        // The sink survives a rebuild.
+        executor.rebuild(chainGraph());
+        executor.onFrameFenceCompleted(1);
+        executor.beginFrameExecution(1);
+        marks.count = 0;
+        executor.beginPass(FakeCommandBuffer, ChainFixture::pass(0));
+        CHECK(marks.count == 1);
+        for (uint32_t pass = 1; pass < 5; ++pass) executor.skipPass(ChainFixture::pass(pass));
+        executor.finishFrameExecution();
+        CHECK(marks.count == 1);
+
+        for (const VulkanCheckpointMarker marker : {
+                 VulkanCheckpointMarker{ VulkanCheckpointKind::Pass, true, 131071u, 0xFF'FFFF'FFFFull },
+                 VulkanCheckpointMarker{ VulkanCheckpointKind::FrameBegin, false, 0u, 1u },
+                 VulkanCheckpointMarker{ VulkanCheckpointKind::Upload, true, 1u, 77u } }) {
+            VulkanCheckpointMarker decoded{};
+            CHECK(decodeVulkanCheckpointMarker(encodeVulkanCheckpointMarker(marker), decoded));
+            CHECK(decoded.kind == marker.kind && decoded.end == marker.end &&
+                decoded.index == marker.index && decoded.serial == marker.serial);
+        }
+        VulkanCheckpointMarker foreign{};
+        CHECK(!decodeVulkanCheckpointMarker(0x1234u, foreign));
+        return true;
+    }
+
     // AroundBarriers (R3c.2): the range covers only the pass's barriers and is
     // closed before its execute callback records.
     bool testGpuRangeAroundBarriers() {
@@ -2276,6 +2343,7 @@ int main() {
         { "finish drains and rollback", testFinishDrainsAndRollback },
         { "GPU range placement and groups", testGpuRangePlacementAndGroups },
         { "GPU range around barriers", testGpuRangeAroundBarriers },
+        { "pass checkpoint sink (M7.10.D)", testPassCheckpointSink },
         { "explicit drain points", testExplicitDrainPoints },
         { "callback context and reentry", testCallbackContextAndReentry },
         { "History pair lifetime", testHistoryPairLifetime },

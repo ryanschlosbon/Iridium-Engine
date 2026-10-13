@@ -1,5 +1,6 @@
 #include "VulkanFrameScheduler.h"
 
+#include "VulkanDeviceLossDiagnostics.h"
 #include "profiling/CpuProfiler.h"
 #include "profiling/GpuTimestamp.h"
 
@@ -14,6 +15,8 @@ namespace Iridium {
     namespace {
 
         [[noreturn]] void throwVkError(const char* operation, VkResult result) {
+            // M7.10.D: a device loss is reported (once) before the throw.
+            noteVulkanDeviceLoss(result, operation);
             throw std::runtime_error(std::string(operation) + " failed with VkResult " +
                 std::to_string(static_cast<int>(result)) + ".");
         }

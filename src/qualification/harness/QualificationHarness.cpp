@@ -57,6 +57,7 @@ namespace Iridium {
             .aliasPoison = options.aliasPoison,
             .validateProbeCaptureTargets = options.validateReflectionProbes,
             .exposureTrace = options.exposureTrace,
+            .simulateDeviceLostReportFrame = options.simulateDeviceLostReportFrame,
         };
     }
 

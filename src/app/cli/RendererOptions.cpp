@@ -471,6 +471,15 @@ namespace Iridium::AppCli {
                     "--upload-queue requires auto, graphics or legacy-blocking");
             });
 
+        addValueOption(registry, owner, "--gpu-crash-checkpoints", "on|off",
+            "Per-pass GPU breadcrumbs for device-loss reports (default on)",
+            "--gpu-crash-checkpoints requires on or off",
+            [&c](std::string_view value) {
+                if (value == "on") c.gpuCrashCheckpoints = true;
+                else if (value == "off") c.gpuCrashCheckpoints = false;
+                else throw std::invalid_argument("--gpu-crash-checkpoints requires on or off");
+            });
+
         registry.addValidator(std::string(owner), [&c] {
             if (c.outputTransport != Color::OutputTransport::SdrSrgb &&
                 c.outputOperator != OutputTransformOperator::Aces2) {

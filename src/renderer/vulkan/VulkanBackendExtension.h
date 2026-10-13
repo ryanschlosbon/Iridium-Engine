@@ -39,6 +39,7 @@ namespace Iridium {
     class VulkanReflectionProbeCaptureTargets;
     class VulkanDepthPyramid;
     class VulkanResourceRegistry;
+    class VulkanDeviceLossDiagnostics;
     struct VulkanImageResource;
     struct VulkanBufferResource;
     struct VulkanIndirectScene;
@@ -76,6 +77,8 @@ namespace Iridium {
         // Null unless the depth pyramid is enabled for this process.
         VulkanDepthPyramid* depthPyramid = nullptr;
         CpuProfiler* profiler = nullptr;
+        // M7.10.D: the device-loss reporter (qualification simulates a report).
+        VulkanDeviceLossDiagnostics* deviceLoss = nullptr;
     };
 
     struct VulkanCaptureHookPayload {

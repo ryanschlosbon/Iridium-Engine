@@ -104,7 +104,8 @@ namespace Iridium {
         vkContext = std::make_unique<VkContext>(config.enableValidation,
             config.enableGpuProfiling,
             config.enableTransparentPipelineStatistics, window,
-            config.enableValidation && config.enableSynchronizationValidation);
+            config.enableValidation && config.enableSynchronizationValidation,
+            config.gpuCrashCheckpoints);
         // R4c.4: before any pipeline is created.
         pipelineCache_.init(vkContext->getDevice(),
             VulkanPipelineCacheIdentity::of(vkContext->getPhysicalDevice()),
@@ -158,6 +159,14 @@ namespace Iridium {
                 sceneExtent_.height,
             vkContext->hasSynchronization2(), vkContext->hasTimelineSemaphore());
         scheduler.attachAllocator(resourceAllocator);
+        // M7.10.D: device-loss reports from here on (frame and upload waits).
+        deviceLoss_.init({
+            .context = vkContext.get(),
+            .scheduler = &scheduler,
+            .graph = &renderGraph_,
+            .reportDirectory = config.deviceLostReportDirectory,
+        });
+        uploadContext.setDeviceLossDiagnostics(&deviceLoss_);
         // M7R R4d.3: resources written by an upload outlive the frame that
         // waits on it.
         scheduler.setRetireFloor(&VulkanUploadContext::retireFloorThunk, &uploadContext);
@@ -460,6 +469,7 @@ namespace Iridium {
             .probeCaptureTargets = &probes_.captureTargets(),
             .depthPyramid = opaque_.depthPyramidEnabled() ? &opaque_.depthPyramid() : nullptr,
             .profiler = cpuProfiler_,
+            .deviceLoss = &deviceLoss_,
         };
     }
 
@@ -519,7 +529,7 @@ namespace Iridium {
         cleaned_ = true;
 
         const VkDevice device = vkContext->getDevice();
-        vkDeviceWaitIdle(device);
+        noteVulkanDeviceLoss(vkDeviceWaitIdle(device), "vkDeviceWaitIdle(cleanup)");
         uploadContext.flush();
         scheduler.waitForAllFrames();
         for (uint32_t frame = 0;
@@ -588,6 +598,8 @@ namespace Iridium {
         // R4c.4: every pipeline is destroyed and the device is idle.
         pipelineCache_.save();
         pipelineCache_.destroy();
+        uploadContext.setDeviceLossDiagnostics(nullptr);
+        deviceLoss_.cleanup();
         vkContext.reset();
         initialized_ = false;
         frameOpen_ = false;
@@ -849,6 +861,7 @@ namespace Iridium {
             ? VulkanBarrierApi::Synchronization2
             : VulkanBarrierApi::Synchronization1);
         renderGraph_.setGpuRangeSink(VulkanGpuRangeSink::forScheduler(scheduler));
+        renderGraph_.setPassCheckpointSink(deviceLoss_.passCheckpointSink());
         bindGraphImportedImages();
         bindGraphImportedBuffers();
         // R3c: feature owners re-query graph resources and register their
@@ -907,7 +920,8 @@ namespace Iridium {
                 oit_.residency().enabled() }, productionGraphFeatures());
 
         // Resize is the one accepted global stall, after candidate validation.
-        vkDeviceWaitIdle(vkContext->getDevice());
+        noteVulkanDeviceLoss(vkDeviceWaitIdle(vkContext->getDevice()),
+            "vkDeviceWaitIdle(swapchain)");
 
         // Owners with descriptor sets over transient graph resources retire
         // them before the graph is rebuilt, and recreate them afterward.
@@ -1300,6 +1314,9 @@ namespace Iridium {
         if (frame.status == FrameStatus::RecreateSwapchain) {
             return frame.status;
         }
+        // M7.10.D: the frame's first breadcrumb (this submission's serial).
+        deviceLoss_.beginFrame(frame.commandBuffer, scheduler.lastSubmittedSerial() + 1,
+            frameSlot);
         // M7R R4d.3: queue-family acquires of submitted uploads, before any
         // pass, and the upload timeline values this frame waits on.
         {
@@ -1898,6 +1915,7 @@ namespace Iridium {
     }
 
     FrameStatus VulkanVertexBackend::endFrame() {
+        if (frameOpen_) deviceLoss_.markFrameSubmit(currentCmd);
         const FrameStatus status = scheduler.endFrame(
             vkSwapchain->getSwapchain(), currentImageIndex);
         frameOpen_ = false;

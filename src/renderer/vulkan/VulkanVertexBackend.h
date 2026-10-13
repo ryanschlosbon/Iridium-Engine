@@ -62,6 +62,7 @@
 #include "VulkanRenderGraphExecutor.h"
 #include "VulkanTransparencyPyramid.h"
 #include "VulkanDepthPyramid.h"
+#include "VulkanDeviceLossDiagnostics.h"
 #include "VulkanLayeredInterfaceCapturePass.h"
 #include "VulkanLayeredLocalCompositionPass.h"
 #include "VulkanLayeredSceneResolvePass.h"
@@ -96,6 +97,8 @@ namespace Iridium {
         // --- 1. THE SUBSYSTEMS (Composition) ---
         // We moved all of these pointers out of Application.cpp and into here.
         std::unique_ptr<VkContext> vkContext;
+        // M7.10.D: device-loss reports and GPU crash breadcrumbs.
+        VulkanDeviceLossDiagnostics deviceLoss_;
         VulkanResourceAllocator resourceAllocator;
         VulkanUploadContext uploadContext;
         VulkanFrameScheduler scheduler;
