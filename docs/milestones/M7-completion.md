@@ -903,6 +903,30 @@ None open. The two-car scene was never saved, so PC3 is the reference approximat
     PC4-graze-ultra, T-F5-hetero); a new frozen baseline for F5 after admission. The new
     point/spot bias constants are not yet Project Settings, unlike the directional ones.
 
+- **2026-10-13 — M7.10.4b: named per-type lobe state replaces the unrolled arrays
+  (refactor tier; fixes an owner-reported regression).**
+  - **Report:** the owner saw about 200 FPS in the two-car scene with a point light. A
+    bisect across this phase's commits (`out/m7r/timing/m7c-regress`, two single processes
+    per point, product route) blamed M7.10.4. Unrolling kept 8×(type, vec4, vec3) lobe slots
+    live across the whole light loop, which spilled inside the point-shadow filter: PC3
+    point light 4.10 → 5.06 ms GPU, though PC3 without a local light improved
+    3.55 → 1.92 ms.
+  - **Fix:** the material compiler emits at most one lobe per type in increasing type order
+    (`MaterialCompiler.cpp` ~600–750), so lobe state is held in named per-type variables
+    (`hasCoatLobe`, `sheenLobe`, …). It is evaluated in type order, which is the lobe order,
+    so summation order is unchanged. There are no per-pixel arrays and no unrolling.
+  - **Evidence:**
+    - owner cases 62/62 byte-identical against a capture of HEAD `56677ab`;
+    - frozen set `m7c-1070` with sync validation against `m7c-1060`: 0 failures, zero
+      messages.
+  - **Diagnostic GPU frame (ms):**
+
+    | Fixture | `9e55059` | `56677ab` | M7.10.4b | Sorted pass |
+    |---|---|---|---|---|
+    | PC3-point-r10 | 4.10 | 4.86 | **3.24** | 2.20 → 1.06 |
+    | PC2-glass-fill | 5.16 | 4.35 | **3.34** | 2.01 → 1.01 |
+    | PC3-nolight | 3.55 | 1.92 | **1.92** | — |
+
 ## Completion report
 
 To be written at M7.12, following AGENTS.md:
