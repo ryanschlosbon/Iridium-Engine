@@ -393,6 +393,18 @@ namespace Iridium {
         }
     };
 
+    // M7.10.D GPU crash breadcrumbs (VulkanDeviceLossDiagnostics): called at
+    // the start of every executed pass (before its barriers and GPU range)
+    // and at its end (after its callback). Skipped passes are not marked.
+    // Without a sink nothing is recorded.
+    struct VulkanPassCheckpointSink {
+        void* owner = nullptr;
+        void (*mark)(void* owner, VkCommandBuffer commandBuffer, uint32_t passOrder,
+            bool end) noexcept = nullptr;
+
+        [[nodiscard]] bool enabled() const noexcept { return mark != nullptr; }
+    };
+
     class VulkanRenderGraphExecutor final {
     public:
         VulkanRenderGraphExecutor() = default;
@@ -488,6 +500,12 @@ namespace Iridium {
         [[nodiscard]] bool isRegistered(RenderGraph::PassId pass) const noexcept;
         void registerRangeGroup(const VulkanRangeGroup& group);
         void setGpuRangeSink(const VulkanGpuRangeSink& sink) noexcept { rangeSink_ = sink; }
+        // M7.10.D: kept across rebuilds (unlike registrations).
+        void setPassCheckpointSink(const VulkanPassCheckpointSink& sink) noexcept {
+            checkpointSink_ = sink;
+        }
+        // Rebuilds so far: pass indices are only meaningful within one plan.
+        [[nodiscard]] uint64_t rebuildCount() const noexcept { return rebuildCount_; }
         // Context for drained callbacks this frame. Without it, the first
         // beginPass of the frame supplies {commandBuffer, frameIndex}.
         void setFrameRecordContext(const VulkanFrameRecordContext& context);
@@ -588,6 +606,7 @@ namespace Iridium {
         std::vector<VulkanRangeGroup> rangeGroups_;
         uint32_t registeredCount_ = 0;
         VulkanGpuRangeSink rangeSink_{};
+        VulkanPassCheckpointSink checkpointSink_{};
         VulkanFrameRecordContext recordContext_{};
         bool hasRecordContext_ = false;
         bool inCallback_ = false;

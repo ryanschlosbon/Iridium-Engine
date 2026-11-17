@@ -33,9 +33,13 @@ struct SwapChainSupportDetails {
 class VkContext {
 public:
 	// The Constructor takes the Window pointer so we can create the Surface
+	// enableDiagnosticCheckpoints (M7.10.D, --gpu-crash-checkpoints) enables
+	// VK_NV_device_diagnostic_checkpoints when the device has it.
+	// VK_EXT_device_fault is enabled whenever the device supports it.
 	VkContext(bool enableValidation, bool enableDebugUtils,
 		bool enablePipelineStatistics, GLFWwindow* window,
-		bool enableSynchronizationValidation = false);
+		bool enableSynchronizationValidation = false,
+		bool enableDiagnosticCheckpoints = false);
 	~VkContext();
 
 	// Getters: The rest of the engine will need these handles later.
@@ -72,6 +76,10 @@ public:
 	bool hasDynamicRendering() const { return dynamicRenderingEnabled; }
 	// Vulkan 1.2 timeline semaphores; M7R R4d enables them when supported.
 	bool hasTimelineSemaphore() const { return timelineSemaphoreEnabled; }
+	// M7.10.D GPU crash diagnostics (VulkanDeviceLossDiagnostics).
+	bool hasDeviceFault() const { return deviceFaultEnabled; }
+	bool hasDeviceFaultVendorBinary() const { return deviceFaultVendorBinaryEnabled; }
+	bool hasDiagnosticCheckpoints() const { return diagnosticCheckpointsEnabled; }
 	uint32_t getMaxDrawIndirectCount() const { return maxDrawIndirectCount; }
 	uint32_t getMaxIndexedTextureViews() const { return maxIndexedTextureViews; }
 	uint32_t getMaxIndexedSamplers() const { return maxIndexedSamplers; }
@@ -129,6 +137,10 @@ private:
 	bool dynamicRenderingEnabled = false;
 	bool timelineSemaphoreEnabled = false;
 	bool synchronizationValidationRequested = false;
+	bool diagnosticCheckpointsRequested = false;
+	bool diagnosticCheckpointsEnabled = false;
+	bool deviceFaultEnabled = false;
+	bool deviceFaultVendorBinaryEnabled = false;
 	uint32_t maxDrawIndirectCount = 0;
 	uint32_t maxIndexedTextureViews = 0;
 	uint32_t maxIndexedSamplers = 0;

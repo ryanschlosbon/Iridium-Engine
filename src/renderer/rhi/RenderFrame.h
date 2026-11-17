@@ -112,6 +112,46 @@ namespace Iridium {
         }
     };
 
+    // M7.10.1: the transparency resources one transparent work item keeps
+    // resident when present in a queue: the refraction pyramids (any
+    // compatibility-queue work), a layered-glass atlas tier, or WeightedOIT.
+    // Extraction culls off-screen transparent work; the bits of the culled
+    // work travel with the frame so residency hysteresis follows the
+    // requested work, not only the visible work.
+    enum TransparentResidencyDemand : uint32_t {
+        TransparentDemandCompatibilityQueue = 1u << 0u,
+        TransparentDemandOrdinary2 = 1u << 1u,
+        TransparentDemandHero4 = 1u << 2u,
+        TransparentDemandCinematic8 = 1u << 3u,
+        TransparentDemandWeightedOit = 1u << 4u,
+    };
+
+    // The demand of one work item with this effective policy (the routing of
+    // RenderExtractor: classified SortedSurface and WeightedOIT work goes to
+    // the sorted-surface queue, everything else to the compatibility queue).
+    [[nodiscard]] constexpr uint32_t transparentResidencyDemand(
+        TransparencyExecutionMode mode,
+        const CompiledTransparencyPolicy& policy) noexcept {
+        const bool classified = mode == TransparencyExecutionMode::Classified;
+        if (classified && policy.resolvedClass == TransparencyClass::WeightedOit)
+            return TransparentDemandWeightedOit;
+        if (classified &&
+            policy.resolvedClass == TransparencyClass::SortedSurface)
+            return 0u;
+        uint32_t demand = TransparentDemandCompatibilityQueue;
+        if (classified && policy.resolvedClass == TransparencyClass::LayeredGlass) {
+            switch (policy.quality) {
+            case TransparencyQuality::Ordinary2:
+                demand |= TransparentDemandOrdinary2; break;
+            case TransparencyQuality::Hero4:
+                demand |= TransparentDemandHero4; break;
+            case TransparencyQuality::Cinematic8:
+                demand |= TransparentDemandCinematic8; break;
+            }
+        }
+        return demand;
+    }
+
     // One shadow kind's casters and its (possibly empty) frame packets.
     // Cached storage is updated before any opaque/forward consumer reads it;
     // an empty packet list disables sampling of that kind.
@@ -187,8 +227,12 @@ namespace Iridium {
         // M9 G4: last frame's world transform per forward-opaque packet
         // (parallel to forwardOpaqueQueue).
         std::span<const glm::mat4> forwardOpaquePreviousTransforms{};
+        // M7.10.1: the transparent queues hold the work that survived the
+        // main-view frustum and depth cull; culledTransparentDemand is the
+        // TransparentResidencyDemand of the culled work (see above).
         std::span<const DrawPacket> sortedSurfaceQueue{};
         std::span<const DrawPacket> compatibilityTransparentQueue{};
+        uint32_t culledTransparentDemand = 0;
         // M9.8e: the same for the sorted and compatibility queues. Blended
         // surfaces write no velocity; they compare this motion with the
         // opaque velocity under them (motion-aware reactive coverage).

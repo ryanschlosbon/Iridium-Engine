@@ -133,6 +133,9 @@ namespace Iridium {
         uint64_t uploadStagingRingWaits = 0;
         uint64_t uploadDedicatedStagingUploads = 0;
         uint64_t uploadAsyncSubmits = 0;
+        // M7.10.D GPU crash diagnostics (RenderBackendRuntimeInfo).
+        bool gpuDeviceFault = false;
+        bool gpuCrashCheckpoints = false;
         bool refractionPyramidsResident = false;
         std::string modelLoadMode;
         std::string modelLocation;

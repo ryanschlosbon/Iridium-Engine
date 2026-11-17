@@ -530,6 +530,8 @@ namespace Iridium {
         metadata.uploadDedicatedStagingUploads =
             runtimeInfo_.uploads.dedicatedStagingUploads;
         metadata.uploadAsyncSubmits = runtimeInfo_.uploads.asyncSubmits;
+        metadata.gpuDeviceFault = runtimeInfo_.gpuDeviceFault;
+        metadata.gpuCrashCheckpoints = runtimeInfo_.gpuCrashCheckpoints;
         metadata.refractionPyramidsResident =
             runtimeInfo_.refractionPyramidsResident;
         metadata.modelLoadMode =

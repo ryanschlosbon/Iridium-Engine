@@ -22,6 +22,14 @@ namespace {
 
     constexpr std::array<uint32_t, 3> Resolutions{ 256, 512, 1024 };
 
+    // Receiver terms in shadow texels of the receiver's cube footprint
+    // (point_shadow.glsl; ADR-0010 decision 4, the directional contract):
+    // constant depth bias, bounded per-tap receiver-plane correction, and the
+    // front-facing geometric-normal offset.
+    constexpr float ReceiverDepthBiasTexels = 2.0f;
+    constexpr float ReceiverPlaneClampTexels = 2.0f;
+    constexpr float NormalOffsetTexels = 0.5f;
+
 } // namespace
 
 uint32_t VulkanPointShadowPools::poolIndex(uint32_t resolution) {
@@ -214,9 +222,10 @@ void VulkanPointShadowPools::updateFrame(uint32_t frameIndex,
         entry.depthBias = {
             packet.farPlane / denominator,
             packet.farPlane * packet.nearPlane / denominator,
-            0.0f, 2.0f };
+            NormalOffsetTexels, ReceiverDepthBiasTexels };
         entry.filterParameters = { packet.sourceRadiusMeters,
-            packet.filterProfile.maximumPenumbraTexels, 0.0f, 0.0f };
+            packet.filterProfile.maximumPenumbraTexels,
+            ReceiverPlaneClampTexels, 0.0f };
         entry.filterMetadata = {
             packet.filterProfile.blockerSearchSamples,
             packet.filterProfile.filterSamples,

@@ -148,6 +148,12 @@ if(TARGET iridium_qualification)
             SOURCES qualification/ScriptedChangesTests.cpp
             LIBS iridium_qualification
             NO_PCH)
+
+    # M7C P1 multi-model fixtures: cooked artifact to fixture source matching.
+    iridium_add_test(BenchmarkModelMatchingTests
+            SOURCES qualification/BenchmarkModelMatchingTests.cpp
+            LIBS iridium_qualification
+            NO_PCH)
 endif()
 
 iridium_add_test(TransformSystemTests
@@ -268,6 +274,12 @@ iridium_add_test(GpuSceneObservationTests
 # M9 G4: previous transforms of packets without a GPU-scene record.
 iridium_add_test(PreviousTransformCacheTests
         SOURCES renderer/PreviousTransformCacheTests.cpp
+        LIBS iridium_render_extraction)
+
+# M7.10.1: conservative transparent frustum culling (whole-owner bound,
+# instance batches, culled previous-transform keys, residency demand).
+iridium_add_test(TransparentFrustumCullingTests
+        SOURCES renderer/TransparentFrustumCullingTests.cpp
         LIBS iridium_render_extraction)
 
 # M7R R5c.3: compact (key, index) queue sorts keep the packet sorts' permutation.

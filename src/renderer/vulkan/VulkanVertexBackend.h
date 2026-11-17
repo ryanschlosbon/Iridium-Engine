@@ -62,6 +62,7 @@
 #include "VulkanRenderGraphExecutor.h"
 #include "VulkanTransparencyPyramid.h"
 #include "VulkanDepthPyramid.h"
+#include "VulkanDeviceLossDiagnostics.h"
 #include "VulkanLayeredInterfaceCapturePass.h"
 #include "VulkanLayeredLocalCompositionPass.h"
 #include "VulkanLayeredSceneResolvePass.h"
@@ -96,6 +97,8 @@ namespace Iridium {
         // --- 1. THE SUBSYSTEMS (Composition) ---
         // We moved all of these pointers out of Application.cpp and into here.
         std::unique_ptr<VkContext> vkContext;
+        // M7.10.D: device-loss reports and GPU crash breadcrumbs.
+        VulkanDeviceLossDiagnostics deviceLoss_;
         VulkanResourceAllocator resourceAllocator;
         VulkanUploadContext uploadContext;
         VulkanFrameScheduler scheduler;
@@ -288,13 +291,6 @@ namespace Iridium {
             uint32_t imageIndex) const;
         [[nodiscard]] VulkanProductionGraphFeatures
             productionGraphFeatures() const noexcept;
-        void applyTransparencyPyramidTopologyChange(
-            std::optional<VkExtent2D> requestedOrdinary2AtlasExtent =
-                std::nullopt,
-            std::optional<VkExtent2D> requestedHero4AtlasExtent =
-                std::nullopt,
-            std::optional<VkExtent2D> requestedCinematic8AtlasExtent =
-                std::nullopt);
         void emitFrameCounters();
         void bindMaterialDescriptors(VkPipelineLayout layout);
         // The deep tier's validation readback hook (layered payload).

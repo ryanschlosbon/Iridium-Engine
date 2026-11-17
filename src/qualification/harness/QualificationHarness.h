@@ -14,10 +14,12 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <memory>
 #include <optional>
 #include <span>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "benchmarks/BenchmarkManifest.h"
@@ -126,6 +128,12 @@ namespace Iridium {
         // Startup (QualificationHarness.cpp, BenchmarkScene.cpp).
         void allocateTableScaleProbes(AppStartupContext& context);
         void loadBenchmarkContent(AppStartupContext& context);
+        void loadBenchmarkModels(AppStartupContext& context,
+            std::shared_ptr<ModelAsset> startupModel);
+        void prepareBenchmarkModelTopology(AppStartupContext& context);
+        [[nodiscard]] const std::shared_ptr<ModelAsset>& benchmarkSourceModel(
+            const std::filesystem::path& sourceAsset,
+            const AppStartupContext& context) const;
         void checkPreconditions(AppStartupContext& context);
         void recordTopologyBaselines(AppStartupContext& context);
         void constructBenchmarkScene(AppStartupContext& context);
@@ -204,6 +212,11 @@ namespace Iridium {
         std::string benchmarkManifestPath_;
         std::string benchmarkManifestSha256_;
         std::vector<BenchmarkInstanceState> benchmarkInstances_;
+        // M7C P1 multi-model fixtures: the model backing each fixture source
+        // (benchmarkFixtureSourceAssets order; the first is the startup
+        // model). Empty for single-model fixtures.
+        std::vector<std::pair<std::filesystem::path, std::shared_ptr<ModelAsset>>>
+            benchmarkSourceModels_;
         uint32_t generatedLightCount_ = 0;
 
         // Backend facts retained for the run report.

@@ -89,7 +89,7 @@ namespace Iridium {
 
     VulkanWeightedOitFeature::FrameDecision VulkanWeightedOitFeature::observe(
         std::span<const DrawPacket> sortedSurfaceQueue,
-        std::span<const glm::mat4> instanceTransforms) {
+        std::span<const glm::mat4> instanceTransforms, bool culledDemand) {
         VulkanFrameTelemetry& telemetry = context_->telemetry;
         const uint64_t weightedOitPacketCount = static_cast<uint64_t>(
             std::ranges::count_if(sortedSurfaceQueue,
@@ -117,7 +117,7 @@ namespace Iridium {
             }
             weightedOitInstanceCount += packet.instanceCount;
         }
-        residency_.observe(weightedOitPacketCount != 0u);
+        residency_.observe(weightedOitPacketCount != 0u || culledDemand);
         const bool weightedOitExecutionEnabled =
             residency_.enabled() &&
             weightedOitInstanceCount <= instanceCapacity_;

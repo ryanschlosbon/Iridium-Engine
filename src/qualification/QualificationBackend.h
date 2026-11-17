@@ -16,6 +16,7 @@
 #include "renderer/rhi/RenderBackendExtension.h"
 
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 namespace Iridium {
@@ -41,6 +42,9 @@ namespace Iridium {
         bool validateProbeCaptureTargets = false;
         // M9.5: exposure readbacks will be armed every frame.
         bool exposureTrace = false;
+        // M7.10.D: the backend frame (0-based beginFrame count) at which a
+        // fabricated device loss is reported; the device stays healthy.
+        std::optional<uint64_t> simulateDeviceLostReportFrame;
     };
 
     class IQualificationBackend {

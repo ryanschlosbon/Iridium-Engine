@@ -33,9 +33,14 @@
 
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <span>
 
 namespace Iridium {
+
+    struct FrameTopologyPreparation;
+    struct FrameTopologyRequirements;
+    class VulkanWeightedOitFeature;
 
     class VulkanLayeredTransparencyFeature final : public IVulkanFeature {
     public:
@@ -102,6 +107,34 @@ namespace Iridium {
         }
         [[nodiscard]] bool deepActive(TransparencyQuality quality) const noexcept;
 
+        // The transparency topology (M7.10.0: moved from the backend): the
+        // refraction pyramids' residency (forward owner), these tiers'
+        // residency and atlas extents, and the WeightedOIT residency. Changes
+        // happen only between frames, inside the backend's frame-target cycle
+        // (release the graph, targets and descriptors; recreate them and the
+        // editor's target textures).
+        struct TopologyServices {
+            TransparencyPyramidResidency* pyramids = nullptr;
+            VulkanWeightedOitFeature* weightedOit = nullptr;
+            void* owner = nullptr;
+            void (*releaseTargets)(void* owner) = nullptr;
+            void (*createTargets)(void* owner) = nullptr;
+        };
+        // Before the first frame.
+        void configureTopology(const TopologyServices& services) noexcept {
+            topology_ = services;
+        }
+        // Publishes pending residency and atlas-extent changes (beginFrame;
+        // prepareTopology passes explicit extents), restoring the previous
+        // topology when the rebuild fails.
+        void applyTopologyChange(VkExtent2D sceneExtent,
+            std::optional<VkExtent2D> requestedOrdinary2AtlasExtent = std::nullopt,
+            std::optional<VkExtent2D> requestedHero4AtlasExtent = std::nullopt,
+            std::optional<VkExtent2D> requestedCinematic8AtlasExtent = std::nullopt);
+        // IRenderBackend::prepareFrameTopology (between frames).
+        [[nodiscard]] FrameTopologyPreparation prepareTopology(
+            const FrameTopologyRequirements& requirements, VkExtent2D sceneExtent);
+
         // Per frame. beginFrame invalidates the view projection, which the
         // lighting submission publishes; observe records the tiers' demand;
         // prepare builds the frame's plans (inside cpu.render.record.forward)
@@ -111,7 +144,11 @@ namespace Iridium {
             viewProjection_ = viewProjection;
             viewProjectionValid_ = true;
         }
-        void observe(std::span<const DrawPacket> compatibilityTransparentQueue);
+        // M7.10.1: culledDemand holds the TransparentResidencyDemand bits of
+        // the work extraction culled; it keeps the tiers' residency as the
+        // unculled queue would.
+        void observe(std::span<const DrawPacket> compatibilityTransparentQueue,
+            uint32_t culledDemand);
         void prepare(const FrameInputs& inputs);
         // A packet the frame's layered tiers resolve (the compatibility
         // forward pass skips it).
@@ -178,6 +215,7 @@ namespace Iridium {
         void drawDeepSceneResolve(VulkanPassContext& context);
 
         const VulkanFeatureContext* context_ = nullptr;
+        TopologyServices topology_{};
         VkDescriptorSetLayout lightingSetLayout_ = VK_NULL_HANDLE;
         VulkanLayeredInterfaceCapturePass interfaceCapture_;
         VulkanLayeredLocalCompositionPass localComposition_;

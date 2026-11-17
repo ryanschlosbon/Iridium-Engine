@@ -3,8 +3,10 @@
 #include "renderer/lighting/ClusteredReflectionProbes.h"
 #include "scene/components/TransformComponent.h"
 
+#include <algorithm>
 #include <cmath>
 #include <bit>
+#include <limits>
 #include <cstdio>
 #include <iostream>
 #include <stdexcept>
@@ -51,6 +53,135 @@ namespace {
             .farPlane = 100.0f,
             .priority = static_cast<int32_t>(owner),
         };
+    }
+
+    PackedGpuLight packedLight(PackedGpuLightType type, glm::vec3 position,
+        float range) {
+        PackedGpuLight light;
+        light.positionRange = glm::vec4(position, range);
+        light.directionOuterCos = { 0.0f, 0.0f, 1.0f, 0.5f };
+        light.colorIntensity = { 1.0f, 1.0f, 1.0f, 1'000.0f };
+        light.shapeMetadata = { 0.05f, 0.0f,
+            std::bit_cast<float>(static_cast<uint32_t>(type)),
+            std::bit_cast<float>(kInvalidShadowDataSlot) };
+        return light;
+    }
+
+    // M7.10.5: a realtime capture's lighting revision depends only on the
+    // lights that can reach its depth-clipped cube, plus whether each such
+    // light is inside the capture loop's slot window [0, activeLightCount).
+    bool captureLightingRevisionIsScopedToReachingLights() {
+        const glm::vec3 capture{ 0.0f };
+        constexpr float far = 10.0f;
+        using Type = PackedGpuLightType;
+        // The cube is [-10, 10]^3.
+        CHECK(lightCanReachReflectionProbeCapture(
+            packedLight(Type::Directional, glm::vec3(1.0e6f), 0.0f),
+            capture, far));
+        CHECK(lightCanReachReflectionProbeCapture(
+            packedLight(Type::Point, { 13.99f, 0.0f, 0.0f }, 4.0f),
+            capture, far));
+        CHECK(lightCanReachReflectionProbeCapture(
+            packedLight(Type::Spot, { 0.0f, 0.0f, 14.0f }, 5.0f),
+            capture, far));
+        // Outside the cube's corner region but inside its bounding sphere.
+        CHECK(!lightCanReachReflectionProbeCapture(
+            packedLight(Type::Point, { 13.0f, 13.0f, 0.0f }, 4.0f),
+            capture, far));
+        CHECK(!lightCanReachReflectionProbeCapture(
+            packedLight(Type::Point, { 40.0f, 0.0f, 0.0f }, 5.0f),
+            capture, far));
+        CHECK(lightCanReachReflectionProbeCapture(
+            packedLight(Type::Point, { 40.0f, 0.0f, 0.0f }, 5.0f),
+            capture, std::numeric_limits<float>::quiet_NaN()));
+
+        std::vector<PackedGpuLight> records(8);
+        std::vector<uint64_t> revisions(8, 0);
+        std::vector<uint32_t> active;
+        uint64_t nextRevision = 0;
+        const auto place = [&](uint32_t slot, const PackedGpuLight& light) {
+            records[slot] = light;
+            revisions[slot] = ++nextRevision;
+            if (std::ranges::find(active, slot) == active.end()) {
+                active.push_back(slot);
+                std::ranges::sort(active);
+            }
+        };
+        const auto remove = [&](uint32_t slot) {
+            records[slot] = {};
+            revisions[slot] = ++nextRevision;
+            active.erase(std::ranges::find(active, slot));
+        };
+        const auto revision = [&] {
+            const LightingFramePacket packet{ .records = records,
+                .recordRevisions = revisions, .activeSlots = active,
+                .stats = { .activeLightCount =
+                    static_cast<uint32_t>(active.size()) } };
+            return reflectionProbeCaptureLightingRevision(packet, capture, far);
+        };
+        place(0, packedLight(Type::Directional, glm::vec3(0.0f), 0.0f));
+        place(1, packedLight(Type::Point, { 5.0f, 0.0f, 0.0f }, 2.0f));
+        place(2, packedLight(Type::Spot, { 0.0f, 0.0f, 14.0f }, 5.0f));
+        place(3, packedLight(Type::Point, { 13.99f, 0.0f, 0.0f }, 4.0f));
+        place(4, packedLight(Type::Point, { 40.0f, 0.0f, 0.0f }, 5.0f));
+        place(5, packedLight(Type::Point, { 13.0f, 13.0f, 0.0f }, 4.0f));
+        const uint64_t base = revision();
+        CHECK(base != 0u && revision() == base);
+
+        // Edits to out-of-reach lights (an intensity drag) change nothing.
+        records[4].colorIntensity.w = 1.0e6f;
+        revisions[4] = ++nextRevision;
+        records[5].colorIntensity = { 0.2f, 0.4f, 1.0f, 9.0f };
+        revisions[5] = ++nextRevision;
+        CHECK(revision() == base);
+        // Removing or adding out-of-reach lights changes nothing while no
+        // reaching light crosses the slot window.
+        remove(5);
+        CHECK(revision() == base);
+        remove(4);
+        CHECK(revision() == base);
+        place(4, packedLight(Type::Point, { -60.0f, 0.0f, 0.0f }, 20.0f));
+        CHECK(revision() == base);
+
+        // Reaching lights: each edit is a new revision.
+        records[1].colorIntensity.w = 5.0f;
+        revisions[1] = ++nextRevision;
+        const uint64_t local = revision();
+        CHECK(local != base);
+        records[0].colorIntensity.w = 50.0f;
+        revisions[0] = ++nextRevision;
+        const uint64_t directional = revision();
+        CHECK(directional != local);
+
+        // Membership: moving into reach, and back out, and adding/removing a
+        // reaching light.
+        records[4].positionRange = { -25.0f, 0.0f, 0.0f, 20.0f };
+        revisions[4] = ++nextRevision;
+        const uint64_t entered = revision();
+        CHECK(entered != directional);
+        records[4].positionRange = { -60.0f, 0.0f, 0.0f, 20.0f };
+        revisions[4] = ++nextRevision;
+        CHECK(revision() == directional);
+        place(5, packedLight(Type::Spot, { 0.0f, 9.0f, 0.0f }, 3.0f));
+        const uint64_t added = revision();
+        CHECK(added != directional);
+        remove(5);
+        CHECK(revision() == directional);
+
+        // Slot bound: with a hole at slot 5, a reaching light in slot 6 is
+        // still inside the capture's slot bound (highest active slot + 1), so
+        // filling the hole with an out-of-reach light changes nothing.
+        place(6, packedLight(Type::Point, { 1.0f, 1.0f, 1.0f }, 1.0f));
+        const uint64_t highSlot = revision();
+        CHECK(highSlot != directional);
+        {
+            const LightingFramePacket packet{ .records = records,
+                .recordRevisions = revisions, .activeSlots = active };
+            CHECK(reflectionProbeCaptureLightSlotBound(packet) == 7u);
+        }
+        place(5, packedLight(Type::Point, { 90.0f, 0.0f, 0.0f }, 1.0f));
+        CHECK(revision() == highSlot);
+        return true;
     }
 
     glm::vec3 expectedCubeDirection(uint32_t face, float u, float v) {
@@ -671,6 +802,8 @@ int main() {
             realtimeCaptureCadenceBoundsAutomaticRefresh },
         { "realtime capture completes across changing dependencies",
             realtimeCaptureCompletesAcrossChangingDependencies },
+        { "capture lighting revision is scoped to reaching lights",
+            captureLightingRevisionIsScopedToReachingLights },
     };
     for (const auto& test : tests) {
         std::cout << "[ RUN      ] " << test.name << '\n';

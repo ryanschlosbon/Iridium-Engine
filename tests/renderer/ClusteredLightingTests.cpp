@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <functional>
 #include <iostream>
 #include <vector>
 
@@ -192,6 +193,71 @@ namespace {
         return true;
     }
 
+    // M7.10.2: a light whose range sphere encloses the camera covers every
+    // cluster once (the case the GPU now spreads over many workgroups).
+    bool cameraEnclosingLightCoversEveryCluster() {
+        Iridium::ClusteredLightAssigner assigner(smallConfig());
+        Lights lights;
+        lights.add(Iridium::PackedGpuLightType::Directional, {}, 0.0f);
+        const uint32_t point = lights.add(Iridium::PackedGpuLightType::Point,
+            { 0.0f, 0.0f, 0.0f }, 1'000.0f);
+        const auto product = assigner.build(lights.packet(), frame());
+        CHECK(!product.usesFallback());
+        CHECK(product.headers.size() == 64);
+        CHECK(product.stats.clustersUsed == 64);
+        CHECK(product.stats.maximumClusterOccupancy == 1);
+        CHECK(product.stats.publishedLightReferences == 64);
+        CHECK(product.localLightSlots == std::vector<uint32_t>(64, point));
+        for (uint32_t cluster = 0; cluster < product.headers.size(); ++cluster) {
+            CHECK(product.headers[cluster].count == 1);
+            CHECK(product.headers[cluster].offset == cluster);
+        }
+        return true;
+    }
+
+    // M7.10.2: many overlapping lights. Every cluster lists its lights in
+    // ascending slot order, so the product does not depend on the active
+    // list's order (the GPU's atomic order is free; its sort restores this).
+    bool manyLightsAreSlotOrderedAndOrderIndependent() {
+        auto config = smallConfig();
+        config.maximumLightsPerCluster = 64;
+        config.maximumLightReferences = 4'096;
+        Iridium::ClusteredLightAssigner assigner(config);
+        Lights lights;
+        for (uint32_t index = 0; index < 48; ++index) {
+            const float x = static_cast<float>(index % 7) * 3.0f - 9.0f;
+            const float y = static_cast<float>(index % 5) * 3.0f - 6.0f;
+            const float z = -2.0f - static_cast<float>(index % 11) * 6.0f;
+            const auto type = index % 4 == 3 ? Iridium::PackedGpuLightType::Spot
+                : Iridium::PackedGpuLightType::Point;
+            lights.add(type, { x, y, z }, 4.0f + static_cast<float>(index % 3) * 6.0f);
+        }
+        lights.add(Iridium::PackedGpuLightType::Point, {}, 500.0f);
+        const auto product = assigner.build(lights.packet(), frame());
+        CHECK(!product.usesFallback());
+        CHECK(product.stats.localLightCount == 49);
+        uint64_t references = 0;
+        uint32_t occupancy = 0;
+        for (const auto header : product.headers) {
+            CHECK(static_cast<uint64_t>(header.offset) + header.count <=
+                product.localLightSlots.size());
+            const auto begin = product.localLightSlots.begin() + header.offset;
+            CHECK(std::adjacent_find(begin, begin + header.count,
+                std::greater_equal<uint32_t>()) == begin + header.count);
+            references += header.count;
+            occupancy = (std::max)(occupancy, header.count);
+        }
+        CHECK(references == product.localLightSlots.size());
+        CHECK(product.stats.clustersUsed == product.headers.size());
+        CHECK(product.stats.maximumClusterOccupancy == occupancy);
+        CHECK(occupancy > 1);
+
+        Lights reversed = lights;
+        std::ranges::reverse(reversed.active);
+        CHECK(product == assigner.build(reversed.packet(), frame()));
+        return true;
+    }
+
 } // namespace
 
 int main() {
@@ -201,6 +267,8 @@ int main() {
         std::pair{ "camera boundaries", behindCameraAndNearPlaneBehaviorIsConservative },
         std::pair{ "whole fallback", overflowUsesWholeDeterministicFallback },
         std::pair{ "overflow codes", directionalAndGlobalReferenceOverflowAreDistinct },
+        std::pair{ "camera-enclosing light", cameraEnclosingLightCoversEveryCluster },
+        std::pair{ "many lights", manyLightsAreSlotOrderedAndOrderIndependent },
     };
     for (const auto& [name, test] : tests) {
         if (!test()) { std::cerr << "[FAIL] " << name << '\n'; return 1; }

@@ -277,6 +277,10 @@ namespace Iridium {
                         metadata.uploadDedicatedStagingUploads },
                     { "async_submits", metadata.uploadAsyncSubmits },
                 } },
+                { "gpu_crash_diagnostics", {
+                    { "device_fault", metadata.gpuDeviceFault },
+                    { "checkpoints", metadata.gpuCrashCheckpoints },
+                } },
                 { "refraction_pyramids_resident",
                     metadata.refractionPyramidsResident },
                 { "model_load_mode", metadata.modelLoadMode },

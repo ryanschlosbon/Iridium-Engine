@@ -3,6 +3,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <array>
+#include <cmath>
 #include <iostream>
 #include <limits>
 #include <random>
@@ -208,12 +209,94 @@ namespace {
     }
 }
 
+namespace {
+    // M7.10.1: the public box-plane test (transparent culling) matches the
+    // classifier's instance test, rejects only boxes wholly outside one plane
+    // and fails visible on an invalid frustum or invalid bounds.
+    void publicAabbRejection() {
+        const GpuSceneFrustum identity = makeGpuSceneFrustum(glm::mat4(1.0f));
+        CHECK(!gpuSceneFrustumRejectsAabb(identity,
+            { -0.5f, -0.5f, 0.25f }, { 0.5f, 0.5f, 0.75f }));
+        CHECK(gpuSceneFrustumRejectsAabb(identity,
+            { 1.5f, -0.5f, 0.25f }, { 2.0f, 0.5f, 0.75f }));       // x > w
+        CHECK(gpuSceneFrustumRejectsAabb(identity,
+            { -0.5f, -2.0f, 0.25f }, { 0.5f, -1.5f, 0.75f }));     // y < -w
+        CHECK(gpuSceneFrustumRejectsAabb(identity,
+            { -0.5f, -0.5f, -1.0f }, { 0.5f, 0.5f, -0.5f }));      // z < 0
+        CHECK(gpuSceneFrustumRejectsAabb(identity,
+            { -0.5f, -0.5f, 1.5f }, { 0.5f, 0.5f, 2.0f }));        // z > w
+        CHECK(!gpuSceneFrustumRejectsAabb(identity,
+            { 0.9f, -0.5f, 0.25f }, { 1.5f, 0.5f, 0.75f }));       // straddles
+        // Outside two planes' corner region but no single plane: kept.
+        CHECK(!gpuSceneFrustumRejectsAabb(identity,
+            { 0.5f, 0.5f, 0.25f }, { 1.5f, 1.5f, 0.75f }));
+
+        // Fail visible.
+        const GpuSceneFrustum invalid = makeGpuSceneFrustum(glm::mat4(0.0f));
+        CHECK(!invalid.valid);
+        CHECK(!gpuSceneFrustumRejectsAabb(invalid,
+            { 1.5f, -0.5f, 0.25f }, { 2.0f, 0.5f, 0.75f }));
+        const float nan = std::numeric_limits<float>::quiet_NaN();
+        CHECK(!gpuSceneFrustumRejectsAabb(identity,
+            { nan, -0.5f, 0.25f }, { 2.0f, 0.5f, 0.75f }));
+        CHECK(!gpuSceneFrustumRejectsAabb(identity,
+            { 2.0f, -0.5f, 0.25f }, { 1.5f, 0.5f, 0.75f }));       // inverted
+
+        // Same decision as the classifier's instance stage.
+        for (const float x : { -2.0f, -1.1f, -0.9f, 0.0f, 0.9f, 1.1f, 2.0f }) {
+            const GpuScenePackedTables scene = sceneAt(x);
+            GpuSceneVisibilityResult result;
+            classifyGpuSceneFrustum(scene, identity,
+                GpuSceneConsumerMainOpaque, result);
+            const GpuSceneInstanceRecord& instance = scene.instances[0];
+            const glm::vec3 minimum{ instance.worldBoundsMin.x,
+                instance.worldBoundsMin.y, instance.worldBoundsMin.z };
+            const glm::vec3 maximum{ instance.worldBoundsMax.x,
+                instance.worldBoundsMax.y, instance.worldBoundsMax.z };
+            CHECK(gpuSceneFrustumRejectsAabb(identity, minimum, maximum) ==
+                (result.stats.frustumRejectedInstances == 1u));
+        }
+
+        // Conservative under a perspective view: a rejected box has no
+        // corner inside the clip volume.
+        std::mt19937 random(0x7f10u);
+        std::uniform_real_distribution<float> position(-30.0f, 30.0f);
+        std::uniform_real_distribution<float> extent(0.01f, 6.0f);
+        const glm::mat4 clip = glm::perspective(glm::radians(60.0f),
+            16.0f / 9.0f, 0.1f, 40.0f) * glm::lookAt(glm::vec3(1.0f, 2.0f, 3.0f),
+                glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+        const GpuSceneFrustum frustum = makeGpuSceneFrustum(clip);
+        CHECK(frustum.valid);
+        uint32_t rejectedCount = 0;
+        for (uint32_t sample = 0; sample < 4096; ++sample) {
+            const glm::vec3 minimum{ position(random), position(random),
+                position(random) };
+            const glm::vec3 maximum = minimum + glm::vec3(extent(random),
+                extent(random), extent(random));
+            if (!gpuSceneFrustumRejectsAabb(frustum, minimum, maximum)) continue;
+            ++rejectedCount;
+            for (uint32_t corner = 0; corner < 8; ++corner) {
+                const glm::vec4 point = clip * glm::vec4(
+                    (corner & 1u) ? maximum.x : minimum.x,
+                    (corner & 2u) ? maximum.y : minimum.y,
+                    (corner & 4u) ? maximum.z : minimum.z, 1.0f);
+                const bool inside = point.w > 0.0f &&
+                    std::abs(point.x) <= point.w && std::abs(point.y) <= point.w &&
+                    point.z >= 0.0f && point.z <= point.w;
+                CHECK(!inside);
+            }
+        }
+        CHECK(rejectedCount > 0u);
+    }
+}
+
 int main() {
     identityVulkanClipVolume();
     primitiveSecondStage();
     invalidDataFailsVisible();
     consumerMaskAndDeterminism();
     rangeClassificationMatchesWhole();
+    publicAabbRejection();
     if (failures == 0) std::cout << "GpuSceneVisibilityTests passed\n";
     return failures == 0 ? 0 : 1;
 }

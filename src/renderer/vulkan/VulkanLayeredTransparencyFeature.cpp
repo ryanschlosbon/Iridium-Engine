@@ -1,17 +1,25 @@
 #include "VulkanLayeredTransparencyFeature.h"
 
 #include "VulkanExtensionHooks.h"
+#include "VulkanFrameScheduler.h"
 #include "VulkanFrameTargets.h"
 #include "VulkanFrameTelemetry.h"
 #include "VulkanIndirectCullerShared.h"
 #include "VulkanMeshLayouts.h"
 #include "VulkanResourceRegistry.h"
+#include "VulkanWeightedOitFeature.h"
 #include "profiling/CpuProfiler.h"
+#include "renderer/rhi/IRenderBackend.h"
 #include "renderer/rhi/Mesh.h"
+#include "renderer/rhi/RenderFrame.h"
 #include "renderer/transparency/LayeredGlass.h"
+#include "renderer/transparency/WeightedOit.h"
 
 #include <algorithm>
+#include <chrono>
+#include <exception>
 #include <stdexcept>
+#include <string>
 
 namespace Iridium {
 
@@ -179,20 +187,27 @@ namespace Iridium {
     }
 
     void VulkanLayeredTransparencyFeature::observe(
-        std::span<const DrawPacket> compatibilityTransparentQueue) {
-        const bool requiresOrdinary2Atlas = std::ranges::any_of(
-            compatibilityTransparentQueue, isOrdinary2LayeredGlassPacket);
+        std::span<const DrawPacket> compatibilityTransparentQueue,
+        uint32_t culledDemand) {
+        const bool requiresOrdinary2Atlas =
+            (culledDemand & TransparentDemandOrdinary2) != 0u ||
+            std::ranges::any_of(
+                compatibilityTransparentQueue, isOrdinary2LayeredGlassPacket);
         ordinary2Residency_.observe(requiresOrdinary2Atlas);
-        const bool requiresHero4Atlas = std::ranges::any_of(
-            compatibilityTransparentQueue, [](const DrawPacket& packet) {
-                return isLayeredGlassPacket(packet,
-                    TransparencyQuality::Hero4);
-            });
-        const bool requiresCinematic8Atlas = std::ranges::any_of(
-            compatibilityTransparentQueue, [](const DrawPacket& packet) {
-                return isLayeredGlassPacket(packet,
-                    TransparencyQuality::Cinematic8);
-            });
+        const bool requiresHero4Atlas =
+            (culledDemand & TransparentDemandHero4) != 0u ||
+            std::ranges::any_of(
+                compatibilityTransparentQueue, [](const DrawPacket& packet) {
+                    return isLayeredGlassPacket(packet,
+                        TransparencyQuality::Hero4);
+                });
+        const bool requiresCinematic8Atlas =
+            (culledDemand & TransparentDemandCinematic8) != 0u ||
+            std::ranges::any_of(
+                compatibilityTransparentQueue, [](const DrawPacket& packet) {
+                    return isLayeredGlassPacket(packet,
+                        TransparencyQuality::Cinematic8);
+                });
         hero4Residency_.observe(requiresHero4Atlas);
         cinematic8Residency_.observe(requiresCinematic8Atlas);
     }
@@ -1254,6 +1269,210 @@ namespace Iridium {
         context.endRendering();
         resolveDrawCounts_ = sceneResolveDrawCounts;
         resolveRecorded_ = true;
+    }
+
+    // ------------------------------------------------------------------
+    // The transparency topology (M7.10.0: moved from the backend).
+    // ------------------------------------------------------------------
+
+    void VulkanLayeredTransparencyFeature::applyTopologyChange(
+        VkExtent2D sceneExtent,
+        std::optional<VkExtent2D> requestedOrdinary2AtlasExtent,
+        std::optional<VkExtent2D> requestedHero4AtlasExtent,
+        std::optional<VkExtent2D> requestedCinematic8AtlasExtent) {
+        TransparencyPyramidResidency& pyramids = *topology_.pyramids;
+        VulkanWeightedOitFeature& weightedOit = *topology_.weightedOit;
+        const VkExtent2D previousOrdinary2AtlasExtent = ordinary2Extent_;
+        const VkExtent2D previousHero4AtlasExtent = hero4Extent_;
+        const VkExtent2D previousCinematic8AtlasExtent = cinematic8Extent_;
+        const auto requestedExtent = [&](std::optional<VkExtent2D> explicitExtent,
+                const TransparencyPyramidResidency& residency,
+                TransparencyQuality quality) {
+            if (explicitExtent) return *explicitExtent;
+            if (!residency.requestedEnabled()) return VkExtent2D{};
+            const Ordinary2AtlasExtent capacity = layeredAtlasCapacityExtent(
+                sceneExtent.width, sceneExtent.height, quality);
+            return VkExtent2D{ capacity.width, capacity.height };
+        };
+        const VkExtent2D nextOrdinary2AtlasExtent = requestedExtent(
+            requestedOrdinary2AtlasExtent, ordinary2Residency_,
+            TransparencyQuality::Ordinary2);
+        const VkExtent2D nextHero4AtlasExtent = requestedExtent(
+            requestedHero4AtlasExtent, hero4Residency_,
+            TransparencyQuality::Hero4);
+        const VkExtent2D nextCinematic8AtlasExtent = requestedExtent(
+            requestedCinematic8AtlasExtent, cinematic8Residency_,
+            TransparencyQuality::Cinematic8);
+        const auto extentChanged = [](VkExtent2D lhs, VkExtent2D rhs) {
+            return lhs.width != rhs.width || lhs.height != rhs.height;
+        };
+        const bool ordinary2AtlasChange = extentChanged(
+            previousOrdinary2AtlasExtent, nextOrdinary2AtlasExtent);
+        const bool hero4AtlasChange = extentChanged(
+            previousHero4AtlasExtent, nextHero4AtlasExtent);
+        const bool cinematic8AtlasChange = extentChanged(
+            previousCinematic8AtlasExtent, nextCinematic8AtlasExtent);
+        if (!pyramids.changePending() &&
+            !ordinary2Residency_.changePending() &&
+            !hero4Residency_.changePending() &&
+            !cinematic8Residency_.changePending() &&
+            !weightedOit.residency().changePending() &&
+            !ordinary2AtlasChange && !hero4AtlasChange &&
+            !cinematic8AtlasChange)
+            return;
+
+        CpuProfiler* profiler = context_->profiler;
+        CpuScope topologyChangeScope(profiler,
+            "cpu.renderer.transparency_topology_change");
+
+        const bool previousEnabled = pyramids.enabled();
+        const bool previousOrdinary2Enabled = ordinary2Residency_.enabled();
+        const bool previousHero4Enabled = hero4Residency_.enabled();
+        const bool previousCinematic8Enabled = cinematic8Residency_.enabled();
+        const bool previousWeightedOitEnabled = weightedOit.residency().enabled();
+        const auto releaseTargets = [&] { topology_.releaseTargets(topology_.owner); };
+        const auto createTargets = [&] { topology_.createTargets(topology_.owner); };
+        VulkanFrameTelemetry& telemetry = context_->telemetry;
+
+        // This executes only between frames. All shared descriptor sets and
+        // scene targets must be unreferenced before the topology is retired.
+        {
+            CpuScope waitScope(profiler,
+                "cpu.renderer.transparency_topology_wait");
+            context_->scheduler.waitForAllFrames();
+        }
+        try {
+            CpuScope rebuildScope(profiler,
+                "cpu.renderer.transparency_topology_rebuild");
+            releaseTargets();
+            pyramids.publishRequested();
+            ordinary2Residency_.publishRequested();
+            hero4Residency_.publishRequested();
+            cinematic8Residency_.publishRequested();
+            weightedOit.residency().publishRequested();
+            weightedOit.setInstanceCapacity(weightedOit.residency().enabled()
+                ? kWeightedOitMaximumInstanceCount : 0u);
+            ordinary2Extent_ = nextOrdinary2AtlasExtent;
+            hero4Extent_ = nextHero4AtlasExtent;
+            cinematic8Extent_ = nextCinematic8AtlasExtent;
+            createTargets();
+            if (telemetry.collecting())
+                ++telemetry.counters().transparencyPyramidTopologyRebuilds;
+        }
+        catch (const std::exception& exception) {
+            if (telemetry.collecting())
+                ++telemetry.counters().transparencyPyramidTopologyRebuildFailures;
+            try {
+                CpuScope restoreScope(profiler,
+                    "cpu.renderer.transparency_topology_restore");
+                releaseTargets();
+                pyramids.restore(previousEnabled);
+                ordinary2Residency_.restore(previousOrdinary2Enabled);
+                hero4Residency_.restore(previousHero4Enabled);
+                cinematic8Residency_.restore(previousCinematic8Enabled);
+                weightedOit.residency().restore(previousWeightedOitEnabled);
+                weightedOit.setInstanceCapacity(previousWeightedOitEnabled
+                    ? kWeightedOitMaximumInstanceCount : 0u);
+                ordinary2Extent_ = previousOrdinary2AtlasExtent;
+                hero4Extent_ = previousHero4AtlasExtent;
+                cinematic8Extent_ = previousCinematic8AtlasExtent;
+                createTargets();
+            }
+            catch (const std::exception& restoreException) {
+                throw std::runtime_error(std::string(
+                    "Transparency topology rebuild failed: ") +
+                    exception.what() + "; restoring the previous topology "
+                    "failed: " + restoreException.what());
+            }
+        }
+    }
+
+    FrameTopologyPreparation VulkanLayeredTransparencyFeature::prepareTopology(
+        const FrameTopologyRequirements& requirements, VkExtent2D sceneExtent) {
+        TransparencyPyramidResidency& pyramids = *topology_.pyramids;
+        VulkanWeightedOitFeature& weightedOit = *topology_.weightedOit;
+        FrameTopologyPreparation result{
+            .requested = requirements.refractionPyramids ||
+                requirements.ordinary2LayeredInterfaces ||
+                requirements.hero4LayeredInterfaces ||
+                requirements.cinematic8LayeredInterfaces ||
+                requirements.weightedOit,
+        };
+        const bool previousPyramids = pyramids.enabled();
+        const VkExtent2D previousOrdinary2AtlasExtent = ordinary2Extent_;
+        const VkExtent2D previousHero4AtlasExtent = hero4Extent_;
+        const VkExtent2D previousCinematic8AtlasExtent = cinematic8Extent_;
+        const bool previousWeightedOit = weightedOit.residency().enabled();
+        const bool requirePyramids = requirements.refractionPyramids ||
+            requirements.ordinary2LayeredInterfaces ||
+            requirements.hero4LayeredInterfaces ||
+            requirements.cinematic8LayeredInterfaces;
+        VkExtent2D requestedOrdinary2AtlasExtent = ordinary2Extent_;
+        VkExtent2D requestedHero4AtlasExtent = hero4Extent_;
+        VkExtent2D requestedCinematic8AtlasExtent = cinematic8Extent_;
+        const auto requireTier = [&](bool required,
+                TransparencyQuality quality, VkExtent2D& requestedExtent,
+                const char* name) {
+            if (!required) return;
+            const Ordinary2AtlasExtent capacity = layeredAtlasCapacityExtent(
+                sceneExtent.width, sceneExtent.height, quality);
+            if (capacity.empty()) {
+                throw std::runtime_error(std::string(name) +
+                    " startup topology requires a tile-sized scene extent");
+            }
+            requestedExtent = { capacity.width, capacity.height };
+        };
+        requireTier(requirements.ordinary2LayeredInterfaces,
+            TransparencyQuality::Ordinary2, requestedOrdinary2AtlasExtent,
+            "Ordinary2");
+        requireTier(requirements.hero4LayeredInterfaces,
+            TransparencyQuality::Hero4, requestedHero4AtlasExtent, "Hero4");
+        requireTier(requirements.cinematic8LayeredInterfaces,
+            TransparencyQuality::Cinematic8,
+            requestedCinematic8AtlasExtent, "Cinematic8");
+        const auto extentChanged = [](VkExtent2D lhs, VkExtent2D rhs) {
+            return lhs.width != rhs.width || lhs.height != rhs.height;
+        };
+        const bool ordinary2Change = extentChanged(
+            requestedOrdinary2AtlasExtent, ordinary2Extent_);
+        const bool hero4Change = extentChanged(
+            requestedHero4AtlasExtent, hero4Extent_);
+        const bool cinematic8Change = extentChanged(
+            requestedCinematic8AtlasExtent, cinematic8Extent_);
+        if (!requirePyramids && !requirements.weightedOit) return result;
+
+        if (requirePyramids) {
+            pyramids.observe(true);
+            ordinary2Residency_.observe(requirements.ordinary2LayeredInterfaces);
+            hero4Residency_.observe(requirements.hero4LayeredInterfaces);
+            cinematic8Residency_.observe(requirements.cinematic8LayeredInterfaces);
+        }
+        weightedOit.residency().observe(requirements.weightedOit);
+        if (!pyramids.changePending() &&
+            !ordinary2Residency_.changePending() &&
+            !hero4Residency_.changePending() &&
+            !cinematic8Residency_.changePending() &&
+            !weightedOit.residency().changePending() &&
+            !ordinary2Change && !hero4Change && !cinematic8Change)
+            return result;
+
+        const auto start = std::chrono::steady_clock::now();
+        applyTopologyChange(sceneExtent,
+            requestedOrdinary2AtlasExtent, requestedHero4AtlasExtent,
+            requestedCinematic8AtlasExtent);
+        result.durationNanoseconds = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - start).count());
+        result.changed =
+            previousPyramids != pyramids.enabled() ||
+            previousOrdinary2AtlasExtent.width != ordinary2Extent_.width ||
+            previousOrdinary2AtlasExtent.height != ordinary2Extent_.height ||
+            previousHero4AtlasExtent.width != hero4Extent_.width ||
+            previousHero4AtlasExtent.height != hero4Extent_.height ||
+            previousCinematic8AtlasExtent.width != cinematic8Extent_.width ||
+            previousCinematic8AtlasExtent.height != cinematic8Extent_.height ||
+            previousWeightedOit != weightedOit.residency().enabled();
+        return result;
     }
 
 } // namespace Iridium

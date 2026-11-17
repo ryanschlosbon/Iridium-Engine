@@ -401,10 +401,12 @@ namespace {
     constexpr std::array<std::string_view, 6> DeclaredSinceR3b6{
         "shadow.directional.compact", "shadow.spot.compact", "shadow.point.compact",
         "gpu-scene.opaque.compact", "lighting.probe-cluster", "probe.capture" };
-    // Transient resources added after R3b.6 (M9.1). They are left out of the
-    // slot comparison, so the golden still pins every earlier resource's slot
-    // membership; slots that held only these resources are dropped.
-    constexpr std::array<std::string_view, 1> ResourcesSinceR3b6{ "gbuffer.velocity" };
+    // Transient resources added after R3b.6 (M9.1, M7.10.2). They are left out
+    // of the slot comparison, so the golden still pins every earlier
+    // resource's slot membership; slots that held only these resources are
+    // dropped.
+    constexpr std::array<std::string_view, 2> ResourcesSinceR3b6{ "gbuffer.velocity",
+        "lighting.cluster.light-bounds" };
 
     bool testDeclaredWorkKeepsOrderAndSlots() {
         const VulkanLayeredGraphConfig all{ Ordinary2Atlas, Hero4Atlas, Cinematic8Atlas, true };

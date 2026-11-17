@@ -29,6 +29,7 @@ namespace Iridium {
         RenderGraph::GraphResourceId cursors;
         RenderGraph::GraphResourceId scanScratch;
         RenderGraph::GraphResourceId indirect;
+        RenderGraph::GraphResourceId lightBounds;
     };
 
     // One deep layered tier (Hero4: 4 interfaces, Cinematic8: 8).

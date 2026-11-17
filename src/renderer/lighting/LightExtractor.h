@@ -25,6 +25,9 @@ namespace Iridium {
     // scan (the test-only ReferenceLightExtractor). The removal walk and the
     // active-list rebuild run only when membership can have changed. Steady
     // frames do not allocate, including frames that repeat diagnostics.
+    // M7.10.5: each slot also carries a shadow revision that advances only
+    // when the record's shadow geometry changes (sameLightShadowGeometry), on
+    // its own counter so record revisions are unchanged.
     class LightExtractor final {
     public:
         explicit LightExtractor(LightExtractionConfig config = {});
@@ -87,14 +90,17 @@ namespace Iridium {
         void clearRecord(uint32_t slot);
         void buildChangedRanges();
         void advanceRevision(uint64_t& value) noexcept;
+        void advanceShadowRevision(uint64_t& value) noexcept;
 
         LightExtractionConfig config_;
         const SceneWorld* world_ = nullptr;
         uint64_t worldEpoch_ = 0;
         uint64_t nextRevision_ = 0;
+        uint64_t nextShadowRevision_ = 0;
         uint64_t activeListRevision_ = 0;
         std::vector<PackedGpuLight> records_;
         std::vector<uint64_t> recordRevisions_;
+        std::vector<uint64_t> shadowRevisions_;
         std::vector<LightSelectionMetadata> selectionMetadata_;
         std::vector<uint32_t> activeSlots_;
         std::vector<uint32_t> previousActiveSlots_;

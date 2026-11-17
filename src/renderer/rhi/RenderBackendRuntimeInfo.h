@@ -98,6 +98,10 @@ namespace Iridium {
         std::string_view uploadQueueKind = "graphics";
         uint32_t uploadQueueFamily = 0;
         uint64_t uploadStagingRingBytes = 0;
+        // M7.10.D GPU crash diagnostics in effect: device-fault reports and
+        // per-pass checkpoints (--gpu-crash-checkpoints).
+        bool gpuDeviceFault = false;
+        bool gpuCrashCheckpoints = false;
         uint32_t gpuLightCapacity = 0;
         uint32_t gpuLightActiveCount = 0;
         uint64_t gpuLightUploadBytes = 0;

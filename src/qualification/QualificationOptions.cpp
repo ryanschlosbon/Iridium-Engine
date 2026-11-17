@@ -182,6 +182,14 @@ namespace Iridium {
             "--benchmark-manifest requires a path",
             [&q](std::string_view value) { q.benchmarkManifest = std::string(value); },
             true);
+        addValueOption(registry, owner, "--benchmark-model-artifact", "PATH",
+            "Load a further cooked model for a multi-model fixture (repeatable; "
+            "matched to its source by asset identity)",
+            "--benchmark-model-artifact requires a path",
+            [&q](std::string_view value) {
+                q.benchmarkModelArtifacts.emplace_back(std::string(value));
+            },
+            true);
         addValueOption(registry, owner, "--weighted-oit-order-seed", "N",
             "Deterministically permute OIT draws for qualification; 0 preserves production order",
             "--weighted-oit-order-seed requires an unsigned integer",
@@ -304,6 +312,13 @@ namespace Iridium {
         addSwitch(registry, owner, "--qualification-exposure-trace",
             "Read back each frame's adapted exposure and histogram summary (auto-exposure); print IRIDIUM_EXPOSURE lines",
             [&q] { q.exposureTrace = true; });
+        addValueOption(registry, owner, "--qualification-simulate-device-lost-report", "N",
+            "Write a device-loss report (IRIDIUM_DEVICE_LOST) for a fabricated VK_ERROR_DEVICE_LOST at backend frame N; the device is not lost and the run continues",
+            "--qualification-simulate-device-lost-report requires a frame index",
+            [&q](std::string_view value) {
+                q.simulateDeviceLostReportFrame = parseUnsigned(value,
+                    "--qualification-simulate-device-lost-report");
+            });
         addSwitch(registry, owner, "--validate-depth-pyramid-capture",
             "Read back live depth and verify every pyramid mip",
             [&q, &c] {
@@ -374,6 +389,10 @@ namespace Iridium {
             if (q.benchmarkHoldFrame && q.benchmarkId.empty()) {
                 throw std::invalid_argument(
                     "--benchmark-hold-frame requires --benchmark");
+            }
+            if (!q.benchmarkModelArtifacts.empty() && q.benchmarkId.empty()) {
+                throw std::invalid_argument(
+                    "--benchmark-model-artifact requires --benchmark");
             }
         }, AppCli::kValidateLightGenerators + 20);
     }

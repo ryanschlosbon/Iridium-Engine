@@ -162,8 +162,8 @@ void main() {
         ? shadowGeometricNormal * inversesqrt(shadowGeometricLengthSquared) : N;
     if (dot(shadowGeometricNormal, N) < 0.0)
         shadowGeometricNormal = -shadowGeometricNormal;
-    IridiumDirectionalShadowReceiver shadowReceiver =
-        IridiumDirectionalShadowReceiver(fragPos, N, shadowGeometricNormal,
+    IridiumShadowReceiver shadowReceiver =
+        IridiumShadowReceiver(fragPos, N, shadowGeometricNormal,
             shadowWorldDx, shadowWorldDy);
     IridiumDirectLightRange lightRange = iridiumDirectLightRange(
         fragPos, uvec2(gl_FragCoord.xy));
@@ -180,11 +180,11 @@ void main() {
             if ((floatBitsToUint(lightRecord.shapeMetadata.z) & 3u) ==
                 IRIDIUM_LIGHT_TYPE_SPOT)
                 visibility *= iridiumSpotShadowVisibility(lightSlot,
-                    lightRecord, fragPos, N, light.direction);
+                    lightRecord, shadowReceiver, light.direction);
             else if ((floatBitsToUint(lightRecord.shapeMetadata.z) & 3u) ==
                 IRIDIUM_LIGHT_TYPE_POINT)
                 visibility *= iridiumPointShadowVisibility(lightSlot,
-                    lightRecord, fragPos, N, light.direction);
+                    lightRecord, shadowReceiver, light.direction);
             shadowVisibility = min(shadowVisibility, visibility);
             direct += materialEvaluateCanonicalBrdf(diffuse, f0, f90,
                 roughness, N, V, light.direction) * light.radiance * noL *

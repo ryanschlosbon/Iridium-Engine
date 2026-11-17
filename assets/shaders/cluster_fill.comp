@@ -1,44 +1,38 @@
 #version 450
 #include "include/clustered_lighting.glsl"
 
+// M7.10.2: the same (light, chunk) grid-stride split as cluster_count. The
+// enable test is unchanged: an active local light with valid bounds (its
+// cluster_light_bounds record) while no overflow is set at workgroup start.
 layout(local_size_x = 64) in;
 
-shared uvec3 sharedMinimum;
-shared uvec3 sharedSpan;
-shared uint sharedSlot;
 shared uint sharedEnabled;
 
 void main() {
     uint activeIndex = gl_WorkGroupID.x;
     uint lane = gl_LocalInvocationID.x;
     if (lane == 0u) {
-        sharedEnabled = 0u;
-        if (activeIndex < clusterInput.x &&
-            clusterDiagnostics[IRIDIUM_DIAGNOSTIC_OVERFLOW] == 0u) {
-            sharedSlot = activeLightSlots[activeIndex];
-            PackedGpuLight light = lights[sharedSlot];
-            if (iridiumLightType(light) != IRIDIUM_LIGHT_TYPE_DIRECTIONAL) {
-                IridiumClusterBounds bounds = iridiumLocalLightBounds(light);
-                if (bounds.valid) {
-                    sharedMinimum = bounds.minimum;
-                    sharedSpan = bounds.maximum - bounds.minimum + uvec3(1u);
-                    sharedEnabled = 1u;
-                }
-            }
-        }
+        sharedEnabled = activeIndex < clusterInput.x &&
+            clusterDiagnostics[IRIDIUM_DIAGNOSTIC_OVERFLOW] == 0u ? 1u : 0u;
     }
     barrier();
     if (sharedEnabled == 0u) return;
+    ClusterLightBounds record = clusterLightBounds[activeIndex];
+    if ((record.spanFlags.w & IRIDIUM_CLUSTER_BOUNDS_FILL) == 0u) return;
 
-    uint volume = sharedSpan.x * sharedSpan.y * sharedSpan.z;
-    uint plane = sharedSpan.x * sharedSpan.y;
-    for (uint linear = lane; linear < volume; linear += 64u) {
+    uvec3 minimum = record.minimumSlot.xyz;
+    uint slot = record.minimumSlot.w;
+    uvec3 span = record.spanFlags.xyz;
+    uint volume = span.x * span.y * span.z;
+    uint plane = span.x * span.y;
+    uint stride = 64u * gl_NumWorkGroups.y;
+    for (uint linear = gl_WorkGroupID.y * 64u + lane; linear < volume;
+        linear += stride) {
         uint z = linear / plane;
         uint remainder = linear - z * plane;
-        uint y = remainder / sharedSpan.x;
-        uint x = remainder - y * sharedSpan.x;
-        uint cluster = iridiumClusterIndex(
-            sharedMinimum + uvec3(x, y, z));
+        uint y = remainder / span.x;
+        uint x = remainder - y * span.x;
+        uint cluster = iridiumClusterIndex(minimum + uvec3(x, y, z));
         uint cursor = atomicAdd(clusterCursors[cluster], 1u);
         ClusterLightHeader header = clusterHeaders[cluster];
         if (cursor == 0u && header.count > 0u) {
@@ -58,6 +52,6 @@ void main() {
         }
         uint destination = header.offset + cursor;
         if (cursor < header.count && destination < clusterLimits.z)
-            clusterLightSlots[destination] = sharedSlot;
+            clusterLightSlots[destination] = slot;
     }
 }

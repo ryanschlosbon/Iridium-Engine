@@ -60,10 +60,11 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(VkDebugUtilsMessageSeverityF
 // Constructor
 VkContext::VkContext(bool enableValidation, bool enableDebugUtils,
 	bool enablePipelineStatistics, GLFWwindow* window,
-	bool enableSynchronizationValidation)
+	bool enableSynchronizationValidation, bool enableDiagnosticCheckpoints)
 	: enableValidationLayers(enableValidation),
 	  synchronizationValidationRequested(
 		  enableValidation && enableSynchronizationValidation),
+	  diagnosticCheckpointsRequested(enableDiagnosticCheckpoints),
 	  requestDebugUtils(enableValidation || enableDebugUtils),
 	  pipelineStatisticsRequested(enablePipelineStatistics) {
 	// Initialize the library
@@ -519,7 +520,35 @@ void VkContext::createLogicalDevice() {
 			deviceExtensions.push_back(VK_EXT_HDR_METADATA_EXTENSION_NAME);
 			hdrMetadataEnabled = true;
 		}
+		// M7.10.D: device-loss diagnostics. Fault reports are free until a
+		// loss; checkpoints are command-buffer breadcrumbs (opt-out switch).
+		if (strcmp(extension.extensionName, VK_EXT_DEVICE_FAULT_EXTENSION_NAME) == 0)
+			deviceFaultEnabled = true;
+		if (diagnosticCheckpointsRequested && strcmp(extension.extensionName,
+				VK_NV_DEVICE_DIAGNOSTIC_CHECKPOINTS_EXTENSION_NAME) == 0) {
+			deviceExtensions.push_back(VK_NV_DEVICE_DIAGNOSTIC_CHECKPOINTS_EXTENSION_NAME);
+			diagnosticCheckpointsEnabled = true;
+		}
     }
+	VkPhysicalDeviceFaultFeaturesEXT enabledFault{
+		VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FAULT_FEATURES_EXT };
+	if (deviceFaultEnabled) {
+		VkPhysicalDeviceFaultFeaturesEXT supportedFault{
+			VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FAULT_FEATURES_EXT };
+		VkPhysicalDeviceFeatures2 faultFeatures2{
+			VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2 };
+		faultFeatures2.pNext = &supportedFault;
+		vkGetPhysicalDeviceFeatures2(physicalDevice, &faultFeatures2);
+		deviceFaultEnabled = supportedFault.deviceFault == VK_TRUE;
+		deviceFaultVendorBinaryEnabled = deviceFaultEnabled &&
+			supportedFault.deviceFaultVendorBinary == VK_TRUE;
+		if (deviceFaultEnabled) {
+			deviceExtensions.push_back(VK_EXT_DEVICE_FAULT_EXTENSION_NAME);
+			enabledFault.deviceFault = VK_TRUE;
+			enabledFault.deviceFaultVendorBinary =
+				deviceFaultVendorBinaryEnabled ? VK_TRUE : VK_FALSE;
+		}
+	}
 
     // 4. Create the Logical Device
     VkDeviceCreateInfo createInfo{};
@@ -531,6 +560,10 @@ void VkContext::createLogicalDevice() {
     createInfo.pEnabledFeatures = &deviceFeatures;
     createInfo.pNext = descriptorIndexingEnabled || drawIndirectCountEnabled ||
 		timelineSemaphoreEnabled || vulkan13FeaturesEnabled ? &enabledVulkan12 : nullptr;
+	if (deviceFaultEnabled) {
+		enabledFault.pNext = const_cast<void*>(createInfo.pNext);
+		createInfo.pNext = &enabledFault;
+	}
 
     // Pass the dynamically created list of extensions
     createInfo.enabledExtensionCount = static_cast<uint32_t>(deviceExtensions.size());

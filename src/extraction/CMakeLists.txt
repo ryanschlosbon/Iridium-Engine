@@ -9,6 +9,7 @@ add_library(iridium_render_extraction STATIC
         ParallelDrawSort.cpp
         PreviousTransformCache.cpp
         RenderExtractor.cpp
+        TransparentFrustumCulling.cpp
 )
 target_link_libraries(iridium_render_extraction PUBLIC
         iridium_lighting

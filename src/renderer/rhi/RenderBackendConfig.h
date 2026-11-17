@@ -162,6 +162,12 @@ namespace Iridium {
         // switch is kept until R6).
         bool renderGraphAliasing = true;
         UploadQueueMode uploadQueue = UploadQueueMode::Auto;
+        // M7.10.D GPU crash diagnostics: per-pass GPU breadcrumbs, when the
+        // device supports them (--gpu-crash-checkpoints on|off). Device-loss
+        // reports are written to deviceLostReportDirectory (empty: stderr
+        // only).
+        bool gpuCrashCheckpoints = true;
+        std::filesystem::path deviceLostReportDirectory;
         AntiAliasingMode antiAliasing = AntiAliasingMode::None;
         TemporalAntiAliasingTuning taaTuning{};
         // M9.5: Manual until admission (M9.7); Auto adds the exposure passes.

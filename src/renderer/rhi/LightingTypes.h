@@ -6,6 +6,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <span>
 #include <string>
 #include <type_traits>
@@ -40,6 +41,23 @@ namespace Iridium {
         glm::vec4 colorIntensity{};
         glm::vec4 shapeMetadata{};
     };
+
+    // M7.10.5: true when two records produce the same cached shadow-map
+    // content. Position, range, emission direction and outer cone build the
+    // shadow view and projection (the range is the local far plane);
+    // shapeMetadata.z carries type, shadow enable and quality, and .w the
+    // shadow-data slot. Colour, intensity, source radius (PCSS sampling) and
+    // the inner-cone term (shading only) are excluded: sampling inputs reach
+    // the shaders every frame and never dirty a cached map.
+    [[nodiscard]] inline bool sameLightShadowGeometry(
+        const PackedGpuLight& lhs, const PackedGpuLight& rhs) noexcept {
+        static_assert(offsetof(PackedGpuLight, directionOuterCos) ==
+            sizeof(glm::vec4));
+        return std::memcmp(&lhs.positionRange, &rhs.positionRange,
+                2 * sizeof(glm::vec4)) == 0 &&
+            std::memcmp(&lhs.shapeMetadata.z, &rhs.shapeMetadata.z,
+                2 * sizeof(float)) == 0;
+    }
 
     struct LightRecordRange {
         uint32_t firstRecord = 0;
@@ -87,6 +105,10 @@ namespace Iridium {
     struct LightingFramePacket {
         std::span<const PackedGpuLight> records;
         std::span<const uint64_t> recordRevisions;
+        // M7.10.5: per slot, advanced only when sameLightShadowGeometry()
+        // fails (never for a radiometric edit). Shadow caches key on it;
+        // record uploads and probe captures keep recordRevisions.
+        std::span<const uint64_t> shadowRevisions;
         std::span<const uint32_t> activeSlots;
         std::span<const LightSelectionMetadata> selectionMetadata;
         std::span<const LightRecordRange> changedRanges;

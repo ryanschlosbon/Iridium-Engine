@@ -141,6 +141,7 @@ namespace {
             "/" + exact(c.bloom.knee) + "/" + exact(c.bloom.levels) + "/" +
             exact(static_cast<int>(c.bloom.karis)));
         field("uploadQueue", exact(enumValue(c.uploadQueue)));
+        flag("gpuCrashCheckpoints", c.gpuCrashCheckpoints);
         flag("aliasPoison", c.aliasPoison);
         flag("validateDepthPyramidCapture", c.validateDepthPyramidCapture);
         flag("validateDepthPyramidResize", c.validateDepthPyramidResize);
@@ -222,6 +223,12 @@ namespace {
             : std::string("none"));
         field("benchmarkHoldFrame", c.benchmarkHoldFrame
             ? exact(*c.benchmarkHoldFrame) : std::string("none"));
+        {
+            std::string artifacts;
+            for (const std::filesystem::path& artifact : c.benchmarkModelArtifacts)
+                artifacts += artifact.generic_string() + ";";
+            field("benchmarkModelArtifacts", artifacts);
+        }
         flag("requireCaptureSignal", c.requireCaptureSignal);
         field("capturePoint", exact(enumValue(c.capturePoint)));
         field("captureDirectory", c.captureDirectory.generic_string());
@@ -232,6 +239,8 @@ namespace {
         flag("allocationTrace", c.allocationTrace);
         flag("probeFinalizeDrain", c.probeFinalizeDrain);
         flag("exposureTrace", c.exposureTrace);
+        field("simulateDeviceLostReportFrame", c.simulateDeviceLostReportFrame
+            ? exact(*c.simulateDeviceLostReportFrame) : std::string("none"));
         return s.str();
     }
 
@@ -581,6 +590,12 @@ namespace {
                 "--upload-queue requires auto, graphics or legacy-blocking",
                 { { "transfer", "--upload-queue requires auto, graphics or legacy-blocking" },
                   { "", "--upload-queue requires auto, graphics or legacy-blocking" } } },
+            // M7.10.D; on by default, so the row selects off.
+            { "--gpu-crash-checkpoints", G, "off", {}, [](C& c) {
+                c.gpuCrashCheckpoints = false; },
+                "--gpu-crash-checkpoints requires on or off",
+                { { "yes", "--gpu-crash-checkpoints requires on or off" },
+                  { "", "--gpu-crash-checkpoints requires on or off" } } },
             // --- qualification (46) ---
             { "--validate-texture-residency-churn", Q, {}, {}, [](C& c) {
                 c.validateTextureResidencyChurn = true; }, {}, {} },
@@ -689,6 +704,11 @@ namespace {
             // M9.5.
             { "--qualification-exposure-trace", Q, {}, {}, [](C& c) {
                 c.exposureTrace = true; }, {}, {} },
+            // M7.10.D.
+            { "--qualification-simulate-device-lost-report", Q, "30", {}, [](C& c) {
+                c.simulateDeviceLostReportFrame = 30; },
+                "--qualification-simulate-device-lost-report requires a frame index",
+                { { "x", "--qualification-simulate-device-lost-report requires an unsigned integer" } } },
             { "--validate-depth-pyramid-capture", Q, {}, {}, [](C& c) {
                 c.experimentalDepthPyramid = true; c.validateDepthPyramidCapture = true; },
                 {}, {} },
@@ -716,6 +736,13 @@ namespace {
                 c.benchmarkHoldFrame = 130; c.benchmarkId = "m9_tf_pan_v1"; },
                 "--benchmark-hold-frame requires a benchmark frame index",
                 { { "x", "--benchmark-hold-frame requires an unsigned integer" } } },
+            // M7C P1; repeatable (see the accumulation check below).
+            { "--benchmark-model-artifact", Q, "out/b.irartifact", { "--benchmark", "m7c_pc3" },
+                [](C& c) {
+                    c.benchmarkModelArtifacts = { "out/b.irartifact" };
+                    c.benchmarkId = "m7c_pc3"; },
+                "--benchmark-model-artifact requires a path",
+                { { "", "--benchmark-model-artifact requires a path" } } },
             { "--capture-directory", Q, "out/cap", { "--capture-frame", "0" }, withCapture,
                 "--capture-directory requires a path",
                 { { "", "--capture-directory requires a path" } } },
@@ -751,8 +778,8 @@ namespace {
         Cli::CliOptionRegistry registry;
         registerEngineOptions(registry, scratch);
 
-        CHECK(table.size() == 106);
-        CHECK(registry.options().size() == 106);
+        CHECK(table.size() == 109);
+        CHECK(registry.options().size() == 109);
         std::set<std::string_view> names;
         std::map<std::string_view, size_t> ownerCounts;
         for (const FlagCase& row : table) {
@@ -815,6 +842,17 @@ namespace {
             error("--require-capture-signal requires a capture request"));
         CHECK(newOutcome({ "--benchmark-hold-frame", "5" }) ==
             error("--benchmark-hold-frame requires --benchmark"));
+        CHECK(newOutcome({ "--benchmark-model-artifact", "a.irartifact" }) ==
+            error("--benchmark-model-artifact requires --benchmark"));
+        {
+            // M7C P1: every value is kept, in order.
+            CombinedConfig models{};
+            models.benchmarkId = "m7c_pc3";
+            models.benchmarkModelArtifacts = { "a.irartifact", "b.irartifact" };
+            CHECK(newOutcome({ "--benchmark", "m7c_pc3", "--benchmark-model-artifact",
+                      "a.irartifact", "--benchmark-model-artifact", "b.irartifact" }) ==
+                "OK:" + describe(models));
+        }
         {
             // --upload-queue: every value, the last one wins.
             CombinedConfig legacy{};
@@ -836,8 +874,8 @@ namespace {
         }
         CHECK(ownerCounts[R] == 14);
         CHECK(ownerCounts[E] == 4);
-        CHECK(ownerCounts[G] == 40);
-        CHECK(ownerCounts[Q] == 48);
+        CHECK(ownerCounts[G] == 41);
+        CHECK(ownerCounts[Q] == 50);
         std::cout << "  owners: runtime " << ownerCounts[R] << ", editor " << ownerCounts[E]
                   << ", renderer " << ownerCounts[G] << ", qualification "
                   << ownerCounts[Q] << '\n';
@@ -888,7 +926,7 @@ namespace {
     bool testUsageParity() {
         const std::string usage = engineUsage();
         CHECK(usage.starts_with("Usage: IridiumEngine [options]\n"));
-        CHECK(optionLines(usage).size() == 106);
+        CHECK(optionLines(usage).size() == 109);
         // Groups appear in owner order: runtime, editor, renderer, qualification.
         const size_t runtime = usage.find("runtime options:");
         const size_t editor = usage.find("editor options:");
@@ -907,7 +945,7 @@ namespace {
         AppCli::registerRuntimeOptions(registry, config);
         AppCli::registerEditorOptions(registry, config);
         AppCli::registerRendererOptions(registry, config);
-        CHECK(registry.options().size() == 58);
+        CHECK(registry.options().size() == 59);
         try {
             registry.parse(Args{ "--benchmark", "material_lab_v1" });
             CHECK(false);

@@ -21,6 +21,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace Iridium {
 
@@ -55,6 +56,10 @@ namespace Iridium {
         // Benchmark fixtures.
         std::string benchmarkId;
         std::filesystem::path benchmarkManifest;
+        // M7C P1 --benchmark-model-artifact PATH (repeatable): cooked model
+        // artifacts beyond --cooked-model-artifact for a multi-model fixture.
+        // Each is matched to a fixture source by asset identity, not order.
+        std::vector<std::filesystem::path> benchmarkModelArtifacts;
         bool selectBenchmarkEntity = false;
         bool disableBenchmarkLocalShadows = false;
         uint64_t weightedOitOrderSeed = 0;
@@ -142,6 +147,14 @@ namespace Iridium {
         // M9.5: read back the adapted exposure and histogram summary of every
         // frame (auto-exposure only) and print them at the end of the run.
         bool exposureTrace = false;
+        // M7.10.D: report a fabricated VK_ERROR_DEVICE_LOST through the
+        // device-loss diagnostics at backend frame N (0-based beginFrame
+        // count) without losing the device; the run continues. The report's
+        // fault and checkpoint queries formally require a lost device
+        // (VUID-vkGetDeviceFaultInfoEXT-device-07336,
+        // VUID-vkGetQueueCheckpointDataNV-queue-02025): run it without
+        // validation. It uses the process's one report.
+        std::optional<uint64_t> simulateDeviceLostReportFrame;
     };
 
     // Whether this run captures at all (--capture-frame or --capture-frames).

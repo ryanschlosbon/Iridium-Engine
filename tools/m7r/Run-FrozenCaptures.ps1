@@ -43,10 +43,9 @@ try {
             $log = Join-Path $outDir "$($fixture.Key)__$point.log"
             # Absolute paths: an engine built elsewhere resolves relative paths
             # against its own compiled-in project root.
-            $artifact = Join-Path $artifactRoot (Get-M7RModelArtifact $artifactRoot $fixture.Model)
             $arguments = @(
-                '--benchmark', $fixture.Id, '--benchmark-manifest', (Join-Path $root $fixture.Manifest),
-                '--cooked-model-artifact', $artifact,
+                '--benchmark', $fixture.Id, '--benchmark-manifest', (Join-Path $root $fixture.Manifest)
+            ) + @(Get-M7RModelArtifactArgs $artifactRoot $fixture) + @(
                 '--window-size', '3840x2160', '--hidden-window', '--borderless-window',
                 '--output-transport', 'sdr',
                 '--warmup-frames', '12', '--frame-limit', '6',

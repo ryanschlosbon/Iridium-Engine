@@ -88,6 +88,12 @@ namespace Iridium {
         void recordProbeCluster(uint32_t clusterCount);
         void recordClusters(uint32_t frameIndex, uint32_t clusterCount,
             uint32_t activeLightCount);
+        // submitLightingPass (M7.10.0: moved from the backend): both drain
+        // points over the frame's cluster grid (the probe clustering shares
+        // the light grid's configuration, so one evaluation sizes both).
+        void recordFrame(uint32_t frameIndex, const glm::mat4& view,
+            const glm::mat4& projection, float nearPlane, float farPlane,
+            VkExtent2D sceneExtent, uint32_t activeLightCount);
 
         // The reflection-probe clustering pipeline; its descriptors bind the
         // probe buffers (backend-owned until R3c.6).

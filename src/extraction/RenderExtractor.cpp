@@ -72,15 +72,6 @@ namespace Iridium {
             return hash == 0u ? 1u : hash;
         }
 
-        uint64_t reflectionProbeLightingRevision(
-            const LightingFramePacket& lights) noexcept {
-            uint64_t hash = 1469598103934665603ull;
-            for (uint64_t revision : lights.recordRevisions)
-                appendCaptureRevision(hash, revision);
-            appendCaptureRevision(hash, lights.activeListRevision);
-            return hash == 0u ? 1u : hash;
-        }
-
     }
 
     RenderExtractor::RenderExtractor(CpuProfiler& profiler, SceneWorld& scene,
@@ -395,9 +386,11 @@ namespace Iridium {
                 const DirectionalShadowCascadePlan plan =
                     buildDirectionalShadowCascades(shadowCamera,
                         selection.lightForward, shadowConfig);
+                // M7.10.5: shadow geometry only; radiometric edits keep
+                // the cached cascades.
                 const uint64_t lightRevision = selection.lightSlot <
-                    lightingFrame.recordRevisions.size()
-                    ? lightingFrame.recordRevisions[selection.lightSlot] : 0;
+                    lightingFrame.shadowRevisions.size()
+                    ? lightingFrame.shadowRevisions[selection.lightSlot] : 0;
                 std::array<uint64_t, kDirectionalShadowCascadeCount>
                     casterRevisions{};
                 {
@@ -573,7 +566,7 @@ namespace Iridium {
                 .request = *request,
                 .resolution = tile.size,
                 .allocationRevision = shadowRevision(allocationIdentity),
-                .lightRevision = lightingFrame.recordRevisions[tile.lightSlot],
+                .lightRevision = lightingFrame.shadowRevisions[tile.lightSlot],
                 .casterRevision = localCasterRevision,
                 .projectionRevision = shadowRevision(
                     projection.worldToShadowClip),
@@ -667,7 +660,7 @@ namespace Iridium {
                 .request = *request,
                 .resolution = slot.resolution,
                 .allocationRevision = shadowRevision(allocationIdentity),
-                .lightRevision = lightingFrame.recordRevisions[slot.lightSlot],
+                .lightRevision = lightingFrame.shadowRevisions[slot.lightSlot],
                 .casterRevision = localCasterRevision,
                 .projectionRevision = shadowRevision(matrices),
                 .pipelineRevision = 1,
@@ -737,11 +730,14 @@ namespace Iridium {
             environmentRevision *= 1099511628211ull;
         }
         if (environmentRevision == 0u) environmentRevision = 1u;
-        const uint64_t lightingRevision =
-            reflectionProbeLightingRevision(lightingFrame);
         for (const ReflectionProbeCandidate& candidate :
                 extractedProbes.candidates) {
             if (!candidate.probe.environmentAssetGuid.isNil()) continue;
+            // M7.10.5: scoped to the lights that can reach this capture.
+            const uint64_t lightingRevision =
+                reflectionProbeCaptureLightingRevision(lightingFrame,
+                    glm::vec3(candidate.probeToWorld[3]),
+                    candidate.probe.captureFarMeters);
             probeCaptureRequests.push_back({
                 .owner = candidate.owner,
                 .updateMode = candidate.probe.updateMode,
@@ -1029,12 +1025,18 @@ namespace Iridium {
         uint64_t gpuSceneDeferredCandidateTriangles = 0;
         uint64_t gpuSceneForwardVisibleCount = 0;
         uint64_t gpuSceneForwardVisibleTriangles = 0;
+        // M7.10.1: one main-view frustum per extract (scene and preview), from
+        // the unjittered projection; it culls transparent work.
+        const glm::mat4 clipFromWorld = projMatrix * viewMatrix;
+        const GpuSceneFrustum transparentFrustum =
+            makeGpuSceneFrustum(clipFromWorld);
         if (!assetPreviewActive && gpuSceneFrame_) {
             CpuScope classifyScope(cpuProfiler_, "cpu.render.classify");
-            classifyMainView(projMatrix * viewMatrix);
+            classifyMainView(clipFromWorld);
             gpuSceneVisibilityStats = gpuSceneVisibility_.stats;
         }
         ExtractionCounters extracted{};
+        uint32_t extractionChunkCount = 0;
         {
             CpuScope extractionScope(cpuProfiler_, "cpu.render.extract");
             // M7R R5c.7: appends one model's packets, transforms and counters
@@ -1187,13 +1189,22 @@ namespace Iridium {
                                 "Render instance batches currently require "
                                 "classified WeightedOIT materials");
                         }
+                        ++counters.transparentRequested;
                         const bool visible = prepareTransparentWorkInterval(
                             packet, packetBoundsMin, packetBoundsMax,
                             viewMatrix, renderCameraNearPlane,
                             renderCameraFarPlane);
-                        if (!visible && effectiveExecutionMode ==
-                                TransparencyExecutionMode::Classified) {
+                        // M7.10.1: off-screen work contributes no pixels in
+                        // any execution mode (depth interval, then frustum).
+                        if (!visible) {
                             ++counters.transparentCulled;
+                            out.transparentCull.cull(packet);
+                            return;
+                        }
+                        if (transparentPacketFrustumRejected(
+                                transparentFrustum, packet)) {
+                            ++counters.transparentFrustumRejected;
+                            out.transparentCull.cull(packet);
                             return;
                         }
                         if (effectiveExecutionMode ==
@@ -1246,6 +1257,18 @@ namespace Iridium {
                         instanceCount;
                     counters.sourceTriangles +=
                         transparentList->sourceTriangles * instanceCount;
+                    // M7.10.1: an off-screen owner skips its submeshes.
+                    if (transparentModelFrustumRejected(transparentFrustum,
+                            model, instanceBatch, transparentList->submeshes,
+                            transparentList->localBounds, worldTransform)) {
+                        const uint64_t packets = transparentList->submeshes.size();
+                        counters.transparentRequested += packets;
+                        counters.transparentFrustumRejected += packets;
+                        ++counters.transparentModelsRejected;
+                        out.transparentCull.models.push_back({ owner, &model,
+                            transparentList->submeshes, worldTransform });
+                        return;
+                    }
                     for (const uint32_t subMeshIndex :
                             transparentList->submeshes) {
                         const SubMesh& subMesh = model.subMeshes[subMeshIndex];
@@ -1324,11 +1347,11 @@ namespace Iridium {
                 for (std::vector<DrawPacket>& queue : chunk.queues) queue.clear();
                 chunk.selection.clear();
                 chunk.instanceTransforms.clear();
+                chunk.transparentCull.clear();
                 chunk.counters = {};
                 chunk.failure = nullptr;
             };
 
-            uint32_t extractionChunkCount = 0;
             uint32_t parityChunkCount = 0;
             if (assetPreviewActive) {
                 if (extractionChunks_.empty()) extractionChunks_.resize(1);
@@ -1598,6 +1621,7 @@ namespace Iridium {
             opaqueQueue.size() + gpuSceneOpaquePrimitives.size());
         cpuProfiler_.recordCounter("draw.requested.forward_opaque",
             forwardOpaqueQueue.size());
+        // M7.10.1: post-cull (the queues hold the visible transparent work).
         const uint64_t requestedTransparent =
             transparentQueue.size() + sortedSurfaceQueue.size();
         cpuProfiler_.recordCounter("draw.requested.transparent",
@@ -1740,6 +1764,16 @@ namespace Iridium {
         cpuProfiler_.recordCounter("transparent.transport.metric_sheet_thickness",
             metricThicknessPackets);
         cpuProfiler_.recordCounter("transparent.work.culled", transparentCulled);
+        // M7.10.1: requested = visible + culled (depth) + frustum_rejected;
+        // visible is the queues' size (draw.requested.transparent).
+        cpuProfiler_.recordCounter("transparent.work.requested",
+            extracted.transparentRequested);
+        cpuProfiler_.recordCounter("transparent.work.frustum_rejected",
+            extracted.transparentFrustumRejected);
+        cpuProfiler_.recordCounter("transparent.work.visible",
+            requestedTransparent);
+        cpuProfiler_.recordCounter("transparent.model.frustum_rejected",
+            extracted.transparentModelsRejected);
         cpuProfiler_.recordCounter("light.scene",
             lightingFrame.stats.sceneLightCount);
         cpuProfiler_.recordCounter("light.active",
@@ -1887,12 +1921,24 @@ namespace Iridium {
             : std::span<const DrawPacket>{};
         // M9 G4: last frame's transform for every opaque direct and
         // forward-opaque packet.
-        previousTransforms_.beginFrame();
-        resolvePreviousTransforms(opaqueQueue, opaqueDirectPrevious_);
-        resolvePreviousTransforms(forwardOpaqueQueue, forwardOpaquePrevious_);
-        resolvePreviousTransforms(sortedSurfaceQueue, sortedSurfacePrevious_);
-        resolvePreviousTransforms(transparentQueue, compatibilityPrevious_);
-        previousTransforms_.endFrame();
+        uint32_t culledTransparentDemand = 0;
+        {
+            CpuScope previousScope(cpuProfiler_, "cpu.render.previous_transforms");
+            previousTransforms_.beginFrame();
+            resolvePreviousTransforms(opaqueQueue, opaqueDirectPrevious_);
+            resolvePreviousTransforms(forwardOpaqueQueue, forwardOpaquePrevious_);
+            resolvePreviousTransforms(sortedSurfaceQueue, sortedSurfacePrevious_);
+            resolvePreviousTransforms(transparentQueue, compatibilityPrevious_);
+            // M7.10.1: culled transparent keys stay tracked (this frame's
+            // transform), and the culled work's residency demand.
+            for (uint32_t chunk = 0; chunk < extractionChunkCount; ++chunk) {
+                culledTransparentDemand |= replayCulledTransparentWork(
+                    extractionChunks_[chunk].transparentCull, previousTransforms_,
+                    policy_.deterministicContent,
+                    static_cast<unsigned>(view.layeredInterfaceOverride));
+            }
+            previousTransforms_.endFrame();
+        }
         renderFrame.opaque = {
             .order = opaqueOrder_,
             .directPackets = opaqueQueue,
@@ -1911,6 +1957,7 @@ namespace Iridium {
         renderFrame.forwardOpaquePreviousTransforms = forwardOpaquePrevious_;
         renderFrame.sortedSurfaceQueue = sortedSurfaceQueue;
         renderFrame.compatibilityTransparentQueue = transparentQueue;
+        renderFrame.culledTransparentDemand = culledTransparentDemand;
         renderFrame.sortedSurfacePreviousTransforms = sortedSurfacePrevious_;
         renderFrame.compatibilityPreviousTransforms = compatibilityPrevious_;
         renderFrame.instanceTransforms = forwardInstanceTransforms_;
@@ -2172,6 +2219,11 @@ namespace Iridium {
             extracted.lodWithheldRanges += counters.lodWithheldRanges;
             extracted.lodWithheldIndexBytes += counters.lodWithheldIndexBytes;
             extracted.transparentCulled += counters.transparentCulled;
+            extracted.transparentRequested += counters.transparentRequested;
+            extracted.transparentFrustumRejected +=
+                counters.transparentFrustumRejected;
+            extracted.transparentModelsRejected +=
+                counters.transparentModelsRejected;
             extracted.maximumLodResidentBase = (std::max)(
                 extracted.maximumLodResidentBase,
                 counters.maximumLodResidentBase);
@@ -2321,6 +2373,8 @@ namespace Iridium {
                         list->submeshes.push_back(static_cast<uint32_t>(index));
                 }
             }
+            // M7.10.1: from this frame's model (bounds are not checked above).
+            list->localBounds = transparentSubmeshBounds(model, list->submeshes);
             list->usedFrame = extractionFrame_;
         }
         lastTransparentSubmeshModel_ = &model;

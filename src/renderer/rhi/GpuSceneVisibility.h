@@ -42,6 +42,13 @@ namespace Iridium {
     [[nodiscard]] GpuSceneFrustum makeGpuSceneFrustum(
         const glm::mat4& clipFromWorld) noexcept;
 
+    // M7.10.1: true when the world AABB [minimum, maximum] lies entirely
+    // outside one plane of the frustum (the classifier's box-plane test). An
+    // invalid frustum or invalid bounds (non-finite, or minimum > maximum on
+    // an axis) never reject: uncertain culling fails visible.
+    [[nodiscard]] bool gpuSceneFrustumRejectsAabb(const GpuSceneFrustum& frustum,
+        const glm::vec3& minimum, const glm::vec3& maximum) noexcept;
+
     // Conservative CPU oracle for the GPU implementation. Instance AABBs reject
     // coarse work first; primitive local AABBs are then transformed exactly to a
     // conservative world AABB. Invalid references or bounds fail visible.

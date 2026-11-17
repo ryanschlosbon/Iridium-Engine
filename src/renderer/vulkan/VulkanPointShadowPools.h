@@ -22,9 +22,10 @@ namespace Iridium {
         glm::vec4 lightPositionFar{};
         // Light slot, sampleable, pool tier, cube index.
         glm::uvec4 metadata{};
-        // Projection A/B, reserved, receiver bias in shadow texels.
+        // Projection A/B, normal offset and receiver bias in shadow texels.
         glm::vec4 depthBias{};
-        // Local source radius, maximum penumbra texels, reserved, reserved.
+        // Local source radius, maximum penumbra texels, receiver-plane
+        // correction clamp in shadow texels, reserved.
         glm::vec4 filterParameters{};
         // Blocker samples, filter samples, contact hardening, reserved.
         glm::uvec4 filterMetadata{};

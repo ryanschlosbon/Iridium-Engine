@@ -9,6 +9,7 @@
 #
 #   powershell -File tools/m7r/Run-TimingPair.ps1 -Label r1 -BaselineRoot out/m7r/worktrees/r0
 #   ... -Label x -BaselineRoot <main> -ArtifactRoot <main> -Only T-F5-hetero,T-F6-probecap
+#   ... -Label pc3 -BaselineRoot <main> -Only T-PC3-nolight,T-PC3-point-r10   (M7C owner-case routes run only when named)
 param(
     [Parameter(Mandatory)] [string] $Label,
     [Parameter(Mandatory)] [string] $BaselineRoot,
@@ -38,9 +39,8 @@ if (Test-Path $outDir) { throw "Output directory already exists: $outDir" }
 New-Item -ItemType Directory -Force $outDir | Out-Null
 
 $runs = @()
-foreach ($route in $M7RTimingRoutes) {
-    if ($Only.Count -gt 0 -and $Only -notcontains $route.Key) { continue }
-    $artifact = Join-Path $ArtifactRoot (Get-M7RModelArtifact $ArtifactRoot $route.Model)
+foreach ($route in (Select-M7RTimingRoutes $Only)) {
+    $modelArgs = @(Get-M7RModelArtifactArgs $ArtifactRoot $route)
     $index = 0
     foreach ($side in @('A', 'B', 'B', 'A')) {
         $index++
@@ -51,8 +51,8 @@ foreach ($route in $M7RTimingRoutes) {
         # third-party content to the local asset library only under its own assets/.
         $manifest = Join-Path $roots[$side] $route.Manifest
         $arguments = @(
-            '--benchmark', $route.Id, '--benchmark-manifest', $manifest,
-            '--cooked-model-artifact', $artifact,
+            '--benchmark', $route.Id, '--benchmark-manifest', $manifest
+        ) + $modelArgs + @(
             '--window-size', '3840x2160', '--hidden-window', '--borderless-window',
             '--output-transport', 'sdr', '--no-validation',
             '--profile-cpu', '--profile-gpu', '--profile-cpu-output', $profile,

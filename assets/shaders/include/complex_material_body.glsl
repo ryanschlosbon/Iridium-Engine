@@ -760,9 +760,20 @@ void main() {
         reflect(-view, frame.normal), roughness * max(float(textureQueryLevels(
             iridiumEnvironmentPrefiltered)) - 1.0, 0.0)).rgb;
     vec3 baseLayerAttenuation = vec3(1.0);
-    uint directLobeTypes[8];
-    vec4 directLobeData[8];
-    vec3 directLobeNormals[8];
+    // M7.10.4b: the compiler emits at most one lobe of each type, in type
+    // order, so each type's parameters live in named variables (no per-pixel
+    // arrays, and only a material's present lobes stay live) and the lobes
+    // are evaluated in type order, which is the lobe order.
+    bool hasCoatLobe = false;
+    float coatLobeFactor = 0.0;
+    float coatLobeRoughness = 0.0;
+    vec3 coatLobeNormal = frame.normal;
+    bool hasSheenLobe = false;
+    vec4 sheenLobe = vec4(0.0);
+    bool hasAnisotropyLobe = false;
+    vec2 anisotropyLobe = vec2(0.0);
+    bool hasIridescenceLobe = false;
+    vec3 iridescenceLobeF0 = vec3(0.0);
 
 #ifdef IRIDIUM_REFRACTION_TRANSPORT
     float transmission = 0.0;
@@ -780,7 +791,6 @@ void main() {
     // Every direct light below then evaluates the same authored closure stack.
     for (uint index = 0u; index < material.complexLobeCount; ++index) {
         PackedComplexLobe lobe = material.complexLobes[index];
-        directLobeTypes[index] = lobe.type;
         if (lobe.type == 0u) {
             float factor = lobe.parameters[0] * materialSampleOrOne(material, 7u).r;
             float coatRoughness = lobe.parameters[1] *
@@ -801,8 +811,10 @@ void main() {
             vec3 coatF = materialFresnelSchlick(vec3(0.04), vec3(1.0),
                 max(dot(coatFrame.normal, view), 0.0)) * factor;
             baseLayerAttenuation *= vec3(1.0) - coatF;
-            directLobeData[index] = vec4(factor, coatRoughness, 0.0, 0.0);
-            directLobeNormals[index] = coatFrame.normal;
+            hasCoatLobe = true;
+            coatLobeFactor = factor;
+            coatLobeRoughness = coatRoughness;
+            coatLobeNormal = coatFrame.normal;
         }
         else if (lobe.type == 1u) {
             vec3 color = linearSrgbToAcesCg(vec3(lobe.parameters[0],
@@ -810,7 +822,8 @@ void main() {
                 materialSampleOrOne(material, 10u).rgb);
             float sheenRoughness = lobe.parameters[3] *
                 materialSampleOrOne(material, 11u).a;
-            directLobeData[index] = vec4(color, sheenRoughness);
+            hasSheenLobe = true;
+            sheenLobe = vec4(color, sheenRoughness);
         }
         else if (lobe.type == 2u) {
             vec3 anisotropySample = materialSampleOrOne(material, 14u).rgb;
@@ -818,8 +831,9 @@ void main() {
                 0.0, 1.0);
             float textureRotation = atan(anisotropySample.y * 2.0 - 1.0,
                 anisotropySample.x * 2.0 - 1.0);
-            directLobeData[index] = vec4(strength,
-                lobe.parameters[1] + textureRotation, 0.0, 0.0);
+            hasAnisotropyLobe = true;
+            anisotropyLobe = vec2(strength,
+                lobe.parameters[1] + textureRotation);
         }
         else if (lobe.type == 3u) {
             float factor = lobe.parameters[0] *
@@ -829,7 +843,8 @@ void main() {
                 thicknessMix);
             vec3 tint = materialIridescenceTint(lobe.parameters[1], thickness,
                 max(dot(frame.normal, view), 0.0));
-            directLobeData[index] = vec4(mix(f0, tint, factor), 0.0);
+            hasIridescenceLobe = true;
+            iridescenceLobeF0 = mix(f0, tint, factor);
         }
 #ifdef IRIDIUM_REFRACTION_TRANSPORT
         else if (lobe.type == 4u) {
@@ -861,44 +876,38 @@ void main() {
         roughness, frame.normal, view, ao, fragWorldPos,
         IRIDIUM_MATERIAL_SCENE_PIXEL) * baseLayerAttenuation;
     vec3 iblLobes = vec3(0.0);
-    for (uint lobeIndex = 0u; lobeIndex < material.complexLobeCount;
-        ++lobeIndex) {
-        uint lobeType = directLobeTypes[lobeIndex];
-        if (lobeType == 0u) {
-            float factor = directLobeData[lobeIndex].x;
-            iblLobes += iridiumSceneSpecular(vec3(0.04 * factor),
-                vec3(factor), directLobeData[lobeIndex].y,
-                directLobeNormals[lobeIndex], view, fragWorldPos,
-                IRIDIUM_MATERIAL_SCENE_PIXEL) * ao;
-        }
-        else if (lobeType == 1u) {
-            // Product v1 has no Charlie sheen convolution. Use the named
-            // isotropic GGX approximation until dedicated evidence exists.
-            vec3 color = directLobeData[lobeIndex].rgb;
-            iblLobes += iridiumSceneSpecular(color, color,
-                directLobeData[lobeIndex].a, frame.normal, view,
-                fragWorldPos, IRIDIUM_MATERIAL_SCENE_PIXEL) * ao *
-                baseLayerAttenuation;
-        }
-        else if (lobeType == 2u) {
-            // Product v1 is isotropic; the standard-base result is the explicit
-            // anisotropic IBL approximation while direct light remains exact.
-        }
-        else if (lobeType == 3u) {
-            vec3 filmF0 = directLobeData[lobeIndex].rgb;
-            iblLobes += (iridiumSceneSpecular(filmF0, f90, roughness,
-                frame.normal, view, fragWorldPos,
-                    IRIDIUM_MATERIAL_SCENE_PIXEL) -
-                iridiumSceneSpecular(f0, f90, roughness, frame.normal, view,
-                    fragWorldPos, IRIDIUM_MATERIAL_SCENE_PIXEL)) * ao *
-                baseLayerAttenuation;
-        }
+    if (hasCoatLobe) {
+        float factor = coatLobeFactor;
+        iblLobes += iridiumSceneSpecular(vec3(0.04 * factor),
+            vec3(factor), coatLobeRoughness,
+            coatLobeNormal, view, fragWorldPos,
+            IRIDIUM_MATERIAL_SCENE_PIXEL) * ao;
+    }
+    if (hasSheenLobe) {
+        // Product v1 has no Charlie sheen convolution. Use the named
+        // isotropic GGX approximation until dedicated evidence exists.
+        vec3 color = sheenLobe.rgb;
+        iblLobes += iridiumSceneSpecular(color, color,
+            sheenLobe.a, frame.normal, view,
+            fragWorldPos, IRIDIUM_MATERIAL_SCENE_PIXEL) * ao *
+            baseLayerAttenuation;
+    }
+    // Anisotropy: product v1 is isotropic; the standard-base result is the
+    // explicit anisotropic IBL approximation while direct light remains exact.
+    if (hasIridescenceLobe) {
+        vec3 filmF0 = iridescenceLobeF0;
+        iblLobes += (iridiumSceneSpecular(filmF0, f90, roughness,
+            frame.normal, view, fragWorldPos,
+                IRIDIUM_MATERIAL_SCENE_PIXEL) -
+            iridiumSceneSpecular(f0, f90, roughness, frame.normal, view,
+                fragWorldPos, IRIDIUM_MATERIAL_SCENE_PIXEL)) * ao *
+            baseLayerAttenuation;
     }
     result += iblLobes;
     vec3 directContribution = vec3(0.0);
     float shadowVisibility = 1.0;
-    IridiumDirectionalShadowReceiver shadowReceiver =
-        IridiumDirectionalShadowReceiver(fragWorldPos, frame.normal,
+    IridiumShadowReceiver shadowReceiver =
+        IridiumShadowReceiver(fragWorldPos, frame.normal,
             shadowGeometricNormal, dFdx(fragWorldPos), dFdy(fragWorldPos));
 
     IridiumDirectLightRange lightRange = iridiumDirectLightRange(
@@ -916,11 +925,11 @@ void main() {
         if ((floatBitsToUint(lightRecord.shapeMetadata.z) & 3u) ==
             IRIDIUM_LIGHT_TYPE_SPOT)
             visibility *= iridiumSpotShadowVisibility(lightSlot,
-                lightRecord, fragWorldPos, frame.normal, light);
+                lightRecord, shadowReceiver, light);
         else if ((floatBitsToUint(lightRecord.shapeMetadata.z) & 3u) ==
             IRIDIUM_LIGHT_TYPE_POINT)
             visibility *= iridiumPointShadowVisibility(lightSlot,
-                lightRecord, fragWorldPos, frame.normal, light);
+                lightRecord, shadowReceiver, light);
         shadowVisibility = min(shadowVisibility, visibility);
         vec3 radiance = directLight.radiance * visibility;
         float noL = max(dot(frame.normal, light), 0.0);
@@ -932,57 +941,48 @@ void main() {
                 noL * baseLayerAttenuation;
         }
 
-        for (uint lobeIndex = 0u; lobeIndex < material.complexLobeCount;
-            ++lobeIndex) {
-            uint lobeType = directLobeTypes[lobeIndex];
-            if (lobeType == 0u) {
-                float factor = directLobeData[lobeIndex].x;
-                float coatRoughness = directLobeData[lobeIndex].y;
-                MaterialTangentFrame coatFrame = frame;
-                coatFrame.normal = directLobeNormals[lobeIndex];
-                float coatNoL = max(dot(coatFrame.normal, light), 0.0);
-                if (coatNoL > 0.0) {
-                    directContribution += materialEvaluateSpecularLobe(
-                        vec3(0.04) * factor, vec3(factor), coatRoughness,
-                        coatFrame.normal, view, light) * radiance * coatNoL;
-                }
+        // M7.10.4b: present lobes in type order (the lobe order).
+        if (hasCoatLobe) {
+            float coatNoL = max(dot(coatLobeNormal, light), 0.0);
+            if (coatNoL > 0.0) {
+                directContribution += materialEvaluateSpecularLobe(
+                    vec3(0.04) * coatLobeFactor, vec3(coatLobeFactor),
+                    coatLobeRoughness, coatLobeNormal, view, light) *
+                    radiance * coatNoL;
             }
-            else if (lobeType == 1u && noL > 0.0) {
-                vec3 color = directLobeData[lobeIndex].rgb;
-                float sheenRoughness = directLobeData[lobeIndex].a;
-                directContribution += materialEvaluateSheen(
-                    color, sheenRoughness,
-                    frame.normal, view, light) * radiance * noL *
-                    baseLayerAttenuation;
-            }
-            else if (lobeType == 2u && noL > 0.0) {
-                float strength = directLobeData[lobeIndex].x;
-                float rotation = directLobeData[lobeIndex].y;
-                vec3 isotropic = materialEvaluateSpecularLobe(f0, f90,
-                    roughness, frame.normal, view, light);
-                vec3 anisotropic = materialEvaluateAnisotropicSpecular(f0,
-                    f90, roughness, strength, rotation, frame, view, light);
-                directContribution += (anisotropic - isotropic) * radiance * noL *
-                    baseLayerAttenuation;
-            }
-            else if (lobeType == 3u && noL > 0.0) {
-                vec3 filmF0 = directLobeData[lobeIndex].rgb;
-                directContribution += (materialEvaluateSpecularLobe(
-                    filmF0, f90,
-                    roughness, frame.normal, view, light) -
-                    materialEvaluateSpecularLobe(f0, f90, roughness,
-                        frame.normal, view, light)) * radiance * noL *
-                    baseLayerAttenuation;
-            }
-#ifdef IRIDIUM_REFRACTION_TRANSPORT
-            else if (lobeType == 7u && diffuseTransmission > 0.0) {
-                directContribution += diffuseTransmissionColor * baseColor *
-                    diffuseTransmission / MATERIAL_PI * radiance *
-                    max(dot(-frame.normal, light), 0.0) *
-                    baseLayerAttenuation;
-            }
-#endif
         }
+        if (hasSheenLobe && noL > 0.0) {
+            directContribution += materialEvaluateSheen(
+                sheenLobe.rgb, sheenLobe.a,
+                frame.normal, view, light) * radiance * noL *
+                baseLayerAttenuation;
+        }
+        if (hasAnisotropyLobe && noL > 0.0) {
+            vec3 isotropic = materialEvaluateSpecularLobe(f0, f90,
+                roughness, frame.normal, view, light);
+            vec3 anisotropic = materialEvaluateAnisotropicSpecular(f0,
+                f90, roughness, anisotropyLobe.x, anisotropyLobe.y, frame,
+                view, light);
+            directContribution += (anisotropic - isotropic) * radiance * noL *
+                baseLayerAttenuation;
+        }
+        if (hasIridescenceLobe && noL > 0.0) {
+            directContribution += (materialEvaluateSpecularLobe(
+                iridescenceLobeF0, f90,
+                roughness, frame.normal, view, light) -
+                materialEvaluateSpecularLobe(f0, f90, roughness,
+                    frame.normal, view, light)) * radiance * noL *
+                baseLayerAttenuation;
+        }
+#ifdef IRIDIUM_REFRACTION_TRANSPORT
+        // Only the diffuse-transmission lobe sets diffuseTransmission.
+        if (diffuseTransmission > 0.0) {
+            directContribution += diffuseTransmissionColor * baseColor *
+                diffuseTransmission / MATERIAL_PI * radiance *
+                max(dot(-frame.normal, light), 0.0) *
+                baseLayerAttenuation;
+        }
+#endif
     }
     if (materialDebugView == 17u) {
         iridiumWriteMaterialOutput(

@@ -57,6 +57,7 @@ namespace Iridium {
             .aliasPoison = options.aliasPoison,
             .validateProbeCaptureTargets = options.validateReflectionProbes,
             .exposureTrace = options.exposureTrace,
+            .simulateDeviceLostReportFrame = options.simulateDeviceLostReportFrame,
         };
     }
 
@@ -101,6 +102,7 @@ namespace Iridium {
             checkPreconditions(context);
             return;
         case StartupPhase::TopologyReady:
+            prepareBenchmarkModelTopology(context);
             recordTopologyBaselines(context);
             return;
         case StartupPhase::SceneConstruction:

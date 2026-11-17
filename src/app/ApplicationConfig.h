@@ -71,6 +71,9 @@ namespace Iridium {
         uint32_t temporalJitterSequenceLength = 8;
         // M7R R4d: --upload-queue auto|graphics|legacy-blocking.
         UploadQueueMode uploadQueue = UploadQueueMode::Auto;
+        // M7.10.D: --gpu-crash-checkpoints on|off (per-pass GPU breadcrumbs
+        // for device-loss reports; on by default).
+        bool gpuCrashCheckpoints = true;
         bool forceWireframe = false;
         uint32_t clusterTileSize = 32;
         uint32_t clusterDepthSlices = 24;

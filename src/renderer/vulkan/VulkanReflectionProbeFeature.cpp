@@ -7,6 +7,7 @@
 #include "VulkanMeshLayouts.h"
 #include "VulkanResourceRegistry.h"
 #include "renderer/lighting/ClusteredReflectionProbes.h"
+#include "renderer/lighting/ReflectionProbe.h"
 #include "renderer/lighting/ShadowCasterCulling.h"
 #include "renderer/rhi/MaterialTableCapacity.h"
 #include "renderer/rhi/Mesh.h"
@@ -704,7 +705,7 @@ namespace Iridium {
                         "Reflection-probe capture face records are exhausted");
                 capturePass.writeFace(frameIndex, faceRecord,
                     capture.faces[face], capture.position,
-                    capture.nearPlane, lights.stats.activeLightCount,
+                    capture.nearPlane, reflectionProbeCaptureLightSlotBound(lights),
                     capture.captureSky, capture.resolution);
                 if (indirectValid)
                     counters.dispatchRecorded += self.culler_.recordWorkItem(

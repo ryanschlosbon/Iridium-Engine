@@ -14,6 +14,7 @@
 namespace Iridium {
 
     class CpuProfiler;
+    class VulkanDeviceLossDiagnostics;
 
     // Resource uploads (M7R R4d).
     //
@@ -147,7 +148,14 @@ namespace Iridium {
         }
         [[nodiscard]] uint64_t asyncSubmitCount() const noexcept { return asyncSubmits_; }
 
+        // M7.10.D: upload-lane batches carry GPU crash breadcrumbs (start and
+        // end of each lane command buffer). Null records none.
+        void setDeviceLossDiagnostics(VulkanDeviceLossDiagnostics* diagnostics) noexcept {
+            deviceLoss_ = diagnostics;
+        }
+
     private:
+        VulkanDeviceLossDiagnostics* deviceLoss_ = nullptr;
         enum LaneIndex : uint32_t { TransferLane = 0, GraphicsLane = 1, LaneCount = 2 };
 
         struct Lane {

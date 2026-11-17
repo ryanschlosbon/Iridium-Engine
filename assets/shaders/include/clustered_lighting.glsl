@@ -52,11 +52,24 @@ layout(std430, set = 0, binding = 11) buffer ClusterScanScratch {
 layout(std430, set = 0, binding = 12) buffer ClusterIndirectArgs {
     uint clusterIndirectArgs[];
 };
+// M7.10.2 (PackedGpuClusterLightBounds): one record per active light, written
+// by cluster_light_bounds and read by every cluster_count/cluster_fill
+// workgroup of that light.
+struct ClusterLightBounds {
+    uvec4 minimumSlot; // minimum tile x/y, slice, light slot
+    uvec4 spanFlags;   // span x/y/z, IRIDIUM_CLUSTER_BOUNDS_* flags
+};
+layout(std430, set = 0, binding = 13) buffer ClusterLightBoundsBuffer {
+    ClusterLightBounds clusterLightBounds[];
+};
 
 const uint IRIDIUM_CLUSTER_OVERFLOW_DIRECTIONAL = 1u;
 const uint IRIDIUM_CLUSTER_OVERFLOW_PER_CLUSTER = 2u;
 const uint IRIDIUM_CLUSTER_OVERFLOW_REFERENCES = 3u;
 const uint IRIDIUM_INVALID_LIGHT_SLOT = 0xffffffffu;
+// Bounds valid (fill), and references reserved too (count).
+const uint IRIDIUM_CLUSTER_BOUNDS_FILL = 1u;
+const uint IRIDIUM_CLUSTER_BOUNDS_COUNT = 2u;
 
 const uint IRIDIUM_DIAGNOSTIC_ACTIVE = 0u;
 const uint IRIDIUM_DIAGNOSTIC_DIRECTIONAL = 1u;

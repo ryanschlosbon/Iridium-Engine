@@ -79,6 +79,8 @@ namespace {
         IRIDIUM_EXPECT(records, bytesEqual(expected.records, actual.records))
         IRIDIUM_EXPECT(recordRevisions,
             bytesEqual(expected.recordRevisions, actual.recordRevisions))
+        IRIDIUM_EXPECT(shadowRevisions,
+            bytesEqual(expected.shadowRevisions, actual.shadowRevisions))
         IRIDIUM_EXPECT(activeSlots,
             bytesEqual(expected.activeSlots, actual.activeSlots))
         IRIDIUM_EXPECT(changedRanges,
@@ -975,7 +977,7 @@ namespace {
                     });
                 return LocalShadowCacheInput{ .request = *request,
                     .resolution = resolution, .allocationRevision = 1,
-                    .lightRevision = packet.recordRevisions[lightSlot],
+                    .lightRevision = packet.shadowRevisions[lightSlot],
                     .casterRevision = 1, .projectionRevision = 1 };
             };
             spotInputs.clear();
@@ -995,14 +997,21 @@ namespace {
         // M7R R5c.8: the probe-capture schedule as RenderExtractor runs it
         // (requests in caller-owned storage, schedule, faces rendered,
         // publication). The lighting revision advances every 20 frames, so
-        // realtime captures start, progress and publish in measured frames.
+        // realtime captures start, progress and publish in measured frames;
+        // it is offset by the per-probe light-scoped revision (M7.10.5) so
+        // that computation is measured too.
         ReflectionProbeCaptureScheduler captureScheduler;
         std::vector<ReflectionProbeCaptureRequest> captureRequests;
         size_t captureEntries = 0;
         uint64_t capturesPublished = 0;
-        const auto scheduleCaptures = [&](uint64_t frameIndex) {
+        const auto scheduleCaptures = [&](uint64_t frameIndex,
+            const LightingFramePacket& lighting) {
             captureRequests.clear();
             for (const ReflectionProbeCandidate& candidate : probes.candidates) {
+                const uint64_t lightingRevision =
+                    reflectionProbeCaptureLightingRevision(lighting,
+                        glm::vec3(candidate.probeToWorld[3]),
+                        candidate.probe.captureFarMeters);
                 captureRequests.push_back({
                     .owner = candidate.owner,
                     .updateMode = ReflectionProbeUpdateMode::Realtime,
@@ -1011,7 +1020,7 @@ namespace {
                     .priority = candidate.probe.priority,
                     .settingsRevision = 1,
                     .sceneRevision = 1,
-                    .lightingRevision = 1 + frameIndex / 20,
+                    .lightingRevision = lightingRevision + frameIndex / 20,
                     .environmentRevision = 1,
                     .pipelineRevision = 1,
                     .frameIndex = frameIndex,
@@ -1031,11 +1040,12 @@ namespace {
         // change, not a steady frame.
         uint64_t frameIndex = 0;
         const auto frame = [&] {
-            scheduleShadows(lights.extract(scene.world));
+            const LightingFramePacket lighting = lights.extract(scene.world);
+            scheduleShadows(lighting);
             extractReflectionProbes(scene.world, residency, probes);
             applyRuntimeCaptures(probes, 0);
             (void)publisher.publish(probes.candidates, environmentSlot);
-            scheduleCaptures(frameIndex++);
+            scheduleCaptures(frameIndex++, lighting);
         };
         TransformSystem transforms;
         std::vector<Entity> changedTransforms;

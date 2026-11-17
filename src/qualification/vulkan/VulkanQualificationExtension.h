@@ -178,6 +178,9 @@ namespace Iridium {
         bool casterRevisionOracleEnabled_ = false;
         bool validateProbeCaptureTargets_ = false;
         bool aliasPoison_ = false;
+        // M7.10.D (--qualification-simulate-device-lost-report).
+        std::optional<uint64_t> simulateDeviceLostReportFrame_;
+        uint64_t retiredFrameCount_ = 0;
         struct AliasPoisonSlot {
             uint64_t rebuildCount = 0;
             bool valid = false;
