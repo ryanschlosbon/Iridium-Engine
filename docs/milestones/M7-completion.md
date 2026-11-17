@@ -927,6 +927,41 @@ None open. The two-car scene was never saved, so PC3 is the reference approximat
     | PC2-glass-fill | 5.16 | 4.35 | **3.34** | 2.01 → 1.01 |
     | PC3-nolight | 3.55 | 1.92 | **1.92** | — |
 
+- **2026-11-17 — M7.10.D: GPU device-loss diagnostics (refactor tier for images; overhead
+  pending).**
+  - **Why:** the device-loss watch item. It was seen on PC2-glass-fill with profiling, and
+    in the owner's editor on 2026-10-13 while dragging a point light far from the origin
+    (`vkWaitSemaphores(all frames)` returned -4, with nvlddmkm event 153). Neither left
+    anything to attribute the loss to.
+  - **What:** a worktree lane (`m7c-diag`, `1149cc6`), reviewed and cherry-picked as `676e7fc`.
+    - A device loss in the frame path is reported once, before the throw: a
+      `IRIDIUM_DEVICE_LOST {json}` line on stderr, and the same JSON under
+      `%LOCALAPPDATA%/Iridium/DeviceLost/`.
+    - The report covers VK_EXT_device_fault (description, addresses, vendor records and the
+      vendor binary) and VK_NV_device_diagnostic_checkpoints (per-pass breadcrumbs, plus
+      frame begin and submit and upload batches).
+    - It also includes a CPU trail of the last four frames.
+    - `--gpu-crash-checkpoints on|off` controls the breadcrumbs (default on).
+    - `--qualification-simulate-device-lost-report N` exercises the report path on a healthy
+      device.
+  - **Simulated report on the RTX 4090:** deviceFault, the vendor binary and checkpoints are
+    all supported. The fault-count query returns -13 on a healthy device, which is expected:
+    the query is only defined after a loss.
+  - **Review notes:**
+    - The breadcrumbs and the CPU trail assume single-threaded command recording. M7.10.8
+      (parallel recording) must give each recording thread its own trail.
+    - Imperative passes mark only their start.
+  - **Evidence:**
+    - Release passes 120/120 tests;
+    - frozen set `m7c-10D` with sync validation against `m7c-1070`: 0 failures (F4-woit
+      within its envelope), zero messages;
+    - owner cases 62/62 byte-identical against `m7c-1070-owner`.
+  - **Pending:**
+    - the checkpoint overhead, measured as a timing pair of the same build with
+      `--gpu-crash-checkpoints on` versus `off` (quiet window). If it is measurable,
+      measurement routes pin `off` and the editor keeps `on`;
+    - re-testing the device loss with diagnostics in place.
+
 ## Completion report
 
 To be written at M7.12, following AGENTS.md:
