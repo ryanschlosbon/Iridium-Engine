@@ -176,7 +176,9 @@ namespace {
                     // bounded receiver-plane correction) for every owner.
                     "iridiumShadowNormalOffsetScale",
                     "iridiumShadowReceiverPlaneGradient",
-                    "iridiumPointShadowReference" })
+                    "iridiumPointShadowReference",
+                    // M7.10.6b: bilinear point-shadow comparisons.
+                    "iridiumPointShadowBilinearCompare" })
                 IRIDIUM_CHECK_MSG(compiled.module.callsFunction(function),
                     name << ' ' << function);
         }
@@ -189,6 +191,8 @@ namespace {
         IRIDIUM_CHECK(definedOnlyIn("iridiumSpotShadowVisibility",
             "include/spot_shadow.glsl"));
         IRIDIUM_CHECK(definedOnlyIn("iridiumPointShadowVisibility",
+            "include/point_shadow.glsl"));
+        IRIDIUM_CHECK(definedOnlyIn("iridiumPointShadowBilinearCompare",
             "include/point_shadow.glsl"));
         for (const char* function : { "iridiumShadowNormalOffsetScale",
                 "iridiumShadowReceiverPlaneGradient",

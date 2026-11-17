@@ -107,6 +107,11 @@ $M7COwnerCases = @(
     foreach ($quality in @('high', 'ultra')) {
         @{ Key = "PC4-contact-$quality"; Id = "m7c_pc4_contact_$($quality)_v1"; Manifest = $m7c; Models = @('porsche911', 'contact'); Args = @() }
     }
+    # PC4 caliper (M7.10.6b): the Carrera's front brake caliper behind the spokes, about
+    # 4 m from a shadowed point light, where a cube texel is large (High and Ultra).
+    foreach ($quality in @('high', 'ultra')) {
+        @{ Key = "PC4-caliper-$quality"; Id = "m7c_pc4_caliper_$($quality)_v1"; Manifest = $m7c; Model = 'porsche911'; Args = @() }
+    }
 )
 $M7CTimingRoutes = @($M7COwnerCases | ForEach-Object {
     $route = $_.Clone()

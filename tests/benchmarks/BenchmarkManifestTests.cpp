@@ -1841,11 +1841,12 @@ namespace {
 
     // M7C P1 owner cases (local third-party content, verified by hash): PC1
     // instance grids, PC2 glass camera series, PC3 two-model composition; and
-    // the M7.10.6 PC4 local-shadow receiver cases (local light only).
+    // the M7.10.6 PC4 local-shadow receiver cases (local light only) and the
+    // M7.10.6b caliper cases.
     bool testM7cOwnerCasesFixtureContract() {
         const BenchmarkManifest manifest = loadBenchmarkManifest(
             m7cOwnerCasesManifestPath());
-        CHECK(manifest.fixtures.size() == 30);
+        CHECK(manifest.fixtures.size() == 32);
         for (const BenchmarkFixture& fixture : manifest.fixtures) {
             CHECK(fixture.id.starts_with("m7c_"));
             CHECK(fixture.warmupFrames == 500 && fixture.measuredFrames == 2000);
@@ -1931,6 +1932,17 @@ namespace {
         CHECK(contact.sceneFactory.compositionEntities.size() == 2);
         CHECK(!contact.sceneFactory.compositionEntities[1].wholeModel);
         CHECK(benchmarkFixtureSourceAssets(contact).size() == 2);
+        // PC4 caliper: one camera and point light, High then Ultra.
+        const BenchmarkFixture& caliper = findBenchmarkFixture(manifest,
+            "m7c_pc4_caliper_high_v1");
+        const BenchmarkFixture& caliperUltra = findBenchmarkFixture(manifest,
+            "m7c_pc4_caliper_ultra_v1");
+        CHECK(caliper.lights[0].type == BenchmarkLightType::Point);
+        CHECK(caliper.lights[0].shadowQuality == BenchmarkShadowQuality::High);
+        CHECK(caliperUltra.lights[0].shadowQuality ==
+            BenchmarkShadowQuality::Ultra);
+        CHECK(caliperUltra.camera.position == caliper.camera.position);
+        CHECK(caliperUltra.lights[0].position == caliper.lights[0].position);
         return true;
     }
 

@@ -2053,6 +2053,116 @@
         "PC4 contact check: the Porsche 911 Carrera 4S standing on a ground plane, a 1.6 m triangle blocker 1 cm above the plane beside its right side; one shadowed (Ultra) point light, 1e5 cd, 10 m range, 1.6 m up between them.",
         "No directional light. Over-biasing shows as light leaking at the tyre contacts and under the body, or a lit gap along the triangle shadow edges."
       ]
+    },
+    {
+      "id": "m7c_pc4_caliper_high_v1",
+      "revision": 1,
+      "required": false,
+      "source_asset": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf",
+      "environment": {
+        "kind": "procedural_constant",
+        "constant_linear_rgb": [0.3, 0.35, 0.4]
+      },
+      "camera": {
+        "id": "m7c_pc4_caliper_camera_v1",
+        "position": [1.62, -0.12, 1.66],
+        "target": [0.65, -0.31, 1.41],
+        "up": [0.0, 1.0, 0.0],
+        "vertical_fov_degrees": 30.0,
+        "near": 0.05,
+        "far": 200.0
+      },
+      "scene_factory": {
+        "kind": "instanced_grid",
+        "instance_grid": [1, 1, 1],
+        "instance_spacing": [0.0, 0.0, 0.0]
+      },
+      "lights": [
+        {
+          "type": "point",
+          "position": [4.2, 1.2, 2.6],
+          "rotation_degrees": [0.0, 0.0, 0.0],
+          "color_linear_rec709": [1.0, 0.9, 0.8],
+          "luminous_intensity_candela": 300000.0,
+          "range_meters": 12.0,
+          "source_radius_meters": 0.05,
+          "casts_shadows": true,
+          "shadow_quality": "high",
+          "priority": 2
+        }
+      ],
+      "output_label": "m7c_pc4_caliper_high",
+      "warmup_frames": 500,
+      "measured_frames": 2000,
+      "content_files": [
+        {
+          "path": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf",
+          "sha256": "65480c5fc8111d0abe7b04cb6d8f09c6172cc7c8504e6c924f8e1034b8ebb3de"
+        },
+        {
+          "path": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf.iridium.meta",
+          "sha256": "3b09ae1c183c9d7ebedea1be084c08a522bf5ce3fe6cf0c8334c2cf19e7a0736"
+        }
+      ],
+      "expected_behavior": [
+        "PC4 caliper check: one Porsche 911 Carrera 4S, the camera about 1 m outside its right front wheel looking at the brake caliper behind the spokes; one shadowed (High, 512 cube) point light, 3e5 cd, 12 m range, about 4 m away outside and above the wheel.",
+        "No directional light. Nearest-texel shadow comparisons show as large overlapping cube-texel squares along the spoke shadows on the caliper."
+      ]
+    },
+    {
+      "id": "m7c_pc4_caliper_ultra_v1",
+      "revision": 1,
+      "required": false,
+      "source_asset": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf",
+      "environment": {
+        "kind": "procedural_constant",
+        "constant_linear_rgb": [0.3, 0.35, 0.4]
+      },
+      "camera": {
+        "id": "m7c_pc4_caliper_camera_v1",
+        "position": [1.62, -0.12, 1.66],
+        "target": [0.65, -0.31, 1.41],
+        "up": [0.0, 1.0, 0.0],
+        "vertical_fov_degrees": 30.0,
+        "near": 0.05,
+        "far": 200.0
+      },
+      "scene_factory": {
+        "kind": "instanced_grid",
+        "instance_grid": [1, 1, 1],
+        "instance_spacing": [0.0, 0.0, 0.0]
+      },
+      "lights": [
+        {
+          "type": "point",
+          "position": [4.2, 1.2, 2.6],
+          "rotation_degrees": [0.0, 0.0, 0.0],
+          "color_linear_rec709": [1.0, 0.9, 0.8],
+          "luminous_intensity_candela": 300000.0,
+          "range_meters": 12.0,
+          "source_radius_meters": 0.05,
+          "casts_shadows": true,
+          "shadow_quality": "ultra",
+          "priority": 2
+        }
+      ],
+      "output_label": "m7c_pc4_caliper_ultra",
+      "warmup_frames": 500,
+      "measured_frames": 2000,
+      "content_files": [
+        {
+          "path": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf",
+          "sha256": "65480c5fc8111d0abe7b04cb6d8f09c6172cc7c8504e6c924f8e1034b8ebb3de"
+        },
+        {
+          "path": "models/porsche_911_carrera4s/porsche_911_carrera4s.gltf.iridium.meta",
+          "sha256": "3b09ae1c183c9d7ebedea1be084c08a522bf5ce3fe6cf0c8334c2cf19e7a0736"
+        }
+      ],
+      "expected_behavior": [
+        "PC4 caliper check: one Porsche 911 Carrera 4S, the camera about 1 m outside its right front wheel looking at the brake caliper behind the spokes; one shadowed (Ultra, 1024 cube) point light, 3e5 cd, 12 m range, about 4 m away outside and above the wheel.",
+        "No directional light. Nearest-texel shadow comparisons show as large overlapping cube-texel squares along the spoke shadows on the caliper."
+      ]
     }
   ]
 }

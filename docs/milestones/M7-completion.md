@@ -962,6 +962,39 @@ None open. The two-car scene was never saved, so PC3 is the reference approximat
       measurement routes pin `off` and the editor keeps `on`;
     - re-testing the device loss with diagnostics in place.
 
+- **2026-11-17 — M7.10.6b: bilinear point-shadow comparisons (feature tier;
+  owner-reported).**
+  - **Report (2026-10-13):** under a point light at High, shadows on small parts far from the
+    light (spoke shadows on a brake caliper) looked like large overlapping transparent
+    squares, finer at Ultra.
+  - **Cause:** point shadows compared each tap against one nearest cube texel. Directional
+    and spot shadows already reconstruct bilinearly. Far from the light a 512 cube texel
+    spans about 1.6 cm, so every tap of the 1.5-texel disk quantised to whole texels.
+  - **Fix:** a worktree lane (`m7c-pcf`), applied as a patch.
+    - `iridiumPointShadowBilinearCompare` gathers the 2×2 texels on the face the tap direction
+      selects, with seamless edges and corners, and compares each texel against the receiver
+      plane at that texel's centre. The plane is evaluated exactly per face as
+      `dot(depthPerUnitMajor, unitMajor(c))`, stepped by the face's per-texel gradient, and
+      bounded as in M7.10.6. The comparisons are blended bilinearly.
+    - The hard filter becomes a fixed 3×3 tent of bilinear comparisons, one texel apart, in
+      the receiver's tangent frame. This matches the directional and spot hard filters.
+    - PCSS taps also use the bilinear comparison.
+    - New fixtures: `PC4-caliper-{high,ultra}`.
+  - **Evidence:**
+    - Release passes 120/120 tests (shader ownership checks the new function);
+    - frozen set `m7c-1061b` with sync validation against `m7c-10D`: only F5-point and
+      F5-hetero change, with zero messages;
+    - owner cases: only the shadowed point-light cases change. PC4-contact-high changes 0.54%
+      of pixels, mostly darker (no leak). PC3-point-r10 changes 0.05% (max 9/255),
+      PC2-glass-fill 0.02%;
+    - PC4-graze-high changes 4.23% of pixels. The strongest changes are lit patches through
+      the spoke gaps on the caliper, which now match their Ultra rendering instead of
+      High's larger quantised patches.
+    - Crops are in `out/m7r/evidence/m7c-1061b`. The caliper crops show the squares removed at
+      High and Ultra.
+  - **Pending:** owner eye check; timing (folded into the M7.10.6 five-process admission,
+    adding PC4-caliper-high).
+
 ## Completion report
 
 To be written at M7.12, following AGENTS.md:

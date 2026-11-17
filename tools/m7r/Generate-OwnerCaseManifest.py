@@ -348,6 +348,33 @@ for quality in ('high', 'ultra'):
          'lit gap along the triangle shadow edges.'],
         PC4_CONTACT_BOXES, sources=[P911, CONTACT])
 
+# Caliper check (M7.10.6b): owner report 2026-10-13, a brake caliper behind the wheel
+# spokes under a point light showed the spoke shadows as large overlapping cube-texel
+# squares (finer at Ultra), worst on small parts far from the light. The Carrera's right
+# front caliper ('Material.001' of Cylinder.001) sits at x ~ 0.57-0.72, y ~ -0.50..-0.13,
+# z ~ 1.31-1.51, inboard of the rim face (x ~ 0.93); the camera is about 1 m outside the
+# wheel and the light about 4 m away, outside and above, so the spokes shadow the caliper
+# and a 512 (1024) cube texel spans about 1.6 (0.8) cm there.
+PC4_CALIPER = (0.65, -0.31, 1.41)
+PC4_CALIPER_CAMERA = ((1.62, -0.12, 1.66), PC4_CALIPER, 30.0)
+PC4_CALIPER_LIGHT_POS = [4.2, 1.2, 2.6]
+for quality, size in (('high', 512), ('ultra', 1024)):
+    fid = f'm7c_pc4_caliper_{quality}_v1'
+    light = {'type': 'point', 'position': PC4_CALIPER_LIGHT_POS, 'rotation_degrees': [0.0, 0.0, 0.0],
+             'color_linear_rec709': [1.0, 0.9, 0.8], 'luminous_intensity_candela': 300000.0,
+             'range_meters': 12.0, 'source_radius_meters': 0.05,
+             'casts_shadows': True, 'shadow_quality': quality, 'priority': 2}
+    pos, target, fov = PC4_CALIPER_CAMERA
+    add(fid, P911, camera('m7c_pc4_caliper_camera_v1', pos, target, fov),
+        {'kind': 'instanced_grid', 'instance_grid': [1, 1, 1], 'instance_spacing': [0.0, 0.0, 0.0]},
+        [light],
+        [f'PC4 caliper check: one Porsche 911 Carrera 4S, the camera about 1 m outside its right front wheel '
+         f'looking at the brake caliper behind the spokes; one shadowed ({quality.capitalize()}, {size} cube) '
+         'point light, 3e5 cd, 12 m range, about 4 m away outside and above the wheel.',
+         'No directional light. Nearest-texel shadow comparisons show as large overlapping cube-texel squares '
+         'along the spoke shadows on the caliper.'],
+        grid_boxes(P911, [1, 1, 1], [0, 0, 0]))
+
 manifest = {
     'schema_version': 1,
     'generator': 'Iridium Engine M7.P1 owner-case fixture generator v1',
